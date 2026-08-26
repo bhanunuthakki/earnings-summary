@@ -54,6 +54,7 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 sys.path.insert(0, str(REPO / "src"))
 
 
+from dcf.artifact_promotion import ArtifactPromotion, promotion_from_env  # noqa: E402
 from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from dcf.specialized_price import (  # noqa: E402
     SpecializedPriceObservation,
@@ -487,6 +488,8 @@ def persist_dcf_run(
     eq: float,
     vps: float,
     price_observation: SpecializedPriceObservation | None = None,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. No-op without the DB / persist module."""
@@ -567,8 +570,9 @@ def persist_dcf_run(
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         if not schema_supports_provenance(conn):
             row = replace(row, provenance=None)
-        persist_mod.upsert(conn, row)
-    return True
+        if artifact_promotion is None:
+            return persist_mod.upsert(conn, row)
+        return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
 def main() -> int:
@@ -583,7 +587,18 @@ def main() -> int:
     s.price = price_observation.price
     eq, vps = value(s)
     build(s, DEST)
-    persisted = persist_dcf_run(s, eq, vps, price_observation)
+    artifact_promotion = promotion_from_env(DEST)
+    persisted = (
+        persist_dcf_run(
+            s,
+            eq,
+            vps,
+            price_observation,
+            artifact_promotion=artifact_promotion,
+        )
+        if artifact_promotion is not None
+        else persist_dcf_run(s, eq, vps, price_observation)
+    )
     lend, fs, tech = seg_vals(s)
     drag = corp_drag(s)
     up = (vps / s.price - 1) if s.price else 0.0

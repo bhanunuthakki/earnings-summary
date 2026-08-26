@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 
+from dcf.artifact_promotion import StagedFilePromotion
 from dcf.persist import DcfPromotionBlocked, DcfRunRow, upsert
 from dcf.provenance import (
     DcfInputProvenance,
@@ -154,6 +155,43 @@ def test_exact_provenance_retry_is_a_noop() -> None:
     ]
 
 
+def test_dcf_row_and_staged_workbook_promote_together(tmp_path: Path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    live = tmp_path / "META.xlsx"
+    staged = tmp_path / "META.rebuild.xlsx"
+    live.write_bytes(b"old workbook")
+    staged.write_bytes(b"new workbook")
+
+    assert upsert(conn, _row(), artifact_promotion=StagedFilePromotion(staged, live)) is True
+
+    assert live.read_bytes() == b"new workbook"
+    assert not staged.exists()
+    assert not list(tmp_path.glob("*.rollback.*"))
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1
+
+
+def test_commit_failure_restores_workbook_and_dcf_row(tmp_path: Path) -> None:
+    class FailingCommitConnection(sqlite3.Connection):
+        def commit(self) -> None:
+            raise sqlite3.OperationalError("simulated commit failure")
+
+    conn = sqlite3.connect(":memory:", factory=FailingCommitConnection)
+    conn.executescript(_SCHEMA)
+    live = tmp_path / "META.xlsx"
+    staged = tmp_path / "META.rebuild.xlsx"
+    live.write_bytes(b"old workbook")
+    staged.write_bytes(b"new workbook")
+
+    with pytest.raises(sqlite3.OperationalError, match="simulated commit failure"):
+        upsert(conn, _row(), artifact_promotion=StagedFilePromotion(staged, live))
+
+    assert live.read_bytes() == b"old workbook"
+    assert staged.read_bytes() == b"new workbook"
+    assert not list(tmp_path.glob("*.rollback.*"))
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+
+
 def _bridge_row(row: DcfRunRow, status: str) -> DcfRunRow:
     assert row.provenance is not None
     detail = dict(row.provenance.detail or {})
@@ -173,7 +211,9 @@ def test_weaker_bridge_candidate_cannot_replace_verified_current() -> None:
 
     assert blocked.value.decision.reason == "candidate_equity_bridge_weaker_than_current"
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 1
-    assert conn.execute("SELECT npv_per_share FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 100.0
+    assert (
+        conn.execute("SELECT npv_per_share FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 100.0
+    )
 
 
 def test_outlier_candidate_is_blocked_with_deterministic_evidence() -> None:

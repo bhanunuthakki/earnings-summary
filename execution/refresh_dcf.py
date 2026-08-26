@@ -654,7 +654,13 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
     _unlink(tmp)
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
+    env = dict(
+        os.environ,
+        DCF_TICKER=t,
+        DCF_REPO_ROOT=str(repo_root),
+        DCF_DEST=str(tmp),
+        DCF_PROMOTE_DEST=str(dest),
+    )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_BANK_BUILDER)],
         env=env,
@@ -665,11 +671,14 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
         check=False,
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
-    if line is None:
+    if line is None or "dcf_runs=ok" not in line or not dest.is_file():
         _unlink(tmp)
-        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        reason = (
+            (proc.stderr.strip().splitlines() or [""])[-1][:160]
+            if line is None
+            else "builder did not atomically persist and promote the DCF"
+        )
         return {"ticker": t, "status": "failed", "format": "bank", "reason": reason}
-    os.replace(tmp, dest)
     return {"ticker": t, "status": "ok", "format": "bank", "workbook": str(dest), "result": line}
 
 
@@ -681,7 +690,14 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
     _unlink(tmp)
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
+    env = dict(
+        os.environ,
+        DCF_TICKER=t,
+        DCF_REPO_ROOT=str(repo_root),
+        DCF_DEST=str(tmp),
+        DCF_PROMOTE_DEST=str(dest),
+        DCF_OWNER_INPUTS_DEST=str(dest),
+    )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_HOLDCO_BUILDER)],
         env=env,
@@ -692,11 +708,14 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
         check=False,
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
-    if line is None:
+    if line is None or "dcf_runs=ok" not in line or not dest.is_file():
         _unlink(tmp)
-        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        reason = (
+            (proc.stderr.strip().splitlines() or [""])[-1][:160]
+            if line is None
+            else "builder did not atomically persist and promote the DCF"
+        )
         return {"ticker": t, "status": "failed", "format": "holdco_sotp", "reason": reason}
-    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",
@@ -717,7 +736,13 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
     _unlink(tmp)
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
+    env = dict(
+        os.environ,
+        DCF_TICKER=t,
+        DCF_REPO_ROOT=str(repo_root),
+        DCF_DEST=str(tmp),
+        DCF_PROMOTE_DEST=str(dest),
+    )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_FINTECH_BUILDER)],
         env=env,
@@ -728,11 +753,14 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
         check=False,
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
-    if line is None:
+    if line is None or "dcf_runs=ok" not in line or not dest.is_file():
         _unlink(tmp)
-        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        reason = (
+            (proc.stderr.strip().splitlines() or [""])[-1][:160]
+            if line is None
+            else "builder did not atomically persist and promote the DCF"
+        )
         return {"ticker": t, "status": "failed", "format": "fintech_sotp", "reason": reason}
-    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",
@@ -753,7 +781,13 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
     _unlink(tmp)
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
+    env = dict(
+        os.environ,
+        DCF_TICKER=t,
+        DCF_REPO_ROOT=str(repo_root),
+        DCF_DEST=str(tmp),
+        DCF_PROMOTE_DEST=str(dest),
+    )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_PLATFORM_BUILDER)],
         env=env,
@@ -764,11 +798,14 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
         check=False,
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
-    if line is None:
+    if line is None or "dcf_runs=ok" not in line or not dest.is_file():
         _unlink(tmp)
-        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        reason = (
+            (proc.stderr.strip().splitlines() or [""])[-1][:160]
+            if line is None
+            else "builder did not atomically persist and promote the DCF"
+        )
         return {"ticker": t, "status": "failed", "format": "platform_dcf", "reason": reason}
-    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",
@@ -791,7 +828,13 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
     _unlink(tmp)
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
+    env = dict(
+        os.environ,
+        DCF_TICKER=t,
+        DCF_REPO_ROOT=str(repo_root),
+        DCF_DEST=str(tmp),
+        DCF_PROMOTE_DEST=str(dest),
+    )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_MELI_SOTP_BUILDER)],
         env=env,
@@ -802,11 +845,14 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
         check=False,
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
-    if line is None:
+    if line is None or "dcf_runs=ok" not in line or not dest.is_file():
         _unlink(tmp)
-        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        reason = (
+            (proc.stderr.strip().splitlines() or [""])[-1][:160]
+            if line is None
+            else "builder did not atomically persist and promote the DCF"
+        )
         return {"ticker": t, "status": "failed", "format": "meli_platform_sotp", "reason": reason}
-    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",

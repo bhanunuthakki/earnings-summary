@@ -1989,6 +1989,62 @@ def test_valuation_model_dispatches_to_holdco(refresh_repo: Path) -> None:
     assert res["format"] == "holdco_sotp"
 
 
+def test_holdco_refresh_threads_live_owner_inputs_and_atomic_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = tmp_path / "dcf" / "BN.xlsx"
+    live.parent.mkdir(parents=True)
+    live.write_bytes(b"owner workbook")
+    captured_env: dict[str, str] = {}
+
+    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        env = cast("dict[str, str]", kwargs["env"])
+        captured_env.update(env)
+        Path(env["DCF_PROMOTE_DEST"]).write_bytes(b"promoted workbook")
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="RESULT\tBN\tdcf_runs=ok\t-> staged\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(refresh_dcf.subprocess, "run", fake_run)
+
+    result = refresh_dcf._refresh_holdco("BN", tmp_path)
+
+    assert result["status"] == "ok"
+    assert captured_env["DCF_OWNER_INPUTS_DEST"] == str(live)
+    assert captured_env["DCF_PROMOTE_DEST"] == str(live)
+    assert captured_env["DCF_DEST"].endswith("BN.rebuild.xlsx")
+    assert live.read_bytes() == b"promoted workbook"
+
+
+def test_specialized_refresh_rejects_skip_without_replacing_live_workbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = tmp_path / "dcf" / "NU.xlsx"
+    live.parent.mkdir(parents=True)
+    live.write_bytes(b"current workbook")
+
+    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        env = cast("dict[str, str]", kwargs["env"])
+        Path(env["DCF_DEST"]).write_bytes(b"unpersisted candidate")
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="RESULT\tNU\tdcf_runs=skip\t-> staged\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(refresh_dcf.subprocess, "run", fake_run)
+
+    result = refresh_dcf._refresh_platform("NU", tmp_path)
+
+    assert result["status"] == "failed"
+    assert live.read_bytes() == b"current workbook"
+    assert not (tmp_path / "dcf" / "NU.rebuild.xlsx").exists()
+
+
 def test_valuation_model_dispatches_to_fintech_sotp(refresh_repo: Path) -> None:
     """An explicit valuation_model='fintech_sotp' routes to the fintech SOTP builder."""
     assumptions = refresh_repo / "data" / "dcf_assumptions"

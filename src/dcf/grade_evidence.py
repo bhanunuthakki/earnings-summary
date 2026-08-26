@@ -243,10 +243,154 @@ def _project_provenance(provenance: dict[str, object]) -> dict[str, object]:
 
 def _serialized_size(value: object) -> int:
     return len(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-            "utf-8"
-        )
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     )
+
+
+_BOUNDED_TEXT_CHARS = 512
+_BOUNDED_MAX_ITEMS = 256
+_BOUNDED_MAX_DEPTH = 8
+_BOUNDED_PRIORITY_KEYS: dict[str, tuple[str, ...]] = {
+    "assumption_snapshot": ("scenarios", "priced_in", "reverse_valuation"),
+    "scenarios": ("bull", "base", "bear"),
+    "provenance": (
+        "equity_bridge_receipt",
+        "market_price",
+        "country_risk_context",
+        "sources",
+        "primary_fact_overlay",
+    ),
+    "equity_bridge_receipt": (
+        "schema_version",
+        "ticker",
+        "status",
+        "arithmetic_status",
+        "operating_value_usd_m",
+        "cash_m",
+        "total_debt_m",
+        "diluted_shares_m",
+        "fx_to_usd",
+        "stored_value_per_share_usd",
+        "recomputed_value_per_share_usd",
+        "arithmetic_delta",
+        "reporting_currency",
+        "bridge_period_end",
+        "bridge_fiscal_period_type",
+        "bridge_context",
+        "cash_lineage",
+        "total_debt_lineage",
+        "reasons",
+    ),
+    "market_price": ("price", "observed_at", "source"),
+    "country_risk_context": ("authority", "country", "rate"),
+}
+
+
+def _bounded_text(value: str, max_bytes: int) -> str:
+    """Return a deterministic, UTF-8-safe prefix fitting ``max_bytes``."""
+    candidate = value[:_BOUNDED_TEXT_CHARS]
+    while candidate and _serialized_size(candidate) > max_bytes:
+        candidate = candidate[: max(1, len(candidate) // 2)]
+    return candidate if _serialized_size(candidate) <= max_bytes else ""
+
+
+def _bounded_value(
+    value: object,
+    max_bytes: int,
+    *,
+    container_name: str | None = None,
+    depth: int = 0,
+) -> object:
+    """Project arbitrary JSON into a deterministic byte-bounded JSON value.
+
+    Priority keys are visited first so a tight budget cannot hide the receipt
+    fields that explain the conclusion behind arbitrary payloads.
+    """
+    if max_bytes < 2 or depth > _BOUNDED_MAX_DEPTH:
+        return None
+    if isinstance(value, str):
+        return _bounded_text(value, max_bytes)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, list):
+        projected_list: list[object] = []
+        for item in cast("list[object]", value)[:_BOUNDED_MAX_ITEMS]:
+            remaining = max_bytes - _serialized_size(projected_list) - 2
+            if remaining < 2:
+                break
+            projected_item = _bounded_value(item, remaining, depth=depth + 1)
+            candidate = [*projected_list, projected_item]
+            if _serialized_size(candidate) > max_bytes:
+                break
+            projected_list.append(projected_item)
+        return projected_list
+    if isinstance(value, dict):
+        mapping = cast("dict[str, object]", value)
+        priority = _BOUNDED_PRIORITY_KEYS.get(container_name or "", ())
+        ordered_keys = [key for key in priority if key in mapping]
+        ordered_keys.extend(sorted(key for key in mapping if key not in ordered_keys))
+        projected_mapping: dict[str, object] = {}
+        for key in ordered_keys[:_BOUNDED_MAX_ITEMS]:
+            remaining = max_bytes - _serialized_size(projected_mapping) - 2
+            if remaining < 2:
+                break
+            projected_key = _bounded_text(key, min(_BOUNDED_TEXT_CHARS, max(2, remaining // 2)))
+            child_budget = max(2, remaining - _serialized_size({projected_key: None}))
+            projected_value = _bounded_value(
+                mapping[key],
+                child_budget,
+                container_name=key,
+                depth=depth + 1,
+            )
+            candidate = {**projected_mapping, projected_key: projected_value}
+            if _serialized_size(candidate) > max_bytes:
+                continue
+            projected_mapping[projected_key] = projected_value
+        return projected_mapping
+    return None
+
+
+def _bounded_available_evidence(evidence: DcfGradeEvidence) -> DcfGradeEvidence:
+    """Keep an oversized result available while retaining its audit anchors."""
+    data = cast("dict[str, object]", evidence.model_dump(mode="json"))
+    # Scalar columns are untrusted too (for example, an accidentally repeated
+    # workbook error can be megabytes long), so bound them before allocating the
+    # remaining budget to structured receipts.
+    for key, value in tuple(data.items()):
+        if isinstance(value, str):
+            data[key] = _bounded_text(value, _BOUNDED_TEXT_CHARS * 4)
+    checks = data.get("checks")
+    if isinstance(checks, dict):
+        checks_mapping = cast("dict[str, object]", checks)
+        for key, value in tuple(checks_mapping.items()):
+            if isinstance(value, str):
+                checks_mapping[key] = _bounded_text(value, _BOUNDED_TEXT_CHARS)
+
+    data["assumption_snapshot"] = {}
+    data["provenance"] = {}
+    fixed_size = _serialized_size(data)
+    available = max(2, MAX_SERIALIZED_EVIDENCE_BYTES - fixed_size - 1)
+    snapshot_budget = max(2, available * 3 // 10)
+    provenance_budget = max(2, available - snapshot_budget)
+    data["assumption_snapshot"] = _bounded_value(
+        evidence.assumption_snapshot,
+        snapshot_budget,
+        container_name="assumption_snapshot",
+    )
+    data["provenance"] = _bounded_value(
+        evidence.provenance,
+        provenance_budget,
+        container_name="provenance",
+    )
+    projected = DcfGradeEvidence.model_validate(data)
+    # The budgets above are additive with the fixed envelope. This assertion is
+    # intentionally executable: a future schema field cannot silently re-open
+    # the oversized invalid-shell regression.
+    if _serialized_size(cast("object", projected.model_dump(mode="json"))) >= (
+        MAX_SERIALIZED_EVIDENCE_BYTES
+    ):
+        raise ValueError("bounded DCF evidence projection exceeded byte budget")
+    return projected
 
 
 def _market_price_consistent(
@@ -433,14 +577,10 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
         provenance=_project_provenance(provenance),
         checks=checks,
     )
-    if _serialized_size(cast("object", evidence.model_dump(mode="json"))) > (
+    if _serialized_size(cast("object", evidence.model_dump(mode="json"))) >= (
         MAX_SERIALIZED_EVIDENCE_BYTES
     ):
-        return DcfGradeEvidence(
-            status="invalid",
-            ticker=normalized_ticker,
-            invalid_reason="evidence_too_large",
-        )
+        return _bounded_available_evidence(evidence)
     return evidence
 
 

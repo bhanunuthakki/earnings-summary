@@ -37,13 +37,17 @@ edited in an existing v2 workbook overrides the JSON (the redesign capture-injec
 convention; price always refreshes live), and the effective values sync back to
 the JSON so it stays the from-scratch source of truth.
 
-Env (like build_redesigned_dcf.py): DCF_TICKER, DCF_DEST, DCF_REPO_ROOT. Values in $B.
+Env (like build_redesigned_dcf.py): DCF_TICKER, DCF_DEST, DCF_REPO_ROOT, and
+optionally DCF_OWNER_INPUTS_DEST. The latter keeps owner-edited inputs anchored
+to the currently promoted workbook while DCF_DEST points at an atomic rebuild.
+Values in $B.
 A Python value-of-record mirrors the in-sheet formulas exactly (openpyxl can't
 evaluate offline) — verified against the `formulas` lib in tests.
 """
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import os
@@ -62,11 +66,13 @@ CODE_ROOT = Path(__file__).resolve().parents[1]
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
 T = os.environ.get("DCF_TICKER", "BN")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
+OWNER_INPUTS_DEST = Path(os.environ.get("DCF_OWNER_INPUTS_DEST") or DEST)
 
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
 
 from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
+from dcf.artifact_promotion import ArtifactPromotion, promotion_from_env  # noqa: E402
 from dcf.provenance import (  # noqa: E402
     build_file_provenance,
     build_file_source_record,
@@ -233,6 +239,7 @@ def persist_dcf_run(
     source_records: tuple[dict[str, object], ...] = (),
     price_observation: SpecializedPriceObservation | None = None,
     calculation_source_files: tuple[tuple[Path, str], ...] | None = None,
+    artifact_promotion: ArtifactPromotion | None = None,
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. Shape-agnostic (BN or BRK). No-op without the DB / persist module."""
@@ -321,8 +328,9 @@ def persist_dcf_run(
                 + "\n"
             )
             row = dataclasses.replace(row, provenance=None)
-        persist_mod.upsert(conn, row)
-    return True
+        if artifact_promotion is None:
+            return persist_mod.upsert(conn, row)
+        return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
 def _persist_then_sync_bn(
@@ -332,52 +340,55 @@ def _persist_then_sync_bn(
     snapshot: dict[str, object],
     source_records: tuple[dict[str, object], ...] = (),
     price_observation: SpecializedPriceObservation | None = None,
+    artifact_promotion: ArtifactPromotion | None = None,
 ) -> tuple[bool, SyncResult]:
-    """Persist effective marks before mutating their owner-authority JSON."""
-    pending = SyncResult("pending")
+    """Sync effective marks and promote workbook + DCF row as one unit."""
+    assumptions_path = REPO / "data" / "dcf_assumptions" / f"{T}.json"
+    assumptions_existed = assumptions_path.is_file()
+    assumptions_before = assumptions_path.read_bytes() if assumptions_existed else None
+    sync_result = _sync_sotp_json_result(T, s)
     snapshot["assumption_provenance"] = {
         "authority": f"data/dcf_assumptions/{T}.json",
         "workbook_capture": "supported",
-        "sync_status": pending.status,
+        "sync_status": sync_result.status,
     }
-    persisted = persist_dcf_run(
-        eq,
-        vps,
-        s.price,
-        s.ke,
-        snapshot,
-        pending,
-        source_records,
-        price_observation,
-    )
-    if not persisted:
-        return False, SyncResult("not_attempted: DCF run was not persisted")
+    try:
+        recorded = persist_dcf_run(
+            eq,
+            vps,
+            s.price,
+            s.ke,
+            snapshot,
+            sync_result,
+            source_records,
+            price_observation,
+            artifact_promotion=artifact_promotion,
+        )
+    except Exception:
+        _restore_assumptions_file(assumptions_path, assumptions_existed, assumptions_before)
+        raise
+    if not recorded:
+        _restore_assumptions_file(assumptions_path, assumptions_existed, assumptions_before)
+        return False, SyncResult("rolled_back: DCF run was not persisted")
+    return True, sync_result
 
-    sync_result = _sync_sotp_json_result(T, s)
-    assumption_provenance = snapshot.get("assumption_provenance")
-    if isinstance(assumption_provenance, dict):
-        assumption_provenance["sync_status"] = sync_result.status
-    recorded = persist_dcf_run(
-        eq,
-        vps,
-        s.price,
-        s.ke,
-        snapshot,
-        sync_result,
-        source_records,
-        price_observation,
-    )
-    return recorded, sync_result
+
+def _restore_assumptions_file(path: Path, existed: bool, content: bytes | None) -> None:
+    if existed and content is not None:
+        path.write_bytes(content)
+    elif not existed:
+        with contextlib.suppress(OSError):
+            path.unlink()
 
 
 def _run_bn() -> int:
     prior_workbook_input = (
         build_file_source_record(
-            DEST,
+            OWNER_INPUTS_DEST,
             role="owner_workbook_inputs",
             repo_root=REPO,
         )
-        if _capture_bn_inputs(DEST)
+        if _capture_bn_inputs(OWNER_INPUTS_DEST)
         else None
     )
     s, notes = _load(T)
@@ -418,13 +429,19 @@ def _run_bn() -> int:
     reverse = reverse_valuation(s, eq, vps)
     if reverse is not None:
         snap["reverse_valuation"] = reverse
-    persisted, sync_result = _persist_then_sync_bn(
+    artifact_promotion = promotion_from_env(DEST)
+    persist_args = (
         s,
         eq,
         vps,
         snap,
         (prior_workbook_input,) if prior_workbook_input is not None else (),
         price_observation,
+    )
+    persisted, sync_result = (
+        _persist_then_sync_bn(*persist_args, artifact_promotion=artifact_promotion)
+        if artifact_promotion is not None
+        else _persist_then_sync_bn(*persist_args)
     )
     # reverse-solve: what the market implies for carry + private RE at the price
     implied_eq = s.price * s.shares_m / 1000.0
@@ -593,7 +610,7 @@ def _load(ticker: str) -> tuple[Sotp, dict[str, str]]:
             if key == "price":
                 s.price_seed_source = "owner_assumptions"
                 s.price_seed_path = f"data/dcf_assumptions/{ticker}.json"
-    for key, v in _capture_bn_inputs(DEST).items():
+    for key, v in _capture_bn_inputs(OWNER_INPUTS_DEST).items():
         setattr(s, key, v)
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
@@ -991,25 +1008,40 @@ def _run_brk() -> int:
         "value_per_share_usd": vps,
         "global_assumptions": _global_assumptions_note(),
     }
-    persisted = persist_dcf_run(
-        eq,
-        vps,
-        s.price,
-        1.0 / s.op_mult,
-        snap,
-        price_observation=price_observation,
-        calculation_source_files=(
-            (
-                REPO / "data" / "historical" / "fmp" / f"{T}_balance_sheet_annual.json",
-                "balance_sheet",
-            ),
-            (
-                REPO / "data" / "historical" / "fmp" / f"{T}_income_statement_annual.json",
-                "income_statement",
-            ),
-            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
-            *price_seed_source_files(REPO, price_observation),
+    artifact_promotion = promotion_from_env(DEST)
+    calculation_source_files = (
+        (
+            REPO / "data" / "historical" / "fmp" / f"{T}_balance_sheet_annual.json",
+            "balance_sheet",
         ),
+        (
+            REPO / "data" / "historical" / "fmp" / f"{T}_income_statement_annual.json",
+            "income_statement",
+        ),
+        (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+        *price_seed_source_files(REPO, price_observation),
+    )
+    persisted = (
+        persist_dcf_run(
+            eq,
+            vps,
+            s.price,
+            1.0 / s.op_mult,
+            snap,
+            price_observation=price_observation,
+            calculation_source_files=calculation_source_files,
+            artifact_promotion=artifact_promotion,
+        )
+        if artifact_promotion is not None
+        else persist_dcf_run(
+            eq,
+            vps,
+            s.price,
+            1.0 / s.op_mult,
+            snap,
+            price_observation=price_observation,
+            calculation_source_files=calculation_source_files,
+        )
     )
     print(
         f"RESULT\t{T}\tSOTP/sh=${vps:.2f}\tprice=${s.price:.2f}\tupside={vps / s.price - 1:+.0%}"

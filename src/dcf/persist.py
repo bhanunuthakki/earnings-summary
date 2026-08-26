@@ -35,6 +35,7 @@ from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from dcf import valuation
+from dcf.artifact_promotion import ArtifactPromotion
 from dcf.provenance import DcfInputProvenance
 from model_provenance.versioning import mark_superseded_by, supersede_current
 from schema_compat import require_current_for_write
@@ -388,9 +389,7 @@ def _current_promotion_state(
     return _receipt_status(current[0]), (str(raw_flag) if isinstance(raw_flag, str) else None)
 
 
-def promotion_decision(
-    conn: sqlite3.Connection, row: DcfRunRow
-) -> DcfPromotionDecision:
+def promotion_decision(conn: sqlite3.Connection, row: DcfRunRow) -> DcfPromotionDecision:
     """Evaluate whether ``row`` may become the current run.
 
     Outliers require an explicit owner-review contract. No such contract is
@@ -407,16 +406,10 @@ def promotion_decision(
     current_status = current_state[0] if current_state is not None else "missing"
     evidence: dict[str, object] = {
         "ticker": row.ticker.upper(),
-        "engine_version": (
-            row.provenance.engine_version if row.provenance is not None else None
-        ),
+        "engine_version": (row.provenance.engine_version if row.provenance is not None else None),
         "input_sha256": row.provenance.input_sha256 if row.provenance is not None else None,
-        "workbook_sha256": (
-            row.provenance.workbook_sha256 if row.provenance is not None else None
-        ),
-        "inputs_as_of": (
-            row.provenance.inputs_as_of_iso() if row.provenance is not None else None
-        ),
+        "workbook_sha256": (row.provenance.workbook_sha256 if row.provenance is not None else None),
+        "inputs_as_of": (row.provenance.inputs_as_of_iso() if row.provenance is not None else None),
         "equity_bridge_status": candidate_status,
         "sanity_flag": candidate_sanity,
     }
@@ -429,7 +422,10 @@ def promotion_decision(
             candidate_sanity_flag=candidate_sanity,
             candidate_evidence=evidence,
         )
-    if current_state is not None and _BRIDGE_STRENGTH[candidate_status] < _BRIDGE_STRENGTH[current_status]:
+    if (
+        current_state is not None
+        and _BRIDGE_STRENGTH[candidate_status] < _BRIDGE_STRENGTH[current_status]
+    ):
         return DcfPromotionDecision(
             allowed=False,
             reason="candidate_equity_bridge_weaker_than_current",
@@ -453,7 +449,12 @@ def check_promotion(conn: sqlite3.Connection, row: DcfRunRow) -> DcfPromotionDec
     return promotion_decision(conn, row)
 
 
-def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
+def upsert(
+    conn: sqlite3.Connection,
+    row: DcfRunRow,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
+) -> bool:
     """Persist a new dcf_runs version for ``row.ticker``.
 
     On the versioned schema (migration 0137+) the prior current run for the ticker
@@ -575,7 +576,13 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
     if not decision.allowed:
         raise DcfPromotionBlockedError(decision)
 
+    # A SAVEPOINT opened as the outermost transaction is committed by RELEASE
+    # in SQLite. Start an explicit transaction so the workbook swap remains
+    # reversible until the following connection commit succeeds.
+    if not conn.in_transaction:
+        conn.execute("BEGIN")
     conn.execute("SAVEPOINT dcf_run_upsert")
+    artifact_applied = False
     try:
         if _has_versioning_columns(conn):
             # Supersede the prior current run for this ticker (unsegmented — the
@@ -603,12 +610,23 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
             )
             new_id = int(cur.lastrowid or 0)
         _persist_input_ledger(conn, dcf_run_id=new_id, rows=input_ledger_rows)
-    except Exception:
-        conn.execute("ROLLBACK TO SAVEPOINT dcf_run_upsert")
+        if artifact_promotion is not None:
+            artifact_promotion.apply()
+            artifact_applied = True
         conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            try:
+                conn.execute("ROLLBACK TO SAVEPOINT dcf_run_upsert")
+                conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
+            except sqlite3.Error:
+                conn.rollback()
+        if artifact_applied and artifact_promotion is not None:
+            artifact_promotion.rollback()
         raise
-    conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
-    conn.commit()
+    if artifact_applied and artifact_promotion is not None:
+        artifact_promotion.finalize()
     return True
 
 

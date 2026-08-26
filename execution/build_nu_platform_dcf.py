@@ -54,6 +54,7 @@ sys.path.insert(0, str(CODE_ROOT / "src"))
 
 
 from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
+from dcf.artifact_promotion import ArtifactPromotion, promotion_from_env  # noqa: E402
 from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from dcf.specialized_price import (  # noqa: E402
     SpecializedPriceObservation,
@@ -758,6 +759,8 @@ def persist_dcf_run(
     m: Mirror,
     holdings: dict[str, object] | None = None,
     price_observation: SpecializedPriceObservation | None = None,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
 ) -> bool:
     """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
     loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
@@ -848,8 +851,9 @@ def persist_dcf_run(
                 + "\n"
             )
             row = replace(row, provenance=None)
-        persist_mod.upsert(conn, row)
-    return True
+        if artifact_promotion is None:
+            return persist_mod.upsert(conn, row)
+        return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
 def main() -> int:
@@ -868,11 +872,19 @@ def main() -> int:
     # never two that could drift on a mid-run file edit.
     holdings = _load_holdings(T)
     build(s, m, DEST, holdings)
-    persisted = (
-        persist_dcf_run(s, m, holdings, price_observation)
-        if os.environ.get("DCF_PERSIST", "1") == "1"
-        else False
-    )
+    artifact_promotion = promotion_from_env(DEST)
+    if os.environ.get("DCF_PERSIST", "1") != "1":
+        persisted = False
+    elif artifact_promotion is not None:
+        persisted = persist_dcf_run(
+            s,
+            m,
+            holdings,
+            price_observation,
+            artifact_promotion=artifact_promotion,
+        )
+    else:
+        persisted = persist_dcf_run(s, m, holdings, price_observation)
     up = (m.vps / s.price - 1) if s.price else 0.0
     last = m.rows[-1]
     print(
