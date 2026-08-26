@@ -42,6 +42,18 @@ filing identity when available, the fetched-at knowledge time, and Content Ident
 Attempt Identity supports logs, checkpoints, cost attribution, and failure recovery;
 it must never be used as the Logical Idempotency Key because it changes on every run.
 
+## DCF Debt Scope
+
+**Definition.** The exact liability set included in a DCF equity bridge. Its value
+is either `interest_bearing_debt_only`, which excludes lease liabilities, or
+`debt_and_lease_obligations`, which includes both debt and lease liabilities.
+**Contract.** Every governed equity bridge states its DCF Debt Scope explicitly;
+component selection and provenance must reconcile to that scope without silently
+mixing the two sets.
+**Not to be confused with.** `total_debt_basis`, which records how the selected
+amount was resolved from an aggregate or component source. DCF Debt Scope defines
+what belongs in the amount; `total_debt_basis` explains how that amount was found.
+
 ## Research Level
 
 **Definition.** The evidence depth authorized for an active tracked instrument. The four levels are mutually exclusive and collectively exhaustive: `catalog` preserves identity and raw-source availability; `screened` adds compact deterministic screening metrics; `monitored` adds narrow company-specific monitoring; `governed` admits the company to the complete document, fact, provenance, brief, DCF, and research-artifact contract.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
 import sqlite3
 from datetime import UTC, date, datetime
@@ -11,7 +12,8 @@ from typing import cast
 
 import pytest
 
-from dcf.persist import DcfRunRow, upsert
+from dcf.artifact_promotion import StagedFilePromotion, live_path_from_env
+from dcf.persist import DcfPromotionBlocked, DcfRunRow, upsert
 from dcf.provenance import (
     DcfInputProvenance,
     build_file_provenance,
@@ -154,6 +156,89 @@ def test_exact_provenance_retry_is_a_noop() -> None:
     ]
 
 
+def test_dcf_row_and_staged_workbook_promote_together(tmp_path: Path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    live = tmp_path / "META.xlsx"
+    staged = tmp_path / "META.rebuild.xlsx"
+    live.write_bytes(b"old workbook")
+    staged.write_bytes(b"new workbook")
+
+    assert upsert(conn, _row(), artifact_promotion=StagedFilePromotion(staged, live)) is True
+
+    assert live.read_bytes() == b"new workbook"
+    assert not staged.exists()
+    assert not list(tmp_path.glob("*.rollback.*"))
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1
+
+
+def test_commit_failure_restores_workbook_and_dcf_row(tmp_path: Path) -> None:
+    class FailingCommitConnection(sqlite3.Connection):
+        def commit(self) -> None:
+            raise sqlite3.OperationalError("simulated commit failure")
+
+    conn = sqlite3.connect(":memory:", factory=FailingCommitConnection)
+    conn.executescript(_SCHEMA)
+    live = tmp_path / "META.xlsx"
+    staged = tmp_path / "META.rebuild.xlsx"
+    live.write_bytes(b"old workbook")
+    staged.write_bytes(b"new workbook")
+
+    with pytest.raises(sqlite3.OperationalError, match="simulated commit failure"):
+        upsert(conn, _row(), artifact_promotion=StagedFilePromotion(staged, live))
+
+    assert live.read_bytes() == b"old workbook"
+    assert staged.read_bytes() == b"new workbook"
+    assert not list(tmp_path.glob("*.rollback.*"))
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+
+
+def _bridge_row(row: DcfRunRow, status: str) -> DcfRunRow:
+    assert row.provenance is not None
+    detail = dict(row.provenance.detail or {})
+    detail["equity_bridge_receipt"] = {"status": status}
+    return dataclasses.replace(row, provenance=dataclasses.replace(row.provenance, detail=detail))
+
+
+def test_weaker_bridge_candidate_cannot_replace_verified_current() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    current = _bridge_row(_row(), "verified")
+    assert upsert(conn, current) is True
+    candidate = _bridge_row(dataclasses.replace(_row(), npv_per_share=101.0), "unverified")
+
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, candidate)
+
+    assert blocked.value.decision.reason == "candidate_equity_bridge_weaker_than_current"
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 1
+    assert (
+        conn.execute("SELECT npv_per_share FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 100.0
+    )
+
+
+def test_outlier_candidate_is_blocked_with_deterministic_evidence() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    candidate = dataclasses.replace(_row(), live_price=200.0)
+
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, candidate)
+
+    decision = blocked.value.decision
+    assert decision.reason == "outlier_requires_explicit_owner_review"
+    assert decision.candidate_evidence == {
+        "ticker": "META",
+        "engine_version": "redesign_fcff_v1",
+        "input_sha256": "a" * 64,
+        "workbook_sha256": "b" * 64,
+        "inputs_as_of": "2026-07-28T12:00:00+00:00",
+        "equity_bridge_status": "missing",
+        "sanity_flag": "outlier",
+    }
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+
+
 def test_reused_hash_cannot_hide_a_changed_calculation() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
@@ -287,6 +372,7 @@ def test_input_ledger_constraint_failure_preserves_the_current_run() -> None:
     with pytest.raises(sqlite3.IntegrityError):
         upsert(conn, duplicate_inputs)
 
+    assert conn.in_transaction is False
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1
     assert conn.execute("SELECT npv FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1_000.0
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 2
@@ -323,6 +409,51 @@ def test_generated_workbook_does_not_fake_the_input_cutoff(tmp_path: Path) -> No
     by_role = {item["role"]: item for item in typed_sources}
     assert by_role["owner_assumptions"]["influences_calculation"] is True
     assert by_role["calculation_workbook"]["influences_calculation"] is False
+
+
+def test_staged_workbook_hash_uses_the_promoted_live_locator(tmp_path: Path) -> None:
+    staged = tmp_path / "dcf" / "META.rebuild.xlsx"
+    live = tmp_path / "dcf" / "META.xlsx"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"candidate workbook")
+
+    provenance = build_file_provenance(
+        ticker="META",
+        repo_root=tmp_path,
+        workbook_path=staged,
+        workbook_locator_path=live,
+        engine_version="test@1",
+        effective_inputs={},
+        assumption_snapshot={},
+        live_price=None,
+        live_price_at=None,
+        live_price_source=None,
+        source_files=(),
+    )
+
+    assert provenance.detail is not None
+    sources = provenance.detail["sources"]
+    assert isinstance(sources, list)
+    calculation = next(
+        cast("dict[str, object]", source)
+        for source in cast("list[object]", sources)
+        if isinstance(source, dict) and source.get("role") == "calculation_workbook"
+    )
+    assert calculation["path"] == "dcf/META.xlsx"
+    assert provenance.workbook_sha256 == hashlib.sha256(b"candidate workbook").hexdigest()
+
+
+def test_live_workbook_locator_uses_promotion_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staged = tmp_path / "dcf" / "META.rebuild.xlsx"
+    live = tmp_path / "dcf" / "META.xlsx"
+
+    monkeypatch.delenv("DCF_PROMOTE_DEST", raising=False)
+    assert live_path_from_env(staged) == staged
+
+    monkeypatch.setenv("DCF_PROMOTE_DEST", str(live))
+    assert live_path_from_env(staged) == live
 
 
 def test_pre_overwrite_workbook_input_receipt_retains_the_exact_old_bytes(

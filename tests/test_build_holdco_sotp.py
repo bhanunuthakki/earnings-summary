@@ -56,6 +56,7 @@ def tmp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     monkeypatch.setattr(h, "REPO", tmp_path)
     monkeypatch.setattr(h, "DEST", tmp_path / "dcf" / "BN.xlsx")
+    monkeypatch.setattr(h, "OWNER_INPUTS_DEST", h.DEST)
     monkeypatch.setattr(h, "resolve_specialized_price", fallback_price)
     return tmp_path
 
@@ -161,6 +162,28 @@ def test_workbook_edit_survives_rebuild(tmp_repo: Path) -> None:
     wb.save(h.DEST)
     s2, _ = h._load("BN")
     assert s2.bws_mult == 14.5  # workbook edit beats the JSON's 12.0
+
+
+def test_staged_rebuild_reads_owner_inputs_from_live_workbook(
+    tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Atomic promotion writes to a staged path without losing the owner's
+    yellow-cell edits from the currently promoted workbook."""
+    _write_marks(tmp_repo, {"bws_mult": 12.0})
+    owner_workbook = tmp_repo / "dcf" / "BN.xlsx"
+    staged_workbook = tmp_repo / "dcf" / "BN.rebuild.xlsx"
+    h.build(h.Sotp(), owner_workbook)
+    wb = openpyxl.load_workbook(owner_workbook)
+    wb["Dashboard"].cell(row=h._SOTP_ROW["bws_mult"], column=2, value=14.5)
+    wb.save(owner_workbook)
+
+    monkeypatch.setattr(h, "DEST", staged_workbook)
+    monkeypatch.setattr(h, "OWNER_INPUTS_DEST", owner_workbook)
+
+    s, _ = h._load("BN")
+
+    assert s.bws_mult == 14.5
+    assert not staged_workbook.exists()
 
 
 def test_bn_run_captures_owner_workbook_bytes_before_rebuild(
@@ -283,7 +306,7 @@ def test_bn_owner_json_is_not_mutated_when_dcf_persistence_does_not_succeed(
     persisted, sync_result = h._persist_then_sync_bn(s, *h.value(s), {"marks": {}})
 
     assert persisted is False
-    assert sync_result.status.startswith("not_attempted")
+    assert sync_result.status.startswith("rolled_back")
     assert path.read_text(encoding="utf-8") == before
 
 

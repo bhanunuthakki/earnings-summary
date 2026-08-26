@@ -31,10 +31,11 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import cast
+from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from dcf import valuation
+from dcf.artifact_promotion import ArtifactPromotion
 from dcf.provenance import DcfInputProvenance
 from model_provenance.versioning import mark_superseded_by, supersede_current
 from schema_compat import require_current_for_write
@@ -72,6 +73,42 @@ class DcfRunRow:
     assumptions_sync_status: str | None = None
     assumptions_synced_at: datetime | None = None
     provenance: DcfInputProvenance | None = None
+
+
+PromotionStatus = Literal["verified", "unverified", "not_applicable", "missing"]
+
+
+@dataclass(frozen=True)
+class DcfPromotionDecision:
+    """Typed, deterministic decision about replacing the current DCF run."""
+
+    allowed: bool
+    reason: str | None
+    candidate_bridge_status: PromotionStatus
+    current_bridge_status: PromotionStatus
+    candidate_sanity_flag: str | None
+    candidate_evidence: dict[str, object]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "candidate_bridge_status": self.candidate_bridge_status,
+            "current_bridge_status": self.current_bridge_status,
+            "candidate_sanity_flag": self.candidate_sanity_flag,
+            "candidate_evidence": dict(self.candidate_evidence),
+        }
+
+
+class DcfPromotionBlockedError(RuntimeError):
+    """A candidate was retained as evidence but denied current promotion."""
+
+    def __init__(self, decision: DcfPromotionDecision) -> None:
+        self.decision = decision
+        super().__init__(decision.reason or "DCF promotion blocked")
+
+
+DcfPromotionBlocked = DcfPromotionBlockedError
 
 
 def derive_over_under(live_price: float | None, npv_per_share: float) -> float | None:
@@ -300,7 +337,136 @@ def _same_current_version(
     return tuple(current) == expected
 
 
-def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
+_BRIDGE_STRENGTH: dict[PromotionStatus, int] = {
+    "missing": 0,
+    "not_applicable": 0,
+    "unverified": 1,
+    "verified": 2,
+}
+
+
+def _bridge_status(value: object) -> PromotionStatus:
+    if value in {"verified", "unverified"}:
+        return cast("PromotionStatus", value)
+    return "missing"
+
+
+def _receipt_status(provenance_json: object) -> PromotionStatus:
+    if not isinstance(provenance_json, str) or not provenance_json.strip():
+        return "missing"
+    try:
+        raw: object = json.loads(provenance_json)
+    except json.JSONDecodeError:
+        return "missing"
+    if not isinstance(raw, dict):
+        return "missing"
+    receipt = cast("dict[str, object]", raw).get("equity_bridge_receipt")
+    if not isinstance(receipt, dict):
+        return "missing"
+    return _bridge_status(cast("dict[str, object]", receipt).get("status"))
+
+
+def _current_promotion_state(
+    conn: sqlite3.Connection, ticker: str
+) -> tuple[PromotionStatus, str | None] | None:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(dcf_runs)")}
+    if "ticker" not in columns:
+        return None
+    has_latest = "is_latest" in columns
+    has_segment = "segment_name" in columns
+    has_sanity = "sanity_flag" in columns
+    if has_sanity and has_latest and has_segment:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    elif has_sanity and has_latest:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 ORDER BY id DESC LIMIT 1"
+    elif has_sanity and has_segment:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    elif has_sanity:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) ORDER BY id DESC LIMIT 1"
+    elif has_latest and has_segment:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    elif has_latest:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 ORDER BY id DESC LIMIT 1"
+    elif has_segment:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    else:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) ORDER BY id DESC LIMIT 1"
+    try:
+        current = conn.execute(query, (ticker.upper(),)).fetchone()
+    except sqlite3.Error:
+        return None
+    if current is None:
+        return None
+    raw_flag = current[1]
+    return _receipt_status(current[0]), (str(raw_flag) if isinstance(raw_flag, str) else None)
+
+
+def promotion_decision(conn: sqlite3.Connection, row: DcfRunRow) -> DcfPromotionDecision:
+    """Evaluate whether ``row`` may become the current run.
+
+    Outliers require an explicit owner-review contract. No such contract is
+    inferred here: the existing DCF refresh/apply paths provide none, so the
+    candidate is denied and returned to the caller as evidence. A candidate
+    with a weaker equity-bridge receipt also cannot replace a stronger current
+    receipt. This function is read-only and safe to run before file replacement.
+    """
+    candidate_status = (
+        _receipt_status(row.provenance.as_json()) if row.provenance is not None else "missing"
+    )
+    candidate_sanity = derive_sanity_flag(derive_over_under(row.live_price, row.npv_per_share))
+    current_state = _current_promotion_state(conn, row.ticker)
+    current_status = current_state[0] if current_state is not None else "missing"
+    evidence: dict[str, object] = {
+        "ticker": row.ticker.upper(),
+        "engine_version": (row.provenance.engine_version if row.provenance is not None else None),
+        "input_sha256": row.provenance.input_sha256 if row.provenance is not None else None,
+        "workbook_sha256": (row.provenance.workbook_sha256 if row.provenance is not None else None),
+        "inputs_as_of": (row.provenance.inputs_as_of_iso() if row.provenance is not None else None),
+        "equity_bridge_status": candidate_status,
+        "sanity_flag": candidate_sanity,
+    }
+    if candidate_sanity == "outlier":
+        return DcfPromotionDecision(
+            allowed=False,
+            reason="outlier_requires_explicit_owner_review",
+            candidate_bridge_status=candidate_status,
+            current_bridge_status=current_status,
+            candidate_sanity_flag=candidate_sanity,
+            candidate_evidence=evidence,
+        )
+    if (
+        current_state is not None
+        and _BRIDGE_STRENGTH[candidate_status] < _BRIDGE_STRENGTH[current_status]
+    ):
+        return DcfPromotionDecision(
+            allowed=False,
+            reason="candidate_equity_bridge_weaker_than_current",
+            candidate_bridge_status=candidate_status,
+            current_bridge_status=current_status,
+            candidate_sanity_flag=candidate_sanity,
+            candidate_evidence=evidence,
+        )
+    return DcfPromotionDecision(
+        allowed=True,
+        reason=None,
+        candidate_bridge_status=candidate_status,
+        current_bridge_status=current_status,
+        candidate_sanity_flag=candidate_sanity,
+        candidate_evidence=evidence,
+    )
+
+
+def check_promotion(conn: sqlite3.Connection, row: DcfRunRow) -> DcfPromotionDecision:
+    """Public read-only preflight used before swapping files or mirrors."""
+    return promotion_decision(conn, row)
+
+
+def upsert(
+    conn: sqlite3.Connection,
+    row: DcfRunRow,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
+) -> bool:
     """Persist a new dcf_runs version for ``row.ticker``.
 
     On the versioned schema (migration 0137+) the prior current run for the ticker
@@ -418,7 +584,18 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
     ):
         return False
 
+    decision = promotion_decision(conn, row)
+    if not decision.allowed:
+        raise DcfPromotionBlockedError(decision)
+
+    # A SAVEPOINT opened as the outermost transaction is committed by RELEASE
+    # in SQLite. Start an explicit transaction so the workbook swap remains
+    # reversible until the following connection commit succeeds.
+    started_transaction = not conn.in_transaction
+    if started_transaction:
+        conn.execute("BEGIN")
     conn.execute("SAVEPOINT dcf_run_upsert")
+    artifact_applied = False
     try:
         if _has_versioning_columns(conn):
             # Supersede the prior current run for this ticker (unsegmented — the
@@ -446,12 +623,25 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
             )
             new_id = int(cur.lastrowid or 0)
         _persist_input_ledger(conn, dcf_run_id=new_id, rows=input_ledger_rows)
-    except Exception:
-        conn.execute("ROLLBACK TO SAVEPOINT dcf_run_upsert")
+        if artifact_promotion is not None:
+            artifact_promotion.apply()
+            artifact_applied = True
         conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            try:
+                conn.execute("ROLLBACK TO SAVEPOINT dcf_run_upsert")
+                conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
+            except sqlite3.Error:
+                conn.rollback()
+        if started_transaction and conn.in_transaction:
+            conn.rollback()
+        if artifact_applied and artifact_promotion is not None:
+            artifact_promotion.rollback()
         raise
-    conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
-    conn.commit()
+    if artifact_applied and artifact_promotion is not None:
+        artifact_promotion.finalize()
     return True
 
 

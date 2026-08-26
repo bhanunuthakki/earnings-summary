@@ -4,10 +4,72 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
+from typing import cast
 
 import pytest
 
-from dcf.grade_evidence import load_dcf_grade_evidence
+import dcf.grade_evidence as grade_evidence_module
+from dcf.grade_evidence import (
+    MAX_SERIALIZED_EVIDENCE_BYTES,
+    DcfEvidenceChecks,
+    DcfGradeEvidence,
+    load_dcf_grade_evidence,
+)
+
+
+def test_bounded_text_terminates_when_budget_is_smaller_than_json_string_overhead() -> None:
+    bounded_text = cast(
+        "Callable[[str, int], str]",
+        grade_evidence_module.__dict__["_bounded_text"],
+    )
+    assert bounded_text("x", 2) == ""
+
+
+def test_wide_bridge_context_cannot_starve_both_lineage_receipts() -> None:
+    bridge = {
+        "status": "verified",
+        "arithmetic_status": "verified",
+        "bridge_context": {f"context_{index}": "x" * 400 for index in range(100_000)},
+        "cash_lineage": {"fact_id": 1, "lineage_role": "cash"},
+        "total_debt_lineage": {"fact_id": 2, "lineage_role": "debt"},
+    }
+    evidence = DcfGradeEvidence(
+        status="available",
+        ticker="META",
+        assumption_snapshot={"scenarios": {"base": {"conclusion": "base"}}},
+        provenance={"equity_bridge_receipt": bridge},
+        checks=DcfEvidenceChecks(
+            input_hash_valid=True,
+            workbook_hash_valid=True,
+            snapshot_status="valid",
+            provenance_status="valid",
+            source_count=0,
+            scenario_receipt_present=True,
+            reverse_receipt_present=False,
+            primary_fact_overlay_status="not_applicable",
+            equity_bridge_status="verified",
+            country_risk_authority=None,
+            market_price_consistent=False,
+        ),
+    )
+
+    bounded_projection = cast(
+        "Callable[[DcfGradeEvidence], DcfGradeEvidence]",
+        grade_evidence_module.__dict__["_bounded_available_evidence"],
+    )
+    bounded = bounded_projection(evidence)
+
+    assert bounded.projection_status == "bounded"
+    assert bounded.provenance is not None
+    projected_bridge = bounded.provenance["equity_bridge_receipt"]
+    assert isinstance(projected_bridge, dict)
+    assert projected_bridge["status"] == "verified"
+    assert projected_bridge["cash_lineage"]["lineage_role"] == "cash"
+    assert projected_bridge["total_debt_lineage"]["lineage_role"] == "debt"
+    assert len(json.dumps(bounded.model_dump(mode="json"), separators=(",", ":")).encode()) < (
+        MAX_SERIALIZED_EVIDENCE_BYTES
+    )
 
 
 def _schema(conn: sqlite3.Connection) -> None:
@@ -66,6 +128,7 @@ def test_generic_receipts_are_projected_without_regrading_them() -> None:
     evidence = load_dcf_grade_evidence(conn, "meta")
 
     assert evidence.status == "available"
+    assert evidence.projection_status == "complete"
     assert evidence.checks is not None
     assert evidence.checks.input_hash_valid is True
     assert evidence.checks.workbook_hash_valid is True
@@ -74,6 +137,143 @@ def test_generic_receipts_are_projected_without_regrading_them() -> None:
     assert evidence.checks.primary_fact_overlay_status == "ok"
     assert evidence.checks.equity_bridge_status == "verified"
     assert evidence.checks.market_price_consistent is True
+
+
+def test_projection_excludes_primary_fact_history_and_stays_below_bound() -> None:
+    conn = sqlite3.connect(":memory:")
+    _schema(conn)
+    observed_at = "2026-08-26T03:32:46+00:00"
+    overlay = {
+        "status": "ok",
+        "statements": {
+            "balance": {
+                "status": "ok",
+                "applied": [
+                    {"fmp_field": "totalDebt", "period_end": "2026-06-30"} for _ in range(5_000)
+                ],
+            }
+        },
+    }
+    snapshot: dict[str, object] = {
+        "scenarios": {"bull": {}, "base": {}, "bear": {}},
+        "priced_in": {},
+    }
+    provenance = {
+        "ticker": "META",
+        "sources": [{"role": "income_statement", "sha256": "a" * 64}],
+        "market_price": {"price": 90.0, "observed_at": observed_at, "source": "yfinance"},
+        "primary_fact_overlay": overlay,
+        "equity_bridge_receipt": {"status": "verified", "cash_lineage": {"fact_id": 1}},
+        "country_risk_context": {"authority": "systematic_default_zero"},
+    }
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1,'META','2026-08-26T03:33:00','2026-08-26',"
+        "'redesign_fcff_v1',?,?,?,90.0,?,427.77,0.3326,NULL,?,?,1,NULL)",
+        (
+            "a" * 64,
+            "b" * 64,
+            observed_at,
+            observed_at,
+            json.dumps(snapshot),
+            json.dumps(provenance),
+        ),
+    )
+
+    evidence = load_dcf_grade_evidence(conn, "META")
+
+    assert evidence.status == "available"
+    assert evidence.provenance is not None
+    overlay_projection = evidence.provenance["primary_fact_overlay"]
+    assert isinstance(overlay_projection, dict)
+    typed_overlay = cast("dict[str, object]", overlay_projection)
+    statements = typed_overlay["statements"]
+    assert isinstance(statements, dict)
+    typed_statements = cast("dict[str, object]", statements)
+    balance = typed_statements["balance"]
+    assert isinstance(balance, dict) and balance["applied_count"] == 5_000
+    assert not any(isinstance(value, list) for value in typed_overlay.values())
+    assert evidence.checks is not None and evidence.checks.source_count == 1
+    assert len(json.dumps(evidence.model_dump(mode="json"), separators=(",", ":"))) <= (
+        MAX_SERIALIZED_EVIDENCE_BYTES
+    )
+
+
+def test_oversized_projection_keeps_checks_and_equity_bridge_receipt() -> None:
+    conn = sqlite3.connect(":memory:")
+    _schema(conn)
+    observed_at = "2026-08-26T03:32:46+00:00"
+    snapshot: dict[str, object] = {
+        "format": "redesign",
+        "scenarios": {
+            "bull": {"conclusion": "retain bull case", "noise": "x" * 80_000},
+            "base": {"conclusion": "retain base case"},
+            "bear": {"conclusion": "retain bear case"},
+        },
+        "priced_in": {"method": "reverse", "noise": "y" * 80_000},
+        "irrelevant_payload": {"noise": "z" * 200_000},
+    }
+    bridge: dict[str, object] = {
+        "schema_version": "dcf_equity_bridge_receipt.v2",
+        "ticker": "META",
+        "status": "verified",
+        "arithmetic_status": "verified",
+        "operating_value_usd_m": 100.0,
+        "cash_m": 20.0,
+        "total_debt_m": 10.0,
+        "diluted_shares_m": 10.0,
+        "fx_to_usd": 1.0,
+        "stored_value_per_share_usd": 11.0,
+        "recomputed_value_per_share_usd": 11.0,
+        "arithmetic_delta": 0.0,
+        "reporting_currency": "USD",
+        "bridge_period_end": "2026-06-30",
+        "bridge_fiscal_period_type": "quarter",
+        "bridge_context": {"noise": "a" * 120_000},
+        "cash_lineage": {"fact_id": 1, "noise": "b" * 120_000},
+        "total_debt_lineage": {"fact_id": 2, "noise": "c" * 120_000},
+        "reasons": [],
+    }
+    provenance: dict[str, object] = {
+        "ticker": "META",
+        "sources": [{"role": "income_statement", "sha256": "a" * 64}],
+        "market_price": {"price": 570.05, "observed_at": observed_at, "source": "yfinance"},
+        "country_risk_context": {"authority": "r" * 200_000},
+        "equity_bridge_receipt": bridge,
+        "irrelevant_payload": {"noise": "q" * 300_000},
+    }
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1,'META','2026-08-26T03:33:00','2026-08-26',"
+        "'redesign_fcff_v1',?,?,?,570.05,?,427.77,0.3326,NULL,?,?,1,NULL)",
+        (
+            "a" * 64,
+            "b" * 64,
+            observed_at,
+            observed_at,
+            json.dumps(snapshot),
+            json.dumps(provenance),
+        ),
+    )
+
+    evidence = load_dcf_grade_evidence(conn, "META")
+
+    assert evidence.status == "available"
+    assert evidence.checks is not None
+    assert evidence.checks.equity_bridge_status == "verified"
+    assert evidence.provenance is not None
+    projected_bridge = evidence.provenance.get("equity_bridge_receipt")
+    assert isinstance(projected_bridge, dict)
+    assert projected_bridge["status"] == "verified"
+    assert projected_bridge["arithmetic_status"] == "verified"
+    assert projected_bridge["stored_value_per_share_usd"] == 11.0
+    assert evidence.checks.country_risk_authority is not None
+    assert len(evidence.checks.country_risk_authority) <= 512
+    assert "irrelevant_payload" not in evidence.provenance
+    serialized = json.dumps(evidence.model_dump(mode="json"), separators=(",", ":")).encode()
+    assert len(serialized) < MAX_SERIALIZED_EVIDENCE_BYTES
+
+    # Projection is deterministic, including which arbitrary payload is retained.
+    repeat = load_dcf_grade_evidence(conn, "META")
+    assert repeat.model_dump(mode="json") == evidence.model_dump(mode="json")
 
 
 def test_specialized_receipts_mark_fcff_only_checks_not_applicable() -> None:

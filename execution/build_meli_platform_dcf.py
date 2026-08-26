@@ -60,6 +60,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
+from dcf.artifact_promotion import (  # noqa: E402
+    ArtifactPromotion,
+    live_path_from_env,
+    promotion_from_env,
+)
 from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from dcf.specialized_price import (  # noqa: E402
     SpecializedPriceObservation,
@@ -834,6 +839,8 @@ def persist_dcf_run(
     m: Mirror,
     holdings: dict[str, object] | None = None,
     price_observation: SpecializedPriceObservation | None = None,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
 ) -> bool:
     """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
     loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
@@ -851,6 +858,7 @@ def persist_dcf_run(
     price_source = (
         price_observation.source_name if price_observation is not None else "assumption_seed"
     )
+    live_workbook = live_path_from_env(DEST)
     snap_payload: dict[str, object] = {
         "model": "meli_platform_sotp",
         "value_per_share": m.vps,
@@ -863,7 +871,7 @@ def persist_dcf_run(
         "wacc": s.wacc,
         "credit_ke": s.credit_ke,
         "country_risk_premium": s.country_risk_premium,
-        "workbook": str(DEST),
+        "workbook": str(live_workbook),
         "assumption_provenance": {
             "authority": f"data/bank_assumptions/{T}_sotp.json",
             "workbook_capture": "unsupported",
@@ -880,6 +888,7 @@ def persist_dcf_run(
         ticker=T,
         repo_root=REPO,
         workbook_path=DEST,
+        workbook_locator_path=live_workbook,
         engine_version="meli_platform_sotp_v1",
         effective_inputs=asdict(s),
         assumption_snapshot=snap_payload,
@@ -912,7 +921,7 @@ def persist_dcf_run(
         live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
-        notes=f"workbook={DEST.name} (MELI sum-of-the-parts platform DCF)",
+        notes=f"workbook={live_workbook.name} (MELI sum-of-the-parts platform DCF)",
         provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
@@ -928,8 +937,9 @@ def persist_dcf_run(
                 + "\n"
             )
             row = replace(row, provenance=None)
-        persist_mod.upsert(conn, row)
-    return True
+        if artifact_promotion is None:
+            return persist_mod.upsert(conn, row)
+        return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
 def main() -> int:
@@ -948,11 +958,19 @@ def main() -> int:
     # never two that could drift on a mid-run file edit.
     holdings = _load_holdings(T)
     build(s, m, DEST, holdings)
-    persisted = (
-        persist_dcf_run(s, m, holdings, price_observation)
-        if os.environ.get("DCF_PERSIST", "1") == "1"
-        else False
-    )
+    artifact_promotion = promotion_from_env(DEST)
+    if os.environ.get("DCF_PERSIST", "1") != "1":
+        persisted = False
+    elif artifact_promotion is not None:
+        persisted = persist_dcf_run(
+            s,
+            m,
+            holdings,
+            price_observation,
+            artifact_promotion=artifact_promotion,
+        )
+    else:
+        persisted = persist_dcf_run(s, m, holdings, price_observation)
     up = (m.vps / s.price - 1) if s.price else 0.0
     print(
         f"RESULT\t{T}\tvalue/sh=${m.vps:,.2f}\tprice=${s.price:,.2f}\tupside={up:+.0%}"

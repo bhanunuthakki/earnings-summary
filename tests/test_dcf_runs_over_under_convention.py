@@ -206,6 +206,8 @@ def test_bank_writer_stores_decimal_ratio(monkeypatch: pytest.MonkeyPatch, repo_
     )
     s = bank.Assum()
     m = bank.mirror(a, s)
+    a = dataclasses.replace(a, price=m.vps_usd * 0.8)
+    m = bank.mirror(a, s)
     assert a.price < m.vps_usd  # fixture is under-valued
     assert bank.persist_dcf_run(a, s, m)
     live, fair, stored = _stored(repo_root, bank.T)
