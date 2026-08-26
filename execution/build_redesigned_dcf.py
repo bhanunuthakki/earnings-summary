@@ -633,10 +633,11 @@ _cash_resolution = equity_bridge.resolve_complete_aggregate(
     aggregate_field="cashAndShortTermInvestments",
     component_fields=("cashAndCashEquivalents", "shortTermInvestments"),
 )
-# Use TOTAL debt (long- + short-term), not longTermDebt alone: convertible notes
-# and near-maturity paper land in shortTermDebt (e.g. LITE FQ3'26: $3,251M of $3,314M
-# total debt sat in short-term), so longTermDebt-only massively understates net debt
-# and overstates equity value. Fall back to the LT+ST sum if totalDebt is absent.
+# Debt is a governed valuation input, not a normalized-data convenience.  The
+# builder may publish only when the approved scope resolves from the exact
+# primary aggregate and every signed lease component.  Missing evidence is a
+# HOLD; LT+ST is never a publishing fallback because it cannot prove the lease
+# perimeter of DebtAndCapitalLeaseObligations.
 _bridge_period_end_raw = _bal_latest.get("date")
 _bridge_currency_raw = _bal_latest.get("reportedCurrency")
 _bridge_period_end = _bridge_period_end_raw if isinstance(_bridge_period_end_raw, str) else None
@@ -653,12 +654,7 @@ _verified_debt_resolution = (
     if _bridge_period_end is not None and _bridge_currency is not None
     else None
 )
-_fallback_debt_resolution = equity_bridge.resolve_complete_aggregate(
-    _bal_latest,
-    aggregate_field="totalDebt",
-    component_fields=("longTermDebt", "shortTermDebt"),
-)
-if _cash_resolution is None or _fallback_debt_resolution is None:
+if _cash_resolution is None or _verified_debt_resolution is None:
     print(
         json.dumps(
             {
@@ -669,7 +665,7 @@ if _cash_resolution is None or _fallback_debt_resolution is None:
                     name
                     for name, resolution in (
                         ("cash_and_short_term_investments", _cash_resolution),
-                        ("total_debt", _fallback_debt_resolution),
+                        (f"verified_{DCF_DEBT_SCOPE}", _verified_debt_resolution),
                     )
                     if resolution is None
                 ],
@@ -678,13 +674,9 @@ if _cash_resolution is None or _fallback_debt_resolution is None:
         ),
         file=sys.stderr,
     )
-    raise RuntimeError("latest balance sheet lacks a complete DCF equity bridge")
+    raise RuntimeError("latest balance sheet lacks a verified DCF equity bridge")
 cash_now = _cash_resolution.value / 1e6
-debt_now = (
-    _verified_debt_resolution.value
-    if _verified_debt_resolution is not None
-    else _fallback_debt_resolution.value
-) / 1e6
+debt_now = _verified_debt_resolution.value / 1e6
 shares_now = m(inc_i[latest].get("weightedAverageShsOutDil"))
 if shares_now is None or shares_now <= 0:
     print(
@@ -700,54 +692,40 @@ if shares_now is None or shares_now <= 0:
         file=sys.stderr,
     )
     raise RuntimeError("latest income statement lacks positive diluted shares")
-if _verified_debt_resolution is None:
-    print(
-        json.dumps(
-            {
-                "event": "dcf_equity_bridge_unavailable",
-                "ticker": T,
-                "period": f"{latest[1]} {latest[0]}",
-                "missing": [f"verified_{DCF_DEBT_SCOPE}"],
-            },
-            sort_keys=True,
-        ),
-        file=sys.stderr,
+_debt_component_lineage = [
+    {**dict(lineage), "operation_sign": sign}
+    for lineage, (_field, sign) in zip(
+        _verified_debt_resolution.component_lineage,
+        _verified_debt_resolution.operations,
+        strict=True,
     )
-else:
-    _debt_component_lineage = [
-        {**dict(lineage), "operation_sign": sign}
-        for lineage, (_field, sign) in zip(
-            _verified_debt_resolution.component_lineage,
-            _verified_debt_resolution.operations,
-            strict=True,
-        )
-    ]
-    print(
-        json.dumps(
-            {
-                "event": "dcf_equity_bridge_context",
-                "schema_version": "dcf_equity_bridge_context.v2",
-                "ticker": T,
-                "period_end": _bridge_period_end,
-                "fiscal_period_type": latest[1],
-                "reporting_currency": _bridge_currency,
-                "cash_m": cash_now,
-                "total_debt_m": debt_now,
-                "diluted_shares_m": shares_now,
-                "cash_basis": _cash_resolution.basis,
-                "total_debt_basis": _verified_debt_resolution.debt_basis,
-                "debt_scope": _verified_debt_resolution.scope,
-                "debt_calculation": _verified_debt_resolution.calculation,
-                "debt_operations": [
-                    {"field": field, "sign": sign}
-                    for field, sign in _verified_debt_resolution.operations
-                ],
-                "debt_component_lineage": _debt_component_lineage,
-            },
-            sort_keys=True,
-        ),
-        file=sys.stderr,
-    )
+]
+print(
+    json.dumps(
+        {
+            "event": "dcf_equity_bridge_context",
+            "schema_version": "dcf_equity_bridge_context.v2",
+            "ticker": T,
+            "period_end": _bridge_period_end,
+            "fiscal_period_type": latest[1],
+            "reporting_currency": _bridge_currency,
+            "cash_m": cash_now,
+            "total_debt_m": debt_now,
+            "diluted_shares_m": shares_now,
+            "cash_basis": _cash_resolution.basis,
+            "total_debt_basis": _verified_debt_resolution.debt_basis,
+            "debt_scope": _verified_debt_resolution.scope,
+            "debt_calculation": _verified_debt_resolution.calculation,
+            "debt_operations": [
+                {"field": field, "sign": sign}
+                for field, sign in _verified_debt_resolution.operations
+            ],
+            "debt_component_lineage": _debt_component_lineage,
+        },
+        sort_keys=True,
+    ),
+    file=sys.stderr,
+)
 beta = BETA
 ke = RF + beta * ERP + CRP
 mktcap = price * shares_now

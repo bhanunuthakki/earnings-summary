@@ -92,6 +92,7 @@ def _row() -> DcfRunRow:
             engine_version="redesign_fcff_v1",
             inputs_as_of=datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
             detail={
+                "equity_bridge_receipt": {"status": "verified"},
                 "sources": [
                     {
                         "role": "income_statement",
@@ -129,7 +130,8 @@ def test_exact_provenance_retry_is_a_noop() -> None:
         "a" * 64,
         "b" * 64,
         "redesign_fcff_v1",
-        '{"market_price":{"observed_at":"2026-07-28T12:00:00+00:00",'
+        '{"equity_bridge_receipt":{"status":"verified"},'
+        '"market_price":{"observed_at":"2026-07-28T12:00:00+00:00",'
         '"price":90.0,"source":"fmp_quote"},"sources":[{"bytes":123,'
         '"observed_at":"2026-07-28T11:59:00+00:00",'
         '"path":"data/META_income_statement.json","role":"income_statement",'
@@ -210,11 +212,34 @@ def test_weaker_bridge_candidate_cannot_replace_verified_current() -> None:
     with pytest.raises(DcfPromotionBlocked) as blocked:
         upsert(conn, candidate)
 
-    assert blocked.value.decision.reason == "candidate_equity_bridge_weaker_than_current"
+    assert blocked.value.decision.reason == "candidate_equity_bridge_unverified"
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 1
     assert (
         conn.execute("SELECT npv_per_share FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 100.0
     )
+
+
+@pytest.mark.parametrize("status", ["missing", "unverified"])
+def test_unverified_bridge_candidate_cannot_be_first_promotion(status: str) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    candidate = _row()
+    assert candidate.provenance is not None
+    detail = dict(candidate.provenance.detail or {})
+    if status == "missing":
+        detail.pop("equity_bridge_receipt", None)
+    else:
+        detail["equity_bridge_receipt"] = {"status": "unverified"}
+    candidate = dataclasses.replace(
+        candidate,
+        provenance=dataclasses.replace(candidate.provenance, detail=detail),
+    )
+
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, candidate)
+
+    assert blocked.value.decision.reason == "candidate_equity_bridge_unverified"
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
 
 
 def test_outlier_candidate_is_blocked_with_deterministic_evidence() -> None:
@@ -233,7 +258,7 @@ def test_outlier_candidate_is_blocked_with_deterministic_evidence() -> None:
         "input_sha256": "a" * 64,
         "workbook_sha256": "b" * 64,
         "inputs_as_of": "2026-07-28T12:00:00+00:00",
-        "equity_bridge_status": "missing",
+        "equity_bridge_status": "verified",
         "sanity_flag": "outlier",
     }
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
@@ -308,13 +333,15 @@ def test_pacific_information_date_rejects_naive_cutoff() -> None:
         upsert(conn, dataclasses.replace(row, provenance=provenance))
 
 
-def test_provenance_none_keeps_existing_callers_working() -> None:
+def test_provenance_none_cannot_publish_an_unverified_first_run() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
 
-    assert upsert(conn, dataclasses.replace(_row(), provenance=None)) is True
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, dataclasses.replace(_row(), provenance=None))
 
-    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 1
+    assert blocked.value.decision.reason == "candidate_equity_bridge_unverified"
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 0
 
 
@@ -365,7 +392,10 @@ def test_input_ledger_constraint_failure_preserves_the_current_run() -> None:
         provenance=dataclasses.replace(
             provenance,
             input_sha256="e" * 64,
-            detail={"sources": [source, source]},
+            detail={
+                "equity_bridge_receipt": {"status": "verified"},
+                "sources": [source, source],
+            },
         ),
     )
 

@@ -149,7 +149,7 @@ def test_primary_debt_scope_requires_exact_reported_aggregate_lineage() -> None:
     assert resolved.value == 100_000_000
     assert resolved.component_lineage == (total_debt, finance_lease)
 
-    derived_total_debt = {
+    derived_total_debt: dict[str, object] = {
         **total_debt,
         "derivation": {
             "formula": "long_term_debt + short_term_debt",
@@ -201,6 +201,30 @@ def test_equity_bridge_receipt_verifies_arithmetic_and_primary_lineage() -> None
     assert len(receipt.debt_component_lineage) == 2
     assert receipt.cash_lineage["fact_id"] == 34
     assert receipt.total_debt_lineage["source_tier"] == "sec_official"
+
+
+def test_equity_bridge_context_accepts_only_machine_rounding_noise() -> None:
+    context = _context()
+    context["cash_m"] = 200.00000000000003
+    receipt = build_equity_bridge_receipt(
+        ticker="TEST",
+        operating_value_usd_m=1_000,
+        cash_m=200,
+        total_debt_m=100,
+        diluted_shares_m=10,
+        fx_to_usd=1,
+        value_per_share_usd=110,
+        reporting_currency="USD",
+        primary_fact_overlay=_overlay(
+            _lineage("cashAndShortTermInvestments", 200_000_000),
+            _lineage("totalDebt", 100_000_000),
+            _lineage("financeLeaseLiability", 0),
+        ),
+        bridge_context=context,
+    )
+
+    assert receipt.status == "verified"
+    assert "equity_bridge_context_cash_m_mismatch" not in receipt.reasons
 
 
 def test_equity_bridge_receipt_does_not_average_away_missing_lineage() -> None:

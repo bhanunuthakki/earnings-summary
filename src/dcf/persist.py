@@ -425,6 +425,15 @@ def promotion_decision(conn: sqlite3.Connection, row: DcfRunRow) -> DcfPromotion
         "equity_bridge_status": candidate_status,
         "sanity_flag": candidate_sanity,
     }
+    if candidate_status != "verified":
+        return DcfPromotionDecision(
+            allowed=False,
+            reason="candidate_equity_bridge_unverified",
+            candidate_bridge_status=candidate_status,
+            current_bridge_status=current_status,
+            candidate_sanity_flag=candidate_sanity,
+            candidate_evidence=evidence,
+        )
     if candidate_sanity == "outlier":
         return DcfPromotionDecision(
             allowed=False,

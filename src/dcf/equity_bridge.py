@@ -417,7 +417,7 @@ def _validate_bridge_context(
         ("diluted_shares_m", diluted_shares_m),
     ):
         observed = _decimal(copied.get(field))
-        if observed is None or observed != Decimal(str(expected)):
+        if observed is None or not _decimal_close(observed, Decimal(str(expected))):
             reasons.add(f"equity_bridge_context_{field}_mismatch")
     for field in ("cash_basis", "total_debt_basis"):
         if copied.get(field) not in {"reported_aggregate", "complete_component_sum"}:
@@ -589,6 +589,11 @@ def _decimal(value: object) -> Decimal | None:
     except (InvalidOperation, ValueError):
         return None
     return parsed if parsed.is_finite() else None
+
+
+def _decimal_close(left: Decimal, right: Decimal) -> bool:
+    """Accept only machine-rounding noise at the serialized million-unit boundary."""
+    return abs(left - right) <= Decimal("0.000000001")
 
 
 def _text(value: Mapping[str, object] | None, key: str) -> str | None:

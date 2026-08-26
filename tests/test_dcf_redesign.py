@@ -356,6 +356,76 @@ def test_from_dict_rejects_segment_without_growth() -> None:
 # --------------------------------------------------------------------------- #
 # Fixtures: write FMP, run the real builder
 # --------------------------------------------------------------------------- #
+def _write_primary_bridge_facts(
+    repo: Path, ticker: str, latest: dict[str, object], *, currency: str
+) -> None:
+    conn = sqlite3.connect(repo / "data" / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
+            doc_type TEXT NOT NULL, source_url TEXT, file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL, fetched_at TEXT NOT NULL, fetch_status TEXT NOT NULL,
+            raw_bytes_size INTEGER NOT NULL, source_quality_tier TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS financial_facts (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, period_end TEXT NOT NULL,
+            fiscal_period_type TEXT NOT NULL, line_item TEXT NOT NULL, value NUMERIC NOT NULL,
+            currency TEXT, unit TEXT NOT NULL, source_doc_id INTEGER NOT NULL, locator TEXT
+        );
+        CREATE VIEW IF NOT EXISTS v_financial_facts_resolved_current AS
+            SELECT * FROM financial_facts;
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO documents "
+        "(id,ticker,source_type,doc_type,source_url,file_path,sha256,fetched_at,"
+        "fetch_status,raw_bytes_size,source_quality_tier) VALUES "
+        "(1,?,'sec_xbrl','10-Q','https://www.sec.gov/example','fixture.xml',?,"
+        "'2026-01-15T00:00:00+00:00','ok',1,'sec_official')",
+        (ticker, "1" * 64),
+    )
+    conn.executemany(
+        "INSERT OR REPLACE INTO financial_facts "
+        "(id,ticker,period_end,fiscal_period_type,line_item,value,currency,unit,source_doc_id,locator) "
+        "VALUES (?,?,?,?,?,?,?,?,1,NULL)",
+        [
+            (
+                1,
+                ticker,
+                latest["date"],
+                latest["period"],
+                "cash_and_short_term_investments",
+                latest["cashAndShortTermInvestments"],
+                currency,
+                "actual",
+            ),
+            (
+                2,
+                ticker,
+                latest["date"],
+                latest["period"],
+                "total_debt",
+                latest["totalDebt"],
+                currency,
+                "actual",
+            ),
+            (
+                3,
+                ticker,
+                latest["date"],
+                latest["period"],
+                "finance_lease_liability",
+                latest.get("financeLeaseLiability", 0),
+                currency,
+                "actual",
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
 def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool = False) -> None:
     """Minimal FMP fixture: 4 full fiscal years of growing quarterlies + a profile
     + forward estimates. Optionally a two-line product-segment file."""
@@ -390,6 +460,8 @@ def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool
                 {
                     "fiscalYear": year,
                     "period": q,
+                    "reportedCurrency": currency,
+                    "date": f"{year}-03-31",
                     "cashAndShortTermInvestments": rev * 0.30 * 1e6,
                     "totalCurrentAssets": rev * 0.60 * 1e6,
                     "propertyPlantEquipmentNet": rev * 0.50 * 1e6,
@@ -397,6 +469,7 @@ def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool
                     "totalCurrentLiabilities": rev * 0.30 * 1e6,
                     "longTermDebt": rev * 0.20 * 1e6,
                     "totalDebt": rev * 0.20 * 1e6,
+                    "financeLeaseLiability": 0,
                     "totalStockholdersEquity": rev * 0.80 * 1e6,
                 }
             )
@@ -451,6 +524,7 @@ def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
+    _write_primary_bridge_facts(repo, ticker, bal[-1], currency=currency)
 
 
 def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
@@ -488,6 +562,8 @@ def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
                 {
                     "fiscalYear": year,
                     "period": q,
+                    "reportedCurrency": "USD",
+                    "date": f"{year}-06-30",
                     "cashAndShortTermInvestments": rev * 0.30 * 1e6,
                     "totalCurrentAssets": rev * 0.60 * 1e6,
                     "propertyPlantEquipmentNet": rev * 0.50 * 1e6,
@@ -495,6 +571,7 @@ def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
                     "totalCurrentLiabilities": rev * 0.30 * 1e6,
                     "longTermDebt": rev * 0.20 * 1e6,
                     "totalDebt": rev * 0.20 * 1e6,
+                    "financeLeaseLiability": 0,
                     "totalStockholdersEquity": rev * 0.80 * 1e6,
                 }
             )
@@ -536,6 +613,7 @@ def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
+    _write_primary_bridge_facts(repo, ticker, bal[-1], currency="USD")
 
 
 def _build(repo: Path, ticker: str, dest: Path) -> float:
@@ -1584,21 +1662,22 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     assert base_inp is not None
     m0 = base_inp.exit_multiple
     conn = sqlite3.connect(str(db))
-    npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
-    primary_overlay = {
+    seeded = conn.execute(
+        "SELECT npv_per_share, provenance_json FROM dcf_runs WHERE ticker='TESTCO'"
+    ).fetchone()
+    assert seeded is not None
+    npv0 = seeded[0]
+    seeded_provenance = json.loads(str(seeded[1]))
+    primary_overlay = json.loads(json.dumps(seeded_provenance["primary_fact_overlay"]))
+    primary_overlay["statements"]["income"] = {
         "status": "ok",
-        "statements": {
-            "income": {
-                "status": "ok",
-                "applied": [
-                    {
-                        "fact_id": 42,
-                        "source_url": "https://www.sec.gov/example",
-                        "as_of": "2026-08-20T12:00:00+00:00",
-                    }
-                ],
+        "applied": [
+            {
+                "fact_id": 42,
+                "source_url": "https://www.sec.gov/example",
+                "as_of": "2026-08-20T12:00:00+00:00",
             }
-        },
+        ],
     }
     prior_country_context = {
         "schema_version": "dcf_country_risk_context.v1",
@@ -1620,7 +1699,7 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
         (
             json.dumps(
                 {
-                    "ticker": "TESTCO",
+                    **seeded_provenance,
                     "primary_fact_overlay": primary_overlay,
                     "country_risk_context": prior_country_context,
                 }
@@ -1766,7 +1845,7 @@ def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
 
 
 _KPI_SCHEMA = """
-CREATE TABLE documents (
+CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL, source_type TEXT NOT NULL, doc_type TEXT NOT NULL,
     source_url TEXT, file_path TEXT NOT NULL, sha256 TEXT NOT NULL,
@@ -1774,10 +1853,10 @@ CREATE TABLE documents (
     raw_bytes_size INTEGER NOT NULL,
     source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
 );
-CREATE TABLE kpi_definitions (
+CREATE TABLE IF NOT EXISTS kpi_definitions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, name TEXT NOT NULL
 );
-CREATE TABLE kpi_facts (
+CREATE TABLE IF NOT EXISTS kpi_facts (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
     period_end TIMESTAMP NOT NULL, fiscal_period_type TEXT NOT NULL,
     kpi_definition_id INTEGER NOT NULL, value NUMERIC(24, 6) NOT NULL,
@@ -1791,17 +1870,24 @@ def _seed_kpi_fact(db: Path, ticker: str, name: str, value: float, unit: str) ->
     single latest-quarter KPI fact the inject route can resolve."""
     conn = sqlite3.connect(str(db))
     conn.executescript(_KPI_SCHEMA)
-    conn.execute(
-        "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256, "
-        "fetched_at, fetch_status, raw_bytes_size) VALUES "
-        "(1, ?, 'fmp', 'fmp_key_metrics', 'x', ?, '2026-01-01 00:00:00', 'ok', 1)",
+    document = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size, source_quality_tier) VALUES "
+        "(?, 'fmp', 'fmp_key_metrics', 'x', ?, '2026-01-01 00:00:00', 'ok', 1, "
+        "'fmp_normalized')",
         (ticker, "0" * 64),
     )
-    conn.execute("INSERT INTO kpi_definitions (id, ticker, name) VALUES (1, ?, ?)", (ticker, name))
+    assert document.lastrowid is not None
+    document_id = int(document.lastrowid)
+    definition = conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name) VALUES (?, ?)", (ticker, name)
+    )
+    assert definition.lastrowid is not None
+    definition_id = int(definition.lastrowid)
     conn.execute(
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
-        "value, unit, source_doc_id) VALUES (?, '2025-09-30 00:00:00', 'Q3', 1, ?, ?, 1)",
-        (ticker, value, unit),
+        "value, unit, source_doc_id) VALUES (?, '2025-09-30 00:00:00', 'Q3', ?, ?, ?, ?)",
+        (ticker, definition_id, value, unit, document_id),
     )
     conn.commit()
     conn.close()
