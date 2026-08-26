@@ -71,6 +71,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import statistics
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -79,6 +80,13 @@ from typing import cast
 from compute.comparable_sets import ComparableSetMember, MetricClass
 from models.facts import DerivedRef, FactLocator
 from pipeline.locators import derived_locator
+from sources.adapters import EstimateMetric
+from sources.readers import ProviderNeutralDataReader, ReaderUnavailableStatus
+
+# Analyst estimates are refreshed on the paid roughly-six-month cadence in
+# directives/fmp_backpop.md. One extra month is the explicit freshness grace;
+# older observations remain attributable but are not projected as current NTM.
+FORWARD_ESTIMATE_STALE_AFTER_DAYS = 210
 
 # ---------------------------------------------------------------------------
 # Per-member raw inputs
@@ -107,6 +115,13 @@ class MemberSnapshot:
     # method_flags so a thin/zero result is traceable to currency, not just
     # "missing data."
     non_usd_currency: bool = False
+    forward_net_income: float | None = None
+    forward_period_end: date | None = None
+    forward_estimate_observed_on: date | None = None
+    forward_estimate_provider: str | None = None
+    forward_estimate_currency: str | None = None
+    forward_estimate_source_hash: str | None = None
+    forward_estimate_unavailable_reason: str | None = None
 
 
 @dataclass
@@ -225,6 +240,53 @@ def load_member_snapshot(repo_root: Path, ticker: str, as_of: date) -> MemberSna
     elif bal_q and not bal_is_usd:
         snap.non_usd_currency = True
 
+    # Canonical forward-earnings projection. The provider-neutral adapter
+    # validates source bytes, currency, fiscal period, provider, observation
+    # time, and payload identity. We select the closest forward fiscal-year
+    # consensus (the same FY1 proxy the valuation engine calls NTM), never a
+    # trailing value or a fabricated zero.
+    estimates = ProviderNeutralDataReader(repo_root).get_analyst_estimates(
+        ticker, metric=EstimateMetric.NET_INCOME.value
+    )
+    if isinstance(estimates, ReaderUnavailableStatus):
+        snap.forward_estimate_unavailable_reason = (
+            "estimate_cache_missing"
+            if estimates.reason.startswith("No estimates cache found")
+            else "estimate_source_invalid"
+        )
+        return snap
+    forward = sorted(
+        (
+            item
+            for item in estimates
+            if item.fiscal_period.value == "FY" and item.target_period_end.date() > as_of
+        ),
+        key=lambda item: item.target_period_end,
+    )
+    if not forward:
+        snap.forward_estimate_unavailable_reason = "no_forward_fiscal_period"
+        return snap
+    estimate = forward[0]
+    snap.forward_period_end = estimate.target_period_end.date()
+    snap.forward_estimate_observed_on = estimate.observation_date.date()
+    snap.forward_estimate_provider = estimate.provider
+    snap.forward_estimate_currency = estimate.currency.value
+    snap.forward_estimate_source_hash = estimate.source_payload_hash
+    if estimate.observation_date.date() > as_of:
+        snap.forward_estimate_unavailable_reason = "estimate_observed_after_as_of"
+    elif (as_of - estimate.observation_date.date()).days > FORWARD_ESTIMATE_STALE_AFTER_DAYS:
+        snap.forward_estimate_unavailable_reason = "stale_estimate"
+    elif estimate.currency.value != "USD":
+        # historical_market_cap is the USD quote-side series in this engine;
+        # never divide it by issuer earnings in another currency.
+        snap.forward_estimate_unavailable_reason = "currency_mismatch"
+    elif estimate.estimated_avg <= 0:
+        snap.forward_estimate_unavailable_reason = "negative_forward_earnings"
+    elif snap.market_cap is None:
+        snap.forward_estimate_unavailable_reason = "market_cap_unavailable"
+    else:
+        snap.forward_net_income = float(estimate.estimated_avg)
+
     return snap
 
 
@@ -293,6 +355,66 @@ def _pe_rows(snapshots: list[MemberSnapshot], n_members: int) -> list[MetricRow]
         else:
             agg_row.method_flags["aggregate_pe_undefined_negative_denominator"] = True
     return [_tag_non_usd(median_row, snapshots), _tag_non_usd(agg_row, snapshots)]
+
+
+def _forward_method_flags(snapshots: list[MemberSnapshot]) -> dict[str, object]:
+    observed = sorted(
+        s.forward_estimate_observed_on.isoformat()
+        for s in snapshots
+        if s.forward_estimate_observed_on is not None
+    )
+    periods = sorted(
+        s.forward_period_end.isoformat() for s in snapshots if s.forward_period_end is not None
+    )
+    providers = sorted(
+        {s.forward_estimate_provider for s in snapshots if s.forward_estimate_provider is not None}
+    )
+    unavailable = Counter(
+        s.forward_estimate_unavailable_reason
+        for s in snapshots
+        if s.forward_estimate_unavailable_reason is not None
+    )
+    flags: dict[str, object] = {
+        "period_basis": "closest_forward_fiscal_year",
+        "currency": "USD",
+        "unit": "x",
+    }
+    if providers:
+        flags["estimate_provider"] = providers[0] if len(providers) == 1 else providers
+    if observed:
+        flags["estimate_observed_min"] = observed[0]
+        flags["estimate_observed_max"] = observed[-1]
+    if periods:
+        flags["target_period_min"] = periods[0]
+        flags["target_period_max"] = periods[-1]
+    if unavailable:
+        flags["unavailable_reasons"] = dict(sorted(unavailable.items()))
+    return flags
+
+
+def _pe_ntm_rows(snapshots: list[MemberSnapshot], n_members: int) -> list[MetricRow]:
+    usable = [
+        (s.market_cap, s.forward_net_income)
+        for s in snapshots
+        if s.market_cap is not None and s.forward_net_income is not None
+    ]
+    member_values = [market_cap / earnings for market_cap, earnings in usable]
+    median_row = _coverage_row(
+        "pe_ntm",
+        "median",
+        statistics.median(member_values) if member_values else None,
+        n_members,
+        len(usable),
+    )
+    aggregate_row = _coverage_row("pe_ntm", "aggregate", None, n_members, len(usable))
+    if usable:
+        aggregate_row.value = sum(market_cap for market_cap, _ in usable) / sum(
+            earnings for _, earnings in usable
+        )
+    metadata = _forward_method_flags(snapshots)
+    median_row.method_flags.update(metadata)
+    aggregate_row.method_flags.update(metadata)
+    return [median_row, aggregate_row]
 
 
 def _ev_ebitda_rows(snapshots: list[MemberSnapshot], n_members: int) -> list[MetricRow]:
@@ -384,6 +506,12 @@ def _fcf_yield_row(snapshots: list[MemberSnapshot], n_members: int) -> MetricRow
 _METRIC_CONSTRUCTION: dict[tuple[str, str], str] = {
     ("pe_ttm", "median"): "median of member market_cap / TTM net income (4 reported quarters)",
     ("pe_ttm", "aggregate"): "sum(member market_cap) / sum(member TTM net income)",
+    ("pe_ntm", "median"): (
+        "median of member market_cap / closest-forward-FY analyst net-income consensus"
+    ),
+    ("pe_ntm", "aggregate"): (
+        "sum(member market_cap) / sum(closest-forward-FY analyst net-income consensus)"
+    ),
     ("ev_ebitda_ttm", "median"): "median of member enterprise_value / TTM EBITDA",
     ("ev_ebitda_ttm", "aggregate"): "sum(member enterprise_value) / sum(member TTM EBITDA)",
     ("p_b", "median"): "median of member market_cap / totalStockholdersEquity",
@@ -435,7 +563,8 @@ def compute_comparable_set_metrics(
 
     snapshots = [load_member_snapshot(repo_root, t, as_of) for t in contributing]
 
-    rows: list[MetricRow] = list(_pe_rows(snapshots, n_members))
+    rows: list[MetricRow] = list(_pe_ntm_rows(snapshots, n_members))
+    rows.extend(_pe_rows(snapshots, n_members))
     if metric_class == "operating":
         rows.extend(_ev_ebitda_rows(snapshots, n_members))
     elif metric_class == "financial":

@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from report.renderers.workspace_sections.company import _comp_set_context_panel  # noqa: E402
 from report.sections.comp_set_context import load_comp_set_context  # noqa: E402
 
 AS_OF = date.today() - timedelta(days=1)
@@ -93,6 +96,17 @@ def _seed_subject_financials(repo_root: Path, ticker: str) -> None:
     _write_json(
         repo_root, ticker, "profile", {"industry": "Semiconductors", "sector": "Technology"}
     )
+    _write_json(
+        repo_root,
+        ticker,
+        "analyst_estimates_annual",
+        [{"symbol": ticker, "date": "2027-12-31", "netIncomeAvg": 500.0}],
+    )
+    estimate_path = (
+        repo_root / "data" / "historical" / "fmp" / f"{ticker}_analyst_estimates_annual.json"
+    )
+    stamp = datetime.combine(AS_OF, datetime.min.time()).timestamp()
+    os.utime(estimate_path, (stamp, stamp))
 
 
 def _insert_scope_row(
@@ -105,11 +119,12 @@ def _insert_scope_row(
     value: float | None,
     n_members: int,
     n_valid: int,
+    method_flags: dict[str, object] | None = None,
 ) -> None:
     conn.execute(
         "INSERT INTO comp_set_metrics_daily (scope_type, scope_key, as_of_date, metric, "
         "stat_type, value, n_members, n_valid, coverage_pct, method_version, method_flags, "
-        "computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}', ?)",
+        "computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
         (
             scope_type,
             scope_key,
@@ -120,6 +135,7 @@ def _insert_scope_row(
             n_members,
             n_valid,
             (n_valid / n_members) if n_members else 0.0,
+            json.dumps(method_flags or {}),
             as_of.isoformat(),
         ),
     )
@@ -158,8 +174,33 @@ def test_populated_set_returns_full_section(tmp_path: Path) -> None:
     )
     _insert_scope_row(conn, "comparable_set", set_id, AS_OF, "pe_ttm", "median", 18.4, 1, 1)
     _insert_scope_row(conn, "comparable_set", set_id, AS_OF, "pe_ttm", "aggregate", 19.1, 1, 1)
+    forward_flags: dict[str, object] = {
+        "estimate_provider": "fmp",
+        "period_basis": "closest_forward_fiscal_year",
+        "estimate_observed_min": AS_OF.isoformat(),
+        "estimate_observed_max": AS_OF.isoformat(),
+        "target_period_min": "2027-12-31",
+        "target_period_max": "2027-12-31",
+        "currency": "USD",
+        "unit": "x",
+    }
+    _insert_scope_row(
+        conn,
+        "comparable_set",
+        set_id,
+        AS_OF,
+        "pe_ntm",
+        "median",
+        16.5,
+        1,
+        1,
+        forward_flags,
+    )
+    _insert_scope_row(conn, "comparable_set", set_id, AS_OF, "pe_ntm", "aggregate", 17.0, 1, 1)
     _insert_scope_row(conn, "industry", "Semiconductors", AS_OF, "pe_ttm", "median", 22.0, 30, 28)
+    _insert_scope_row(conn, "industry", "Semiconductors", AS_OF, "pe_ntm", "median", 20.0, 30, 20)
     _insert_scope_row(conn, "sector", "Technology", AS_OF, "pe_ttm", "median", 25.0, 90, 85)
+    _insert_scope_row(conn, "sector", "Technology", AS_OF, "pe_ntm", "median", 23.0, 90, 60)
     conn.commit()
     conn.close()
 
@@ -176,6 +217,7 @@ def test_populated_set_returns_full_section(tmp_path: Path) -> None:
     assert section.sector == "Technology"
     assert section.industry_scope is not None
     assert section.industry_scope.pe_ttm_median == 22.0
+    assert section.industry_scope.pe_ntm_median == 20.0
     assert section.sector_scope is not None
     assert section.sector_scope.pe_ttm_median == 25.0
     # Semiconductors is ratified in SECTOR_BENCHMARK_MAP.
@@ -186,11 +228,27 @@ def test_populated_set_returns_full_section(tmp_path: Path) -> None:
     pe_line = next(m for m in section.primary_metrics if m.metric == "pe_ttm")
     assert pe_line.subject_value == pytest.approx(10.0)
     assert pe_line.median_value == 18.4
+    ntm_line = next(m for m in section.primary_metrics if m.metric == "pe_ntm")
+    assert ntm_line.subject_value == pytest.approx(8.0)
+    assert ntm_line.median_value == 16.5
     # Roster: both members present, context_only correctly tagged.
     by_ticker = {m.ticker: m for m in section.members}
     assert by_ticker["AMD"].context_only is False
     assert by_ticker["AMD"].name == "Advanced Micro Devices"
     assert by_ticker["GRAB"].context_only is True
+
+    body = StringIO()
+    _comp_set_context_panel(body, section)
+    html = body.getvalue()
+    assert "P/E (NTM)" in html
+    assert "FY1 PROXY" in html
+    assert "OBS " in html
+    assert "Forward P/E" in html
+    assert "Subject 8.0x" in html
+    assert "governed-peer median 16.5x" in html
+    assert "Full comparable universe (2)" in html
+    assert "data-comp-roster-filter" in html
+    assert html.index("AMD") < html.index("GRAB")
 
 
 def test_stale_flag_set_when_as_of_old(tmp_path: Path) -> None:
@@ -216,6 +274,9 @@ def test_stale_flag_set_when_as_of_old(tmp_path: Path) -> None:
     section = load_comp_set_context("NU", db_path=db_path, repo_root=tmp_path)
     assert section is not None
     assert section.stale is True
+    body = StringIO()
+    _comp_set_context_panel(body, section)
+    assert "Unavailable: estimate observed after as-of date" in body.getvalue()
 
 
 def test_set_with_no_metrics_yet(tmp_path: Path) -> None:

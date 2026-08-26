@@ -42,6 +42,7 @@ STALE_AFTER_DAYS = 10
 # multiple (15.2x), 'pct' = percentage (already-scaled for rev_yoy, a raw
 # fraction for fcf_yield_ttm -- see _fmt_metric_value).
 _METRIC_LABELS: dict[str, str] = {
+    "pe_ntm": "P/E (NTM)",
     "pe_ttm": "P/E (TTM)",
     "ev_ebitda_ttm": "EV/EBITDA (TTM)",
     "p_b": "Price/Book",
@@ -50,7 +51,7 @@ _METRIC_LABELS: dict[str, str] = {
     "fcf_yield_ttm": "FCF yield (TTM)",
 }
 _PCT_METRICS = frozenset({"rev_yoy", "fcf_yield_ttm"})
-_OPERATING_PRIMARY = ("pe_ttm", "ev_ebitda_ttm")
+_OPERATING_PRIMARY = ("pe_ntm", "pe_ttm", "ev_ebitda_ttm")
 _FINANCIAL_PRIMARY = ("p_b", "p_tbv")
 _SECONDARY_ALWAYS = ("rev_yoy", "fcf_yield_ttm")
 
@@ -69,6 +70,16 @@ class CompSetMetricLine:
     n_valid_median: int
     coverage_pct_median: float
     flags: tuple[str, ...] = ()
+    provider: str | None = None
+    period_basis: str | None = None
+    estimate_observed_min: date | None = None
+    estimate_observed_max: date | None = None
+    target_period_min: date | None = None
+    target_period_max: date | None = None
+    currency: str | None = None
+    unit: str | None = None
+    subject_unavailable_reason: str | None = None
+    unavailable_reasons: tuple[tuple[str, int], ...] = ()
     secondary: bool = False
 
 
@@ -82,6 +93,9 @@ class CompSetScopeSummary:
     as_of_date: date | None
     n_members: int
     pe_ttm_median: float | None
+    pe_ntm_median: float | None
+    pe_ntm_n_valid: int
+    pe_ntm_unavailable_reasons: tuple[tuple[str, int], ...]
     stale: bool
 
 
@@ -283,6 +297,30 @@ def _build_metric_line(
         if isinstance(mf, dict):
             flags.extend(str(k) for k in cast("dict[str, object]", mf))
     n_members = _int_or(med, "n_members") or _int_or(agg, "n_members")
+    med_flags_obj = med.get("method_flags")
+    med_flags = cast("dict[str, object]", med_flags_obj) if isinstance(med_flags_obj, dict) else {}
+    subj_flags_obj = subj_med.get("method_flags") or subj_agg.get("method_flags")
+    subj_flags = (
+        cast("dict[str, object]", subj_flags_obj) if isinstance(subj_flags_obj, dict) else {}
+    )
+    unavailable_obj = med_flags.get("unavailable_reasons")
+    unavailable = (
+        tuple(
+            sorted(
+                (str(key), int(value))
+                for key, value in cast("dict[str, object]", unavailable_obj).items()
+                if isinstance(value, (int, float))
+            )
+        )
+        if isinstance(unavailable_obj, dict)
+        else ()
+    )
+    subject_unavailable_obj = subj_flags.get("unavailable_reasons")
+    subject_unavailable = (
+        next(iter(sorted(cast("dict[str, object]", subject_unavailable_obj))), None)
+        if isinstance(subject_unavailable_obj, dict)
+        else None
+    )
     return CompSetMetricLine(
         metric=metric,
         label=_METRIC_LABELS.get(metric, metric),
@@ -294,6 +332,16 @@ def _build_metric_line(
         n_valid_median=_int_or(med, "n_valid"),
         coverage_pct_median=_float_or(med, "coverage_pct"),
         flags=tuple(sorted(set(flags))),
+        provider=_str_or_none(med_flags.get("estimate_provider")),
+        period_basis=_str_or_none(med_flags.get("period_basis")),
+        estimate_observed_min=_parse_date(med_flags.get("estimate_observed_min")),
+        estimate_observed_max=_parse_date(med_flags.get("estimate_observed_max")),
+        target_period_min=_parse_date(med_flags.get("target_period_min")),
+        target_period_max=_parse_date(med_flags.get("target_period_max")),
+        currency=_str_or_none(med_flags.get("currency")),
+        unit=_str_or_none(med_flags.get("unit")),
+        subject_unavailable_reason=subject_unavailable,
+        unavailable_reasons=unavailable,
         secondary=secondary,
     )
 
@@ -306,6 +354,21 @@ def _scope_summary(
         return None
     rows = _metric_rows_at(conn, scope_type, scope_key, as_of, method_version)
     med = rows.get(("pe_ttm", "median"), {})
+    ntm_med = rows.get(("pe_ntm", "median"), {})
+    ntm_flags_obj = ntm_med.get("method_flags")
+    ntm_flags = cast("dict[str, object]", ntm_flags_obj) if isinstance(ntm_flags_obj, dict) else {}
+    unavailable_obj = ntm_flags.get("unavailable_reasons")
+    unavailable = (
+        tuple(
+            sorted(
+                (str(key), int(value))
+                for key, value in cast("dict[str, object]", unavailable_obj).items()
+                if isinstance(value, (int, float))
+            )
+        )
+        if isinstance(unavailable_obj, dict)
+        else ()
+    )
     stale = (render_today() - as_of) > timedelta(days=STALE_AFTER_DAYS)
     return CompSetScopeSummary(
         scope_type=scope_type,
@@ -313,6 +376,9 @@ def _scope_summary(
         as_of_date=as_of,
         n_members=_int_or(med, "n_members"),
         pe_ttm_median=cast("float | None", med.get("value")),
+        pe_ntm_median=cast("float | None", ntm_med.get("value")),
+        pe_ntm_n_valid=_int_or(ntm_med, "n_valid"),
+        pe_ntm_unavailable_reasons=unavailable,
         stale=stale,
     )
 
@@ -375,7 +441,9 @@ def load_comp_set_context(
 
         stale = as_of is None or (render_today() - as_of) > timedelta(days=STALE_AFTER_DAYS)
 
-        primary_keys = _OPERATING_PRIMARY if metric_class == "operating" else _FINANCIAL_PRIMARY
+        primary_keys = (
+            _OPERATING_PRIMARY if metric_class == "operating" else ("pe_ntm", *_FINANCIAL_PRIMARY)
+        )
         primary_metrics = tuple(
             _build_metric_line(m, subject_rows, scope_rows, secondary=False)
             for m in primary_keys

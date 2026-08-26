@@ -5,13 +5,13 @@ One-time trimmer that brings existing index_member peer files in
 data/historical/fmp/ down to the shallow peer contract
 (save_fmp_data.PEER_ENDPOINT_ALLOWLIST). Peers were historically fetched at
 the full ~67-endpoint / 100-quarter depth, which grew the cache to 9.1 GB
-(2026-07-30 DB-size audit); their consumers read only 8 file families at
+(2026-07-30 DB-size audit); their consumers read only 9 file families at
 shallow depth.
 
 Per index_member ticker (and ONLY index_member — a ticker that also carries
 any other list_type row is left untouched):
-  - files outside the 8 allowlisted families are DELETED
-  - the 4 depth-limited families are truncated to their newest N records
+  - files outside the 9 allowlisted families are DELETED
+  - the 5 depth-limited families are truncated to their newest N records
   - the 4 keep-as-is families (profile, peers, TTM metrics/ratios) are untouched
 
 Dry-run by default: prints the plan and byte counts, changes nothing. Pass
@@ -56,6 +56,7 @@ TRUNCATE_DEPTH: dict[str, int] = {
     "income_statement_quarterly": 9,
     "key_metrics_quarterly": 4,
     "balance_sheet_quarterly": 1,
+    "analyst_estimates_annual": 3,
     "historical_market_cap": 90,
 }
 

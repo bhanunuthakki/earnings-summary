@@ -662,7 +662,7 @@ def _log_deferred_split_quarantine(
 
 # Peer-depth contract (2026-07-30 DB-size audit). index_member peers are
 # comp-set pool candidates, never subjects, and their only consumers
-# (discovery screens, comparable-set metrics, the ghost filter) read these 8
+# (discovery screens, comparable-set metrics, the ghost filter) read these 9
 # file families at shallow depth — yet the full catalog was fetched for ~2,350
 # peers, which is what grew data/historical/fmp/ to 9.1 GB. A value of None
 # keeps the catalog's default params; a dict REPLACES the job's params with
@@ -670,6 +670,7 @@ def _log_deferred_split_quarantine(
 #   income 9 quarters   — screens._rev_yoy_at(inc, 4) reads index 8
 #   key-metrics 4       — the TTM sums need exactly 4 quarters
 #   balance sheet 1     — only the latest quarter is read
+#   annual estimates 3  — FY1 forward P/E plus adjacent-year context
 #   market cap ~140d    — ~90 daily rows, one quarter of trading closes
 # Existing full-depth peer files are trimmed once by
 # execution/truncate_peer_fmp_cache.py, whose KEEP_FULL/TRUNCATE_DEPTH tables
@@ -683,6 +684,7 @@ PEER_ENDPOINT_ALLOWLIST: dict[str, dict[str, object] | None] = {
     "income_statement_quarterly": {"period": "quarter", "limit": 9},
     "key_metrics_quarterly": {"period": "quarter", "limit": 4},
     "balance_sheet_quarterly": {"period": "quarter", "limit": 1},
+    "analyst_estimates_annual": {"period": "annual", "limit": 3},
     "historical_market_cap": {"from": PEER_MARKET_CAP_FROM, "to": TODAY_STR, "limit": 5000},
 }
 
