@@ -37,6 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
+from llm.resolver import CapabilityProfile, require_model_capabilities
 from log_redact import redact
 
 log = logging.getLogger(__name__)
@@ -162,6 +163,7 @@ def call_codex_llm(
     fallback_used: str | None = None,
     fallback_from_provider: str | None = None,
     fallback_from_transport: str | None = None,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """One Codex call with a ledger row. Raises on failure (the caller's
     judge wrapper records it as a judge error — infra, never a score).
@@ -174,6 +176,7 @@ def call_codex_llm(
     no shell/apps/hooks) bounds the blast radius of anything a hostile page
     could try. See directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md.
     """
+    require_model_capabilities(model, capability_profile or CapabilityProfile())
     if model not in _CODEX_API_PRICES:
         raise ValueError(f"missing public API price for Codex model {model!r}")
     from llm.ledger import record_llm_call

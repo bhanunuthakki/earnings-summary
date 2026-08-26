@@ -28,7 +28,7 @@ import llm_client
 from llm import cli
 
 
-def _good_cli_response(text: str = "ok") -> str:
+def _good_cli_response(text: str = "ok https://example.test") -> str:
     """Minimal `claude -p --output-format json` success envelope."""
     return json.dumps(
         {
@@ -45,6 +45,10 @@ def _good_cli_response(text: str = "ok") -> str:
             },
         }
     )
+
+
+def _fail_if_plain_transport_runs(*_args: object, **_kwargs: object) -> str:
+    pytest.fail("grounded web request must not degrade to plain output")
 
 
 @pytest.fixture
@@ -177,10 +181,10 @@ def test_web_success_records_transport_provenance(
     assert record["transport"] == "subscription_cli"
     assert record["attempts"] == 1
     assert record["retries"] == 0
-    assert record["response_text"] == "ok"
+    assert record["response_text"] == "ok https://example.test"
 
 
-def test_web_failure_records_transport_and_failure_class(
+def test_web_failure_allows_plain_degradation_only_when_grounding_not_required(
     monkeypatch: pytest.MonkeyPatch,
     capture_web_cmd: dict[str, Any],
 ) -> None:
@@ -194,6 +198,7 @@ def test_web_failure_records_transport_and_failure_class(
         "prompt",
         purpose="recent_developments",
         force_budget_bypass=True,
+        require_grounding=False,
     )
 
     assert result == "plain fallback"
@@ -204,6 +209,27 @@ def test_web_failure_records_transport_and_failure_class(
     assert record["retries"] == 0
     assert record["failure_class"] == "timeout"
     assert record["error"].startswith("[timeout]")
+
+
+def test_web_failure_does_not_return_plain_output_when_grounding_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_web_cmd: dict[str, Any],
+) -> None:
+    def _failed_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd=["claude"], timeout=1)
+
+    monkeypatch.setattr(cli.subprocess, "run", _failed_run)
+    monkeypatch.setattr(cli, "_call_claude", _fail_if_plain_transport_runs)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        cli.call_llm_with_web(
+            "prompt",
+            purpose="recent_developments",
+            force_budget_bypass=True,
+        )
+
+    (record,) = capture_web_cmd["records"]
+    assert record["failure_class"] == "timeout"
 
 
 def test_web_quota_block_records_zero_attempt_provenance(

@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from typing import cast
 
 from llm.fallback import GEMINI_FALLBACK_MODEL, try_gemini_fallback
+from llm.resolver import CapabilityProfile, require_model_capabilities
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +151,7 @@ def fallback_call_logged(
     scope: str | None,
     run_id: str | None,
     metered_fallback_authorized: bool = False,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """Wrap try_gemini_fallback with its own ledger row.
 
@@ -167,8 +169,14 @@ def fallback_call_logged(
     """
     from llm.fallback import fallback_available
 
+    effective_profile = capability_profile or CapabilityProfile()
+    require_model_capabilities(GEMINI_FALLBACK_MODEL, effective_profile)
     if not fallback_available():
-        return try_gemini_fallback(prompt, claude_error)  # raises; no phantom row
+        return try_gemini_fallback(
+            prompt,
+            claude_error,
+            capability_profile=effective_profile,
+        )  # raises; no phantom row
     if not metered_fallback_authorized:
         raise RuntimeError(
             "Gemini metered fallback is not authorized for this call; "
@@ -177,7 +185,11 @@ def fallback_call_logged(
     started_at = datetime.now(UTC)
     t0 = time.monotonic()
     try:
-        text = try_gemini_fallback(prompt, claude_error)
+        text = try_gemini_fallback(
+            prompt,
+            claude_error,
+            capability_profile=effective_profile,
+        )
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         record_llm_call(
             started_at=started_at,

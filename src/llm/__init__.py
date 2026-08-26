@@ -88,6 +88,7 @@ from llm.openrouter_backend import (
     call_openrouter,
     openrouter_model_for,
 )
+from llm.resolver import CapabilityProfile
 from llm.style import (
     NUMBER_FORMATTING_BLOCK,
     compose_brief_prompt,
@@ -119,6 +120,7 @@ __all__ = [
     "PRIORS_ANCHOR_CHAR_CAP",
     "WEB_CONTENT_NOTICE",
     "WORLDVIEW_ANCHOR_CHAR_CAP",
+    "CapabilityProfile",
     "LLMBudgetExceeded",
     "aggregate_by_purpose",
     "call_gemini",

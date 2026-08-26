@@ -151,7 +151,7 @@ def test_codex_unknown_model_blocks_before_dispatch(monkeypatch: pytest.MonkeyPa
         must_not_load,
     )
 
-    with pytest.raises(ValueError, match="missing public API price"):
+    with pytest.raises(ValueError, match="unregistered capability metadata"):
         codex_backend.call_codex_llm("question", model="gpt-future")
 
 
@@ -346,7 +346,10 @@ def test_web_codex_primary_failure_falls_back_to_claude_web(
     def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append("claude_web")
         return subprocess.CompletedProcess(
-            args=cmd, returncode=0, stdout=_good_cli_response("claude web fallback"), stderr=""
+            args=cmd,
+            returncode=0,
+            stdout=_good_cli_response("claude web fallback https://example.test"),
+            stderr="",
         )
 
     records: list[dict[str, object]] = []
@@ -356,7 +359,7 @@ def test_web_codex_primary_failure_falls_back_to_claude_web(
 
     result = llm_cli.call_llm_with_web("question", purpose="recent_developments", ticker="NU")
 
-    assert result == "claude web fallback"
+    assert result == "claude web fallback https://example.test"
     assert calls == ["codex", "claude_web"]
     (record,) = records
     assert record["fallback_used"] == "claude"
@@ -389,7 +392,11 @@ def test_web_codex_then_claude_web_failure_does_not_reenter_codex(
     monkeypatch.setattr(llm_cli, "_call_claude", fake_plain_claude)
     monkeypatch.setattr(llm_cli, "record_llm_call", lambda **_kwargs: None)
 
-    result = llm_cli.call_llm_with_web("question", purpose="recent_developments")
+    result = llm_cli.call_llm_with_web(
+        "question",
+        purpose="recent_developments",
+        require_grounding=False,
+    )
 
     assert result == "plain fallback, no codex retry"
     assert calls == ["codex", "claude_web", "claude_plain"]
@@ -412,7 +419,10 @@ def test_web_explicit_claude_model_bypasses_codex_primary(
     def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         assert cmd[cmd.index("--model") + 1] == "claude-opus-4-8"
         return subprocess.CompletedProcess(
-            args=cmd, returncode=0, stdout=_good_cli_response("explicit claude web"), stderr=""
+            args=cmd,
+            returncode=0,
+            stdout=_good_cli_response("explicit claude web https://example.test"),
+            stderr="",
         )
 
     monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
@@ -421,7 +431,7 @@ def test_web_explicit_claude_model_bypasses_codex_primary(
     result = llm_cli.call_llm_with_web(
         "question", model="claude-opus-4-8", purpose="recent_developments"
     )
-    assert result == "explicit claude web"
+    assert result == "explicit claude web https://example.test"
 
 
 # --- META-GUARD: a third entry point cannot be added silently ---------------

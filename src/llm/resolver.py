@@ -67,6 +67,9 @@ MODEL_CAPABILITIES: dict[str, CapabilityProfile] = {
     "gemini-2.5-flash": CapabilityProfile(
         min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
     ),
+    "gemini-2.5-pro": CapabilityProfile(
+        min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
+    ),
     # Codex models
     "gpt-5.6-terra": CapabilityProfile(
         min_context_length=128_000, requires_vision=True, requires_structured_output=True

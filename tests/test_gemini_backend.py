@@ -733,6 +733,17 @@ def test_call_gemini_anneals_on_not_found(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(gemini_backend, "_discover_api_flash_model", _discover)
     monkeypatch.setattr(gemini_backend, "record_llm_call", _record_discard)
+    from llm.resolver import MODEL_CAPABILITIES, CapabilityProfile
+
+    monkeypatch.setitem(
+        MODEL_CAPABILITIES,
+        "gemini-3.2-flash",
+        CapabilityProfile(
+            min_context_length=1_000_000,
+            requires_vision=True,
+            requires_structured_output=True,
+        ),
+    )
 
     attempted_models: list[str] = []
 
