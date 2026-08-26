@@ -372,15 +372,27 @@ def _current_promotion_state(
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(dcf_runs)")}
     if "ticker" not in columns:
         return None
-    latest = " AND COALESCE(is_latest, 1) = 1" if "is_latest" in columns else ""
-    segment = " AND COALESCE(segment_name, '') = ''" if "segment_name" in columns else ""
-    sanity = "sanity_flag" if "sanity_flag" in columns else "NULL AS sanity_flag"
+    has_latest = "is_latest" in columns
+    has_segment = "segment_name" in columns
+    has_sanity = "sanity_flag" in columns
+    if has_sanity and has_latest and has_segment:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    elif has_sanity and has_latest:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 ORDER BY id DESC LIMIT 1"
+    elif has_sanity and has_segment:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    elif has_sanity:
+        query = "SELECT provenance_json, sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) ORDER BY id DESC LIMIT 1"
+    elif has_latest and has_segment:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    elif has_latest:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(is_latest, 1) = 1 ORDER BY id DESC LIMIT 1"
+    elif has_segment:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(segment_name, '') = '' ORDER BY id DESC LIMIT 1"
+    else:
+        query = "SELECT provenance_json, NULL AS sanity_flag FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) ORDER BY id DESC LIMIT 1"
     try:
-        current = conn.execute(
-            f"SELECT provenance_json, {sanity} FROM dcf_runs "
-            "WHERE UPPER(ticker) = UPPER(?)" + latest + segment + " ORDER BY id DESC LIMIT 1",
-            (ticker.upper(),),
-        ).fetchone()
+        current = conn.execute(query, (ticker.upper(),)).fetchone()
     except sqlite3.Error:
         return None
     if current is None:
