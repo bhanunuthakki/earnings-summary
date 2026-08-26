@@ -234,6 +234,11 @@ _OPERATIONS_SECTION_RE = re.compile(
     r"(?=</div>\s*</main>)",
     re.DOTALL,
 )
+_SIDEBAR_COMMAND_RE = re.compile(
+    r"\s*<!-- Command Bar Trigger -->\s*<div class=\"sidebar-cmd\"[^>]*>.*?</div>\s*"
+    r"(?=<!-- LAYER 1: PORTFOLIO INTELLIGENCE -->)",
+    re.S,
+)
 
 
 def _endpoint_map() -> dict[str, str]:
@@ -1744,6 +1749,12 @@ def _production_runtime(generated_at: datetime) -> str:
       }}).join('') : (desk.question_store_status === 'unavailable'
         ? '<div class="k-well" role="alert">Open-question store unavailable.</div>'
         : '<div class="k-well">No open research questions.</div>');
+      const askCompany = document.getElementById('workOsAskCompany');
+      const askContracts = document.getElementById('workOsAskContracts');
+      const askQuestions = document.getElementById('workOsAskQuestions');
+      if (askCompany) askCompany.disabled = false;
+      if (askContracts) askContracts.disabled = !conditions.length;
+      if (askQuestions) askQuestions.disabled = !questions.length;
       const warnings = Array.isArray(desk.warnings) ? desk.warnings : [];
       const warningBox = document.getElementById('deskWarnings');
       if (warningBox) {{ warningBox.hidden = !warnings.length; warningBox.textContent = warnings.length ? 'Unavailable: ' + warnings.join(', ') : ''; }}
@@ -2681,16 +2692,46 @@ def _production_runtime(generated_at: datetime) -> str:
   window.addEventListener('popstate', function () {{ workOsApplyHash(false); }});
   workOsApplyHash(true);
   workOsHydratePortfolio();
+  function workOsCopilotScopeItems(trigger, readerScoped) {{
+    const scope = String(trigger.getAttribute('data-copilot-scope') || '');
+    const items = [];
+    if (scope === 'company') {{
+      const ticker = workOsCurrentCompanyTicker();
+      if (ticker) items.push({{ kind: 'company', stable_id: 'company:' + ticker, label: ticker + ' company context' }});
+    }} else if (scope === 'thesis-contracts') {{
+      document.querySelectorAll('#deskConditions [data-stable-id]').forEach(function (node) {{
+        const stableId = String(node.getAttribute('data-stable-id') || '');
+        const labelNode = node.querySelector('strong');
+        if (stableId && labelNode) items.push({{ kind: 'thesis_contract', stable_id: stableId, label: String(labelNode.textContent || '').trim() }});
+      }});
+    }} else if (scope === 'open-questions') {{
+      document.querySelectorAll('#deskQuestions [data-stable-id]').forEach(function (node) {{
+        const stableId = String(node.getAttribute('data-stable-id') || '');
+        const labelNode = node.querySelector('strong');
+        if (stableId && labelNode) items.push({{ kind: 'open_question', stable_id: stableId, label: String(labelNode.textContent || '').trim() }});
+      }});
+    }} else if (scope === 'full-brief' && readerScoped && workOsReaderContext.artifact_id) {{
+      items.push({{
+        kind: 'brief_artifact', stable_id: String(workOsReaderContext.artifact_id),
+        label: String(workOsReaderContext.ticker || '') + ' full research brief'
+      }});
+    }}
+    return items;
+  }}
+
   document.addEventListener('click', function (event) {{
-    const trigger = event.target instanceof Element ? event.target.closest('[data-research-chat]') : null;
+    const trigger = event.target instanceof Element ? event.target.closest('[data-research-chat][data-copilot-scope]') : null;
     if (!trigger) return;
     const readerScoped = !!(briefReader && briefReader.contains(trigger) && workOsReaderContext);
     const chatTicker = readerScoped ? workOsReaderContext.ticker : workOsCurrentCompanyTicker();
     const originSuffix = readerScoped ? ':artifact:' + workOsReaderContext.artifact_id : '';
+    const contextKind = String(trigger.getAttribute('data-copilot-scope') || 'company');
     window.openWorkOsCopilot({{
       company_ticker: chatTicker || null,
-      category: 'research',
+      category: contextKind === 'thesis-contracts' ? 'thesis' : 'research',
       origin_key: 'work-os:' + String(trigger.getAttribute('data-research-chat') || 'company') + originSuffix,
+      context_kind: contextKind,
+      scope_items: workOsCopilotScopeItems(trigger, readerScoped),
       coverage_role_at_creation: readerScoped
         ? (workOsReaderContext.coverage_role || 'unknown')
         : ((workOsCompanyByTicker(workOsCurrentCompanyTicker()) || {{}}).coverage_role || 'unknown'),
@@ -2956,6 +2997,7 @@ def _add_production_contract(
     html: str, generated_at: datetime, *, db_path: Path | None = None
 ) -> str:
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
+    html = _SIDEBAR_COMMAND_RE.sub("", html, count=1)
     html = html.replace("Execution Queue & Operations Hub", "Operations")
     html = html.replace("Operations & Execution Governance Hub", "Operations")
     html = html.replace("Portfolio Performance vs Index Benchmark", "Performance")
@@ -3009,17 +3051,6 @@ def _add_production_contract(
         count=1,
     )
     html = _OPERATIONS_SECTION_RE.sub(render_operations_shell() + "\n      ", html, count=1)
-    html = html.replace(
-        '<div class="sidebar-cmd" onclick="openWorkOsCopilot()">',
-        '<button type="button" class="sidebar-cmd k-btn k-btn-quiet" aria-label="Search or ask" onclick="workOsOpenGlobalCopilot()">',
-        1,
-    )
-    command_end = "</span>\n      </div>\n\n      <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->"
-    html = html.replace(
-        command_end,
-        "</span>\n      </button>\n\n      <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->",
-        1,
-    )
     html = html.replace(
         '<section id="screen-cockpit" class="screen-view is-active">',
         '<section id="screen-cockpit" class="screen-view is-active" data-mobile-surface="cockpit">',

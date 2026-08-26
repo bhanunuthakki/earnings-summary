@@ -372,7 +372,7 @@ def test_proposal_state_transitions_restore_a_safe_focus_target() -> None:
 def test_new_chat_suggestions_route_through_the_same_composer() -> None:
     html = render_work_os_copilot()
 
-    assert "var suggestions = [" in html
+    assert "var suggestions = suggestionsForPendingContext()" in html
     assert "button.className = 'k-chip k-chip-btn'" in html
     assert "button.dataset.copilotSuggestion = prompt" in html
     assert "What changed since the last review?" in html
@@ -380,6 +380,20 @@ def test_new_chat_suggestions_route_through_the_same_composer() -> None:
     assert "Stress-test the current thesis." in html
     assert "function renderNewChatEmptyState()" in html
     assert "form.requestSubmit()" in html
+
+
+def test_contextual_copilot_suggestions_and_attachments_are_removable_before_send() -> None:
+    html = render_work_os_copilot()
+
+    assert "function suggestionsForPendingContext()" in html
+    assert "thesis_contract" in html
+    assert "open_question" in html
+    assert "brief_artifact" in html
+    assert "function removePendingScopeItem(stableId)" in html
+    assert "button.setAttribute('aria-label', 'Remove context ' + item.label)" in html
+    assert "pendingContext.scope_items" in html
+    assert "scope_items: normalizedScopeItems(pendingContext.scope_items)" in html
+    assert "renderNewChatEmptyState();" in html
 
 
 def test_copilot_has_resilient_states_and_keyboard_mobile_contracts() -> None:

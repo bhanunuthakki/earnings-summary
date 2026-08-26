@@ -1330,9 +1330,40 @@ def _retrieval_text(text: str, turn: AskTurn) -> str:
         normalized = candidate.strip()
         if _EVIDENCE_REF_RX.fullmatch(normalized) is not None and normalized not in refs:
             refs.append(normalized)
-    if not refs:
-        return text
-    return text + "\nEvidence handles: " + ", ".join(refs)
+    additions: list[str] = []
+    if refs:
+        additions.append("Evidence handles: " + ", ".join(refs))
+    raw_scope = context.get("scope_items")
+    if isinstance(raw_scope, list):
+        scoped: list[str] = []
+        allowed_kinds = {
+            "company",
+            "thesis_contract",
+            "open_question",
+            "brief_artifact",
+        }
+        for raw_item in cast("list[object]", raw_scope):
+            if not isinstance(raw_item, dict):
+                continue
+            item = cast("dict[str, object]", raw_item)
+            kind = item.get("kind")
+            stable_id = item.get("stable_id")
+            label = item.get("label")
+            if (
+                not isinstance(kind, str)
+                or kind not in allowed_kinds
+                or not isinstance(stable_id, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,255}", stable_id) is None
+                or not isinstance(label, str)
+                or not label.strip()
+                or "\n" in label
+                or "\r" in label
+            ):
+                continue
+            scoped.append(f"- {kind.replace('_', ' ')} [{stable_id}]: {label.strip()}")
+        if scoped:
+            additions.append("Scoped context:\n" + "\n".join(scoped))
+    return text if not additions else text + "\n" + "\n".join(additions)
 
 
 def _retrieval_event(
