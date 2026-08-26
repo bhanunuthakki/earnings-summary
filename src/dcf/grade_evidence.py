@@ -39,6 +39,7 @@ class DcfGradeEvidence(BaseModel):
 
     schema_version: Literal["dcf_grade_evidence.v1"] = "dcf_grade_evidence.v1"
     status: Literal["available", "missing", "invalid"]
+    projection_status: Literal["complete", "bounded"] = "complete"
     ticker: str
     missing_columns: tuple[str, ...] = ()
     invalid_reason: str | None = None
@@ -290,7 +291,7 @@ def _bounded_text(value: str, max_bytes: int) -> str:
     """Return a deterministic, UTF-8-safe prefix fitting ``max_bytes``."""
     candidate = value[:_BOUNDED_TEXT_CHARS]
     while candidate and _serialized_size(candidate) > max_bytes:
-        candidate = candidate[: max(1, len(candidate) // 2)]
+        candidate = candidate[: len(candidate) // 2]
     return candidate if _serialized_size(candidate) <= max_bytes else ""
 
 
@@ -326,11 +327,22 @@ def _bounded_value(
         return projected_list
     if isinstance(value, dict):
         mapping = cast("dict[str, object]", value)
+        if container_name == "equity_bridge_receipt":
+            return _bounded_equity_bridge(mapping, max_bytes, depth=depth)
         priority = _BOUNDED_PRIORITY_KEYS.get(container_name or "", ())
         ordered_keys = [key for key in priority if key in mapping]
-        ordered_keys.extend(sorted(key for key in mapping if key not in ordered_keys))
+        priority_keys = set(ordered_keys)
+        # Source order is deterministic for a parsed JSON object. Cap before
+        # traversing arbitrary keys so a hostile wide mapping cannot force an
+        # unbounded sort or repeated serialization work.
+        for key in mapping:
+            if key in priority_keys:
+                continue
+            ordered_keys.append(key)
+            if len(ordered_keys) == _BOUNDED_MAX_ITEMS:
+                break
         projected_mapping: dict[str, object] = {}
-        for key in ordered_keys[:_BOUNDED_MAX_ITEMS]:
+        for key in ordered_keys:
             remaining = max_bytes - _serialized_size(projected_mapping) - 2
             if remaining < 2:
                 break
@@ -350,6 +362,64 @@ def _bounded_value(
     return None
 
 
+def _bounded_equity_bridge(
+    mapping: dict[str, object], max_bytes: int, *, depth: int
+) -> dict[str, object]:
+    """Project a bridge with reserved space for both conclusion lineages."""
+    special_budgets = {
+        "bridge_context": max(2, max_bytes * 18 // 100),
+        "cash_lineage": max(2, max_bytes * 32 // 100),
+        "total_debt_lineage": max(2, max_bytes * 32 // 100),
+        "reasons": max(2, max_bytes * 8 // 100),
+    }
+    core_keys = tuple(
+        key for key in _BOUNDED_PRIORITY_KEYS["equity_bridge_receipt"] if key not in special_budgets
+    )
+    core_limit = max(2, max_bytes - sum(special_budgets.values()) - 4)
+    core: dict[str, object] = {}
+    for key in core_keys:
+        if key not in mapping:
+            continue
+        remaining = core_limit - _serialized_size(core) - 2
+        if remaining < 2:
+            break
+        projected_key = _bounded_text(key, min(_BOUNDED_TEXT_CHARS, max(2, remaining // 2)))
+        child_budget = max(2, remaining - _serialized_size({projected_key: None}))
+        projected_value = _bounded_value(
+            mapping[key],
+            child_budget,
+            container_name=key,
+            depth=depth + 1,
+        )
+        candidate = {**core, projected_key: projected_value}
+        if _serialized_size(candidate) <= core_limit:
+            core[projected_key] = projected_value
+
+    projected_bridge = dict(core)
+    for key, budget in special_budgets.items():
+        if key not in mapping:
+            continue
+        remaining = max_bytes - _serialized_size(projected_bridge) - 2
+        if remaining < 2:
+            break
+        projected_key = _bounded_text(key, min(_BOUNDED_TEXT_CHARS, max(2, remaining // 2)))
+        key_overhead = _serialized_size({projected_key: None})
+        child_budget = min(
+            max(2, budget - key_overhead),
+            max(2, remaining - key_overhead),
+        )
+        projected_value = _bounded_value(
+            mapping[key],
+            child_budget,
+            container_name=key,
+            depth=depth + 1,
+        )
+        candidate = {**projected_bridge, projected_key: projected_value}
+        if _serialized_size(candidate) <= max_bytes:
+            projected_bridge[projected_key] = projected_value
+    return projected_bridge
+
+
 def _bounded_available_evidence(evidence: DcfGradeEvidence) -> DcfGradeEvidence:
     """Keep an oversized result available while retaining its audit anchors."""
     data = cast("dict[str, object]", evidence.model_dump(mode="json"))
@@ -366,6 +436,7 @@ def _bounded_available_evidence(evidence: DcfGradeEvidence) -> DcfGradeEvidence:
             if isinstance(value, str):
                 checks_mapping[key] = _bounded_text(value, _BOUNDED_TEXT_CHARS)
 
+    data["projection_status"] = "bounded"
     data["assumption_snapshot"] = {}
     data["provenance"] = {}
     fixed_size = _serialized_size(data)

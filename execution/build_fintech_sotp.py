@@ -54,7 +54,11 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 sys.path.insert(0, str(REPO / "src"))
 
 
-from dcf.artifact_promotion import ArtifactPromotion, promotion_from_env  # noqa: E402
+from dcf.artifact_promotion import (  # noqa: E402
+    ArtifactPromotion,
+    live_path_from_env,
+    promotion_from_env,
+)
 from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from dcf.specialized_price import (  # noqa: E402
     SpecializedPriceObservation,
@@ -504,6 +508,7 @@ def persist_dcf_run(
         except (OSError, json.JSONDecodeError):
             mos = None
     lend, fs, tech = seg_vals(s)
+    live_workbook = live_path_from_env(DEST)
     snap_payload: dict[str, object] = {
         "model": "fintech_sotp",
         "value_per_share_usd": vps,
@@ -520,7 +525,7 @@ def persist_dcf_run(
             "terminal_mult": s.corp_terminal_mult,
             "ke": s.ke,
         },
-        "workbook": str(DEST),
+        "workbook": str(live_workbook),
     }
     snap = json.dumps(snap_payload, indent=2)
     observed_at = price_observation.observed_at if price_observation is not None else None
@@ -531,6 +536,7 @@ def persist_dcf_run(
         ticker=T,
         repo_root=REPO,
         workbook_path=DEST,
+        workbook_locator_path=live_workbook,
         engine_version="fintech_sotp_v1",
         effective_inputs=asdict(s),
         assumption_snapshot=snap_payload,
@@ -564,7 +570,7 @@ def persist_dcf_run(
         live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
-        notes=f"workbook={DEST.name} (fintech SOTP)",
+        notes=f"workbook={live_workbook.name} (fintech SOTP)",
         provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:

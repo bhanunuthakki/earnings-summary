@@ -71,12 +71,17 @@ class StagedFilePromotion:
         self._applied = False
 
 
-def promotion_from_env(staged_path: Path) -> StagedFilePromotion | None:
-    """Resolve the live workbook target supplied by a refresh wrapper."""
+def live_path_from_env(staged_path: Path) -> Path:
+    """Resolve the durable workbook locator supplied by a refresh wrapper."""
     raw = os.environ.get("DCF_PROMOTE_DEST")
     if raw is None or not raw.strip():
-        return None
-    live_path = Path(raw)
+        return staged_path
+    return Path(raw)
+
+
+def promotion_from_env(staged_path: Path) -> StagedFilePromotion | None:
+    """Resolve the live workbook target supplied by a refresh wrapper."""
+    live_path = live_path_from_env(staged_path)
     if live_path == staged_path:
         return None
     return StagedFilePromotion(staged_path, live_path)

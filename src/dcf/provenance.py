@@ -84,6 +84,7 @@ def build_file_provenance(
     live_price_source: str | None,
     source_files: Sequence[tuple[Path, str]],
     source_records: Sequence[Mapping[str, object]] = (),
+    workbook_locator_path: Path | None = None,
 ) -> DcfInputProvenance:
     """Build durable file-based lineage without treating the mutable DB as input.
 
@@ -130,6 +131,12 @@ def build_file_provenance(
     workbook_sha256: str | None = None
     if workbook_record is not None:
         detail, _generated_at = workbook_record
+        if workbook_locator_path is not None:
+            try:
+                locator = str(workbook_locator_path.relative_to(repo_root))
+            except ValueError:
+                locator = str(workbook_locator_path)
+            detail["path"] = locator.replace("\\", "/")
         sources.append(detail)
         workbook_sha256 = str(detail["sha256"])
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
 import sqlite3
 from datetime import UTC, date, datetime
@@ -11,7 +12,7 @@ from typing import cast
 
 import pytest
 
-from dcf.artifact_promotion import StagedFilePromotion
+from dcf.artifact_promotion import StagedFilePromotion, live_path_from_env
 from dcf.persist import DcfPromotionBlocked, DcfRunRow, upsert
 from dcf.provenance import (
     DcfInputProvenance,
@@ -371,6 +372,7 @@ def test_input_ledger_constraint_failure_preserves_the_current_run() -> None:
     with pytest.raises(sqlite3.IntegrityError):
         upsert(conn, duplicate_inputs)
 
+    assert conn.in_transaction is False
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1
     assert conn.execute("SELECT npv FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1_000.0
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 2
@@ -407,6 +409,51 @@ def test_generated_workbook_does_not_fake_the_input_cutoff(tmp_path: Path) -> No
     by_role = {item["role"]: item for item in typed_sources}
     assert by_role["owner_assumptions"]["influences_calculation"] is True
     assert by_role["calculation_workbook"]["influences_calculation"] is False
+
+
+def test_staged_workbook_hash_uses_the_promoted_live_locator(tmp_path: Path) -> None:
+    staged = tmp_path / "dcf" / "META.rebuild.xlsx"
+    live = tmp_path / "dcf" / "META.xlsx"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"candidate workbook")
+
+    provenance = build_file_provenance(
+        ticker="META",
+        repo_root=tmp_path,
+        workbook_path=staged,
+        workbook_locator_path=live,
+        engine_version="test@1",
+        effective_inputs={},
+        assumption_snapshot={},
+        live_price=None,
+        live_price_at=None,
+        live_price_source=None,
+        source_files=(),
+    )
+
+    assert provenance.detail is not None
+    sources = provenance.detail["sources"]
+    assert isinstance(sources, list)
+    calculation = next(
+        cast("dict[str, object]", source)
+        for source in cast("list[object]", sources)
+        if isinstance(source, dict) and source.get("role") == "calculation_workbook"
+    )
+    assert calculation["path"] == "dcf/META.xlsx"
+    assert provenance.workbook_sha256 == hashlib.sha256(b"candidate workbook").hexdigest()
+
+
+def test_live_workbook_locator_uses_promotion_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staged = tmp_path / "dcf" / "META.rebuild.xlsx"
+    live = tmp_path / "dcf" / "META.xlsx"
+
+    monkeypatch.delenv("DCF_PROMOTE_DEST", raising=False)
+    assert live_path_from_env(staged) == staged
+
+    monkeypatch.setenv("DCF_PROMOTE_DEST", str(live))
+    assert live_path_from_env(staged) == live
 
 
 def test_pre_overwrite_workbook_input_receipt_retains_the_exact_old_bytes(

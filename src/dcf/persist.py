@@ -579,7 +579,8 @@ def upsert(
     # A SAVEPOINT opened as the outermost transaction is committed by RELEASE
     # in SQLite. Start an explicit transaction so the workbook swap remains
     # reversible until the following connection commit succeeds.
-    if not conn.in_transaction:
+    started_transaction = not conn.in_transaction
+    if started_transaction:
         conn.execute("BEGIN")
     conn.execute("SAVEPOINT dcf_run_upsert")
     artifact_applied = False
@@ -622,6 +623,8 @@ def upsert(
                 conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
             except sqlite3.Error:
                 conn.rollback()
+        if started_transaction and conn.in_transaction:
+            conn.rollback()
         if artifact_applied and artifact_promotion is not None:
             artifact_promotion.rollback()
         raise

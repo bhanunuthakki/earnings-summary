@@ -4,11 +4,72 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from typing import cast
 
 import pytest
 
-from dcf.grade_evidence import MAX_SERIALIZED_EVIDENCE_BYTES, load_dcf_grade_evidence
+import dcf.grade_evidence as grade_evidence_module
+from dcf.grade_evidence import (
+    MAX_SERIALIZED_EVIDENCE_BYTES,
+    DcfEvidenceChecks,
+    DcfGradeEvidence,
+    load_dcf_grade_evidence,
+)
+
+
+def test_bounded_text_terminates_when_budget_is_smaller_than_json_string_overhead() -> None:
+    bounded_text = cast(
+        "Callable[[str, int], str]",
+        grade_evidence_module.__dict__["_bounded_text"],
+    )
+    assert bounded_text("x", 2) == ""
+
+
+def test_wide_bridge_context_cannot_starve_both_lineage_receipts() -> None:
+    bridge = {
+        "status": "verified",
+        "arithmetic_status": "verified",
+        "bridge_context": {f"context_{index}": "x" * 400 for index in range(100_000)},
+        "cash_lineage": {"fact_id": 1, "lineage_role": "cash"},
+        "total_debt_lineage": {"fact_id": 2, "lineage_role": "debt"},
+    }
+    evidence = DcfGradeEvidence(
+        status="available",
+        ticker="META",
+        assumption_snapshot={"scenarios": {"base": {"conclusion": "base"}}},
+        provenance={"equity_bridge_receipt": bridge},
+        checks=DcfEvidenceChecks(
+            input_hash_valid=True,
+            workbook_hash_valid=True,
+            snapshot_status="valid",
+            provenance_status="valid",
+            source_count=0,
+            scenario_receipt_present=True,
+            reverse_receipt_present=False,
+            primary_fact_overlay_status="not_applicable",
+            equity_bridge_status="verified",
+            country_risk_authority=None,
+            market_price_consistent=False,
+        ),
+    )
+
+    bounded_projection = cast(
+        "Callable[[DcfGradeEvidence], DcfGradeEvidence]",
+        grade_evidence_module.__dict__["_bounded_available_evidence"],
+    )
+    bounded = bounded_projection(evidence)
+
+    assert bounded.projection_status == "bounded"
+    assert bounded.provenance is not None
+    projected_bridge = bounded.provenance["equity_bridge_receipt"]
+    assert isinstance(projected_bridge, dict)
+    assert projected_bridge["status"] == "verified"
+    assert projected_bridge["cash_lineage"]["lineage_role"] == "cash"
+    assert projected_bridge["total_debt_lineage"]["lineage_role"] == "debt"
+    assert len(json.dumps(bounded.model_dump(mode="json"), separators=(",", ":")).encode()) < (
+        MAX_SERIALIZED_EVIDENCE_BYTES
+    )
 
 
 def _schema(conn: sqlite3.Connection) -> None:
@@ -67,6 +128,7 @@ def test_generic_receipts_are_projected_without_regrading_them() -> None:
     evidence = load_dcf_grade_evidence(conn, "meta")
 
     assert evidence.status == "available"
+    assert evidence.projection_status == "complete"
     assert evidence.checks is not None
     assert evidence.checks.input_hash_valid is True
     assert evidence.checks.workbook_hash_valid is True

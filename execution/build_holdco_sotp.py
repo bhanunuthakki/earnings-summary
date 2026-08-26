@@ -72,7 +72,11 @@ sys.path.insert(0, str(CODE_ROOT / "src"))
 
 
 from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
-from dcf.artifact_promotion import ArtifactPromotion, promotion_from_env  # noqa: E402
+from dcf.artifact_promotion import (  # noqa: E402
+    ArtifactPromotion,
+    live_path_from_env,
+    promotion_from_env,
+)
 from dcf.provenance import (  # noqa: E402
     build_file_provenance,
     build_file_source_record,
@@ -257,11 +261,13 @@ def persist_dcf_run(
     price_source = (
         price_observation.source_name if price_observation is not None else "assumption_seed"
     )
-    snapshot_payload = {**snapshot, "workbook": str(DEST)}
+    live_workbook = live_path_from_env(DEST)
+    snapshot_payload = {**snapshot, "workbook": str(live_workbook)}
     provenance = build_file_provenance(
         ticker=T,
         repo_root=REPO,
         workbook_path=DEST,
+        workbook_locator_path=live_workbook,
         engine_version="holdco_sotp_v1",
         effective_inputs=(
             snapshot.get("marks", {}) if isinstance(snapshot.get("marks"), dict) else {}
@@ -298,7 +304,7 @@ def persist_dcf_run(
         live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=json.dumps(snapshot_payload, indent=2),
-        notes=f"workbook={DEST.name} ({snapshot.get('model', 'holdco SOTP')})",
+        notes=f"workbook={live_workbook.name} ({snapshot.get('model', 'holdco SOTP')})",
         assumptions_sync_status=None,
         assumptions_synced_at=None,
         provenance=provenance,

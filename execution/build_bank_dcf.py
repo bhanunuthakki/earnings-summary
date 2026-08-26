@@ -47,7 +47,11 @@ FMP = REPO / "data" / "historical" / "fmp"
 sys.path.insert(0, str(REPO / "src"))
 
 
-from dcf.artifact_promotion import ArtifactPromotion, promotion_from_env  # noqa: E402
+from dcf.artifact_promotion import (  # noqa: E402
+    ArtifactPromotion,
+    live_path_from_env,
+    promotion_from_env,
+)
 from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from dcf.specialized_price import (  # noqa: E402
     SpecializedPriceObservation,
@@ -980,6 +984,7 @@ def persist_dcf_run(
     npv_usd = m.value * s.fx_to_usd
     shares_traded = a.shares / s.adr_ratio if s.adr_ratio else a.shares
     mos = load_breaks(T).get("mos_bar")
+    live_workbook = live_path_from_env(DEST)
     snap_payload: dict[str, object] = {
         "model": "bank_excess_return",
         "ke": s.ke,
@@ -992,7 +997,7 @@ def persist_dcf_run(
         "pv_terminal_m": m.pv_tv,
         "book_equity_m": a.equity,
         "value_equity_reporting_m": m.value,
-        "workbook": str(DEST),
+        "workbook": str(live_workbook),
     }
     snap = json.dumps(snap_payload, indent=2)
     observed_at = price_observation.observed_at if price_observation is not None else None
@@ -1003,6 +1008,7 @@ def persist_dcf_run(
         ticker=T,
         repo_root=REPO,
         workbook_path=DEST,
+        workbook_locator_path=live_workbook,
         engine_version="bank_excess_return_v1",
         effective_inputs={"actuals": asdict(a), "assumptions": asdict(s)},
         assumption_snapshot=snap_payload,
@@ -1035,7 +1041,7 @@ def persist_dcf_run(
         live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
-        notes=f"workbook={DEST.name} (bank credit model)",
+        notes=f"workbook={live_workbook.name} (bank credit model)",
         provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
