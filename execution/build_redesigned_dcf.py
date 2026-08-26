@@ -628,20 +628,27 @@ import numpy as np  # noqa: E402
 
 latest = keys[-1]
 _bal_latest = bal_i[latest]
-_cash_resolution = equity_bridge.resolve_complete_aggregate(
-    _bal_latest,
-    aggregate_field="cashAndShortTermInvestments",
-    component_fields=("cashAndCashEquivalents", "shortTermInvestments"),
-)
 # Debt is a governed valuation input, not a normalized-data convenience.  The
-# builder may publish only when the approved scope resolves from the exact
-# primary aggregate and every signed lease component.  Missing evidence is a
-# HOLD; LT+ST is never a publishing fallback because it cannot prove the lease
-# perimeter of DebtAndCapitalLeaseObligations.
+# builder may publish only when cash and the approved debt scope resolve from
+# exact primary aggregates and every signed lease component. Missing evidence
+# is a HOLD; normalized cash/component sums and LT+ST debt are never publishing
+# fallbacks because they cannot prove the primary-source perimeter.
 _bridge_period_end_raw = _bal_latest.get("date")
 _bridge_currency_raw = _bal_latest.get("reportedCurrency")
 _bridge_period_end = _bridge_period_end_raw if isinstance(_bridge_period_end_raw, str) else None
 _bridge_currency = _bridge_currency_raw if isinstance(_bridge_currency_raw, str) else None
+_cash_resolution = (
+    equity_bridge.resolve_primary_reported_aggregate(
+        _bal_latest,
+        aggregate_field="cashAndShortTermInvestments",
+        overlay={"statements": PRIMARY_FACT_OVERLAY},
+        period_end=_bridge_period_end,
+        fiscal_period_type=latest[1],
+        currency=_bridge_currency,
+    )
+    if _bridge_period_end is not None and _bridge_currency is not None
+    else None
+)
 _verified_debt_resolution = (
     equity_bridge.resolve_primary_debt_scope(
         _bal_latest,

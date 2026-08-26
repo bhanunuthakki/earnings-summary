@@ -114,6 +114,57 @@ def resolve_complete_aggregate(
     )
 
 
+def resolve_primary_reported_aggregate(
+    record: Mapping[str, object],
+    *,
+    aggregate_field: str,
+    overlay: Mapping[str, object] | None,
+    period_end: str,
+    fiscal_period_type: str,
+    currency: str,
+) -> ResolvedAggregate | None:
+    """Resolve an aggregate only from one exact, non-derived primary fact.
+
+    A normalized provider aggregate or a complete component sum is useful for
+    modeling, but neither proves the primary-source perimeter required for a
+    conclusion-driving equity bridge. Currency, unit, period, and fiscal-period
+    identity must all match the exact value used by the calculation.
+    """
+    aggregate = _decimal(record.get(aggregate_field))
+    if aggregate is None or overlay is None:
+        return None
+    statements = overlay.get("statements")
+    if not isinstance(statements, Mapping):
+        return None
+    balance = cast("Mapping[str, object]", statements).get("balance")
+    if not isinstance(balance, Mapping) or balance.get("status") != "ok":
+        return None
+    applied = cast("Mapping[str, object]", balance).get("applied")
+    if not isinstance(applied, list):
+        return None
+    matches = [
+        cast("Mapping[str, object]", raw)
+        for raw in cast("list[object]", applied)
+        if isinstance(raw, Mapping)
+        and cast("Mapping[str, object]", raw).get("fmp_field") == aggregate_field
+        and _text(cast("Mapping[str, object]", raw), "period_end") == period_end
+        and _text(cast("Mapping[str, object]", raw), "fiscal_period_type") == fiscal_period_type
+        and isinstance(cast("Mapping[str, object]", raw).get("currency"), str)
+        and cast(str, cast("Mapping[str, object]", raw).get("currency")).upper() == currency.upper()
+        and isinstance(cast("Mapping[str, object]", raw).get("unit"), str)
+        and cast(str, cast("Mapping[str, object]", raw).get("unit")).lower() == "actual"
+        and cast("Mapping[str, object]", raw).get("derivation") is None
+        and (
+            (primary := _decimal(cast("Mapping[str, object]", raw).get("primary_value")))
+            is not None
+        )
+        and _decimal_close(primary, aggregate)
+    ]
+    if len(matches) != 1:
+        return None
+    return ResolvedAggregate(float(aggregate), "reported_aggregate", ())
+
+
 def resolve_debt_scope(
     record: Mapping[str, object], *, scope: DebtScope
 ) -> ResolvedDebtScope | None:

@@ -289,6 +289,38 @@ def test_not_applicable_status_without_typed_archetype_contract_is_blocked() -> 
     assert blocked.value.decision.candidate_bridge_status == "unverified"
 
 
+@pytest.mark.parametrize(
+    ("receipt_key", "malformed_value", "expected_status"),
+    [("status", [], "missing"), ("valuation_archetype", [], "unverified")],
+)
+def test_structurally_malformed_receipt_returns_typed_hold(
+    receipt_key: str, malformed_value: object, expected_status: str
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    candidate = _row()
+    assert candidate.provenance is not None
+    receipt: dict[str, object] = {
+        "schema_version": "dcf_equity_bridge_receipt.v3",
+        "status": "not_applicable",
+        "reason_code": "equity_direct_valuation",
+        "valuation_scope": "equity",
+        "valuation_archetype": "bank_excess_return",
+    }
+    receipt[receipt_key] = malformed_value
+    malformed = dataclasses.replace(
+        candidate.provenance,
+        detail={"equity_bridge_receipt": receipt},
+    )
+
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, dataclasses.replace(candidate, provenance=malformed))
+
+    assert blocked.value.decision.reason == "candidate_equity_bridge_unverified"
+    assert blocked.value.decision.candidate_bridge_status == expected_status
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+
+
 def test_outlier_candidate_is_blocked_with_deterministic_evidence() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)

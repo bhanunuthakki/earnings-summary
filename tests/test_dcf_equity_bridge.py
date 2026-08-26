@@ -5,6 +5,7 @@ from dcf.equity_bridge import (
     resolve_complete_aggregate,
     resolve_debt_scope,
     resolve_primary_debt_scope,
+    resolve_primary_reported_aggregate,
 )
 
 
@@ -161,6 +162,55 @@ def test_primary_debt_scope_requires_exact_reported_aggregate_lineage() -> None:
             {"totalDebt": 130_000_000, "financeLeaseLiability": 30_000_000},
             scope="interest_bearing_debt_only",
             overlay=_overlay(derived_total_debt, finance_lease),
+            period_end="2026-06-30",
+            fiscal_period_type="Q2",
+            currency="USD",
+        )
+        is None
+    )
+
+
+def test_primary_reported_aggregate_rejects_normalized_or_derived_cash() -> None:
+    exact_cash = _lineage("cashAndShortTermInvestments", 200_000_000)
+    resolved = resolve_primary_reported_aggregate(
+        {"cashAndShortTermInvestments": 200_000_000},
+        aggregate_field="cashAndShortTermInvestments",
+        overlay=_overlay(exact_cash),
+        period_end="2026-06-30",
+        fiscal_period_type="Q2",
+        currency="USD",
+    )
+    assert resolved is not None
+    assert resolved.value == 200_000_000
+    assert resolved.basis == "reported_aggregate"
+
+    assert (
+        resolve_primary_reported_aggregate(
+            {
+                "cashAndShortTermInvestments": 200_000_000,
+                "cashAndCashEquivalents": 190_000_000,
+                "shortTermInvestments": 10_000_000,
+            },
+            aggregate_field="cashAndShortTermInvestments",
+            overlay=_overlay(),
+            period_end="2026-06-30",
+            fiscal_period_type="Q2",
+            currency="USD",
+        )
+        is None
+    )
+    derived: dict[str, object] = {
+        **exact_cash,
+        "derivation": {
+            "formula": "cash_and_equivalents + short_term_investments",
+            "components": [],
+        },
+    }
+    assert (
+        resolve_primary_reported_aggregate(
+            {"cashAndShortTermInvestments": 200_000_000},
+            aggregate_field="cashAndShortTermInvestments",
+            overlay=_overlay(derived),
             period_end="2026-06-30",
             fiscal_period_type="Q2",
             currency="USD",

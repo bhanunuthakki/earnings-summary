@@ -315,6 +315,26 @@ def test_builder_fails_loudly_on_partial_debt_or_missing_shares(tmp_path: Path) 
     assert '"positive_diluted_shares"' in missing_shares.stderr
 
 
+def test_builder_preserves_existing_workbook_when_primary_cash_is_missing(tmp_path: Path) -> None:
+    repo = tmp_path / "missing-primary-cash"
+    _write_fixture(repo, "TESTCO")
+    conn = sqlite3.connect(repo / "data" / "portfolio.db")
+    conn.execute("DELETE FROM financial_facts WHERE line_item='cash_and_short_term_investments'")
+    conn.commit()
+    conn.close()
+    destination = tmp_path / "existing.xlsx"
+    sentinel = b"existing-workbook-must-survive"
+    destination.write_bytes(sentinel)
+
+    result = _run_builder(repo, "TESTCO", destination)
+
+    assert result.returncode != 0
+    assert '"event": "dcf_equity_bridge_unavailable"' in result.stderr
+    assert '"cash_and_short_term_investments"' in result.stderr
+    assert not result.stdout.startswith("RESULT\t")
+    assert destination.read_bytes() == sentinel
+
+
 # --------------------------------------------------------------------------- #
 # graceful degradation: short histories (clean SKIP) + base-year segment gaps
 # (single-seg fallback) instead of crashing on out-of-range/zero-denominator data

@@ -354,14 +354,16 @@ _EQUITY_DIRECT_ARCHETYPES = {
 
 
 def _bridge_status(value: object, receipt: dict[str, object]) -> PromotionStatus:
-    if value in {"verified", "unverified"}:
+    if isinstance(value, str) and value in {"verified", "unverified"}:
         return cast("PromotionStatus", value)
     if value == "not_applicable":
+        archetype = receipt.get("valuation_archetype")
         if (
             receipt.get("schema_version") == "dcf_equity_bridge_receipt.v3"
             and receipt.get("reason_code") == "equity_direct_valuation"
             and receipt.get("valuation_scope") == "equity"
-            and receipt.get("valuation_archetype") in _EQUITY_DIRECT_ARCHETYPES
+            and isinstance(archetype, str)
+            and archetype in _EQUITY_DIRECT_ARCHETYPES
         ):
             return "not_applicable"
         return "unverified"
