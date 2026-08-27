@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -25,6 +26,8 @@ PORTFOLIO_TRACKER_RUNTIME_SURFACE_FIELD = "portfolio_tracker_runtime"
 LEASE_STALE_AFTER_SECONDS = 3_600.0
 LEASE_RELEASE_DEADLINE_SECONDS = 0.5
 HEALTH_RESPONSE_CLOCK_SKEW = timedelta(seconds=5)
+SUPERVISOR_LISTENER_RECEIPT_MAX_AGE = timedelta(minutes=15)
+SUPERVISOR_LISTENER_BIND = ("127.0.0.1", 8000)
 
 
 class RuntimeConfig(BaseModel):
@@ -97,6 +100,55 @@ def is_loopback_bind_host(host: str) -> bool:
         return ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def read_supervisor_listener_ownership(
+    receipt_path: Path,
+    *,
+    listener_owner: str,
+    bind_host: str,
+    bind_port: int,
+    observed_at: datetime,
+) -> ListenerObservation | None:
+    """Return fresh, live ownership from the canonical listener supervisor.
+
+    The supervisor is the only non-dashboard process authorized to own the
+    production tracker endpoint. Its typed heartbeat supplies the PID; a new
+    exclusive endpoint probe proves that the same process tree still owns the
+    configured socket. Invalid, stale, or non-canonical evidence fails closed.
+    """
+
+    if (bind_host, bind_port) != SUPERVISOR_LISTENER_BIND or observed_at.tzinfo is None:
+        return None
+    try:
+        metadata = receipt_path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            return None
+        receipt = RuntimeReceipt.model_validate_json(receipt_path.read_bytes())
+    except (FileNotFoundError, OSError, ValidationError, ValueError):
+        return None
+    listener = receipt.listener
+    checked_at = listener.health_checked_at or receipt.recorded_at
+    if (
+        receipt.lifecycle_state not in {"started", "already_running"}
+        or not listener.healthy
+        or not health_is_healthy(listener.health, now=observed_at)
+        or listener.owner != listener_owner
+        or listener.pid is None
+        or receipt.recorded_at > observed_at
+        or checked_at.tzinfo is None
+        or checked_at > observed_at
+        or observed_at - checked_at > SUPERVISOR_LISTENER_RECEIPT_MAX_AGE
+        or endpoint_owner_matches_pid(
+            bind_host,
+            bind_port,
+            listener.pid,
+            require_exclusive=True,
+        )
+        is not True
+    ):
+        return None
+    return listener
 
 
 class SchedulerEvidence(BaseModel):
