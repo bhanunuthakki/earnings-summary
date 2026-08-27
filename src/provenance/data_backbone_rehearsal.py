@@ -595,6 +595,10 @@ def checkpoint_and_close_candidate_database(path: Path) -> tuple[int, int, int]:
         if row is None or len(row) != 3:
             raise RehearsalError("candidate WAL checkpoint returned an invalid result")
         checkpoint = (int(row[0]), int(row[1]), int(row[2]))
+    finally:
+        connection.close()
+    connection = connect_sqlite(path, role=SQLiteConnectionRole.SNAPSHOT_DESTINATION)
+    try:
         journal_mode_row = connection.execute("PRAGMA journal_mode = DELETE").fetchone()
         journal_mode = "" if journal_mode_row is None else str(journal_mode_row[0]).lower()
         if journal_mode != "delete":
