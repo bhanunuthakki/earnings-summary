@@ -25,6 +25,8 @@ _SAFE_FILENAME = re.compile(r"^[^/\\\x00-\x1f]+$")
 _EXHIBIT_TYPE = re.compile(r"^EX-\d{1,3}(?:\.\d+)*(?:[A-Z])?$")
 _FINANCIAL_EXHIBIT_TYPE = re.compile(r"^EX-(?:101(?:\.[A-Z0-9]+)?|104)$")
 _RENDERED_FINANCIAL_REPORT = re.compile(r"^R\d+\.htm$", re.IGNORECASE)
+_VPRR_PDF = re.compile(r"^/Archives/edgar/vprr/\d{4}/\d+\.pdf$")
+_SEC_ORIGIN = "https://www.sec.gov"
 _ARCHIVE_BASE = "https://www.sec.gov/Archives/edgar/data"
 _FINANCIAL_FILENAMES = frozenset({"FilingSummary.xml", "MetaLinks.json"})
 _FINANCIAL_SUFFIXES = (
@@ -97,6 +99,7 @@ class _ManifestDocument(_Closed):
     filename: str
     description: str | None
     byte_size: int | None = Field(default=None, ge=0)
+    source_url: str
 
 
 def filing_package_index_url(cik: str, accession_number: str) -> str:
@@ -246,7 +249,7 @@ def parse_sec_filing_package_inventory(
                 index_media_icon=None if item is None else item.type,
                 byte_size=byte_size,
                 last_modified_at=modified,
-                source_url=f"{base}/{name}",
+                source_url=f"{base}/{name}" if manifest is None else manifest.source_url,
                 role=role,
                 inventory_presence=presence,
             )
@@ -331,22 +334,26 @@ def _manifest_documents(
                 raise SecFilingPackageContractError(
                     f"filing-index table {table_index} row {row_index} has no document URL"
                 )
-            filename = _manifest_filename(
-                href_value,
-                displayed_filename=anchors[0].get_text(" ", strip=True),
-                cik=cik,
-                accession_number=accession_number,
-            )
+            displayed_filename = anchors[0].get_text(" ", strip=True)
             sequence_text = cells[0].get_text(" ", strip=True)
             try:
                 sequence = int(sequence_text) if sequence_text else None
             except ValueError as exc:
                 raise SecFilingPackageContractError(
-                    f"manifest document {filename!r} has invalid sequence"
+                    f"manifest document {displayed_filename!r} has invalid sequence"
                 ) from exc
             description = cells[1].get_text(" ", strip=True) or None
             declared_type = cells[3].get_text(" ", strip=True).upper() or None
             size_text = cells[4].get_text(" ", strip=True)
+            filename, source_url = _manifest_reference(
+                href_value,
+                displayed_filename=displayed_filename,
+                description=description,
+                declared_type=declared_type,
+                sequence=sequence,
+                cik=cik,
+                accession_number=accession_number,
+            )
             byte_size = _byte_size(size_text, filename)
             document = _ManifestDocument(
                 declared_type=declared_type,
@@ -354,6 +361,7 @@ def _manifest_documents(
                 filename=filename,
                 description=description,
                 byte_size=byte_size,
+                source_url=source_url,
             )
             prior = result.get(filename)
             if prior is None:
@@ -372,14 +380,21 @@ def _manifest_documents(
     return result
 
 
-def _manifest_filename(
+def _manifest_reference(
     href: str,
     *,
     displayed_filename: str,
+    description: str | None,
+    declared_type: str | None,
+    sequence: int | None,
     cik: str,
     accession_number: str,
-) -> str:
+) -> tuple[str, str]:
     parsed = urlparse(href)
+    if (parsed.scheme or parsed.netloc) and (
+        parsed.scheme.lower() != "https" or parsed.netloc.lower() != "www.sec.gov"
+    ):
+        raise SecFilingPackageContractError("manifest document URL is outside SEC authority")
     if parsed.path == "/ix":
         document_values = parse_qs(parsed.query, strict_parsing=True).get("doc")
         if document_values is None or len(document_values) != 1:
@@ -395,6 +410,18 @@ def _manifest_filename(
         document_path = parsed.path
     prefix = f"/Archives/edgar/data/{int(cik)}/{accession_number.replace('-', '')}/"
     if not document_path.startswith(prefix):
+        displayed = _filename(
+            displayed_filename,
+            label="displayed manifest attachment filename",
+        )
+        if (
+            _VPRR_PDF.fullmatch(document_path)
+            and displayed == "scanned.pdf"
+            and description == "Scanned paper document"
+            and declared_type is None
+            and sequence is None
+        ):
+            return displayed, f"{_SEC_ORIGIN}{document_path}"
         raise SecFilingPackageContractError(
             "manifest document URL is outside the requested accession"
         )
@@ -409,8 +436,8 @@ def _manifest_filename(
             label="displayed manifest attachment filename",
         )
         if linked_filename == f"{legacy_prefix}{displayed}":
-            return displayed
-    return linked_filename
+            return displayed, f"{_SEC_ORIGIN}{prefix}{displayed}"
+    return linked_filename, f"{_SEC_ORIGIN}{prefix}{linked_filename}"
 
 
 def _role(

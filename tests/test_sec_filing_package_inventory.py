@@ -82,6 +82,20 @@ def _legacy_alias_manifest(*documents: tuple[str, str, str]) -> bytes:
     ).encode()
 
 
+def _paper_manifest(*, scan_href: str, scan_filename: str = "scanned.pdf") -> bytes:
+    return (
+        '<html><body><table class="tableFile">'
+        "<tr><th>Seq</th><th>Description</th><th>Document</th>"
+        "<th>Type</th><th>Size</th></tr>"
+        '<tr><td>1</td><td>AUTO-GENERATED PAPER DOCUMENT</td><td><a href="'
+        "/Archives/edgar/data/1001/000000100125000001/primary.paper"
+        '">primary.paper</a></td><td>6-K</td><td>150</td></tr>'
+        '<tr><td></td><td>Scanned paper document</td><td><a href="'
+        f'{scan_href}">{scan_filename}</a></td><td></td><td>676505</td></tr>'
+        "</table></body></html>"
+    ).encode()
+
+
 def test_package_retains_primary_exhibits_and_financial_report_attachments() -> None:
     result = parse_sec_filing_package_inventory(
         cik="1001",
@@ -202,6 +216,53 @@ def test_noncanonical_prefixed_link_does_not_alias_displayed_filename() -> None:
             primary_document="0001.txt",
             index_body=_index(_item("0001.txt")),
             filing_manifest_body=manifest,
+        )
+
+
+def test_sec_vprr_paper_scan_preserves_manifest_only_authority_url() -> None:
+    result = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="6-K",
+        primary_document="primary.paper",
+        index_body=_index(_item("primary.paper", size="150")),
+        filing_manifest_body=_paper_manifest(scan_href="/Archives/edgar/vprr/0201/02013406.pdf"),
+    )
+
+    scan = next(item for item in result.attachments if item.filename == "scanned.pdf")
+    assert scan.inventory_presence == "manifest_only"
+    assert scan.role == "supporting_attachment"
+    assert scan.source_url == "https://www.sec.gov/Archives/edgar/vprr/0201/02013406.pdf"
+
+
+@pytest.mark.parametrize(
+    ("scan_href", "scan_filename", "match"),
+    [
+        ("/Archives/edgar/vprr/0201/not-numeric.pdf", "scanned.pdf", "outside"),
+        ("/Archives/edgar/vprr/0201/02013406.pdf", "renamed.pdf", "outside"),
+        (
+            "https://example.com/Archives/edgar/vprr/0201/02013406.pdf",
+            "scanned.pdf",
+            "outside SEC authority",
+        ),
+    ],
+)
+def test_noncanonical_vprr_reference_fails_closed(
+    scan_href: str,
+    scan_filename: str,
+    match: str,
+) -> None:
+    with pytest.raises(SecFilingPackageContractError, match=match):
+        parse_sec_filing_package_inventory(
+            cik="1001",
+            accession_number="0000001001-25-000001",
+            form_type="6-K",
+            primary_document="primary.paper",
+            index_body=_index(_item("primary.paper", size="150")),
+            filing_manifest_body=_paper_manifest(
+                scan_href=scan_href,
+                scan_filename=scan_filename,
+            ),
         )
 
 
