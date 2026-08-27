@@ -6,12 +6,16 @@ must remain runnable without importing ``tests/conftest.py`` or opening the app 
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
+
+from execution import validate_directive_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTIVES = ROOT / "directives"
@@ -29,20 +33,18 @@ def _manifest() -> dict[str, object]:
     return cast(dict[str, object], payload_dict)
 
 
-def _entries() -> dict[str, dict[str, str]]:
+def _entries() -> dict[str, dict[str, object]]:
     entries_value = _manifest()["directives"]
     assert isinstance(entries_value, dict)
     entries_dict = cast(dict[object, object], entries_value)
     assert all(isinstance(path, str) for path in entries_dict)
     entries = cast(dict[str, object], entries_dict)
-    typed: dict[str, dict[str, str]] = {}
+    typed: dict[str, dict[str, object]] = {}
     for path, entry_value in entries.items():
         assert isinstance(entry_value, dict)
         entry_dict = cast(dict[object, object], entry_value)
-        assert all(
-            isinstance(key, str) and isinstance(value, str) for key, value in entry_dict.items()
-        )
-        typed[path] = cast(dict[str, str], entry_dict)
+        assert all(isinstance(key, str) for key in entry_dict)
+        typed[path] = cast(dict[str, object], entry_dict)
     return typed
 
 
@@ -62,6 +64,107 @@ def test_directive_manifest_is_complete_and_uses_the_closed_class_vocabulary() -
         and entry.get("class") in {"canonical", "runbook", "draft", "history"}
         for entry in entries.values()
     )
+
+
+def test_manifest_is_the_complete_non_overlapping_authority_graph() -> None:
+    manifest = _manifest()
+    entries = _entries()
+
+    assert manifest["schema_version"] == 2
+    owners_by_domain: dict[str, str] = {}
+    for path, entry in entries.items():
+        classification = entry["class"]
+        if classification == "canonical":
+            domains = entry.get("authority_domains")
+            assert isinstance(domains, list) and domains, path
+            assert "governed_by" not in entry, path
+            for domain in domains:
+                assert isinstance(domain, str) and re.fullmatch(
+                    r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", domain
+                ), (path, domain)
+                assert domain not in owners_by_domain, (
+                    domain,
+                    owners_by_domain.get(domain),
+                    path,
+                )
+                owners_by_domain[domain] = path
+        elif classification == "runbook":
+            governed_by = entry.get("governed_by")
+            assert isinstance(governed_by, list) and governed_by, path
+            assert "authority_domains" not in entry, path
+            for owner in governed_by:
+                assert isinstance(owner, str), (path, owner)
+                assert entries[owner]["class"] == "canonical", (path, owner)
+        else:
+            assert set(entry) == {"class", "summary"}, path
+
+
+def test_readme_routes_through_manifest_instead_of_a_partial_authority_table() -> None:
+    readme = _read("directives/README.md")
+
+    assert "authority_domains" in readme
+    assert "governed_by" in readme
+    assert "## Current authority map" not in readme
+
+
+def test_manifest_validator_rejects_duplicate_canonical_ownership() -> None:
+    payload = copy.deepcopy(_manifest())
+    entries = cast(dict[str, dict[str, object]], payload["directives"])
+    entries["annual_kpi_cadence_design.md"]["authority_domains"] = ["directive_authority"]
+
+    with patch.object(validate_directive_manifest, "_load_manifest", return_value=payload):
+        errors = validate_directive_manifest.validate()
+
+    assert any("multiple canonical owners" in error for error in errors)
+
+
+def test_manifest_validator_rejects_runbook_links_to_noncanonical_files() -> None:
+    payload = copy.deepcopy(_manifest())
+    entries = cast(dict[str, dict[str, object]], payload["directives"])
+    entries["backfill_transcripts.md"]["governed_by"] = ["capture_every_number_program.md"]
+
+    with patch.object(validate_directive_manifest, "_load_manifest", return_value=payload):
+        errors = validate_directive_manifest.validate()
+
+    assert any("governed_by target must be a canonical directive" in error for error in errors)
+
+
+def test_retention_decisions_live_with_canonical_owners_and_existing_writers() -> None:
+    entries = _entries()
+    dag = _read("directives/data_pipeline_dag.md")
+    calls = _read("directives/llm_calls.md")
+    db_gc = _read("execution/db_gc.py")
+    weekly_cleanup = _read("execution/run_weekly_cleanup.py")
+
+    assert entries["db_garbage_collection.md"]["governed_by"] == [
+        "data_pipeline_dag.md",
+        "data_provenance.md",
+        "llm_calls.md",
+        "operations_governance_surface.md",
+    ]
+    assert entries["weekly_cleanup.md"]["governed_by"] == [
+        "data_pipeline_dag.md",
+        "operations_governance_surface.md",
+    ]
+    assert "## Intermediate and telemetry lifecycle" in dag
+    assert "## LLM artifact lifecycle" in calls
+    assert "DEFAULT_TELEMETRY_RETENTION_DAYS = 90" in db_gc
+    assert "DEFAULT_ARTIFACT_RETENTION_DAYS = 180" in db_gc
+    assert "DEFAULT_DISPOSABLE_RETENTION_DAYS = 30" in weekly_cleanup
+    assert "DEFAULT_CACHE_RETENTION_DAYS = 7" in weekly_cleanup
+    agents = _read("AGENTS.md")
+    assert "Safe to wipe." not in agents
+    assert "no active run or recovery path depends on them" in " ".join(agents.split())
+
+
+def test_semantic_manifest_edges_match_current_directive_status_and_state_owner() -> None:
+    entries = _entries()
+
+    assert entries["dcf_gsheets_setup.md"]["governed_by"] == ["holdings_json_schema.md"]
+    assert entries["ir_events_ingestion.md"]["class"] == "draft"
+    assert "governed_by" not in entries["ir_events_ingestion.md"]
+    assert entries["monthly_red_team.md"]["class"] == "canonical"
+    assert entries["monthly_red_team.md"]["authority_domains"] == ["portfolio_red_team"]
 
 
 def test_manifest_validator_accepts_the_checked_in_authority_graph() -> None:

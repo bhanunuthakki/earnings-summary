@@ -13,20 +13,19 @@ manifest, the manifest wins. Changing a class requires editing the manifest and
 passing `make instruction-check`; renaming or adding a directive without classifying
 it fails the same gate.
 
-## Current authority map
+## Authority graph
 
-| Concern | Canonical owner | Adjacent procedure or evidence |
-|---|---|---|
-| pipeline stages and repeat safety | `data_pipeline_dag.md` | source identities in `data_provenance.md` |
-| provenance, source precedence, and legacy fact cutover | `data_provenance.md` | run-specific ingestion runbooks |
-| repository topology | `folder_structure.md` | `execution/validate_folder_contract.py` |
-| visual system and page continuity | `design_language.md` | `design_conformance_audit.md` runbook |
-| interaction behavior | `interaction_contract.md` | `report_comments_and_chat.md` |
-| operational surface changes | `operations_governance_surface.md` | named operation runbook |
-| LLM call and fallback boundary | `llm_calls.md` | provider adapter runbooks |
-| LLM quality and failure evidence | `llm_evals.md` | cases and rubrics under `evals/` |
-| model qualification and promotion | `model_eval_loop.md` | economic rule in `cheapest_model_routing.md` |
-| private hosting architecture | `self_host_scoping.md` | `self_host_phase1_laptop.md` runbook |
+The manifest is the complete authority graph; this README does not maintain a second,
+partial map. Each canonical entry declares one or more stable `authority_domains`.
+The validator rejects a domain claimed by more than one canonical file. Each runbook
+entry declares the canonical contracts it implements in `governed_by`; the validator
+rejects missing, non-canonical, or repeated targets. Draft and history entries cannot
+carry either field.
+
+The metadata makes placement reviewable and prevents exact duplicate ownership. It
+does not pretend to understand prose: when a proposed domain is merely a synonym for
+an existing one, consolidate it into the existing canonical owner rather than minting
+a second label. Add a new domain only for a genuinely independent product decision.
 
 Product code, typed schemas, migrations, executable registries, and tests remain
 more precise authorities when a directive explicitly delegates a value or inventory
@@ -35,7 +34,8 @@ and backlog files are history unless the manifest says otherwise.
 
 ## Task routing
 
-- Start with the relevant canonical contract, then load only the named runbook.
+- Find the relevant `authority_domains` entry, then load only the runbooks whose
+  `governed_by` list names that canonical contract.
 - Drafts may inform exploration but cannot authorize implementation or contradict a
   canonical owner.
 - History may explain why a decision exists but cannot reopen work or supply current

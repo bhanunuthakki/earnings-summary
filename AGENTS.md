@@ -81,7 +81,8 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 ### Categories
 
 - **Deliverables**: Push to canonical destinations (Google Drive, Sheets, S3, Postgres). Never to `.tmp/`.
-- **Intermediates**: Write exclusively to `.tmp/`. Safe to wipe.
+- **Intermediates**: Write exclusively to `.tmp/`. Clear only after confirming no
+  active run or recovery path depends on them.
 - **Cached responses**: Optional, in `.cache/` if implemented. Always include a TTL or invalidation rule.
 
 ### Directory Structure

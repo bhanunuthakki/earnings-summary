@@ -23,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 POLICY_VERSION = "weekly-cleanup-v2"
+DEFAULT_DISPOSABLE_RETENTION_DAYS = 30
+DEFAULT_CACHE_RETENTION_DAYS = 7
 Collector: TypeAlias = Callable[[Path, datetime, "_Counts"], list["Candidate"]]
 
 
@@ -438,37 +440,37 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
             "cron_logs_30d",
             repo_root / ".tmp" / "cron_logs",
             _collect_tmp_owned_by_age,
-            now - timedelta(days=30),
+            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
         ),
         (
             "cron_runs_30d",
             repo_root / ".tmp" / "cron_runs",
             _collect_tmp_owned_by_age,
-            now - timedelta(days=30),
+            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
         ),
         (
             "news_cache_7d",
             repo_root / ".tmp" / "news_cache",
             _collect_news_cache,
-            now - timedelta(days=7),
+            now - timedelta(days=DEFAULT_CACHE_RETENTION_DAYS),
         ),
         (
             "pdf_pages_30d",
             repo_root / ".tmp" / "pdf_pages",
             _collect_tmp_owned_by_age,
-            now - timedelta(days=30),
+            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
         ),
         (
             "main_python_caches_7d",
             repo_root,
             _collect_main_caches,
-            now - timedelta(days=7),
+            now - timedelta(days=DEFAULT_CACHE_RETENTION_DAYS),
         ),
         (
             "tmp_unclassified_30d",
             repo_root / ".tmp",
             _collect_tmp_unclassified,
-            now - timedelta(days=30),
+            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
         ),
     ]
     roots_to_prune: list[Path] = []
