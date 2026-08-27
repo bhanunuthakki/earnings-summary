@@ -146,12 +146,15 @@ def test_duplicate_accession_conflict_is_material_and_not_silently_selected() ->
     assert result.issues[0].code == "accession_conflict"
 
 
-def test_missing_primary_document_is_a_contract_error() -> None:
+def test_missing_primary_document_is_preserved_as_authority_unavailable() -> None:
     columns = _columns(["0000001001-25-000001"], primary_documents=[""])
-    with pytest.raises(SecInventoryContractError, match="primaryDocument"):
-        parse_sec_submissions_inventory(
-            cik="1001",
-            ticker="ACME",
-            primary_body=_root(columns, []),
-            historical=(),
-        )
+    result = parse_sec_submissions_inventory(
+        cik="1001",
+        ticker="ACME",
+        primary_body=_root(columns, []),
+        historical=(),
+    )
+
+    assert result.complete
+    assert result.filings[0].primary_document is None
+    assert result.filings[0].primary_document_url is None

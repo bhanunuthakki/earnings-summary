@@ -215,16 +215,43 @@ def test_directory_identity_must_match_requested_accession() -> None:
         )
 
 
-def test_filing_manifest_document_missing_from_directory_fails_closed() -> None:
-    with pytest.raises(SecFilingPackageContractError, match="not present in index"):
-        parse_sec_filing_package_inventory(
-            cik="1001",
-            accession_number="0000001001-25-000001",
-            form_type="8-K",
-            primary_document="acme-8k.htm",
-            index_body=_index(_item("acme-8k.htm")),
-            filing_manifest_body=_manifest(
-                ("acme-8k.htm", "8-K", "Current report"),
-                ("missing.htm", "EX-99.1", "Missing exhibit"),
-            ),
-        )
+def test_filing_manifest_only_document_preserves_authority_disagreement() -> None:
+    result = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="8-K",
+        primary_document="acme-8k.htm",
+        index_body=_index(_item("acme-8k.htm")),
+        filing_manifest_body=_manifest(
+            ("acme-8k.htm", "8-K", "Current report"),
+            ("missing.htm", "EX-99.1", "Manifest-only exhibit"),
+        ),
+    )
+
+    assert [item.inventory_presence for item in result.attachments] == [
+        "matched",
+        "manifest_only",
+    ]
+    manifest_only = result.attachments[1]
+    assert manifest_only.filename == "missing.htm"
+    assert manifest_only.index_media_icon is None
+    assert manifest_only.last_modified_at is None
+    assert manifest_only.role == "exhibit"
+
+
+def test_manifest_only_primary_preserves_authority_disagreement() -> None:
+    result = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="8-K",
+        primary_document="acme-8k.htm",
+        index_body=_index(_item("supporting.css")),
+        filing_manifest_body=_manifest(
+            ("acme-8k.htm", "8-K", "Current report"),
+        ),
+    )
+
+    primary = next(item for item in result.attachments if item.role == "primary_document")
+    assert primary.inventory_presence == "manifest_only"
+    assert primary.index_media_icon is None
+    assert primary.last_modified_at is None

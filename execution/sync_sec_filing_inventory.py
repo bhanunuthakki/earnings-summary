@@ -65,14 +65,32 @@ from sec_identity import sec_user_agent  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _TIMEOUT = (10, 60)
-_COLLECTOR = "sync-sec-filing-inventory@2"
+_COLLECTOR = "sync-sec-filing-inventory@4"
 _DEFAULT_PACKAGE_LIMIT = 250
 _SEC_REQUEST_DELAY_SECONDS = 0.25
-_PACKAGE_SCOPE_POLICY_VERSION = "company-report-package-scope@1"
-_ISSUER_REPORT_FORMS = frozenset(
+_PACKAGE_SCOPE_POLICY_VERSION = "governed-reporting-package-scope@4"
+PACKAGE_ELIGIBLE_FORMS = frozenset(
     {
         "10-K",
         "10-K/A",
+        "10-Q",
+        "10-Q/A",
+        "20-F",
+        "20-F/A",
+        "40-F",
+        "40-F/A",
+        "6-K",
+        "6-K/A",
+        "8-K",
+        "8-K/A",
+    }
+)
+ISSUER_OR_REGISTRATION_INVENTORY_FORMS = frozenset(
+    {
+        "10-K",
+        "10-K/A",
+        "10-K405",
+        "10-K405/A",
         "10-Q",
         "10-Q/A",
         "11-K",
@@ -86,10 +104,14 @@ _ISSUER_REPORT_FORMS = frozenset(
         "424B3",
         "424B4",
         "424B5",
+        "424B7",
+        "425",
         "6-K",
         "6-K/A",
         "8-A12B",
+        "8-A12B/A",
         "8-A12G",
+        "8-A12G/A",
         "8-K",
         "8-K/A",
         "ARS",
@@ -97,6 +119,8 @@ _ISSUER_REPORT_FORMS = frozenset(
         "CORRESP",
         "DEF 14A",
         "DEFA14A",
+        "DEFM14A",
+        "DEFR14A",
         "DRS",
         "DRS/A",
         "DRSLTR",
@@ -106,21 +130,131 @@ _ISSUER_REPORT_FORMS = frozenset(
         "F-3/A",
         "F-4",
         "F-4/A",
+        "FWP",
         "PRE 14A",
+        "PRER14A",
+        "POS AM",
+        "POS AMI",
+        "POS EX",
         "S-1",
         "S-1/A",
         "S-1MEF",
         "S-3",
         "S-3/A",
+        "S-3ASR",
         "S-3MEF",
         "S-4",
         "S-4/A",
+        "S-4MEF",
         "S-8",
+        "S-8 POS",
+        "SC TO-C",
+        "SC TO-I",
+        "SC TO-I/A",
+        "SC TO-T",
+        "SC TO-T/A",
+        "10-12B",
+        "10-12B/A",
+        "10-QT",
+        "11-KT",
+        "24F-2NT",
+        "40-17G",
+        "40-17G/A",
+        "40FR12B",
+        "40FR12B/A",
+        "424A",
+        "424B8",
+        "485APOS",
+        "485BPOS",
+        "485BXT",
+        "497",
+        "497J",
+        "497K",
+        "8-K12B",
+        "8-K12G3",
+        "8A12BEF",
+        "ARS/A",
+        "CB",
+        "CB/A",
+        "DEF 14C",
+        "DEFA14C",
+        "DEFC14A",
+        "DEFN14A",
+        "DEFS14A",
+        "DEL AM",
+        "DFAN14A",
+        "DFRN14A",
+        "F-10",
+        "F-10/A",
+        "F-1MEF",
+        "F-3ASR",
+        "F-3D",
+        "F-6",
+        "F-6 POS",
+        "F-6EF",
+        "F-8",
+        "F-8 POS",
+        "F-8/A",
+        "F-9",
+        "F-9/A",
+        "F-9EF",
+        "F-N",
+        "F-N/A",
+        "F-X",
+        "F-X/A",
+        "N-14",
+        "N-18F1",
+        "N-1A",
+        "N-1A/A",
+        "N-30D",
+        "N-30D/A",
+        "N-8A",
+        "N-CEN",
+        "N-CEN/A",
+        "N-CSR",
+        "N-CSR/A",
+        "N-CSRS",
+        "N-CSRS/A",
+        "N-PX/A",
+        "N-Q",
+        "N-Q/A",
+        "NPORT-EX",
+        "NPORT-P",
+        "NSAR-A",
+        "NSAR-B",
+        "NSAR-B/A",
+        "NT 10-K",
+        "NT 10-Q",
+        "NT 11-K",
+        "POSASR",
+        "PRE 14C",
+        "PREC14A",
+        "PREM14A",
+        "PREN14A",
+        "PRES14A",
+        "PRRN14A",
+        "S-3D",
+        "S-3DPOS",
+        "S-4 POS",
+        "SC 13E3",
+        "SC 13E3/A",
+        "SC 13E4",
+        "SC 13E4/A",
+        "SC 14D1",
+        "SC 14D1/A",
+        "SC 14D9",
+        "SC 14D9/A",
+        "SC13E4F",
+        "SC14D1F",
+        "SC14D1F/A",
+        "SUPPL",
+        "T-3",
+        "T-3/A",
         "SD",
         "SD/A",
     }
 )
-_EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
+EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
     {
         "3",
         "3/A",
@@ -130,7 +264,20 @@ _EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
         "5/A",
         "144",
         "144/A",
+        "13F-HR",
+        "15-12G",
+        "15-15D",
+        "25",
+        "305B2",
+        "AW",
+        "CERTNAS",
+        "CT ORDER",
+        "D",
+        "D/A",
         "EFFECT",
+        "IRANNOTICE",
+        "N-PX",
+        "NO ACT",
         "SC 13D",
         "SC 13D/A",
         "SC 13G",
@@ -139,6 +286,33 @@ _EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
         "SCHEDULE 13D/A",
         "SCHEDULE 13G",
         "SCHEDULE 13G/A",
+        "PX14A6G",
+        "RW",
+        "RW WD",
+        "13F-HR/A",
+        "13FCONP",
+        "15-12B",
+        "15-15D/A",
+        "15F-12B",
+        "25-NSE",
+        "40-6C",
+        "40-6C/A",
+        "40-APP",
+        "40-APP/A",
+        "APP NTC",
+        "APP ORDR",
+        "APP WD",
+        "APP WDG",
+        "CERTAMX",
+        "CERTARCA",
+        "CERTNYS",
+        "CERTPAC",
+        "PX14A6N",
+        "REGDEX",
+        "REGDEX/A",
+        "U-3A-2",
+        "U-3A-2/A",
+        "U-57",
         "SEC STAFF LETTER",
         "UPLOAD",
     }
@@ -167,7 +341,7 @@ class _PackageCheckpoint(_ClosedModel):
         return self
 
 
-class _PackageComponent(_ClosedModel):
+class PackageComponent(_ClosedModel):
     accession_number: str
     component_kind: Literal["package_index", "filing_manifest", "validation"]
     source_url: str
@@ -188,7 +362,7 @@ class PackageFailureSummary(_ClosedModel):
 
 
 def summarize_package_failures(
-    failures: tuple[_PackageComponent, ...],
+    failures: tuple[PackageComponent, ...],
     *,
     sample_limit: int = 20,
 ) -> tuple[PackageFailureSummary, ...]:
@@ -208,35 +382,37 @@ def summarize_package_failures(
 
 class _PackageCollection(_ClosedModel):
     packages: tuple[ParsedSecFilingPackage, ...]
-    components: tuple[_PackageComponent, ...]
+    components: tuple[PackageComponent, ...]
     deferred_accession_count: int = Field(ge=0)
 
 
 class FilingPackageScope(_ClosedModel):
-    issuer_reports: tuple[SecFilingInventoryEntry, ...]
-    external_or_administrative: tuple[SecFilingInventoryEntry, ...]
+    package_eligible: tuple[SecFilingInventoryEntry, ...]
+    inventory_only: tuple[SecFilingInventoryEntry, ...]
     unclassified: tuple[SecFilingInventoryEntry, ...]
 
 
 def partition_filing_package_scope(
     filings: tuple[SecFilingInventoryEntry, ...],
 ) -> FilingPackageScope:
-    """Classify SEC feed entries without treating third-party filings as issuer reports."""
+    """Select the closed governed-reporting set for deep package expansion."""
 
-    issuer_reports: list[SecFilingInventoryEntry] = []
-    external: list[SecFilingInventoryEntry] = []
+    package_eligible: list[SecFilingInventoryEntry] = []
+    inventory_only: list[SecFilingInventoryEntry] = []
     unclassified: list[SecFilingInventoryEntry] = []
     for filing in filings:
         normalized_form = filing.form_type.strip().upper()
-        if normalized_form in _ISSUER_REPORT_FORMS:
-            issuer_reports.append(filing)
-        elif normalized_form in _EXTERNAL_OR_ADMINISTRATIVE_FORMS:
-            external.append(filing)
+        if normalized_form in PACKAGE_ELIGIBLE_FORMS:
+            package_eligible.append(filing)
+        elif normalized_form in (
+            ISSUER_OR_REGISTRATION_INVENTORY_FORMS | EXTERNAL_OR_ADMINISTRATIVE_FORMS
+        ):
+            inventory_only.append(filing)
         else:
             unclassified.append(filing)
     return FilingPackageScope(
-        issuer_reports=tuple(issuer_reports),
-        external_or_administrative=tuple(external),
+        package_eligible=tuple(package_eligible),
+        inventory_only=tuple(inventory_only),
         unclassified=tuple(unclassified),
     )
 
@@ -248,8 +424,9 @@ class SyncResult(BaseModel):
     ticker: str
     issuer_id: str
     filing_count: int = Field(ge=0)
-    issuer_report_filing_count: int = Field(default=0, ge=0)
-    external_or_administrative_filing_count: int = Field(default=0, ge=0)
+    package_eligible_filing_count: int = Field(default=0, ge=0)
+    inventory_only_filing_count: int = Field(default=0, ge=0)
+    primary_document_unavailable_count: int = Field(default=0, ge=0)
     unclassified_form_types: tuple[str, ...] = ()
     attachment_count: int = Field(default=0, ge=0)
     component_count: int = Field(ge=0)
@@ -398,11 +575,14 @@ def collect_filing_packages(
     )
     cached_by_accession = {entry.accession_number: entry for entry in checkpoint.entries}
     packages: list[ParsedSecFilingPackage] = []
-    components: list[_PackageComponent] = []
+    components: list[PackageComponent] = []
     attempts = 0
     deferred = 0
     for filing in filings:
         accession = filing.accession_number
+        primary_document = filing.primary_document
+        if primary_document is None:
+            raise ValueError("package collection requires a declared primary document")
         index_url = filing_package_index_url(cik, accession)
         manifest_url = filing_package_manifest_url(cik, accession)
         cached = cached_by_accession.get(accession)
@@ -410,13 +590,13 @@ def collect_filing_packages(
             deferred += 1
             components.extend(
                 (
-                    _PackageComponent(
+                    PackageComponent(
                         accession_number=accession,
                         component_kind="package_index",
                         source_url=index_url,
                         failure_reason="deferred_by_package_limit",
                     ),
-                    _PackageComponent(
+                    PackageComponent(
                         accession_number=accession,
                         component_kind="filing_manifest",
                         source_url=manifest_url,
@@ -434,14 +614,14 @@ def collect_filing_packages(
             if index_body is None or manifest_body is None:
                 components.extend(
                     (
-                        _PackageComponent(
+                        PackageComponent(
                             accession_number=accession,
                             component_kind="package_index",
                             source_url=index_url,
                             body=index_body,
                             failure_reason=index_failure,
                         ),
-                        _PackageComponent(
+                        PackageComponent(
                             accession_number=accession,
                             component_kind="filing_manifest",
                             source_url=manifest_url,
@@ -477,13 +657,13 @@ def collect_filing_packages(
 
         components.extend(
             (
-                _PackageComponent(
+                PackageComponent(
                     accession_number=accession,
                     component_kind="package_index",
                     source_url=index_url,
                     body=index_body,
                 ),
-                _PackageComponent(
+                PackageComponent(
                     accession_number=accession,
                     component_kind="filing_manifest",
                     source_url=manifest_url,
@@ -500,14 +680,14 @@ def collect_filing_packages(
                     cik=cik,
                     accession_number=accession,
                     form_type=filing.form_type,
-                    primary_document=filing.primary_document,
+                    primary_document=primary_document,
                     index_body=index_body,
                     filing_manifest_body=manifest_body,
                 )
             )
         except SecFilingPackageContractError:
             components.append(
-                _PackageComponent(
+                PackageComponent(
                     accession_number=accession,
                     component_kind="validation",
                     source_url=index_url + "#package-validation",
@@ -684,10 +864,21 @@ def build_expected_documents(
             primary_document=filing.primary_document,
             filing_at=datetime.fromisoformat(filing.filing_date),
             expectation_basis="authoritative",
-            absence=ExplicitAbsence(
-                coverage_status="available",
-                reason_code="sec_authority_inventory",
-                reason_details=(("component", filing.source_component_name),),
+            absence=(
+                ExplicitAbsence(
+                    coverage_status="available",
+                    reason_code="sec_authority_inventory",
+                    reason_details=(("component", filing.source_component_name),),
+                )
+                if filing.primary_document is not None
+                else ExplicitAbsence(
+                    coverage_status="authority_unavailable",
+                    reason_code="sec_authority_primary_document_unavailable",
+                    reason_details=(
+                        ("component", filing.source_component_name),
+                        ("primary_document_field", "empty"),
+                    ),
+                )
             ),
         )
         for filing in filings
@@ -725,6 +916,10 @@ def build_expected_documents(
                                     (
                                         "declared_type",
                                         attachment.declared_type or "index_only",
+                                    ),
+                                    (
+                                        "inventory_presence",
+                                        attachment.inventory_presence,
                                     ),
                                     ("parent_expected_document_key", parent_key),
                                     ("role", attachment.role),
@@ -915,6 +1110,12 @@ def _run(args: argparse.Namespace) -> int:
         return 3
     issuer_id = canonical_issuer_id or parsed.issuer_id
     filing_scope = partition_filing_package_scope(parsed.filings)
+    package_filings = tuple(
+        filing for filing in filing_scope.package_eligible if filing.primary_document is not None
+    )
+    primary_document_unavailable_count = sum(
+        filing.primary_document is None for filing in parsed.filings
+    )
     package_observation_by_url: dict[str, str] = {}
 
     def capture_package_response(body: bytes, url: str, media_type: str) -> str:
@@ -943,7 +1144,7 @@ def _run(args: argparse.Namespace) -> int:
         session=session,
         user_agent=user_agent,
         cik=cik,
-        filings=filing_scope.issuer_reports,
+        filings=package_filings,
         checkpoint_root=args.package_checkpoint_root,
         package_limit=int(args.package_limit),
         capture_response=capture_package_response if conn is not None else None,
@@ -967,10 +1168,9 @@ def _run(args: argparse.Namespace) -> int:
                 ticker=ticker,
                 issuer_id=issuer_id,
                 filing_count=len(parsed.filings),
-                issuer_report_filing_count=len(filing_scope.issuer_reports),
-                external_or_administrative_filing_count=len(
-                    filing_scope.external_or_administrative
-                ),
+                package_eligible_filing_count=len(filing_scope.package_eligible),
+                inventory_only_filing_count=len(filing_scope.inventory_only),
+                primary_document_unavailable_count=primary_document_unavailable_count,
                 unclassified_form_types=unclassified_form_types,
                 attachment_count=attachment_count,
                 component_count=(
@@ -1050,7 +1250,7 @@ def _run(args: argparse.Namespace) -> int:
             )
         expected_documents = build_expected_documents(
             issuer_id=issuer_id,
-            filings=filing_scope.issuer_reports,
+            filings=parsed.filings,
             packages=package_collection.packages,
         )
         request = SourceCoverageImport(
@@ -1081,8 +1281,9 @@ def _run(args: argparse.Namespace) -> int:
         ticker=ticker,
         issuer_id=issuer_id,
         filing_count=len(parsed.filings),
-        issuer_report_filing_count=len(filing_scope.issuer_reports),
-        external_or_administrative_filing_count=len(filing_scope.external_or_administrative),
+        package_eligible_filing_count=len(filing_scope.package_eligible),
+        inventory_only_filing_count=len(filing_scope.inventory_only),
+        primary_document_unavailable_count=primary_document_unavailable_count,
         unclassified_form_types=unclassified_form_types,
         attachment_count=attachment_count,
         component_count=len(components),
