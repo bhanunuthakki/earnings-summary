@@ -105,6 +105,36 @@ class TableCommitment(BaseModel):
     logical_sha256: str = Field(pattern=_SHA256_PATTERN)
 
 
+class TablePreservationEvidence(BaseModel):
+    """Proof that every source row survived across a schema-changing migration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    table_name: str = Field(min_length=1)
+    source_present: bool
+    candidate_present: bool
+    source_row_count: int = Field(ge=0)
+    candidate_row_count: int = Field(ge=0)
+    primary_key_columns: tuple[str, ...]
+    compared_columns: tuple[str, ...]
+    dropped_source_columns: tuple[str, ...]
+    added_candidate_columns: tuple[str, ...]
+    source_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    candidate_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def _preserved(self) -> Self:
+        if self.source_present and not self.candidate_present:
+            raise ValueError("source preservation table is absent from candidate")
+        if self.candidate_row_count < self.source_row_count:
+            raise ValueError("candidate has fewer rows than the source preservation table")
+        if self.source_projection_sha256 != self.candidate_projection_sha256:
+            raise ValueError("source row projection differs from candidate")
+        if self.source_present and not self.primary_key_columns:
+            raise ValueError("source preservation proof requires a primary key")
+        return self
+
+
 class DatabaseVerification(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -322,7 +352,7 @@ class RehearsalReceipt(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal["data-backbone-rehearsal/v2"]
+    schema_version: Literal["data-backbone-rehearsal/v3"]
     mode: Literal["plan", "apply_rehearsal"]
     status: Literal["planned", "passed"]
     main_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -347,7 +377,9 @@ class RehearsalReceipt(BaseModel):
     source_corpus_after: CorpusManifest | None = None
     copied_corpus_after: CorpusManifest | None = None
     preservation_before: tuple[TableCommitment, ...]
+    preservation_after_upgrade: tuple[TableCommitment, ...] | None = None
     preservation_after: tuple[TableCommitment, ...] | None = None
+    source_row_preservation: tuple[TablePreservationEvidence, ...] | None = None
     upgrade: UpgradeTerminalReceipt | None = None
     offline_replay: OfflineTerminalReceipt | None = None
     swap_rollback: SwapRollbackEvidence | None = None
@@ -372,7 +404,9 @@ class RehearsalReceipt(BaseModel):
             self.candidate_storage_after,
             self.source_corpus_after,
             self.copied_corpus_after,
+            self.preservation_after_upgrade,
             self.preservation_after,
+            self.source_row_preservation,
             self.upgrade,
             self.offline_replay,
             self.swap_rollback,
@@ -821,6 +855,168 @@ def require_equal_commitments(
 ) -> None:
     if expected != observed:
         raise RehearsalError("preservation commitment mismatch")
+
+
+def _projection_sha256(columns: tuple[str, ...], rows: Iterable[tuple[object, ...]]) -> str:
+    digest = hashlib.sha256()
+    digest.update(_canonical_json({"columns": columns}).encode("utf-8"))
+    digest.update(b"\n")
+    for row in rows:
+        digest.update(_canonical_json([_canonical_cell(value) for value in row]).encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def verify_source_rows_preserved(
+    source: Path,
+    candidate: Path,
+    *,
+    tables: Iterable[str] = PRESERVATION_CRITICAL_TABLES,
+    source_read_mode: DatabaseReadMode = DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    candidate_read_mode: DatabaseReadMode = DatabaseReadMode.CANDIDATE,
+) -> tuple[TablePreservationEvidence, ...]:
+    """Prove source owner rows survive while allowing explicit migration deltas.
+
+    Schema migrations may add owner-state rows or intentionally retire a column.
+    The proof therefore projects every pre-migration row onto columns retained by
+    the candidate, keys it by the source primary key, and requires that projection
+    to exist unchanged after migration. Candidate-only rows and schema columns are
+    recorded in the evidence; they are not allowed to hide source-row loss.
+    """
+
+    evidence: list[TablePreservationEvidence] = []
+    with (
+        _open_database_read(source, read_mode=source_read_mode) as source_connection,
+        _open_database_read(candidate, read_mode=candidate_read_mode) as candidate_connection,
+    ):
+        source_tables = {
+            str(row[0])
+            for row in source_connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )
+        }
+        candidate_tables = {
+            str(row[0])
+            for row in candidate_connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )
+        }
+        for table in sorted(set(tables)):
+            source_present = table in source_tables
+            candidate_present = table in candidate_tables
+            absent_sha = hashlib.sha256(
+                _canonical_json({"absent_source_rows": table}).encode("utf-8")
+            ).hexdigest()
+            if not source_present:
+                candidate_columns = (
+                    tuple(
+                        str(row[1])
+                        for row in candidate_connection.execute(
+                            f"PRAGMA table_info({_quote_identifier(table)})"
+                        )
+                    )
+                    if candidate_present
+                    else ()
+                )
+                candidate_count = (
+                    int(
+                        candidate_connection.execute(
+                            f"SELECT COUNT(*) FROM {_quote_identifier(table)}"  # nosec B608
+                        ).fetchone()[0]
+                    )
+                    if candidate_present
+                    else 0
+                )
+                evidence.append(
+                    TablePreservationEvidence(
+                        table_name=table,
+                        source_present=False,
+                        candidate_present=candidate_present,
+                        source_row_count=0,
+                        candidate_row_count=candidate_count,
+                        primary_key_columns=(),
+                        compared_columns=(),
+                        dropped_source_columns=(),
+                        added_candidate_columns=candidate_columns,
+                        source_projection_sha256=absent_sha,
+                        candidate_projection_sha256=absent_sha,
+                    )
+                )
+                continue
+            if not candidate_present:
+                raise RehearsalError(f"source preservation table is absent from candidate: {table}")
+
+            source_info = tuple(
+                source_connection.execute(f"PRAGMA table_info({_quote_identifier(table)})")
+            )
+            candidate_info = tuple(
+                candidate_connection.execute(f"PRAGMA table_info({_quote_identifier(table)})")
+            )
+            source_columns = tuple(str(row[1]) for row in source_info)
+            candidate_columns = tuple(str(row[1]) for row in candidate_info)
+            primary_key_columns = tuple(
+                str(row[1])
+                for row in sorted(
+                    (row for row in source_info if int(row[5]) > 0), key=lambda row: int(row[5])
+                )
+            )
+            if not primary_key_columns:
+                raise RehearsalError(f"source preservation table has no primary key: {table}")
+            if any(column not in candidate_columns for column in primary_key_columns):
+                raise RehearsalError(f"candidate dropped a preservation primary key: {table}")
+            compared_columns = tuple(
+                column for column in source_columns if column in candidate_columns
+            )
+            dropped_columns = tuple(
+                column for column in source_columns if column not in candidate_columns
+            )
+            added_columns = tuple(
+                column for column in candidate_columns if column not in source_columns
+            )
+            selected = ",".join(_quote_identifier(column) for column in compared_columns)
+            ordered = ",".join(_quote_identifier(column) for column in primary_key_columns)
+            source_rows = tuple(
+                source_connection.execute(
+                    f"SELECT {selected} FROM {_quote_identifier(table)} ORDER BY {ordered}"  # nosec B608
+                )
+            )
+            candidate_rows = tuple(
+                candidate_connection.execute(
+                    f"SELECT {selected} FROM {_quote_identifier(table)} ORDER BY {ordered}"  # nosec B608
+                )
+            )
+            key_indexes = tuple(compared_columns.index(column) for column in primary_key_columns)
+            candidate_by_key = {
+                tuple(row[index] for index in key_indexes): tuple(row) for row in candidate_rows
+            }
+            source_keys = tuple(tuple(row[index] for index in key_indexes) for row in source_rows)
+            missing = tuple(key for key in source_keys if key not in candidate_by_key)
+            if missing:
+                raise RehearsalError(
+                    f"candidate is missing {len(missing)} source row(s) from preservation table: {table}"
+                )
+            candidate_projection = tuple(candidate_by_key[key] for key in source_keys)
+            source_projection = tuple(tuple(row) for row in source_rows)
+            source_sha = _projection_sha256(compared_columns, source_projection)
+            candidate_sha = _projection_sha256(compared_columns, candidate_projection)
+            if source_sha != candidate_sha:
+                raise RehearsalError(f"source rows changed in preservation table: {table}")
+            evidence.append(
+                TablePreservationEvidence(
+                    table_name=table,
+                    source_present=True,
+                    candidate_present=True,
+                    source_row_count=len(source_rows),
+                    candidate_row_count=len(candidate_rows),
+                    primary_key_columns=primary_key_columns,
+                    compared_columns=compared_columns,
+                    dropped_source_columns=dropped_columns,
+                    added_candidate_columns=added_columns,
+                    source_projection_sha256=source_sha,
+                    candidate_projection_sha256=candidate_sha,
+                )
+            )
+    return tuple(evidence)
 
 
 def database_revision(

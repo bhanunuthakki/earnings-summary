@@ -55,6 +55,7 @@ from provenance.data_backbone_rehearsal import (  # noqa: E402
     sha256_file,
     validate_offline_receipt,
     verify_database,
+    verify_source_rows_preserved,
     write_json_atomically,
 )
 from runtime.python_process import managed_python_prefix  # noqa: E402
@@ -351,7 +352,7 @@ def _receipt_common(
     **terminal: object,
 ) -> RehearsalReceipt:
     return seal_rehearsal_receipt(
-        schema_version="data-backbone-rehearsal/v2",
+        schema_version="data-backbone-rehearsal/v3",
         mode=mode,
         status=status,
         main_commit=commit,
@@ -466,6 +467,15 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
     upgrade = _run_upgrade(repo_root, candidate, work_dir / "candidate-pre-upgrade.db")
     if upgrade.from_revision != source_revision or upgrade.to_revision != ACTIVE_HEAD:
         raise RehearsalError("upgrade receipt is not bound to source and expected revisions")
+    preservation_after_upgrade = build_table_commitments(
+        candidate,
+        read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
+    source_row_preservation = verify_source_rows_preserved(
+        source_db,
+        candidate,
+        candidate_read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
     offline = _run_offline_replay(
         repo_root,
         rehearsal_root,
@@ -486,7 +496,7 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
         candidate,
         read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
     )
-    require_equal_commitments(preservation_before, preservation_after)
+    require_equal_commitments(preservation_after_upgrade, preservation_after)
     candidate_verification = verify_database(
         candidate,
         expected_head=ACTIVE_HEAD,
@@ -546,7 +556,9 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
         candidate_storage_after=candidate_storage_after,
         source_corpus_after=source_manifest_after,
         copied_corpus_after=copied_manifest_after,
+        preservation_after_upgrade=preservation_after_upgrade,
         preservation_after=preservation_after,
+        source_row_preservation=source_row_preservation,
         upgrade=upgrade,
         offline_replay=offline,
         swap_rollback=swap,
