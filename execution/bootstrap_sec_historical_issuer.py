@@ -31,6 +31,15 @@ def _event(event: str, **fields: object) -> None:
     sys.stderr.write(json.dumps({"event": event, **fields}, sort_keys=True) + "\n")
 
 
+def normalize_cik(value: object) -> str:
+    """Return the ten-digit identity used by SEC URLs and typed requests."""
+
+    normalized = str(value).strip().zfill(10)
+    if len(normalized) != 10 or not normalized.isdigit():
+        raise ValueError("CIK must contain at most ten decimal digits")
+    return normalized
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, required=True)
@@ -76,7 +85,7 @@ def _run(
             conn,
             request=SecHistoricalIssuerRequest(
                 ticker=str(args.ticker),
-                normalized_cik=str(args.cik),
+                normalized_cik=normalize_cik(args.cik),
                 source_url=source_url,
                 raw_body=raw_body,
                 blob_root=args.blob_root,
@@ -90,7 +99,7 @@ def _run(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    normalized_cik = str(args.cik).strip().zfill(10)
+    normalized_cik = normalize_cik(args.cik)
     source_url = f"https://data.sec.gov/submissions/CIK{normalized_cik}.json"
     try:
         _event(
