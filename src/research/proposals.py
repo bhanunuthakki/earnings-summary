@@ -3,7 +3,7 @@
 Follows the codebase store convention (writers own a connection + commit; readers
 best-effort ``[]`` on a missing table, the ``signals/store.py`` pattern). It owns
 the two Phase-1 lifecycles and exposes ``act_on_proposal`` — the ONE action core
-both the inbox HTMX route and the Telegram callback dispatch call (no logic
+both the inbox form route and the Telegram callback dispatch call (no logic
 duplication).
 
 The detection tap (``detect_and_create_task``) is fire-and-forget: it classifies

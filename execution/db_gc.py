@@ -1,7 +1,7 @@
 """Periodic garbage collection for data/portfolio.db.
 
 Grounded in the 2026-07-30 consumer audit (3 parallel sweeps over every reader
-of financial_facts, kpi_facts, and the telemetry tables). Four policies are
+of financial_facts, kpi_facts, and the telemetry tables). Five policies are
 independently selectable for dry runs. Applied validation and telemetry
 deletes are copied into the run-keyed sidecar SQLite archive
 (``data/archive/portfolio_gc_archive.db``) before removal. Restores go through
@@ -96,7 +96,12 @@ Policies
    legacy_fact_evidence_match_revisions, fact_selection_decisions) by
    (fact_table/target_table, row id).
 
-4. ``maintenance`` — ANALYZE after any applied deletion; VACUUM only with
+4. ``llm-artifacts`` — retain current and provenance/decision-linked artifacts
+   indefinitely; archive and delete only unreferenced superseded artifacts
+   older than ``--artifact-retention-days`` (180 days by default). Malformed
+   parent-artifact provenance aborts the policy before any deletion.
+
+5. ``maintenance`` — ANALYZE after any applied deletion; VACUUM only with
    --vacuum (the freelist alone held ~281 MB at audit time), under the
    preflight + hard timeout described above.
 
@@ -122,9 +127,9 @@ import time
 from collections.abc import Generator, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
@@ -154,7 +159,14 @@ MIN_KEEP_FY = 12
 # list are removed entirely (portfolio joins only with --include-portfolio).
 WINDOWED_LIST_TYPES = ("watchlist", "evaluation", "index_member", "etf", "none")
 
-POLICY_NAMES = ("validation-issues", "telemetry", "facts-depth", "maintenance")
+POLICY_NAMES = (
+    "validation-issues",
+    "telemetry",
+    "llm-artifacts",
+    "facts-depth",
+    "maintenance",
+)
+DEFAULT_ARTIFACT_RETENTION_DAYS = 180
 
 # The 0225 cutover's append-only delete guard on financial_facts. db_gc drops
 # and verbatim-recreates exactly this trigger inside each delete-batch
@@ -1070,7 +1082,212 @@ def telemetry_retention(
 
 
 # ---------------------------------------------------------------------------
-# Policy 3: financial_facts depth windows
+# Policy 3: superseded LLM-artifact retention
+# ---------------------------------------------------------------------------
+
+
+_ARTIFACT_REFERENCE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("alerts", "memo_artifact_id"),
+    ("decisions", "source_artifact_id"),
+    ("decisions", "advice_artifact_id"),
+    ("predictions", "source_artifact_id"),
+    ("prompt_calibration_scores", "artifact_id"),
+    ("llm_calls", "artifact_id"),
+)
+
+_ARTIFACT_JSON_REFERENCE_COLUMNS: tuple[
+    tuple[str, str, Literal["integer_list", "named_integer"]], ...
+] = (
+    ("insights", "input_artifact_ids", "integer_list"),
+    ("decision_drafts", "draft_json", "named_integer"),
+    ("standup_messages", "evidence_json", "named_integer"),
+)
+_ARTIFACT_JSON_REFERENCE_KEYS = frozenset(
+    {"artifact_id", "artifact_ids", "linked_advice_artifact_id"}
+)
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')}
+
+
+def _artifact_provenance_ids(conn: sqlite3.Connection) -> set[int]:
+    """Return every artifact id named by a durable provenance edge.
+
+    ``parent_artifact_ids`` predates normalized relationship tables. Treat a
+    malformed non-empty value as an unknown edge and fail closed: deleting in
+    that state could sever an audit chain without leaving a queryable signal.
+    """
+    protected: set[int] = set()
+    for artifact_id, raw in conn.execute(
+        "SELECT id, parent_artifact_ids FROM llm_artifacts "
+        "WHERE parent_artifact_ids IS NOT NULL AND TRIM(parent_artifact_ids) != ''"
+    ):
+        try:
+            payload = json.loads(str(raw))
+        except json.JSONDecodeError as exc:
+            raise GcAbortedError(
+                f"llm_artifacts id={artifact_id} has invalid parent_artifact_ids JSON"
+            ) from exc
+        if not isinstance(payload, list) or any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in cast("list[object]", payload)
+        ):
+            raise GcAbortedError(
+                f"llm_artifacts id={artifact_id} parent_artifact_ids must be a JSON integer list"
+            )
+        protected.update(cast("list[int]", payload))
+    return protected
+
+
+def _json_integer_list(value: object, *, location: str) -> set[int]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, int) or isinstance(item, bool) for item in cast("list[object]", value)
+    ):
+        raise GcAbortedError(f"{location} must be a JSON integer list")
+    return set(cast("list[int]", value))
+
+
+def _named_json_artifact_ids(value: object, *, location: str) -> set[int]:
+    """Recursively collect only explicit LLM-artifact keys from a JSON object."""
+    if not isinstance(value, dict):
+        raise GcAbortedError(f"{location} must be a JSON object")
+    protected: set[int] = set()
+    pending: list[object] = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            for raw_key, child in cast("dict[object, object]", current).items():
+                if not isinstance(raw_key, str):
+                    continue
+                if raw_key in _ARTIFACT_JSON_REFERENCE_KEYS:
+                    if child is None:
+                        continue
+                    if raw_key.endswith("_ids"):
+                        protected.update(
+                            _json_integer_list(child, location=f"{location}.{raw_key}")
+                        )
+                    elif not isinstance(child, int) or isinstance(child, bool):
+                        raise GcAbortedError(f"{location}.{raw_key} must be a JSON integer")
+                    else:
+                        protected.add(child)
+                elif isinstance(child, dict):
+                    pending.append(cast("dict[object, object]", child))
+                elif isinstance(child, list):
+                    pending.append(cast("list[object]", child))
+        elif isinstance(current, list):
+            pending.extend(cast("list[object]", current))
+    return protected
+
+
+def _artifact_json_provenance_ids(conn: sqlite3.Connection) -> set[int]:
+    """Return artifact ids embedded in registered durable JSON columns.
+
+    The registry is deliberately explicit: JSON elsewhere may use string
+    ``artifact_id`` values for non-LLM resources. Registered, non-empty JSON
+    fails closed when malformed so GC cannot silently sever provenance.
+    """
+    protected: set[int] = set()
+    for table, column, shape in _ARTIFACT_JSON_REFERENCE_COLUMNS:
+        if column not in _table_columns(conn, table):
+            continue
+        rows = conn.execute(
+            f'SELECT rowid, "{column}" FROM "{table}" '  # nosec B608 -- identifiers are from the internal policy registry
+            f'WHERE "{column}" IS NOT NULL AND TRIM("{column}") != \'\''
+        )
+        for row_id, raw in rows:
+            location = f"{table} rowid={row_id} {column}"
+            try:
+                payload: object = json.loads(str(raw))
+            except json.JSONDecodeError as exc:
+                raise GcAbortedError(f"{location} contains invalid JSON") from exc
+            if shape == "integer_list":
+                protected.update(_json_integer_list(payload, location=location))
+            else:
+                protected.update(_named_json_artifact_ids(payload, location=location))
+    return protected
+
+
+def llm_artifact_retention(
+    conn: sqlite3.Connection,
+    *,
+    apply: bool,
+    run_at: str,
+    retention_days: int,
+    ctrl: _RunControl,
+    batch_size: int,
+) -> PolicyReport:
+    """Archive/delete old superseded artifacts only when no durable edge uses them."""
+    if retention_days < 1:
+        raise ValueError(f"--artifact-retention-days {retention_days} < 1")
+    ctrl.checkpoint()
+    report = PolicyReport(policy="llm-artifacts", applied=apply)
+    cutoff = (datetime.fromisoformat(run_at) - timedelta(days=retention_days)).isoformat()
+    candidates = {
+        int(row[0])
+        for row in conn.execute(
+            "SELECT id FROM llm_artifacts WHERE superseded_by_id IS NOT NULL AND generated_at < ?",
+            (cutoff,),
+        )
+    }
+    protected = _artifact_provenance_ids(conn)
+    protected.update(_artifact_json_provenance_ids(conn))
+    protected.update(
+        int(row[0])
+        for row in conn.execute(
+            "SELECT superseded_by_id FROM llm_artifacts WHERE superseded_by_id IS NOT NULL"
+        )
+    )
+    for table, column in _ARTIFACT_REFERENCE_COLUMNS:
+        if column not in _table_columns(conn, table):
+            continue
+        protected.update(
+            int(row[0])
+            for row in conn.execute(
+                f'SELECT DISTINCT "{column}" FROM "{table}" WHERE "{column}" IS NOT NULL'  # nosec B608 -- identifiers are from the internal policy registry
+            )
+        )
+
+    eligible = sorted(candidates - protected)
+    protected_candidates = candidates & protected
+    report.detail.update(
+        {
+            "retention_days": retention_days,
+            "candidate_rows": len(candidates),
+            "protected_rows": len(protected_candidates),
+        }
+    )
+    report.rows_deleted["llm_artifacts"] = len(eligible)
+    _reset_doomed(conn)
+    if eligible:
+        conn.executemany("INSERT INTO _gc_doomed (id) VALUES (?)", [(value,) for value in eligible])
+    if apply and eligible:
+        _archive_doomed(
+            conn,
+            table="llm_artifacts",
+            run_at=run_at,
+            policy="llm-artifacts",
+        )
+        _delete_batches(
+            conn,
+            table="llm_artifacts",
+            policy="llm-artifacts",
+            ctrl=ctrl,
+            batch_size=batch_size,
+        )
+    _log(
+        "gc_llm_artifacts",
+        cutoff=cutoff,
+        candidates=len(candidates),
+        protected=len(protected_candidates),
+        rows=len(eligible),
+        action="deleted" if apply else "would_delete",
+    )
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Policy 4: financial_facts depth windows
 # ---------------------------------------------------------------------------
 
 
@@ -1416,6 +1633,7 @@ def run_gc(
     apply: bool,
     policies: list[str],
     retention_days: int,
+    artifact_retention_days: int = DEFAULT_ARTIFACT_RETENTION_DAYS,
     keep_quarters: int,
     keep_fy: int,
     include_portfolio: bool,
@@ -1440,6 +1658,7 @@ def run_gc(
         apply=apply,
         policies=policies,
         retention_days=retention_days,
+        artifact_retention_days=artifact_retention_days,
         keep_quarters=keep_quarters,
         keep_fy=keep_fy,
         include_portfolio=include_portfolio,
@@ -1460,6 +1679,7 @@ def _run_gc_implementation(
     apply: bool,
     policies: list[str],
     retention_days: int,
+    artifact_retention_days: int = DEFAULT_ARTIFACT_RETENTION_DAYS,
     keep_quarters: int,
     keep_fy: int,
     include_portfolio: bool,
@@ -1488,6 +1708,8 @@ def _run_gc_implementation(
             f"--keep-fy {keep_fy} < floor {MIN_KEEP_FY} "
             "(10 rendered years + 52/53-week-filer margin)"
         )
+    if artifact_retention_days < 1:
+        raise ValueError(f"--artifact-retention-days {artifact_retention_days} < 1")
     if batch_size < 1:
         raise ValueError(f"--batch-size {batch_size} < 1")
 
@@ -1576,6 +1798,17 @@ def _run_gc_implementation(
                         batch_size=batch_size,
                     )
                 )
+            if "llm-artifacts" in policies:
+                report.policies.append(
+                    llm_artifact_retention(
+                        conn,
+                        apply=apply,
+                        run_at=run_at,
+                        retention_days=artifact_retention_days,
+                        ctrl=ctrl,
+                        batch_size=batch_size,
+                    )
+                )
             if "facts-depth" in policies:
                 report.policies.append(
                     facts_depth(
@@ -1621,6 +1854,12 @@ def main(argv: list[str] | None = None) -> int:
         help=f"comma-separated subset of {POLICY_NAMES}",
     )
     parser.add_argument("--retention-days", type=int, default=90)
+    parser.add_argument(
+        "--artifact-retention-days",
+        type=int,
+        default=180,
+        help="retain unreferenced superseded LLM artifacts for this many days",
+    )
     parser.add_argument("--keep-quarters", type=int, default=20)
     parser.add_argument("--keep-fy", type=int, default=12)
     parser.add_argument(
@@ -1681,6 +1920,7 @@ def main(argv: list[str] | None = None) -> int:
             apply=args.apply,
             policies=policies,
             retention_days=args.retention_days,
+            artifact_retention_days=args.artifact_retention_days,
             keep_quarters=args.keep_quarters,
             keep_fy=args.keep_fy,
             include_portfolio=args.include_portfolio,

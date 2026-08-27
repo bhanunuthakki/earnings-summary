@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 from typing import Literal, cast
 
-from flask import Flask, Response, request
+from flask import Flask, redirect, request
 
 import comments
 
@@ -183,7 +183,10 @@ def register_journal_routes(app: Flask, context: JournalRouteContext) -> None:
         from user_state import notes as notes_store
 
         context.bump_activation_count(f"act:note:{action}")
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        payload = cast("dict[str, object]", request.get_json(silent=True) or request.form.to_dict())
+        return_to = str(request.form.get("return_to") or "")
+        if return_to not in {"", "/", "/feed"}:
+            return ({"error": "invalid return_to"}, 400)
         route_intent = ""
         try:
             if action == "resolve":
@@ -285,25 +288,8 @@ def register_journal_routes(app: Flask, context: JournalRouteContext) -> None:
             return ({"error": str(exc)}, 404)
         if updated is None:
             return ({"error": f"note {note_id} not found"}, 404)
-        if request.headers.get("HX-Request") and action in (
-            "archive",
-            "unarchive",
-        ):
-            from dashboard.inbox import acted_span, restored_note_button
-
-            if action == "archive":
-                return Response(
-                    acted_span(
-                        "✕ archived",
-                        "archived",
-                        undo_url=f"/api/notes/{note_id}/unarchive",
-                    ),
-                    mimetype="text/html",
-                )
-            return Response(
-                restored_note_button(note_id),
-                mimetype="text/html",
-            )
+        if return_to:
+            return redirect(return_to, code=303)
         result: dict[str, object] = {
             "note": context.note_to_json(updated),
         }

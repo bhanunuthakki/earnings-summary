@@ -193,8 +193,22 @@ def test_weekly_db_gc_never_schedules_destructive_facts_depth_apply() -> None:
     text = (CRON / "run_db_gc.bat").read_text(encoding="utf-8").lower()
     invocation = next(line for line in text.splitlines() if "execution\\db_gc.py" in line)
     assert "--apply" in invocation
-    assert "--policies validation-issues,telemetry,maintenance" in invocation
+    assert "--policies validation-issues,telemetry,llm-artifacts,maintenance" in invocation
     assert "--include-portfolio" not in invocation
+
+
+def test_retention_reuses_existing_gc_and_cleanup_tasks() -> None:
+    manifest = json.loads((CRON / "task_manifest.json").read_text(encoding="utf-8"))
+    tasks = manifest["tasks"]
+    retention_tasks = [
+        (task["task_name"], task.get("wrapper"))
+        for task in tasks
+        if "cleanup" in task["task_name"].lower() or "_gc" in task["task_name"].lower()
+    ]
+    assert retention_tasks == [
+        (r"\earnings-summary\db_gc", "run_db_gc.bat"),
+        (r"\earnings-summary\weekly_cleanup", "run_weekly_cleanup.bat"),
+    ]
 
 
 def test_no_wrapper_carries_a_stray_carriage_return() -> None:

@@ -244,18 +244,6 @@ def main() -> int:
                 code_root=PROJECT_ROOT,
                 limit=args.limit,
             )
-        elif args.purpose == "podcast_takeaway_summary":
-            from evals.podcast_takeaway import (
-                DEFAULT_GOLDEN_RELPATH as PODCAST_GOLDEN,
-            )
-            from evals.podcast_takeaway import run_podcast_takeaway_eval
-
-            golden_path = (args.golden or (PROJECT_ROOT / PODCAST_GOLDEN)).resolve()
-            summary = run_podcast_takeaway_eval(
-                golden_path=golden_path,
-                code_root=PROJECT_ROOT,
-                limit=args.limit,
-            )
         elif args.purpose == "sector_benchmark_proposal":
             # Mode-A exact-match over a hand-picked industry->ETF golden set,
             # no judge — --no-judge is a no-op like the other deterministic

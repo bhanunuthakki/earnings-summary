@@ -22,7 +22,7 @@ if %DOM% LEQ 7 set "VACUUM_FLAG=--vacuum"
 set LOG_FILE=%LOG_DIR%\db_gc_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-call "%PROJECT_ROOT%\cron\run_python.bat" "db-gc" "portfolio-db" execution\db_gc.py --apply --policies validation-issues,telemetry,maintenance %VACUUM_FLAG% > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "db-gc" "portfolio-db" execution\db_gc.py --apply --policies validation-issues,telemetry,llm-artifacts,maintenance %VACUUM_FLAG% > "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 
 REM Propagate the job's exit code. Without this the script ended on

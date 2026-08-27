@@ -22,7 +22,7 @@ from typing import Literal, TypeAlias, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-POLICY_VERSION = "weekly-cleanup-v1"
+POLICY_VERSION = "weekly-cleanup-v2"
 Collector: TypeAlias = Callable[[Path, datetime, "_Counts"], list["Candidate"]]
 
 
@@ -46,7 +46,7 @@ class CleanupSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    policy_version: Literal["weekly-cleanup-v1"]
+    policy_version: Literal["weekly-cleanup-v2"]
     idempotency_key: str = Field(min_length=1)
     mode: Literal["dry_run", "apply"]
     files_scanned: int = Field(ge=0)
@@ -95,8 +95,8 @@ def _is_reparse_or_symlink(path: Path) -> bool:
 
 
 def _is_protected_name(path: Path) -> bool:
-    """Global denylist inside otherwise allowed roots for live state and locks."""
-    return path.name == "state.json" or "job_locks" in path.parts
+    """Global denylist inside otherwise allowed roots for live locks."""
+    return "job_locks" in path.parts
 
 
 def _iter_regular_files(root: Path, counts: _Counts) -> Iterator[Path]:
@@ -178,6 +178,8 @@ def _collect_news_cache(root: Path, cutoff: datetime, counts: _Counts) -> list[C
     for path in _iter_regular_files(root, counts):
         if path.suffix.lower() != ".json":
             continue
+        if _is_recovery_material(path) or _checkpoint_is_active(path, root.parent, counts):
+            continue
         counts.files_scanned += 1
         cached_at = _cached_at(path)
         if cached_at is None:
@@ -221,6 +223,102 @@ def _collect_main_caches(repo_root: Path, cutoff: datetime, counts: _Counts) -> 
             candidate = _older_than(path, cutoff)
             if candidate is not None:
                 candidates.append(candidate)
+    return candidates
+
+
+_OWNED_TMP_ROOTS = frozenset({"cron_logs", "cron_runs", "news_cache", "pdf_pages"})
+_RECOVERY_SUFFIXES = frozenset({".db", ".bak", ".gz", ".enc"})
+_RECOVERY_NAME_MARKERS = (
+    "backup",
+    "snapshot",
+    "recovery",
+    "restore",
+    "precutover",
+    "pre_gc",
+    "rollback",
+    "lease",
+    "lock",
+)
+
+
+_COMPLETED_CHECKPOINT_STATUSES = frozenset(
+    {"complete", "completed", "done", "success", "succeeded"}
+)
+
+
+def _checkpoint_is_active(path: Path, tmp_root: Path, counts: _Counts) -> bool:
+    """Treat checkpoint state as active unless it explicitly says it completed.
+
+    Current resumable pipelines use heterogeneous state schemas and remove
+    ``state.json`` after success. Therefore absence of a recognized completed
+    status is intentionally fail-closed. An explicitly completed checkpoint is
+    ordinary disposable `.tmp` material and receives the policy's age window.
+    """
+    parent = path.parent
+    while parent == tmp_root or tmp_root in parent.parents:
+        state_path = parent / "state.json"
+        if state_path.is_file():
+            try:
+                payload_raw: object = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                counts.skipped_invalid += 1
+                _event("cleanup_skipped", reason="invalid_checkpoint_state", path=str(state_path))
+                return True
+            if not isinstance(payload_raw, dict):
+                counts.skipped_invalid += 1
+                _event("cleanup_skipped", reason="invalid_checkpoint_state", path=str(state_path))
+                return True
+            payload = cast("dict[str, object]", payload_raw)
+            status = payload.get("status")
+            return not (
+                isinstance(status, str) and status.strip().lower() in _COMPLETED_CHECKPOINT_STATUSES
+            )
+        if parent == tmp_root:
+            break
+        parent = parent.parent
+    return False
+
+
+def _is_recovery_material(path: Path) -> bool:
+    lower_name = path.name.lower()
+    return (
+        path.suffix.lower() in _RECOVERY_SUFFIXES
+        or lower_name.endswith((".db-wal", ".db-shm"))
+        or any(marker in lower_name for marker in _RECOVERY_NAME_MARKERS)
+    )
+
+
+def _collect_tmp_unclassified(tmp_root: Path, cutoff: datetime, counts: _Counts) -> list[Candidate]:
+    """Collect generic disposable files while preserving owned and recovery state."""
+    candidates: list[Candidate] = []
+    for path in _iter_regular_files(tmp_root, counts):
+        relative = path.relative_to(tmp_root)
+        if relative.parts and relative.parts[0] in _OWNED_TMP_ROOTS:
+            continue
+        if path.name.startswith("temp_audio_"):
+            continue
+        if _is_recovery_material(path) or _checkpoint_is_active(path, tmp_root, counts):
+            continue
+        counts.files_scanned += 1
+        candidate = _older_than(path, cutoff)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _collect_tmp_owned_by_age(root: Path, cutoff: datetime, counts: _Counts) -> list[Candidate]:
+    """Apply age retention to an owned `.tmp` root without breaking checkpoints."""
+    candidates: list[Candidate] = []
+    tmp_root = root.parent
+    for path in _iter_regular_files(root, counts):
+        if path.name.startswith("temp_audio_"):
+            continue
+        if _is_recovery_material(path) or _checkpoint_is_active(path, tmp_root, counts):
+            continue
+        counts.files_scanned += 1
+        candidate = _older_than(path, cutoff)
+        if candidate is not None:
+            candidates.append(candidate)
     return candidates
 
 
@@ -332,19 +430,20 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
         "news_cache_7d": _Counts(),
         "pdf_pages_30d": _Counts(),
         "main_python_caches_7d": _Counts(),
+        "tmp_unclassified_30d": _Counts(),
         "temp_audio_qa_guard": _Counts(),
     }
     targets: list[tuple[str, Path, Collector, datetime]] = [
         (
             "cron_logs_30d",
             repo_root / ".tmp" / "cron_logs",
-            _collect_by_age,
+            _collect_tmp_owned_by_age,
             now - timedelta(days=30),
         ),
         (
             "cron_runs_30d",
             repo_root / ".tmp" / "cron_runs",
-            _collect_by_age,
+            _collect_tmp_owned_by_age,
             now - timedelta(days=30),
         ),
         (
@@ -356,7 +455,7 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
         (
             "pdf_pages_30d",
             repo_root / ".tmp" / "pdf_pages",
-            _collect_by_age,
+            _collect_tmp_owned_by_age,
             now - timedelta(days=30),
         ),
         (
@@ -365,11 +464,17 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
             _collect_main_caches,
             now - timedelta(days=7),
         ),
+        (
+            "tmp_unclassified_30d",
+            repo_root / ".tmp",
+            _collect_tmp_unclassified,
+            now - timedelta(days=30),
+        ),
     ]
     roots_to_prune: list[Path] = []
     for name, root, collector, cutoff in targets:
         _apply_candidates(name, collector(root, cutoff, policies[name]), policies[name], args.apply)
-        if root != repo_root:
+        if root not in (repo_root, repo_root / ".tmp"):
             roots_to_prune.append(root)
     _collect_temp_audio(repo_root / ".tmp", policies["temp_audio_qa_guard"])
     if args.apply:

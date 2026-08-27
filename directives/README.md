@@ -18,7 +18,7 @@ it fails the same gate.
 | Concern | Canonical owner | Adjacent procedure or evidence |
 |---|---|---|
 | pipeline stages and repeat safety | `data_pipeline_dag.md` | source identities in `data_provenance.md` |
-| provenance and source precedence | `data_provenance.md` | run-specific ingestion runbooks |
+| provenance, source precedence, and legacy fact cutover | `data_provenance.md` | run-specific ingestion runbooks |
 | repository topology | `folder_structure.md` | `execution/validate_folder_contract.py` |
 | visual system and page continuity | `design_language.md` | `design_conformance_audit.md` runbook |
 | interaction behavior | `interaction_contract.md` | `report_comments_and_chat.md` |

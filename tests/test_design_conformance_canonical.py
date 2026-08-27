@@ -1550,7 +1550,7 @@ def _write_complete_fixture_tree(root: Path, *, include_live_drift: bool) -> Pat
           .portfolio-card-grid { grid-template-columns: 340px 1fr; }
         </style>
         """
-        (source_root / "dashboard" / "inbox.py").write_text(
+        (source_root / "pipeline" / "advisor_memos_panel.py").write_text(
             f"CSS = {violations!r}\nnode.innerHTML = CSS\n", encoding="utf-8"
         )
     return source_root
@@ -1606,7 +1606,8 @@ def test_cli_check_uses_shared_scanner_for_all_four_dimensions(tmp_path: Path) -
     live = {
         finding["dimension"]
         for finding in receipt["findings"]
-        if finding["surface"] == "dashboard/inbox.py" and finding["disposition"] == "live"
+        if finding["surface"] == "pipeline/advisor_memos_panel.py"
+        and finding["disposition"] == "live"
     }
     assert live >= EXPECTED_STRUCTURAL_DIMENSIONS
     assert receipt["findings"] == sorted(
