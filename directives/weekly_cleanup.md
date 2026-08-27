@@ -9,11 +9,17 @@ separately guarded by the checkout-to-database Alembic revision preflight.
 
 ## Target sources
 
-- `.tmp/cron_logs/`: regular files older than 30 days.
-- `.tmp/cron_runs/`: regular files older than 30 days.
+- `.tmp/cron_logs/`: regular files older than 30 days, except active
+  checkpoint trees and recovery material.
+- `.tmp/cron_runs/`: regular files older than 30 days, except active
+  checkpoint trees and recovery material.
 - `.tmp/news_cache/*.json`: entries whose payload `cached_at` is older than
   seven days. Invalid or missing timestamps are retained.
-- `.tmp/pdf_pages/`: regular files older than 30 days.
+- `.tmp/pdf_pages/`: regular files older than 30 days, except active
+  checkpoint trees and recovery material.
+- Other regular files under `.tmp/`: entries older than 30 days, excluding
+  owned policy roots, active checkpoint trees containing `state.json`, locks,
+  database/backup/recovery material, and unverified temporary audio.
 - Python cache files under `src/`, `execution/`, `tests/`, `cron/`, `scripts/`,
   and `alembic/`, plus root `.pytest_cache/` and `.ruff_cache/`: entries older
   than seven days.
@@ -63,7 +69,11 @@ exit. A filesystem-cleanup failure prevents the research-expiry stage.
 
 - Missing allowlisted roots are successful no-ops.
 - Invalid news-cache JSON/timestamps are retained and counted.
-- Symlinks, junctions/reparse points, `state.json`, and `job_locks` are retained.
+- Symlinks, junctions/reparse points, active or unrecognized checkpoint trees,
+  and `job_locks` are retained. A checkpoint is completed only when its
+  `state.json` object has a recognized terminal `status` (`complete`,
+  `completed`, `done`, `success`, or `succeeded`); completed trees then receive
+  their owning policy's 30-day window. Malformed state fails closed.
 - Unlink/stat errors are logged and fail the filesystem stage.
 - A database revision mismatch fails before any research-task mutation.
 - Task Scheduler uses `IgnoreNew`, a 15-minute limit, one retry after 30

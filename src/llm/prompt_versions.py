@@ -216,10 +216,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # not an LLM prompt of its own — versioned so a future canary-set revision
     # forks the security-pass-rate history cleanly. Bump when cases change.
     "injection_canaries": "v1",
-    # Podcast takeaway summarizer (S11): 2-4 sentence investment briefing from
-    # RSS description copy. Bump when _build_prompt is materially rewritten and
-    # re-run the golden-set eval (evals/golden/podcast_takeaway_summary.json).
-    "podcast_takeaway_summary": "v1",
     # Pre-earnings brief (src/earnings_brief.py, 2026-07-31): the scheduled
     # per-(ticker, ER-date) narrative brief. The version participates in the
     # llm_artifacts input hash, so a bump here alone forces regeneration on

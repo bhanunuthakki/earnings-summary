@@ -1,7 +1,7 @@
 """The universal action-feedback contract (``window.CCAction``).
 
 The 2026-07-30 responsiveness sweep found five divergent click-feedback
-patterns across the POST-action surfaces: HTMX buttons with no busy state,
+patterns across the POST-action surfaces: declarative buttons with no busy state,
 disable-only handlers, instant ``.remove()`` pop-outs, dim-in-place, and
 no-feedback double-submit buttons. ``pipeline/cc_action.py`` is the ONE
 primitive (busy / release / receipt / animated leave); these assertions pin
@@ -9,9 +9,7 @@ the structural contract so per-surface drift can't come back:
 
 * the primitive is inlined into BOTH documents (live shell + offline report),
   before the panel/section scripts that call it;
-* the kit styles the pressed state declaratively — ``[aria-busy="true"]`` and
-  HTMX's in-flight ``.htmx-request`` on ``.k-btn`` — so declarative buttons
-  need no JS for busy feedback;
+* the kit styles the pressed state declaratively via ``[aria-busy="true"]``;
 * the leave motion is tokenized (``var(--transition)``), two-beat
   (fade+settle → height collapse), driven by transitionend with a timeout
   fallback, and respects ``prefers-reduced-motion``.
@@ -55,10 +53,10 @@ def test_busy_state_is_aria_and_label_roundtrip() -> None:
     assert "data-cc-label" in CC_ACTION_JS
 
 
-def test_kit_styles_pressed_state_for_ccaction_and_htmx() -> None:
+def test_kit_styles_pressed_state_for_ccaction() -> None:
     css = controls_css("paper")
     assert '.k-btn[aria-busy="true"]' in css
-    assert ".k-btn.htmx-request" in css
+    assert ".htmx-request" not in css
 
 
 def test_leave_motion_is_tokenized_two_beat_and_reduced_motion_safe() -> None:

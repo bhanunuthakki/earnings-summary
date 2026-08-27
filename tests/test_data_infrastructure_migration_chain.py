@@ -13,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0028_remove_processing_tier_and_rename_research_tasks"
+HEAD = "0029_retire_podcast_prototype"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",

@@ -287,43 +287,31 @@ def test_approve_post_conflict_stays_json_409(client: FlaskClient, db_path: Path
     assert len(list_entries(ticker="NU", db_path=db_path)) == 1
 
 
-# ----------------------------------------------------------------------------
-# Consequence receipts (REQ-11): the HTMX quick-action path renders the exact
-# outcome approve_and_apply produced, instead of a bare "✓ applied" chip.
-# ----------------------------------------------------------------------------
-
-
-def test_approve_htmx_returns_consequence_detail(client: FlaskClient, db_path: Path) -> None:
+def test_approve_form_applies_and_redirects(client: FlaskClient, db_path: Path) -> None:
     action_id = _seed_pending_action(db_path, ticker="NU")
     resp = client.post(
-        "/approve", data={"action_id": str(action_id)}, headers={"HX-Request": "true"}
+        "/approve",
+        data={"action_id": str(action_id), "confirm": "1", "return_to": "/"},
     )
-    assert resp.status_code == 200
-    body = resp.data.decode()
-    assert "ix-acted-detail" in body
-    # approve_and_apply's exact returned string (execution/approve_queued_action.py)
-    assert f"Approved queued_action id={action_id}" in body
-    assert "Ledger entry id=" in body
-    assert "NU" in body
-    # A written Ledger entry names a doorway to the Decisions panel.
-    assert 'href="/#decisions_record"' in body
+    assert resp.status_code == 303
+    assert resp.headers["Location"] == "/"
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_APPLIED
 
 
-def test_approve_htmx_dismiss_carries_no_consequence_detail(
-    client: FlaskClient, db_path: Path
-) -> None:
-    """A dismiss (no downstream write) keeps its plain undo-carrying chip —
-    detail is only ever populated by approve_and_apply's return value."""
+def test_dismiss_form_cancels_and_redirects(client: FlaskClient, db_path: Path) -> None:
     action_id = _seed_pending_action(db_path, ticker="GOOG")
     resp = client.post(
         "/approve",
-        data={"action_id": str(action_id), "dismiss": "1"},
-        headers={"HX-Request": "true"},
+        data={
+            "action_id": str(action_id),
+            "dismiss": "1",
+            "confirm": "1",
+            "return_to": "/feed",
+        },
     )
-    assert resp.status_code == 200
-    body = resp.data.decode()
-    assert "ix-acted-detail" not in body
-    assert "ix-undo" in body
+    assert resp.status_code == 303
+    assert resp.headers["Location"] == "/feed"
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_CANCELLED
 
 
 # ----------------------------------------------------------------------------
@@ -487,7 +475,7 @@ def test_thesis_episode_acknowledgement_rejects_cross_site_referer(
 # ----------------------------------------------------------------------------
 
 
-def test_dismiss_alert_htmx_chip_carries_why_affordance(client: FlaskClient, db_path: Path) -> None:
+def test_dismiss_alert_form_uses_shared_approve_route(client: FlaskClient, db_path: Path) -> None:
     alert = fire_alert(
         ticker="NU",
         trigger_kind="earnings_tone",
@@ -496,11 +484,18 @@ def test_dismiss_alert_htmx_chip_carries_why_affordance(client: FlaskClient, db_
         signature_sha="sig-dismiss-why",
         db_path=db_path,
     )
-    resp = client.post(f"/api/alerts/{alert.id}/dismiss", headers={"HX-Request": "true"})
-    assert resp.status_code == 200
-    body = resp.data.decode()
-    assert "ix-why-toggle" in body
-    assert f'hx-post="/api/alerts/{alert.id}/dismiss"' in body
+    resp = client.post(
+        "/approve",
+        data={
+            "alert_id": str(alert.id),
+            "dismiss": "1",
+            "confirm": "1",
+            "return_to": "/",
+        },
+    )
+    assert resp.status_code == 303
+    assert resp.headers["Location"] == "/"
+    assert get_alert(alert.id, db_path=db_path).status == "dismissed"
 
 
 def test_dismiss_alert_reason_round_trip_attaches_without_retransition(
@@ -534,29 +529,6 @@ def test_dismiss_alert_reason_round_trip_attaches_without_retransition(
         "cancelled_actions": 0,
     }
     assert get_alert(alert.id, db_path=db_path).dismiss_reason == "already knew"
-
-
-def test_dismiss_alert_reason_htmx_returns_empty_body(client: FlaskClient, db_path: Path) -> None:
-    """Once a reason lands, nothing further renders (signal capture, not
-    ceremony) — the response is empty so HTMX's outerHTML swap removes the
-    whole .ix-dismiss-why affordance."""
-    alert = fire_alert(
-        ticker="NU",
-        trigger_kind="earnings_tone",
-        fired_at=datetime.now(UTC),
-        evidence_json='{"summary": "tone test"}',
-        signature_sha="sig-dismiss-reason-htmx",
-        db_path=db_path,
-    )
-    client.post(f"/api/alerts/{alert.id}/dismiss")
-    resp = client.post(
-        f"/api/alerts/{alert.id}/dismiss",
-        data={"reason": "wrong ticker"},
-        headers={"HX-Request": "true"},
-    )
-    assert resp.status_code == 200
-    assert resp.data.decode() == ""
-    assert get_alert(alert.id, db_path=db_path).dismiss_reason == "wrong ticker"
 
 
 def test_dismiss_alert_double_click_without_reason_still_409s(

@@ -873,7 +873,7 @@ def _render_card_footer(out: StringIO, it: InboxItem, *, compact: bool) -> None:
     stays a clean two-line entry instead of growing an empty action band.
     Advisor memos keep their own ``.k-chip`` affordances (open memo / dismiss)."""
     if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
-        _render_memo_actions(out, it)
+        _render_memo_actions(out, it, return_to="/" if compact else "/feed")
         return
 
     parts: list[str] = []
@@ -999,7 +999,7 @@ def _decision_condition_body(it: InboxItem) -> str:
     return " — ".join(parts)
 
 
-def _render_memo_actions(out: StringIO, it: InboxItem) -> None:
+def _render_memo_actions(out: StringIO, it: InboxItem, *, return_to: str) -> None:
     """Affordances for an advisor-memo card (Law-1 identity), built from the
     shared control kit (``.k-chip``) — not the bespoke ``.ix-act`` quick
     buttons that approve queued drafts:
@@ -1016,8 +1016,10 @@ def _render_memo_actions(out: StringIO, it: InboxItem) -> None:
     out.write('<a class="k-chip k-chip-btn ix-memo-open" href="/#advisor_memos">open memo</a>')
     if it.note_id is not None:
         out.write(
-            '<button type="button" class="k-chip k-chip-btn ix-note-dismiss" '
-            f'data-note-id="{it.note_id}" title="Archive this memo note">dismiss</button>'
+            f'<form method="post" action="/api/notes/{it.note_id}/archive" class="ix-action-form">'
+            f'<input type="hidden" name="return_to" value="{_esc(return_to)}">'
+            '<button class="k-chip k-chip-btn ix-note-dismiss" type="submit" '
+            'title="Archive this memo note">dismiss</button></form>'
         )
     out.write("</div>")
 
@@ -1047,137 +1049,63 @@ def _quick_action_id(it: InboxItem) -> int | None:
     return qa.id if qa is not None else None
 
 
-# --- Wave 3b: HTMX optimistic quick actions -------------------------------
-# Each button POSTs to its endpoint with HMX and swaps the .ix-quick span for a
-# terminal "done" chip (``acted_span``); reversible actions (dismiss-action,
-# archive-note) carry an Undo that POSTs the reverse and restores the buttons.
-# The data-* hooks stay (peek / analytics); HTMX drives the action now, so the
-# old INBOX_JS click handler is gone.
-_HX_QUICK = 'hx-target="closest .ix-quick" hx-swap="outerHTML"'
-
-
-def _btn_approve(action_id: int) -> str:
+def _action_form(action: str, fields: tuple[tuple[str, object], ...], button: str) -> str:
+    hidden = "".join(
+        f'<input type="hidden" name="{_esc(name)}" value="{_esc(str(value))}">'
+        for name, value in fields
+    )
     return (
-        '<button class="ix-act ix-act-approve k-btn k-btn-quiet k-btn-sm" type="button" '
-        f'data-action-id="{action_id}" title="Approve &amp; apply" '
-        f'hx-post="/approve" hx-vals=\'{{"action_id": "{action_id}"}}\' {_HX_QUICK}>&#10003;</button>'
+        f'<form method="post" action="{_esc(action)}" class="ix-action-form">'
+        f'{hidden}<input type="hidden" name="return_to" value="/">{button}</form>'
     )
 
 
+def _btn_approve(action_id: int) -> str:
+    button = (
+        '<button class="ix-act ix-act-approve k-btn k-btn-quiet k-btn-sm" type="submit" '
+        f'data-action-id="{action_id}" aria-label="Approve and apply" '
+        'title="Approve &amp; apply">&#10003;</button>'
+    )
+    return _action_form("/approve", (("action_id", action_id), ("confirm", 1)), button)
+
+
 def _btn_dismiss_action(action_id: int) -> str:
-    return (
-        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
-        f'data-action-id="{action_id}" data-dismiss="1" title="Dismiss" '
-        f'hx-post="/approve" hx-vals=\'{{"action_id": "{action_id}", "dismiss": "1"}}\' '
-        f"{_HX_QUICK}>&#10005;</button>"
+    button = (
+        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="submit" '
+        f'data-action-id="{action_id}" data-dismiss="1" aria-label="Dismiss action" title="Dismiss" '
+        ">&#10005;</button>"
+    )
+    return _action_form(
+        "/approve",
+        (("action_id", action_id), ("dismiss", 1), ("confirm", 1)),
+        button,
     )
 
 
 def _btn_dismiss_alert(alert_id: int) -> str:
-    return (
-        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
-        f'data-alert-id="{alert_id}" title="Dismiss alert" '
-        f'hx-post="/api/alerts/{alert_id}/dismiss" {_HX_QUICK}>&#10005;</button>'
+    button = (
+        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="submit" '
+        f'data-alert-id="{alert_id}" aria-label="Dismiss alert" '
+        'title="Dismiss alert">&#10005;</button>'
+    )
+    return _action_form(
+        "/approve",
+        (("alert_id", alert_id), ("dismiss", 1), ("confirm", 1)),
+        button,
     )
 
 
 def _btn_dismiss_note(note_id: int) -> str:
-    return (
-        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
-        f'data-note-id="{note_id}" title="Dismiss" '
-        f'hx-post="/api/notes/{note_id}/archive" {_HX_QUICK}>&#10005;</button>'
+    button = (
+        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="submit" '
+        f'data-note-id="{note_id}" aria-label="Dismiss note" title="Dismiss">&#10005;</button>'
     )
+    return _action_form(f"/api/notes/{note_id}/archive", (), button)
 
 
 def quick_actions_span(buttons: list[str]) -> str:
-    """Wrap quick-action buttons in the ``.ix-quick`` span (the HTMX swap unit)."""
+    """Wrap the compact rail's ordinary POST forms."""
     return '<span class="ix-quick">' + "".join(buttons) + "</span>"
-
-
-_DETAIL_MAX = 60
-
-
-def acted_span(
-    label: str,
-    status: str,
-    *,
-    undo_url: str | None = None,
-    detail: str | None = None,
-    detail_href: str | None = None,
-    dismiss_why_id: int | None = None,
-) -> str:
-    """The ``.ix-quick`` replacement a quick-action endpoint returns to HTMX: a
-    terminal done-chip, optionally with an Undo button (reversible actions
-    only) that POSTs ``undo_url`` and restores the buttons.
-
-    ``detail`` (consequence receipts, REQ-11) is the specific outcome the
-    action produced — e.g. approve_and_apply's "Ledger entry id=42 written: …"
-    — rendered as a muted suffix, truncated to ``_DETAIL_MAX`` chars with the
-    full text on ``title=`` for hover. Absent ``detail`` renders byte-identical
-    to the pre-receipts chip (every existing caller keeps working unchanged).
-    ``detail_href``, given alongside ``detail``, makes the whole suffix a
-    doorway (the panel the consequence's row actually lives in) instead of
-    plain text — only ever passed when the caller has a REAL route for it
-    (never invented).
-
-    ``dismiss_why_id`` (alerts-lane dismiss reason, v1) renders a "· why?"
-    one-word inline input instead: submitting POSTs ``{reason}`` back to
-    ``/api/alerts/<id>/dismiss`` and the input then removes itself — the
-    reason is signal capture, not ceremony, so nothing further renders once
-    it lands. Mutually exclusive with ``detail`` (the two receipt shapes
-    apply to different action kinds and never co-occur on one chip)."""
-    undo = ""
-    if undo_url:
-        undo = (
-            ' <button type="button" class="ix-undo k-btn k-btn-quiet k-btn-sm" '
-            f'hx-post="{_esc(undo_url)}" hx-target="closest .ix-quick" hx-swap="outerHTML">'
-            "undo</button>"
-        )
-    suffix = ""
-    if detail:
-        clean = " ".join(detail.split())  # collapse newlines/repeated whitespace
-        short = clean if len(clean) <= _DETAIL_MAX else clean[: _DETAIL_MAX - 1] + "…"
-        if detail_href:
-            suffix = (
-                f' <a class="ix-acted-detail" href="{_esc(detail_href)}" title="{_esc(clean)}">'
-                f"{_esc(short)}</a>"
-            )
-        else:
-            suffix = f' <span class="ix-acted-detail" title="{_esc(clean)}">{_esc(short)}</span>'
-    elif dismiss_why_id is not None:
-        # HTMX-driven like every other quick action (Wave 3b): the Enter-key
-        # submit is a declarative hx-post attribute on the input itself (this
-        # string, not INBOX_JS) — no bespoke fetch() dispatcher re-acquires
-        # the "/api/alerts/" literal INBOX_JS's own guard test forbids. htmx
-        # auto-includes a named form element's own value as a urlencoded
-        # param when IT is the trigger (no hx-vals/hx-include needed — the
-        # server route reads request.values, which covers form-encoded
-        # posts). The ".ix-why-toggle" reveal is local, network-free
-        # show/hide, wired by INBOX_JS's existing delegated-click idiom
-        # (event-delegated, not inline onclick, matching the rest of this
-        # module).
-        why_url = f"/api/alerts/{dismiss_why_id}/dismiss"
-        suffix = (
-            ' <span class="ix-dismiss-why">'
-            '<button type="button" class="ix-why-toggle k-btn k-btn-quiet k-btn-sm">'
-            "why?</button>"
-            f'<input type="text" class="ix-why-input" name="reason" maxlength="40" hidden '
-            f'placeholder="one word" hx-post="{_esc(why_url)}" '
-            "hx-trigger=\"keyup[key=='Enter']\" "
-            'hx-target="closest .ix-dismiss-why" hx-swap="outerHTML" />'
-            "</span>"
-        )
-    return f'<span class="ix-quick ix-acted ix-acted-{_esc(status)}">{_esc(label)}{suffix}{undo}</span>'
-
-
-def restored_action_buttons(action_id: int) -> str:
-    """The original approve/dismiss pair, for an un-cancel Undo to swap back in."""
-    return quick_actions_span([_btn_approve(action_id), _btn_dismiss_action(action_id)])
-
-
-def restored_note_button(note_id: int) -> str:
-    """The original note-dismiss button, for an un-archive Undo to swap back in."""
-    return quick_actions_span([_btn_dismiss_note(note_id)])
 
 
 def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
@@ -1189,9 +1117,9 @@ def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
     dismiss on every actionable card):
 
       * a pending queued action (a draft, or an alert that drafted one) → a
-        ✓ that approves it (POST /approve via HTMX);
+        ✓ that approves it (ordinary POST /approve form);
       * an alert → a ✕ that dismisses the ALERT itself (POST
-        /api/alerts/<id>/dismiss), the alert-level counterpart to a draft's
+        /approve with alert_id), the alert-level counterpart to a draft's
         action-level dismiss; the route also cancels any pending draft so the
         dismissed alert can't leave one behind to resurface;
       * a standalone draft → its ✕ dismisses the ACTION (POST /approve
@@ -1265,15 +1193,9 @@ def _esc(text: str) -> str:
 #    The mark advances only once the stream is actually ON SCREEN
 #    (IntersectionObserver — landing on another tab doesn't mark Home seen),
 #    so accents persist while you read and clear on the next visit.
-# 2. QUICK ACTIONS — the rail's hover ✓/✕, routed by which id the button
-#    carries so the rail can act on the same surface the full feed does:
-#      * data-action-id  → POST /approve  (approve / dismiss a queued action),
-#      * data-alert-id   → POST /api/alerts/<id>/dismiss  (dismiss the alert),
-#      * data-note-id    → POST /api/notes/<id>/archive   (dismiss a note).
-#    Each updates the card in place: an approve swaps a draft's status chip
-#    (applied/cancelled); a dismissal (action / alert / note) fades the card
-#    and leaves a small "✓ applied" / "✕ dismissed" confirmation where the
-#    buttons sat. Alert/note dismissals clear the card from the inbox.
+# Mutating inbox actions are ordinary server-rendered forms and therefore need
+# no JavaScript transport. This script owns only unread tracking and local
+# category filtering.
 INBOX_JS = r"""
 (function () {
   if (window.__ixWired) return;
@@ -1324,77 +1246,6 @@ INBOX_JS = r"""
     for (var j = 0; j < cards.length; j++) {
       cards[j].classList.toggle('ix-hide', cat !== '*' && cards[j].getAttribute('data-cat') !== cat);
     }
-  });
-
-  // The .ix-act quick actions (approve / dismiss / archive) are driven by HTMX
-  // now (Wave 3b): each button POSTs and swaps its .ix-quick span for a
-  // terminal "done" chip — with an Undo on the reversible ones. No JS handler
-  // here; the server returns the chip HTML. (Category filtering + the
-  // advisor-memo dismiss below stay vanilla.) The pressed state while the
-  // POST is in flight is the kit's .k-btn.htmx-request rule — declarative,
-  // no JS. What IS wired here: when the swapped-in chip is a dismissal
-  // (cancelled / archived), settle the whole card via .ix-dismissed so the
-  // click visibly lands on the card, not just the chip — and an Undo swap
-  // (buttons restored, no .ix-acted) lifts it again.
-  document.addEventListener('htmx:afterSwap', function (ev) {
-    var card = ev.target && ev.target.closest
-      ? ev.target.closest('.ix-card, .alert-card') : null;
-    if (!card) return;
-    var settled = card.querySelector('.ix-acted-cancelled, .ix-acted-archived');
-    card.classList.toggle('ix-dismissed', !!settled);
-  });
-
-  // Advisor-memo dismiss chip (.ix-note-dismiss): archive the note-backed memo
-  // via the REST endpoint the journal already uses, then fade the card in
-  // place. Distinct from the .ix-act quick buttons above (those POST /approve
-  // on queued drafts) — this is the memo card's own affordance.
-  document.addEventListener('click', function (ev) {
-    if (!ev.target || !ev.target.closest) return;
-    var chip = ev.target.closest('.ix-note-dismiss');
-    if (!chip || chip.disabled) return;
-    var noteId = chip.getAttribute('data-note-id');
-    var card = chip.closest('.ix-card');
-    // Same busy affordance as every other action button (.k-btn[aria-busy]);
-    // on success the terminal state IS the .ix-acted span — the identical
-    // receipt shape the HTMX quick-actions above render server-side, so this
-    // row type no longer carries a second, hand-rolled contract.
-    CCAction.busy(chip, 'Dismissing…');
-    fetch('/api/notes/' + encodeURIComponent(noteId) + '/archive', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}'
-    }).then(function (resp) {
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      if (!card) return;
-      card.classList.add('ix-dismissed');
-      var acts = card.querySelector('.ix-memo-acts');
-      if (acts) acts.innerHTML = '<span class="ix-acted ix-acted-applied">✓ dismissed</span>';
-    }).catch(function (err) {
-      CCAction.release(chip);
-      chip.classList.add('ix-act-fail');
-      var detail = String((err && err.message) || err);
-      chip.textContent = 'dismiss failed — ' + detail;
-      chip.title = detail;
-    });
-  });
-
-  // Dismiss-with-reason (alerts lane, v1): the "why?" toggle on a dismissed
-  // alert's acted chip reveals a one-word input — purely local show/hide,
-  // no network call (the Enter-key submit is HTMX's own declarative hx-post
-  // on the input, rendered server-side in acted_span() — see dashboard/
-  // inbox.py; INBOX_JS carries no fetch dispatcher for it, matching the
-  // Wave 3b quick-actions convention above). Skippable: the toggle without a
-  // submit leaves nothing behind (the dismiss already happened).
-  document.addEventListener('click', function (ev) {
-    if (!ev.target || !ev.target.closest) return;
-    var toggle = ev.target.closest('.ix-why-toggle');
-    if (!toggle) return;
-    var wrap = toggle.closest('.ix-dismiss-why');
-    var input = wrap && wrap.querySelector('.ix-why-input');
-    if (!input) return;
-    toggle.hidden = true;
-    input.hidden = false;
-    input.focus();
   });
 })();
 """.strip()
