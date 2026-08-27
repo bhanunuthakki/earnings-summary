@@ -173,7 +173,7 @@ class _PackageCheckpoint(_ClosedModel):
         return self
 
 
-class _PackageComponent(_ClosedModel):
+class PackageComponent(_ClosedModel):
     accession_number: str
     component_kind: Literal["package_index", "filing_manifest", "validation"]
     source_url: str
@@ -194,7 +194,7 @@ class PackageFailureSummary(_ClosedModel):
 
 
 def summarize_package_failures(
-    failures: tuple[_PackageComponent, ...],
+    failures: tuple[PackageComponent, ...],
     *,
     sample_limit: int = 20,
 ) -> tuple[PackageFailureSummary, ...]:
@@ -214,7 +214,7 @@ def summarize_package_failures(
 
 class _PackageCollection(_ClosedModel):
     packages: tuple[ParsedSecFilingPackage, ...]
-    components: tuple[_PackageComponent, ...]
+    components: tuple[PackageComponent, ...]
     deferred_accession_count: int = Field(ge=0)
 
 
@@ -404,7 +404,7 @@ def collect_filing_packages(
     )
     cached_by_accession = {entry.accession_number: entry for entry in checkpoint.entries}
     packages: list[ParsedSecFilingPackage] = []
-    components: list[_PackageComponent] = []
+    components: list[PackageComponent] = []
     attempts = 0
     deferred = 0
     for filing in filings:
@@ -416,13 +416,13 @@ def collect_filing_packages(
             deferred += 1
             components.extend(
                 (
-                    _PackageComponent(
+                    PackageComponent(
                         accession_number=accession,
                         component_kind="package_index",
                         source_url=index_url,
                         failure_reason="deferred_by_package_limit",
                     ),
-                    _PackageComponent(
+                    PackageComponent(
                         accession_number=accession,
                         component_kind="filing_manifest",
                         source_url=manifest_url,
@@ -440,14 +440,14 @@ def collect_filing_packages(
             if index_body is None or manifest_body is None:
                 components.extend(
                     (
-                        _PackageComponent(
+                        PackageComponent(
                             accession_number=accession,
                             component_kind="package_index",
                             source_url=index_url,
                             body=index_body,
                             failure_reason=index_failure,
                         ),
-                        _PackageComponent(
+                        PackageComponent(
                             accession_number=accession,
                             component_kind="filing_manifest",
                             source_url=manifest_url,
@@ -483,13 +483,13 @@ def collect_filing_packages(
 
         components.extend(
             (
-                _PackageComponent(
+                PackageComponent(
                     accession_number=accession,
                     component_kind="package_index",
                     source_url=index_url,
                     body=index_body,
                 ),
-                _PackageComponent(
+                PackageComponent(
                     accession_number=accession,
                     component_kind="filing_manifest",
                     source_url=manifest_url,
@@ -513,7 +513,7 @@ def collect_filing_packages(
             )
         except SecFilingPackageContractError:
             components.append(
-                _PackageComponent(
+                PackageComponent(
                     accession_number=accession,
                     component_kind="validation",
                     source_url=index_url + "#package-validation",

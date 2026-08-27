@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 import requests
@@ -80,32 +81,35 @@ def test_sec_fetch_observes_the_declared_request_spacing(
         status_code = 200
         content = b"{}"
 
-    class _Session:
-        def get(
-            self,
-            url: str,
-            *,
-            headers: dict[str, str],
-            timeout: tuple[int, int],
-        ) -> _Response:
-            events.append(("get", (url, headers, timeout)))
-            return _Response()
+    def get(
+        url: str,
+        *,
+        headers: dict[str, str],
+        timeout: tuple[int, int],
+    ) -> _Response:
+        events.append(("get", (url, headers, timeout)))
+        return _Response()
 
-    monkeypatch.setattr(
-        sync.time,
-        "sleep",
-        lambda seconds: events.append(("sleep", seconds)),
+    def sleep(seconds: float) -> None:
+        events.append(("sleep", seconds))
+
+    session = requests.Session()
+    monkeypatch.setattr(session, "get", get)
+    monkeypatch.setattr(sync.time, "sleep", sleep)
+    fetch = cast(
+        Callable[[requests.Session, str, str], bytes],
+        getattr(sync, "_fetch"),
     )
 
     assert (
-        sync._fetch(
-            _Session(),
+        fetch(
+            session,
             "https://data.sec.gov/submissions/CIK0000001001.json",
             "researcher researcher@example.test",
         )
         == b"{}"
     )
-    assert events[0] == ("sleep", sync._SEC_REQUEST_DELAY_SECONDS)
+    assert events[0] == ("sleep", cast(float, getattr(sync, "_SEC_REQUEST_DELAY_SECONDS")))
     assert events[1][0] == "get"
 
 
@@ -114,7 +118,8 @@ def test_sec_contract_failure_preserves_every_raw_component(
 ) -> None:
     root_body = b'{"root":true}'
     historical_body = b'{"filings":{"primaryDocument":[""]}}'
-    manifest_path = sync._dump_inventory_contract_failure(
+    write_failure = cast(Callable[..., Path], getattr(sync, "_dump_inventory_contract_failure"))
+    manifest_path = write_failure(
         tmp_path,
         ticker="BKNG",
         cik="0001075531",
@@ -345,7 +350,7 @@ def test_transient_package_failure_is_explicit_and_retryable(
 
 def test_package_failure_summary_identifies_accession_without_exposing_url() -> None:
     failures = (
-        sync._PackageComponent(
+        sync.PackageComponent(
             accession_number="0000001001-25-000001",
             component_kind="validation",
             source_url="https://www.sec.gov/Archives/private-looking-path",
