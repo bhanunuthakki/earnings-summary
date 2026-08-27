@@ -235,6 +235,54 @@ def test_sec_vprr_paper_scan_preserves_manifest_only_authority_url() -> None:
     assert scan.source_url == "https://www.sec.gov/Archives/edgar/vprr/0201/02013406.pdf"
 
 
+def test_same_accession_alternate_cik_locator_is_preserved() -> None:
+    manifest = _manifest(("acme-8k.htm", "8-K", "Current report")).replace(
+        b"/Archives/edgar/data/1001/000000100125000001/acme-8k.htm",
+        b"/Archives/edgar/data/2002/000000100125000001/acme-8k.htm",
+    )
+
+    result = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="8-K",
+        primary_document="acme-8k.htm",
+        index_body=_index(_item("acme-8k.htm")),
+        filing_manifest_body=manifest,
+    )
+
+    primary = result.attachments[0]
+    assert primary.inventory_presence == "matched"
+    assert primary.source_url == (
+        "https://www.sec.gov/Archives/edgar/data/2002/000000100125000001/acme-8k.htm"
+    )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        b"/Archives/edgar/data/2002/000000100124999999/acme-8k.htm",
+        b"/Archives/edgar/data/2002/000000100125000001/other.htm",
+    ],
+)
+def test_alternate_cik_locator_requires_exact_accession_and_filename(
+    replacement: bytes,
+) -> None:
+    manifest = _manifest(("acme-8k.htm", "8-K", "Current report")).replace(
+        b"/Archives/edgar/data/1001/000000100125000001/acme-8k.htm",
+        replacement,
+    )
+
+    with pytest.raises(SecFilingPackageContractError, match="outside"):
+        parse_sec_filing_package_inventory(
+            cik="1001",
+            accession_number="0000001001-25-000001",
+            form_type="8-K",
+            primary_document="acme-8k.htm",
+            index_body=_index(_item("acme-8k.htm")),
+            filing_manifest_body=manifest,
+        )
+
+
 @pytest.mark.parametrize(
     ("scan_href", "scan_filename", "match"),
     [
