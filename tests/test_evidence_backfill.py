@@ -235,6 +235,31 @@ def test_apply_is_idempotent_and_uses_only_active_evidence(tmp_path: Path) -> No
         conn.close()
 
 
+def test_exact_replay_does_not_reinsert_into_a_sealed_extraction_run(
+    tmp_path: Path,
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        first = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert first.records_created == 9
+        conn.execute(
+            "CREATE TRIGGER reject_sealed_extraction_run_reinsert "
+            "BEFORE INSERT ON evidence_nodes "
+            "WHEN NEW.extraction_run_id = 'legacy-run-doc-1' "
+            "BEGIN SELECT RAISE(ABORT, 'fact extraction run is sealed'); END"
+        )
+
+        replay = backfill_legacy_evidence(
+            conn,
+            _request(repo_root, apply=True, task_id="evidence-ledger-sealed-replay"),
+        )
+
+        assert replay.records_created == 0
+        assert replay.records_replayed == 9
+    finally:
+        conn.close()
+
+
 def test_apply_reuses_verified_legacy_file_observation_from_a_clone_root(
     tmp_path: Path,
 ) -> None:
