@@ -80,8 +80,8 @@ class SecFilingInventoryEntry(_Closed):
     filing_date: str
     report_date: str | None
     accepted_at: str | None
-    primary_document: str
-    primary_document_url: str
+    primary_document: str | None
+    primary_document_url: str | None
     source_component_name: str
 
 
@@ -254,10 +254,6 @@ def _parse_columns(
             raise SecInventoryContractError(
                 f"{component_name} row {index} has invalid accessionNumber"
             )
-        if not primary:
-            raise SecInventoryContractError(
-                f"{component_name} row {index} has empty primaryDocument"
-            )
         if not form or not filing_date:
             raise SecInventoryContractError(
                 f"{component_name} row {index} has empty form or filingDate"
@@ -271,9 +267,11 @@ def _parse_columns(
                 filing_date=filing_date,
                 report_date=_optional(columns["reportDate"][index]),
                 accepted_at=_optional(columns["acceptanceDateTime"][index]),
-                primary_document=primary,
+                primary_document=primary or None,
                 primary_document_url=(
-                    f"{_ARCHIVE_BASE}/{int(cik)}/{accession.replace('-', '')}/{primary}"
+                    None
+                    if not primary
+                    else f"{_ARCHIVE_BASE}/{int(cik)}/{accession.replace('-', '')}/{primary}"
                 ),
                 source_component_name=component_name,
             )
