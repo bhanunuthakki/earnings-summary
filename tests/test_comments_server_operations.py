@@ -473,10 +473,13 @@ def test_start_tracker_route_rejects_healthy_listener_without_matching_registry_
 def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    supervisor_root = tmp_path.parent / "runtime-checkout"
+    supervisor_root.mkdir(exist_ok=True)
     tracker_root = tmp_path.parent / "portfolio-tracker"
     tracker_root.mkdir(exist_ok=True)
     monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
     monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(comments_server, "PROJECT_ROOT", supervisor_root)
     now = datetime.now(UTC)
     health = HealthV1.model_validate(
         {
@@ -493,7 +496,7 @@ def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
         }
     )
     write_runtime_receipt(
-        portfolio_tracker_receipt_path(tmp_path),
+        portfolio_tracker_receipt_path(supervisor_root),
         RuntimeReceipt(
             idempotency_key="portfolio-tracker-refresh:2026-08-27",
             lifecycle_state="already_running",
@@ -540,7 +543,11 @@ def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
         portfolio_tracker_runtime, "endpoint_owner_matches_pid", endpoint_owner_matches
     )
     monkeypatch.setattr(comments_server, "Registry", _Registry)
-    response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
+    response = (
+        comments_server.create_app(tmp_path, code_root=PROJECT_ROOT)
+        .test_client()
+        .post("/actions/start-tracker")
+    )
 
     assert response.status_code == 200
     assert response.get_json()["lifecycle_state"] == "already_running"
