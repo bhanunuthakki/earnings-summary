@@ -93,7 +93,7 @@ def _expected_grid_signature(item: registry.GridSignature) -> str:
 
 
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.10.0"
+    assert registry.REGISTRY_VERSION == "1.10.1"
     records = (
         registry.CARD_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0],

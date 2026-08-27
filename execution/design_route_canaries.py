@@ -246,7 +246,7 @@ def _canary_shell_payloads() -> dict[str, object]:
             "items": [
                 {
                     "ticker": "TOST",
-                    "name": "Canary Evaluation",
+                    "name": "Toast, Inc.",
                     "instrument_type": "stock",
                     "lifecycle": "evaluation",
                     "discovery_candidate_id": 7,
@@ -256,7 +256,33 @@ def _canary_shell_payloads() -> dict[str, object]:
                     "ask_session_id": None,
                     "ask_session_link_state": "unlinked",
                     "freshness": "available",
-                }
+                },
+                {
+                    "ticker": "IFNNY",
+                    "name": "Infineon Technologies AG",
+                    "instrument_type": "stock",
+                    "lifecycle": "evaluation",
+                    "discovery_candidate_id": 8,
+                    "open_note_count": 0,
+                    "latest_note_at": None,
+                    "workup_readiness": "partial",
+                    "ask_session_id": None,
+                    "ask_session_link_state": "unlinked",
+                    "freshness": "available",
+                },
+                {
+                    "ticker": "PCOR",
+                    "name": "Procore Technologies, Inc.",
+                    "instrument_type": "stock",
+                    "lifecycle": "evaluation",
+                    "discovery_candidate_id": 9,
+                    "open_note_count": 2,
+                    "latest_note_at": "2025-12-31T00:00:00Z",
+                    "workup_readiness": "partial",
+                    "ask_session_id": None,
+                    "ask_session_link_state": "unlinked",
+                    "freshness": "available",
+                },
             ],
         },
         "evaluation": {
