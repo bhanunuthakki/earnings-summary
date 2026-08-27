@@ -177,6 +177,61 @@ def test_table_commitment_detects_preservation_mismatch(tmp_path: Path) -> None:
         rehearsal.require_equal_commitments(before, after)
 
 
+def test_source_row_preservation_allows_additions_and_records_dropped_columns(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.db"
+    candidate = tmp_path / "candidate.db"
+    with sqlite3.connect(source) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE tracked_companies (
+                ticker TEXT PRIMARY KEY,
+                notes TEXT NOT NULL,
+                processing_tier TEXT NOT NULL
+            );
+            INSERT INTO tracked_companies VALUES ('META', 'owner-note', 'core');
+            """
+        )
+    with sqlite3.connect(candidate) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE tracked_companies (
+                ticker TEXT PRIMARY KEY,
+                notes TEXT NOT NULL
+            );
+            INSERT INTO tracked_companies VALUES ('META', 'owner-note');
+            INSERT INTO tracked_companies VALUES ('AAPL', 'migration-added');
+            """
+        )
+
+    proof = rehearsal.verify_source_rows_preserved(
+        source,
+        candidate,
+        tables=("tracked_companies",),
+    )[0]
+
+    assert proof.source_row_count == 1
+    assert proof.candidate_row_count == 2
+    assert proof.primary_key_columns == ("ticker",)
+    assert proof.dropped_source_columns == ("processing_tier",)
+    assert proof.source_projection_sha256 == proof.candidate_projection_sha256
+
+
+def test_source_row_preservation_rejects_changed_owner_row(tmp_path: Path) -> None:
+    source = tmp_path / "source.db"
+    candidate = tmp_path / "candidate.db"
+    _write_db(source)
+    _write_db(candidate, value="changed")
+
+    with pytest.raises(rehearsal.RehearsalError, match="source rows changed"):
+        rehearsal.verify_source_rows_preserved(
+            source,
+            candidate,
+            tables=("tracked_companies",),
+        )
+
+
 def test_table_commitments_explicitly_record_absent_owner_tables(tmp_path: Path) -> None:
     database = tmp_path / "source.db"
     _write_db(database)
@@ -777,6 +832,12 @@ def test_cli_apply_keeps_exact_sources_and_records_throwaway_rollback(
     assert receipt.candidate_storage_before_upgrade.journal_absent
     assert receipt.candidate_storage_after is not None
     assert receipt.candidate_storage_after.storage.entries[0].suffix == ""
+    assert receipt.preservation_after_upgrade == receipt.preservation_after
+    assert receipt.source_row_preservation is not None
+    tracked_proof = next(
+        item for item in receipt.source_row_preservation if item.table_name == "tracked_companies"
+    )
+    assert tracked_proof.source_projection_sha256 == tracked_proof.candidate_projection_sha256
     assert receipt.swap_rollback is not None and receipt.swap_rollback.rollback_restored
     assert receipt.forced_failure_rollback is not None
     assert receipt.forced_failure_rollback.rollback_restored
@@ -790,7 +851,7 @@ def test_cli_apply_keeps_exact_sources_and_records_throwaway_rollback(
             rollback.failed_candidate_storage.storage.entries[0].content_sha256
             == rollback.candidate_sha256
         )
-    assert source_roles == [rehearsal.SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY] * 4
+    assert source_roles == [rehearsal.SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY] * 5
     assert rehearsal.database_storage_identity(source_db) == source_storage
     assert rehearsal.build_corpus_manifest(source_corpus) == source_manifest
 
