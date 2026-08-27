@@ -71,12 +71,17 @@ def _body(*entries: dict[str, object]) -> bytes:
     ).encode()
 
 
-def _request(tmp_path: Path, *, apply: bool) -> BootstrapRequest:
+def _request(
+    tmp_path: Path,
+    *,
+    apply: bool,
+    recorded_at: datetime = STAMP,
+) -> BootstrapRequest:
     return BootstrapRequest(
         source_url=SOURCE_URL,
         blob_root=tmp_path / "blobs",
         apply=apply,
-        recorded_at=STAMP,
+        recorded_at=recorded_at,
     )
 
 
@@ -200,6 +205,51 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     blob_files = tuple(path for path in (tmp_path / "blobs").rglob("*") if path.is_file())
     assert len(blob_files) == 1
     assert blob_files[0].read_bytes() == raw
+    conn.close()
+
+
+def test_new_source_observation_reuses_immutable_reporting_entity(
+    tmp_path: Path,
+) -> None:
+    db_path = _database(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+    )
+    conn.commit()
+    first_raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
+    second_raw = _body(
+        {"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"},
+        {"cik_str": 999999, "ticker": "OTHER", "title": "Other Corporation"},
+    )
+
+    first = bootstrap_issuer_reporting_registry(
+        conn,
+        raw_body=first_raw,
+        request=_request(tmp_path, apply=True),
+    )
+    conn.commit()
+    second = bootstrap_issuer_reporting_registry(
+        conn,
+        raw_body=second_raw,
+        request=_request(
+            tmp_path,
+            apply=True,
+            recorded_at=datetime(2026, 7, 28, 21, 0, tzinfo=UTC),
+        ),
+    )
+    conn.commit()
+
+    assert second.source_sha256 != first.source_sha256
+    assert second.records_created > 0
+    assert conn.execute(
+        "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM reporting_entities"
+    ).fetchone() == (1, STAMP.isoformat(" "), STAMP.isoformat(" "))
+    assert conn.execute(
+        "SELECT revision, supersedes_resolution_id IS NOT NULL "
+        "FROM reporting_entity_identifier_resolution_outcomes ORDER BY revision"
+    ).fetchall() == [(1, 0), (2, 1)]
+    assert conn.execute("SELECT COUNT(*) FROM source_obligation_revisions").fetchone() == (5,)
     conn.close()
 
 

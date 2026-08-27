@@ -764,7 +764,6 @@ def bootstrap_sec_fund_registry(
                 continue
             entry = ticker_candidates[0]
             captured = captured_registrants[entry.normalized_cik]
-            item_recorded_at = max(registry_recorded_at, captured[3])
             item_created = _persist_selected_fund_ticker(
                 conn,
                 issuer_registry=issuer_registry,
@@ -776,7 +775,8 @@ def bootstrap_sec_fund_registry(
                 registry_source_sha=source_sha,
                 registrant_observation_id=captured[0],
                 registrant_source_sha=captured[1],
-                recorded_at=item_recorded_at,
+                registry_recorded_at=registry_recorded_at,
+                registrant_recorded_at=captured[3],
                 scope_inclusion_state=(
                     None
                     if item.inclusion_state == "historical"
@@ -913,17 +913,14 @@ def bootstrap_sec_historical_issuer(
             verification_method="sec_form15_identity_contract",
         )
         reporting_entity_id = f"reporting:sec:{identity.normalized_cik}"
-        created += int(
-            reporting_registry.persist(
-                ReportingEntity(
-                    reporting_entity_id=reporting_entity_id,
-                    idempotency_key=reporting_entity_id,
-                    issuer_id=issuer_id,
-                    reporting_entity_kind="legal_registrant",
-                    display_name=identity.legal_name,
-                    created_at=recorded_at,
-                )
-            ).created
+        created += _persist_reporting_entity(
+            conn,
+            reporting_registry,
+            reporting_entity_id=reporting_entity_id,
+            issuer_id=issuer_id,
+            reporting_entity_kind="legal_registrant",
+            display_name=identity.legal_name,
+            recorded_at=recorded_at,
         )
         created += _persist_reporting_identifier_assertion(
             conn,
@@ -1359,68 +1356,24 @@ def _persist_reporting_boundary(
         return 0
     registry = ReportingEntityRegistry(conn)
     reporting_entity_id = f"reporting:sec:{normalized_cik}"
-    created = int(
-        registry.persist(
-            ReportingEntity(
-                reporting_entity_id=reporting_entity_id,
-                idempotency_key=reporting_entity_id,
-                issuer_id=issuer_id,
-                reporting_entity_kind="legal_registrant",
-                display_name=legal_name,
-                created_at=recorded_at,
-            )
-        ).created
+    created = _persist_reporting_entity(
+        conn,
+        registry,
+        reporting_entity_id=reporting_entity_id,
+        issuer_id=issuer_id,
+        reporting_entity_kind="legal_registrant",
+        display_name=legal_name,
+        recorded_at=recorded_at,
     )
-    assertion_id = _record_id(
-        "reporting-identifier-assertion",
-        reporting_entity_id,
-        normalized_cik,
-        observation_id,
-    )
-    assertion = ReportingEntityIdentifierAssertion(
-        assertion_id=assertion_id,
-        idempotency_key=assertion_id,
+    created += _persist_reporting_identifier_assertion(
+        conn,
+        registry,
         reporting_entity_id=reporting_entity_id,
         identifier_type="sec_cik",
         identifier_value=normalized_cik,
-        normalized_value=normalized_cik,
         authority="sec_registry",
         source_observation_id=observation_id,
-        effective_at=recorded_at,
-        knowledge_at=recorded_at,
         recorded_at=recorded_at,
-    )
-    created += int(registry.persist(assertion).created)
-    candidate_digest = reporting_identifier_candidate_digest((assertion,))
-    resolution_id = _record_id(
-        "reporting-identifier-resolution",
-        assertion.resolution_key,
-        candidate_digest,
-    )
-    created += int(
-        registry.persist(
-            ReportingEntityIdentifierResolution(
-                resolution_id=resolution_id,
-                idempotency_key=resolution_id,
-                resolution_key=assertion.resolution_key,
-                revision=1,
-                outcome="selected",
-                selected_assertion_id=assertion.assertion_id,
-                candidate_digest_sha256=candidate_digest,
-                policy_name="regulator_exact_match",
-                policy_version="1",
-                policy_config_sha256=_digest(
-                    "reporting-identifier-policy",
-                    "sec_cik:regulator_exact_match:1",
-                ),
-                reason_code="unique_regulator_identifier",
-                reason_details=(("source_observation_id", observation_id),),
-                material_dissent=False,
-                effective_at=recorded_at,
-                knowledge_at=recorded_at,
-                recorded_at=recorded_at,
-            )
-        ).created
     )
     if not active_scope:
         return created
@@ -1452,57 +1405,39 @@ def _persist_reporting_boundary(
         ),
     )
     for authority_kind, document_family, completeness_rule in obligations:
-        obligation_key = f"{reporting_entity_id}:{authority_kind}:{document_family}"
-        record_id = _record_id("source-obligation", obligation_key, "1")
-        created += int(
-            registry.persist(
-                SourceObligationRevision(
-                    obligation_revision_id=record_id,
-                    idempotency_key=record_id,
-                    obligation_key=obligation_key,
-                    revision=1,
-                    issuer_id=issuer_id,
-                    reporting_entity_id=reporting_entity_id,
-                    authority_kind=cast(
-                        Literal[
-                            "sec_edgar",
-                            "sedar_plus",
-                            "edinet",
-                            "issuer_publisher",
-                        ],
-                        authority_kind,
-                    ),
-                    document_family=cast(
-                        Literal[
-                            "operating_company_periodic",
-                            "investment_company_periodic",
-                            "continuous_disclosure",
-                            "annual_securities_report",
-                            "issuer_financial_statements",
-                            "issuer_presentations",
-                            "issuer_earnings_materials",
-                        ],
-                        document_family,
-                    ),
-                    obligation_state="required",
-                    completeness_rule=cast(
-                        Literal[
-                            "regulator_inventory",
-                            "publisher_surface_exhaustion",
-                            "manual_exception",
-                        ],
-                        completeness_rule,
-                    ),
-                    active_from=recorded_at,
-                    active_to=None,
-                    decision_kind="deterministic",
-                    reason_code="active_operating_company_scope",
-                    reason_details=(("source_observation_id", observation_id),),
-                    effective_at=recorded_at,
-                    knowledge_at=recorded_at,
-                    recorded_at=recorded_at,
-                )
-            ).created
+        created += _persist_source_obligation(
+            conn,
+            registry,
+            issuer_id=issuer_id,
+            reporting_entity_id=reporting_entity_id,
+            authority_kind=cast(
+                Literal["sec_edgar", "sedar_plus", "edinet", "issuer_publisher"],
+                authority_kind,
+            ),
+            document_family=cast(
+                Literal[
+                    "operating_company_periodic",
+                    "investment_company_periodic",
+                    "continuous_disclosure",
+                    "annual_securities_report",
+                    "issuer_financial_statements",
+                    "issuer_presentations",
+                    "issuer_earnings_materials",
+                ],
+                document_family,
+            ),
+            obligation_state="required",
+            completeness_rule=cast(
+                Literal[
+                    "regulator_inventory",
+                    "publisher_surface_exhaustion",
+                    "manual_exception",
+                ],
+                completeness_rule,
+            ),
+            source_observation_id=observation_id,
+            recorded_at=recorded_at,
+            reason_code="active_operating_company_scope",
         )
     return created
 
@@ -1519,10 +1454,12 @@ def _persist_selected_fund_ticker(
     registry_source_sha: str,
     registrant_observation_id: str,
     registrant_source_sha: str,
-    recorded_at: datetime,
+    registry_recorded_at: datetime,
+    registrant_recorded_at: datetime,
     scope_inclusion_state: Literal["core", "monitored"] | None,
     scope_list_types: tuple[str, ...],
 ) -> int:
+    recorded_at = max(registry_recorded_at, registrant_recorded_at)
     issuer_id = _issuer_id(entry.normalized_cik)
     legal_reporting_id = f"reporting:sec:{entry.normalized_cik}"
     series_reporting_id = f"reporting:sec-series:{entry.series_id}"
@@ -1541,7 +1478,7 @@ def _persist_selected_fund_ticker(
         legal_name=legal_name,
         observation_id=registrant_observation_id,
         source_sha=registrant_source_sha,
-        recorded_at=recorded_at,
+        recorded_at=registrant_recorded_at,
         filing_regime="SEC Investment Company",
         reason_code="sec_submissions_fund_registrant_import",
     )
@@ -1560,16 +1497,16 @@ def _persist_selected_fund_ticker(
         normalized_value=entry.normalized_cik,
         authority="sec_registry",
         source_observation_id=registrant_observation_id,
-        effective_at=recorded_at,
-        knowledge_at=recorded_at,
-        recorded_at=recorded_at,
+        effective_at=registrant_recorded_at,
+        knowledge_at=registrant_recorded_at,
+        recorded_at=registrant_recorded_at,
     )
     created += int(issuer_registry.persist(issuer_assertion).created)
     created += _persist_identifier_resolution(
         conn,
         issuer_registry,
         assertion=issuer_assertion,
-        recorded_at=recorded_at,
+        recorded_at=registrant_recorded_at,
     )
     created += _persist_sec_surface(
         conn,
@@ -1578,20 +1515,17 @@ def _persist_selected_fund_ticker(
         normalized_cik=entry.normalized_cik,
         observation_id=registrant_observation_id,
         source_sha=registrant_source_sha,
-        recorded_at=recorded_at,
+        recorded_at=registrant_recorded_at,
         verification_method="sec_submissions_identity_contract",
     )
-    created += int(
-        reporting_registry.persist(
-            ReportingEntity(
-                reporting_entity_id=legal_reporting_id,
-                idempotency_key=legal_reporting_id,
-                issuer_id=issuer_id,
-                reporting_entity_kind="legal_registrant",
-                display_name=legal_name,
-                created_at=recorded_at,
-            )
-        ).created
+    created += _persist_reporting_entity(
+        conn,
+        reporting_registry,
+        reporting_entity_id=legal_reporting_id,
+        issuer_id=issuer_id,
+        reporting_entity_kind="legal_registrant",
+        display_name=legal_name,
+        recorded_at=registrant_recorded_at,
     )
     created += _persist_reporting_identifier_assertion(
         conn,
@@ -1601,19 +1535,16 @@ def _persist_selected_fund_ticker(
         identifier_value=entry.normalized_cik,
         authority="sec_registry",
         source_observation_id=registrant_observation_id,
-        recorded_at=recorded_at,
+        recorded_at=registrant_recorded_at,
     )
-    created += int(
-        reporting_registry.persist(
-            ReportingEntity(
-                reporting_entity_id=series_reporting_id,
-                idempotency_key=series_reporting_id,
-                issuer_id=issuer_id,
-                reporting_entity_kind="fund_series",
-                display_name=f"SEC fund series {entry.series_id} ({item.ticker})",
-                created_at=recorded_at,
-            )
-        ).created
+    created += _persist_reporting_entity(
+        conn,
+        reporting_registry,
+        reporting_entity_id=series_reporting_id,
+        issuer_id=issuer_id,
+        reporting_entity_kind="fund_series",
+        display_name=f"SEC fund series {entry.series_id} ({item.ticker})",
+        recorded_at=recorded_at,
     )
     created += _persist_reporting_identifier_assertion(
         conn,
@@ -1623,19 +1554,16 @@ def _persist_selected_fund_ticker(
         identifier_value=entry.series_id,
         authority="sec_registry",
         source_observation_id=registry_observation_id,
-        recorded_at=recorded_at,
+        recorded_at=registry_recorded_at,
     )
-    created += int(
-        issuer_registry.persist(
-            Security(
-                security_id=security_id,
-                idempotency_key=security_id,
-                issuer_id=issuer_id,
-                security_kind="fund_share",
-                share_class=entry.class_id,
-                created_at=recorded_at,
-            )
-        ).created
+    created += _persist_security(
+        conn,
+        issuer_registry,
+        security_id=security_id,
+        issuer_id=issuer_id,
+        security_kind="fund_share",
+        share_class=entry.class_id,
+        recorded_at=registry_recorded_at,
     )
     created += _persist_security_identifier_assertion(
         conn,
@@ -1643,33 +1571,15 @@ def _persist_selected_fund_ticker(
         security_id=security_id,
         identifier_value=entry.class_id,
         source_observation_id=registry_observation_id,
-        recorded_at=recorded_at,
+        recorded_at=registry_recorded_at,
     )
-    relationship_key = f"{security_id}:reports-through"
-    relationship_id = _record_id(
-        "security-reporting-relationship",
-        relationship_key,
-        series_reporting_id,
-        "1",
-    )
-    created += int(
-        reporting_registry.persist(
-            SecurityReportingEntityRevision(
-                relationship_revision_id=relationship_id,
-                idempotency_key=relationship_id,
-                relationship_key=relationship_key,
-                revision=1,
-                security_id=security_id,
-                reporting_entity_id=series_reporting_id,
-                relationship_kind="reports_through",
-                decision_kind="deterministic",
-                reason_code="sec_series_class_mapping",
-                reason_details=(("source_observation_id", registry_observation_id),),
-                effective_at=recorded_at,
-                knowledge_at=recorded_at,
-                recorded_at=recorded_at,
-            )
-        ).created
+    created += _persist_security_reporting_relationship(
+        conn,
+        reporting_registry,
+        security_id=security_id,
+        reporting_entity_id=series_reporting_id,
+        source_observation_id=registry_observation_id,
+        recorded_at=registry_recorded_at,
     )
     created += _persist_binding(
         conn,
@@ -1713,6 +1623,7 @@ def _persist_selected_fund_ticker(
             reason_code="registered_fund_reporting_scope",
         )
         created += _persist_fund_source_obligations(
+            conn,
             reporting_registry,
             issuer_id=issuer_id,
             reporting_entity_id=series_reporting_id,
@@ -1769,7 +1680,41 @@ def _persist_reporting_identifier_assertion(
         recorded_at=recorded_at,
     )
     created = int(registry.persist(assertion).created)
-    candidate_digest = reporting_identifier_candidate_digest((assertion,))
+    rows = conn.execute(
+        "SELECT assertion_id, idempotency_key, reporting_entity_id, "
+        "identifier_value, normalized_value, authority, source_observation_id, "
+        "effective_at, knowledge_at, recorded_at "
+        "FROM reporting_entity_identifier_assertions "
+        "WHERE identifier_type = ? AND normalized_value = ? ORDER BY assertion_id",
+        (assertion.identifier_type, assertion.normalized_value),
+    ).fetchall()
+    assertions = tuple(
+        ReportingEntityIdentifierAssertion(
+            assertion_id=str(row[0]),
+            idempotency_key=str(row[1]),
+            reporting_entity_id=str(row[2]),
+            identifier_type=identifier_type,
+            identifier_value=str(row[3]),
+            normalized_value=str(row[4]),
+            authority=cast(
+                Literal[
+                    "issuer_publisher",
+                    "sec_registry",
+                    "exchange_registry",
+                    "regulator",
+                    "manual",
+                    "imported",
+                ],
+                str(row[5]),
+            ),
+            source_observation_id=None if row[6] is None else str(row[6]),
+            effective_at=_parse_datetime(row[7]),
+            knowledge_at=_parse_datetime(row[8]),
+            recorded_at=_parse_datetime(row[9]),
+        )
+        for row in rows
+    )
+    candidate_digest = reporting_identifier_candidate_digest(assertions)
     current = conn.execute(
         "SELECT resolution_id, revision, candidate_digest_sha256, "
         "selected_assertion_id FROM "
@@ -1777,14 +1722,14 @@ def _persist_reporting_identifier_assertion(
         "WHERE resolution_key = ? ORDER BY revision DESC LIMIT 1",
         (assertion.resolution_key,),
     ).fetchone()
+    selected = max(assertions, key=lambda item: (item.knowledge_at, item.assertion_id))
     if (
         current is not None
         and str(current[2]) == candidate_digest
-        and str(current[3]) == assertion.assertion_id
+        and str(current[3]) == selected.assertion_id
     ):
         return created
-    if current is not None:
-        raise ValueError("SEC reporting identifier already has a different candidate set")
+    revision = 1 if current is None else int(current[1]) + 1
     resolution_id = _record_id(
         "reporting-identifier-resolution",
         assertion.resolution_key,
@@ -1796,9 +1741,9 @@ def _persist_reporting_identifier_assertion(
                 resolution_id=resolution_id,
                 idempotency_key=resolution_id,
                 resolution_key=assertion.resolution_key,
-                revision=1,
+                revision=revision,
                 outcome="selected",
-                selected_assertion_id=assertion.assertion_id,
+                selected_assertion_id=selected.assertion_id,
                 candidate_digest_sha256=candidate_digest,
                 policy_name="regulator_exact_match",
                 policy_version="1",
@@ -1807,11 +1752,15 @@ def _persist_reporting_identifier_assertion(
                     f"{identifier_type}:regulator_exact_match:1",
                 ),
                 reason_code="unique_regulator_identifier",
-                reason_details=(("source_observation_id", source_observation_id),),
-                material_dissent=False,
+                reason_details=(
+                    ("candidate_count", str(len(assertions))),
+                    ("selected_assertion_id", selected.assertion_id),
+                ),
+                material_dissent=(len({item.reporting_entity_id for item in assertions}) > 1),
                 effective_at=recorded_at,
                 knowledge_at=recorded_at,
                 recorded_at=recorded_at,
+                supersedes_resolution_id=None if current is None else str(current[0]),
             )
         ).created
     )
@@ -1848,21 +1797,55 @@ def _persist_security_identifier_assertion(
         recorded_at=recorded_at,
     )
     created = int(registry.persist(assertion).created)
-    candidate_digest = security_identifier_candidate_digest((assertion,))
+    rows = conn.execute(
+        "SELECT assertion_id, idempotency_key, security_id, identifier_value, "
+        "normalized_value, authority, source_observation_id, effective_at, "
+        "knowledge_at, recorded_at FROM security_identifier_assertions "
+        "WHERE identifier_type = 'sec_class_contract_id' AND normalized_value = ? "
+        "ORDER BY assertion_id",
+        (assertion.normalized_value,),
+    ).fetchall()
+    assertions = tuple(
+        SecurityIdentifierAssertion(
+            assertion_id=str(row[0]),
+            idempotency_key=str(row[1]),
+            security_id=str(row[2]),
+            identifier_type="sec_class_contract_id",
+            identifier_value=str(row[3]),
+            normalized_value=str(row[4]),
+            authority=cast(
+                Literal[
+                    "issuer_publisher",
+                    "sec_registry",
+                    "exchange_registry",
+                    "regulator",
+                    "manual",
+                    "imported",
+                ],
+                str(row[5]),
+            ),
+            source_observation_id=None if row[6] is None else str(row[6]),
+            effective_at=_parse_datetime(row[7]),
+            knowledge_at=_parse_datetime(row[8]),
+            recorded_at=_parse_datetime(row[9]),
+        )
+        for row in rows
+    )
+    candidate_digest = security_identifier_candidate_digest(assertions)
     current = conn.execute(
         "SELECT resolution_id, revision, candidate_digest_sha256, "
         "selected_assertion_id FROM security_identifier_resolution_outcomes "
         "WHERE resolution_key = ? ORDER BY revision DESC LIMIT 1",
         (assertion.resolution_key,),
     ).fetchone()
+    selected = max(assertions, key=lambda item: (item.knowledge_at, item.assertion_id))
     if (
         current is not None
         and str(current[2]) == candidate_digest
-        and str(current[3]) == assertion.assertion_id
+        and str(current[3]) == selected.assertion_id
     ):
         return created
-    if current is not None:
-        raise ValueError("SEC security identifier already has a different candidate set")
+    revision = 1 if current is None else int(current[1]) + 1
     resolution_id = _record_id(
         "security-identifier-resolution",
         assertion.resolution_key,
@@ -1874,9 +1857,9 @@ def _persist_security_identifier_assertion(
                 resolution_id=resolution_id,
                 idempotency_key=resolution_id,
                 resolution_key=assertion.resolution_key,
-                revision=1,
+                revision=revision,
                 outcome="selected",
-                selected_assertion_id=assertion.assertion_id,
+                selected_assertion_id=selected.assertion_id,
                 candidate_digest_sha256=candidate_digest,
                 policy_name="regulator_exact_match",
                 policy_version="1",
@@ -1885,11 +1868,15 @@ def _persist_security_identifier_assertion(
                     "sec_class_contract_id:regulator_exact_match:1",
                 ),
                 reason_code="unique_regulator_identifier",
-                reason_details=(("source_observation_id", source_observation_id),),
-                material_dissent=False,
+                reason_details=(
+                    ("candidate_count", str(len(assertions))),
+                    ("selected_assertion_id", selected.assertion_id),
+                ),
+                material_dissent=len({item.security_id for item in assertions}) > 1,
                 effective_at=recorded_at,
                 knowledge_at=recorded_at,
                 recorded_at=recorded_at,
+                supersedes_resolution_id=None if current is None else str(current[0]),
             )
         ).created
     )
@@ -1968,7 +1955,95 @@ def _persist_subject_binding(
     )
 
 
+def _persist_source_obligation(
+    conn: sqlite3.Connection,
+    registry: ReportingEntityRegistry,
+    *,
+    issuer_id: str,
+    reporting_entity_id: str,
+    authority_kind: Literal[
+        "sec_edgar",
+        "sedar_plus",
+        "edinet",
+        "issuer_publisher",
+    ],
+    document_family: Literal[
+        "operating_company_periodic",
+        "investment_company_periodic",
+        "continuous_disclosure",
+        "annual_securities_report",
+        "issuer_financial_statements",
+        "issuer_presentations",
+        "issuer_earnings_materials",
+    ],
+    obligation_state: Literal["required", "optional", "not_applicable"],
+    completeness_rule: Literal[
+        "regulator_inventory",
+        "publisher_surface_exhaustion",
+        "manual_exception",
+    ],
+    source_observation_id: str,
+    recorded_at: datetime,
+    reason_code: str,
+) -> int:
+    obligation_key = f"{reporting_entity_id}:{authority_kind}:{document_family}"
+    current = conn.execute(
+        "SELECT obligation_revision_id, revision, issuer_id, reporting_entity_id, "
+        "authority_kind, document_family, obligation_state, completeness_rule, active_to "
+        "FROM source_obligation_revisions WHERE obligation_key = ? "
+        "ORDER BY revision DESC LIMIT 1",
+        (obligation_key,),
+    ).fetchone()
+    expected = (
+        issuer_id,
+        reporting_entity_id,
+        authority_kind,
+        document_family,
+        obligation_state,
+        completeness_rule,
+    )
+    if (
+        current is not None
+        and tuple(str(value) for value in current[2:8]) == expected
+        and current[8] is None
+    ):
+        return 0
+    revision = 1 if current is None else int(current[1]) + 1
+    record_id = _record_id(
+        "source-obligation",
+        obligation_key,
+        source_observation_id,
+        str(revision),
+    )
+    return int(
+        registry.persist(
+            SourceObligationRevision(
+                obligation_revision_id=record_id,
+                idempotency_key=record_id,
+                obligation_key=obligation_key,
+                revision=revision,
+                issuer_id=issuer_id,
+                reporting_entity_id=reporting_entity_id,
+                authority_kind=authority_kind,
+                document_family=document_family,
+                obligation_state=obligation_state,
+                completeness_rule=completeness_rule,
+                active_from=recorded_at,
+                active_to=None,
+                decision_kind="deterministic",
+                reason_code=reason_code,
+                reason_details=(("source_observation_id", source_observation_id),),
+                effective_at=recorded_at,
+                knowledge_at=recorded_at,
+                recorded_at=recorded_at,
+                supersedes_obligation_revision_id=(None if current is None else str(current[0])),
+            )
+        ).created
+    )
+
+
 def _persist_fund_source_obligations(
+    conn: sqlite3.Connection,
     registry: ReportingEntityRegistry,
     *,
     issuer_id: str,
@@ -2004,60 +2079,42 @@ def _persist_fund_source_obligations(
     )
     created = 0
     for authority_kind, document_family, state, completeness_rule in obligations:
-        obligation_key = f"{reporting_entity_id}:{authority_kind}:{document_family}"
-        record_id = _record_id("source-obligation", obligation_key, "1")
-        created += int(
-            registry.persist(
-                SourceObligationRevision(
-                    obligation_revision_id=record_id,
-                    idempotency_key=record_id,
-                    obligation_key=obligation_key,
-                    revision=1,
-                    issuer_id=issuer_id,
-                    reporting_entity_id=reporting_entity_id,
-                    authority_kind=cast(
-                        Literal[
-                            "sec_edgar",
-                            "sedar_plus",
-                            "edinet",
-                            "issuer_publisher",
-                        ],
-                        authority_kind,
-                    ),
-                    document_family=cast(
-                        Literal[
-                            "operating_company_periodic",
-                            "investment_company_periodic",
-                            "continuous_disclosure",
-                            "annual_securities_report",
-                            "issuer_financial_statements",
-                            "issuer_presentations",
-                            "issuer_earnings_materials",
-                        ],
-                        document_family,
-                    ),
-                    obligation_state=cast(
-                        Literal["required", "optional", "not_applicable"],
-                        state,
-                    ),
-                    completeness_rule=cast(
-                        Literal[
-                            "regulator_inventory",
-                            "publisher_surface_exhaustion",
-                            "manual_exception",
-                        ],
-                        completeness_rule,
-                    ),
-                    active_from=recorded_at,
-                    active_to=None,
-                    decision_kind="deterministic",
-                    reason_code="registered_investment_company_series",
-                    reason_details=(("source_observation_id", source_observation_id),),
-                    effective_at=recorded_at,
-                    knowledge_at=recorded_at,
-                    recorded_at=recorded_at,
-                )
-            ).created
+        created += _persist_source_obligation(
+            conn,
+            registry,
+            issuer_id=issuer_id,
+            reporting_entity_id=reporting_entity_id,
+            authority_kind=cast(
+                Literal["sec_edgar", "sedar_plus", "edinet", "issuer_publisher"],
+                authority_kind,
+            ),
+            document_family=cast(
+                Literal[
+                    "operating_company_periodic",
+                    "investment_company_periodic",
+                    "continuous_disclosure",
+                    "annual_securities_report",
+                    "issuer_financial_statements",
+                    "issuer_presentations",
+                    "issuer_earnings_materials",
+                ],
+                document_family,
+            ),
+            obligation_state=cast(
+                Literal["required", "optional", "not_applicable"],
+                state,
+            ),
+            completeness_rule=cast(
+                Literal[
+                    "regulator_inventory",
+                    "publisher_surface_exhaustion",
+                    "manual_exception",
+                ],
+                completeness_rule,
+            ),
+            source_observation_id=source_observation_id,
+            recorded_at=recorded_at,
+            reason_code="registered_investment_company_series",
         )
     return created
 
@@ -2127,6 +2184,135 @@ def _persist_entity(
                 idempotency_key=f"issuer-entity:{issuer_id}",
                 entity_kind=entity_kind,
                 created_at=recorded_at,
+            )
+        ).created
+    )
+
+
+def _persist_reporting_entity(
+    conn: sqlite3.Connection,
+    registry: ReportingEntityRegistry,
+    *,
+    reporting_entity_id: str,
+    issuer_id: str,
+    reporting_entity_kind: Literal[
+        "legal_registrant",
+        "fund_series",
+        "foreign_reporting_entity",
+        "other",
+    ],
+    display_name: str,
+    recorded_at: datetime,
+) -> int:
+    existing = conn.execute(
+        "SELECT issuer_id, reporting_entity_kind, display_name "
+        "FROM reporting_entities WHERE reporting_entity_id = ?",
+        (reporting_entity_id,),
+    ).fetchone()
+    expected = (issuer_id, reporting_entity_kind, display_name)
+    if existing is not None:
+        if tuple(str(value) for value in existing) != expected:
+            raise ValueError("reporting entity ID conflicts with immutable identity")
+        return 0
+    return int(
+        registry.persist(
+            ReportingEntity(
+                reporting_entity_id=reporting_entity_id,
+                idempotency_key=reporting_entity_id,
+                issuer_id=issuer_id,
+                reporting_entity_kind=reporting_entity_kind,
+                display_name=display_name,
+                created_at=recorded_at,
+            )
+        ).created
+    )
+
+
+def _persist_security(
+    conn: sqlite3.Connection,
+    registry: IssuerRegistry,
+    *,
+    security_id: str,
+    issuer_id: str,
+    security_kind: Literal[
+        "common_stock",
+        "preferred_stock",
+        "adr",
+        "fund_share",
+        "partnership_unit",
+        "debt",
+        "other",
+    ],
+    share_class: str | None,
+    recorded_at: datetime,
+) -> int:
+    existing = conn.execute(
+        "SELECT issuer_id, security_kind, share_class FROM securities WHERE security_id = ?",
+        (security_id,),
+    ).fetchone()
+    expected = (issuer_id, security_kind, share_class)
+    if existing is not None:
+        stored = tuple(None if value is None else str(value) for value in existing)
+        if stored != expected:
+            raise ValueError("security ID conflicts with immutable identity")
+        return 0
+    return int(
+        registry.persist(
+            Security(
+                security_id=security_id,
+                idempotency_key=security_id,
+                issuer_id=issuer_id,
+                security_kind=security_kind,
+                share_class=share_class,
+                created_at=recorded_at,
+            )
+        ).created
+    )
+
+
+def _persist_security_reporting_relationship(
+    conn: sqlite3.Connection,
+    registry: ReportingEntityRegistry,
+    *,
+    security_id: str,
+    reporting_entity_id: str,
+    source_observation_id: str,
+    recorded_at: datetime,
+) -> int:
+    relationship_key = f"{security_id}:reports-through"
+    current = conn.execute(
+        "SELECT relationship_revision_id, revision, security_id, reporting_entity_id, "
+        "relationship_kind FROM security_reporting_entity_revisions "
+        "WHERE relationship_key = ? ORDER BY revision DESC LIMIT 1",
+        (relationship_key,),
+    ).fetchone()
+    expected = (security_id, reporting_entity_id, "reports_through")
+    if current is not None and tuple(str(value) for value in current[2:]) == expected:
+        return 0
+    revision = 1 if current is None else int(current[1]) + 1
+    relationship_id = _record_id(
+        "security-reporting-relationship",
+        relationship_key,
+        reporting_entity_id,
+        str(revision),
+    )
+    return int(
+        registry.persist(
+            SecurityReportingEntityRevision(
+                relationship_revision_id=relationship_id,
+                idempotency_key=relationship_id,
+                relationship_key=relationship_key,
+                revision=revision,
+                security_id=security_id,
+                reporting_entity_id=reporting_entity_id,
+                relationship_kind="reports_through",
+                decision_kind="deterministic",
+                reason_code="sec_series_class_mapping",
+                reason_details=(("source_observation_id", source_observation_id),),
+                effective_at=recorded_at,
+                knowledge_at=recorded_at,
+                recorded_at=recorded_at,
+                supersedes_relationship_revision_id=(None if current is None else str(current[0])),
             )
         ).created
     )
