@@ -234,6 +234,7 @@ from runtime.portfolio_tracker import (  # noqa: E402
     health_is_healthy,
     is_loopback_bind_host,
     parse_tracker_bind_url,
+    read_supervisor_listener_ownership,
     write_runtime_receipt,
 )
 from runtime.python_process import managed_python_argv  # noqa: E402
@@ -4578,9 +4579,13 @@ def create_app(
             str(bind_port),
         ]
         start_job: list[Job] = []
+        supervisor_proof_seen = False
+        runtime_receipt_path = portfolio_tracker_receipt_path(repo_root)
 
         def inspect_listener() -> ListenerObservation:
+            nonlocal supervisor_proof_seen
             fetch = TrackerV1Client(base_url=api_url).probe_v1()
+            checked_at = datetime.now(UTC)
             tracked = None
             for item in job_registry.list_jobs():
                 job_id = item.get("job_id")
@@ -4614,21 +4619,40 @@ def create_app(
                 ):
                     tracked = {**item, "pid": pid}
                     break
+            supervisor = (
+                read_supervisor_listener_ownership(
+                    runtime_receipt_path,
+                    listener_owner=owner,
+                    bind_host=bind_host,
+                    bind_port=bind_port,
+                    observed_at=checked_at,
+                )
+                if tracked is None
+                else None
+            )
+            supervisor_proof_seen = supervisor_proof_seen or supervisor is not None
+            ownership_proven = tracked is not None or supervisor is not None
             attributed_owner = (
                 owner
                 if fetch.data is not None
-                and health_is_healthy(fetch.data, now=datetime.now(UTC))
-                and tracked is not None
+                and health_is_healthy(fetch.data, now=checked_at)
+                and ownership_proven
                 else None
             )
-            tracked_pid = tracked.get("pid") if tracked is not None else None
+            tracked_pid = (
+                tracked.get("pid")
+                if tracked is not None
+                else supervisor.pid
+                if supervisor is not None
+                else None
+            )
             tracked_job_id = tracked.get("job_id") if tracked is not None else None
             return ListenerObservation(
-                healthy=fetch.available and health_is_healthy(fetch.data, now=datetime.now(UTC)),
+                healthy=fetch.available and health_is_healthy(fetch.data, now=checked_at),
                 owner=attributed_owner,
                 pid=tracked_pid if isinstance(tracked_pid, int) else None,
                 job_id=tracked_job_id if isinstance(tracked_job_id, str) else None,
-                health_checked_at=datetime.now(UTC),
+                health_checked_at=checked_at,
                 health=fetch.data,
             )
 
@@ -4653,15 +4677,15 @@ def create_app(
             inspect_listener=inspect_listener,
             start_listener=start_listener,
             now=lambda: datetime.now(UTC),
-            lease=AtomicFileLease(portfolio_tracker_receipt_path(repo_root).with_suffix(".lease")),
+            lease=AtomicFileLease(runtime_receipt_path.with_suffix(".lease")),
         )
-        persisted = manager.ensure_running(receipt_path=portfolio_tracker_receipt_path(repo_root))
+        persisted = manager.ensure_running(receipt_path=runtime_receipt_path)
         if persisted.lifecycle_state in {"started", "already_running"} and (
             not persisted.listener.healthy
             or not health_is_healthy(persisted.listener.health, now=persisted.recorded_at)
             or persisted.listener.owner != owner
             or persisted.listener.pid is None
-            or persisted.listener.job_id is None
+            or (persisted.listener.job_id is None and not supervisor_proof_seen)
         ):
             # Keep a terminal, truthful receipt if an injected/legacy manager
             # violates the manager contract at this boundary.
@@ -4672,12 +4696,10 @@ def create_app(
                     "failure_detail": "listener HealthV1 health/ownership proof is missing",
                 }
             )
-            repair_lease = AtomicFileLease(
-                portfolio_tracker_receipt_path(repo_root).with_suffix(".lease")
-            )
+            repair_lease = AtomicFileLease(runtime_receipt_path.with_suffix(".lease"))
             if repair_lease.acquire():
                 try:
-                    write_runtime_receipt(portfolio_tracker_receipt_path(repo_root), failed)
+                    write_runtime_receipt(runtime_receipt_path, failed)
                 finally:
                     repair_lease.release()
             return ({"error": failed.failure_detail}, 503)
