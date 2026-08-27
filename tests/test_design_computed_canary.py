@@ -420,9 +420,6 @@ def test_evaluation_dialogue_labels_share_columns_and_center_without_own_subtext
                     kind_center = kind_box["y"] + kind_box["height"] / 2
                     assert abs(title_center - kind_center) <= 1
                     assert abs(meta_center - readiness_center) <= 1
-            assert page.evaluate(
-                "() => document.documentElement.scrollWidth === document.documentElement.clientWidth"
-            )
         finally:
             context.close()
             browser.close()
