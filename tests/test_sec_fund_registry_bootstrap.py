@@ -64,22 +64,30 @@ def _database(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _fund_body() -> bytes:
+def _fund_body(*, include_untracked: bool = False) -> bytes:
+    data = [
+        [1710607, "S000066457", "C000214352", "AVDV"],
+        [1710607, "S000066459", "C000214354", "AVUV"],
+        [857489, "S000005786", "C000015902", "VWO"],
+        [2078265, "S000104044", "C000274642", ""],
+    ]
+    if include_untracked:
+        data.append([9999999, "S000999999", "C000999999", "OTHER"])
     return json.dumps(
         {
             "fields": ["cik", "seriesId", "classId", "symbol"],
-            "data": [
-                [1710607, "S000066457", "C000214352", "AVDV"],
-                [1710607, "S000066459", "C000214354", "AVUV"],
-                [857489, "S000005786", "C000015902", "VWO"],
-                [2078265, "S000104044", "C000274642", ""],
-            ],
+            "data": data,
         },
         separators=(",", ":"),
     ).encode()
 
 
-def _request(tmp_path: Path, *, apply: bool) -> SecFundBootstrapRequest:
+def _request(
+    tmp_path: Path,
+    *,
+    apply: bool,
+    recorded_at: datetime = STAMP,
+) -> SecFundBootstrapRequest:
     registrant = json.dumps(
         {
             "cik": "0001710607",
@@ -99,7 +107,7 @@ def _request(tmp_path: Path, *, apply: bool) -> SecFundBootstrapRequest:
         ),
         blob_root=tmp_path / "blobs",
         apply=apply,
-        recorded_at=STAMP,
+        recorded_at=recorded_at,
     )
 
 
@@ -188,4 +196,34 @@ def test_bootstrap_keeps_two_series_under_one_legal_trust_and_replays_exactly(
         ("sec_mutual_fund_tickers", 1),
         ("sec_submissions", 1),
     ]
+    conn.close()
+
+
+def test_new_fund_registry_observation_reuses_immutable_identity_records(
+    tmp_path: Path,
+) -> None:
+    conn = _database(tmp_path)
+    first = bootstrap_sec_fund_registry(
+        conn,
+        raw_body=_fund_body(),
+        request=_request(tmp_path, apply=True),
+    )
+    second = bootstrap_sec_fund_registry(
+        conn,
+        raw_body=_fund_body(include_untracked=True),
+        request=_request(
+            tmp_path,
+            apply=True,
+            recorded_at=datetime(2026, 7, 28, 23, 0, tzinfo=UTC),
+        ),
+    )
+
+    assert second.source_sha256 != first.source_sha256
+    assert second.records_created > 0
+    assert conn.execute("SELECT COUNT(*) FROM reporting_entities").fetchone() == (3,)
+    assert conn.execute("SELECT COUNT(*) FROM securities").fetchone() == (2,)
+    assert conn.execute("SELECT COUNT(*) FROM security_reporting_entity_revisions").fetchone() == (
+        2,
+    )
+    assert conn.execute("SELECT COUNT(*) FROM source_obligation_revisions").fetchone() == (8,)
     conn.close()
