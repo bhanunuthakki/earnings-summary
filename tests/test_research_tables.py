@@ -68,7 +68,7 @@ def test_downgrade_to_0119_drops_them(
         assert table not in names
 
 
-def test_research_tasks_estimated_cost_and_metadata_columns_present(db_path: Path) -> None:
+def test_research_tasks_legacy_cost_and_metadata_storage_columns_present(db_path: Path) -> None:
     """B7 repurposes these two columns (dead since 0120 — never read/written
     by any code path until this PR) as the triage's stated cost estimate and
     a JSON meta blob (session_prompt/packeted_at/unanswered_weeks) — see
@@ -79,8 +79,8 @@ def test_research_tasks_estimated_cost_and_metadata_columns_present(db_path: Pat
         cols = {r[1]: r[3] for r in conn.execute("PRAGMA table_info(research_tasks)")}
     finally:
         conn.close()
-    assert "estimated_cost_usd" in cols and cols["estimated_cost_usd"] == 0  # nullable
-    assert "task_metadata_json" in cols and cols["task_metadata_json"] == 0  # nullable
+    assert "cost_usd" in cols and cols["cost_usd"] == 0  # nullable
+    assert "run_id" in cols and cols["run_id"] == 0  # nullable
 
 
 def test_status_and_provenance_defaults(db_path: Path) -> None:

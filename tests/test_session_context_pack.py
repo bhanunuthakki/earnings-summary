@@ -9,7 +9,7 @@ production schema). Seeds one tenet, one stance, one open musing, one owner
 decision; calls ``build_pack`` directly (no subprocess) and asserts each
 section renders its seed, the empty-section behavior for research-task
 prompts (no ``research_tasks`` row carries a ``session_prompt`` in its
-``task_metadata_json`` in this fixture), and that the whole build is zero-LLM.
+the legacy ``run_id`` metadata field in this fixture), and that the whole build is zero-LLM.
 """
 
 from __future__ import annotations
@@ -226,22 +226,22 @@ def test_pack_research_task_prompts_empty_when_none_carry_session_prompt(
     db_path: Path,
 ) -> None:
     """No research_tasks row in this fixture carries a session_prompt in its
-    task_metadata_json, so the section renders an explicit 'none' note."""
+    run_id metadata field, so the section renders an explicit 'none' note."""
     pack = session_context_pack.build_pack(db_path)
     assert "## Research Tasks -> Claude Session" in pack
     section_idx = pack.index("## Research Tasks -> Claude Session")
     profile_idx = pack.index("## Owner Profile")
     block = pack[section_idx:profile_idx]
-    assert ("_None pending._" in block) or ("task_metadata_json` column" in block)
+    assert ("_None pending._" in block) or ("run_id` metadata column" in block)
 
 
-def test_pack_renders_session_prompt_from_task_metadata_json(db_path: Path) -> None:
+def test_pack_renders_session_prompt_from_run_id_metadata(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
         now = "2026-07-20T00:00:00"
         conn.execute(
             "INSERT INTO research_tasks "
-            "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+            "(claim, ticker, status, run_id, created_at, updated_at) "
             "VALUES (?, ?, 'proposed', ?, ?, ?)",
             (
                 "does NU's NIM hold up?",
@@ -269,7 +269,7 @@ def test_pack_ignores_invalid_or_missing_task_metadata(db_path: Path) -> None:
         for metadata in ("not-json", json.dumps(["not", "an", "object"]), None):
             conn.execute(
                 "INSERT INTO research_tasks "
-                "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+                "(claim, ticker, status, run_id, created_at, updated_at) "
                 "VALUES (?, ?, 'proposed', ?, ?, ?)",
                 ("unrenderable task", "NU", metadata, now, now),
             )
@@ -293,7 +293,7 @@ def test_pack_limits_to_newest_valid_task_prompts(db_path: Path) -> None:
         for index in range(12):
             conn.execute(
                 "INSERT INTO research_tasks "
-                "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+                "(claim, ticker, status, run_id, created_at, updated_at) "
                 "VALUES (?, ?, 'proposed', ?, ?, ?)",
                 (
                     f"valid task {index}",
@@ -307,7 +307,7 @@ def test_pack_limits_to_newest_valid_task_prompts(db_path: Path) -> None:
         # prompts or make the guarded JSON predicate raise.
         conn.execute(
             "INSERT INTO research_tasks "
-            "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+            "(claim, ticker, status, run_id, created_at, updated_at) "
             "VALUES (?, ?, 'proposed', ?, ?, ?)",
             ("invalid newest task", "NU", "not-json", now, now),
         )

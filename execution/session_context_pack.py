@@ -17,7 +17,7 @@ owns the only LLM leg in the bridge). Prints a markdown context pack:
     a linked research_tasks row)
   - open owner decisions + falsifiers, ungraded (v_decision_journal)
   - research-task prompt blocks explicitly marked for a Claude session (the
-    ``session_prompt`` value inside a ``research_tasks.task_metadata_json``
+    ``session_prompt`` value inside the legacy ``research_tasks.run_id``
     object; read defensively so a DB without the metadata column or with an
     invalid value renders an empty section instead of crashing)
   - the owner-profile anchor (affirmed capacity/appetite facts)
@@ -282,24 +282,24 @@ def _render_research_prompts(db_path: Path) -> list[str]:
         return lines
     try:
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(research_tasks)")}
-        if "task_metadata_json" not in cols:
+        if "run_id" not in cols:
             # Older DB: the metadata column doesn't exist yet. Render an
             # empty section with a note rather than crashing — the pack must
             # always render against a partially migrated DB.
             lines.append(
-                "_None — this DB has no `task_metadata_json` column; "
+                "_None — this DB has no `run_id` metadata column; "
                 "no research-task prompts to show yet._"
             )
             lines.append("")
             return lines
         rows = conn.execute(
             "SELECT id, ticker, claim, "
-            "json_extract(task_metadata_json, '$.session_prompt') AS session_prompt, status "
+            "json_extract(run_id, '$.session_prompt') AS session_prompt, status "
             "FROM research_tasks "
-            "WHERE CASE WHEN json_valid(task_metadata_json) THEN "
-            "json_type(task_metadata_json) = 'object' "
-            "AND json_type(task_metadata_json, '$.session_prompt') = 'text' "
-            "AND TRIM(json_extract(task_metadata_json, '$.session_prompt')) != '' "
+            "WHERE CASE WHEN json_valid(run_id) THEN "
+            "json_type(run_id) = 'object' "
+            "AND json_type(run_id, '$.session_prompt') = 'text' "
+            "AND TRIM(json_extract(run_id, '$.session_prompt')) != '' "
             "ELSE 0 END "
             "ORDER BY id DESC LIMIT ?",
             (_RESEARCH_TASK_CAP,),

@@ -599,7 +599,7 @@ def predraft(item: PacketItemRow, *, call: PredraftCall | None = None) -> str | 
 # directly rather than the ``weekly_packet_items`` table above: a proposed
 # task the owner never ran is the SUBSTRATE (research.proposals owns it), so
 # "packeted"/"unanswered weeks" state lands on ITS OWN row (the repurposed
-# ``estimated_cost_usd`` / ``task_metadata_json`` columns — see
+# public ``estimated_cost_usd`` / ``metadata`` fields over legacy columns — see
 # research.proposals' module docstring) instead of duplicating tracking here.
 # Deterministic — no LLM
 # call in this section (unlike the ITEM_KINDS predraft above).

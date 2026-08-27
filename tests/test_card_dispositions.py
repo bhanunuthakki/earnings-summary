@@ -68,11 +68,11 @@ CREATE TABLE research_tasks (
     claim TEXT NOT NULL,
     ticker TEXT,
     status TEXT NOT NULL,
-    -- estimated_cost_usd/task_metadata_json exist on the real table and create_task
-    -- writes both since B7 (stated cost + JSON meta) — the hand DDL must
+    -- cost_usd/run_id are the legacy physical columns used for stated cost and
+    -- JSON metadata — the hand DDL must
     -- track the real schema or every disposition test breaks on INSERT.
-    estimated_cost_usd FLOAT,
-    task_metadata_json TEXT,
+    cost_usd FLOAT,
+    run_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

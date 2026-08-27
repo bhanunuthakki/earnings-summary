@@ -101,8 +101,8 @@ CREATE TABLE research_tasks (
     budget_tier TEXT,
     budget_usd REAL,
     adversarial_verdict TEXT,
-    estimated_cost_usd REAL,
-    task_metadata_json TEXT,
+    cost_usd REAL,
+    run_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -405,8 +405,8 @@ def _seed_research_task(
     conn = _conn(db)
     try:
         cur = conn.execute(
-            "INSERT INTO research_tasks (claim, ticker, status, estimated_cost_usd, "
-            "task_metadata_json, "
+            "INSERT INTO research_tasks (claim, ticker, status, cost_usd, "
+            "run_id, "
             "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (claim, ticker, status, estimated_cost_usd, metadata_json, created_at, created_at),
         )
