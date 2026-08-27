@@ -88,6 +88,8 @@ def tickers_due_for_refresh(
 
     with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
+        if not _has_columns(conn, "tracked_companies", {"list_type", "last_built_at"}):
+            return []
         rows = conn.execute(
             "SELECT ticker, list_type, last_built_at "
             "FROM tracked_companies "
@@ -120,6 +122,8 @@ def tickers_due_for_lens_regen(
 
     with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
+        if not _has_columns(conn, "tracked_companies", {"ticker", "list_type"}):
+            return []
         if not _has_table(conn, "llm_artifacts"):
             # No artifact store yet — every tracked ticker is "due" since
             # nothing has been generated.
@@ -207,6 +211,14 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
+def _has_columns(conn: sqlite3.Connection, table: str, required: set[str]) -> bool:
+    """Return whether a transitional or fixture schema supports this reader."""
+    if not _has_table(conn, table):
+        return False
+    present = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    return required <= present
+
+
 # ---------------------------------------------------------------------------
 # Coverage summary for the dashboard tier-coverage strip
 # ---------------------------------------------------------------------------
@@ -242,6 +254,8 @@ def tier_coverage_summary(
     db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         db_conn.row_factory = sqlite3.Row
+        if not _has_columns(db_conn, "tracked_companies", {"list_type", "last_built_at"}):
+            return out
         rows = db_conn.execute(
             "SELECT list_type, last_built_at FROM tracked_companies WHERE archived_at IS NULL"
         ).fetchall()

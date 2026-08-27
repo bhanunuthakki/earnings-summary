@@ -12,7 +12,7 @@ from sqlalchemy.exc import OperationalError
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-ACTIVE_HEAD = "0027_add_sizing_intent_supersessions"
+ACTIVE_HEAD = "0028_remove_processing_tier_and_rename_research_tasks"
 GROUNDING_REVISION = "0016_add_ask_grounding_traces"
 
 

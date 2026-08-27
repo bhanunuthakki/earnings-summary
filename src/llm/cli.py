@@ -490,11 +490,11 @@ LLM_MODELS: dict[str, str] = {
     # alerts fire, so this is a sector/business-model judgment where Opus's
     # wider knowledge and instruction-following materially reduce the two
     # catastrophic failure modes (wrong polarity, ungrounded breaker). One
-    # call per ticker, run rarely — cost is bounded. A distinct purpose key
-    # also gives portfolio-wide auto-seeding its own budget attribution. The
-    # manual --propose purpose (kpi_registry_proposal) stays unregistered ->
-    # Sonnet, so the two modes diverge cleanly.
+    # call per ticker, run rarely — cost is bounded. Distinct registered purpose
+    # keys give auto and manual seeding separate budget attribution while the
+    # manual proposal remains on Sonnet.
     "kpi_registry_auto_proposal": "claude-opus-4-8",
+    "kpi_registry_proposal": DEFAULT_MODEL,
     # News LLM modules. material_news_classification is the material-news
     # trigger's per-headline materiality veto (src/triggers/material_news.py):
     # it was ABSENT here and so silently fell back to Sonnet; pinning it to

@@ -16,11 +16,11 @@ artifact pipeline; an ``observation`` is inert. It NEVER auto-runs the research
 pass, and a detection failure NEVER affects capture (it swallows errors, returns
 None).
 
-The ``research_tasks`` columns ``estimated_cost_usd`` and
-``task_metadata_json`` map to the API fields ``estimated_cost_usd`` and
-decoded ``metadata`` respectively:
-``estimated_cost_usd`` holds the triage's STATED cost estimate for the RUN button/
-packet line, and ``task_metadata_json`` holds a small JSON metadata blob
+The legacy physical ``research_tasks`` columns ``cost_usd`` and ``run_id`` map
+to the clearer API fields ``estimated_cost_usd`` and decoded ``metadata``.
+Keeping the storage names avoids a risky historical migration rewrite while
+making their current semantics explicit: ``cost_usd`` holds the triage's STATED
+cost estimate for the RUN button/packet line, and ``run_id`` holds a small JSON metadata blob
 (``{"session_prompt": ..., "packeted_at": ...,
 "unanswered_weeks": ...}``) — see :func:`_encode_task_metadata` /
 :func:`_decode_task_metadata` and
@@ -75,7 +75,7 @@ def research_run_enabled() -> bool:
 
 
 def _encode_task_metadata(metadata: dict[str, object]) -> str | None:
-    """Encode task metadata for the ``task_metadata_json`` TEXT column.
+    """Encode task metadata for the legacy ``run_id`` TEXT column.
     Empty metadata encodes to None (NULL), matching the column's nullable
     intent rather than storing a noisy ``'{}'`` on every legacy row."""
     return json.dumps(metadata) if metadata else None
@@ -124,7 +124,7 @@ def create_task(
         now = now_iso()
         cur = conn.execute(
             "INSERT INTO research_tasks "
-            "(note_id, claim, ticker, status, estimated_cost_usd, task_metadata_json, "
+            "(note_id, claim, ticker, status, cost_usd, run_id, "
             "created_at, updated_at) "
             "VALUES (?, ?, ?, 'proposed', ?, ?, ?, ?)",
             (
@@ -153,7 +153,7 @@ def set_task_extras(
     db_path: Path | str | None = None,
 ) -> None:
     """Merge-patch a task's extras (read-merge-write on the
-    ``task_metadata_json`` blob, like :func:`user_state.notes.patch_note_context`).
+    legacy ``run_id`` blob, like :func:`user_state.notes.patch_note_context`).
     Only the passed fields change; everything else in the metadata blob (and an
     explicit ``estimated_cost_usd`` NULL-vs-unset) is preserved. A missing task is a silent
     no-op — this is best-effort bookkeeping, never a write anyone blocks on."""
@@ -171,8 +171,7 @@ def set_task_extras(
     conn = open_conn(db_path)
     try:
         conn.execute(
-            "UPDATE research_tasks SET estimated_cost_usd = ?, task_metadata_json = ?, "
-            "updated_at = ? WHERE id = ?",
+            "UPDATE research_tasks SET cost_usd = ?, run_id = ?, updated_at = ? WHERE id = ?",
             (new_cost, _encode_task_metadata(metadata), now_iso(), task_id),
         )
         conn.commit()
@@ -192,13 +191,11 @@ def _row_to_task(row: sqlite3.Row) -> ResearchTask:
         ticker=None if row["ticker"] is None else str(row["ticker"]),
         status=str(row["status"]),
         estimated_cost_usd=(
-            float(cast("float", row["estimated_cost_usd"]))
-            if "estimated_cost_usd" in keys and row["estimated_cost_usd"] is not None
+            float(cast("float", row["cost_usd"]))
+            if "cost_usd" in keys and row["cost_usd"] is not None
             else None
         ),
-        metadata=(
-            _decode_task_metadata(row["task_metadata_json"]) if "task_metadata_json" in keys else {}
-        ),
+        metadata=(_decode_task_metadata(row["run_id"]) if "run_id" in keys else {}),
         created_at=str(row["created_at"]) if "created_at" in keys else "",
     )
 

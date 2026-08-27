@@ -83,8 +83,8 @@ def test_cli_module_exposes_expected_names() -> None:
 
 def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
     """The auto KPI-registry seeder's purpose resolves to Opus via the
-    LLM_MODELS table, while the manual --propose purpose stays unregistered
-    (Sonnet default) — the two modes diverge cleanly."""
+    LLM_MODELS table, while the manual --propose purpose is explicitly pinned
+    to Sonnet — the two modes diverge cleanly."""
     from llm import cli
 
     assert cli.LLM_MODELS["kpi_registry_auto_proposal"] == "claude-opus-4-8"
@@ -92,8 +92,8 @@ def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
     # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
     resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
     assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
-    # The manual seeder purpose is deliberately NOT registered -> Sonnet.
-    assert "kpi_registry_proposal" not in cli.LLM_MODELS
+    # Fail-closed routing requires every public purpose to be registered.
+    assert cli.LLM_MODELS["kpi_registry_proposal"] == cli.DEFAULT_MODEL
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
 
 
@@ -124,8 +124,7 @@ def test_news_purpose_pins() -> None:
 
 def test_news_pins_do_not_disturb_existing_purposes() -> None:
     """Registering the news purposes must not flip any other prompt's model.
-    Spot-check one purpose per tier plus the manual KPI seeder (deliberately
-    unregistered -> Sonnet)."""
+    Spot-check one purpose per tier plus the manual KPI seeder."""
     from llm import cli
 
     resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
@@ -142,8 +141,8 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     # classifier purposes reverted from Gemini Flash (#538) back to Claude Haiku.
     assert resolve("intake_classifier") == cli.FAST_CLASSIFIER_MODEL
     assert resolve("transcript_metadata") == cli.FAST_CLASSIFIER_MODEL
-    # The manual KPI-proposal purpose stays unregistered -> Sonnet.
-    assert "kpi_registry_proposal" not in cli.LLM_MODELS
+    # The manual KPI-proposal purpose stays explicitly pinned to Sonnet.
+    assert cli.LLM_MODELS["kpi_registry_proposal"] == cli.DEFAULT_MODEL
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
 
 

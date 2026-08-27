@@ -1,4 +1,4 @@
-"""Derive schedule class and normalize research-task audit names.
+"""Derive schedule class from tracked-company state.
 
 Revision ID: 0028_remove_processing_tier_and_rename_research_tasks
 Revises: 0027_add_sizing_intent_supersessions
@@ -32,16 +32,6 @@ def _index_exists(name: str) -> bool:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    research_columns = _columns("research_tasks")
-    if "cost_usd" in research_columns and "estimated_cost_usd" not in research_columns:
-        bind.exec_driver_sql(
-            "ALTER TABLE research_tasks RENAME COLUMN cost_usd TO estimated_cost_usd"
-        )
-    if "run_id" in research_columns and "task_metadata_json" not in research_columns:
-        bind.exec_driver_sql(
-            "ALTER TABLE research_tasks RENAME COLUMN run_id TO task_metadata_json"
-        )
-
     for index_name in (
         "idx_tracked_processing_tier",
         "ix_tracked_companies_processing_tier",
@@ -54,16 +44,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    research_columns = _columns("research_tasks")
-    if "estimated_cost_usd" in research_columns and "cost_usd" not in research_columns:
-        bind.exec_driver_sql(
-            "ALTER TABLE research_tasks RENAME COLUMN estimated_cost_usd TO cost_usd"
-        )
-    if "task_metadata_json" in research_columns and "run_id" not in research_columns:
-        bind.exec_driver_sql(
-            "ALTER TABLE research_tasks RENAME COLUMN task_metadata_json TO run_id"
-        )
-
     if "processing_tier" not in _columns("tracked_companies"):
         bind.exec_driver_sql(
             "ALTER TABLE tracked_companies ADD COLUMN processing_tier VARCHAR(8) DEFAULT 'P3' NOT NULL"

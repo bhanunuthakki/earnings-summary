@@ -93,8 +93,8 @@ def test_both_paths_run_in_neutral_cwd(capture_run_calls: list[dict[str, Any]]) 
     (its historical bug: passing no `cwd` and inheriting the caller's)."""
     # Plain path (exercised via the public wrapper, which delegates to
     # _call_claude) then the web path. Each appends one subprocess.run call.
-    cli.call_llm("prompt", force_budget_bypass=True)
-    cli.call_llm_with_web("prompt", force_budget_bypass=True)
+    cli.call_llm("prompt", purpose="bear_case", force_budget_bypass=True)
+    cli.call_llm_with_web("prompt", purpose="bear_case", force_budget_bypass=True)
 
     assert len(capture_run_calls) == 2
     plain_cwd = capture_run_calls[0].get("cwd")
@@ -123,8 +123,8 @@ def test_both_paths_strip_ambient_anthropic_base_url(
     monkeypatch.delenv(cli.ES_CLAUDE_BASE_URL_VAR, raising=False)
     monkeypatch.setattr(cli, "_stripped_base_url_logged", False)
 
-    cli.call_llm("prompt", force_budget_bypass=True)
-    cli.call_llm_with_web("prompt", force_budget_bypass=True)
+    cli.call_llm("prompt", purpose="bear_case", force_budget_bypass=True)
+    cli.call_llm_with_web("prompt", purpose="bear_case", force_budget_bypass=True)
 
     assert len(capture_run_calls) == 2
     for kwargs in capture_run_calls:
@@ -144,7 +144,7 @@ def test_explicit_es_claude_base_url_is_honored(
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787")
     monkeypatch.setenv(cli.ES_CLAUDE_BASE_URL_VAR, "https://gateway.example/claude")
 
-    cli.call_llm("prompt", force_budget_bypass=True)
+    cli.call_llm("prompt", purpose="bear_case", force_budget_bypass=True)
 
     env = capture_run_calls[0].get("env")
     assert env is not None

@@ -18,7 +18,7 @@ from execution.ingest_earnings_surprises import ingest_one_ticker
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0027_add_sizing_intent_supersessions"
+ACTIVE_HEAD = "0028_remove_processing_tier_and_rename_research_tasks"
 
 
 def _config(path: Path) -> Config:
