@@ -411,6 +411,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "footnote_extraction": "v1",
     "investor_deck_extraction": "v1",
     "kpi_registry_auto_proposal": "v1",
+    "kpi_registry_proposal": "v1",
     "market_signals": "v1",
     "patent_timeline": "v1",
     "pressure_test_thesis": "v2",
