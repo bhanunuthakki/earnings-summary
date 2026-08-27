@@ -472,6 +472,16 @@ class EvidenceLedger:
             )
             self._validate_legacy_document(record)
         table, columns, values, identity_column, identity_value = self._statement(record)
+        existing = self._conn.execute(
+            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
+            (identity_value,),
+        ).fetchone()
+        if existing is not None:
+            if not _matches_stored_values(tuple(existing), values):
+                raise ValueError(
+                    f"immutable {table} identity {identity_value!r} conflicts with existing data"
+                )
+            return PersistResult(record_id=identity_value, created=False)
         placeholders = ", ".join("?" for _ in columns)
         sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"  # nosec B608 -- trusted internal SQL shape; values remain bound
         cursor = self._conn.execute(sql, values)
