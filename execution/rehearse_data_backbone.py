@@ -43,6 +43,7 @@ from provenance.data_backbone_rehearsal import (  # noqa: E402
     attest_closed_database_storage,
     build_corpus_manifest,
     build_table_commitments,
+    checkpoint_and_close_candidate_database,
     copy_corpus_verified,
     database_revision,
     exercise_swap_and_rollback,
@@ -467,6 +468,7 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
     upgrade = _run_upgrade(repo_root, candidate, work_dir / "candidate-pre-upgrade.db")
     if upgrade.from_revision != source_revision or upgrade.to_revision != ACTIVE_HEAD:
         raise RehearsalError("upgrade receipt is not bound to source and expected revisions")
+    checkpoint_and_close_candidate_database(candidate)
     preservation_after_upgrade = build_table_commitments(
         candidate,
         read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
