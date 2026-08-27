@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from execution.bootstrap_sec_former_ticker import normalize_cik
 from provenance.issuer_registry_bootstrap import (
     SecCompanyTickerContractError,
@@ -19,8 +18,6 @@ from provenance.issuer_registry_bootstrap import (
     parse_sec_former_ticker_identity,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 8, 27, 20, 45, tzinfo=UTC)
 CIK = "0001009759"
 SUBMISSIONS_URL = f"https://data.sec.gov/submissions/CIK{CIK}.json"
@@ -50,13 +47,11 @@ def _transition(*, former_ticker: str = "CGEH") -> bytes:
     ).encode()
 
 
-def _database(tmp_path: Path) -> sqlite3.Connection:
-    path = tmp_path / "former-ticker.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+def _database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> sqlite3.Connection:
+    path = migrated_db(tmp_path / "former-ticker.db")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -121,8 +116,9 @@ def test_former_ticker_cli_normalizes_short_sec_cik() -> None:
 
 def test_former_ticker_bootstrap_is_append_only_and_exactly_replayable(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     dry_run = bootstrap_sec_former_ticker(conn, request=_request(tmp_path, apply=False))
     first = bootstrap_sec_former_ticker(conn, request=_request(tmp_path, apply=True))
     second = bootstrap_sec_former_ticker(conn, request=_request(tmp_path, apply=True))
