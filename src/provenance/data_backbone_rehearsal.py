@@ -595,6 +595,13 @@ def checkpoint_and_close_candidate_database(path: Path) -> tuple[int, int, int]:
         if row is None or len(row) != 3:
             raise RehearsalError("candidate WAL checkpoint returned an invalid result")
         checkpoint = (int(row[0]), int(row[1]), int(row[2]))
+        journal_mode_row = connection.execute("PRAGMA journal_mode = DELETE").fetchone()
+        journal_mode = "" if journal_mode_row is None else str(journal_mode_row[0]).lower()
+        if journal_mode != "delete":
+            raise RehearsalError(
+                "candidate database could not leave WAL mode after checkpoint: "
+                f"journal_mode={journal_mode or 'missing'}"
+            )
     finally:
         connection.close()
     busy, log_frames, checkpointed_frames = checkpoint
