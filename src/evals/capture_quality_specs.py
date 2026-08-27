@@ -349,6 +349,14 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "A proposal that conflates metrics or overwrites an existing definition.",
     ),
     _q(
+        "kpi_registry_proposal",
+        "P1",
+        "warm",
+        "extraction",
+        "Propose reviewable canonical KPI definitions, aliases, units, and provenance.",
+        "A proposal that conflates metrics, invents provenance, or overwrites a definition.",
+    ),
+    _q(
         "kpi_summary_enumerate",
         "P1",
         "cold",
