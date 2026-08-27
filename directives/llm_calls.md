@@ -107,6 +107,20 @@ latency, cost or billing class when observable, outcome/failure class, fallback
 attribution, and Attempt Identity. Missing ledger or budget infrastructure fails closed
 where the call would otherwise authorize spend or a durable decision.
 
+## LLM artifact lifecycle
+
+Current artifacts and artifacts reached by a registered durable provenance, alert,
+decision, prediction, calibration, call-ledger, insight-input, decision-draft, or
+standup-evidence edge are retained. Only superseded artifacts with none of those durable
+edges are eligible after 180 days. Malformed registered provenance fails closed.
+
+`execution/db_gc.py` owns the executable edge inventory, cutoff constant, archive-first
+mechanics, and dry-run/apply behavior. The existing weekly DB GC job is the only
+retention writer; this contract does not authorize another cleanup task. Adding a
+durable artifact consumer requires adding its edge before cleanup can treat the artifact
+as unreferenced. Changing the 180-day default is a canonical contract change here, not a
+runbook-only edit.
+
 ## Change workflow
 
 - New purpose or material prompt change: register the purpose, bump its prompt version,

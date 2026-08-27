@@ -7,22 +7,26 @@ without deleting research evidence, recovery material, or active pipeline state.
 The filesystem phase is allowlist-only and dry-run-first. Database mutation is
 separately guarded by the checkout-to-database Alembic revision preflight.
 
+This runbook implements the intermediate lifecycle in `data_pipeline_dag.md` and
+the scheduled-operation rules in `operations_governance_surface.md`. It owns the
+allowlist and execution mechanics, not a second retention policy or schedule.
+
 ## Target sources
 
-- `.tmp/cron_logs/`: regular files older than 30 days, except active
+- `.tmp/cron_logs/`: regular files past the canonical disposable cutoff, except active
   checkpoint trees and recovery material.
-- `.tmp/cron_runs/`: regular files older than 30 days, except active
+- `.tmp/cron_runs/`: regular files past the canonical disposable cutoff, except active
   checkpoint trees and recovery material.
-- `.tmp/news_cache/*.json`: entries whose payload `cached_at` is older than
-  seven days. Invalid or missing timestamps are retained.
-- `.tmp/pdf_pages/`: regular files older than 30 days, except active
+- `.tmp/news_cache/*.json`: entries whose payload `cached_at` is past the
+  canonical cache cutoff. Invalid or missing timestamps are retained.
+- `.tmp/pdf_pages/`: regular files past the canonical disposable cutoff, except active
   checkpoint trees and recovery material.
-- Other regular files under `.tmp/`: entries older than 30 days, excluding
+- Other regular files under `.tmp/`: entries past the canonical disposable cutoff, excluding
   owned policy roots, active checkpoint trees containing `state.json`, locks,
   database/backup/recovery material, and unverified temporary audio.
 - Python cache files under `src/`, `execution/`, `tests/`, `cron/`, `scripts/`,
-  and `alembic/`, plus root `.pytest_cache/` and `.ruff_cache/`: entries older
-  than seven days.
+  and `alembic/`, plus root `.pytest_cache/` and `.ruff_cache/`: entries past
+  the canonical cache cutoff.
 - `.tmp/temp_audio_*`: inventory only. Deletion remains owned by
   `execution/qa_transcripts.py` and requires a matching `qa_status=ok`.
 - `research_tasks`: `execution/expire_stale_research.py --apply` applies the
@@ -73,7 +77,7 @@ exit. A filesystem-cleanup failure prevents the research-expiry stage.
   and `job_locks` are retained. A checkpoint is completed only when its
   `state.json` object has a recognized terminal `status` (`complete`,
   `completed`, `done`, `success`, or `succeeded`); completed trees then receive
-  their owning policy's 30-day window. Malformed state fails closed.
+  their owning policy's canonical disposable window. Malformed state fails closed.
 - Unlink/stat errors are logged and fail the filesystem stage.
 - A database revision mismatch fails before any research-task mutation.
 - Task Scheduler uses `IgnoreNew`, a 15-minute limit, one retry after 30

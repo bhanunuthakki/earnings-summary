@@ -16,6 +16,11 @@ validation issues (~10.2k identical re-inserts/day), superseded LLM artifacts
 that no durable decision/provenance edge needs, unbounded per-ticker fact
 history far deeper than any reader's window, and telemetry age.
 
+This runbook implements the retention boundaries owned by `llm_calls.md` and
+`data_pipeline_dag.md`, the preservation boundary in `data_provenance.md`, and
+the scheduled-operation rules in `operations_governance_surface.md`. It owns
+execution mechanics, not new retention policy or a second schedule.
+
 ## Tool
 
 `execution/db_gc.py` — single-purpose CLI, dry-run by default. `--apply`
@@ -80,18 +85,17 @@ steady-state after the one-off deep prunes); revisit with a deliberate
 age-out policy only if the sidecar passes ~1 GB, and never age out runs the
 restore drill has not verified since.
 
-For `llm-artifacts`, retention eligibility itself carries no product recovery
-promise: correctness comes from preserving every current or durably referenced
-artifact. The shared archive-first mechanism remains a safety copy, but backup
-availability is not a precondition for disposing of an eligible superseded row.
+For `llm-artifacts`, eligibility is defined by `llm_calls.md`. The shared
+archive-first mechanism remains a safety copy, but backup availability is not
+a precondition for disposing of an eligible superseded row.
 
 ## Policies & parameters
 
 | Policy | What | Default | Owner-tunable |
 |---|---|---|---|
 | `validation-issues` | Collapse duplicates per defect key AND backfill a fingerprint onto EVERY NULL-fingerprint row (singletons included; collisions archived+removed, FK-referenced conflicts logged `gc_validation_fingerprint_stranded`) | always on | — |
-| `telemetry` | Age retention: stage_transitions, source_calls, ingestion_runs | 90 days | `--retention-days` |
-| `llm-artifacts` | Archive/delete only superseded artifacts with no supersession, parent, alert, decision, prediction, calibration, call-ledger, insight-input, decision-draft, or standup-evidence reference; malformed registered provenance JSON aborts before deletion | 180 days | `--artifact-retention-days` |
+| `telemetry` | Apply the bounded pipeline-telemetry lifecycle from `data_pipeline_dag.md` | canonical default | `--retention-days` |
+| `llm-artifacts` | Apply the superseded, unreferenced artifact lifecycle from `llm_calls.md` | canonical default | `--artifact-retention-days` |
 | `facts-depth` | Read-only measurement of the former per-ticker window | 20 quarters / 12 FY; floors 16 / 12 | dry-run only; apply is disabled |
 | `maintenance` | ANALYZE on every `--apply`; VACUUM opt-in (15s exclusivity preflight + hard timeout) | — | `--vacuum`, `--vacuum-timeout-min` (30) |
 | *(all)* | Rows deleted/updated per committed transaction | 20,000 | `--batch-size` |

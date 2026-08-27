@@ -45,6 +45,26 @@ Resumption queries one Attempt Identity and proceeds from its first non-`ok` sta
 Cross-attempt skip logic compares the Logical Idempotency Key and required Observation Version,
 never the timestamp-bearing `run_id`.
 
+## Intermediate and telemetry lifecycle
+
+Pipeline checkpoints and `.tmp/` files are disposable only after they are no longer
+needed for exact resumption. Active checkpoint trees, malformed or unrecognized
+`state.json` files, locks, database/recovery material, and unverified temporary audio
+fail closed and are never cleanup candidates.
+
+The current retention defaults are:
+
+- 30 days for completed checkpoint trees and general disposable `.tmp/` artifacts;
+- seven days for rebuildable caches, including news and Python tool caches; and
+- 90 days for bounded pipeline telemetry (`stage_transitions`, `source_calls`, and
+  `ingestion_runs`).
+
+`execution/run_weekly_cleanup.py` and `execution/db_gc.py` are the executable
+allowlists and exact cutoff implementations. Their already-registered weekly jobs are
+the only cleanup writers; this lifecycle does not authorize a new operation, schedule,
+or generic directory sweep. A retention change belongs here first, followed by its
+executable constant and focused tests.
+
 ## Failure-mode policy
 
 | Class | Example | Action |
