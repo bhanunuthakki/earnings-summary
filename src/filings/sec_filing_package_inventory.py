@@ -333,6 +333,7 @@ def _manifest_documents(
                 )
             filename = _manifest_filename(
                 href_value,
+                displayed_filename=anchors[0].get_text(" ", strip=True),
                 cik=cik,
                 accession_number=accession_number,
             )
@@ -374,6 +375,7 @@ def _manifest_documents(
 def _manifest_filename(
     href: str,
     *,
+    displayed_filename: str,
     cik: str,
     accession_number: str,
 ) -> str:
@@ -396,10 +398,19 @@ def _manifest_filename(
         raise SecFilingPackageContractError(
             "manifest document URL is outside the requested accession"
         )
-    return _filename(
+    linked_filename = _filename(
         document_path[len(prefix) :],
         label="manifest attachment filename",
     )
+    legacy_prefix = f"{accession_number}-"
+    if linked_filename.startswith(legacy_prefix):
+        displayed = _filename(
+            displayed_filename,
+            label="displayed manifest attachment filename",
+        )
+        if linked_filename == f"{legacy_prefix}{displayed}":
+            return displayed
+    return linked_filename
 
 
 def _role(

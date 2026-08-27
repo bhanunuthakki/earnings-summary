@@ -61,6 +61,27 @@ def _manifest(*documents: tuple[str, str, str]) -> bytes:
     ).encode()
 
 
+def _legacy_alias_manifest(*documents: tuple[str, str, str]) -> bytes:
+    accession = "0000001001-25-000001"
+    rows = "".join(
+        (
+            "<tr>"
+            f"<td>{sequence}</td><td>{description}</td>"
+            '<td><a href="/Archives/edgar/data/1001/'
+            f'000000100125000001/{accession}-{filename}">{filename}</a></td>'
+            f"<td>{declared_type}</td><td></td>"
+            "</tr>"
+        )
+        for sequence, (filename, declared_type, description) in enumerate(documents, start=1)
+    )
+    return (
+        '<html><body><table class="tableFile">'
+        "<tr><th>Seq</th><th>Description</th><th>Document</th>"
+        "<th>Type</th><th>Size</th></tr>"
+        f"{rows}</table></body></html>"
+    ).encode()
+
+
 def test_package_retains_primary_exhibits_and_financial_report_attachments() -> None:
     result = parse_sec_filing_package_inventory(
         cik="1001",
@@ -143,6 +164,45 @@ def test_manifest_allows_authority_generated_complete_submission_row_without_typ
 
     assert result.attachments[1].declared_type is None
     assert result.attachments[1].role == "supporting_attachment"
+
+
+def test_legacy_accession_prefixed_link_uses_displayed_archive_filename() -> None:
+    result = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="10-Q",
+        primary_document="0001.txt",
+        index_body=_index(
+            _item("0001.txt", size="130146"),
+            _item("0002.txt", size="9813"),
+        ),
+        filing_manifest_body=_legacy_alias_manifest(
+            ("0001.txt", "10-Q", "Quarterly report"),
+            ("0002.txt", "EX-10.25", "Material agreement"),
+        ),
+    )
+
+    assert [item.filename for item in result.attachments] == ["0001.txt", "0002.txt"]
+    assert result.attachments[0].role == "primary_document"
+    assert result.attachments[1].role == "exhibit"
+    assert result.attachments[0].source_url.endswith("/0001.txt")
+
+
+def test_noncanonical_prefixed_link_does_not_alias_displayed_filename() -> None:
+    manifest = _legacy_alias_manifest(("0001.txt", "10-Q", "Quarterly report")).replace(
+        b"0000001001-25-000001-0001.txt",
+        b"unrelated-prefix-0001.txt",
+    )
+
+    with pytest.raises(SecFilingPackageContractError, match="primary document"):
+        parse_sec_filing_package_inventory(
+            cik="1001",
+            accession_number="0000001001-25-000001",
+            form_type="10-Q",
+            primary_document="0001.txt",
+            index_body=_index(_item("0001.txt")),
+            filing_manifest_body=manifest,
+        )
 
 
 def test_duplicate_filename_with_conflicting_authority_metadata_fails_closed() -> None:
