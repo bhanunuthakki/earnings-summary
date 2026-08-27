@@ -4,20 +4,22 @@
 > 20Q/12FY facts-depth policy remains available for read-only measurement, but
 > destructive facts-depth apply is disabled pending an immutable
 > archive-generation migration and explicit cutover. Weekly GC remains
-> registered Sunday 06:00 PT for validation issues, telemetry, maintenance,
+> registered Sunday 06:00 PT for validation issues, telemetry, superseded LLM
+> artifacts, maintenance,
 > and first-Sunday VACUUM only.
 
 ## Goal
 
 Keep `data/portfolio.db` bounded without changing what any current consumer
 renders or computes. Attack the three real growth vectors: duplicated
-validation issues (~10.2k identical re-inserts/day), unbounded per-ticker
-fact history far deeper than any reader's window, and (future) telemetry age.
+validation issues (~10.2k identical re-inserts/day), superseded LLM artifacts
+that no durable decision/provenance edge needs, unbounded per-ticker fact
+history far deeper than any reader's window, and telemetry age.
 
 ## Tool
 
 `execution/db_gc.py` — single-purpose CLI, dry-run by default. `--apply`
-writes only the validation-issues, telemetry, and maintenance policies. Any
+writes only the validation-issues, telemetry, llm-artifacts, and maintenance policies. Any
 apply containing `facts-depth` aborts before a run lock, archive sidecar, or DB
 mutation. Historical facts-depth implementation evidence remains covered by
 tests, but is not an authorized production entry point.
@@ -78,12 +80,18 @@ steady-state after the one-off deep prunes); revisit with a deliberate
 age-out policy only if the sidecar passes ~1 GB, and never age out runs the
 restore drill has not verified since.
 
+For `llm-artifacts`, retention eligibility itself carries no product recovery
+promise: correctness comes from preserving every current or durably referenced
+artifact. The shared archive-first mechanism remains a safety copy, but backup
+availability is not a precondition for disposing of an eligible superseded row.
+
 ## Policies & parameters
 
 | Policy | What | Default | Owner-tunable |
 |---|---|---|---|
 | `validation-issues` | Collapse duplicates per defect key AND backfill a fingerprint onto EVERY NULL-fingerprint row (singletons included; collisions archived+removed, FK-referenced conflicts logged `gc_validation_fingerprint_stranded`) | always on | — |
 | `telemetry` | Age retention: stage_transitions, source_calls, ingestion_runs | 90 days | `--retention-days` |
+| `llm-artifacts` | Archive/delete only superseded artifacts with no supersession, parent, alert, decision, prediction, calibration, call-ledger, insight-input, decision-draft, or standup-evidence reference; malformed registered provenance JSON aborts before deletion | 180 days | `--artifact-retention-days` |
 | `facts-depth` | Read-only measurement of the former per-ticker window | 20 quarters / 12 FY; floors 16 / 12 | dry-run only; apply is disabled |
 | `maintenance` | ANALYZE on every `--apply`; VACUUM opt-in (15s exclusivity preflight + hard timeout) | — | `--vacuum`, `--vacuum-timeout-min` (30) |
 | *(all)* | Rows deleted/updated per committed transaction | 20,000 | `--batch-size` |
@@ -161,7 +169,8 @@ dashboard looking healthy. Standing rules now built into the tool:
   inside db_gc's own protected window, and the ~10:30 eval rung is clear).
   The wrapper adds `--vacuum` only when day-of-month <= 7 (first
   Sunday). Repository standing invocation: `--apply --policies
-  validation-issues,telemetry,maintenance`; facts-depth is excluded. No LLM
+  validation-issues,telemetry,llm-artifacts,maintenance`; facts-depth is
+  excluded. No LLM
   leg → the quota windows in `llm_quota_scheduling.md` do
   not apply; DB write-lock contention does, hence the slot — and the in-tool
   protected-window guard + run lock above are the backstop if the schedule

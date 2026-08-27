@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.diet_panel import render_diet_panel
-from signals.store import record_investor_day, record_media_appearance
+from signals.store import record_investor_day
 
 from ._signals_fixtures import make_news_then_signals, signals_only
 
@@ -120,25 +120,6 @@ def test_headline_news_never_renders(db: Path) -> None:
     html = render_diet_panel(db)
     assert "News &amp; podcasts" not in html
     assert "Nu launches product" not in html
-
-
-def test_media_appearance_renders_in_the_stream(db: Path) -> None:
-    conn = sqlite3.connect(str(db))
-    try:
-        record_media_appearance(
-            conn,
-            "NU",
-            "David Vélez on Invest Like the Best",
-            url="http://pod/ep1",
-            firm="Invest Like the Best",
-        )
-    finally:
-        conn.close()
-    html = render_diet_panel(db)
-    assert "Podcasts" in html  # its own group header now (news list removed)
-    assert "David Vélez on Invest Like the Best" in html
-    assert 'k-pill">Podcast' in html  # neutral category pill (§2 accent discipline)
-    assert "Invest Like the Best" in html  # the show name in the source column
 
 
 def test_signal_links_to_its_source(db: Path) -> None:

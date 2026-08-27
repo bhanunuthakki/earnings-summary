@@ -7,8 +7,8 @@ typed `signals` substrate (alembic 0095) directly and renders two lenses over
 it:
 
   * the INGEST STREAM — recent sell-side rating changes (``consensus_rating``,
-    routed free from the yf_grades feed), EDGAR filings, and curated podcast
-    appearances, newest first. NON-decaying: a story does not lose its place
+    routed free from the yf_grades feed) and EDGAR filings, newest first.
+    NON-decaying: a story does not lose its place
     because the clock moved (design_language "Diet-vs-alert"). General news
     headlines are DELIBERATELY absent (owner ruling 2026-07-30: "surface level
     poor quality work") — ``general_news`` rows render ONLY when EDGAR-fed
@@ -44,7 +44,6 @@ from pipeline.research_panel_styles import DIET_PANEL_STYLE
 from signals.store import (
     SIGNAL_CONSENSUS_RATING,
     SIGNAL_GENERAL_NEWS,
-    SIGNAL_MEDIA_APPEARANCE,
     SignalRow,
     load_diet_signals,
     load_forward_agenda_result,
@@ -84,11 +83,10 @@ def _load_list_types(db_path: Path) -> dict[str, str]:
 
 
 # The non-forward-dated reading lanes shown in the ingest stream: news-backed
-# ratings (mirrored), EDGAR-fed filings (the only general_news rows that
-# survive to render — see _drop_headline_news), and media appearances (written
-# direct, free path). Forward-dated investor days have their own lens (the
-# forward agenda).
-_STREAM_TYPES = (SIGNAL_GENERAL_NEWS, SIGNAL_CONSENSUS_RATING, SIGNAL_MEDIA_APPEARANCE)
+# ratings (mirrored) and EDGAR-fed filings (the only general_news rows that
+# survive to render — see _drop_headline_news). Forward-dated investor days
+# have their own lens (the forward agenda).
+_STREAM_TYPES = (SIGNAL_GENERAL_NEWS, SIGNAL_CONSENSUS_RATING)
 
 
 def _drop_headline_news(rows: list[SignalRow]) -> list[SignalRow]:
@@ -107,11 +105,8 @@ def _drop_headline_news(rows: list[SignalRow]) -> list[SignalRow]:
 # signal_type → (display label, .k-pill tone class). Categories stay QUIET on a
 # dashboard (bare .k-pill, neutral --paper fill): accent is reserved for
 # interactive/selected/unread/status, not a decorative category tint. Only the
-# podcasts block renders through _stream_row now, so only its type is mapped
-# (an unmapped type falls back to its raw signal_type label).
-_TYPE_PILL: dict[str, tuple[str, str]] = {
-    SIGNAL_MEDIA_APPEARANCE: ("Podcast", ""),
-}
+# An unmapped type falls back to its raw signal_type label.
+_TYPE_PILL: dict[str, tuple[str, str]] = {}
 
 
 def render_diet_panel(db_path: Path, *, today: date | None = None) -> str:
@@ -354,7 +349,7 @@ def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     """The ingest stream, regrouped per D3 (surface_density_jit_redesign.md,
     walkthrough #8): sell-side actions as a parsed dense table (firm / action /
     PT from→to with a deterministic per-group summary), filings as their own
-    block, and podcast appearances — no general-news list (removed entirely,
+    block — no general-news list (removed entirely,
     owner ruling 2026-07-30; ``rows`` arrives pre-filtered through
     :func:`_drop_headline_news`). Within every group the order stays book-first
     then newest-first (the non-decaying diet invariant is untouched — grouping
@@ -368,17 +363,12 @@ def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     if not rows:
         return (
             head + '<p class="diet-empty">No diet signals yet — they populate from the '
-            "yfinance-grades, EDGAR, and podcast feeds.</p></div>"
+            "yfinance-grades and EDGAR feeds.</p></div>"
         )
     ratings = [r for r in rows if r.signal_type == SIGNAL_CONSENSUS_RATING]
     filings = [r for r in rows if r.signal_type == SIGNAL_GENERAL_NEWS]
-    podcasts = [r for r in rows if r.signal_type == SIGNAL_MEDIA_APPEARANCE]
     return (
-        head
-        + _ratings_block(ratings, list_types)
-        + _filings_block(filings, list_types)
-        + _podcasts_block(podcasts, list_types)
-        + "</div>"
+        head + _ratings_block(ratings, list_types) + _filings_block(filings, list_types) + "</div>"
     )
 
 
@@ -501,29 +491,6 @@ def _filings_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
         f"{len({r.ticker for r in rows})} name(s)</span></h4>"
         '<table class="p-table"><thead><tr><th>When</th><th>Name</th><th>Filing</th>'
         f"</tr></thead><tbody>{''.join(body)}</tbody></table>"
-    )
-
-
-def _podcasts_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
-    """Curated podcast appearances (``media_appearance`` — a tracked exec or
-    rostered investor on an allowlisted show). Kept when the news list was
-    removed: these are long-form primary conversations, not headline churn."""
-    if not rows:
-        return ""
-    body = "".join(_stream_row(r, list_types.get(r.ticker, "")) for r in rows)
-    return (
-        '<h4 class="diet-group-h">Podcasts '
-        f'<span class="diet-group-sum">{len(rows)} appearance(s)</span></h4>'
-        + lg.grid_open()
-        + lg.filter_bar(len(rows), noun="signals", placeholder="Filter by name / source / text…")
-        + '<table class="p-table"><thead><tr>'
-        + lg.th("When", "when", "text", num=False)
-        + lg.th("Name", "name", "text", num=False)
-        + lg.th("Type", "type", "text", num=False)
-        + "<th>Signal</th>"
-        + lg.th("Source", "source", "text", num=False)
-        + f"</tr></thead><tbody>{body}</tbody></table>"
-        + lg.grid_close()
     )
 
 

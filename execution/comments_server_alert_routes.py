@@ -23,7 +23,6 @@ class AppContext:
     db_path: Path
     default_user_id: str
     referer_back_path: Callable[[str], str | None]
-    approve_consequence_href: Callable[[str], str | None]
 
 
 class _AcknowledgePayload(BaseModel):
@@ -58,7 +57,6 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
 
     db_path = context.db_path
     referer_back_path = context.referer_back_path
-    approve_consequence_href = context.approve_consequence_href
     blueprint = Blueprint("alerts", __name__)
 
     @blueprint.route("/digest", methods=["GET"])
@@ -144,47 +142,22 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
             referer and referer_back is None
         ):
             return ({"error": "cross-site approve/dismiss rejected"}, 403)
-        consequence = ""
         try:
             if alert_id is not None:
-                consequence = (
+                if dismissed:
                     dismiss_alert_and_cancel_actions(alert_id, db_path=db_path)
-                    if dismissed
-                    else approve_alert_and_apply_all(alert_id, db_path=db_path)
-                )
+                else:
+                    approve_alert_and_apply_all(alert_id, db_path=db_path)
             else:
                 assert action_id is not None
                 if dismissed:
                     dismiss_action(action_id, db_path=db_path)
                 else:
-                    consequence = approve_and_apply(action_id, db_path=db_path)
+                    approve_and_apply(action_id, db_path=db_path)
         except LookupError as exc:
             return ({"error": str(exc)}, 404)
         except (ValueError, KeyError) as exc:
             return ({"error": str(exc)}, 409)
-        if request.headers.get("HX-Request"):
-            from dashboard.inbox import acted_span
-
-            if dismissed:
-                undo = f"/api/actions/{action_id}/uncancel" if action_id is not None else None
-                return Response(
-                    acted_span(
-                        "✕ dismissed",
-                        "cancelled",
-                        undo_url=undo,
-                        detail=consequence,
-                    ),
-                    mimetype="text/html",
-                )
-            return Response(
-                acted_span(
-                    "✓ applied",
-                    "applied",
-                    detail=consequence,
-                    detail_href=approve_consequence_href(consequence),
-                ),
-                mimetype="text/html",
-            )
         if request.values.get("confirm") == "1":
             return redirect(back, code=303)
         from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED
@@ -227,8 +200,6 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
                 return ({"error": str(exc)}, 404)
             except ValueError as exc:
                 return ({"error": str(exc)}, 409)
-            if request.headers.get("HX-Request"):
-                return Response("", mimetype="text/html")
             return {
                 "ok": True,
                 "alert_id": dismissed_alert.id,
@@ -254,26 +225,6 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
             return ({"error": str(exc)}, 404)
         except (ValueError, KeyError) as exc:
             return ({"error": str(exc)}, 409)
-        if request.headers.get("HX-Request"):
-            from dashboard.inbox import acted_span
-
-            if dismissed_alert.dismiss_reason:
-                return Response(
-                    acted_span(
-                        "✕ dismissed",
-                        "cancelled",
-                        detail=dismissed_alert.dismiss_reason,
-                    ),
-                    mimetype="text/html",
-                )
-            return Response(
-                acted_span(
-                    "✕ dismissed",
-                    "cancelled",
-                    dismiss_why_id=alert_id,
-                ),
-                mimetype="text/html",
-            )
         return {
             "ok": True,
             "alert_id": dismissed_alert.id,
@@ -352,7 +303,6 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
         if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
             return ({"error": "cross-site uncancel rejected"}, 403)
         from alerts import uncancel_action
-        from dashboard.inbox import restored_action_buttons
 
         try:
             uncancel_action(action_id, db_path=db_path)
@@ -360,10 +310,7 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
             return ({"error": str(exc)}, 404)
         except (ValueError, KeyError) as exc:
             return ({"error": str(exc)}, 409)
-        return Response(
-            restored_action_buttons(action_id),
-            mimetype="text/html",
-        )
+        return {"ok": True, "action_id": action_id, "status": "pending"}
 
     return blueprint
 

@@ -32,7 +32,7 @@ def test_current_head_seeds_skip_mode_budget_and_downgrade_preserves_it(
             "SELECT monthly_cap_usd, warn_threshold_pct, hard_block, on_exceed "
             "FROM llm_budgets WHERE purpose='post_earnings_readout'"
         ).fetchone()
-    assert revision == ("0028_remove_processing_tier_and_rename_research_tasks",)
+    assert revision == ("0029_retire_podcast_prototype",)
     assert row == (5, 0.80, 0, "skip")
 
     command.downgrade(config, "0002_drop_dead_tables")

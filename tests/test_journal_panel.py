@@ -403,6 +403,20 @@ def test_full_brief_research_items_actions_cover_lifecycle_and_restore(
     assert b"Archive me." not in archived_view.data
 
 
+def test_note_archive_form_redirects_to_server_rendered_inbox(
+    client: FlaskClient, db_path: Path
+) -> None:
+    note = create_note(ticker="NU", kind="watch", body="Archive from inbox.", db_path=db_path)
+
+    response = client.post(
+        f"/api/notes/{note.id}/archive",
+        data={"return_to": "/"},
+    )
+
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/"
+
+
 def test_full_brief_research_items_band_exposes_archived_filter_and_retry_states(
     db_path: Path,
 ) -> None:

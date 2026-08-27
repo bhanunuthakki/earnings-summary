@@ -7,6 +7,7 @@ preflight no-ops (its documented fixture contract)."""
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -69,6 +70,25 @@ def gc_db(tmp_path: Path) -> Path:
         CREATE TABLE stage_transitions (id INTEGER PRIMARY KEY, started_at TEXT);
         CREATE TABLE source_calls (id INTEGER PRIMARY KEY, called_at TEXT);
         CREATE TABLE ingestion_runs (run_id TEXT, started_at TEXT);
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY, purpose TEXT NOT NULL,
+            input_sha256 TEXT NOT NULL, generated_at TEXT NOT NULL,
+            superseded_by_id INTEGER REFERENCES llm_artifacts(id) ON DELETE SET NULL,
+            parent_artifact_ids TEXT
+        );
+        CREATE TABLE alerts (id INTEGER PRIMARY KEY, memo_artifact_id INTEGER);
+        CREATE TABLE decisions (
+            id INTEGER PRIMARY KEY, source_artifact_id INTEGER, advice_artifact_id INTEGER
+        );
+        CREATE TABLE predictions (id INTEGER PRIMARY KEY, source_artifact_id INTEGER);
+        CREATE TABLE prompt_calibration_scores (id INTEGER PRIMARY KEY, artifact_id INTEGER);
+        CREATE TABLE llm_calls (
+            id INTEGER PRIMARY KEY, artifact_id INTEGER, purpose TEXT,
+            called_at TEXT, cost_estimate_usd NUMERIC
+        );
+        CREATE TABLE decision_drafts (id INTEGER PRIMARY KEY, draft_json TEXT);
+        CREATE TABLE standup_messages (id INTEGER PRIMARY KEY, evidence_json TEXT);
+        CREATE TABLE insights (id INTEGER PRIMARY KEY, input_artifact_ids TEXT);
         """
     )
     conn.commit()
@@ -82,6 +102,7 @@ def _run(
     apply: bool = False,
     policies: list[str] | None = None,
     retention_days: int = 90,
+    artifact_retention_days: int = 180,
     keep_quarters: int = 16,
     keep_fy: int = 12,
     include_portfolio: bool = False,
@@ -104,6 +125,7 @@ def _run(
         apply=apply,
         policies=selected_policies,
         retention_days=retention_days,
+        artifact_retention_days=artifact_retention_days,
         keep_quarters=keep_quarters,
         keep_fy=keep_fy,
         include_portfolio=include_portfolio,
@@ -467,6 +489,119 @@ class TestTelemetryRetention:
         assert conn.execute("SELECT COUNT(*) FROM ingestion_runs").fetchone()[0] == 1
         arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
         assert arc.execute("SELECT COUNT(*) FROM source_calls").fetchone()[0] == 1
+
+
+class TestLlmArtifactRetention:
+    @staticmethod
+    def _artifact(
+        conn: sqlite3.Connection,
+        artifact_id: int,
+        *,
+        generated_at: str,
+        superseded_by_id: int | None,
+        parents: str | None = "[]",
+    ) -> None:
+        conn.execute(
+            "INSERT INTO llm_artifacts "
+            "(id, purpose, input_sha256, generated_at, superseded_by_id, parent_artifact_ids) "
+            "VALUES (?, 'test', ?, ?, ?, ?)",
+            (artifact_id, f"sha-{artifact_id}", generated_at, superseded_by_id, parents),
+        )
+
+    def test_deletes_only_old_unreferenced_superseded_artifacts(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        self._artifact(conn, 10, generated_at="2025-01-01", superseded_by_id=None)
+        self._artifact(conn, 11, generated_at="2025-01-02", superseded_by_id=10)
+        self._artifact(conn, 12, generated_at="2026-07-01", superseded_by_id=10)
+        conn.commit()
+        conn.close()
+
+        report = _run(gc_db, apply=True, policies=["llm-artifacts"])
+
+        assert report.policies[0].rows_deleted == {"llm_artifacts": 1}
+        conn = sqlite3.connect(gc_db)
+        assert [row[0] for row in conn.execute("SELECT id FROM llm_artifacts ORDER BY id")] == [
+            10,
+            12,
+        ]
+        archive = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        assert archive.execute("SELECT id FROM llm_artifacts").fetchall() == [(11,)]
+
+    def test_preserves_provenance_and_decision_linked_artifacts(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        self._artifact(conn, 20, generated_at="2025-01-01", superseded_by_id=None)
+        self._artifact(conn, 21, generated_at="2025-01-01", superseded_by_id=20)
+        self._artifact(conn, 22, generated_at="2025-01-01", superseded_by_id=20)
+        self._artifact(conn, 23, generated_at="2025-01-01", superseded_by_id=20)
+        self._artifact(conn, 24, generated_at="2025-01-01", superseded_by_id=20)
+        self._artifact(conn, 25, generated_at="2025-01-01", superseded_by_id=20)
+        self._artifact(conn, 30, generated_at="2026-08-01", superseded_by_id=None, parents="[21]")
+        conn.execute("INSERT INTO decisions (id, source_artifact_id) VALUES (1, 22)")
+        conn.execute("INSERT INTO alerts (id, memo_artifact_id) VALUES (1, 23)")
+        conn.execute("INSERT INTO predictions (id, source_artifact_id) VALUES (1, 24)")
+        conn.execute("INSERT INTO prompt_calibration_scores (id, artifact_id) VALUES (1, 25)")
+        conn.commit()
+        conn.close()
+
+        report = _run(gc_db, apply=True, policies=["llm-artifacts"])
+
+        assert report.policies[0].rows_deleted == {"llm_artifacts": 0}
+        assert report.policies[0].detail["protected_rows"] == 5
+
+    def test_invalid_parent_artifact_json_aborts_without_deleting(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        self._artifact(conn, 40, generated_at="2025-01-01", superseded_by_id=None)
+        self._artifact(conn, 41, generated_at="2025-01-01", superseded_by_id=40)
+        self._artifact(
+            conn, 42, generated_at="2026-08-01", superseded_by_id=None, parents="not-json"
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(db_gc.GcAbortedError, match="parent_artifact_ids"):
+            _run(gc_db, apply=True, policies=["llm-artifacts"])
+
+        conn = sqlite3.connect(gc_db)
+        assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 3
+
+    def test_preserves_artifacts_embedded_in_registered_durable_json(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        self._artifact(conn, 50, generated_at="2026-08-01", superseded_by_id=None)
+        for artifact_id in (51, 52, 53):
+            self._artifact(conn, artifact_id, generated_at="2025-01-01", superseded_by_id=50)
+        conn.execute(
+            "INSERT INTO decision_drafts (id, draft_json) VALUES (1, ?)",
+            (json.dumps({"nested": {"linked_advice_artifact_id": 51}}),),
+        )
+        conn.execute(
+            "INSERT INTO standup_messages (id, evidence_json) VALUES (1, ?)",
+            (json.dumps({"artifact_id": 52}),),
+        )
+        conn.execute("INSERT INTO insights (id, input_artifact_ids) VALUES (1, '[53]')")
+        conn.commit()
+        conn.close()
+
+        report = _run(gc_db, apply=True, policies=["llm-artifacts"])
+
+        assert report.policies[0].rows_deleted == {"llm_artifacts": 0}
+        assert report.policies[0].detail["protected_rows"] == 3
+
+    def test_invalid_registered_json_reference_aborts_without_deleting(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        self._artifact(conn, 60, generated_at="2026-08-01", superseded_by_id=None)
+        self._artifact(conn, 61, generated_at="2025-01-01", superseded_by_id=60)
+        conn.execute(
+            "INSERT INTO decision_drafts (id, draft_json) VALUES (1, ?)",
+            ('{"linked_advice_artifact_id": "61"}',),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(db_gc.GcAbortedError, match="linked_advice_artifact_id"):
+            _run(gc_db, apply=True, policies=["llm-artifacts"])
+
+        conn = sqlite3.connect(gc_db)
+        assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 2
 
 
 class TestFactsDepth:
@@ -1305,10 +1440,6 @@ class TestProtectedTableScope:
                 id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
                 fiscal_period_type TEXT, value NUMERIC, source_doc_id INTEGER
             );
-            CREATE TABLE llm_calls (
-                id INTEGER PRIMARY KEY, purpose TEXT, called_at TEXT,
-                cost_estimate_usd NUMERIC
-            );
             CREATE TABLE fmp_endpoint_status (
                 ticker TEXT, endpoint TEXT, period TEXT, status TEXT,
                 last_pulled TIMESTAMP, PRIMARY KEY (ticker, endpoint, period)
@@ -1370,6 +1501,7 @@ class TestProtectedTableScope:
         assert db_gc.POLICY_NAMES == (
             "validation-issues",
             "telemetry",
+            "llm-artifacts",
             "facts-depth",
             "maintenance",
         )
@@ -1393,6 +1525,7 @@ class TestProtectedTableScope:
             ("--keep-quarters", 20),
             ("--keep-fy", 12),
             ("--retention-days", 90),
+            ("--artifact-retention-days", 180),
         ):
             match = re.search(
                 rf'add_argument\(\s*"{re.escape(flag)}"[^)]*?default=(\d+)', source, re.S

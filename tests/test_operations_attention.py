@@ -29,7 +29,7 @@ from operations.attention import (
 from operations.models import OperationsRegistry, OperationsSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0028_remove_processing_tier_and_rename_research_tasks"
+HEAD = "0029_retire_podcast_prototype"
 NOW = datetime(2026, 8, 24, 18, 0, tzinfo=UTC)
 
 

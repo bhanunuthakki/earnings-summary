@@ -466,7 +466,6 @@ MONO_TABLE_APPROVALS = (
 SURFACE_SANCTIONS: tuple[SurfaceSanction, ...] = ()
 
 CCACTION_REGRESSION_FLOOR = (
-    CCActionRegressionFloor("dashboard/inbox.py", "work-os", "Current CCAction adopter."),
     CCActionRegressionFloor(
         "pipeline/advisor_memos_panel.py", "work-os", "Current CCAction adopter."
     ),
@@ -708,7 +707,6 @@ _PYTHON_CSS_SURFACES = frozenset(
         "compute/soft_rule_evaluator.py",
         "dashboard/_styles.py",
         "dashboard/feed.py",
-        "dashboard/inbox.py",
         "etf_sources/nport.py",
         "execution/build_earnings_calendar.py",
         "execution/comments_server_alert_routes.py",
@@ -959,16 +957,6 @@ VISUAL_EMITTER_MANIFEST = (
         )
         for path in _NONVISUAL_CENSUS_CLASSIFICATIONS
     )
-    + (
-        VisualEmitterEntry(
-            "ui/htmx_runtime.py",
-            EmitterDisposition.VENDOR,
-            frozenset({EvidenceAdapter.HTML}),
-            frozenset({EvidenceMode.STATIC, EvidenceMode.SCOPED}),
-            "design-system",
-            "Vendored HTMX runtime wrapper emits behavior but owns no product visual language.",
-        ),
-    )
 )
 validate_visual_emitter_manifest(VISUAL_EMITTER_MANIFEST)
 
@@ -1018,7 +1006,7 @@ MASTER_SOURCES = GLOBAL_MASTER_SOURCES | FAMILY_MASTER_SOURCES
 # identity here while still rejecting any unregistered layout change.
 _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
     {
-        "dashboard/_styles.py": "06bef447e15928290d39104bbf46e7741a77547aa46a7e766a3aceb388ec5b4a",  # pragma: allowlist secret
+        "dashboard/_styles.py": "8de9e096d433a450e42bcca822da5ee5ee3a273020e2684e680bdb570275cbd2",  # pragma: allowlist secret
         "design-system/src/styles/controls.css": "4a086f122923dc5ea35c588e370545e7a6cd600852e8d45bd4dce2033f3f9336",  # pragma: allowlist secret
         "design-system/src/tokens/tokens.css": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
