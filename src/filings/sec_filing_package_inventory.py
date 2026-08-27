@@ -52,6 +52,7 @@ AttachmentRole = Literal[
     "financial_report",
     "supporting_attachment",
 ]
+SourceInventoryPresence = Literal["matched", "index_only", "manifest_only"]
 
 
 class SecFilingPackageAttachment(_Closed):
@@ -61,11 +62,12 @@ class SecFilingPackageAttachment(_Closed):
     declared_type: str | None
     sequence: int | None = Field(default=None, gt=0)
     description: str | None
-    index_media_icon: str
+    index_media_icon: str | None
     byte_size: int | None = Field(default=None, ge=0)
-    last_modified_at: datetime
+    last_modified_at: datetime | None
     source_url: str
     role: AttachmentRole
+    inventory_presence: SourceInventoryPresence
 
 
 class ParsedSecFilingPackage(_Closed):
@@ -155,14 +157,7 @@ def parse_sec_filing_package_inventory(
         cik=normalized_cik,
         accession_number=accession,
     )
-    archive_names = {item.name for item in archive_items}
-    for document in submission_documents.values():
-        if document.filename not in archive_names:
-            raise SecFilingPackageContractError(
-                f"manifest document {document.filename!r} is not present in index"
-            )
-    if primary not in archive_names:
-        raise SecFilingPackageContractError("primary document is not present in archive index")
+    archive_by_name = {item.name: item for item in archive_items}
     primary_manifest = submission_documents.get(primary)
     if primary_manifest is None:
         raise SecFilingPackageContractError(
@@ -177,30 +172,50 @@ def parse_sec_filing_package_inventory(
         )
 
     base = f"{_ARCHIVE_BASE}/{int(normalized_cik)}/{accession.replace('-', '')}"
+    ordered_names = [item.name for item in archive_items]
+    ordered_names.extend(name for name in submission_documents if name not in archive_by_name)
     attachments: list[SecFilingPackageAttachment] = []
-    for item in archive_items:
-        manifest = submission_documents.get(item.name)
+    for name in ordered_names:
+        item = archive_by_name.get(name)
+        manifest = submission_documents.get(name)
         declared_type = (
             None
             if manifest is None or manifest.declared_type is None
             else manifest.declared_type.upper()
         )
-        byte_size = _byte_size(item.size, item.name)
+        index_byte_size = None if item is None else _byte_size(item.size, item.name)
+        byte_size = (
+            index_byte_size
+            if index_byte_size is not None
+            else None
+            if manifest is None
+            else manifest.byte_size
+        )
         if (
-            manifest is not None
+            item is not None
+            and manifest is not None
             and manifest.byte_size is not None
-            and byte_size is not None
-            and manifest.byte_size != byte_size
+            and index_byte_size is not None
+            and manifest.byte_size != index_byte_size
         ):
             raise SecFilingPackageContractError(
-                f"{item.name} size conflicts between archive index and manifest"
+                f"{name} size conflicts between archive index and manifest"
             )
-        try:
-            modified = datetime.strptime(item.last_modified, "%Y-%m-%d %H:%M:%S")
-        except ValueError as exc:
-            raise SecFilingPackageContractError(f"{item.name} has invalid last-modified") from exc
+        modified: datetime | None = None
+        if item is not None:
+            try:
+                modified = datetime.strptime(item.last_modified, "%Y-%m-%d %H:%M:%S")
+            except ValueError as exc:
+                raise SecFilingPackageContractError(f"{name} has invalid last-modified") from exc
+        presence: SourceInventoryPresence = (
+            "matched"
+            if item is not None and manifest is not None
+            else "index_only"
+            if item is not None
+            else "manifest_only"
+        )
         role = _role(
-            filename=item.name,
+            filename=name,
             declared_type=declared_type,
             primary_document=primary,
         )
@@ -210,9 +225,10 @@ def parse_sec_filing_package_inventory(
                 "byte_size": byte_size,
                 "declared_type": declared_type,
                 "description": None if manifest is None else manifest.description,
-                "filename": item.name,
-                "index_media_icon": item.type,
-                "last_modified_at": modified.isoformat(),
+                "filename": name,
+                "index_media_icon": None if item is None else item.type,
+                "inventory_presence": presence,
+                "last_modified_at": None if modified is None else modified.isoformat(),
                 "role": role,
                 "sequence": None if manifest is None else manifest.sequence,
             },
@@ -223,15 +239,16 @@ def parse_sec_filing_package_inventory(
             SecFilingPackageAttachment(
                 attachment_id=hashlib.sha256(identity.encode()).hexdigest(),
                 parent_accession_number=accession,
-                filename=item.name,
+                filename=name,
                 declared_type=declared_type,
                 sequence=None if manifest is None else manifest.sequence,
                 description=None if manifest is None else manifest.description,
-                index_media_icon=item.type,
+                index_media_icon=None if item is None else item.type,
                 byte_size=byte_size,
                 last_modified_at=modified,
-                source_url=f"{base}/{item.name}",
+                source_url=f"{base}/{name}",
                 role=role,
+                inventory_presence=presence,
             )
         )
     return ParsedSecFilingPackage(

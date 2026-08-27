@@ -65,10 +65,10 @@ from sec_identity import sec_user_agent  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _TIMEOUT = (10, 60)
-_COLLECTOR = "sync-sec-filing-inventory@2"
+_COLLECTOR = "sync-sec-filing-inventory@3"
 _DEFAULT_PACKAGE_LIMIT = 250
 _SEC_REQUEST_DELAY_SECONDS = 0.25
-_PACKAGE_SCOPE_POLICY_VERSION = "company-report-package-scope@1"
+_PACKAGE_SCOPE_POLICY_VERSION = "company-report-package-scope@2"
 _ISSUER_REPORT_FORMS = frozenset(
     {
         "10-K",
@@ -106,18 +106,21 @@ _ISSUER_REPORT_FORMS = frozenset(
         "F-3/A",
         "F-4",
         "F-4/A",
+        "FWP",
         "PRE 14A",
         "S-1",
         "S-1/A",
         "S-1MEF",
         "S-3",
         "S-3/A",
+        "S-3ASR",
         "S-3MEF",
         "S-4",
         "S-4/A",
         "S-8",
         "SD",
         "SD/A",
+        "424B7",
     }
 )
 _EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
@@ -130,6 +133,8 @@ _EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
         "5/A",
         "144",
         "144/A",
+        "D",
+        "D/A",
         "EFFECT",
         "SC 13D",
         "SC 13D/A",
@@ -139,6 +144,7 @@ _EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
         "SCHEDULE 13D/A",
         "SCHEDULE 13G",
         "SCHEDULE 13G/A",
+        "PX14A6G",
         "SEC STAFF LETTER",
         "UPLOAD",
     }
@@ -725,6 +731,10 @@ def build_expected_documents(
                                     (
                                         "declared_type",
                                         attachment.declared_type or "index_only",
+                                    ),
+                                    (
+                                        "inventory_presence",
+                                        attachment.inventory_presence,
                                     ),
                                     ("parent_expected_document_key", parent_key),
                                     ("role", attachment.role),

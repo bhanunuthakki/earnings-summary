@@ -36,6 +36,20 @@ Version even when its Logical Idempotency Key is unchanged.
 **Not to be confused with.** Fetch time alone. Preserve the source timestamp or
 filing identity when available, the fetched-at knowledge time, and Content Identity.
 
+## Source Inventory Presence
+
+**Definition.** The explicit agreement state for one document or attachment across
+the authoritative inventory surfaces used to enumerate it. Its values are
+`matched` when every required surface lists the item, `index_only` when only the
+archive directory lists it, and `manifest_only` when only the filing manifest
+lists it. Metadata absent from one surface remains unknown rather than inferred.
+**Lives in.** `SecFilingPackageAttachment` and
+`src/filings/sec_filing_package_inventory.py`.
+**Not to be confused with.** Source coverage or acquisition completeness. Source
+Inventory Presence preserves an authority disagreement for one item; the enclosing
+inventory still separately proves whether every required authority response was
+captured and reconciled.
+
 ## Attempt Identity
 
 **Definition.** The unique identity of one execution attempt, including retries.

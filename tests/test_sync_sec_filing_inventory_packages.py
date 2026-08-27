@@ -180,6 +180,30 @@ def test_package_scope_separates_company_reports_external_filings_and_unknowns()
     assert [item.form_type for item in scope.unclassified] == ["NEW-FORM"]
 
 
+def test_package_scope_classifies_observed_sec_forms() -> None:
+    filings = tuple(
+        _filing(f"0000001001-25-{index:06d}", f"form-{index}.htm", form_type=form)
+        for index, form in enumerate(
+            ("424B7", "FWP", "S-3ASR", "D", "D/A", "PX14A6G"),
+            start=1,
+        )
+    )
+
+    scope = sync.partition_filing_package_scope(filings)
+
+    assert [item.form_type for item in scope.issuer_reports] == [
+        "424B7",
+        "FWP",
+        "S-3ASR",
+    ]
+    assert [item.form_type for item in scope.external_or_administrative] == [
+        "D",
+        "D/A",
+        "PX14A6G",
+    ]
+    assert scope.unclassified == ()
+
+
 def _bodies(
     filing: SecFilingInventoryEntry,
 ) -> tuple[str, bytes, str, bytes]:
@@ -367,7 +391,7 @@ def test_package_auth_failure_is_a_hard_stop(
         )
 
 
-def test_authority_bytes_are_captured_before_package_contract_validation(
+def test_manifest_only_primary_is_captured_with_explicit_presence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -399,8 +423,12 @@ def test_authority_bytes_are_captured_before_package_contract_validation(
     )
 
     assert captured == [index_url, submission_url]
-    assert result.packages == ()
-    assert result.components[-1].failure_reason == "package_contract_invalid"
+    assert len(result.packages) == 1
+    primary = next(
+        item for item in result.packages[0].attachments if item.role == "primary_document"
+    )
+    assert primary.inventory_presence == "manifest_only"
+    assert not any(item.failure_reason for item in result.components)
 
 
 def test_expected_documents_keep_accession_parentage_for_every_package_child(
@@ -439,6 +467,7 @@ def test_expected_documents_keep_accession_parentage_for_every_package_child(
     assert child.accession_number == filing.accession_number
     assert child.source_url is not None and child.source_url.endswith("/release.htm")
     assert child.absence is not None
+    assert dict(child.absence.reason_details)["inventory_presence"] == "matched"
     assert dict(child.absence.reason_details)["parent_expected_document_key"] == (
         f"sec-cik:0000001001:{filing.accession_number}"
     )
