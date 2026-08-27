@@ -587,6 +587,45 @@ def require_sidecar_free_database(path: Path) -> None:
         )
 
 
+def checkpoint_and_close_candidate_database(path: Path) -> tuple[int, int, int]:
+    """Checkpoint an isolated migrated candidate and prove its storage is closed."""
+    connection = connect_sqlite(path, role=SQLiteConnectionRole.WRITER)
+    try:
+        row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if row is None or len(row) != 3:
+            raise RehearsalError("candidate WAL checkpoint returned an invalid result")
+        checkpoint = (int(row[0]), int(row[1]), int(row[2]))
+    finally:
+        connection.close()
+    connection = connect_sqlite(path, role=SQLiteConnectionRole.SNAPSHOT_DESTINATION)
+    try:
+        journal_mode_row = connection.execute("PRAGMA journal_mode = DELETE").fetchone()
+        journal_mode = "" if journal_mode_row is None else str(journal_mode_row[0]).lower()
+        if journal_mode != "delete":
+            raise RehearsalError(
+                "candidate database could not leave WAL mode after checkpoint: "
+                f"journal_mode={journal_mode or 'missing'}"
+            )
+    finally:
+        connection.close()
+    busy, log_frames, checkpointed_frames = checkpoint
+    if busy != 0 or log_frames != checkpointed_frames:
+        raise RehearsalError(
+            "candidate WAL checkpoint did not close cleanly: "
+            f"busy={busy} log_frames={log_frames} checkpointed_frames={checkpointed_frames}"
+        )
+    remaining = tuple(
+        str(Path(f"{path}{suffix}"))
+        for suffix in ("-wal", "-shm", "-journal")
+        if Path(f"{path}{suffix}").exists()
+    )
+    if remaining:
+        raise RehearsalError(
+            "candidate database remained open after WAL checkpoint: " + ", ".join(remaining)
+        )
+    return checkpoint
+
+
 def attest_closed_database_storage(path: Path) -> ClosedDatabaseStorageAttestation:
     """Seal a database identity while making every closed-storage predicate explicit."""
     resolved = path.resolve(strict=True)
