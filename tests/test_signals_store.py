@@ -16,10 +16,10 @@ import pytest
 
 from news.store import NewsRow, upsert_news_rows
 from signals.store import (
-    _NEWS_SYNC_ID_CHUNK_SIZE,
     CADENCES,
     DIET_ONLY_TYPES,
     NEWS_MIRRORED_TYPES,
+    NEWS_SYNC_ID_CHUNK_SIZE,
     SCAFFOLD_TYPES,
     SIGNAL_BUYSIDE_RATING,
     SIGNAL_CONSENSUS_RATING,
@@ -200,7 +200,7 @@ def test_sync_chunks_large_bounded_id_collection(db_with_news: Path) -> None:
                     "fmp_stock_news",
                     "t",
                 )
-                for index in range(_NEWS_SYNC_ID_CHUNK_SIZE + 1)
+                for index in range(NEWS_SYNC_ID_CHUNK_SIZE + 1)
             ],
         )
         conn.commit()
@@ -211,7 +211,7 @@ def test_sync_chunks_large_bounded_id_collection(db_with_news: Path) -> None:
             )
         ]
 
-        assert len(ids) == _NEWS_SYNC_ID_CHUNK_SIZE + 1
+        assert len(ids) == NEWS_SYNC_ID_CHUNK_SIZE + 1
         assert sync_news_to_signals(conn, news_ids=ids) == len(ids)
         assert conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == len(ids)
     finally:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import db as dbmod
 
 
@@ -30,7 +32,9 @@ class _Connection:
         self.close_count += 1
 
 
-def test_refresh_reuses_connection_and_commits_each_ticker(monkeypatch) -> None:
+def test_refresh_reuses_connection_and_commits_each_ticker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     connection = _Connection()
     connections: list[_Connection] = []
     updated: list[tuple[object, str]] = []
@@ -54,7 +58,9 @@ def test_refresh_reuses_connection_and_commits_each_ticker(monkeypatch) -> None:
     assert connection.close_count == 1
 
 
-def test_refresh_keeps_prior_ticker_commits_on_later_failure(monkeypatch) -> None:
+def test_refresh_keeps_prior_ticker_commits_on_later_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     connection = _Connection()
     updated: list[str] = []
 

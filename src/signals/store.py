@@ -96,7 +96,7 @@ SIGNAL_MEDIA_APPEARANCE = "media_appearance"
 
 # Keep incremental mirror statements below SQLite's portable host-parameter
 # ceiling while retaining one transaction for the complete sync call.
-_NEWS_SYNC_ID_CHUNK_SIZE = 500
+NEWS_SYNC_ID_CHUNK_SIZE = 500
 
 SIGNAL_TYPES: frozenset[str] = frozenset(
     {
@@ -431,8 +431,8 @@ def sync_news_to_signals(
         if not unique_ids:
             return 0
         id_chunks = tuple(
-            unique_ids[start : start + _NEWS_SYNC_ID_CHUNK_SIZE]
-            for start in range(0, len(unique_ids), _NEWS_SYNC_ID_CHUNK_SIZE)
+            unique_ids[start : start + NEWS_SYNC_ID_CHUNK_SIZE]
+            for start in range(0, len(unique_ids), NEWS_SYNC_ID_CHUNK_SIZE)
         )
     else:
         id_chunks = ((),)

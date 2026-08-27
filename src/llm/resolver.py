@@ -224,18 +224,15 @@ def resolve_model_and_backend(
     """
     from llm.cli import LLM_MODELS
 
-    if model is None:
-        purpose = validate_purpose(purpose)
-    else:
-        validate_purpose(purpose, model=model, allow_unbound_model=True)
-
     # 1. Resolve Model ID
     resolved_model: str
     if model is not None:
+        validate_purpose(purpose, model=model, allow_unbound_model=True)
         resolved_model = model
     else:
-        override = active_override(purpose, db_path=db_path)
-        resolved_model = override if override is not None else LLM_MODELS[purpose]
+        validated_purpose = validate_purpose(purpose)
+        override = active_override(validated_purpose, db_path=db_path)
+        resolved_model = override if override is not None else LLM_MODELS[validated_purpose]
 
     # 2. Resolve Backend Provider
     resolved_backend: str

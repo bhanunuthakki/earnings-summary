@@ -28,8 +28,15 @@ def test_invalid_purpose_fails_before_budget_or_transport(
     monkeypatch: pytest.MonkeyPatch, invoke: Callable[[], object]
 ) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(cli, "_enforce_budget_pre_call", lambda *_a, **_k: calls.append("budget"))
-    monkeypatch.setattr(cli, "_call_claude", lambda *_a, **_k: calls.append("transport"))
+
+    def record_budget(*_args: object, **_kwargs: object) -> None:
+        calls.append("budget")
+
+    def record_transport(*_args: object, **_kwargs: object) -> None:
+        calls.append("transport")
+
+    monkeypatch.setattr(cli, "_enforce_budget_pre_call", record_budget)
+    monkeypatch.setattr(cli, "_call_claude", record_transport)
 
     with pytest.raises(InvalidLLMPurposeError):
         invoke()

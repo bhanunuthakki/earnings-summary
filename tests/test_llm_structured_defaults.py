@@ -18,9 +18,13 @@ def _stub_structured_calls(
         return responses.pop(0)
 
     monkeypatch.setattr(structured, "call_llm", fake_call)
+
+    def resolve_lower_tier(**_kwargs: object) -> tuple[str, str]:
+        return ("lower-tier-model", "codex")
+
     monkeypatch.setattr(
         "llm.resolver.resolve_model_and_backend",
-        lambda **_kwargs: ("lower-tier-model", "codex"),
+        resolve_lower_tier,
     )
     return calls
 

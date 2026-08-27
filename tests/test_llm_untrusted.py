@@ -155,7 +155,7 @@ def test_summary_transcript_bound_preserves_short_input() -> None:
     import llm_client
 
     text = "Prepared remarks.\nQ&A tail."
-    assert llm_client._bound_summary_transcript(text) == text
+    assert llm_client.bound_summary_transcript(text) == text
 
 
 def test_generate_summary_bounds_long_transcript_head_and_tail(
@@ -185,7 +185,7 @@ def test_generate_summary_bounds_long_transcript_head_and_tail(
     assert "TAIL-QA-TRANSCRIPT" in evidence
     assert "MIDDLE-OF-TRANSCRIPT-EXCLUDED" not in evidence
     assert "transcript characters omitted from the middle" in evidence
-    assert len(evidence) <= llm_client._SUMMARY_TRANSCRIPT_CHAR_CAP
+    assert len(evidence) <= llm_client.SUMMARY_TRANSCRIPT_CHAR_CAP
 
 
 def test_web_prompts_carry_web_content_notice(monkeypatch: pytest.MonkeyPatch) -> None:

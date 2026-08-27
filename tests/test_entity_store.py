@@ -180,10 +180,8 @@ def test_upsert_entity_kind_namespace_independent(db: Path) -> None:
 
 
 class _TrackingConnection(sqlite3.Connection):
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
-        self.commit_calls = 0
-        self.close_calls = 0
+    commit_calls: int = 0
+    close_calls: int = 0
 
     def commit(self) -> None:
         self.commit_calls += 1
@@ -197,12 +195,14 @@ class _TrackingConnection(sqlite3.Connection):
 def test_borrowed_entity_writers_leave_transaction_ownership_to_caller(db: Path) -> None:
     conn = sqlite3.connect(str(db), factory=_TrackingConnection)
     company_id = upsert_entity(kind="company", canonical_name="Alphabet", conn=conn)
+    assert company_id is not None
     segment_id = upsert_entity(
         kind="segment",
         canonical_name="Alphabet:Cloud",
         parent_entity_id=company_id,
         conn=conn,
     )
+    assert segment_id is not None
     alias_id = record_alias(entity_id=segment_id, alias_text="Cloud", conn=conn)
     relationship_id = upsert_relationship(
         from_entity_id=segment_id,
@@ -223,7 +223,11 @@ def test_default_entity_writer_owns_commit_and_close(monkeypatch: pytest.MonkeyP
     conn = _TrackingConnection(":memory:")
     _schema(conn)
     conn.commit_calls = 0
-    monkeypatch.setattr(entity_store, "_open", lambda _db_path: conn)
+
+    def open_tracking(_db_path: Path | str | None) -> _TrackingConnection:
+        return conn
+
+    monkeypatch.setattr(entity_store, "_open", open_tracking)
 
     assert upsert_entity(kind="company", canonical_name="Alphabet") is not None
     assert conn.commit_calls == 1

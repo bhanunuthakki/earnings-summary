@@ -220,7 +220,7 @@ def _canonicalize_one_ticker(
     return cast("dict[str, object]", validated.model_dump())
 
 
-def _apply_groups(
+def apply_groups(
     *,
     ticker: str,
     company_entity_id: int,
@@ -396,7 +396,7 @@ def main() -> int:
             )
             if parsed is None:
                 continue
-            n = _apply_groups(
+            n = apply_groups(
                 ticker=ticker,
                 company_entity_id=company_entity_id,
                 parsed=parsed,

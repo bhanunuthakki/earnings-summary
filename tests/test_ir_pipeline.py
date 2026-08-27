@@ -30,7 +30,7 @@ from ir_pipeline.discover import (  # noqa: E402
     discover_documents,
     discover_history_hybrid,
 )
-from ir_pipeline.discover._docmeta import classify  # noqa: E402
+from ir_pipeline.discover._docmeta import CandidateDoc, classify  # noqa: E402
 from ir_pipeline.spreadsheet import (  # noqa: E402
     _header_row,
     _parse_period,
@@ -82,7 +82,9 @@ def test_q4cdn_config_has_no_precise_adapter() -> None:
         discover_documents(config)
 
 
-def test_q4cdn_config_uses_generic_history_fallback(monkeypatch) -> None:
+def test_q4cdn_config_uses_generic_history_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config = IrConfig(
         ticker="ZZZ",
         platform="q4cdn",
@@ -90,7 +92,7 @@ def test_q4cdn_config_uses_generic_history_fallback(monkeypatch) -> None:
     )
     calls: list[tuple[str, int, int]] = []
 
-    def fake_history(*, ir_url: str, max_quarters: int, timeout_ms: int):
+    def fake_history(*, ir_url: str, max_quarters: int, timeout_ms: int) -> list[CandidateDoc]:
         calls.append((ir_url, max_quarters, timeout_ms))
         return []
 
@@ -188,7 +190,7 @@ def test_config_save_load_roundtrip(tmp_path: Path) -> None:
     assert nim.kpi_name == "Risk-adjusted NIM" and nim.scale == 100.0
 
 
-def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
+def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The builder feeds the sheet structure + canonical KPIs to the LLM and
     assembles a persisted config from the mapping (LLM mocked)."""
     sheet = tmp_path / "hist.xlsx"
@@ -204,7 +206,7 @@ def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
         ),
         encoding="utf-8",
     )
-    fake = {
+    fake: dict[str, object] = {
         "Monthly ARPAC (USD)": {
             "sheet": "Managerial indicators",
             "row_label": "Average Revenue",
@@ -218,7 +220,11 @@ def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
             "scale": 100,
         },
     }
-    monkeypatch.setattr("llm.structured.call_llm_structured", lambda *a, **k: fake)
+
+    def fake_structured_call(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return fake
+
+    monkeypatch.setattr("llm.structured.call_llm_structured", fake_structured_call)
     cfg = config_builder.build_ir_config(
         "ZZ", sheet, platform="mz", results_center_url="https://x", repo_root=tmp_path
     )

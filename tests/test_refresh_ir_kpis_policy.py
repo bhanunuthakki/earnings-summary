@@ -93,7 +93,7 @@ def test_direct_kpi_refresh_rejects_more_than_five_before_network(
     monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
 
     def fail_network(_url: str, _repo_root: Path, _ticker: str) -> Path:
-        pytest.fail("network boundary crossed")
+        raise AssertionError("network boundary crossed")
 
     monkeypatch.setattr(
         refresh_ir_kpis,
@@ -123,20 +123,19 @@ def test_q4cdn_discover_fails_cleanly_without_network(
         owner_requested=False,
     )
     monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
-    monkeypatch.setattr(
-        refresh_ir_kpis,
-        "get_config",
-        lambda _ticker, _repo_root: IrConfig(
+
+    def q4cdn_config(_ticker: str, _repo_root: Path) -> IrConfig:
+        return IrConfig(
             ticker="ACME",
             platform="q4cdn",
             results_center_url="https://issuer.example/results",
-        ),
-    )
-    monkeypatch.setattr(
-        refresh_ir_kpis,
-        "download_spreadsheet",
-        lambda *_args: pytest.fail("network boundary crossed"),
-    )
+        )
+
+    def fail_download(*_args: object) -> None:
+        raise AssertionError("network boundary crossed")
+
+    monkeypatch.setattr(refresh_ir_kpis, "get_config", q4cdn_config)
+    monkeypatch.setattr(refresh_ir_kpis, "download_spreadsheet", fail_download)
 
     assert refresh_ir_kpis.main() == 3
     error = capsys.readouterr().err

@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from execution import canonicalize_segments
+from sqlite_runtime import SQLiteConnectionRole
 
 
 class _TrackingConnection(sqlite3.Connection):
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
-        self.commit_calls = 0
-        self.close_calls = 0
+    commit_calls: int = 0
+    close_calls: int = 0
 
     def commit(self) -> None:
         self.commit_calls += 1
@@ -104,9 +104,14 @@ def db(tmp_path: Path) -> Path:
 
 
 def _patch_writer(monkeypatch: pytest.MonkeyPatch, opened: list[_TrackingConnection]) -> None:
-    def connect(path: str, *, role: object, schema_preflight: bool = False) -> _TrackingConnection:
+    def connect(
+        path: str | os.PathLike[str],
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> _TrackingConnection:
         del role, schema_preflight
-        conn = sqlite3.connect(path, factory=_TrackingConnection)
+        conn = sqlite3.connect(os.fspath(path), factory=_TrackingConnection)
         opened.append(conn)
         return conn
 
@@ -129,7 +134,7 @@ def test_apply_groups_one_connection_and_commit_for_multiple_groups(
     _patch_writer(monkeypatch, opened)
 
     assert (
-        canonicalize_segments._apply_groups(
+        canonicalize_segments.apply_groups(
             ticker="NU",
             company_entity_id=1,
             parsed=_parsed(),
@@ -156,16 +161,26 @@ def test_apply_groups_one_connection_and_commit_for_multiple_groups(
 def test_apply_groups_is_idempotent(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     opened: list[_TrackingConnection] = []
     _patch_writer(monkeypatch, opened)
-    kwargs = dict(
-        ticker="NU",
-        company_entity_id=1,
-        parsed=_parsed(),
-        repo_root=db.parent.parent,
-        dry_run=False,
+    assert (
+        canonicalize_segments.apply_groups(
+            ticker="NU",
+            company_entity_id=1,
+            parsed=_parsed(),
+            repo_root=db.parent.parent,
+            dry_run=False,
+        )
+        == 2
     )
-
-    assert canonicalize_segments._apply_groups(**kwargs) == 2
-    assert canonicalize_segments._apply_groups(**kwargs) == 0
+    assert (
+        canonicalize_segments.apply_groups(
+            ticker="NU",
+            company_entity_id=1,
+            parsed=_parsed(),
+            repo_root=db.parent.parent,
+            dry_run=False,
+        )
+        == 0
+    )
     assert len(opened) == 2
     assert [conn.commit_calls for conn in opened] == [1, 1]
     with sqlite3.connect(db) as conn:
@@ -180,20 +195,39 @@ def test_apply_groups_rolls_back_entire_ticker_on_helper_failure(
     _patch_writer(monkeypatch, opened)
     original = canonicalize_segments.record_alias
 
-    def fail_on_bad(*, alias_text: str, **kwargs: object) -> int | None:
+    def fail_on_bad(
+        *,
+        entity_id: int,
+        alias_text: str,
+        alias_kind: str = "reported_in_10k",
+        confidence: float = 1.0,
+        source_doc_id: int | None = None,
+        excerpt: str | None = None,
+        db_path: Path | str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> int | None:
         if alias_text == "bad":
             return None
-        return original(alias_text=alias_text, **kwargs)
+        return original(
+            entity_id=entity_id,
+            alias_text=alias_text,
+            alias_kind=alias_kind,
+            confidence=confidence,
+            source_doc_id=source_doc_id,
+            excerpt=excerpt,
+            db_path=db_path,
+            conn=conn,
+        )
 
     monkeypatch.setattr(canonicalize_segments, "record_alias", fail_on_bad)
-    parsed = {
+    parsed: dict[str, object] = {
         "groups": [
             {"canonical_name": "Cloud", "kind": "segment", "aliases": ["Cloud"]},
             {"canonical_name": "Bad", "kind": "segment", "aliases": ["bad"]},
         ]
     }
     with pytest.raises(RuntimeError, match="alias upsert failed"):
-        canonicalize_segments._apply_groups(
+        canonicalize_segments.apply_groups(
             ticker="NU",
             company_entity_id=1,
             parsed=parsed,
@@ -221,7 +255,7 @@ def test_apply_groups_dry_run_does_not_open_writer(
 
     monkeypatch.setattr(canonicalize_segments, "connect_sqlite", fail_connect)
     assert (
-        canonicalize_segments._apply_groups(
+        canonicalize_segments.apply_groups(
             ticker="NU",
             company_entity_id=1,
             parsed=_parsed(),
