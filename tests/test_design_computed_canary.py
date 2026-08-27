@@ -349,7 +349,7 @@ def test_portfolio_copilot_sort_control_is_keyboard_reachable_without_layout_shi
                 page.locator("#workOsEvaluationDialogues")
                 .locator("[data-work-os-evaluation-ticker]")
                 .count()
-                == 1
+                == 3
             )
 
             control = page.locator("[data-work-os-portfolio-sort='weight']")
@@ -361,6 +361,65 @@ def test_portfolio_copilot_sort_control_is_keyboard_reachable_without_layout_shi
             control.press("Enter")
             assert control.locator("xpath=ancestor::th").get_attribute("aria-sort") == "ascending"
             assert page_errors == []
+        finally:
+            context.close()
+            browser.close()
+
+
+@pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
+def test_evaluation_dialogue_labels_share_columns_and_center_without_own_subtext(
+    viewport: tuple[int, int],
+) -> None:
+    """Variable title length must not create diagonal label rails."""
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(route="cockpit", viewport="desktop")
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": viewport[0], "height": viewport[1]},
+            reduced_motion="reduce",
+        )
+        try:
+            page = context.new_page()
+            page.set_content(html, wait_until="load")
+            rows = page.locator("[data-work-os-evaluation-ticker]")
+            page.wait_for_function(
+                "() => document.querySelectorAll('[data-work-os-evaluation-ticker]').length === 3"
+            )
+
+            kinds = rows.locator(".work-os-evaluation-kind")
+            kind_boxes = [kinds.nth(index).bounding_box() for index in range(3)]
+            assert all(box is not None for box in kind_boxes)
+            kind_lefts = [box["x"] for box in kind_boxes if box is not None]
+            assert max(kind_lefts) - min(kind_lefts) <= 1
+
+            for index in range(3):
+                row = rows.nth(index)
+                copy_box = row.locator(".work-os-evaluation-copy").bounding_box()
+                readiness_box = (
+                    rows.nth(index).locator(".work-os-evaluation-readiness").bounding_box()
+                )
+                assert copy_box is not None
+                assert readiness_box is not None
+                readiness_center = readiness_box["y"] + readiness_box["height"] / 2
+                if viewport[0] > 400:
+                    copy_center = copy_box["y"] + copy_box["height"] / 2
+                    assert abs(copy_center - readiness_center) <= 1
+                else:
+                    title_box = row.locator(".work-os-evaluation-title").bounding_box()
+                    meta_box = row.locator(".work-os-evaluation-meta").bounding_box()
+                    kind_box = row.locator(".work-os-evaluation-kind").bounding_box()
+                    assert title_box is not None
+                    assert meta_box is not None
+                    assert kind_box is not None
+                    title_center = title_box["y"] + title_box["height"] / 2
+                    meta_center = meta_box["y"] + meta_box["height"] / 2
+                    kind_center = kind_box["y"] + kind_box["height"] / 2
+                    assert abs(title_center - kind_center) <= 1
+                    assert abs(meta_center - readiness_center) <= 1
         finally:
             context.close()
             browser.close()
