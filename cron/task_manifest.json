@@ -365,36 +365,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\monthly_p3_refresh",
-   "xml": "monthly_p3_refresh.task.xml",
-   "wrapper": "run_monthly_p3_refresh.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-06-01T03:20:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": null,
-    "days_of_week": [],
-    "days_of_month": [
-     1
-    ],
-    "months": [
-     "January",
-     "February",
-     "March",
-     "April",
-     "May",
-     "June",
-     "July",
-     "August",
-     "September",
-     "October",
-     "November",
-     "December"
-    ]
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\onboard_pending",
    "xml": "onboard_pending_tickers.task.xml",
    "wrapper": "run_onboard_pending.bat",

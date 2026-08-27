@@ -11,9 +11,8 @@ drops a wondering silently:
      task row each week it stays proposed.
   2. THIS sweep only expires a task when EITHER:
        (a) it has gone through a SECOND unanswered packet week
-           (``unanswered_weeks >= 2`` in the task's repurposed meta JSON —
-           see ``research.proposals`` module docstring for the ``run_id``
-           repurposing), or
+           (``unanswered_weeks >= 2`` in the task's metadata JSON — see
+           ``research.proposals``), or
        (b) it has NEVER been packeted at all and is older than ``--days``
            (the safety net for a stretch where the weekly-packet job itself
            was down/misconfigured — without this floor a task could sit
@@ -62,9 +61,9 @@ def _expiring(tasks: list[ResearchTask], *, cutoff: str) -> list[tuple[ResearchT
     two-phase rule is unit-testable without a DB round trip."""
     out: list[tuple[ResearchTask, str]] = []
     for task in tasks:
-        weeks_raw = task.meta.get("unanswered_weeks")
+        weeks_raw = task.metadata.get("unanswered_weeks")
         weeks = int(weeks_raw) if isinstance(weeks_raw, int) else 0
-        packeted_at = task.meta.get("packeted_at")
+        packeted_at = task.metadata.get("packeted_at")
         if weeks >= 2:
             out.append((task, "second_unanswered_week"))
         elif not packeted_at and task.created_at and task.created_at < cutoff:

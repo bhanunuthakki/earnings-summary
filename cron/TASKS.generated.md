@@ -25,7 +25,6 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\model_eval_sweep` | weekly Saturday at 20:00:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | Task Scheduler |
 | `\earnings-summary\monthly_advisor_memos` | monthly day 1 at 07:30:00 | `monthly_advisor_memos.task.xml` | `run_monthly_advisor_memos.bat` | Task Scheduler |
 | `\earnings-summary\monthly_calibration_scorecard` | monthly day 2 at 07:30:00 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Task Scheduler |
-| `\earnings-summary\monthly_p3_refresh` | monthly day 1 at 03:20:00 | `monthly_p3_refresh.task.xml` | `run_monthly_p3_refresh.bat` | Task Scheduler |
 | `\earnings-summary\onboard_pending` | daily from 00:17:00, repeats PT1H | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Task Scheduler |
 | `\earnings-summary\portfolio_tracker_api` | BootTrigger | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | Task Scheduler |
 | `\earnings-summary\red_team` | weekly Saturday at 10:00:00 | `red_team.task.xml` | `run_red_team.bat` | Task Scheduler |

@@ -43,8 +43,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from evals.capture_quality_specs import CAPTURE_QUALITY_SPECS
-from evals.golden_classifiers import CLASSIFIER_PURPOSES
 from evals.rubric_judge import AUDIT_SPECS
+from evals.run_registry import GOLDEN_PURPOSES as REGISTERED_GOLDEN_PURPOSES
 from llm.cli import LLM_MODELS
 from llm.prompt_versions import registered_purposes
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -54,26 +54,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 # ask_evidence_followup (evals.ask_loop) in S7; ask_claim_grounding
 # (evals.ask_citations — citation accuracy) in S8; injection_canaries
 # (evals.injection_canaries) in S9; news_structuring (Chip 2) in PR C.
-GOLDEN_PURPOSES: frozenset[str] = frozenset(
-    {
-        "viewspec_compile",
-        "ask_pack_router",
-        "ask_evidence_followup",
-        "ask_claim_grounding",
-        "ask_claim_audit",
-        "injection_canaries",
-        "provenance_caution",
-        "news_structuring",
-        "peer_selection",
-        "podcast_takeaway_summary",
-        "key_metrics",
-        "scenario_prior",
-        # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3).
-        "sector_benchmark_proposal",
-        # segment_10q_period_disambiguate rides in via CLASSIFIER_PURPOSES below.
-        *CLASSIFIER_PURPOSES,
-    }
-)
+GOLDEN_PURPOSES: frozenset[str] = frozenset(REGISTERED_GOLDEN_PURPOSES)
 
 # Mode-C outcome graders (execution/run_calibration_grading.py rungs 1-3).
 # decision_audit / management_prediction are score LABELS those graders

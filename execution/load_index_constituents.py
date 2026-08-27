@@ -142,7 +142,7 @@ def upsert_index_members(
             if not dry_run:
                 cur.execute(
                     "UPDATE tracked_companies SET name = ?, list_type = ?, "
-                    "processing_tier = 'P3', brief_dirty = 0 "
+                    "brief_dirty = 0 "
                     "WHERE user_id = ? AND ticker = ? AND list_type NOT IN (?, ?, ?)",
                     (
                         name,
@@ -159,8 +159,8 @@ def upsert_index_members(
             if not dry_run:
                 cur.execute(
                     "INSERT INTO tracked_companies "
-                    "(user_id, ticker, name, list_type, processing_tier, brief_dirty, added_at) "
-                    "VALUES (?, ?, ?, ?, 'P3', 0, ?)",
+                    "(user_id, ticker, name, list_type, brief_dirty, added_at) "
+                    "VALUES (?, ?, ?, ?, 0, ?)",
                     (
                         user_id,
                         ticker,

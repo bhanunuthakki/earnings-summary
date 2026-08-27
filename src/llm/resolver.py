@@ -10,6 +10,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, overload
 
 from llm.model_ladder import CLAUDE, GEMINI, OPENROUTER, family_of
 from llm.model_overrides import active_override
@@ -18,6 +19,63 @@ log = logging.getLogger(__name__)
 
 # Fallback escape hatch env var
 ALLOW_FORCED_FALLBACK_ENV_VAR = "LLM_ALLOW_FORCED_FALLBACK"
+
+
+class InvalidLLMPurposeError(ValueError):
+    """Raised when an LLM call is not attributable to a governed purpose."""
+
+
+@overload
+def validate_purpose(
+    purpose: str | None,
+    *,
+    model: str | None = None,
+    allow_unbound_model: Literal[False] = False,
+) -> str: ...
+
+
+@overload
+def validate_purpose(
+    purpose: str | None,
+    *,
+    model: str | None = None,
+    allow_unbound_model: Literal[True],
+) -> str | None: ...
+
+
+def validate_purpose(
+    purpose: str | None,
+    *,
+    model: str | None = None,
+    allow_unbound_model: bool = False,
+) -> str | None:
+    """Validate a purpose before model selection, budget checks, or transport.
+
+    ``LLM_MODELS`` is the closed registry for ordinary calls. Lens instances
+    are the one dynamic exception: they must carry an explicit model. The
+    resolver retains a narrow ``purpose=None`` escape hatch for the internal
+    model-family lookup used by the Gemini fallback; public call facades do
+    not enable it.
+    """
+    if purpose is None:
+        if allow_unbound_model and model is not None:
+            from llm.cli import LLM_MODELS
+
+            if model in set(LLM_MODELS.values()) or model in MODEL_CAPABILITIES:
+                return purpose
+        raise InvalidLLMPurposeError(
+            "LLM purpose is required; pass a registered purpose or an explicit lens:<name> purpose"
+        )
+    if not purpose.strip() or purpose == "__default__":
+        raise InvalidLLMPurposeError(f"invalid LLM purpose {purpose!r}")
+
+    from llm.cli import LLM_MODELS
+
+    if purpose in LLM_MODELS:
+        return purpose
+    if purpose.startswith("lens:") and purpose[5:].strip() and model is not None:
+        return purpose
+    raise InvalidLLMPurposeError(f"unknown LLM purpose {purpose!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +212,6 @@ def resolve_model_and_backend(
       1. Explicit `model` parameter if passed.
       2. Active DB override (`model_pin_overrides`) for `purpose`.
       3. Purpose pin in `LLM_MODELS`.
-      4. `DEFAULT_MODEL` fallback ("claude-sonnet-4-6").
 
     Resolution order for backend:
       1. Explicit `backend` parameter if passed.
@@ -165,20 +222,20 @@ def resolve_model_and_backend(
     profile adds call-specific hard constraints. Unknown models and violated
     constraints raise ValueError before dispatch.
     """
-    from llm.cli import DEFAULT_MODEL, LLM_MODELS
+    from llm.cli import LLM_MODELS
+
+    if model is None:
+        purpose = validate_purpose(purpose)
+    else:
+        validate_purpose(purpose, model=model, allow_unbound_model=True)
 
     # 1. Resolve Model ID
     resolved_model: str
     if model is not None:
         resolved_model = model
-    elif purpose is not None:
-        override = active_override(purpose, db_path=db_path)
-        if override is not None:
-            resolved_model = override
-        else:
-            resolved_model = LLM_MODELS.get(purpose, DEFAULT_MODEL)
     else:
-        resolved_model = DEFAULT_MODEL
+        override = active_override(purpose, db_path=db_path)
+        resolved_model = override if override is not None else LLM_MODELS[purpose]
 
     # 2. Resolve Backend Provider
     resolved_backend: str

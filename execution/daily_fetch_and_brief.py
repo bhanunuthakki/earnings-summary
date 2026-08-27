@@ -7,7 +7,7 @@ canonical extractors). The fact-table writes flip
 For each dirty ticker, this worker checks three gates before doing real work:
 
   A. Tier-cadence gate (this gate is the tier-aware scalability work):
-     processing_tier P1 always runs daily, P2 only if last_built_at > 7d,
+     schedule class P1 always runs daily, P2 only if last_built_at > 7d,
      P3 only if last_built_at > 30d. This filters the daily tick down to a
      manageable subset of the ~2.4k tracked universe. Bypassed with
      --ignore-tier (preserves the pre-tier behavior of running on every
@@ -56,6 +56,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
+from models.companies import schedule_class_for_list_type  # noqa: E402
 from pipeline.tier_runner import tickers_due_for_refresh  # noqa: E402
 from provenance.selection import selected_transcripts_relation  # noqa: E402
 from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
@@ -135,12 +136,12 @@ def _apply_tier_filter(
             conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(skipped))
             rows = conn.execute(
-                f"SELECT UPPER(ticker) AS ticker, processing_tier "
+                f"SELECT UPPER(ticker) AS ticker, list_type "
                 f"FROM tracked_companies WHERE UPPER(ticker) IN ({placeholders})",
                 [s.upper() for s in skipped],
             ).fetchall()
             for r in rows:
-                tier = (r["processing_tier"] or "P3").upper()
+                tier = schedule_class_for_list_type(str(r["list_type"])).value
                 skipped_by_tier[tier] = skipped_by_tier.get(tier, 0) + 1
     return (accepted, skipped_by_tier)
 
@@ -191,7 +192,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ignore-tier",
         action="store_true",
-        help="Bypass tier-cadence gate (A) — run on every dirty ticker regardless of processing_tier. "
+        help="Bypass schedule-cadence gate (A) — run on every dirty ticker regardless of schedule class. "
         "Preserves pre-tier behavior; gates B + C still apply.",
     )
     p.add_argument(
@@ -221,8 +222,8 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
             f"AND (archived_at IS NULL) "
             f"ORDER BY ticker"
         )
-    elif _has_processing_tier_column(conn):
-        # Dirty queue plus every P1 name. The tier-cadence gate documents "P1
+    else:
+        # Dirty queue plus every P1 name. The schedule-cadence gate documents "P1
         # always runs daily", but a dirty-only candidate set leaves P1 out on
         # days when no fact write happens to land (e.g. every statement
         # endpoint tier-blocked on the free FMP plan). Gates B + C still make
@@ -231,15 +232,8 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
         # measures.
         cursor.execute(
             "SELECT ticker FROM tracked_companies "
-            "WHERE (brief_dirty = 1 OR UPPER(COALESCE(processing_tier, '')) = 'P1') "
+            "WHERE (brief_dirty = 1 OR list_type = 'portfolio') "
             f"AND list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
-            "AND (archived_at IS NULL) "
-            "ORDER BY ticker"
-        )
-    else:
-        cursor.execute(
-            "SELECT ticker FROM tracked_companies "
-            f"WHERE brief_dirty = 1 AND list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
             "AND (archived_at IS NULL) "
             "ORDER BY ticker"
         )
@@ -248,12 +242,6 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
     if args.limit > 0:
         tickers = tickers[: args.limit]
     return tickers
-
-
-def _has_processing_tier_column(conn: sqlite3.Connection) -> bool:
-    """Mirror of tier_runner's guard — pre-0054 DBs lack processing_tier."""
-    cur = conn.execute("PRAGMA table_info(tracked_companies)")
-    return any(row[1] == "processing_tier" for row in cur.fetchall())
 
 
 def _compute_brief_hash(conn: sqlite3.Connection, ticker: str, repo_root: Path) -> str:

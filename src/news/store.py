@@ -147,6 +147,7 @@ def upsert_news_rows(conn: sqlite3.Connection, rows: Iterable[NewsRow]) -> tuple
     fetched_at = datetime.now(UTC).strftime(_DATETIME_FORMAT)
     inserted = 0
     total = 0
+    inserted_news_ids: list[int] = []
     for row in rows:
         total += 1
         cur = conn.execute(
@@ -166,6 +167,8 @@ def upsert_news_rows(conn: sqlite3.Connection, rows: Iterable[NewsRow]) -> tuple
         )
         if cur.rowcount > 0:
             inserted += 1
+            if cur.lastrowid is not None:
+                inserted_news_ids.append(int(cur.lastrowid))
     conn.commit()
     # Mirror the freshly-written stories into the typed diet substrate
     # (`signals`, alembic 0095) so the information-diet panel stays current
@@ -177,7 +180,7 @@ def upsert_news_rows(conn: sqlite3.Connection, rows: Iterable[NewsRow]) -> tuple
         try:
             from signals.store import sync_news_to_signals
 
-            sync_news_to_signals(conn)
+            sync_news_to_signals(conn, news_ids=inserted_news_ids)
         except Exception:  # pragma: no cover - the mirror never blocks news
             pass
     return inserted, total - inserted

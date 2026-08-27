@@ -41,7 +41,6 @@ def _bootstrap_min_schema(db_path: Path) -> None:
             brief_dirty BOOLEAN DEFAULT 0,
             last_built_at TIMESTAMP,
             last_brief_hash TEXT,
-            processing_tier TEXT,
             UNIQUE(user_id, ticker)
         );
         CREATE TABLE financial_facts (ticker TEXT, period_end TEXT, line_item TEXT);
@@ -261,9 +260,9 @@ def test_resolve_tickers_includes_clean_p1(repo_root: Path) -> None:
     was touched within 24h, and gates B/C only run for candidates — so a P1
     name must be a candidate every day, dirty or not.
     """
-    _seed(repo_root, "GOOG", "portfolio", brief_dirty=0, processing_tier="P1")
-    _seed(repo_root, "ABNB", "evaluation", brief_dirty=1, processing_tier="P2")
-    _seed(repo_root, "CLEAN", "evaluation", brief_dirty=0, processing_tier="P2")
+    _seed(repo_root, "GOOG", "portfolio", brief_dirty=0)
+    _seed(repo_root, "ABNB", "evaluation", brief_dirty=1)
+    _seed(repo_root, "CLEAN", "evaluation", brief_dirty=0)
     conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
     conn.row_factory = sqlite3.Row
     try:
@@ -282,7 +281,6 @@ def test_resolve_tickers_skips_archived_p1(repo_root: Path) -> None:
         "GONE",
         "portfolio",
         brief_dirty=0,
-        processing_tier="P1",
         archived_at=datetime.now().isoformat(timespec="seconds"),
     )
     conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
@@ -295,7 +293,7 @@ def test_resolve_tickers_skips_archived_p1(repo_root: Path) -> None:
 
 
 def test_resolve_tickers_excludes_dirty_watchlist(repo_root: Path) -> None:
-    _seed(repo_root, "WATCH", "watchlist", brief_dirty=1, processing_tier="P2")
+    _seed(repo_root, "WATCH", "watchlist", brief_dirty=1)
     conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
     conn.row_factory = sqlite3.Row
     try:
@@ -317,8 +315,8 @@ def test_all_tracked_means_active_briefed_roles(repo_root: Path) -> None:
         conn.close()
 
 
-def test_resolve_tickers_dirty_only_without_tier_column(tmp_path: Path) -> None:
-    """Pre-0054 schema (no processing_tier column) falls back to dirty-only."""
+def test_resolve_tickers_dirty_only_from_fresh_schema(tmp_path: Path) -> None:
+    """A fresh schema still includes only dirty rows plus portfolio names."""
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -339,4 +337,4 @@ def test_resolve_tickers_dirty_only_without_tier_column(tmp_path: Path) -> None:
         tickers = _resolve_tickers(conn, _queue_args())
     finally:
         conn.close()
-    assert tickers == ["DIRT"]
+    assert tickers == ["DIRT", "TIDY"]

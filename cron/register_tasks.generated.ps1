@@ -47,8 +47,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-su
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\monthly_advisor_memos' }
 & schtasks.exe /Create /TN '\earnings-summary\monthly_calibration_scorecard' /XML (Join-Path $renderDir 'monthly_calibration_scorecard.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\monthly_calibration_scorecard' }
-& schtasks.exe /Create /TN '\earnings-summary\monthly_p3_refresh' /XML (Join-Path $renderDir 'monthly_p3_refresh.task.xml') /F
-if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\monthly_p3_refresh' }
 & schtasks.exe /Create /TN '\earnings-summary\onboard_pending' /XML (Join-Path $renderDir 'onboard_pending_tickers.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\onboard_pending' }
 & schtasks.exe /Create /TN '\earnings-summary\portfolio_tracker_api' /XML (Join-Path $renderDir 'portfolio_tracker_api.task.xml') /F

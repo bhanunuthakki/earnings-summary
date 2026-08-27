@@ -10,8 +10,7 @@ REM     P1 (portfolio) always runs.
 REM     P2 (watchlist/eval) runs only if last_built_at > 7 days ago.
 REM     P3 (index members / etf / none) runs only if last_built_at > 30 days ago.
 REM   Pass --ignore-tier to restore the old behavior (run on every dirty ticker).
-REM   Companion runs: cron\run_weekly_p2_lens_refresh.bat (Friday 22:00) and
-REM   cron\run_monthly_p3_refresh.bat (1st of month, 03:00).
+REM   Companion run: cron\run_weekly_p2_lens_refresh.bat (Friday 22:00).
 
 setlocal
 set PYTHONUTF8=1

@@ -4,16 +4,16 @@ import pytest
 
 from llm.resolver import (
     CapabilityProfile,
+    InvalidLLMPurposeError,
     is_forced_fallback_allowed,
     model_has_capabilities,
     resolve_model_and_backend,
 )
 
 
-def test_resolve_model_and_backend_default():
-    model, backend = resolve_model_and_backend(purpose=None)
-    assert model == "claude-sonnet-4-6"
-    assert backend in ("claude", "codex")
+def test_resolve_model_and_backend_requires_purpose_or_explicit_model():
+    with pytest.raises(InvalidLLMPurposeError):
+        resolve_model_and_backend(purpose=None)
 
 
 def test_resolve_model_and_backend_explicit_model():

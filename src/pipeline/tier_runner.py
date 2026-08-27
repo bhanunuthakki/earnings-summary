@@ -5,8 +5,7 @@ processing cadence regardless of how actively the analyst follows it. With
 ~11 portfolio names, ~63 watchlist+evaluation names, and ~2.3k index members
 in the universe, treating them uniformly doesn't scale.
 
-`tracked_companies.processing_tier` (added by migration 0044 OR 0051,
-whichever lands first) carries the tier. The mapping:
+The schedule class is derived from `tracked_companies.list_type`. The mapping:
 
     P1   portfolio                         daily refresh
     P2   watchlist | evaluation            weekly refresh
@@ -51,6 +50,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+from models.companies import schedule_class_for_list_type
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 Cadence = Literal["daily", "weekly", "monthly"]
@@ -71,7 +71,7 @@ def tickers_due_for_refresh(
     *,
     now: datetime | None = None,
 ) -> list[str]:
-    """Tickers whose (processing_tier, last_built_at) make them due for the cadence tick.
+    """Tickers whose (list_type, last_built_at) make them due for the cadence tick.
 
     Returns an alphabetically sorted list of UPPERCASE tickers. Archived rows
     are excluded. A ticker with last_built_at IS NULL is always due (never
@@ -88,10 +88,8 @@ def tickers_due_for_refresh(
 
     with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
-        if not _has_processing_tier_column(conn):
-            return []
         rows = conn.execute(
-            "SELECT ticker, processing_tier, last_built_at "
+            "SELECT ticker, list_type, last_built_at "
             "FROM tracked_companies "
             "WHERE archived_at IS NULL "
             "ORDER BY ticker"
@@ -122,13 +120,11 @@ def tickers_due_for_lens_regen(
 
     with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
-        if not _has_processing_tier_column(conn):
-            return []
         if not _has_table(conn, "llm_artifacts"):
             # No artifact store yet — every tracked ticker is "due" since
             # nothing has been generated.
             rows = conn.execute(
-                "SELECT ticker, processing_tier, NULL AS last_generated "
+                "SELECT ticker, list_type, NULL AS last_generated "
                 "FROM tracked_companies WHERE archived_at IS NULL "
                 "ORDER BY ticker"
             ).fetchall()
@@ -137,7 +133,7 @@ def tickers_due_for_lens_regen(
         rows = conn.execute(
             """
             SELECT tc.ticker,
-                   tc.processing_tier,
+                   tc.list_type,
                    (
                      SELECT MAX(a.generated_at)
                      FROM llm_artifacts a
@@ -161,10 +157,10 @@ def _filter_due(
     now: datetime,
     age_col: str,
 ) -> list[str]:
-    """Apply the per-tier threshold to a (ticker, processing_tier, <age_col>) row set."""
+    """Apply the per-class threshold to a (ticker, list_type, <age_col>) row set."""
     out: list[str] = []
     for r in rows:
-        tier = (r["processing_tier"] or "P3").upper()
+        tier = schedule_class_for_list_type(str(r["list_type"])).value
         threshold_days = thresholds.get(tier)
         # P1 + daily → always due (threshold is None).
         if threshold_days is None:
@@ -201,11 +197,6 @@ def _parse_dt(s: str) -> datetime | None:
     if dt.tzinfo is not None:
         dt = dt.replace(tzinfo=None)
     return dt
-
-
-def _has_processing_tier_column(conn: sqlite3.Connection) -> bool:
-    cur = conn.execute("PRAGMA table_info(tracked_companies)")
-    return any(row[1] == "processing_tier" for row in cur.fetchall())
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
@@ -251,17 +242,15 @@ def tier_coverage_summary(
     db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         db_conn.row_factory = sqlite3.Row
-        if not _has_processing_tier_column(db_conn):
-            return out
         rows = db_conn.execute(
-            "SELECT processing_tier, last_built_at FROM tracked_companies WHERE archived_at IS NULL"
+            "SELECT list_type, last_built_at FROM tracked_companies WHERE archived_at IS NULL"
         ).fetchall()
     finally:
         if conn is None:
             db_conn.close()
 
     for r in rows:
-        tier = (r["processing_tier"] or "P3").upper()
+        tier = schedule_class_for_list_type(str(r["list_type"])).value
         if tier not in out:
             tier = "P3"
         out[tier]["total"] += 1

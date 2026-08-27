@@ -56,6 +56,7 @@ def _sync_db_path(repo_root: Path) -> None:
 
 from llm.cli import is_hard_stop  # noqa: E402
 from log_redact import redact  # noqa: E402
+from models.companies import schedule_class_for_list_type  # noqa: E402
 from pipeline.tier_runner import tickers_due_for_lens_regen  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from synthesis_lenses import (  # noqa: E402
@@ -261,12 +262,13 @@ def _build_plan(repo_root: Path, cadence: Cadence) -> list[tuple[str, str, str]]
     if db_path.exists():
         with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
             conn.row_factory = sqlite3.Row
-            if _has_processing_tier_column(conn):
-                rows = conn.execute(
-                    "SELECT UPPER(ticker) AS ticker, processing_tier "
-                    "FROM tracked_companies WHERE archived_at IS NULL"
-                ).fetchall()
-                tier_by_ticker = {r["ticker"]: (r["processing_tier"] or "P3").upper() for r in rows}
+            rows = conn.execute(
+                "SELECT UPPER(ticker) AS ticker, list_type "
+                "FROM tracked_companies WHERE archived_at IS NULL"
+            ).fetchall()
+            tier_by_ticker = {
+                r["ticker"]: schedule_class_for_list_type(str(r["list_type"])).value for r in rows
+            }
 
     target_tier = {"daily": "P1", "weekly": "P2", "monthly": "P3"}[cadence]
     plan: list[tuple[str, str, str]] = []
@@ -354,12 +356,6 @@ def _portfolio_synthesis_is_due(repo_root: Path, cadence: Cadence) -> bool:
     except ValueError:
         return True
     return (datetime.now() - last_dt) >= timedelta(days=7)
-
-
-def _has_processing_tier_column(conn: sqlite3.Connection) -> bool:
-    cur = conn.execute("PRAGMA table_info(tracked_companies)")
-    rows: list[tuple[object, ...]] = cur.fetchall()
-    return any(row[1] == "processing_tier" for row in rows)
 
 
 def _parse_args() -> argparse.Namespace:

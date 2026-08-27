@@ -33,7 +33,7 @@ def _ignore_budget(
 
 def test_unknown_model_fails_closed_even_for_plain_resolution() -> None:
     with pytest.raises(ValueError, match="unregistered capability metadata"):
-        resolve_model_and_backend(None, model="vendor/unregistered-model")
+        resolve_model_and_backend("bear_case", model="vendor/unregistered-model")
 
 
 def test_registered_codex_model_routes_to_codex_provider() -> None:
@@ -52,7 +52,7 @@ def test_call_llm_rejects_unknown_model_before_transport(
     )
 
     with pytest.raises(ValueError, match="unregistered capability metadata"):
-        cli.call_llm("prompt", model="unregistered-model", backend="claude")
+        cli.call_llm("prompt", purpose="bear_case", model="unregistered-model", backend="claude")
 
 
 def test_call_llm_with_web_rejects_unknown_model_before_transport(
@@ -65,7 +65,7 @@ def test_call_llm_with_web_rejects_unknown_model_before_transport(
     )
 
     with pytest.raises(ValueError, match="unregistered capability metadata"):
-        cli.call_llm_with_web("prompt", model="unregistered-model")
+        cli.call_llm_with_web("prompt", purpose="bear_case", model="unregistered-model")
 
 
 @pytest.mark.parametrize(
@@ -126,6 +126,7 @@ def test_call_llm_with_web_propagates_profile_to_codex_adapter(
 
     result = cli.call_llm_with_web(
         "prompt",
+        purpose="bear_case",
         model="gpt-5.6-sol",
         capability_profile=profile,
     )
@@ -148,7 +149,7 @@ def test_call_llm_propagates_profile_to_openrouter_adapter(
 
     result = cli.call_llm(
         "prompt",
-        purpose="test",
+        purpose="bear_case",
         model="deepseek/deepseek-chat",
         capability_profile=profile,
     )
@@ -205,7 +206,7 @@ def test_logged_fallback_propagates_profile(
         "prompt",
         RuntimeError("primary down"),
         prompt_sha="abc",
-        purpose="test",
+        purpose="bear_case",
         ticker=None,
         scope=None,
         run_id="attempt",
@@ -229,7 +230,9 @@ def test_structured_facade_forces_structured_capability_on_every_attempt(
 
     monkeypatch.setattr(structured, "call_llm", fake_call_llm)
 
-    result = structured.call_llm_structured("prompt", purpose="test", required_keys=("answer",))
+    result = structured.call_llm_structured(
+        "prompt", purpose="bear_case", required_keys=("answer",)
+    )
 
     assert result == {"answer": 1}
     assert len(profiles) == 2
@@ -248,7 +251,7 @@ def test_structured_facade_rejects_unknown_model_before_transport(
     with pytest.raises(ValueError, match="unregistered capability metadata"):
         structured.call_llm_structured(
             "prompt",
-            purpose="test",
+            purpose="bear_case",
             model="unregistered-model",
             backend="claude",
         )
@@ -267,7 +270,7 @@ def test_structured_with_raw_preserves_required_profile(
 
     result = structured.call_llm_structured_with_raw(
         "prompt",
-        purpose="test",
+        purpose="bear_case",
         schema=TypeAdapter(dict[str, int]),
         repair_prompt=lambda error: f"repair: {error}",
     )
@@ -304,7 +307,7 @@ def test_operational_fallback_cannot_bypass_required_capability(
     with pytest.raises(ValueError, match="structured output"):
         cli.call_llm(
             "prompt",
-            purpose="test",
+            purpose="bear_case",
             model="gemini-3-flash-preview",
             capability_profile=CapabilityProfile(requires_structured_output=True),
         )

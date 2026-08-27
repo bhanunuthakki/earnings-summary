@@ -8,7 +8,15 @@ GUI.
 
 ## Active crons
 
-46 scheduled tasks total — the authoritative set is `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic human-readable inventory. Run `python execution/sqlite_bootstrap.py execution/generate_cron_artifacts.py --check` to validate exact XML/wrapper coverage and generated artifacts, then `python execution/sqlite_bootstrap.py execution/verify_cron_registration.py` to compare the manifest with live Task Scheduler state. Registration uses `cron/register_tasks.generated.ps1`, which renders every XML action against the checkout invoking it before calling `schtasks`; adding a declaration here does not register or run it. A monthly disaster-recovery drill (15th, 09:00) restores the latest backup to a throwaway path and verifies it (see **Disaster-recovery drill** below). The five daily data-chain tasks run in sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 05:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (typed 20-stage manifest with atomic checkpoint/resume); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); and a weekly Thursday audit verifies every declared task is registered and on schedule. Session distillation remains available only as an explicit, operator-reviewed maintenance CLI.
+45 scheduled tasks total — the authoritative set is `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic human-readable inventory. Run `python execution/sqlite_bootstrap.py execution/generate_cron_artifacts.py --check` to validate exact XML/wrapper coverage and generated artifacts, then `python execution/sqlite_bootstrap.py execution/verify_cron_registration.py` to compare the manifest with live Task Scheduler state. Registration uses `cron/register_tasks.generated.ps1`, which renders every XML action against the checkout invoking it before calling `schtasks`; adding a declaration here does not register or run it. A monthly disaster-recovery drill (15th, 09:00) restores the latest backup to a throwaway path and verifies it (see **Disaster-recovery drill** below). The five daily data-chain tasks run in sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 05:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (typed 20-stage manifest with atomic checkpoint/resume); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); and a weekly Thursday audit verifies every declared task is registered and on schedule. Session distillation remains available only as an explicit, operator-reviewed maintenance CLI.
+
+The retired `\earnings-summary\monthly_p3_refresh` task is no longer declared or registered by this checkout. On each Windows host where it was previously installed, run this one-time manual cleanup. This repository change does not execute the command or mutate Windows Task Scheduler:
+
+```text
+schtasks /Delete /TN "\earnings-summary\monthly_p3_refresh" /F
+```
+
+Retained scheduler logs and other historical receipts remain historical evidence; deleting the retired task does not delete them.
 
 ### Portfolio Tracker runtime
 
@@ -64,7 +72,6 @@ These regenerate LLM lens artifacts only where the coverage contract permits the
 |---|---|---|---|---|
 | `earnings-summary\weekly_p2_lens_refresh` | Weekly, Friday 22:00 | `weekly_p2_lens_refresh.task.xml` | `run_weekly_p2_lens_refresh.bat` | Regenerates the narrow P2 lens set (`five_min_reread`, `thesis_drift_qoq`) for active watchlist/evaluation names at a 7-day due age. The plan is bounded at 128 pairs and dispatches only from 21:30 through 01:35 PT; transient items defer with retry result 75 and hard stops remain loud. It does not build watchlist DCFs or full briefs. |
 | `earnings-summary\weekly_synthesis` | Weekly, Sunday 23:00 | `weekly_synthesis.task.xml` | `run_weekly_synthesis.bat` | **The "Sunday-night portfolio review" pipeline.** Four steps in order: (1) `refresh_dirty_artifacts.py --manifest-only` drains the LLM-artifact dirty queue so lens reads see fresh facts; (2) `run_lens.py --tickers AMZN,BN,GOOG,MELI,META,NOW,NU,NVO,RBRK,VEEV,WIX --all` regenerates every per-ticker lens for the full portfolio; (3) `run_lens.py --lens cross_portfolio_synthesis` runs the Opus cross-portfolio convergence read (~$0.25); (4) `build_analytical_dashboard.py` rebuilds `output/dashboard/<DATE>_portfolio_dashboard.html` with the new artifacts. Sequential — any step's failure halts the rest. **Bear-case grading was removed from this task** (#675) — it is owned by the dedicated weekly `grade_calibration` cron (Sun 10:30); grading is idempotent so a single weekly pass suffices. |
-| `earnings-summary\monthly_p3_refresh` | Monthly, 1st @ 03:00 | `monthly_p3_refresh.task.xml` | `run_monthly_p3_refresh.bat` | Compatibility no-op. P3/index/catalog coverage is deterministic-only, so `run_due_lenses.py --cadence monthly` returns an empty LLM plan. |
 | `earnings-summary\submit_saydo_batch` | Weekly, Saturday 02:00 | `submit_saydo_batch.task.xml` | `run_submit_saydo_batch.bat` | **SayDo verdicts through the governed subscription-backed LLM entrypoint.** Two steps: (1) `build_saydo_pairs.py --all --prepare-batch` writes a JSONL of management-commitment (say, do) verdict requests whose check-date has arrived; (2) `submit_saydo_batch.py` processes each pending item through central purpose routing, writes successful verdicts, and leaves transient failures pending for the next run. No-op when nothing is due; the pre-flight budget gate and central hard stops fail loudly. |
 | `earnings-summary\red_team` | Weekly Saturday 10:00 (self-gated to the month's FIRST Saturday) | `red_team.task.xml` | `run_red_team.bat` | **Monthly First-Saturday adversarial review** (`directives/monthly_red_team.md` Phase 2). Runs `execution/run_red_team.py`, which generates one rotating-lens adversarial attack per held name (weight > 0.5%, cash-likes/index-ETFs excluded) plus the three cross-book passes (factor-block detection, style drift, human-capital overlay), persists them to `red_team_items`, and writes a brief snapshot to `.tmp/red_team_briefs/`. Windows Task Scheduler has no native "Nth weekday of month" trigger, so the XML fires every Saturday and the script itself no-ops (exit 0, logged `red_team_skipped_not_first_saturday`) unless today is the month's first Saturday. Idempotent on `red_team_{YYYY_MM}` — a re-run of an already-generated month is a no-op unless `--force`. Per-item degrade (a transient LLM failure defers that one item and retries next run); a hard stop (budget cap / missing CLI) halts loudly. Daytime weekend slot, clear of every protected window in `directives/llm_quota_scheduling.md`. |
 
@@ -301,10 +308,6 @@ schtasks /create /tn "earnings-summary\weekly_synthesis" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_synthesis.task.xml" ^
   /ru "%USERNAME%"
 
-schtasks /create /tn "earnings-summary\monthly_p3_refresh" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\monthly_p3_refresh.task.xml" ^
-  /ru "%USERNAME%"
-
 schtasks /create /tn "earnings-summary\refresh_ir_kpis" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_ir_kpis.task.xml" ^
   /ru "%USERNAME%"
@@ -442,9 +445,6 @@ Then check:
   rows for the eleven portfolio tickers + one `cross_portfolio_synthesis`
   artifact, and updated grades on any bear-case predictions whose
   `target_period` has passed.
-- For `monthly_p3_refresh`: new `llm_artifacts` rows for P3-tier
-  (index_member / etf / `none`) tickers that drifted past their 90-day
-  cadence. Bounded — the P3 lens set is `five_min_reread` only.
 - For `refresh_ir_kpis`: per configured ticker, a `=== IR-spreadsheet refresh -
   <T>` header followed by the child's JSON (`rows_inserted`, `doc_id`, …), then a
   final summary `{ "tickers": [...], "skipped_no_config": [...], "ok": N,

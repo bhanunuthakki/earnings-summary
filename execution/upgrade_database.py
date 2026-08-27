@@ -36,13 +36,13 @@ from sqlite_runtime import (
 )
 
 ACTIVE_BASE = "0001_initial_schema"
-ACTIVE_HEAD = "0027_add_sizing_intent_supersessions"
+ACTIVE_HEAD = "0028_remove_processing_tier_and_rename_research_tasks"
 OPERATION_EVENTS_CONTRACT_REVISION = "0012_close_operation_event_detail_reason"
 _MANAGED_RUNTIME_REPOSITORY = "earnings-summary"
 _WINDOWS_CSIDL_PROFILE = 0x0028
 
 _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
-    "tracked_companies": frozenset({"ticker", "processing_tier"}),
+    "tracked_companies": frozenset({"ticker", "list_type"}),
     "documents": frozenset({"id", "ticker"}),
     "llm_calls": frozenset({"purpose", "called_at"}),
     "llm_budgets": frozenset({"purpose", "on_exceed"}),

@@ -236,70 +236,81 @@ def _apply_groups(
 
     db_path = repo_root / "data" / "portfolio.db"
     rows_mapped = 0
-    for g in cast("list[object]", groups_raw):
-        if not isinstance(g, dict):
-            continue
-        gd = cast("dict[str, object]", g)
-        canonical_name = gd.get("canonical_name")
-        kind = gd.get("kind") or "segment"
-        aliases_raw = gd.get("aliases")
-        if not isinstance(canonical_name, str) or not canonical_name.strip():
-            continue
-        if kind not in ("segment", "product_category", "geography"):
-            kind = "segment"
-        aliases = (
-            [a for a in cast("list[object]", aliases_raw) if isinstance(a, str)]
-            if isinstance(aliases_raw, list)
-            else []
-        )
-        if not aliases:
-            continue
-
-        global_canonical = f"{ticker}:{canonical_name}"
-        if dry_run:
-            log.info(
-                {
-                    "event": "dry_run_group",
-                    "ticker": ticker,
-                    "kind": kind,
-                    "canonical": canonical_name,
-                    "aliases": aliases,
-                }
-            )
-            continue
-
-        seg_id = upsert_entity(
-            kind=kind,
-            canonical_name=global_canonical,
-            display_name=canonical_name,
-            parent_entity_id=company_entity_id,
-        )
-        if seg_id is None:
-            continue
-        # Register canonical + all observed aliases
-        for alias in {canonical_name, *aliases}:
-            record_alias(
-                entity_id=seg_id,
-                alias_text=alias,
-                alias_kind="llm_canonicalized",
-                confidence=0.9,
-            )
-        upsert_relationship(
-            from_entity_id=seg_id,
-            relationship_kind=(
-                "segment_of"
-                if kind == "segment"
-                else "product_of"
-                if kind == "product_category"
-                else "geography_of"
-            ),
-            to_entity_id=company_entity_id,
-        )
-
-        # Backfill segment_dimensions for each alias (via segment_periods to
-        # filter on ticker — segment_dimensions itself has no ticker column).
+    conn = None
+    if not dry_run:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        try:
+        conn.row_factory = sqlite3.Row
+    try:
+        for g in cast("list[object]", groups_raw):
+            if not isinstance(g, dict):
+                continue
+            gd = cast("dict[str, object]", g)
+            canonical_name = gd.get("canonical_name")
+            kind = gd.get("kind") or "segment"
+            aliases_raw = gd.get("aliases")
+            if not isinstance(canonical_name, str) or not canonical_name.strip():
+                continue
+            if kind not in ("segment", "product_category", "geography"):
+                kind = "segment"
+            aliases = (
+                [a for a in cast("list[object]", aliases_raw) if isinstance(a, str)]
+                if isinstance(aliases_raw, list)
+                else []
+            )
+            if not aliases:
+                continue
+
+            global_canonical = f"{ticker}:{canonical_name}"
+            if dry_run:
+                log.info(
+                    {
+                        "event": "dry_run_group",
+                        "ticker": ticker,
+                        "kind": kind,
+                        "canonical": canonical_name,
+                        "aliases": aliases,
+                    }
+                )
+                continue
+            if conn is None:
+                raise RuntimeError("writer connection unavailable")
+            seg_id = upsert_entity(
+                kind=kind,
+                canonical_name=global_canonical,
+                display_name=canonical_name,
+                parent_entity_id=company_entity_id,
+                conn=conn,
+            )
+            if seg_id is None:
+                raise RuntimeError(f"entity upsert failed for {ticker}:{canonical_name}")
+            # Register canonical + all observed aliases
+            for alias in {canonical_name, *aliases}:
+                alias_id = record_alias(
+                    entity_id=seg_id,
+                    alias_text=alias,
+                    alias_kind="llm_canonicalized",
+                    confidence=0.9,
+                    conn=conn,
+                )
+                if alias_id is None:
+                    raise RuntimeError(f"alias upsert failed for {ticker}:{alias}")
+            relationship_id = upsert_relationship(
+                from_entity_id=seg_id,
+                relationship_kind=(
+                    "segment_of"
+                    if kind == "segment"
+                    else "product_of"
+                    if kind == "product_category"
+                    else "geography_of"
+                ),
+                to_entity_id=company_entity_id,
+                conn=conn,
+            )
+            if relationship_id is None:
+                raise RuntimeError(f"relationship upsert failed for {ticker}:{canonical_name}")
+
+            # Backfill segment_dimensions for each alias (via segment_periods to
+            # filter on ticker — segment_dimensions itself has no ticker column).
             for alias in aliases:
                 cur = conn.execute(
                     """
@@ -317,8 +328,14 @@ def _apply_groups(
                     (seg_id, ticker, alias),
                 )
                 rows_mapped += cur.rowcount
+        if conn is not None:
             conn.commit()
-        finally:
+    except Exception:
+        if conn is not None:
+            conn.rollback()
+        raise
+    finally:
+        if conn is not None:
             conn.close()
     return rows_mapped
 

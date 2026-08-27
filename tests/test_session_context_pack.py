@@ -8,13 +8,13 @@ migration runs in order against the bootstrap tables ``db.py``'s
 production schema). Seeds one tenet, one stance, one open musing, one owner
 decision; calls ``build_pack`` directly (no subprocess) and asserts each
 section renders its seed, the empty-section behavior for research-task
-prompts (no ``research_tasks`` row carries a ``session_prompt`` in this
-fixture — B7 lands that column concurrently), and that the whole build is
-zero-LLM.
+prompts (no ``research_tasks`` row carries a ``session_prompt`` in its
+``task_metadata_json`` in this fixture), and that the whole build is zero-LLM.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from collections.abc import Callable
@@ -225,16 +225,107 @@ def test_pack_renders_owner_decision_with_falsifier(db_path: Path) -> None:
 def test_pack_research_task_prompts_empty_when_none_carry_session_prompt(
     db_path: Path,
 ) -> None:
-    """No research_tasks row in this fixture carries a session_prompt (either
-    the column doesn't exist yet — pre-B7 — or it exists but is unset on
-    every row). Either way the section renders an explicit 'none' note, never
-    a crash, per the plan's pre-B7-DB defensiveness requirement."""
+    """No research_tasks row in this fixture carries a session_prompt in its
+    task_metadata_json, so the section renders an explicit 'none' note."""
     pack = session_context_pack.build_pack(db_path)
     assert "## Research Tasks -> Claude Session" in pack
     section_idx = pack.index("## Research Tasks -> Claude Session")
     profile_idx = pack.index("## Owner Profile")
     block = pack[section_idx:profile_idx]
-    assert ("_None pending._" in block) or ("session_prompt` column" in block)
+    assert ("_None pending._" in block) or ("task_metadata_json` column" in block)
+
+
+def test_pack_renders_session_prompt_from_task_metadata_json(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        now = "2026-07-20T00:00:00"
+        conn.execute(
+            "INSERT INTO research_tasks "
+            "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+            "VALUES (?, ?, 'proposed', ?, ?, ?)",
+            (
+                "does NU's NIM hold up?",
+                "NU",
+                json.dumps({"session_prompt": "# Research NU NIM\n\nUse primary sources."}),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    pack = session_context_pack.build_pack(db_path)
+
+    assert "### Task #" in pack
+    assert "_Claim:_ does NU's NIM hold up?" in pack
+    assert "# Research NU NIM\n\nUse primary sources." in pack
+
+
+def test_pack_ignores_invalid_or_missing_task_metadata(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        now = "2026-07-20T00:00:00"
+        for metadata in ("not-json", json.dumps(["not", "an", "object"]), None):
+            conn.execute(
+                "INSERT INTO research_tasks "
+                "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+                "VALUES (?, ?, 'proposed', ?, ?, ?)",
+                ("unrenderable task", "NU", metadata, now, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    pack = session_context_pack.build_pack(db_path)
+    section_idx = pack.index("## Research Tasks -> Claude Session")
+    profile_idx = pack.index("## Owner Profile")
+    block = pack[section_idx:profile_idx]
+
+    assert "_None pending._" in block
+    assert "unrenderable task" not in block
+
+
+def test_pack_limits_to_newest_valid_task_prompts(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        now = "2026-07-20T00:00:00"
+        for index in range(12):
+            conn.execute(
+                "INSERT INTO research_tasks "
+                "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+                "VALUES (?, ?, 'proposed', ?, ?, ?)",
+                (
+                    f"valid task {index}",
+                    "NU",
+                    json.dumps({"session_prompt": f"Prompt {index}"}),
+                    now,
+                    now,
+                ),
+            )
+        # Newest row is malformed; it must not displace the newest ten valid
+        # prompts or make the guarded JSON predicate raise.
+        conn.execute(
+            "INSERT INTO research_tasks "
+            "(claim, ticker, status, task_metadata_json, created_at, updated_at) "
+            "VALUES (?, ?, 'proposed', ?, ?, ?)",
+            ("invalid newest task", "NU", "not-json", now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    pack = session_context_pack.build_pack(db_path)
+    section_idx = pack.index("## Research Tasks -> Claude Session")
+    profile_idx = pack.index("## Owner Profile")
+    block = pack[section_idx:profile_idx]
+
+    assert block.count("### Task #") == 10
+    for index in range(2, 12):
+        assert f"Prompt {index}" in block
+    assert "\nPrompt 0\n" not in block
+    assert "\nPrompt 1\n" not in block
+    assert "invalid newest task" not in block
 
 
 def test_pack_owner_profile_empty_state(db_path: Path) -> None:

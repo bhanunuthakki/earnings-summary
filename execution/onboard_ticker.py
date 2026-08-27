@@ -10,8 +10,7 @@ Sequence per ticker:
     0. (Optional) Apply industry KPI template via --industry-template <slug>
        or --industry-template auto. Merges template canonical_kpis into
        micro_thesis/holdings/<T>.json (preserving any existing tier_1_kpis),
-       seeds the company entity row with sector metadata, and sets
-       tracked_companies.processing_tier (P1/P2/P3). See
+       seeds the company entity row with sector metadata. See
        `apply_industry_template` below.
     1. FMP fetch via `execution/save_fmp_data.py --tickers TICKER --skip-existing`
        (subprocess; the script has its own DB-connection lifecycle and resumes
@@ -59,6 +58,7 @@ from industry_classifier import (  # noqa: E402
     classify_ticker,
     load_template,
 )
+from models.companies import schedule_class_for_list_type  # noqa: E402
 from models.runs import StageStatus as RunStageStatus  # noqa: E402
 from pipeline.fmp_doc_index import (  # noqa: E402
     index_fmp_files_for_ticker,
@@ -94,18 +94,6 @@ _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _FMP_SCRIPT = PROJECT_ROOT / "execution" / "save_fmp_data.py"
 _BACKFILL_SCRIPT = PROJECT_ROOT / "execution" / "backfill_transcripts.py"
-
-# Mapping from list_type → processing tier. Used by the template applier when
-# it sets tracked_companies.processing_tier. Mirrors the rules in migration
-# 0044's backfill so the two stay in sync.
-_LIST_TYPE_TO_TIER: dict[str, str] = {
-    "portfolio": "P1",
-    "watchlist": "P2",
-    "evaluation": "P2",
-    "etf": "P3",
-    "index_member": "P3",
-    "none": "P3",
-}
 
 
 def _onboard_invocation_inputs(
@@ -148,7 +136,7 @@ class TemplateApplyResult:
     kpis_added: list[str]
     kpis_kept: list[str]
     entity_id: int | None
-    processing_tier: str | None
+    schedule_class: str | None
 
 
 def apply_industry_template(
@@ -169,9 +157,8 @@ def apply_industry_template(
       3) Upsert a company entity row via entity_store.upsert_entity, with
          external_ids={'ticker': ...} and meta={'sector': <from seed>} when
          the ticker is in the entity_seed registry.
-      4) Set tracked_companies.processing_tier based on list_type. Falls
-         back to 'P3' when the ticker isn't in tracked_companies yet (a
-         fresh onboard before track_company has fired wouldn't have the row).
+      4) Read the derived schedule class from list_type when the ticker is
+         present in tracked_companies.
 
     Each step degrades gracefully — a missing DB doesn't prevent the holdings
     JSON from being written, and vice versa. Callers can inspect the returned
@@ -200,7 +187,7 @@ def apply_industry_template(
         ticker=ticker.upper(),
         db_path=db_path_resolved,
     )
-    processing_tier = _set_processing_tier(
+    schedule_class = _lookup_schedule_class(
         ticker=ticker.upper(),
         db_path=db_path_resolved,
     )
@@ -214,7 +201,7 @@ def apply_industry_template(
             "kpis_added": added,
             "kpis_kept_count": len(kept),
             "entity_id": entity_id,
-            "processing_tier": processing_tier,
+            "schedule_class": schedule_class,
         },
     )
 
@@ -225,7 +212,7 @@ def apply_industry_template(
         kpis_added=added,
         kpis_kept=kept,
         entity_id=entity_id,
-        processing_tier=processing_tier,
+        schedule_class=schedule_class,
     )
 
 
@@ -359,36 +346,22 @@ def _lookup_seed(ticker: str) -> tuple[str | None, str | None, str | None]:
     return (None, None, None)
 
 
-def _set_processing_tier(*, ticker: str, db_path: Path) -> str | None:
-    """Update tracked_companies.processing_tier based on current list_type.
-    Returns the tier value set, or None if the row / column doesn't exist."""
+def _lookup_schedule_class(*, ticker: str, db_path: Path) -> str | None:
+    """Return the derived schedule class for a tracked ticker, if present."""
     if not db_path.exists():
         return None
     try:
-        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        conn.row_factory = sqlite3.Row
-        # Bail if the column isn't present (migration 0044 hasn't run yet)
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracked_companies)").fetchall()}
-        if "processing_tier" not in cols:
-            conn.close()
-            return None
-        row = conn.execute(
-            "SELECT list_type FROM tracked_companies WHERE ticker = ? LIMIT 1",
-            (ticker,),
-        ).fetchone()
-        if row is None:
-            conn.close()
-            return None
-        tier = _LIST_TYPE_TO_TIER.get(row["list_type"], "P3")
-        conn.execute(
-            "UPDATE tracked_companies SET processing_tier = ? WHERE ticker = ?",
-            (tier, ticker),
-        )
-        conn.commit()
-        conn.close()
-        return tier
+        with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT list_type FROM tracked_companies WHERE ticker = ? LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            if row is None:
+                return None
+            return schedule_class_for_list_type(str(row["list_type"])).value
     except sqlite3.Error as exc:
-        log.warning({"event": "set_processing_tier_failed", "error": str(exc)})
+        log.warning({"event": "lookup_schedule_class_failed", "error": str(exc)})
         return None
 
 
@@ -459,7 +432,7 @@ def _run_ir_documents(ticker: str) -> int:
 def _lookup_list_type(ticker: str) -> str | None:
     """Return tracked_companies.list_type for the ticker, or None if absent.
 
-    Mirrors the list_type read in `_set_processing_tier`. Used to gate the
+    Reads the same list_type used for schedule classification. Used to gate the
     Say-Do onboarding step to evaluation-list names.
     """
     if not _DB_PATH.exists():
@@ -676,7 +649,7 @@ def main() -> int:
                     f"kpis_added={len(result.kpis_added)} "
                     f"kpis_kept={len(result.kpis_kept)} "
                     f"entity_id={result.entity_id} "
-                    f"tier={result.processing_tier}",
+                    f"schedule_class={result.schedule_class}",
                     flush=True,
                 )
 

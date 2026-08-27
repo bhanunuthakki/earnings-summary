@@ -64,8 +64,8 @@ def test_tap_creates_task_for_wondering(db_path: Path) -> None:
     assert task.note_id == note_id
     assert task.ticker == "NU"
     # B7: the research_task route stamps a stated cost + a session-bridge prompt.
-    assert task.cost_usd is not None and task.cost_usd > 0
-    assert "do NU margins hold?" in str(task.meta.get("session_prompt", ""))
+    assert task.estimated_cost_usd is not None and task.estimated_cost_usd > 0
+    assert "do NU margins hold?" in str(task.metadata.get("session_prompt", ""))
 
 
 def test_tap_no_task_for_observation(db_path: Path) -> None:
@@ -250,8 +250,8 @@ def test_wondering_research_task_route_creates_task_with_cost_and_prompt(db_path
     assert tid is not None
     task = proposals.get_task(tid, db_path=db_path)
     assert task is not None
-    assert task.cost_usd == pytest.approx(0.40)  # ticker-scoped estimate (NU)
-    assert str(task.meta.get("session_prompt", "")).startswith("# Research this wondering")
+    assert task.estimated_cost_usd == pytest.approx(0.40)  # ticker-scoped estimate (NU)
+    assert str(task.metadata.get("session_prompt", "")).startswith("# Research this wondering")
 
 
 def test_wondering_triage_call_failure_fails_open_to_research_task(db_path: Path) -> None:
@@ -282,26 +282,28 @@ def test_wondering_tap_audits_new_b7_routes(db_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# B7 — set_task_extras (the repurposed cost_usd / run_id-as-JSON-meta columns)
+# B7 — set_task_extras (the estimated_cost_usd / task_metadata_json columns)
 # ---------------------------------------------------------------------------
 
 
 def test_set_task_extras_merges_without_clobbering(db_path: Path) -> None:
     tid = proposals.create_task(note_id=None, claim="c", ticker="NU", db_path=db_path)
-    proposals.set_task_extras(tid, cost_usd=0.40, session_prompt="prompt v1", db_path=db_path)
+    proposals.set_task_extras(
+        tid, estimated_cost_usd=0.40, session_prompt="prompt v1", db_path=db_path
+    )
     task = proposals.get_task(tid, db_path=db_path)
     assert task is not None
-    assert task.cost_usd == 0.40
-    assert task.meta == {"session_prompt": "prompt v1"}
+    assert task.estimated_cost_usd == 0.40
+    assert task.metadata == {"session_prompt": "prompt v1"}
 
     # A second call only touching packeted_at must NOT clobber session_prompt
-    # or cost_usd — read-merge-write, like patch_note_context.
+    # or estimated_cost_usd — read-merge-write, like patch_note_context.
     proposals.set_task_extras(tid, packeted_at="2026-07-20T00:00:00", db_path=db_path)
     task2 = proposals.get_task(tid, db_path=db_path)
     assert task2 is not None
-    assert task2.cost_usd == 0.40
-    assert task2.meta["session_prompt"] == "prompt v1"
-    assert task2.meta["packeted_at"] == "2026-07-20T00:00:00"
+    assert task2.estimated_cost_usd == 0.40
+    assert task2.metadata["session_prompt"] == "prompt v1"
+    assert task2.metadata["packeted_at"] == "2026-07-20T00:00:00"
 
 
 def test_set_task_extras_unanswered_weeks_accumulates(db_path: Path) -> None:
@@ -310,11 +312,11 @@ def test_set_task_extras_unanswered_weeks_accumulates(db_path: Path) -> None:
     proposals.set_task_extras(tid, unanswered_weeks=2, db_path=db_path)
     task = proposals.get_task(tid, db_path=db_path)
     assert task is not None
-    assert task.meta["unanswered_weeks"] == 2
+    assert task.metadata["unanswered_weeks"] == 2
 
 
 def test_set_task_extras_missing_task_is_a_noop(db_path: Path) -> None:
-    proposals.set_task_extras(999999, cost_usd=1.0, db_path=db_path)  # must not raise
+    proposals.set_task_extras(999999, estimated_cost_usd=1.0, db_path=db_path)  # must not raise
 
 
 def test_proposal_source_note_ids_garbage_degrades_to_empty(db_path: Path) -> None:

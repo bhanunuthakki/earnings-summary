@@ -43,7 +43,7 @@ a column is enough for v1.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -93,6 +93,10 @@ SIGNAL_ESTIMATE_REVISION = "estimate_revision"
 # `news`), so it can't become a material_news alert. `estimate_revision` already
 # IS the "model revision" lane the directive also names — no second synonym.
 SIGNAL_MEDIA_APPEARANCE = "media_appearance"
+
+# Keep incremental mirror statements below SQLite's portable host-parameter
+# ceiling while retaining one transaction for the complete sync call.
+_NEWS_SYNC_ID_CHUNK_SIZE = 500
 
 SIGNAL_TYPES: frozenset[str] = frozenset(
     {
@@ -402,7 +406,12 @@ def _now_stamp(now: datetime | None) -> str:
     return (now or datetime.now(UTC)).replace(tzinfo=None).strftime(_DATETIME_FORMAT)
 
 
-def sync_news_to_signals(conn: sqlite3.Connection, *, now: datetime | None = None) -> int:
+def sync_news_to_signals(
+    conn: sqlite3.Connection,
+    *,
+    news_ids: Collection[int] | None = None,
+    now: datetime | None = None,
+) -> int:
     """Mirror `news` rows into `signals` as typed diet rows; return the count
     inserted this call.
 
@@ -411,40 +420,62 @@ def sync_news_to_signals(conn: sqlite3.Connection, *, now: datetime | None = Non
     the typed lane, replacing the render-time headline regex); every other story
     is ``general_news``. Idempotent — ``INSERT OR IGNORE`` on the
     ``ux_signals_news_id`` unique index, so re-running after each news fetch only
-    adds genuinely-new stories and never duplicates. Best-effort on a pre-0095
-    DB (no `signals` / `news` table) → returns 0 without raising, so the news
-    write path is never blocked by the mirror.
+    adds genuinely-new stories and never duplicates. When ``news_ids`` is
+    supplied, only those newly inserted news rows are considered; omitting it
+    intentionally retains the full-table backfill behavior. Best-effort on a
+    pre-0095 DB (no `signals` / `news` table) → returns 0 without raising, so
+    the news write path is never blocked by the mirror.
     """
-    stamp = _now_stamp(now)
-    try:
-        cur = conn.execute(
-            """
-            INSERT OR IGNORE INTO signals
-                (ticker, signal_type, title, body, url, firm,
-                 event_date, published_at, weight, cadence, source_feed,
-                 news_id, created_at)
-            SELECT
-                ticker,
-                CASE WHEN source_feed = 'yf_grades' THEN ? ELSE ? END,
-                headline, snippet, url, source,
-                NULL, published_at,
-                CASE WHEN source_feed = 'yf_grades' THEN ? ELSE ? END,
-                ?, source_feed, id, ?
-            FROM news
-            """,
-            (
-                SIGNAL_CONSENSUS_RATING,
-                SIGNAL_GENERAL_NEWS,
-                DEFAULT_WEIGHTS[SIGNAL_CONSENSUS_RATING],
-                DEFAULT_WEIGHTS[SIGNAL_GENERAL_NEWS],
-                CADENCE_EVENT,
-                stamp,
-            ),
+    if news_ids is not None:
+        unique_ids = tuple(dict.fromkeys(news_ids))
+        if not unique_ids:
+            return 0
+        id_chunks = tuple(
+            unique_ids[start : start + _NEWS_SYNC_ID_CHUNK_SIZE]
+            for start in range(0, len(unique_ids), _NEWS_SYNC_ID_CHUNK_SIZE)
         )
+    else:
+        id_chunks = ((),)
+
+    stamp = _now_stamp(now)
+    inserted = 0
+    try:
+        for bounded_ids in id_chunks:
+            if bounded_ids:
+                placeholders = ", ".join("?" for _ in bounded_ids)
+                news_filter = f" WHERE id IN ({placeholders})"
+            else:
+                news_filter = ""
+            cur = conn.execute(
+                f"""
+                INSERT OR IGNORE INTO signals
+                    (ticker, signal_type, title, body, url, firm,
+                     event_date, published_at, weight, cadence, source_feed,
+                     news_id, created_at)
+                SELECT
+                    ticker,
+                    CASE WHEN source_feed = 'yf_grades' THEN ? ELSE ? END,
+                    headline, snippet, url, source,
+                    NULL, published_at,
+                    CASE WHEN source_feed = 'yf_grades' THEN ? ELSE ? END,
+                    ?, source_feed, id, ?
+                FROM news{news_filter}
+                """,
+                (
+                    SIGNAL_CONSENSUS_RATING,
+                    SIGNAL_GENERAL_NEWS,
+                    DEFAULT_WEIGHTS[SIGNAL_CONSENSUS_RATING],
+                    DEFAULT_WEIGHTS[SIGNAL_GENERAL_NEWS],
+                    CADENCE_EVENT,
+                    stamp,
+                    *bounded_ids,
+                ),
+            )
+            inserted += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
     except sqlite3.Error:
         return 0
     conn.commit()
-    return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    return inserted
 
 
 def record_investor_day(

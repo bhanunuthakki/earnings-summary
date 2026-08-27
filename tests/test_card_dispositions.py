@@ -33,7 +33,6 @@ CREATE TABLE tracked_companies (
     user_id TEXT NOT NULL,
     ticker TEXT NOT NULL,
     list_type TEXT NOT NULL,
-    processing_tier TEXT,
     brief_dirty BOOLEAN DEFAULT 0,
     archived_at TEXT
 );
@@ -69,11 +68,11 @@ CREATE TABLE research_tasks (
     claim TEXT NOT NULL,
     ticker TEXT,
     status TEXT NOT NULL,
-    -- cost_usd/run_id exist on the real table since 0120 and create_task
+    -- estimated_cost_usd/task_metadata_json exist on the real table and create_task
     -- writes both since B7 (stated cost + JSON meta) — the hand DDL must
     -- track the real schema or every disposition test breaks on INSERT.
-    cost_usd FLOAT,
-    run_id TEXT,
+    estimated_cost_usd FLOAT,
+    task_metadata_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

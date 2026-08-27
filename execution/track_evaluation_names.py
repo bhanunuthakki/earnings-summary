@@ -30,7 +30,7 @@ def main() -> int:
         conn = db.get_connection()
         try:
             conn.execute(
-                "UPDATE tracked_companies SET instrument_type = ?, filing_regime = ?, processing_tier = 'P2' WHERE ticker = ?",
+                "UPDATE tracked_companies SET instrument_type = ?, filing_regime = ? WHERE ticker = ?",
                 (inst_type, filing_regime, ticker),
             )
             conn.commit()

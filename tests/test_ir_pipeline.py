@@ -26,7 +26,10 @@ from ir_pipeline.config import (  # noqa: E402
     get_config,
     save_config,
 )
-from ir_pipeline.discover import discover_documents  # noqa: E402
+from ir_pipeline.discover import (  # noqa: E402
+    discover_documents,
+    discover_history_hybrid,
+)
 from ir_pipeline.discover._docmeta import classify  # noqa: E402
 from ir_pipeline.spreadsheet import (  # noqa: E402
     _header_row,
@@ -67,6 +70,41 @@ def test_parse_period_handles_datetime_and_ddmmyyyy() -> None:
     assert _parse_period("31/03/2026") == dt.datetime(2026, 3, 31)
     assert _parse_period("2026-03-31 00:00:00") == dt.datetime(2026, 3, 31)
     assert _parse_period("not a date") is None
+
+
+def test_q4cdn_config_has_no_precise_adapter() -> None:
+    config = IrConfig(
+        ticker="ZZZ",
+        platform="q4cdn",
+        results_center_url="https://example.test/results",
+    )
+    with pytest.raises(ValueError, match=r"precise|generic|direct"):
+        discover_documents(config)
+
+
+def test_q4cdn_config_uses_generic_history_fallback(monkeypatch) -> None:
+    config = IrConfig(
+        ticker="ZZZ",
+        platform="q4cdn",
+        results_center_url="https://example.test/results",
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_history(*, ir_url: str, max_quarters: int, timeout_ms: int):
+        calls.append((ir_url, max_quarters, timeout_ms))
+        return []
+
+    monkeypatch.setattr("ir_pipeline.discover.generic.discover_document_history", fake_history)
+    assert (
+        discover_history_hybrid(
+            ir_url=config.results_center_url,
+            config=config,
+            max_quarters=4,
+            timeout_ms=1234,
+        )
+        == []
+    )
+    assert calls == [(config.results_center_url, 4, 1234)]
 
 
 def test_header_row_detection_finds_offset_date_row(tmp_path: Path) -> None:

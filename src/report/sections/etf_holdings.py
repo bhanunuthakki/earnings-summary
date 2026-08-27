@@ -12,6 +12,7 @@ own modules following the equity-section convention.
 
 from __future__ import annotations
 
+import sqlite3
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,10 +29,15 @@ from report.render_clock import render_today
 from report.sections._common import open_repo_db
 
 
-def build_profile(ticker: str, repo_root: Path) -> EtfProfileSection:
+def build_profile(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> EtfProfileSection:
     """Build the §1 ETF profile section."""
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return EtfProfileSection(
             status=SectionStatus.MISSING_DATA,
             missing=MissingReason(
@@ -41,9 +47,10 @@ def build_profile(ticker: str, repo_root: Path) -> EtfProfileSection:
             ticker=ticker.upper(),
         )
     try:
-        profile = get_etf_profile(conn, ticker)
+        profile = get_etf_profile(db_conn, ticker)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
     if profile is None:
         return EtfProfileSection(
@@ -77,10 +84,16 @@ def build_profile(ticker: str, repo_root: Path) -> EtfProfileSection:
     )
 
 
-def build_holdings(ticker: str, repo_root: Path, top_n: int = 10) -> EtfHoldingsSection:
+def build_holdings(
+    ticker: str,
+    repo_root: Path,
+    top_n: int = 10,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> EtfHoldingsSection:
     """Build the §5 ETF holdings section (top N + sector breakdown)."""
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return EtfHoldingsSection(
             status=SectionStatus.MISSING_DATA,
             missing=MissingReason(
@@ -90,9 +103,10 @@ def build_holdings(ticker: str, repo_root: Path, top_n: int = 10) -> EtfHoldings
         )
     try:
         # Load EVERY holding for sector aggregation; truncate the table to top_n.
-        all_holdings = get_etf_holdings(conn, ticker)
+        all_holdings = get_etf_holdings(db_conn, ticker)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
     if not all_holdings:
         return EtfHoldingsSection(
@@ -138,10 +152,15 @@ def build_holdings(ticker: str, repo_root: Path, top_n: int = 10) -> EtfHoldings
 
 def build_etf_brief(ticker: str, repo_root: Path, top_n: int = 10) -> EtfBriefSpec:
     """Glue both subsections into the EtfBriefSpec the renderer consumes."""
-    return EtfBriefSpec(
-        ticker=ticker.upper(),
-        generation_date=render_today(),
-        repo_root=str(repo_root),
-        profile=build_profile(ticker, repo_root),
-        holdings=build_holdings(ticker, repo_root, top_n=top_n),
-    )
+    conn = open_repo_db(repo_root)
+    try:
+        return EtfBriefSpec(
+            ticker=ticker.upper(),
+            generation_date=render_today(),
+            repo_root=str(repo_root),
+            profile=build_profile(ticker, repo_root, conn=conn),
+            holdings=build_holdings(ticker, repo_root, top_n=top_n, conn=conn),
+        )
+    finally:
+        if conn is not None:
+            conn.close()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -20,8 +21,16 @@ def _start_boundary(filename: str) -> str:
 
 def test_first_of_month_03_00_jobs_are_staggered() -> None:
     """The monthly jobs previously collided at 03:00 on every first day."""
-    assert _start_boundary("monthly_p3_refresh.task.xml").endswith("03:20:00")
     assert _start_boundary("refresh_scenario_priors.task.xml").endswith("03:40:00")
+
+
+def test_retired_monthly_p3_task_is_absent_from_scheduler_surface() -> None:
+    manifest = json.loads((CRON / "task_manifest.json").read_text(encoding="utf-8"))
+    assert all(
+        task["task_name"] != r"\earnings-summary\monthly_p3_refresh" for task in manifest["tasks"]
+    )
+    assert not (CRON / "monthly_p3_refresh.task.xml").exists()
+    assert not (CRON / "run_monthly_p3_refresh.bat").exists()
 
 
 def test_scenario_priors_wrapper_stays_on_invoking_checkout() -> None:
@@ -81,7 +90,6 @@ def test_critical_wrappers_use_explicit_runtime_and_write_lock() -> None:
         "run_daily_fetch_and_brief.bat",
         "run_morning_pipeline.bat",
         "run_refresh_cache.bat",
-        "run_monthly_p3_refresh.bat",
         "run_refresh_scenario_priors.bat",
         "run_track_comp_metrics.bat",
     ):

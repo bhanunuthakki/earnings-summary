@@ -32,7 +32,7 @@ EXPECTED_DISABLED_TASKS = {
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 46
+    assert len(manifest.tasks) == 45
     collector = next(
         task
         for task in manifest.tasks
@@ -49,6 +49,7 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     # precedes its start boundary (Windows' schema parser is order-sensitive).
     assert collector_xml.index("<Repetition>") < collector_xml.index("<StartBoundary>")
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
+    assert all(task.task_name != r"\earnings-summary\monthly_p3_refresh" for task in manifest.tasks)
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")

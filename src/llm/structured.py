@@ -147,7 +147,7 @@ def call_llm_structured(
     required_keys: tuple[str, ...] = (),
     schema: TypeAdapter[T] | None = None,
     domain_guardrail: Callable[[object], tuple[bool, str]] | None = None,
-    max_escalation_tier: int = 1,
+    max_escalation_tier: int = 0,
     db_path: Path | str | None = None,
     capability_profile: CapabilityProfile | None = None,
 ) -> T | object:
@@ -212,19 +212,23 @@ def call_llm_structured(
                 raise ValueError(f"Domain guardrail validation failed: {g_reason}")
         return validated
     except (ValueError, ValidationError) as retry_exc:
-        # Check for P3 Cascade Escalation to higher tier
-        from llm.cli import DEFAULT_MODEL
-        from llm.resolver import resolve_model_and_backend
+        escalation_models: tuple[str, str] | None = None
+        if max_escalation_tier >= 1:
+            # Check for P3 Cascade Escalation to higher tier.
+            from llm.cli import DEFAULT_MODEL
+            from llm.resolver import resolve_model_and_backend
 
-        is_explicit_model = model is not None
-        primary_model, _ = resolve_model_and_backend(
-            purpose=purpose,
-            model=model,
-            capability_profile=effective_profile,
-            db_path=db_path,
-        )
+            primary_model, _ = resolve_model_and_backend(
+                purpose=purpose,
+                model=model,
+                capability_profile=effective_profile,
+                db_path=db_path,
+            )
+            if model is None and primary_model != DEFAULT_MODEL:
+                escalation_models = (primary_model, DEFAULT_MODEL)
 
-        if max_escalation_tier >= 1 and not is_explicit_model and primary_model != DEFAULT_MODEL:
+        if escalation_models is not None:
+            primary_model, target_model = escalation_models
             log.warning(
                 {
                     "event": "p3_cascade_escalation_triggered",
@@ -232,14 +236,14 @@ def call_llm_structured(
                     "ticker": ticker,
                     "reason": str(retry_exc),
                     "primary_model": primary_model,
-                    "target_model": DEFAULT_MODEL,
+                    "target_model": target_model,
                 }
             )
 
             raw_escalated = call_llm(
                 _RETRY_PREAMBLE + prompt,
                 purpose=purpose,
-                model=DEFAULT_MODEL,
+                model=target_model,
                 backend="claude",
                 ticker=ticker,
                 scope=scope,

@@ -701,7 +701,6 @@ def _ensure_compatibility_schema(bind: sa.engine.Connection) -> None:
             brief_dirty BOOLEAN DEFAULT 0 NOT NULL,
             last_built_at DATETIME,
             last_brief_hash VARCHAR(64),
-            processing_tier VARCHAR(8) DEFAULT 'P3' NOT NULL,
             business_model_class TEXT NOT NULL DEFAULT 'operating_company',
             accounting_standard TEXT NOT NULL DEFAULT 'us_gaap',
             UNIQUE(user_id, ticker)
@@ -715,7 +714,6 @@ def _ensure_compatibility_schema(bind: sa.engine.Connection) -> None:
             ("brief_dirty", "BOOLEAN DEFAULT 0 NOT NULL"),
             ("last_built_at", "DATETIME"),
             ("last_brief_hash", "VARCHAR(64)"),
-            ("processing_tier", "VARCHAR(8) DEFAULT 'P3' NOT NULL"),
             (
                 "business_model_class",
                 "TEXT NOT NULL DEFAULT 'operating_company'",
@@ -760,20 +758,12 @@ def upgrade() -> None:
         "CREATE INDEX IF NOT EXISTS ix_llm_calls_purpose_called_at ON llm_calls(purpose,called_at)"
     )
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tracked_processing_tier "
-        "ON tracked_companies(processing_tier,last_built_at)"
-    )
-    op.execute(
         "CREATE INDEX IF NOT EXISTS ix_tracked_companies_active "
         "ON tracked_companies(user_id,list_type) WHERE archived_at IS NULL"
     )
     op.execute(
         "CREATE INDEX IF NOT EXISTS ix_tracked_companies_brief_dirty "
         "ON tracked_companies(brief_dirty) WHERE brief_dirty=1"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_tracked_companies_processing_tier "
-        "ON tracked_companies(processing_tier) WHERE archived_at IS NULL"
     )
 
     identity = bind.execute(

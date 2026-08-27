@@ -35,13 +35,6 @@ class DecisionExtractionPayload(TypedDict):
     falsifier: NotRequired[str | None]
 
 
-class WonderingPayload(TypedDict):
-    is_wondering: bool
-    claim: str
-    ticker: NotRequired[str | None]
-    suggested_artifacts: NotRequired[list[Literal["memo", "dcf", "thesis", "view"]]]
-
-
 class IntentPayload(TypedDict):
     intent: Literal["observation", "wondering", "brief_artifact", "stress_artifact"]
     claim: NotRequired[str]
@@ -280,7 +273,6 @@ class DcfAssumptionsPayload(_ClosedPayload):
 ARTIFACT_BRIEF_SCHEMA = TypeAdapter(ArtifactBriefPayload)
 DCF_TWEAK_SCHEMA = TypeAdapter(DcfTweakPayload)
 DECISION_EXTRACTION_SCHEMA = TypeAdapter(DecisionExtractionPayload)
-WONDERING_SCHEMA = TypeAdapter(WonderingPayload)
 INTENT_SCHEMA = TypeAdapter(IntentPayload)
 RESEARCH_TRIAGE_SCHEMA = TypeAdapter(ResearchTriagePayload)
 RESEARCH_ASSESS_SCHEMA = TypeAdapter(ResearchAssessPayload)
