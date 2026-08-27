@@ -232,6 +232,25 @@ def test_source_row_preservation_rejects_changed_owner_row(tmp_path: Path) -> No
         )
 
 
+def test_checkpoint_and_close_candidate_database_removes_wal_sidecars(tmp_path: Path) -> None:
+    candidate = tmp_path / "candidate.db"
+    _write_wal_mode_restored_db(candidate)
+    with sqlite3.connect(candidate) as connection:
+        connection.execute("UPDATE alembic_version SET version_num=?", (ACTIVE_HEAD,))
+    connection = sqlite3.connect(f"{candidate.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM tracked_companies").fetchone()[0] == 1
+    finally:
+        connection.close()
+    assert Path(f"{candidate}-wal").exists()
+    assert Path(f"{candidate}-shm").exists()
+
+    checkpoint = rehearsal.checkpoint_and_close_candidate_database(candidate)
+
+    assert checkpoint == (0, 0, 0)
+    assert not any(Path(f"{candidate}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+
+
 def test_table_commitments_explicitly_record_absent_owner_tables(tmp_path: Path) -> None:
     database = tmp_path / "source.db"
     _write_db(database)
