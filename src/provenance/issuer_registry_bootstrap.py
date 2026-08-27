@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections import defaultdict
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from pipeline.queries import ANALYZED_LIST_TYPE_VALUES
@@ -210,6 +212,60 @@ class SecHistoricalIssuerResult(_ClosedModel):
     termination_date: date
     source_sha256: str
     source_observation_id: str | None
+    records_created: int = Field(ge=0)
+
+
+class SecFormerTickerIdentity(_ClosedModel):
+    normalized_cik: str = Field(pattern=r"^\d{10}$")
+    legal_name: str = Field(min_length=1)
+    former_ticker: str = Field(min_length=1, max_length=32)
+    successor_ticker: str = Field(min_length=1, max_length=32)
+    transition_date: date
+    transition_accession: str = Field(pattern=r"^\d{10}-\d{2}-\d{6}$")
+
+
+class SecFormerTickerRequest(_ClosedModel):
+    former_ticker: str = Field(min_length=1, max_length=32)
+    successor_ticker: str = Field(min_length=1, max_length=32)
+    normalized_cik: str = Field(pattern=r"^\d{10}$")
+    transition_date: date
+    submissions_source_url: str = Field(min_length=1)
+    submissions_raw_body: bytes = Field(min_length=1)
+    transition_source_url: str = Field(min_length=1)
+    transition_raw_body: bytes = Field(min_length=1)
+    blob_root: Path
+    apply: bool = False
+    recorded_at: datetime
+
+    @field_validator("former_ticker", "successor_ticker")
+    @classmethod
+    def _ticker(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("normalized_cik")
+    @classmethod
+    def _cik(cls, value: str) -> str:
+        return normalize_identifier("sec_cik", value)
+
+    @field_validator("recorded_at")
+    @classmethod
+    def _recorded_at(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+class SecFormerTickerResult(_ClosedModel):
+    mode: Literal["dry_run", "apply"]
+    former_ticker: str
+    successor_ticker: str
+    normalized_cik: str
+    canonical_issuer_id: str
+    legal_name: str
+    transition_date: date
+    transition_accession: str
+    submissions_sha256: str
+    transition_sha256: str
+    submissions_observation_id: str | None
+    transition_observation_id: str | None
     records_created: int = Field(ge=0)
 
 
@@ -488,6 +544,114 @@ def parse_sec_historical_issuer_identity(
             "SEC historical submissions has no Form 15 reporting termination"
         )
     return max(candidates, key=lambda item: item.termination_date)
+
+
+def parse_sec_former_ticker_identity(
+    submissions_raw_body: bytes,
+    transition_raw_body: bytes,
+    *,
+    normalized_cik: str,
+    former_ticker: str,
+    successor_ticker: str,
+    transition_date: date,
+    transition_source_url: str,
+) -> SecFormerTickerIdentity:
+    """Verify a retired ticker against current SEC identity and a transition filing."""
+
+    expected_cik = normalize_identifier("sec_cik", normalized_cik)
+    former = former_ticker.strip().upper()
+    successor = successor_ticker.strip().upper()
+    if former == successor:
+        raise SecCompanyTickerContractError("former and successor tickers must differ")
+    try:
+        decoded_object: object = json.loads(
+            submissions_raw_body,
+            object_pairs_hook=_strict_json_object,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SecCompanyTickerContractError(
+            "SEC former-ticker submissions body is not valid JSON"
+        ) from exc
+    if not isinstance(decoded_object, dict):
+        raise SecCompanyTickerContractError("SEC former-ticker submissions body must be an object")
+    decoded = cast(dict[object, object], decoded_object)
+    try:
+        payload_cik = normalize_identifier("sec_cik", str(decoded["cik"]))
+    except (KeyError, ValueError) as exc:
+        raise SecCompanyTickerContractError(
+            "SEC former-ticker submissions body has no valid CIK"
+        ) from exc
+    if payload_cik != expected_cik:
+        raise SecCompanyTickerContractError(
+            "SEC former-ticker submissions CIK conflicts with requested CIK"
+        )
+    if str(decoded.get("entityType") or "").strip().lower() != "operating":
+        raise SecCompanyTickerContractError(
+            "SEC former-ticker issuer is not an operating-company registrant"
+        )
+    legal_name = str(decoded.get("name") or "").strip()
+    if not legal_name:
+        raise SecCompanyTickerContractError("SEC former-ticker submissions body has no legal name")
+    tickers = decoded.get("tickers")
+    if not isinstance(tickers, list):
+        raise SecCompanyTickerContractError(
+            "SEC former-ticker submissions tickers contract changed"
+        )
+    current_tickers = {str(value).strip().upper() for value in cast(list[object], tickers)}
+    if successor not in current_tickers:
+        raise SecCompanyTickerContractError(
+            "requested successor ticker is not current in SEC submissions"
+        )
+    if former in current_tickers:
+        raise SecCompanyTickerContractError(
+            "requested former ticker is still current in SEC submissions"
+        )
+
+    match = re.fullmatch(
+        r"https://www\.sec\.gov/Archives/edgar/data/(\d+)/(\d{18})/[^/?#]+\.html?",
+        transition_source_url,
+    )
+    if match is None or match.group(1) != str(int(expected_cik)):
+        raise SecCompanyTickerContractError(
+            "SEC former-ticker transition URL is not an exact issuer filing document"
+        )
+    accession_digits = match.group(2)
+    accession = f"{accession_digits[:10]}-{accession_digits[10:12]}-{accession_digits[12:]}"
+    transition_text = " ".join(
+        BeautifulSoup(transition_raw_body, "html.parser").get_text(" ", strip=True).split()
+    )
+    folded = transition_text.casefold()
+    required_cik = expected_cik.casefold()
+    date_markers = {
+        transition_date.strftime("%B %d, %Y").replace(" 0", " ").casefold(),
+        transition_date.isoformat().casefold(),
+    }
+    former_pattern = re.compile(
+        rf"(?:previously|prior).{{0,240}}\b{re.escape(former.casefold())}\b",
+    )
+    successor_pattern = re.compile(
+        rf"(?:ticker symbol|under the symbol).{{0,120}}\b{re.escape(successor.casefold())}\b",
+    )
+    if required_cik not in folded:
+        raise SecCompanyTickerContractError(
+            "SEC former-ticker transition filing does not identify the requested CIK"
+        )
+    if former_pattern.search(folded) is None or successor_pattern.search(folded) is None:
+        raise SecCompanyTickerContractError(
+            "SEC filing does not prove the requested former-to-successor ticker transition"
+        )
+    if not any(marker in folded for marker in date_markers):
+        raise SecCompanyTickerContractError(
+            "SEC filing does not prove the requested ticker transition date"
+        )
+    return SecFormerTickerIdentity(
+        normalized_cik=expected_cik,
+        legal_name=legal_name,
+        former_ticker=former,
+        successor_ticker=successor,
+        transition_date=transition_date,
+        transition_accession=accession,
+    )
 
 
 def target_sec_fund_registrant_ciks(
@@ -989,6 +1153,217 @@ def bootstrap_sec_historical_issuer(
     )
 
 
+def bootstrap_sec_former_ticker(
+    conn: sqlite3.Connection,
+    *,
+    request: SecFormerTickerRequest,
+) -> SecFormerTickerResult:
+    """Resolve historical evidence after an SEC registrant changes ticker."""
+
+    identity = parse_sec_former_ticker_identity(
+        request.submissions_raw_body,
+        request.transition_raw_body,
+        normalized_cik=request.normalized_cik,
+        former_ticker=request.former_ticker,
+        successor_ticker=request.successor_ticker,
+        transition_date=request.transition_date,
+        transition_source_url=request.transition_source_url,
+    )
+    submissions_sha = hashlib.sha256(request.submissions_raw_body).hexdigest()
+    transition_sha = hashlib.sha256(request.transition_raw_body).hexdigest()
+    bundle_sha = _digest(
+        "sec-former-ticker-authority-bundle",
+        f"{submissions_sha}\0{transition_sha}",
+    )
+    issuer_id = _issuer_id(identity.normalized_cik)
+    if not request.apply:
+        return SecFormerTickerResult(
+            mode="dry_run",
+            former_ticker=identity.former_ticker,
+            successor_ticker=identity.successor_ticker,
+            normalized_cik=identity.normalized_cik,
+            canonical_issuer_id=issuer_id,
+            legal_name=identity.legal_name,
+            transition_date=identity.transition_date,
+            transition_accession=identity.transition_accession,
+            submissions_sha256=submissions_sha,
+            transition_sha256=transition_sha,
+            submissions_observation_id=None,
+            transition_observation_id=None,
+            records_created=0,
+        )
+
+    with conn:
+        submissions_observation_id, created, submissions_recorded_at = _capture_source(
+            conn,
+            raw_body=request.submissions_raw_body,
+            request=BootstrapRequest(
+                source_url=request.submissions_source_url,
+                blob_root=request.blob_root,
+                apply=True,
+                recorded_at=request.recorded_at,
+            ),
+            source_sha=submissions_sha,
+            source_kind="sec_submissions",
+            collector_version="sec-former-ticker-bootstrap@1",
+        )
+        transition_observation_id, transition_created, transition_recorded_at = _capture_source(
+            conn,
+            raw_body=request.transition_raw_body,
+            request=BootstrapRequest(
+                source_url=request.transition_source_url,
+                blob_root=request.blob_root,
+                apply=True,
+                recorded_at=request.recorded_at,
+            ),
+            source_sha=transition_sha,
+            source_kind="sec_filing",
+            collector_version="sec-former-ticker-bootstrap@1",
+            media_type="text/html",
+            accept="text/html",
+        )
+        created += transition_created
+        recorded_at = max(submissions_recorded_at, transition_recorded_at)
+        transition_at = datetime.combine(
+            identity.transition_date,
+            datetime.min.time(),
+            tzinfo=UTC,
+        )
+        issuer_registry = IssuerRegistry(conn)
+        reporting_registry = ReportingEntityRegistry(conn)
+        created += _persist_entity(
+            conn,
+            issuer_registry,
+            issuer_id=issuer_id,
+            recorded_at=recorded_at,
+        )
+        created += _persist_profile(
+            conn,
+            issuer_registry,
+            issuer_id=issuer_id,
+            legal_name=identity.legal_name,
+            observation_id=submissions_observation_id,
+            source_sha=submissions_sha,
+            recorded_at=recorded_at,
+            filing_regime="SEC",
+            reason_code="sec_current_registrant_after_ticker_transition",
+            status="active",
+            effective_at=recorded_at,
+        )
+        assertion_id = _record_id(
+            "identifier-assertion",
+            issuer_id,
+            identity.normalized_cik,
+            submissions_observation_id,
+        )
+        assertion = IdentifierAssertion(
+            assertion_id=assertion_id,
+            idempotency_key=assertion_id,
+            issuer_id=issuer_id,
+            identifier_type="sec_cik",
+            identifier_value=identity.normalized_cik,
+            normalized_value=identity.normalized_cik,
+            authority="sec_registry",
+            source_observation_id=submissions_observation_id,
+            effective_at=recorded_at,
+            knowledge_at=recorded_at,
+            recorded_at=recorded_at,
+        )
+        created += int(issuer_registry.persist(assertion).created)
+        created += _persist_identifier_resolution(
+            conn,
+            issuer_registry,
+            assertion=assertion,
+            recorded_at=recorded_at,
+        )
+        created += _persist_sec_surface(
+            conn,
+            issuer_registry,
+            issuer_id=issuer_id,
+            normalized_cik=identity.normalized_cik,
+            observation_id=submissions_observation_id,
+            source_sha=submissions_sha,
+            recorded_at=recorded_at,
+            verification_method="sec_former_ticker_transition_contract",
+        )
+        reporting_entity_id = f"reporting:sec:{identity.normalized_cik}"
+        created += _persist_reporting_entity(
+            conn,
+            reporting_registry,
+            reporting_entity_id=reporting_entity_id,
+            issuer_id=issuer_id,
+            reporting_entity_kind="legal_registrant",
+            display_name=identity.legal_name,
+            recorded_at=recorded_at,
+        )
+        created += _persist_reporting_identifier_assertion(
+            conn,
+            reporting_registry,
+            reporting_entity_id=reporting_entity_id,
+            identifier_type="sec_cik",
+            identifier_value=identity.normalized_cik,
+            authority="sec_registry",
+            source_observation_id=submissions_observation_id,
+            recorded_at=recorded_at,
+        )
+        reason_details = (
+            ("successor_ticker", identity.successor_ticker),
+            ("transition_accession", identity.transition_accession),
+            ("transition_date", identity.transition_date.isoformat()),
+            ("submissions_observation_id", submissions_observation_id),
+            ("transition_observation_id", transition_observation_id),
+        )
+        created += _persist_binding(
+            conn,
+            issuer_registry,
+            ticker=identity.former_ticker,
+            issuer_id=issuer_id,
+            outcome="selected",
+            reason_code="sec_former_ticker_transition_selected",
+            reason_details=reason_details,
+            material_dissent=False,
+            source_sha=bundle_sha,
+            recorded_at=recorded_at,
+        )
+        created += _persist_subject_binding(
+            conn,
+            reporting_registry,
+            ticker=identity.former_ticker,
+            issuer_id=issuer_id,
+            reporting_entity_id=reporting_entity_id,
+            security_id=None,
+            registry_observation_id=transition_observation_id,
+            registry_source_sha=bundle_sha,
+            recorded_at=recorded_at,
+            reason_code="sec_former_ticker_transition_selected",
+            reason_details=reason_details,
+        )
+        created += _persist_retired_ticker_reporting_scope(
+            conn,
+            issuer_registry,
+            issuer_id=issuer_id,
+            transition_at=transition_at,
+            successor_ticker=identity.successor_ticker,
+            source_observation_id=transition_observation_id,
+            recorded_at=recorded_at,
+        )
+    return SecFormerTickerResult(
+        mode="apply",
+        former_ticker=identity.former_ticker,
+        successor_ticker=identity.successor_ticker,
+        normalized_cik=identity.normalized_cik,
+        canonical_issuer_id=issuer_id,
+        legal_name=identity.legal_name,
+        transition_date=identity.transition_date,
+        transition_accession=identity.transition_accession,
+        submissions_sha256=submissions_sha,
+        transition_sha256=transition_sha,
+        submissions_observation_id=submissions_observation_id,
+        transition_observation_id=transition_observation_id,
+        records_created=created,
+    )
+
+
 def _planned_fund_result(
     item: _TrackedTicker,
     candidates: tuple[SecMutualFundTickerEntry, ...],
@@ -1130,11 +1505,13 @@ def _capture_source(
     source_sha: str,
     source_kind: str = "sec_company_tickers",
     collector_version: str = _COLLECTOR_VERSION,
+    media_type: str = "application/json",
+    accept: str = "application/json",
 ) -> tuple[str, int, datetime]:
     config_sha = _digest(
         "retrieval-config",
         json.dumps(
-            {"accept": "application/json", "source_url": request.source_url},
+            {"accept": accept, "source_url": request.source_url},
             sort_keys=True,
             separators=(",", ":"),
         ),
@@ -1153,7 +1530,7 @@ def _capture_source(
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         if hashlib.sha256(path.read_bytes()).hexdigest() != source_sha:
-            raise RuntimeError("existing SEC company-ticker blob fails hash verification")
+            raise RuntimeError("existing SEC authority blob fails hash verification")
     else:
         path.write_bytes(raw_body)
 
@@ -1169,14 +1546,14 @@ def _capture_source(
                 ContentBlob(
                     sha256=source_sha,
                     byte_size=len(raw_body),
-                    media_type="application/json",
+                    media_type=media_type,
                     storage_uri=path.resolve().as_uri(),
                     recorded_at=recorded_at,
                 )
             ).created
         )
     elif int(existing_blob[0]) != len(raw_body):
-        raise ValueError("existing company-ticker evidence blob metadata conflicts")
+        raise ValueError("existing SEC authority evidence blob metadata conflicts")
     storage_uri = path.resolve().as_uri()
     location_id = _record_id("blob-location", source_sha, storage_uri)
     created += int(
@@ -2693,6 +3070,68 @@ def _persist_historical_reporting_scope(
                     ("source_observation_id", source_observation_id),
                 ),
                 effective_at=termination_at,
+                knowledge_at=recorded_at,
+                recorded_at=recorded_at,
+                supersedes_scope_revision_id=(None if current is None else str(current[0])),
+            )
+        ).created
+    )
+
+
+def _persist_retired_ticker_reporting_scope(
+    conn: sqlite3.Connection,
+    registry: IssuerRegistry,
+    *,
+    issuer_id: str,
+    transition_at: datetime,
+    successor_ticker: str,
+    source_observation_id: str,
+    recorded_at: datetime,
+) -> int:
+    scope_key = "investor-research"
+    current = conn.execute(
+        "SELECT scope_revision_id, revision, inclusion_state, history_policy, "
+        "require_sec, require_ir, require_earnings "
+        "FROM issuer_reporting_scope_revisions "
+        "WHERE scope_key = ? AND issuer_id = ? ORDER BY revision DESC LIMIT 1",
+        (scope_key, issuer_id),
+    ).fetchone()
+    if current is not None and str(current[2]) in {"core", "monitored"}:
+        return 0
+    semantics = ("discovery", "all_available", 0, 0, 0)
+    if current is not None and tuple(current[2:]) == semantics:
+        return 0
+    revision = 1 if current is None else int(current[1]) + 1
+    record_id = _record_id(
+        "reporting-scope",
+        scope_key,
+        issuer_id,
+        "retired-ticker",
+        str(revision),
+    )
+    return int(
+        registry.persist(
+            ReportingScopeRevision(
+                scope_revision_id=record_id,
+                idempotency_key=record_id,
+                scope_key=scope_key,
+                issuer_id=issuer_id,
+                revision=revision,
+                inclusion_state="discovery",
+                history_policy="all_available",
+                history_start=None,
+                latest_years=None,
+                require_sec=False,
+                require_ir=False,
+                require_earnings=False,
+                decision_kind="deterministic",
+                reason_code="retired_ticker_historical_retention",
+                reason_details=(
+                    ("successor_ticker", successor_ticker),
+                    ("ticker_transition_at", transition_at.isoformat()),
+                    ("source_observation_id", source_observation_id),
+                ),
+                effective_at=transition_at,
                 knowledge_at=recorded_at,
                 recorded_at=recorded_at,
                 supersedes_scope_revision_id=(None if current is None else str(current[0])),
