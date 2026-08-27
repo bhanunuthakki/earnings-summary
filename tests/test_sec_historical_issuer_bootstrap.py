@@ -11,6 +11,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from execution.bootstrap_sec_historical_issuer import normalize_cik
 from provenance.issuer_registry_bootstrap import (
     SecCompanyTickerContractError,
     SecHistoricalIssuerRequest,
@@ -89,6 +90,13 @@ def test_historical_parser_requires_ticker_retirement_and_form15() -> None:
             normalized_cik=CIK,
             ticker="CFLT",
         )
+
+
+def test_historical_cli_normalizes_short_sec_cik_once_for_url_and_request() -> None:
+    assert normalize_cik("1699838") == CIK
+    assert normalize_cik(f" {CIK} ") == CIK
+    with pytest.raises(ValueError, match="ten decimal digits"):
+        normalize_cik("not-a-cik")
 
 
 def test_historical_bootstrap_is_append_only_and_exactly_replayable(
