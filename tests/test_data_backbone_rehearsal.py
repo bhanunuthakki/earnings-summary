@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -235,8 +236,9 @@ def test_source_row_preservation_rejects_changed_owner_row(tmp_path: Path) -> No
 def test_checkpoint_and_close_candidate_database_removes_wal_sidecars(tmp_path: Path) -> None:
     candidate = tmp_path / "candidate.db"
     _write_wal_mode_restored_db(candidate)
-    with sqlite3.connect(candidate) as connection:
+    with closing(sqlite3.connect(candidate)) as connection:
         connection.execute("UPDATE alembic_version SET version_num=?", (ACTIVE_HEAD,))
+        connection.commit()
     connection = sqlite3.connect(f"{candidate.resolve().as_uri()}?mode=ro", uri=True)
     try:
         assert connection.execute("SELECT COUNT(*) FROM tracked_companies").fetchone()[0] == 1
