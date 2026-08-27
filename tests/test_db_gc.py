@@ -1518,22 +1518,20 @@ class TestProtectedTableScope:
     def test_cron_defaults_match_the_ratified_windows(self) -> None:
         """The wrapper passes no window flags, so the cron inherits these.
         Ratified 2026-07-31: 20 quarters / 12 fiscal years, floors 16/12."""
-        # The parser is built inline in main(), so pin the literals directly:
+        # The parser is built inline in main(), so pin its defaults directly:
         # these are the values an unattended `--apply` resolves to.
         source = (REPO / "execution" / "db_gc.py").read_text(encoding="utf-8")
         for flag, expected in (
-            ("--keep-quarters", 20),
-            ("--keep-fy", 12),
-            ("--retention-days", 90),
-            ("--artifact-retention-days", 180),
+            ("--keep-quarters", "20"),
+            ("--keep-fy", "12"),
+            ("--retention-days", "DEFAULT_TELEMETRY_RETENTION_DAYS"),
+            ("--artifact-retention-days", "DEFAULT_ARTIFACT_RETENTION_DAYS"),
         ):
             match = re.search(
-                rf'add_argument\(\s*"{re.escape(flag)}"[^)]*?default=(\d+)', source, re.S
+                rf'add_argument\(\s*"{re.escape(flag)}"[^)]*?default={expected}', source, re.S
             )
             assert match is not None, f"{flag} default not found — did the CLI change?"
-            assert int(match.group(1)) == expected, (
-                f"{flag} default is {match.group(1)}, ratified value is {expected}; "
-                "the Sunday cron passes no window flags and inherits this"
-            )
+        assert db_gc.DEFAULT_TELEMETRY_RETENTION_DAYS == 90
+        assert db_gc.DEFAULT_ARTIFACT_RETENTION_DAYS == 180
         assert db_gc.MIN_KEEP_QUARTERS == 16, "report §3 loads 12 display + 4 CAGR baseline"
         assert db_gc.MIN_KEEP_FY == 12

@@ -166,6 +166,7 @@ POLICY_NAMES = (
     "facts-depth",
     "maintenance",
 )
+DEFAULT_TELEMETRY_RETENTION_DAYS = 90
 DEFAULT_ARTIFACT_RETENTION_DAYS = 180
 
 # The 0225 cutover's append-only delete guard on financial_facts. db_gc drops
@@ -1853,11 +1854,11 @@ def main(argv: list[str] | None = None) -> int:
         default=",".join(POLICY_NAMES),
         help=f"comma-separated subset of {POLICY_NAMES}",
     )
-    parser.add_argument("--retention-days", type=int, default=90)
+    parser.add_argument("--retention-days", type=int, default=DEFAULT_TELEMETRY_RETENTION_DAYS)
     parser.add_argument(
         "--artifact-retention-days",
         type=int,
-        default=180,
+        default=DEFAULT_ARTIFACT_RETENTION_DAYS,
         help="retain unreferenced superseded LLM artifacts for this many days",
     )
     parser.add_argument("--keep-quarters", type=int, default=20)
