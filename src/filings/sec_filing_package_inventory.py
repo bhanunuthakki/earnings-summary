@@ -414,6 +414,17 @@ def _manifest_reference(
             displayed_filename,
             label="displayed manifest attachment filename",
         )
+        alternate_cik = re.fullmatch(
+            rf"/Archives/edgar/data/[1-9]\d*/{accession_number.replace('-', '')}/([^/]+)",
+            document_path,
+        )
+        if alternate_cik is not None:
+            linked_filename = _filename(
+                alternate_cik.group(1),
+                label="manifest attachment filename",
+            )
+            if linked_filename == displayed:
+                return linked_filename, f"{_SEC_ORIGIN}{document_path}"
         if (
             _VPRR_PDF.fullmatch(document_path)
             and displayed == "scanned.pdf"
