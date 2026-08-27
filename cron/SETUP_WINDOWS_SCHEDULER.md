@@ -18,6 +18,18 @@ schtasks /Delete /TN "\earnings-summary\monthly_p3_refresh" /F
 
 Retained scheduler logs and other historical receipts remain historical evidence; deleting the retired task does not delete them.
 
+The podcast prototype is retired and 13F discovery is planned/dormant. Neither
+is declared by the authoritative manifest. On a host that previously installed
+either task, remove the stale registrations once:
+
+```text
+schtasks /Delete /TN "\earnings-summary\fetch_podcast_rss" /F
+schtasks /Delete /TN "\earnings-summary\fetch_13f" /F
+```
+
+This cleanup removes scheduler controls only. Existing logs, historical signal
+rows, and archived migrations remain retained evidence.
+
 ### Portfolio Tracker runtime
 
 | Task name | Cadence | XML | Wrapper | What it does |
@@ -105,13 +117,15 @@ Runs Sunday 01:30 — just after `refresh_ir_kpis` (01:00) and before Sunday-nig
 
 The failing-only rescan is the cheap mid-week companion to the Sunday full sweep: the full sweep re-checks every name weekly, this re-checks only the still-failing ones on Wednesday + Saturday so a recovered site is picked up within ~3 days. Coverage + each name's last crawl outcome are visible in the command center's **IR Docs** tab (`GET /api/panel/ir_coverage`), which also shows where to drop a manually-pulled file for the names that stay blocked.
 
-### Quarterly 13F miner
+### Prototype scheduler status
 
-| Task name | Cadence | XML | Wrapper | What it does |
-|---|---|---|---|---|
-| `earnings-summary\fetch_13f` | Quarterly, 16th of Feb/May/Aug/Nov @ 08:15 | `fetch_13f.task.xml` | `run_fetch_13f.bat` | **EDGAR 13F-HR miner (S6 discovery, investor lane).** Fires 1–2 days after the 45-day 13F filing deadline (Feb 14 / May 15 / Aug 14 / Nov 14) so the quarter's filings are in. Three steps: (1) `execution/fetch_13f.py` polls every active rostered manager (`discovery_sources` rows **with a `cik`**), diffs its two latest `13F-HR` filings, and writes `investor_13f` `discovery_signals` for untracked universe names + `news` rows (`source_feed='edgar_13f'`) for tracked names — a full-class replace, so a sold position drops; (2) `execution/recalibrate_investor_weights.py` snapshots this quarter's new buys into the `investor_calibration` ledger (alembic 0100), measures any whose 180-day horizon has elapsed against the FMP price cache, and nudges each fund's `base_weight` by its realized win/loss hit-rate (EWMA-damped + bounded; a no-op until ~2 quarters of buys clear the horizon); (3) `execution/run_discovery.py` re-scores the queue so the fresh investor signals + tuned weights re-rank immediately (the clamp + corroboration math runs there). Best-effort — an unreachable manager / unparseable filing contributes nothing; a roster with no CIK-resolved managers is a no-op. Only managers whose CIK is set fire; resolve more with `python execution/sqlite_bootstrap.py execution/resolve_manager_ciks.py --apply` (it auto-applies only a single recent, strong-name 13F-HR match and reports the ambiguous/stale ones for the owner to paste via the Sources panel). |
-
-13F is quarterly with a 45-day lag, so a quarterly poll is ample; the miner uses the two latest filings, so a manager that files a few days late is picked up the next quarter. Verify a run via the JSON summary in `.tmp/cron_logs/fetch_13f_*.log` (`{ "signals": N, "untracked_names": N, "tracked_news": N, "managers": N }`) and new `investor_13f` rows in `discovery_signals` / re-ranked rows in the Discovery panel.
+`task_manifest.json` remains the sole authority for installed operations; no
+parallel prototype scheduler exists. 13F discovery and SEC-delta planning are
+**planned/dormant**: their implementation remains available for manual development
+and validation, but neither is registered. Podcast RSS/takeaway is **retired**:
+its executable, eval, model budget, and rendered Diet paths are removed, while
+historical migrations, logs, and persisted rows remain evidence. Re-activation is
+a separate product and operations decision, not a scheduler toggle.
 
 ### Additional standalone + analytics tasks
 
@@ -120,7 +134,6 @@ These run off the daily chain. They were present on disk but previously undocume
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
 | `earnings-summary\fetch_macro_series` | Daily 05:35 | `fetch_macro_series.task.xml` | `run_fetch_macro_series.bat` | Populates `macro_series` from timeout-bounded Yahoo candidates; direct FMP macro calls remain disabled until admitted by the shared recovery service. Recomputes portfolio `macro_sensitivities` only when every requested series is fresh or explicitly cached-degraded within 45 days, preserving warning/failure exit codes otherwise. |
-| `earnings-summary\fetch_podcast_rss` | Daily 06:30 | `fetch_podcast_rss.task.xml` | `run_fetch_podcast_rss.bat` | DIET-lane podcast poller (S11): polls 7 curated shows, matches episodes to tracked names + rostered investors → `media_appearance` signals (idempotent); then a Sonnet pass summarizes new/short episodes into a 2–4 sentence investment briefing, budget-capped at $5/mo (migration 0103). |
 | `earnings-summary\model_eval_sweep` | Weekly, Saturday 20:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | The activated model-downgrade eval loop (`directives/model_eval_loop.md`): harvest a rotating 2-ticker sample → sweep every cheaper candidate per active purpose → auto-switch a `model_pin_overrides` row after 3 consecutive SWITCH_DOWN verdicts (revert after 3 KEEP_INCUMBENT). Conservative + reversible; every decision audited via `model_eval_verdicts` + alerts. (The task runs `run_weekly_model_eval.bat`; the older `run_model_eval_sweep.bat` is unused.) |
 | `earnings-summary\grade_calibration` | Weekly, Sunday 10:30 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Feeds the prompt-calibration loop: `run_calibration_grading.py` runs 3 outcome graders (predictions → decisions → bear_cases, the last over `--all-portfolio`) + 5 eval-audit rungs (bear_case, transcript_summary, advisor_next_dollar, ask_advisory_answer, calibration_coach), writing `prompt_calibration_scores`. Never aborts early; exit code = count of failed rungs. **Owns bear-case grading** (moved here from `weekly_synthesis` in #675). |
 | `earnings-summary\weekly_validation` | Weekly, Sunday 03:00 | `weekly_validation.task.xml` | `run_weekly_validation.bat` | **Confidence backfill.** Rescores `financial_facts`/`kpi_facts` confidence `--apply`, folding fresh validation-issue penalties into per-fact scores (idempotent). The validation-engine SCAN runs DAILY in `run_morning_pipeline` (stage 3), so it is **not** repeated here (#679 dropped the duplicate weekly scan — the backfill reads the issues the daily run already inserted). Recorded in `ingestion_runs` for the cron-health panel. |
@@ -144,9 +157,6 @@ Editing a `*.task.xml` only changes the repo definition — the **live** Windows
 ```cmd
 schtasks /create /f /tn "earnings-summary\refresh_dirty_artifacts" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_dirty_artifacts.task.xml"   REM 04:00 -> 05:00
-
-schtasks /create /f /tn "earnings-summary\fetch_podcast_rss" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_podcast_rss.task.xml"          REM 06:30 -> 07:15
 
 schtasks /create /f /tn "earnings-summary\model_eval_sweep" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\model_eval_sweep.task.xml"           REM Sun 02:00 -> Sat 20:00
@@ -322,9 +332,6 @@ schtasks /create /tn "earnings-summary\discover_ir_failing" ^
 schtasks /create /tn "earnings-summary\verify_cron" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\verify_cron.task.xml"
 
-schtasks /create /tn "earnings-summary\fetch_13f" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_13f.task.xml"
-
 schtasks /create /tn "earnings-summary\submit_saydo_batch" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\submit_saydo_batch.task.xml"
 
@@ -333,9 +340,6 @@ schtasks /create /tn "earnings-summary\red_team" ^
 
 schtasks /create /tn "earnings-summary\fetch_macro_series" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_macro_series.task.xml"
-
-schtasks /create /tn "earnings-summary\fetch_podcast_rss" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_podcast_rss.task.xml"
 
 schtasks /create /tn "earnings-summary\model_eval_sweep" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\model_eval_sweep.task.xml"

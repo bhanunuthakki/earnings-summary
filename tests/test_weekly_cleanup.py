@@ -35,7 +35,8 @@ def test_dry_run_is_allowlist_only_and_reports_jsonl(
     protected.parent.mkdir()
     protected.write_text("never touch", encoding="utf-8")
     _age(protected, 90)
-    checkpoint = tmp_path / ".tmp" / "cron_logs" / "state.json"
+    checkpoint = tmp_path / ".tmp" / "cron_logs" / "active" / "state.json"
+    checkpoint.parent.mkdir()
     checkpoint.write_text("{}", encoding="utf-8")
     _age(checkpoint, 90)
     lock = tmp_path / ".tmp" / "cron_runs" / "job_locks" / "weekly.lock"
@@ -50,7 +51,7 @@ def test_dry_run_is_allowlist_only_and_reports_jsonl(
     assert checkpoint.exists()
     assert lock.exists()
     assert summary.mode == "dry_run"
-    assert summary.idempotency_key == "weekly_cleanup:2026-W31:weekly-cleanup-v1"
+    assert summary.idempotency_key == "weekly_cleanup:2026-W31:weekly-cleanup-v2"
     assert summary.would_delete == 1
     assert summary.deleted == 0
     assert summary.bytes == len("old")
@@ -171,10 +172,81 @@ def test_temp_audio_is_explicitly_skipped_without_qa_database_access(tmp_path: P
     assert summary.policies["temp_audio_qa_guard"].skipped_qa_unverified == 1
 
 
+def test_generic_tmp_removes_old_completed_artifacts_but_preserves_active_state(
+    tmp_path: Path,
+) -> None:
+    completed = tmp_path / ".tmp" / "llm_runs" / "completed" / "response.json"
+    loose = tmp_path / ".tmp" / "old-response.txt"
+    active = tmp_path / ".tmp" / "morning_pipeline" / "response.json"
+    state = active.parent / "state.json"
+    for path in (completed, loose, active, state):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+        _age(path, 31)
+
+    summary = _run(tmp_path, "--apply")
+
+    assert not completed.exists()
+    assert not loose.exists()
+    assert active.exists()
+    assert state.exists()
+    assert summary.policies["tmp_unclassified_30d"].deleted == 2
+
+
+def test_completed_checkpoint_with_state_expires_after_30_days(tmp_path: Path) -> None:
+    checkpoint_root = tmp_path / ".tmp" / "llm_runs" / "completed"
+    state = checkpoint_root / "state.json"
+    response = checkpoint_root / "response.json"
+    checkpoint_root.mkdir(parents=True)
+    state.write_text('{"status": "completed"}', encoding="utf-8")
+    response.write_text("{}", encoding="utf-8")
+    _age(state, 31)
+    _age(response, 31)
+
+    summary = _run(tmp_path, "--apply")
+
+    assert not state.exists()
+    assert not response.exists()
+    assert summary.policies["tmp_unclassified_30d"].deleted == 2
+
+
+def test_owned_tmp_policy_preserves_active_checkpoint_tree(tmp_path: Path) -> None:
+    checkpoint_root = tmp_path / ".tmp" / "cron_runs" / "active"
+    state = checkpoint_root / "state.json"
+    response = checkpoint_root / "response.json"
+    checkpoint_root.mkdir(parents=True)
+    state.write_text("{}", encoding="utf-8")
+    response.write_text("{}", encoding="utf-8")
+    _age(state, 31)
+    _age(response, 31)
+
+    summary = _run(tmp_path, "--apply")
+
+    assert state.exists()
+    assert response.exists()
+    assert summary.policies["cron_runs_30d"].deleted == 0
+
+
+def test_generic_tmp_preserves_recovery_material_and_owned_policy_roots(tmp_path: Path) -> None:
+    backup = tmp_path / ".tmp" / "recovery" / "portfolio-precutover.db.gz"
+    owned = tmp_path / ".tmp" / "cron_logs" / "old.log"
+    for path in (backup, owned):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("keep", encoding="utf-8")
+        _age(path, 31)
+
+    summary = _run(tmp_path, "--apply")
+
+    assert backup.exists()
+    assert not owned.exists()
+    assert summary.policies["tmp_unclassified_30d"].deleted == 0
+    assert summary.policies["cron_logs_30d"].deleted == 1
+
+
 def test_main_fails_loudly_when_an_eligible_file_cannot_be_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: CaptureFixture[str]
 ) -> None:
-    old_log = tmp_path / ".tmp" / "cron_logs" / "locked.log"
+    old_log = tmp_path / ".tmp" / "cron_logs" / "undeletable.log"
     old_log.parent.mkdir(parents=True)
     old_log.write_text("locked", encoding="utf-8")
     _age(old_log, 31)

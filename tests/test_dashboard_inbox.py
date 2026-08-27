@@ -19,6 +19,7 @@ import pytest
 from alembic.config import Config
 
 from alerts import apply_action, dismiss_alert, fire_alert, get_action, queue_action
+from dashboard._styles import INBOX_CSS
 from dashboard.inbox import INBOX_JS, InboxItem, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from user_state.ledger import append_entry
@@ -248,7 +249,8 @@ def test_portfolio_memo_note_card_carries_dismiss_and_open_memo_chips(db_path: P
     assert memo.note_id is not None
     for compact in (True, False):
         html = render_inbox_stream(items, db_path=db_path, compact=compact)
-        assert f'class="k-chip k-chip-btn ix-note-dismiss" data-note-id="{memo.note_id}"' in html
+        assert f'action="/api/notes/{memo.note_id}/archive"' in html
+        assert 'class="k-chip k-chip-btn ix-note-dismiss" type="submit"' in html
         assert '<a class="k-chip k-chip-btn ix-memo-open" href="/#advisor_memos">' in html
         # Exactly one card carries the affordances — the memo, not the watch.
         assert html.count("ix-memo-acts") == 1
@@ -281,13 +283,17 @@ def test_ledger_advisor_memo_gets_open_memo_without_dismiss(db_path: Path) -> No
     assert "ix-note-dismiss" not in html
 
 
-def test_inbox_js_wires_memo_dismiss() -> None:
-    """Rendered-markup contract: the dismiss chip POSTs the note-archive
-    endpoint and fades the card — distinct from the .ix-act /approve path."""
-    assert "ix-note-dismiss" in INBOX_JS
-    assert "/api/notes/" in INBOX_JS
-    assert "/archive" in INBOX_JS
-    assert "ix-dismissed" in INBOX_JS
+def test_inbox_js_has_no_mutating_action_dispatcher() -> None:
+    assert "ix-note-dismiss" not in INBOX_JS
+    assert "/api/notes/" not in INBOX_JS
+    assert "htmx:" not in INBOX_JS
+
+
+def test_quick_forms_are_keyboard_and_narrow_viewport_reachable() -> None:
+    assert ".ix-card:focus-within .ix-quick" in INBOX_CSS
+    assert "(max-width: 47.5rem)" in INBOX_CSS
+    assert "(hover: none)" in INBOX_CSS
+    assert ".ix-act { min-width: 44px; min-height: 44px; }" in INBOX_CSS
 
 
 # ----------------------------------------------------------------------------
@@ -322,12 +328,13 @@ def test_compact_rail_renders_quick_buttons_in_the_header_row(db_path: Path) -> 
     # (the card-level dismiss, distinct from the action's own lifecycle) so it
     # leaves the inbox in one click.
     assert (
-        f'class="ix-act ix-act-approve k-btn k-btn-quiet k-btn-sm" type="button" '
-        f'data-action-id="{action_id}"' in html
+        f'class="ix-act ix-act-approve k-btn k-btn-quiet k-btn-sm" type="submit" '
+        f'data-action-id="{action_id}" aria-label="Approve and apply"' in html
     )
-    alert_id = items[0].alert.id  # type: ignore[union-attr]
+    assert items[0].alert is not None
+    alert_id = items[0].alert.id
     assert (
-        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-alert-id="{alert_id}"'
+        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="submit" data-alert-id="{alert_id}" aria-label="Dismiss alert"'
         in html
     )
     # Zero extra rows: the buttons sit inside the existing header, BEFORE the
@@ -356,7 +363,8 @@ def test_quick_buttons_absent_off_the_rail_and_for_settled_actions(db_path: Path
     # alert itself. Targeting one action left the alert 'pending' and the card
     # standing in the queue (with its new ledger entry rendering beside it as a
     # second card), which is what "approve does nothing" looked like.
-    alert_id = items[0].alert.id  # type: ignore[union-attr]
+    assert items[0].alert is not None
+    alert_id = items[0].alert.id
     assert f'href="/approve?alert_id={alert_id}"' in full
     assert f'href="/approve?alert_id={alert_id}&dismiss=1"' in full
     assert f"action_id={action_id}" not in full
@@ -389,7 +397,7 @@ def test_alert_without_a_drafted_action_still_gets_dismiss_alert(db_path: Path) 
     items = collect_inbox(db_path)
     compact = render_inbox_stream(items, db_path=db_path, compact=True)
     assert (
-        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-alert-id="{alert.id}"'
+        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="submit" data-alert-id="{alert.id}" aria-label="Dismiss alert"'
         in compact
     )
     assert "ix-act-approve" not in compact
@@ -517,32 +525,28 @@ def test_plain_note_gets_a_dismiss_chip_but_ledger_does_not(db_path: Path) -> No
     items = collect_inbox(db_path)
     compact = render_inbox_stream(items, db_path=db_path, compact=True)
     # The note carries a dismiss ✕ keyed to the notes-archive endpoint.
-    assert (
-        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-note-id="{note.id}"'
-        in compact
-    )
+    assert f'action="/api/notes/{note.id}/archive"' in compact
     # The ledger card stays read-only: no quick-action block on it.
     ledger_card = compact[compact.index('data-kind="ledger"') :]
     head_end = ledger_card.index("</div>", ledger_card.index('class="ix-head"'))
     assert "ix-quick" not in ledger_card[:head_end]
 
 
-def test_quick_actions_post_by_id_via_htmx() -> None:
-    """Wave 3b: each quick action routes by id via HTMX hx-post (not the old JS
-    fetch dispatcher) — alert-id → alert-dismiss, note-id → note-archive,
-    action-id → /approve — and swaps its .ix-quick span in place."""
+def test_quick_actions_use_ordinary_post_forms() -> None:
     from dashboard.inbox import _btn_approve, _btn_dismiss_alert, _btn_dismiss_note
 
     dis_alert = _btn_dismiss_alert(7)
-    assert 'hx-post="/api/alerts/7/dismiss"' in dis_alert
-    assert "data-alert-id" in dis_alert
-    assert 'hx-target="closest .ix-quick"' in dis_alert and 'hx-swap="outerHTML"' in dis_alert
+    assert '<form method="post" action="/approve"' in dis_alert
+    assert 'name="alert_id" value="7"' in dis_alert
+    assert 'name="dismiss" value="1"' in dis_alert
     dis_note = _btn_dismiss_note(9)
-    assert 'hx-post="/api/notes/9/archive"' in dis_note and "data-note-id" in dis_note
+    assert '<form method="post" action="/api/notes/9/archive"' in dis_note
     approve = _btn_approve(5)
-    assert 'hx-post="/approve"' in approve and '"action_id": "5"' in approve
-    # The old JS fetch dispatcher is gone — HTMX drives the actions now.
-    assert "/api/alerts/" not in INBOX_JS
+    assert '<form method="post" action="/approve"' in approve
+    assert 'name="action_id" value="5"' in approve
+    for html in (dis_alert, dis_note, approve):
+        assert 'name="return_to" value="/"' in html
+        assert "hx-" not in html
 
 
 # ----------------------------------------------------------------------------
@@ -663,75 +667,6 @@ def test_collect_inbox_threads_borrowed_connection_into_ranking(
 
 
 # ----------------------------------------------------------------------------
-# Consequence receipts (REQ-11): acted_span's optional detail / detail_href /
-# dismiss_why_id renderings, and byte-compat when none are passed.
-# ----------------------------------------------------------------------------
-
-
-def test_acted_span_byte_compatible_when_detail_absent() -> None:
-    """Every pre-receipts caller (approve/dismiss/archive chips elsewhere in
-    this module) keeps rendering identically — detail is purely additive."""
-    from dashboard.inbox import acted_span
-
-    assert acted_span("✓ applied", "applied") == (
-        '<span class="ix-quick ix-acted ix-acted-applied">✓ applied</span>'
-    )
-    assert acted_span("✕ dismissed", "cancelled", undo_url="/api/actions/5/uncancel") == (
-        '<span class="ix-quick ix-acted ix-acted-cancelled">✕ dismissed'
-        ' <button type="button" class="ix-undo k-btn k-btn-quiet k-btn-sm" '
-        'hx-post="/api/actions/5/uncancel" hx-target="closest .ix-quick" '
-        'hx-swap="outerHTML">undo</button></span>'
-    )
-
-
-def test_acted_span_detail_renders_muted_truncated_suffix() -> None:
-    from dashboard.inbox import acted_span
-
-    long_consequence = (
-        "Approved queued_action id=9 (action_kind=thesis_update). "
-        "Ledger entry id=42 written: NU thesis_update source_alert_id=7."
-    )
-    html = acted_span("✓ applied", "applied", detail=long_consequence)
-    assert "ix-acted-detail" in html
-    assert f'title="{long_consequence}"' in html  # full text always on title=
-    # Truncated to 60 visible chars + ellipsis in the VISIBLE tag content
-    # (after the title= attribute closes) — the body itself is truncated.
-    visible_body = html.split(f'title="{long_consequence}">', 1)[1]
-    assert "…</span>" in visible_body
-    assert long_consequence not in visible_body
-
-
-def test_acted_span_short_detail_renders_untruncated() -> None:
-    from dashboard.inbox import acted_span
-
-    html = acted_span("✓ applied", "applied", detail="Cancelled queued_action id=3.")
-    assert ">Cancelled queued_action id=3.<" in html
-    assert "…" not in html
-
-
-def test_acted_span_detail_href_becomes_a_doorway() -> None:
-    from dashboard.inbox import acted_span
-
-    html = acted_span(
-        "✓ applied",
-        "applied",
-        detail="Ledger entry id=42 written.",
-        detail_href="/#decisions_record",
-    )
-    assert '<a class="ix-acted-detail" href="/#decisions_record"' in html
-
-
-def test_acted_span_dismiss_why_renders_toggle_and_hidden_input() -> None:
-    from dashboard.inbox import acted_span
-
-    html = acted_span("✕ dismissed", "cancelled", dismiss_why_id=17)
-    assert "ix-why-toggle" in html
-    assert 'hx-post="/api/alerts/17/dismiss"' in html
-    assert 'name="reason"' in html
-    assert "hidden" in html  # the input starts hidden until "why?" is clicked
-
-
-# ----------------------------------------------------------------------------
 # Flat stream (2026-06-11): no recency-bucket headers
 # ----------------------------------------------------------------------------
 
@@ -786,15 +721,14 @@ def test_stream_carries_surface_and_per_card_timestamps(db_path: Path) -> None:
     datetime.fromisoformat(stamp)
 
 
-def test_inbox_js_wires_unread_and_quick_actions() -> None:
+def test_inbox_js_wires_unread_without_mutation_transport() -> None:
     """Rendered-markup contract for the page script: per-surface localStorage
     keys, the rail badge hook, and see-it-to-clear-it (IntersectionObserver).
-    The quick actions themselves are HTMX now (Wave 3b) — the old POST /approve
-    fetch dispatcher is gone (see test_quick_actions_post_by_id_via_htmx)."""
+    Mutating actions are ordinary server-rendered forms."""
     assert "ix-last-seen:" in INBOX_JS
     assert "data-ix-badge" in INBOX_JS
     assert "IntersectionObserver" in INBOX_JS
     assert "ix-new" in INBOX_JS
-    # The quick-action fetch dispatcher moved to HTMX hx-post on the buttons
-    # (the advisor-memo dismiss below still POSTs via fetch — a separate path).
     assert "'/approve'" not in INBOX_JS
+    assert "fetch(" not in INBOX_JS
+    assert "htmx:" not in INBOX_JS

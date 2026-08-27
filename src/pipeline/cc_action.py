@@ -2,7 +2,7 @@
 
 Every surface with a POST-action button (dismiss / approve / affirm / archive /
 unmute / delete) used to hand-roll its own click feedback, and the 2026-07-30
-sweep found five divergent patterns: HTMX buttons with zero busy state, panels
+sweep found five divergent patterns: declarative buttons with zero busy state, panels
 that only ``disabled=true`` with no label change, panels that ``.remove()`` the
 row instantly (a jarring pop-out), panels that dim in place, and buttons with
 no feedback at all (double-submit possible). The owner's UX bar
@@ -28,9 +28,8 @@ bans layout props for overlay close motion). Both beats respect
 ``prefers-reduced-motion`` (instant removal).
 
 The kit (``ui.controls``) owns the matching *button* look: ``.k-btn`` styles
-``[aria-busy="true"]`` and ``.htmx-request`` (the class HTMX toggles on the
-triggering element while a request is in flight), so declarative HTMX buttons
-get the pressed state with no JS at all.
+``[aria-busy="true"]`` so controls driven by this primitive get a consistent
+pressed state.
 
 Like CCOverlay, this is inlined into BOTH documents (the live shell and the
 offline ``file://`` report) so panel fragments can call ``window.CCAction``

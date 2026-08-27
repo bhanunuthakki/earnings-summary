@@ -114,7 +114,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert isinstance(registry.REGISTERED, frozenset)
     assert isinstance(registry.GOVERNED, frozenset)
     assert len(registry.REGISTERED) == 109
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 154
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 153
     assert len(registry.GOVERNED) == 130
     assert (
         frozenset(
@@ -158,7 +158,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert len(registry.BESPOKE_BUTTON_APPROVALS) == 17
     assert len(registry.MONO_TABLE_APPROVALS) == 1
     assert registry.SURFACE_SANCTIONS == ()
-    assert len(registry.CCACTION_REGRESSION_FLOOR) == 28
+    assert len(registry.CCACTION_REGRESSION_FLOOR) == 27
     for name in (
         "CHROME_TOKENS",
         "INDENT_TOKENS",

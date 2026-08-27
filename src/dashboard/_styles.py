@@ -231,6 +231,7 @@ INBOX_CSS = r"""
 .ix-foot-link { color: var(--muted); }
 .ix-foot-link:hover { color: var(--accent); }
 .ix-memo-acts { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.ix-action-form { display: inline-flex; margin: 0; }
 .ix-memo-open { text-decoration: none; }
 .ix-note-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-empty { color: var(--muted); font-size: var(--fs-body); padding: var(--sp-4) var(--sp-1); }
@@ -238,15 +239,15 @@ INBOX_CSS = r"""
 .ix-degraded-why { color: var(--muted); font-size: var(--fs-caption); border-bottom: 1px dotted var(--border-2); cursor: help; }
 .ix-more { color: var(--muted); font-size: var(--fs-caption); padding: var(--sp-3) var(--sp-1) var(--sp-1); border-top: 1px solid var(--border-2); margin-top: var(--sp-2); }
 .ix-quick { margin-left: auto; display: inline-flex; gap: var(--sp-1); visibility: hidden; }
-.ix-card:hover .ix-quick, .ix-quick:focus-within { visibility: visible; }
-.ix-quick ~ .ix-when, .ix-acted ~ .ix-when { margin-left: 0; }
+.ix-card:hover .ix-quick, .ix-card:focus-within .ix-quick { visibility: visible; }
+@media (hover: none), (max-width: 47.5rem) {
+  .ix-quick { visibility: visible; }
+  .ix-act { min-width: 44px; min-height: 44px; }
+}
+.ix-quick ~ .ix-when { margin-left: 0; }
 .ix-act-approve:hover { color: var(--ok); border-color: var(--ok); }
 .ix-act-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-act[disabled] { opacity: 0.5; cursor: default; }
-.ix-act-fail { color: var(--bad); border-color: var(--bad); }
-.ix-acted { margin-left: auto; font-size: var(--fs-caption); font-weight: 600; white-space: nowrap; color: var(--muted); }
-.ix-acted-applied { color: var(--ok); }
-.ix-dismissed { opacity: 0.55; transition: opacity var(--transition); }
 .ix-new { box-shadow: inset 2px 0 0 var(--accent); }
 .ix-sev-bad { box-shadow: inset 2px 0 0 var(--bad); }
 .ix-badge { display: inline-block; min-width: 14px; text-align: center; margin-left: var(--sp-1); padding: 1px var(--sp-1); border-radius: var(--radius-full); background: var(--accent); color: var(--accent-contrast); font-family: var(--mono); font-size: var(--fs-caption); font-weight: 600; line-height: 1.4; vertical-align: 2px; }
@@ -255,11 +256,6 @@ INBOX_CSS = r"""
 .ix-cat span { opacity: 0.7; margin-left: var(--sp-1); }
 .ix-hide { display: none !important; }
 .ix-kind[title] { cursor: help; }
-.ix-acted-detail { font-weight: 400; opacity: 0.85; }
-.ix-dismiss-why { margin-left: var(--sp-1); }
-.ix-why-toggle { font-weight: 400; opacity: 0.7; }
-.ix-why-toggle:hover { opacity: 1; }
-.ix-why-input { margin-left: var(--sp-1); width: 7em; font-size: var(--fs-caption); font-family: inherit; background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1px var(--sp-1); }
 """.strip()
 
 UPCOMING_CSS = r"""

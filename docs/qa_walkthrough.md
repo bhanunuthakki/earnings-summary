@@ -370,13 +370,12 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 |---|---|---|---|---|
 | Category chip | click | Client-side: `.is-on` moves to chip, non-matching cards get `.ix-hide`; "All" restores | Scoped per-stream; no server call | P1 |
 | Ticker link | click | `/#holding=T` opens holding in shell; hover → peek mini-card | — | P0 |
-| ✓ approve (hover) | click | HTMX `POST /approve` `{action_id}` → swaps `.ix-quick` for `✓ applied` chip + consequence receipt detail (truncated 60ch, full in title, doorway when `detail_href` present) | 409 on double-click/stale (already applied); 403 cross-site; only present when a pending queued action exists | P0 |
-| ✕ dismiss alert (hover) | click | HTMX `POST /api/alerts/<id>/dismiss` → cancels pending drafts, alert→dismissed, chip `✕ dismissed` + inline `why?` affordance | Terminal (no Undo — cascade); 404 unknown, 409 already terminal | P0 |
-| `why?` → reason input | click, type, Enter | Toggle reveals one-word input (maxlength 40, placeholder "one word"); Enter hx-posts `{reason}` to same dismiss route; input removes itself (empty HTML swap) | Reason-only round-trip must NOT 409 on already-dismissed alert; skippable — no submit leaves nothing | P1 |
-| ✕ dismiss draft (standalone) | click | HTMX `POST /approve&dismiss=1` → `✕ dismissed` chip with **undo** button | Undo `POST /api/actions/<id>/uncancel` restores ✓/✕ pair; 409 if not cancelled | P1 |
-| ✕ archive note | click | HTMX `POST /api/notes/<id>/archive` → chip with undo (restores note button) | Only plain notes (not advisor memos) | P1 |
+| ✓ approve (hover) | click | Ordinary form `POST /approve` with `{action_id, confirm=1, return_to}` applies the draft, then returns `303` to a freshly server-rendered inbox | 409 on stale/already-applied action; 403 cross-site; only present when a pending queued action exists | P0 |
+| ✕ dismiss alert (hover) | click | Ordinary form `POST /approve` with `{alert_id, dismiss=1, confirm=1, return_to}` cancels pending drafts and dismisses the alert, then returns `303` | Terminal (no Undo — cascade); 404 unknown, 409 already terminal | P0 |
+| ✕ dismiss draft (standalone) | click | Ordinary form `POST /approve` with `{action_id, dismiss=1, confirm=1, return_to}` cancels the draft, then returns `303` | 409 if already terminal | P1 |
+| ✕ archive note | click | Ordinary form `POST /api/notes/<id>/archive` with `return_to`; server archives the note and returns `303` | Only plain notes (not advisor memos) | P1 |
 | `open memo` chip (memo card) | click | Navigates `/#advisor_memos` | Ledger-echo survivor (no note_id) gets open-memo only | P1 |
-| `dismiss` chip (memo card) | click | Vanilla fetch `POST /api/notes/<id>/archive`; card fades (`.ix-dismissed`), chips replaced by `✓ dismissed` | On HTTP error: button re-enabled, `.ix-act-fail` red, error in title | P1 |
+| `dismiss` chip (memo card) | click | Ordinary form `POST /api/notes/<id>/archive` with `return_to`; server archives the note and returns `303` to the refreshed inbox | On error the server returns its normal error response and does not archive the note | P1 |
 | "review →" footer | click / hover | Peek `/api/peek/alert/<id>` (evidence drawer detail); real href `/feed?ticker=T` | Absent when no alert/action id | P1 |
 | "article ↗" | click | Opens evidence `url` in new tab | Only http(s) URLs from `material_news` evidence; malformed JSON → no link | P1 |
 | "full feed" link | click | Navigate `/feed` | — | P0 |
@@ -435,7 +434,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 - `?limit=abc` → silently 200; `?status=pending` → alerts-only view with filter chip.
 - Back-navigation after approve: 303 Referer round-trip lands back on `/feed` with the same query string.
 - Missing DB → empty state renders, 200 not 500.
-- HTMX attributes on this page are inert (no htmx script in `_document`) — the GET links are the intended path; verify approve links work JS-free.
+- The page has no HTMX action dependency. Verify its server-rendered action paths work with JavaScript disabled.
 - Page loads with no console errors despite INBOX_JS expecting optional elements (badge absent).
 
 ---
@@ -520,7 +519,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 
 ## Diet (Companies → Diet)
 **Reach:** `/#diet`. Fragment `GET /api/panel/diet`. **Preconditions:** server; `signals` table (alembic 0095), populated by news + yf_grades + IR-events feeds. Pure read, no writes.
-**Renders (top→bottom):** Panel "Information diet" with sub "The pull lane — what to **read** on your names…". Section "Ingest stream" (sub "Recent sell-side ratings + news on tracked names, newest first. Not ranked by urgency — this is reading, not triage."): living-grid filter bar (placeholder "Filter by name / source / text…", "N signals" count) over a `.p-table` — sortable When/Name/Type/Source headers + Signal column; rows: date · ticker_label · type pill (Rating/News/Podcast, quiet) · title (external link `target=_blank` when URL) · firm. Section "Forward agenda" (upcoming investor/analyst days, soonest first): filter bar ("Filter by name / event…") + table Date · In (today/tomorrow/Nd) · Name · Event · Source. Footer scaffold note: "**Coming as fast-follows:** buy-side ratings (the 13F + ARK layer) and sell-side estimate / model revisions…".
+**Renders (top→bottom):** Panel "Information diet" with sub "The pull lane — what to **read** on your names…". Section "Ingest stream" (sub "Recent sell-side ratings + news on tracked names, newest first. Not ranked by urgency — this is reading, not triage."): living-grid filter bar (placeholder "Filter by name / source / text…", "N signals" count) over a `.p-table` — sortable When/Name/Type/Source headers + Signal column; rows: date · ticker_label · type pill (Rating/News, quiet) · title (external link `target=_blank` when URL) · firm. Podcast ingestion is retired and does not produce active Diet rows. Section "Forward agenda" (upcoming investor/analyst days, soonest first): filter bar ("Filter by name / event…") + table Date · In (today/tomorrow/Nd) · Name · Event · Source. Footer scaffold note: "**Coming as fast-follows:** buy-side ratings (the planned 13F + ARK layer) and sell-side estimate / model revisions…".
 
 ### Actions
 | Affordance | Trigger | Expected result | Edge/degraded states | Pri |
@@ -728,7 +727,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 | Affordance | Trigger | Expected result | Edge/degraded states | Pri |
 |---|---|---|---|---|
 | (cards themselves are read-only besides set-ticker) | — | — | — | P2 |
-| Lifecycle REST (no panel buttons; Journal panel/API surface) | `POST /api/notes/<id>/<action>` | `resolve` (`{resolution_note?}`), `archive`, `unarchive`, `set_ticker` (`{ticker}`), `reclassify` (`{kind}`), `supersede` (`{body, kind?}` → returns chained replacement), `link`/`unlink` (`{decision_id?/position_entry_id?, auto_resolve?}`), `route` (`{intent}`, mirrors onto source comment). Returns `{note:…}` JSON. | Unknown action ⇒ 404; bad kind / missing supersede body / dangling link target ⇒ 400/404; HTMX archive returns done-chip HTML `✕ archived` + Undo (`/api/notes/<id>/unarchive`) | P1 |
+| Lifecycle REST / form action | `POST /api/notes/<id>/<action>` | JSON callers receive `{note:…}`. Ordinary forms may include `return_to=/` or `/feed`; after success the server returns `303`. Supported actions: `resolve`, `archive`, `unarchive`, `set_ticker`, `reclassify`, `supersede`, `link`/`unlink`, and `route`. | Unknown action ⇒ 404; bad kind / missing supersede body / dangling link target ⇒ 400/404; invalid `return_to` ⇒ 400 | P1 |
 
 ### States to verify
 - Empty: `"No musings yet - capture a thought above, or send one (voice or text) to your Telegram bot."`
@@ -959,7 +958,7 @@ route must set `PORTFOLIO_TRACKER_API_URL` explicitly.
 ## Section: Cron Health
 
 **Renders:** `<h2>Cron health</h2>` with the last recorded KPI strip and 7-day timeline. The fragment is requested explicitly through its operational panel route; it does not poll in the background. CLI verification remains `verify_cron_registration.py` / `verify_daily_chain.py`.
-**Actions:** HTMX 60s poll (P1 — verify verdict flips in place without reload; JS-off still shows server-rendered body). **States:** no `ingestion_runs` rows/table → "No pipeline run rows yet…" (also served by the poll); no 500 on missing table.
+**Actions:** none; switch away and reopen the panel to request a fresh operational fragment (P1). **States:** no `ingestion_runs` rows/table → "No pipeline run rows yet…"; no 500 on missing table.
 
 ## Section: DCF Coverage
 
@@ -1396,7 +1395,7 @@ A 6-agent pass executed the mechanical rows against a sandboxed instance (worktr
 ## B.1 What is already verified (skip on the human pass)
 - **GET renders (46 checks, all PASS):** `GET /` (shell, open-loops band, cockpit columns, inbox rail, topbar/overlay markup), `/feed`, every `/api/panel/<id>` fragment (incl. Ledger with jump chips, Decisions with mirror-first KPI strip + Coach P&L + pings/mutes/digest sections, Risk offline sections, Provenance's section anchors), ETag→304 behavior, holding band links (`Report/DCF/Review/Ledger`), `/api/peek/review/NU` (base-rate line renders), `/alerts`, `/dcf/NU`, `/source/<id>`. Zero tracebacks, zero 500s anywhere, incl. unknown-panel and tracker-down degrades. Note: `/api/panel/overview` 404s **by design** (Overview is server-inlined on `GET /`).
 - **Ledger action POSTs (19 PASS):** plain + `$TICKER` capture land correctly; notes lifecycle verbs (resolve/archive/unarchive/reclassify) mutate DB as documented; falsifier ratify returns its honest receipt ("queued for arming" vs "armed" per `arming_status`); Rewrite (action=edit) persists; armed-falsifiers table matches SQL ground truth; set-ticker attribution works.
-- **Inbox/alerts/coach POSTs (16 PASS):** alert dismiss ± reason, reason-only round-trip on an already-dismissed alert (no 409), HTMX chip with "why?" affordance, `/api/coach/unmute` clears a mute and the Decisions fragment reflects it, open-loops band counts move coherently after mutations.
+- **Inbox/alerts/coach POSTs (16 PASS at the time of this archived 2026-07-04 run):** alert dismiss ± reason, reason-only round-trip on an already-dismissed alert (no 409), the then-current HTMX chip with "why?" affordance, `/api/coach/unmute` clears a mute and the Decisions fragment reflects it, open-loops band counts move coherently after mutations. The active inbox now uses ordinary server-rendered POST/303 forms; verify that current behavior in the main walkthrough instead of relying on this historical row.
 - **Report build (17 PASS):** no-LLM `build_artifacts` build succeeds on scratch data; 6 tab groups in order; verdict badge dated; KPI tiles emit fact-doorway buttons when `kpi_definition_id` exists (inert divs otherwise, as designed); reread strip honestly absent with no cached lens; data-xtab/src-chips/comment-pins/selection-floater all present; `GET /reports/NU` serves it. (Artifact filename is `<date>_workspace.html`.)
 - **Telegram handlers, function-level (12 PASS):** `/start`, unknown-slash reply, `/review NU` plain-text (no `**`/backticks), `Captured. (NU)` confirm, pledge challenge + `Noted — recorded on decision #N` (extraction seam faked — zero LLM spend), `cp:dismiss` → "Dismissed." + card stamp + keyboard strip, stale re-press → "Already handled.", 3-dismissal auto-mute + notice, `cp:review` → "Reviewing NU..." + plain reply.
 

@@ -4,7 +4,8 @@ Status date: 2026-07-28
 
 ## Verdict
 
-**Blocked for canonical cutover and complete-company claims.**
+**Owner-approved staged cutover; blocked for physical retirement and
+complete-company claims.**
 
 The evidence-first work through the current migration series is a materially
 stronger foundation than the legacy fact tables. It provides immutable source
@@ -378,6 +379,13 @@ flowchart LR
 9. **Retirement gate** — after two quarterly cycles and one annual cycle with
    strict audits clean and no legacy reads/writes, remove legacy views/modules,
    then tables, with explicit owner approval.
+
+This sequence is now the owner-approved retirement path. The architecture
+inventory remains frozen while readers and writers move in tested clusters.
+The observation window begins only after strict parity and zero legacy runtime
+access are true; one clean rehearsal never starts or satisfies it. Table or
+module deletion still requires a separate final owner approval. The canonical
+contract is `directives/data_provenance.md#11-legacy-fact-plane-retirement`.
 
 ## Planned Deletions After Parity
 

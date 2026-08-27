@@ -21,7 +21,6 @@ _SPECIAL_GOLDEN_PURPOSES: tuple[str, ...] = (
     "injection_canaries",
     "provenance_caution",
     "key_metrics",
-    "podcast_takeaway_summary",
     "scenario_prior",
     "sector_benchmark_proposal",
 )

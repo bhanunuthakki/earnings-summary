@@ -262,3 +262,18 @@ durable mechanism is a first-class **override record consulted at read time**.
 Remaining seam: the per-cell source *chip* (§9) still describes the FMP row for an
 overridden value — the displayed number is correct, but the chip's source attribution
 and a `qualify` → ⚠ annotation are a follow-up.
+
+## 11. Legacy fact-plane retirement
+
+The legacy fact plane retires through the ordered cutover gates, not by immediate
+deletion. Its reader/writer inventory is frozen by
+`tests/test_legacy_fact_access_architecture.py`; do not add new product readers or
+writers. Move one bounded cluster at a time to the canonical fact plane with strict
+population, resolution, publication, search, recovery, and rollback evidence.
+
+Physical retirement remains blocked until strict audits show no legacy reads or
+writes across at least two complete quarterly cycles and one complete annual cycle.
+One rehearsal never starts or satisfies that observation window. Removing legacy
+views, modules, migrations, or tables then requires a separate final owner approval,
+an explicit migration, and rollback proof. Historical facts and migration evidence
+remain durable until that separately approved retirement action.

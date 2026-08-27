@@ -62,7 +62,6 @@ _LLM_BUDGETS: tuple[tuple[str, float, str], ...] = (
     ("model_frontier_research", 3, "warn"),
     ("optimizer_nominator", 3, "warn"),
     ("pairwise_analysis", 30, "warn"),
-    ("podcast_takeaway_summary", 5, "skip"),
     ("positioning_coach_turn", 10, "warn"),
     ("positioning_encode", 10, "warn"),
     ("post_earnings_readout", 5, "skip"),

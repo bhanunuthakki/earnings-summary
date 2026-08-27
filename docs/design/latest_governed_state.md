@@ -1,7 +1,9 @@
 # Latest governed state materialization
 
-Status: additive shadow architecture. No live read ownership, retention deletion,
-or production cutover is authorized by this change.
+Status: owner-approved staged cutover target. Live reader/writer ownership moves
+only in tested clusters; retention deletion remains blocked until the complete
+observation and final-approval gates in
+`directives/data_provenance.md#11-legacy-fact-plane-retirement` pass.
 
 ## Goal
 

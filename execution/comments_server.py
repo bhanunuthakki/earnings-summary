@@ -361,28 +361,6 @@ def _is_browser_user_agent(user_agent: str) -> bool:
     return _BROWSER_USER_AGENT_RX.search(user_agent) is not None
 
 
-# The panel id is interpolated rather than written as one literal '#decis…'
-# string: a hex-color scan over CSS-emitting modules reads '#dec' as a raw
-# 3-digit color (open_loops.py's documented idiom) — this constant isn't
-# itself scanned (comments_server.py carries no CSS), but the value flows
-# into acted_span()'s rendered href, so the same discipline applies at the
-# source of truth.
-_DECISIONS_RECORD_PANEL = "decisions_record"
-_DECISIONS_RECORD_HASH = f"/#{_DECISIONS_RECORD_PANEL}"
-
-
-def _approve_consequence_href(consequence: str) -> str | None:
-    """The doorway an approve consequence string opens onto, or None when
-    none applies. Only ever a REAL registered panel hash — never invented:
-    a written thesis-ledger entry or a sizing intent both land in the
-    Portfolio > Decisions panel (P2.2 folded the standalone Thesis Ledger
-    tab into ``decisions_record`` — the Work OS surface owns the doorway
-    registry)."""
-    if "Ledger entry id=" in consequence or "position_sizing_intent id=" in consequence:
-        return _DECISIONS_RECORD_HASH
-    return None
-
-
 def _linked_gsheet(repo_root: Path, ticker: str) -> tuple[str | None, str | None]:
     """The ``(sheet_id, edit_url)`` of the Google Sheet linked to a ticker's DCF,
     or ``(None, None)`` when no ``dcf_defaults.gsheet_id`` is set in the holdings
@@ -2890,7 +2868,6 @@ def create_app(
             db_path=db_path,
             default_user_id=DEFAULT_USER_ID,
             referer_back_path=_referer_back_path,
-            approve_consequence_href=_approve_consequence_href,
         ),
     )
     register_settings_routes(
@@ -4581,6 +4558,7 @@ def create_app(
         start_job: list[Job] = []
         supervisor_proof_seen = False
         runtime_receipt_path = portfolio_tracker_receipt_path(repo_root)
+        supervisor_receipt_path = portfolio_tracker_receipt_path(PROJECT_ROOT)
 
         def inspect_listener() -> ListenerObservation:
             nonlocal supervisor_proof_seen
@@ -4621,7 +4599,7 @@ def create_app(
                     break
             supervisor = (
                 read_supervisor_listener_ownership(
-                    runtime_receipt_path,
+                    supervisor_receipt_path,
                     listener_owner=owner,
                     bind_host=bind_host,
                     bind_port=bind_port,
