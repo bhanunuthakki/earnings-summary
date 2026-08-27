@@ -8,7 +8,7 @@ and verifying the four outputs land:
   1. holdings JSON written with the template's tier-1 KPIs
   2. existing tier-1 KPIs preserved on re-application
   3. company entity row created in the entity spine
-  4. tracked_companies.processing_tier set per list_type
+  4. schedule class is derived from list_type
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 import onboard_ticker  # noqa: E402
 from onboard_ticker import (  # noqa: E402
-    _LIST_TYPE_TO_TIER,
     _merge_tier_1_kpis,
     apply_industry_template,
 )
@@ -40,7 +39,7 @@ def _create_test_db(db_path: Path) -> None:
     """Create the minimal schema the template applier needs:
     - entities + entity_aliases (for upsert_entity)
     - concepts (entity_store opens it but doesn't need rows)
-    - tracked_companies with processing_tier (migration 0044's column)
+    - tracked_companies with list_type
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -93,7 +92,6 @@ def _create_test_db(db_path: Path) -> None:
             list_type TEXT NOT NULL,
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             archived_at TIMESTAMP,
-            processing_tier VARCHAR(8) NOT NULL DEFAULT 'P3',
             UNIQUE(user_id, ticker)
         );
         """,
@@ -139,7 +137,7 @@ def env(tmp_path: Path) -> dict[str, Path]:
 
 
 def test_apply_template_creates_holdings_json(env: dict[str, Path]) -> None:
-    # Seed a tracked_companies row so processing_tier can be set
+    # Seed a tracked_companies row so the derived schedule class can be read
     conn = sqlite3.connect(str(env["db_path"]))
     conn.execute(
         "INSERT INTO tracked_companies (ticker, name, list_type) VALUES (?, ?, ?)",
@@ -177,7 +175,7 @@ def test_apply_template_creates_holdings_json(env: dict[str, Path]) -> None:
     assert result.holdings_written is True
     assert len(result.kpis_added) == 9
     assert result.kpis_kept == []
-    assert result.processing_tier == "P2"  # watchlist → P2
+    assert result.schedule_class == "P2"  # watchlist → P2
 
 
 def test_apply_template_creates_entity_row(env: dict[str, Path]) -> None:
@@ -207,7 +205,7 @@ def test_apply_template_creates_entity_row(env: dict[str, Path]) -> None:
     assert meta == {"sector": "Technology"}
 
 
-def test_apply_template_sets_processing_tier_portfolio(env: dict[str, Path]) -> None:
+def test_apply_template_reads_schedule_class_portfolio(env: dict[str, Path]) -> None:
     conn = sqlite3.connect(str(env["db_path"]))
     conn.execute(
         "INSERT INTO tracked_companies (ticker, name, list_type) VALUES (?, ?, ?)",
@@ -223,18 +221,10 @@ def test_apply_template_sets_processing_tier_portfolio(env: dict[str, Path]) -> 
         holdings_dir=env["holdings_dir"],
         db_path=env["db_path"],
     )
-    assert result.processing_tier == "P1"
-
-    conn = sqlite3.connect(str(env["db_path"]))
-    row = conn.execute(
-        "SELECT processing_tier FROM tracked_companies WHERE ticker = 'NU'",
-    ).fetchone()
-    conn.close()
-    assert row is not None
-    assert row[0] == "P1"
+    assert result.schedule_class == "P1"
 
 
-def test_apply_template_processing_tier_for_each_list_type(env: dict[str, Path]) -> None:
+def test_apply_template_schedule_class_for_each_list_type(env: dict[str, Path]) -> None:
     """Every list_type maps to the documented tier."""
     cases = [
         ("portfolio", "P1"),
@@ -261,15 +251,17 @@ def test_apply_template_processing_tier_for_each_list_type(env: dict[str, Path])
             holdings_dir=env["holdings_dir"],
             db_path=env["db_path"],
         )
-        assert result.processing_tier == expected_tier, (
-            f"{list_type} should map to {expected_tier}, got {result.processing_tier}"
+        assert result.schedule_class == expected_tier, (
+            f"{list_type} should map to {expected_tier}, got {result.schedule_class}"
         )
 
 
-def test_list_type_to_tier_mapping_complete() -> None:
-    """All list_types declared in db.py's CHECK constraint are in the map."""
+def test_list_type_schedule_mapping_complete() -> None:
+    """All list_types declared in db.py's CHECK constraint are classified."""
     expected = {"portfolio", "watchlist", "evaluation", "etf", "index_member", "none"}
-    assert set(_LIST_TYPE_TO_TIER.keys()) == expected
+    from models.companies import schedule_class_for_list_type
+
+    assert {str(value) for value in expected if schedule_class_for_list_type(value)} == expected
 
 
 def test_apply_template_idempotent(env: dict[str, Path]) -> None:
@@ -360,7 +352,7 @@ def test_apply_template_preserves_existing_tier_1_kpis(env: dict[str, Path]) -> 
 
 def test_apply_template_works_without_tracked_companies_row(env: dict[str, Path]) -> None:
     """If a ticker isn't in tracked_companies yet, the template still applies
-    (holdings + entity get written); processing_tier just returns None."""
+    (holdings + entity get written); schedule_class just returns None."""
     result = apply_industry_template(
         ticker="WPM",
         industry_slug="commodity_royalty",
@@ -368,7 +360,7 @@ def test_apply_template_works_without_tracked_companies_row(env: dict[str, Path]
         holdings_dir=env["holdings_dir"],
         db_path=env["db_path"],
     )
-    assert result.processing_tier is None
+    assert result.schedule_class is None
     assert result.entity_id is not None  # entity still created
     assert (env["holdings_dir"] / "WPM.json").exists()
 

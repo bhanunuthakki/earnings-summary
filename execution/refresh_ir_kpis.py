@@ -9,7 +9,8 @@ Modes (one required):
   --file PATH    parse + ingest a local spreadsheet
   --url URL      download the spreadsheet, then parse + ingest
   --discover     resolve the current spreadsheet URL via the IR results-center
-                 browser adapter, then download + parse + ingest
+                 precise browser adapter (currently mz), then download + parse
+                 + ingest; q4cdn configs use generic discovery or a direct URL
 
 Examples:
   python execution/refresh_ir_kpis.py --ticker NU --discover --quarters 8
@@ -102,7 +103,7 @@ def main() -> int:
 
         try:
             url = discover_spreadsheet_url(cfg)
-        except NotImplementedError as e:
+        except ValueError as e:
             print(str(e), file=sys.stderr)
             return 3
         if url is None:
@@ -198,14 +199,23 @@ def _parse_args() -> argparse.Namespace:
     src.add_argument(
         "--discover",
         action="store_true",
-        help="Discover the current spreadsheet URL via the IR results-center browser adapter",
+        help=(
+            "Discover via a configured precise IR browser adapter (mz); "
+            "q4cdn configs use generic discovery or --url/--file"
+        ),
     )
     # Used only when generating a ticker's config on its first refresh.
-    p.add_argument("--platform", help="Discovery platform for a new config (mz | q4cdn)")
+    p.add_argument(
+        "--platform",
+        help="Discovery platform for a new config (mz precise | q4cdn generic marker)",
+    )
     p.add_argument(
         "--results-center-url",
         dest="results_center_url",
-        help="IR results-center URL stored in a newly generated config (for future --discover)",
+        help=(
+            "IR results-center URL stored in a new config (mz --discover only; "
+            "q4cdn is a generic marker)"
+        ),
     )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     p.add_argument(

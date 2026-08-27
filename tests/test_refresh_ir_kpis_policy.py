@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from execution import refresh_ir_kpis, refresh_ir_kpis_all
+from ir_pipeline.config import IrConfig
 
 
 def _db(path: Path, rows: list[tuple[str, str]]) -> None:
@@ -92,7 +93,7 @@ def test_direct_kpi_refresh_rejects_more_than_five_before_network(
     monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
 
     def fail_network(_url: str, _repo_root: Path, _ticker: str) -> Path:
-        pytest.fail("network boundary crossed")
+        raise AssertionError("network boundary crossed")
 
     monkeypatch.setattr(
         refresh_ir_kpis,
@@ -100,6 +101,47 @@ def test_direct_kpi_refresh_rejects_more_than_five_before_network(
         fail_network,
     )
     assert refresh_ir_kpis.main() == 2
+
+
+def test_q4cdn_discover_fails_cleanly_without_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db_path = tmp_path / "data" / "portfolio.db"
+    _db(db_path, [("ACME", "portfolio")])
+    args = argparse.Namespace(
+        ticker="ACME",
+        quarters=5,
+        file=None,
+        url=None,
+        discover=True,
+        platform=None,
+        results_center_url=None,
+        repo_root=tmp_path,
+        db=db_path,
+        owner_requested=False,
+    )
+    monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
+
+    def q4cdn_config(_ticker: str, _repo_root: Path) -> IrConfig:
+        return IrConfig(
+            ticker="ACME",
+            platform="q4cdn",
+            results_center_url="https://issuer.example/results",
+        )
+
+    def fail_download(*_args: object) -> None:
+        raise AssertionError("network boundary crossed")
+
+    monkeypatch.setattr(refresh_ir_kpis, "get_config", q4cdn_config)
+    monkeypatch.setattr(refresh_ir_kpis, "download_spreadsheet", fail_download)
+
+    assert refresh_ir_kpis.main() == 3
+    error = capsys.readouterr().err
+    assert "No precise IR discovery adapter" in error
+    assert "generic discovery or a direct URL" in error
+    assert "Traceback" not in error
 
 
 def test_batch_scope_is_portfolio_automatic_and_explicit_evaluation(
@@ -116,6 +158,7 @@ def test_batch_scope_is_portfolio_automatic_and_explicit_evaluation(
             ("IDX", "index_member"),
         ],
     )
+
     def configured(_root: Path) -> list[str]:
         return ["PORT", "EVAL", "WATCH", "IDX", "UNKNOWN"]
 

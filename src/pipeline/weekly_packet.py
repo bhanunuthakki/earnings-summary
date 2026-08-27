@@ -599,8 +599,9 @@ def predraft(item: PacketItemRow, *, call: PredraftCall | None = None) -> str | 
 # directly rather than the ``weekly_packet_items`` table above: a proposed
 # task the owner never ran is the SUBSTRATE (research.proposals owns it), so
 # "packeted"/"unanswered weeks" state lands on ITS OWN row (the repurposed
-# ``cost_usd`` / ``run_id`` columns — see research.proposals' module
-# docstring) instead of duplicating tracking here. Deterministic — no LLM
+# public ``estimated_cost_usd`` / ``metadata`` fields over legacy columns — see
+# research.proposals' module docstring) instead of duplicating tracking here.
+# Deterministic — no LLM
 # call in this section (unlike the ITEM_KINDS predraft above).
 # --------------------------------------------------------------------------
 
@@ -636,7 +637,7 @@ def _already_packeted_this_week(task: ResearchTask, *, iso_year: int, iso_week: 
     THIS run's ISO week — guards ``send_packet`` being invoked more than once
     in the same week (it is safe to re-run generally) against double-bumping
     ``unanswered_weeks`` or re-sending the same card twice in one week."""
-    packeted_at = task.meta.get("packeted_at")
+    packeted_at = task.metadata.get("packeted_at")
     if not isinstance(packeted_at, str) or not packeted_at:
         return False
     try:
@@ -647,17 +648,21 @@ def _already_packeted_this_week(task: ResearchTask, *, iso_year: int, iso_week: 
     return (y, w) == (iso_year, iso_week)
 
 
-def _resolved_cost_usd(task: ResearchTask) -> float:
+def _resolved_estimated_cost_usd(task: ResearchTask) -> float:
     """The task's stored cost estimate, falling back to the SAME deterministic
     table the B7 triage tap stamped it with at detection time (a pre-B7 task
-    that predates the column being used has ``cost_usd IS NULL``)."""
+    that predates the column being used has ``estimated_cost_usd IS NULL``)."""
     from research.triage import estimate_cost_usd
 
-    return task.cost_usd if task.cost_usd is not None else estimate_cost_usd(task.ticker)
+    return (
+        task.estimated_cost_usd
+        if task.estimated_cost_usd is not None
+        else estimate_cost_usd(task.ticker)
+    )
 
 
 def expiring_research_message_text(task: ResearchTask) -> str:
-    """Render the card. ``task.meta['unanswered_weeks']`` is read AS-IS — the
+    """Render the card. ``task.metadata['unanswered_weeks']`` is read AS-IS — the
     caller (:func:`_send_expiring_research`) passes a task snapshot already
     carrying THIS send's incremented count, so the number shown always
     matches what gets persisted right after, never a stale pre-increment
@@ -665,18 +670,18 @@ def expiring_research_message_text(task: ResearchTask) -> str:
     <= 1) — "unanswered 1 week" reads oddly for something surfacing for the
     first time; it only means something once it recurs."""
     head = f"{task.ticker + ' - ' if task.ticker else ''}{task.claim.strip()}"
-    weeks = task.meta.get("unanswered_weeks")
+    weeks = task.metadata.get("unanswered_weeks")
     weeks_n = int(weeks) if isinstance(weeks, int) else 0
     age_note = f" (unanswered {weeks_n} weeks)" if weeks_n >= 2 else ""
     return (
         f"Expiring research: {head}{age_note}\n\n"
-        f"Run (~${_resolved_cost_usd(task):.2f}) / -> session / Drop"
+        f"Run (~${_resolved_estimated_cost_usd(task):.2f}) / -> session / Drop"
     )
 
 
 def expiring_research_keyboard(task: ResearchTask) -> dict[str, object]:
     labels: tuple[tuple[str, str], ...] = (
-        (f"Run (~${_resolved_cost_usd(task):.2f})", "run"),
+        (f"Run (~${_resolved_estimated_cost_usd(task):.2f})", "run"),
         ("-> session", "session"),
         ("Drop", "drop"),
     )
@@ -706,12 +711,14 @@ def _send_expiring_research(
         if _already_packeted_this_week(task, iso_year=run.iso_year, iso_week=run.iso_week):
             continue
         try:
-            weeks_raw = task.meta.get("unanswered_weeks")
+            weeks_raw = task.metadata.get("unanswered_weeks")
             weeks = (int(weeks_raw) if isinstance(weeks_raw, int) else 0) + 1
             # Render from a snapshot ALREADY carrying this send's incremented
             # count, so the card the owner sees matches what gets persisted
             # right after — never a stale pre-increment number.
-            outgoing = dataclasses.replace(task, meta={**task.meta, "unanswered_weeks": weeks})
+            outgoing = dataclasses.replace(
+                task, metadata={**task.metadata, "unanswered_weeks": weeks}
+            )
             with contextlib.suppress(telegram.TelegramError):
                 send(
                     token,
@@ -721,7 +728,7 @@ def _send_expiring_research(
                 )
             set_task_extras(
                 task.id,
-                cost_usd=_resolved_cost_usd(task),
+                estimated_cost_usd=_resolved_estimated_cost_usd(task),
                 packeted_at=now_iso(),
                 unanswered_weeks=weeks,
                 db_path=db_path,

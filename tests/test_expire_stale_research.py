@@ -8,7 +8,7 @@ of this sweep's scope entirely (tested in tests/test_research_notify.py).
 
 Mirrors tests/test_research_proposals.py's alembic-replay fixture pattern —
 ``research_tasks`` is a real migrated table, not a hand-rolled schema, so this
-exercises the actual repurposed ``cost_usd``/``run_id`` columns.
+exercises the public cost/metadata API over the legacy storage columns.
 """
 
 from __future__ import annotations

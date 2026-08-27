@@ -28,11 +28,11 @@ def test_weekly_plan_contains_only_p2(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "CREATE TABLE tracked_companies (ticker TEXT, processing_tier TEXT, archived_at TEXT)"
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)"
         )
         conn.executemany(
             "INSERT INTO tracked_companies VALUES (?, ?, NULL)",
-            (("HELD", "P1"), ("WATCH", "P2"), ("INDEX", "P3")),
+            (("HELD", "portfolio"), ("WATCH", "watchlist"), ("INDEX", "index_member")),
         )
 
     def all_due(_root: Path, _lens: str, _cadence: run_due_lenses.Cadence) -> list[str]:

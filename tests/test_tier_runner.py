@@ -38,7 +38,6 @@ def _bootstrap_schema(db_path: Path, *, with_artifacts: bool = True) -> None:
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             archived_at TIMESTAMP,
             last_built_at TIMESTAMP,
-            processing_tier TEXT NOT NULL DEFAULT 'P3',
             UNIQUE(user_id, ticker)
         );
         """
@@ -83,13 +82,13 @@ def _seed_ticker(
     archived_at: str | None = None,
 ) -> None:
     conn = sqlite3.connect(str(db_path))
+    if list_type == "portfolio" and tier == "P2":
+        list_type = "watchlist"
+    elif list_type == "portfolio" and tier == "P3":
+        list_type = "index_member"
     conn.execute(
-        """
-        INSERT INTO tracked_companies
-            (user_id, ticker, name, list_type, processing_tier, last_built_at, archived_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
-        """,
-        (ticker, f"{ticker} Co", list_type, tier, last_built_at, archived_at),
+        "INSERT INTO tracked_companies (user_id, ticker, name, list_type, last_built_at, archived_at) VALUES (1, ?, ?, ?, ?, ?)",
+        (ticker, f"{ticker} Co", list_type, last_built_at, archived_at),
     )
     conn.commit()
     conn.close()
@@ -380,9 +379,8 @@ def test_coverage_handles_missing_db(tmp_path: Path) -> None:
     }
 
 
-def test_missing_processing_tier_column_returns_empty(tmp_path: Path) -> None:
-    """If the migration hasn't applied yet, helpers return empty lists rather
-    than crashing — important for fresh-clone setups."""
+def test_list_type_is_sufficient_for_fresh_schema(tmp_path: Path) -> None:
+    """The fresh schema derives cadence directly from list_type."""
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     db_path = tmp_path / "data" / "portfolio.db"
     conn = sqlite3.connect(str(db_path))
@@ -404,8 +402,8 @@ def test_missing_processing_tier_column_returns_empty(tmp_path: Path) -> None:
     )
     conn.commit()
     conn.close()
-    assert tickers_due_for_refresh(tmp_path, "daily") == []
-    assert tickers_due_for_lens_regen(tmp_path, "five_min_reread", "daily") == []
+    assert tickers_due_for_refresh(tmp_path, "daily") == ["GOOG"]
+    assert tickers_due_for_lens_regen(tmp_path, "five_min_reread", "daily") == ["GOOG"]
 
 
 def test_idempotency_repeated_call(repo_root: Path, now: datetime) -> None:

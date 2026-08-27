@@ -14,10 +14,12 @@ from pathlib import Path
 
 import pytest
 
+from news.store import NewsRow, upsert_news_rows
 from signals.store import (
     CADENCES,
     DIET_ONLY_TYPES,
     NEWS_MIRRORED_TYPES,
+    NEWS_SYNC_ID_CHUNK_SIZE,
     SCAFFOLD_TYPES,
     SIGNAL_BUYSIDE_RATING,
     SIGNAL_CONSENSUS_RATING,
@@ -119,6 +121,135 @@ def test_sync_picks_up_new_news(db_with_news: Path) -> None:
         )
         conn.commit()
         assert sync_news_to_signals(conn) == 1
+    finally:
+        conn.close()
+
+
+def test_sync_with_news_ids_mirrors_only_requested_rows(db_with_news: Path) -> None:
+    conn = sqlite3.connect(str(db_with_news))
+    try:
+        conn.executemany(
+            "INSERT INTO news (ticker, headline, url, published_at, source_feed, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "NU",
+                    "Requested story",
+                    "http://x/requested",
+                    "2026-06-13 08:00:00",
+                    "fmp_stock_news",
+                    "t",
+                ),
+                (
+                    "NU",
+                    "Not requested story",
+                    "http://x/not-requested",
+                    "2026-06-13 09:00:00",
+                    "fmp_stock_news",
+                    "t",
+                ),
+            ],
+        )
+        conn.commit()
+        ids = dict(
+            conn.execute(
+                "SELECT url, id FROM news WHERE url IN (?, ?)",
+                ("http://x/requested", "http://x/not-requested"),
+            ).fetchall()
+        )
+
+        assert sync_news_to_signals(conn, news_ids=[ids["http://x/requested"]]) == 1
+        mirrored_urls = {
+            row[0]
+            for row in conn.execute(
+                "SELECT url FROM signals WHERE news_id IN (?, ?)",
+                (ids["http://x/requested"], ids["http://x/not-requested"]),
+            )
+        }
+        assert mirrored_urls == {"http://x/requested"}
+        # Replaying the bounded set is idempotent and does not add a second row.
+        assert sync_news_to_signals(conn, news_ids=[ids["http://x/requested"]]) == 0
+    finally:
+        conn.close()
+
+
+def test_sync_without_ids_keeps_full_backfill_behavior(db_with_news: Path) -> None:
+    conn = sqlite3.connect(str(db_with_news))
+    try:
+        conn.execute("DELETE FROM signals")
+        conn.commit()
+        assert sync_news_to_signals(conn) == len(_NEWS)
+        assert sync_news_to_signals(conn) == 0
+    finally:
+        conn.close()
+
+
+def test_sync_chunks_large_bounded_id_collection(db_with_news: Path) -> None:
+    conn = sqlite3.connect(str(db_with_news))
+    try:
+        conn.execute("DELETE FROM signals")
+        conn.executemany(
+            "INSERT INTO news (ticker, headline, url, published_at, source_feed, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "NU",
+                    f"Chunked story {index}",
+                    f"http://x/chunked-{index}",
+                    "2026-06-13 08:00:00",
+                    "fmp_stock_news",
+                    "t",
+                )
+                for index in range(NEWS_SYNC_ID_CHUNK_SIZE + 1)
+            ],
+        )
+        conn.commit()
+        ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT id FROM news WHERE url LIKE 'http://x/chunked-%' ORDER BY id"
+            )
+        ]
+
+        assert len(ids) == NEWS_SYNC_ID_CHUNK_SIZE + 1
+        assert sync_news_to_signals(conn, news_ids=ids) == len(ids)
+        assert conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == len(ids)
+    finally:
+        conn.close()
+
+
+def test_news_upsert_mirrors_only_inserted_ids(
+    monkeypatch: pytest.MonkeyPatch, db_with_news: Path
+) -> None:
+    calls: list[tuple[int, ...]] = []
+
+    def record_sync(conn: sqlite3.Connection, *, news_ids: list[int]) -> int:
+        del conn
+        calls.append(tuple(news_ids))
+        return 0
+
+    monkeypatch.setattr("signals.store.sync_news_to_signals", record_sync)
+    conn = sqlite3.connect(str(db_with_news))
+    try:
+        # The compact signals fixture hand-creates `news`; add the production
+        # migration's dedup constraint for this upsert-path assertion.
+        conn.execute("CREATE UNIQUE INDEX ux_test_news_ticker_url ON news (ticker, url)")
+        conn.commit()
+        fresh = NewsRow(
+            ticker="NU",
+            headline="Fresh story",
+            url="http://x/fresh",
+            published_at="2026-06-13 10:00:00",
+            source_feed="fmp_stock_news",
+        )
+        assert upsert_news_rows(conn, [fresh]) == (1, 0)
+        fresh_id = conn.execute("SELECT id FROM news WHERE url = ?", (fresh.url,)).fetchone()[0]
+        assert calls == [(fresh_id,)]
+
+        # INSERT OR IGNORE does not call the mirror for a duplicate, avoiding
+        # the historical full-news-table scan on a no-op fetch.
+        assert upsert_news_rows(conn, [fresh]) == (0, 1)
+        assert len(calls) == 1
     finally:
         conn.close()
 

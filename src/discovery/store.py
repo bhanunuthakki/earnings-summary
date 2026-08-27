@@ -290,21 +290,20 @@ def promote_to_watchlist(
         if row is None:
             conn.execute(
                 "INSERT INTO tracked_companies "
-                "(user_id, ticker, name, list_type, processing_tier, brief_dirty) "
-                "VALUES (?, ?, ?, 'watchlist', 'P2', 0)",
+                "(user_id, ticker, name, list_type, brief_dirty) "
+                "VALUES (?, ?, ?, 'watchlist', 0)",
                 (user_id, symbol, name or symbol),
             )
         elif str(row[0]) != "portfolio":
             conn.execute(
                 "UPDATE tracked_companies SET list_type = 'watchlist', "
-                "processing_tier = 'P2', brief_dirty = 0, archived_at = NULL "
+                "brief_dirty = 0, archived_at = NULL "
                 "WHERE user_id = ? AND ticker = ?",
                 (user_id, symbol),
             )
         elif row[1] is not None:
             conn.execute(
-                "UPDATE tracked_companies SET archived_at = NULL, processing_tier = 'P1', "
-                "brief_dirty = 1 "
+                "UPDATE tracked_companies SET archived_at = NULL, brief_dirty = 1 "
                 "WHERE user_id = ? AND ticker = ?",
                 (user_id, symbol),
             )

@@ -48,97 +48,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES  # noqa: E402
+from evals.run_registry import (  # noqa: E402
+    AUDIT_PURPOSES,
+    CAPTURE_AUDIT_PURPOSES,
+    RUNNABLE_PURPOSES,
+)
+from evals.run_registry import GOLDEN_PURPOSES as GOLDEN_PURPOSES  # noqa: E402
 
 log = logging.getLogger("run_llm_evals")
 
-GOLDEN_PURPOSES = (
-    "viewspec_compile",
-    "transcript_metadata",
-    "intake_classifier",
-    "news_structuring",
-    "decision_conditions_extract",
-    "ask_pack_router",
-    "ask_evidence_followup",
-    "ask_claim_grounding",
-    "ask_claim_audit",
-    "injection_canaries",
-    "provenance_caution",
-    "key_metrics",
-    # Podcast takeaway summarization (S11): production generation remains live,
-    # so its checked-in mode-A golden must remain reachable from this CLI.
-    "podcast_takeaway_summary",
-    # The Ledger Phase-1 research-loop gate (mode-A golden classifier).
-    "wondering_detect",
-    # Per-name DCF scenario prior (mode-A: directional skew + grounded-call over
-    # pinned thesis/bear anchors). RISKY-adjacent — it moves allocation.
-    "scenario_prior",
-    # The Ledger intent tap — supersedes wondering_detect on the live tap
-    # (mode-A golden classifier: observation/wondering/brief_artifact/stress_artifact).
-    "capture_intent",
-    # The Ledger reply-box router (#884) — the universal interaction that replaced
-    # per-card verb menus (mode-A: research/save/worldview/dismiss/question/note).
-    "ledger_reply_intent",
-    # Triage second-pass route suggestion (#884) — auto-routes a parked comment at
-    # high confidence (mode-A: a ROUTABLE_INTENTS member or park).
-    "triage_route_suggest",
-    # 10-Q segment quarterly period-axis disambiguation Stage B fallback
-    # (segment_quarterly_framework.md §2.4, mode-A: per-column duration_months/
-    # is_cumulative closed-form classification).
-    "segment_10q_period_disambiguate",
-    # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3):
-    # mode-A exact-match grader over a hand-picked industry->ETF golden set —
-    # deterministic, factual-lookup ground truth, no judge.
-    "sector_benchmark_proposal",
-    # The capture->answer primary gate (capture.triage, B3) — supersedes the
-    # question-shaped-text regex is_answerable_capture (mode-A: answer_now/
-    # contradiction/plain, grounded citations).
-    "capture_triage",
-    # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2) —
-    # the async capture tap that turns a landed musing into a confirmable
-    # decision draft (mode-A: intent/ticker/action + the prefer-ambiguous bar).
-    "decision_draft_parse",
-    # D1e (disclosure_intelligence_v1_prd.md) — ground truth for the
-    # disclosure-judgment layer, mode-A golden classifiers over hand-labeled
-    # prod disclosure_events rows (evals/golden/metric_lifecycle_triage.json,
-    # evals/golden/disclosure_item_specificity_triage.json).
-    "metric_lifecycle_triage",
-    "disclosure_item_specificity_triage",
-)
-AUDIT_PURPOSES = (
-    "readme_update",
-    "bear_case",
-    "transcript_summary",
-    "advisor_next_dollar",
-    # Incremental Dollar Recommendation (P0.4a, personal_investment_partner_prd.md
-    # §7.4/§10.5) — the governed selection over the deterministic Incremental
-    # Dollar frontier. Mode-B rubric; corpus =
-    # evals.corpora.load_incremental_dollar_recommendation_corpus.
-    "incremental_dollar_recommendation",
-    # Investment Decision Card (P1.1, personal_investment_partner_prd.md
-    # §8.1/§10.5) — the per-ticker synthesis over deterministic inputs.
-    # Mode-B rubric; corpus =
-    # evals.corpora.load_investment_decision_card_corpus.
-    "investment_decision_card",
-    # Senior Partner Brief (P2.2, personal_investment_partner_prd.md
-    # §9.1/§10.5) — the weekly governed synthesis over the whole advisory
-    # surface. Mode-B rubric; corpus =
-    # evals.corpora.load_senior_partner_brief_corpus.
-    "senior_partner_brief",
-    "ask_advisory_answer",
-    "calibration_coach",
-    "peer_selection",
-    "earnings_themes_split",
-    "qa_topics",
-    "position_review",
-    # Behavioral-rules distiller (tenet-2 Phase 4) — grades staged
-    # owner_profile_facts rows (category='behavioral') on grounding,
-    # falsifiability, and non-redundancy (mode-B rubric; corpus =
-    # evals.corpora.load_behavior_distill_corpus).
-    "behavior_distill",
-)
-CAPTURE_AUDIT_PURPOSES = CAPTURE_QUALITY_PURPOSES
-PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES + CAPTURE_AUDIT_PURPOSES
+PURPOSES = RUNNABLE_PURPOSES
 
 
 def _parse_args() -> argparse.Namespace:

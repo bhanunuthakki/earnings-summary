@@ -838,7 +838,7 @@ def test_dispatch_rx_session_sends_stored_prompt(db_path: Path) -> None:
         note_id=None,
         claim="do margins hold?",
         ticker="NU",
-        meta={"session_prompt": "# Research this wondering\n\nNU margins"},
+        metadata={"session_prompt": "# Research this wondering\n\nNU margins"},
         db_path=db_path,
     )
     spy = _Spy()

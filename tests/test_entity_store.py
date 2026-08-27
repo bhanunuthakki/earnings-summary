@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import entity_store
 from entity_store import (
     decide_proposal,
     get_entity,
@@ -176,6 +177,61 @@ def test_upsert_entity_kind_namespace_independent(db: Path) -> None:
     eid_co = upsert_entity(kind="company", canonical_name="Cloud", db_path=db)
     eid_seg = upsert_entity(kind="segment", canonical_name="Cloud", db_path=db)
     assert eid_co != eid_seg
+
+
+class _TrackingConnection(sqlite3.Connection):
+    commit_calls: int = 0
+    close_calls: int = 0
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+        super().commit()
+
+    def close(self) -> None:
+        self.close_calls += 1
+        super().close()
+
+
+def test_borrowed_entity_writers_leave_transaction_ownership_to_caller(db: Path) -> None:
+    conn = sqlite3.connect(str(db), factory=_TrackingConnection)
+    company_id = upsert_entity(kind="company", canonical_name="Alphabet", conn=conn)
+    assert company_id is not None
+    segment_id = upsert_entity(
+        kind="segment",
+        canonical_name="Alphabet:Cloud",
+        parent_entity_id=company_id,
+        conn=conn,
+    )
+    assert segment_id is not None
+    alias_id = record_alias(entity_id=segment_id, alias_text="Cloud", conn=conn)
+    relationship_id = upsert_relationship(
+        from_entity_id=segment_id,
+        relationship_kind="segment_of",
+        to_entity_id=company_id,
+        conn=conn,
+    )
+
+    assert company_id and segment_id and alias_id and relationship_id
+    assert conn.commit_calls == 0
+    assert conn.close_calls == 0
+    assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 2
+    conn.rollback()
+    conn.close()
+
+
+def test_default_entity_writer_owns_commit_and_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _TrackingConnection(":memory:")
+    _schema(conn)
+    conn.commit_calls = 0
+
+    def open_tracking(_db_path: Path | str | None) -> _TrackingConnection:
+        return conn
+
+    monkeypatch.setattr(entity_store, "_open", open_tracking)
+
+    assert upsert_entity(kind="company", canonical_name="Alphabet") is not None
+    assert conn.commit_calls == 1
+    assert conn.close_calls == 1
 
 
 def test_get_entity_round_trips_metadata(db: Path) -> None:

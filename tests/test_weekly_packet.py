@@ -397,17 +397,18 @@ def _seed_research_task(
     ticker: str | None = "NU",
     status: str = "proposed",
     created_at: str = "2020-01-01T00:00:00",
-    cost_usd: float | None = None,
-    run_id: str | None = None,
+    estimated_cost_usd: float | None = None,
+    metadata_json: str | None = None,
 ) -> int:
     """A task old enough (2020) to be past ANY warn_days threshold — avoids
     the fragility of computing a relative cutoff against "now" in the test."""
     conn = _conn(db)
     try:
         cur = conn.execute(
-            "INSERT INTO research_tasks (claim, ticker, status, cost_usd, run_id, "
+            "INSERT INTO research_tasks (claim, ticker, status, cost_usd, "
+            "run_id, "
             "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (claim, ticker, status, cost_usd, run_id, created_at, created_at),
+            (claim, ticker, status, estimated_cost_usd, metadata_json, created_at, created_at),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -450,9 +451,9 @@ def test_send_packet_delivers_expiring_research_card_and_stamps_task(db_path: Pa
 
     task = get_task(tid, db_path=db_path)
     assert task is not None
-    assert task.meta.get("unanswered_weeks") == 1
-    assert task.meta.get("packeted_at")
-    assert task.cost_usd is not None and task.cost_usd > 0
+    assert task.metadata.get("unanswered_weeks") == 1
+    assert task.metadata.get("packeted_at")
+    assert task.estimated_cost_usd is not None and task.estimated_cost_usd > 0
 
 
 def test_send_packet_expiring_research_not_resent_same_week(db_path: Path) -> None:
@@ -487,7 +488,7 @@ def test_send_packet_expiring_research_resurfaces_next_week_with_incremented_cou
     assert "unanswered 2 weeks" in card[1]
 
     task = get_task(tid, db_path=db_path)
-    assert task is not None and task.meta.get("unanswered_weeks") == 2
+    assert task is not None and task.metadata.get("unanswered_weeks") == 2
 
 
 def test_send_packet_with_only_expiring_research_and_no_other_items(db_path: Path) -> None:

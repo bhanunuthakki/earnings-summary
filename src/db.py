@@ -105,14 +105,6 @@ ACTIVE_LIST_TYPES: tuple[str, ...] = ANALYZED_LIST_TYPE_VALUES
 ACTIVE_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in ACTIVE_LIST_TYPES) + ")"
 BRIEFED_LIST_TYPES: tuple[str, ...] = BRIEFED_LIST_TYPE_VALUES
 BRIEFED_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in BRIEFED_LIST_TYPES) + ")"
-PROCESSING_TIER_BY_LIST_TYPE: dict[str, str] = {
-    "portfolio": "P1",
-    "watchlist": "P2",
-    "evaluation": "P2",
-    "index_member": "P3",
-    "etf": "P3",
-    "none": "P3",
-}
 
 
 def get_connection() -> sqlite3.Connection:
@@ -612,23 +604,10 @@ def _apply_tracking_policy(
     list_type: str,
     queue_brief: bool,
 ) -> None:
-    """Keep derived scheduling fields aligned inside the membership transaction."""
-    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
-    tier = PROCESSING_TIER_BY_LIST_TYPE[list_type]
+    """Keep the governed brief queue aligned inside the membership transaction."""
     dirty = 1 if queue_brief and list_type in BRIEFED_LIST_TYPES else 0
-    if "processing_tier" in columns and "brief_dirty" in columns:
-        conn.execute(
-            "UPDATE tracked_companies SET processing_tier = ?, brief_dirty = ? "
-            "WHERE user_id = ? AND UPPER(ticker) = ?",
-            (tier, dirty, user_id, ticker.upper()),
-        )
-    elif "processing_tier" in columns:
-        conn.execute(
-            "UPDATE tracked_companies SET processing_tier = ? "
-            "WHERE user_id = ? AND UPPER(ticker) = ?",
-            (tier, user_id, ticker.upper()),
-        )
-    elif "brief_dirty" in columns:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+    if "brief_dirty" in columns:
         conn.execute(
             "UPDATE tracked_companies SET brief_dirty = ? WHERE user_id = ? AND UPPER(ticker) = ?",
             (dirty, user_id, ticker.upper()),
@@ -798,14 +777,15 @@ def get_tracked_companies(
 def refresh_all_fmp_dates(user_id: str = DEFAULT_USER_ID) -> None:
     """Re-scan FMP files for every tracked company; update fmp_data_saved/upto."""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT ticker FROM tracked_companies WHERE user_id = ?", (user_id,))
-    tickers = [r["ticker"] for r in cursor.fetchall()]
-    conn.close()
-
-    for ticker in tickers:
-        conn = get_connection()
+    try:
         cursor = conn.cursor()
-        _update_company_fmp_state(cursor, ticker)
-        conn.commit()
+        cursor.execute("SELECT ticker FROM tracked_companies WHERE user_id = ?", (user_id,))
+        tickers = [r["ticker"] for r in cursor.fetchall()]
+
+        # Keep one writer connection for the scan, but commit each ticker so a
+        # later filesystem/DB error preserves all earlier progress.
+        for ticker in tickers:
+            _update_company_fmp_state(cursor, ticker)
+            conn.commit()
+    finally:
         conn.close()

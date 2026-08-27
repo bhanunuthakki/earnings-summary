@@ -68,7 +68,7 @@ def test_downgrade_to_0119_drops_them(
         assert table not in names
 
 
-def test_research_tasks_cost_usd_and_run_id_columns_present(db_path: Path) -> None:
+def test_research_tasks_legacy_cost_and_metadata_storage_columns_present(db_path: Path) -> None:
     """B7 repurposes these two columns (dead since 0120 — never read/written
     by any code path until this PR) as the triage's stated cost estimate and
     a JSON meta blob (session_prompt/packeted_at/unanswered_weeks) — see

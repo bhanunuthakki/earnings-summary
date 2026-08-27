@@ -16,10 +16,10 @@ owns the only LLM leg in the bridge). Prints a markdown context pack:
   - open questions / wonderings (analyst_notes, capped, wondering-flagged via
     a linked research_tasks row)
   - open owner decisions + falsifiers, ungraded (v_decision_journal)
-  - research-task prompt blocks explicitly marked for a Claude session (a
-    ``research_tasks.session_prompt`` — the B7 agent is landing that column
-    concurrently; read defensively so a pre-B7 DB renders an empty section
-    instead of crashing)
+  - research-task prompt blocks explicitly marked for a Claude session (the
+    ``session_prompt`` value inside the legacy ``research_tasks.run_id``
+    object; read defensively so a DB without the metadata column or with an
+    invalid value renders an empty section instead of crashing)
   - the owner-profile anchor (affirmed capacity/appetite facts)
 
 Every section degrades to an explicit empty-state note on a missing table /
@@ -282,19 +282,25 @@ def _render_research_prompts(db_path: Path) -> list[str]:
         return lines
     try:
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(research_tasks)")}
-        if "session_prompt" not in cols:
-            # Pre-B7 DB: the column doesn't exist yet. Render an empty
-            # section with a note rather than crashing — the pack must
-            # always render regardless of which sibling PR landed first.
+        if "run_id" not in cols:
+            # Older DB: the metadata column doesn't exist yet. Render an
+            # empty section with a note rather than crashing — the pack must
+            # always render against a partially migrated DB.
             lines.append(
-                "_None — this DB predates the `session_prompt` column (B7); "
+                "_None — this DB has no `run_id` metadata column; "
                 "no research-task prompts to show yet._"
             )
             lines.append("")
             return lines
         rows = conn.execute(
-            "SELECT id, ticker, claim, session_prompt, status FROM research_tasks "
-            "WHERE session_prompt IS NOT NULL AND TRIM(session_prompt) != '' "
+            "SELECT id, ticker, claim, "
+            "json_extract(run_id, '$.session_prompt') AS session_prompt, status "
+            "FROM research_tasks "
+            "WHERE CASE WHEN json_valid(run_id) THEN "
+            "json_type(run_id) = 'object' "
+            "AND json_type(run_id, '$.session_prompt') = 'text' "
+            "AND TRIM(json_extract(run_id, '$.session_prompt')) != '' "
+            "ELSE 0 END "
             "ORDER BY id DESC LIMIT ?",
             (_RESEARCH_TASK_CAP,),
         ).fetchall()
@@ -305,16 +311,15 @@ def _render_research_prompts(db_path: Path) -> list[str]:
         return lines
     finally:
         conn.close()
-    if not rows:
-        lines.append("_None pending._")
-        lines.append("")
-        return lines
     for r in rows:
         ticker = f" ({r['ticker']})" if r["ticker"] else ""
         lines.append(f"### Task #{r['id']}{ticker} — {r['status']}")
         lines.append(f"_Claim:_ {_flatten(str(r['claim']))}")
         lines.append("")
         lines.append(str(r["session_prompt"]).strip())
+        lines.append("")
+    if not rows:
+        lines.append("_None pending._")
         lines.append("")
     return lines
 

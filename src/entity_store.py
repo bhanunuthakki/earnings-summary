@@ -125,28 +125,34 @@ def upsert_entity(
     meta: dict[str, object] | None = None,
     effective_from: datetime | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> int | None:
     """Insert if (kind, canonical_name) is new; update meta+aliases on dup.
-    Returns the entity_id. None on DB unavailable."""
-    conn = _open(db_path)
-    if conn is None:
+    Returns the entity_id. None on DB unavailable.
+
+    A supplied connection is borrowed: this helper neither commits nor closes it.
+    """
+    owns_connection = conn is None
+    connection = conn if conn is not None else _open(db_path)
+    if connection is None:
         return None
     try:
-        existing = conn.execute(
+        existing = connection.execute(
             "SELECT id FROM entities WHERE kind = ? AND canonical_name = ?",
             (kind, canonical_name),
         ).fetchone()
         now = _now_iso()
         if existing is not None:
-            eid = int(existing["id"])
+            eid = int(existing[0])
             # Refresh last_observed_at and optionally extend meta
-            conn.execute(
+            connection.execute(
                 "UPDATE entities SET last_observed_at = ? WHERE id = ?",
                 (now, eid),
             )
-            conn.commit()
+            if owns_connection:
+                connection.commit()
             return eid
-        cur = conn.execute(
+        cur = connection.execute(
             """
             INSERT INTO entities(
                 kind, canonical_name, display_name, external_ids,
@@ -167,7 +173,7 @@ def upsert_entity(
         )
         new_id = int(cur.lastrowid or 0)
         # Self-alias so resolve(canonical_name) works immediately
-        conn.execute(
+        connection.execute(
             """
             INSERT OR IGNORE INTO entity_aliases(
                 entity_id, alias_text, alias_kind,
@@ -176,13 +182,15 @@ def upsert_entity(
             """,
             (new_id, canonical_name, "manual", now, now),
         )
-        conn.commit()
+        if owns_connection:
+            connection.commit()
         return new_id
     except sqlite3.Error as exc:
         log.warning({"event": "entity_upsert_failed", "error": str(exc)})
         return None
     finally:
-        conn.close()
+        if owns_connection:
+            connection.close()
 
 
 def record_alias(
@@ -194,30 +202,36 @@ def record_alias(
     source_doc_id: int | None = None,
     excerpt: str | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> int | None:
-    """Insert alias or increment observation_count on dup. Returns alias id."""
-    conn = _open(db_path)
-    if conn is None:
+    """Insert alias or increment observation_count on dup. Returns alias id.
+
+    A supplied connection is borrowed: this helper neither commits nor closes it.
+    """
+    owns_connection = conn is None
+    connection = conn if conn is not None else _open(db_path)
+    if connection is None:
         return None
     try:
         now = _now_iso()
-        existing = conn.execute(
+        existing = connection.execute(
             "SELECT id, observation_count FROM entity_aliases WHERE entity_id = ? AND alias_text = ?",
             (entity_id, alias_text),
         ).fetchone()
         if existing is not None:
-            conn.execute(
+            connection.execute(
                 """
                 UPDATE entity_aliases
                 SET observation_count = observation_count + 1,
                     last_observed_at = ?
                 WHERE id = ?
                 """,
-                (now, int(existing["id"])),
+                (now, int(existing[0])),
             )
-            conn.commit()
-            return int(existing["id"])
-        cur = conn.execute(
+            if owns_connection:
+                connection.commit()
+            return int(existing[0])
+        cur = connection.execute(
             """
             INSERT INTO entity_aliases(
                 entity_id, alias_text, alias_kind,
@@ -227,13 +241,15 @@ def record_alias(
             """,
             (entity_id, alias_text, alias_kind, now, now, confidence, source_doc_id, excerpt),
         )
-        conn.commit()
+        if owns_connection:
+            connection.commit()
         return int(cur.lastrowid or 0)
     except sqlite3.Error as exc:
         log.warning({"event": "entity_alias_failed", "error": str(exc)})
         return None
     finally:
-        conn.close()
+        if owns_connection:
+            connection.close()
 
 
 def resolve_entity(
@@ -358,15 +374,21 @@ def upsert_relationship(
     confidence: float = 1.0,
     meta: dict[str, object] | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> int | None:
-    conn = _open(db_path)
-    if conn is None:
+    """Insert or reuse a relationship edge.
+
+    A supplied connection is borrowed: this helper neither commits nor closes it.
+    """
+    owns_connection = conn is None
+    connection = conn if conn is not None else _open(db_path)
+    if connection is None:
         return None
     try:
         ef_iso = effective_from.isoformat() if effective_from else None
         et_iso = effective_to.isoformat() if effective_to else None
         # Check existing
-        existing = conn.execute(
+        existing = connection.execute(
             """
             SELECT id FROM entity_relationships
             WHERE from_entity_id = ? AND relationship_kind = ? AND to_entity_id = ?
@@ -375,8 +397,8 @@ def upsert_relationship(
             (from_entity_id, relationship_kind, to_entity_id, ef_iso),
         ).fetchone()
         if existing is not None:
-            return int(existing["id"])
-        cur = conn.execute(
+            return int(existing[0])
+        cur = connection.execute(
             """
             INSERT INTO entity_relationships(
                 from_entity_id, relationship_kind, to_entity_id,
@@ -396,13 +418,15 @@ def upsert_relationship(
                 json.dumps(meta) if meta else None,
             ),
         )
-        conn.commit()
+        if owns_connection:
+            connection.commit()
         return int(cur.lastrowid or 0)
     except sqlite3.Error as exc:
         log.warning({"event": "relationship_upsert_failed", "error": str(exc)})
         return None
     finally:
-        conn.close()
+        if owns_connection:
+            connection.close()
 
 
 # ---------------------------------------------------------------------------

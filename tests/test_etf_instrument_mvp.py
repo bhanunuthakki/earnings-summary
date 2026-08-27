@@ -44,6 +44,7 @@ from models.instruments import EtfHolding, EtfProfile  # noqa: E402
 from report.etf_models import EtfBriefSpec  # noqa: E402
 from report.models import SectionStatus  # noqa: E402
 from report.renderers.etf_markdown import render as render_etf_markdown  # noqa: E402
+from report.sections import etf_holdings as etf_sections  # noqa: E402
 from report.sections.etf_holdings import build_etf_brief  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -497,6 +498,26 @@ def test_build_etf_brief_missing_when_profile_absent(repo_root_with_db: Path) ->
     brief = build_etf_brief("UNKNOWN_ETF", repo_root_with_db)
     assert brief.profile.status is SectionStatus.MISSING_DATA
     assert brief.holdings.status is SectionStatus.MISSING_DATA
+
+
+def test_build_etf_brief_reuses_one_database_connection(
+    repo_root_with_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_open = etf_sections.open_repo_db
+    owned_opens = 0
+
+    def tracking_open(
+        repo_root: Path, conn: sqlite3.Connection | None = None
+    ) -> sqlite3.Connection | None:
+        nonlocal owned_opens
+        if conn is None:
+            owned_opens += 1
+        return real_open(repo_root, conn)
+
+    monkeypatch.setattr(etf_sections, "open_repo_db", tracking_open)
+    etf_sections.build_etf_brief("UNKNOWN_ETF", repo_root_with_db)
+
+    assert owned_opens == 1
 
 
 def test_build_etf_brief_ok_after_ingest(etf_db: sqlite3.Connection, tmp_path: Path) -> None:

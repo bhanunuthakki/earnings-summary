@@ -120,8 +120,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # cleanly. (bear_case is already registered above with the outcome
     # graders — one entry governs both its grading modes.)
     # transcript_summary v2 (2026-06-12, S9): transcript body + anchor block
-    # spotlighted as untrusted data.
-    "transcript_summary": "v2",
+    # spotlighted as untrusted data. v3 (2026-08-26): long transcript evidence
+    # is bounded to a 60k head+tail before spotlighting.
+    "transcript_summary": "v3",
     "advisor_next_dollar": "v1",
     # Incremental Dollar Recommendation (P0.4a, mode-B rubric,
     # personal_investment_partner_prd.md §7.4/§10). Bump when
@@ -250,12 +251,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The session-distill tap (B4 keystone). Bump when _build_prompt in
     # synthesis.session_distill is materially rewritten.
     "session_distill": "v1",
-    # The Ledger Phase-1 wondering classifier (research-loop gate). Bump when the
-    # detect prompt is materially rewritten, then re-run the golden set.
-    "wondering_detect": "v1",
-    # The Ledger intent tap (research.intent._build_prompt). Supersedes
-    # wondering_detect on the live tap. Bump when the intent prompt is materially
-    # rewritten, then re-run `run_llm_evals.py --purpose capture_intent`.
+    # The Ledger intent tap (research.intent._build_prompt). Bump when the intent
+    # prompt is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose capture_intent`.
     "capture_intent": "v1",
     # The B7 routing triage (research.triage._build_prompt). Bump when the
     # triage prompt is materially rewritten.
@@ -413,6 +411,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "footnote_extraction": "v1",
     "investor_deck_extraction": "v1",
     "kpi_registry_auto_proposal": "v1",
+    "kpi_registry_proposal": "v1",
     "market_signals": "v1",
     "patent_timeline": "v1",
     "pressure_test_thesis": "v2",

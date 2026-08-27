@@ -11,7 +11,7 @@ subprocess and the ledger write are both stubbed, and the assertion is on the
   * an Opus-pinned purpose resolves to Opus when ``model`` is omitted;
   * an explicit ``model`` still wins (backward-compat);
   * recent_developments stays on Sonnet (DEFAULT_MODEL);
-  * no purpose normalizes to the metered ``__default__`` attribution key.
+  * omitting the purpose fails before model selection or transport.
 """
 
 from __future__ import annotations
@@ -128,30 +128,14 @@ def test_web_recent_developments_stays_on_sonnet(
     assert _model_arg(cmd) == cli.DEFAULT_MODEL
 
 
-def test_web_no_purpose_no_model_defaults_to_sonnet(
-    capture_web_cmd: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Legacy omission keeps the model default but never produces NULL spend."""
-    budget_purposes: list[str | None] = []
+def test_web_requires_a_governed_purpose(capture_web_cmd: dict[str, Any]) -> None:
+    """Omitting the purpose fails before model selection or transport."""
+    from llm.resolver import InvalidLLMPurposeError
 
-    def capture_budget(purpose: str | None, *, force_budget_bypass: bool) -> None:
-        del force_budget_bypass
-        budget_purposes.append(purpose)
-
-    monkeypatch.setattr(
-        cli,
-        "_enforce_budget_pre_call",
-        capture_budget,
-    )
-
-    cli.call_llm_with_web("prompt")
-    cmd = capture_web_cmd["cmd"]
-    assert cmd is not None
-    assert _model_arg(cmd) == cli.DEFAULT_MODEL
-    assert budget_purposes == ["__default__"]
-    (record,) = capture_web_cmd["records"]
-    assert record["purpose"] == "__default__"
+    with pytest.raises(InvalidLLMPurposeError):
+        cli.call_llm_with_web("prompt")
+    assert capture_web_cmd["cmd"] is None
+    assert capture_web_cmd["records"] == []
 
 
 def test_web_call_carries_hard_cost_cap(capture_web_cmd: dict[str, Any]) -> None:

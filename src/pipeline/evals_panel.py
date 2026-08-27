@@ -34,93 +34,22 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
 
-from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES, CAPTURE_QUALITY_SPECS
+from evals.capture_quality_specs import CAPTURE_QUALITY_SPECS
+from evals.run_registry import (
+    CAPTURE_AUDIT_PURPOSES,
+    RUNNABLE_PURPOSES,
+)
 from llm.calibration import VersionSummary, summarize_by_prompt_version
 from pipeline.operations_styles import EVALS_STYLE as _PANEL_CSS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_case, prov_drawer
 
-# Purposes the run bar offers — mirrors execution/run_llm_evals.py PURPOSES
-# (asserted in tests so the two can't drift).
-_CORE_RUNNABLE_PURPOSES: tuple[str, ...] = (
-    "viewspec_compile",
-    "transcript_metadata",
-    "intake_classifier",
-    "news_structuring",
-    "decision_conditions_extract",
-    "ask_pack_router",
-    "ask_evidence_followup",
-    "ask_claim_grounding",
-    "ask_claim_audit",
-    "injection_canaries",
-    "provenance_caution",
-    "peer_selection",
-    "key_metrics",
-    "scenario_prior",
-    "bear_case",
-    "transcript_summary",
-    "advisor_next_dollar",
-    # Incremental Dollar Recommendation (P0.4a) — in sync with
-    # run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
-    "incremental_dollar_recommendation",
-    # Investment Decision Card (P1.1) — in sync with run_llm_evals.AUDIT_PURPOSES
-    # + rubric_judge.AUDIT_SPECS.
-    "investment_decision_card",
-    # Senior Partner Brief (P2.2) — in sync with run_llm_evals.AUDIT_PURPOSES
-    # + rubric_judge.AUDIT_SPECS.
-    "senior_partner_brief",
-    "ask_advisory_answer",
-    # Calibration coach scorecard audit (close_the_loops L8) — keeps this run
-    # bar in sync with run_llm_evals.AUDIT_PURPOSES.
-    "calibration_coach",
-    # Pre-existing omissions vs run_llm_evals.PURPOSES — the CLI runner gained
-    # these audit purposes but the run bar wasn't updated (test_llm_evals_ask_loop
-    # ::test_runner_purpose_lists_stay_in_sync was already red on main); folded in
-    # here so the registries match.
-    "earnings_themes_split",
-    "qa_topics",
-    # The Ledger Phase-1 research-loop gate (mode-A golden classifier) — kept in
-    # sync with run_llm_evals.GOLDEN_PURPOSES (test_runner_purpose_lists_stay_in_sync).
-    "wondering_detect",
-    # The Ledger intent tap (mode-A golden classifier) — supersedes wondering_detect
-    # on the live tap; kept in sync with run_llm_evals.GOLDEN_PURPOSES.
-    "capture_intent",
-    # The Ledger reply-box router + Triage second-pass route suggestion (#884,
-    # mode-A golden classifiers) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
-    "ledger_reply_intent",
-    "triage_route_suggest",
-    # Position-review verdict audit (mode-B rubric) — in sync with
-    # run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
-    "position_review",
-    # 10-Q segment quarterly period-axis disambiguation Stage B fallback
-    # (mode-A golden classifier) — kept in sync with
-    # run_llm_evals.GOLDEN_PURPOSES.
-    "segment_10q_period_disambiguate",
-    # Behavioral-rules distiller audit (tenet-2 Phase 4, mode-B rubric) — in
-    # sync with run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
-    "behavior_distill",
-    # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3,
-    # mode-A golden classifier) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
-    "sector_benchmark_proposal",
-    # The capture->answer primary gate (capture.triage, B3, mode-A golden
-    # classifier) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
-    "capture_triage",
-    # Decision Draft parse (P2.1, mode-A golden classifier) — kept in sync
-    # with run_llm_evals.GOLDEN_PURPOSES.
-    "decision_draft_parse",
-    # D1e disclosure-judgment ground truth (mode-A golden classifiers) — kept
-    # in sync with run_llm_evals.GOLDEN_PURPOSES.
-    "metric_lifecycle_triage",
-    "disclosure_item_specificity_triage",
-    # Podcast takeaway summary has a checked-in mode-A golden set and a live
-    # production caller; keep it reachable from the same eval run bar.
-    "podcast_takeaway_summary",
-    # README updater output has a checked-in rubric audit and bounded corpus.
-    "readme_update",
+# The registry owns the operator-facing order. Keep the core view separate
+# only so capture audits can remain grouped in the run bar.
+_CORE_RUNNABLE_PURPOSES: tuple[str, ...] = tuple(
+    purpose for purpose in RUNNABLE_PURPOSES if purpose not in CAPTURE_AUDIT_PURPOSES
 )
-RUNNABLE_PURPOSES: tuple[str, ...] = _CORE_RUNNABLE_PURPOSES + CAPTURE_QUALITY_PURPOSES
-
 CALL_HEALTH_WINDOW_DAYS = 30
 _FAILED_CASES_PER_RUN = 8
 _CALL_HEALTH_MAX_ROWS = 40
@@ -373,7 +302,7 @@ def _run_bar() -> str:
             'class="k-btn k-btn-quiet k-btn-sm" '
             f'title="{escape(spec.traffic_tier)} traffic; default {spec.default_limit} cases; '
             f'pass {spec.pass_threshold:.0%}">{escape(p)}</button>'
-            for p in CAPTURE_QUALITY_PURPOSES
+            for p in CAPTURE_AUDIT_PURPOSES
             if (spec := CAPTURE_QUALITY_SPECS[p]).priority == priority
         )
         + "</div></details>"

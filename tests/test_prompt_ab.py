@@ -334,7 +334,7 @@ def test_call_llm_hook_wired(monkeypatch: pytest.MonkeyPatch) -> None:
     import llm.prompt_ab as pab
 
     def fake_active(purpose: str, *, db_path: object = None) -> tuple[PromptEdit, ...] | None:
-        return _EDITS if purpose == "zz_test_purpose" else None
+        return _EDITS if purpose == "bear_case" else None
 
     monkeypatch.setattr(pab, "active_prompt_override", fake_active)
     sent: list[str] = []
@@ -344,10 +344,10 @@ def test_call_llm_hook_wired(monkeypatch: pytest.MonkeyPatch) -> None:
         return "ok"
 
     monkeypatch.setattr(cli, "_call_claude", fake_claude)
-    cli.call_llm("Task. Answer briefly.", purpose="zz_test_purpose")
+    cli.call_llm("Task. Answer briefly.", purpose="bear_case")
     assert sent and "three bullets" in sent[0]
     sent.clear()
-    cli.call_llm("Task. Answer briefly.", purpose="zz_test_purpose", scope="model_eval")
+    cli.call_llm("Task. Answer briefly.", purpose="bear_case", scope="model_eval")
     assert sent and sent[0] == "Task. Answer briefly."
 
 
@@ -371,7 +371,7 @@ def test_prompt_override_failure_log_redacts_credentials(
     monkeypatch.setattr(cli, "_call_claude", fake_claude)
 
     with caplog.at_level(logging.DEBUG, logger="llm.cli"):
-        assert cli.call_llm("Task.", purpose="zz_test_purpose") == "ok"
+        assert cli.call_llm("Task.", purpose="bear_case") == "ok"
 
     assert secret not in caplog.text
     assert "prompt_override_hook_failed" in caplog.text

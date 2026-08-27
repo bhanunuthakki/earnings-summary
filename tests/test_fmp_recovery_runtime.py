@@ -56,7 +56,7 @@ from provenance.financial_fact_resolution import (
 )
 
 REVISION = "0008_add_fmp_recovery"
-ACTIVE_REVISION = "0027_add_sizing_intent_supersessions"
+ACTIVE_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
 CONTENT = "c" * 64
 

@@ -16,14 +16,14 @@ artifact pipeline; an ``observation`` is inert. It NEVER auto-runs the research
 pass, and a detection failure NEVER affects capture (it swallows errors, returns
 None).
 
-B7 note on the ``research_tasks`` columns: ``cost_usd`` and ``run_id`` were dead
-columns (created by migration 0120, never read/written by any code path) until
-this PR. They are now repurposed WITHOUT a schema migration (per the
-"land state on existing columns, not new ones" convention this program's B-series
-migrations follow — e.g. 0192's budget-row-only pattern): ``cost_usd`` holds the
-triage's STATED cost estimate for the RUN button/packet line, and ``run_id`` holds
-a small JSON meta blob (``{"session_prompt": ..., "packeted_at": ...,
-"unanswered_weeks": ...}``) — see :func:`_encode_meta` / :func:`_decode_meta` and
+The legacy physical ``research_tasks`` columns ``cost_usd`` and ``run_id`` map
+to the clearer API fields ``estimated_cost_usd`` and decoded ``metadata``.
+Keeping the storage names avoids a risky historical migration rewrite while
+making their current semantics explicit: ``cost_usd`` holds the triage's STATED
+cost estimate for the RUN button/packet line, and ``run_id`` holds a small JSON metadata blob
+(``{"session_prompt": ..., "packeted_at": ...,
+"unanswered_weeks": ...}``) — see :func:`_encode_task_metadata` /
+:func:`_decode_task_metadata` and
 :func:`set_task_extras`.
 """
 
@@ -74,14 +74,14 @@ def research_run_enabled() -> bool:
     return os.environ.get("LEDGER_RESEARCH_RUN", "0").strip().lower() in _RUN_ON
 
 
-def _encode_meta(meta: dict[str, object]) -> str | None:
-    """Encode the B7 task-meta blob for the repurposed ``run_id`` TEXT column.
-    Empty meta encodes to None (NULL), matching the column's original nullable
+def _encode_task_metadata(metadata: dict[str, object]) -> str | None:
+    """Encode task metadata for the legacy ``run_id`` TEXT column.
+    Empty metadata encodes to None (NULL), matching the column's nullable
     intent rather than storing a noisy ``'{}'`` on every legacy row."""
-    return json.dumps(meta) if meta else None
+    return json.dumps(metadata) if metadata else None
 
 
-def _decode_meta(raw: object) -> dict[str, object]:
+def _decode_task_metadata(raw: object) -> dict[str, object]:
     """Guarded decode: NULL / pre-B7 garbage / non-dict shapes -> {} (never
     raises — a bad row must not take the Ledger down)."""
     if raw is None:
@@ -100,12 +100,11 @@ class ResearchTask:
     claim: str
     ticker: str | None
     status: str
-    # B7: the triage's stated cost estimate (repurposed ``cost_usd`` column —
-    # see module docstring) and the repurposed ``run_id`` JSON meta blob,
-    # decoded. Both default so every pre-B7 call site building a ResearchTask
+    # B7: the triage's stated cost estimate and decoded task metadata. Both
+    # default so every pre-B7 call site building a ResearchTask
     # by hand (tests, mostly) keeps working unchanged.
-    cost_usd: float | None = None
-    meta: dict[str, object] = field(default_factory=dict[str, object])
+    estimated_cost_usd: float | None = None
+    metadata: dict[str, object] = field(default_factory=dict[str, object])
     # B7: needed by the weekly-packet's expiring-research query (age since
     # creation); naive-UTC ISO text, like every other stamp in this store.
     created_at: str = ""
@@ -116,8 +115,8 @@ def create_task(
     note_id: int | None,
     claim: str,
     ticker: str | None,
-    cost_usd: float | None = None,
-    meta: dict[str, object] | None = None,
+    estimated_cost_usd: float | None = None,
+    metadata: dict[str, object] | None = None,
     db_path: Path | str | None = None,
 ) -> int:
     conn = open_conn(db_path)
@@ -125,9 +124,18 @@ def create_task(
         now = now_iso()
         cur = conn.execute(
             "INSERT INTO research_tasks "
-            "(note_id, claim, ticker, status, cost_usd, run_id, created_at, updated_at) "
+            "(note_id, claim, ticker, status, cost_usd, run_id, "
+            "created_at, updated_at) "
             "VALUES (?, ?, ?, 'proposed', ?, ?, ?, ?)",
-            (note_id, claim, ticker, cost_usd, _encode_meta(meta or {}), now, now),
+            (
+                note_id,
+                claim,
+                ticker,
+                estimated_cost_usd,
+                _encode_task_metadata(metadata or {}),
+                now,
+                now,
+            ),
         )
         conn.commit()
         return int(cur.lastrowid or 0)
@@ -138,33 +146,33 @@ def create_task(
 def set_task_extras(
     task_id: int,
     *,
-    cost_usd: float | None = None,
+    estimated_cost_usd: float | None = None,
     session_prompt: str | None = None,
     packeted_at: str | None = None,
     unanswered_weeks: int | None = None,
     db_path: Path | str | None = None,
 ) -> None:
-    """Merge-patch a task's B7 extras (read-merge-write on the ``run_id`` JSON
-    meta blob, like :func:`user_state.notes.patch_note_context`). Only the
-    passed fields change; everything else in the meta blob (and an explicit
-    ``cost_usd`` NULL-vs-unset) is preserved. A missing task is a silent
+    """Merge-patch a task's extras (read-merge-write on the
+    legacy ``run_id`` blob, like :func:`user_state.notes.patch_note_context`).
+    Only the passed fields change; everything else in the metadata blob (and an
+    explicit ``estimated_cost_usd`` NULL-vs-unset) is preserved. A missing task is a silent
     no-op — this is best-effort bookkeeping, never a write anyone blocks on."""
     task = get_task(task_id, db_path=db_path)
     if task is None:
         return
-    meta = dict(task.meta)
+    metadata = dict(task.metadata)
     if session_prompt is not None:
-        meta["session_prompt"] = session_prompt
+        metadata["session_prompt"] = session_prompt
     if packeted_at is not None:
-        meta["packeted_at"] = packeted_at
+        metadata["packeted_at"] = packeted_at
     if unanswered_weeks is not None:
-        meta["unanswered_weeks"] = unanswered_weeks
-    new_cost = cost_usd if cost_usd is not None else task.cost_usd
+        metadata["unanswered_weeks"] = unanswered_weeks
+    new_cost = estimated_cost_usd if estimated_cost_usd is not None else task.estimated_cost_usd
     conn = open_conn(db_path)
     try:
         conn.execute(
             "UPDATE research_tasks SET cost_usd = ?, run_id = ?, updated_at = ? WHERE id = ?",
-            (new_cost, _encode_meta(meta), now_iso(), task_id),
+            (new_cost, _encode_task_metadata(metadata), now_iso(), task_id),
         )
         conn.commit()
     finally:
@@ -182,12 +190,12 @@ def _row_to_task(row: sqlite3.Row) -> ResearchTask:
         claim=str(row["claim"]),
         ticker=None if row["ticker"] is None else str(row["ticker"]),
         status=str(row["status"]),
-        cost_usd=(
+        estimated_cost_usd=(
             float(cast("float", row["cost_usd"]))
             if "cost_usd" in keys and row["cost_usd"] is not None
             else None
         ),
-        meta=_decode_meta(row["run_id"]) if "run_id" in keys else {},
+        metadata=(_decode_task_metadata(row["run_id"]) if "run_id" in keys else {}),
         created_at=str(row["created_at"]) if "created_at" in keys else "",
     )
 
@@ -693,14 +701,14 @@ def _route_wondering(
 
     # research_task (explicit route or triage fail-open) — today's pre-B7
     # behavior, now carrying a stated cost + a formatted deep-session prompt.
-    cost_usd = estimate_cost_usd(ticker)
+    estimated_cost_usd = estimate_cost_usd(ticker)
     session_prompt = build_session_prompt(claim, ticker=ticker)
     task_id = create_task(
         note_id=note_id,
         claim=claim,
         ticker=ticker,
-        cost_usd=cost_usd,
-        meta={"session_prompt": session_prompt},
+        estimated_cost_usd=estimated_cost_usd,
+        metadata={"session_prompt": session_prompt},
         db_path=db_path,
     )
     _audit_tap(

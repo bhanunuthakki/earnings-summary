@@ -1089,7 +1089,7 @@ def act_on_card(
             )
         elif verb == "watch":
             conn.execute(
-                "UPDATE tracked_companies SET list_type = ?, processing_tier = 'P2', "
+                "UPDATE tracked_companies SET list_type = ?, "
                 "brief_dirty = 0 "
                 "WHERE user_id = ? AND UPPER(ticker) = ? AND archived_at IS NULL",
                 (ListType.WATCHLIST.value, DEFAULT_USER_ID, ticker),

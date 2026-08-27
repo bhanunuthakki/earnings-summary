@@ -206,17 +206,12 @@ def test_model_for_falls_back_when_db_unavailable(monkeypatch: pytest.MonkeyPatc
     assert _model_for("bear_case") == expected
 
 
-def test_model_for_falls_back_to_default_for_unknown_purpose(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from llm import model_overrides
-    from llm.cli import DEFAULT_MODEL, _model_for
+def test_model_for_rejects_unknown_purpose() -> None:
+    from llm.cli import _model_for
+    from llm.resolver import InvalidLLMPurposeError
 
-    def _resolve_test_db(_: Path | str | None) -> Path | None:
-        return db_path
-
-    monkeypatch.setattr(model_overrides, "resolve_db_path", _resolve_test_db)
-    assert _model_for("totally_unknown_purpose_xyz") == DEFAULT_MODEL
+    with pytest.raises(InvalidLLMPurposeError):
+        _model_for("totally_unknown_purpose_xyz")
 
 
 # ---------------------------------------------------------------------------

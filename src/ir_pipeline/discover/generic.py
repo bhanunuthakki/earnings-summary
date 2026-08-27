@@ -1,11 +1,11 @@
 """Generic headless IR-document discovery — the universal fallback adapter.
 
-The ``mz`` / ``q4cdn`` adapters are precise but per-platform; most issuers (US
-large-caps, the evaluation list) aren't on either. This adapter renders ANY
-issuer's IR page with Playwright, harvests every document link (.pdf / .xlsx /
-CDN / filemanager), follows obvious "quarterly results / financial reports /
-archive" sub-links one hop to reach historical quarters, and returns up to
-``max_quarters`` of :class:`CandidateDoc` rows.
+Only the ``mz`` adapter is precise; this generic crawler handles q4cdn-hosted
+issuers and other issuers without a precise adapter. It renders ANY issuer's IR
+page with Playwright, harvests every document link (.pdf / .xlsx / CDN /
+filemanager), follows obvious "quarterly results / financial reports / archive"
+sub-links one hop to reach historical quarters, and returns up to ``max_quarters``
+of :class:`CandidateDoc` rows.
 
 It is **best-effort**: a login wall, a JS-only download widget, or a site with no
 standard links simply yields fewer (or zero) candidates — never an exception. The

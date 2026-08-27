@@ -506,6 +506,21 @@ def generate_pairwise_analysis(
         return f"Could not generate analysis for {prev_q_str} -> {curr_q_str}."
 
 
+SUMMARY_TRANSCRIPT_CHAR_CAP = 60_000
+
+
+def bound_summary_transcript(text: str) -> str:
+    """Keep summary evidence within the prompt budget while retaining both ends."""
+    if len(text) <= SUMMARY_TRANSCRIPT_CHAR_CAP:
+        return text
+    omitted = len(text) - SUMMARY_TRANSCRIPT_CHAR_CAP
+    marker = f"\n\n[... {omitted:,} transcript characters omitted from the middle ...]\n\n"
+    available = SUMMARY_TRANSCRIPT_CHAR_CAP - len(marker)
+    head_len = (available + 1) // 2
+    tail_len = available - head_len
+    return text[:head_len] + marker + text[-tail_len:]
+
+
 def generate_summary(text: str, anchor_block: str = "", ticker: str | None = None) -> str:
     """
     Generates an analyst-grade prose summary of an earnings transcript.
@@ -615,7 +630,10 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
 
     Transcript:
     """
-    body = spotlight(text, source="earnings call transcript (issuer-published document)")
+    body = spotlight(
+        bound_summary_transcript(text),
+        source="earnings call transcript (issuer-published document)",
+    )
     try:
         return call_llm(prompt + body, purpose="transcript_summary", ticker=ticker)
     except Exception as e:

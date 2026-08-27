@@ -323,10 +323,10 @@ def test_warn_threshold_alert_dedupes_across_calls(
     assert len(rows) == 1
 
 
-def test_purpose_none_uses_default_budget_and_blocks(
+def test_purpose_none_fails_before_budget_and_transport(
     stub_claude_cli: dict[str, Any], db_patch: Path
 ) -> None:
-    """Legacy unclassified calls are charged to the enforceable default."""
+    """Unclassified calls cannot bypass the governed purpose registry."""
     _seed_db(
         db_patch,
         purpose="__default__",
@@ -334,7 +334,9 @@ def test_purpose_none_uses_default_budget_and_blocks(
         spent_usd=999.00,
         hard_block=True,
     )
-    with pytest.raises(LLMBudgetExceeded):
+    from llm.resolver import InvalidLLMPurposeError
+
+    with pytest.raises(InvalidLLMPurposeError):
         call_llm("hello", purpose=None)
     assert stub_claude_cli["calls"] == 0
 

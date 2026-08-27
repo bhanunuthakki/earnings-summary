@@ -33,7 +33,6 @@ CREATE TABLE tracked_companies (
     ticker TEXT NOT NULL,
     name TEXT NOT NULL,
     list_type TEXT NOT NULL,
-    processing_tier TEXT,
     brief_dirty BOOLEAN DEFAULT 0,
     archived_at TIMESTAMP
 );

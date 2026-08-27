@@ -64,7 +64,7 @@ class SheetKpi:
 @dataclass(frozen=True)
 class IrConfig:
     ticker: str
-    platform: str  # discovery adapter key: "mz" | "q4cdn"
+    platform: str  # "mz" precise adapter | "q4cdn" generic-discovery marker
     results_center_url: str
     reporting_currency: str | None = None  # explicit workbook/config declaration only
     spreadsheet_kpis: tuple[SheetKpi, ...] = ()

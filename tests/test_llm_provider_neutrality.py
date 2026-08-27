@@ -7,23 +7,6 @@ from pydantic import ValidationError
 
 from execution.verify_llm_adapter_isolation import main as run_ast_isolation_check
 from llm.envelope import LLMFailureCode, LLMRequestEnvelope, LLMResponseEnvelope
-from llm.purpose import PurposeId, validate_purpose
-
-
-def test_purpose_validation_success() -> None:
-    assert validate_purpose("peer_selection") == PurposeId.PEER_SELECTION
-    assert validate_purpose(PurposeId.BEAR_CASE) == PurposeId.BEAR_CASE
-    assert (
-        validate_purpose("material_news_classification") == PurposeId.MATERIAL_NEWS_CLASSIFICATION
-    )
-
-
-def test_purpose_validation_fails_closed_on_unknown() -> None:
-    with pytest.raises(ValueError, match="Unknown LLM purpose"):
-        validate_purpose("unauthorized_custom_prompt")
-
-    with pytest.raises(ValueError, match="non-empty string"):
-        validate_purpose("")
 
 
 def test_request_envelope_immutability_and_validation() -> None:

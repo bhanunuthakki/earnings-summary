@@ -95,6 +95,24 @@ class ListType(StrEnum):
     INDEX_MEMBER = "index_member"
 
 
+class ScheduleClass(StrEnum):
+    """Derived refresh cadence class for a tracked company."""
+
+    P1 = "P1"
+    P2 = "P2"
+    P3 = "P3"
+
+
+def schedule_class_for_list_type(list_type: ListType | str) -> ScheduleClass:
+    """Return the canonical schedule class for a tracked-company list type."""
+    value = ListType(list_type)
+    if value is ListType.PORTFOLIO:
+        return ScheduleClass.P1
+    if value in (ListType.WATCHLIST, ListType.EVALUATION):
+        return ScheduleClass.P2
+    return ScheduleClass.P3
+
+
 class Company(BaseModel):
     """One tracked_companies row."""
 

@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0027_add_sizing_intent_supersessions"
+_ACTIVE_HEAD = "0028_remove_processing_tier_and_rename_research_tasks"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
@@ -304,8 +304,8 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
         }
 
         assert conn.execute(
-            "SELECT ticker,processing_tier,brief_dirty FROM tracked_companies WHERE id=1"
-        ).fetchone() == ("NU", "P3", 0)
+            "SELECT ticker,list_type,brief_dirty FROM tracked_companies WHERE id=1"
+        ).fetchone() == ("NU", "portfolio", 0)
         assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (68,)
         assert conn.execute("SELECT COUNT(*) FROM discovery_sources").fetchone() == (39,)
         assert conn.execute("SELECT COUNT(*) FROM kpi_definitions").fetchone() == (27,)
@@ -318,7 +318,6 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
         "archived_at",
         "brief_dirty",
         "last_built_at",
-        "processing_tier",
     } <= tracked_columns
     assert {"called_at", "purpose"} <= llm_call_columns
     assert "line_item" in financial_fact_columns
@@ -326,9 +325,7 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
     assert "cik" in discovery_columns
     assert {"fallback_source", "ir_url"} <= kpi_columns
     assert {
-        "idx_tracked_processing_tier",
         "ix_tracked_companies_active",
         "ix_tracked_companies_brief_dirty",
-        "ix_tracked_companies_processing_tier",
         "ix_llm_calls_purpose_called_at",
     } <= indexes

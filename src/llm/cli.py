@@ -67,6 +67,7 @@ from typing import TYPE_CHECKING, cast
 
 from llm.capture import capture_exchange
 from llm.ledger import record_llm_call
+from llm.resolver import validate_purpose
 from llm.transport import (
     FailureInfo,
     LLMQuotaExhausted,
@@ -201,10 +202,6 @@ LLM_MODELS: dict[str, str] = {
     # rather than owner-flagged musings alone. Batch (daily 18:00 cron), not
     # latency-sensitive → Sonnet; budget-capped warn-mode (0190).
     "session_distill": DEFAULT_MODEL,
-    # The Ledger Phase-1 wondering classifier (the research-loop gate). A short
-    # closed binary+extraction behind a deterministic regex pre-gate → the cheap
-    # FAST tier; the golden set (evals/golden/wondering_detect.json) is its bar.
-    "wondering_detect": FAST_CLASSIFIER_MODEL,
     # The Ledger intent tap (research.intent). A closed enum classification —
     # observation/wondering/brief_artifact/stress_artifact — over one short musing,
     # run on EVERY owner musing (no lexical pre-gate) → the cheap FAST tier; the
@@ -260,7 +257,7 @@ LLM_MODELS: dict[str, str] = {
     # The Ledger Phase-2 generation seams (opt-in, web-less). musing_decision_extract
     # structures a free-text owner musing into a decision; drift_narrate rewords a
     # PRE-COMPUTED drift signal (wording only). Both short + closed → the cheap FAST
-    # tier, like the sibling wondering_detect classifier.
+    # tier.
     "musing_decision_extract": FAST_CLASSIFIER_MODEL,
     "drift_narrate": FAST_CLASSIFIER_MODEL,
     # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2) — the
@@ -493,11 +490,11 @@ LLM_MODELS: dict[str, str] = {
     # alerts fire, so this is a sector/business-model judgment where Opus's
     # wider knowledge and instruction-following materially reduce the two
     # catastrophic failure modes (wrong polarity, ungrounded breaker). One
-    # call per ticker, run rarely — cost is bounded. A distinct purpose key
-    # also gives portfolio-wide auto-seeding its own budget attribution. The
-    # manual --propose purpose (kpi_registry_proposal) stays unregistered ->
-    # Sonnet, so the two modes diverge cleanly.
+    # call per ticker, run rarely — cost is bounded. Distinct registered purpose
+    # keys give auto and manual seeding separate budget attribution while the
+    # manual proposal remains on Sonnet.
     "kpi_registry_auto_proposal": "claude-opus-4-8",
+    "kpi_registry_proposal": DEFAULT_MODEL,
     # News LLM modules. material_news_classification is the material-news
     # trigger's per-headline materiality veto (src/triggers/material_news.py):
     # it was ABSENT here and so silently fell back to Sonnet; pinning it to
@@ -875,9 +872,11 @@ def _model_for(purpose: str) -> str:
          auto-switch loop when a cheaper model holds sustained parity.
          Fail-safe: any DB error falls through silently to the code pin.
       2. ``LLM_MODELS`` hardcoded pin (the default code-time choice).
-      3. ``DEFAULT_MODEL`` fallback for unknown purposes (logged as a warning
-         so the gap surfaces in observability).
+      3. No fallback: unknown and dynamic lens purposes fail closed because
+         this selector has no explicit model parameter.
     """
+    purpose = validate_purpose(purpose)
+
     # 1. DB-backed override (the auto-switch loop writes here).
     try:
         from llm.model_overrides import active_override
@@ -902,17 +901,7 @@ def _model_for(purpose: str) -> str:
         )
 
     # 2. Code pin.
-    model = LLM_MODELS.get(purpose)
-    if model is None:
-        log.warning(
-            {
-                "event": "llm_model_purpose_unknown",
-                "purpose": purpose,
-                "fallback": DEFAULT_MODEL,
-            }
-        )
-        return DEFAULT_MODEL
-    return model
+    return LLM_MODELS[purpose]
 
 
 # Default per-call timeout (seconds). Long-context thesis prompts can take
@@ -1558,14 +1547,11 @@ def call_llm(
 
     Args:
         prompt: The fully-rendered prompt text.
-        purpose: Logical key for model selection (see LLM_MODELS). Required
-            for new code. Legacy ``None`` is normalized to the metered
-            ``__default__`` purpose; the explicit `model` arg overrides model
-            selection when both are passed.
+        purpose: Required logical key for model selection (see LLM_MODELS).
+            Dynamic ``lens:<name>`` purposes are valid only with an explicit
+            model.
         model: Explicit registered model ID. With no explicit backend, its
-            registered provider family selects the adapter. If neither purpose
-            nor model is set, resolution falls back to DEFAULT_MODEL with a
-            warning log.
+            registered provider family selects the adapter.
         timeout_seconds: Per-call timeout. None = the backend's default
             (DEFAULT_TIMEOUT_SECONDS / GEMINI_BACKEND_TIMEOUT_SECONDS).
         ticker: Optional ticker for ledger attribution. Set when the call is
@@ -1594,6 +1580,8 @@ def call_llm(
             and structured output. Unknown model metadata and unmet requirements
             fail before any provider transport or fallback is attempted.
     """
+    purpose = validate_purpose(purpose, model=model)
+
     if backend not in (None, "codex", "claude", "gemini", "openrouter"):
         raise ValueError(
             f"Unknown LLM backend {backend!r}: expected 'codex', 'claude', "
@@ -1620,10 +1608,6 @@ def call_llm(
                 backend=backend,
                 capability_profile=capability_profile,
             )
-
-    if purpose is None:
-        purpose = "__default__"
-        log.warning({"event": "llm_purpose_defaulted", "purpose": purpose})
 
     # Apply production prompt experiments before any provider is selected so
     # Codex, Claude, Gemini, and OpenRouter all receive the same governed
@@ -2034,6 +2018,8 @@ def stream_llm(
     from llm.model_ladder import family_of
     from log_redact import redact
 
+    purpose = validate_purpose(purpose)
+
     if scope != "ask":
         raise ValueError("stream_llm currently supports only the governed 'ask' scope")
 
@@ -2319,16 +2305,10 @@ def call_llm_with_web(
     output legitimately carries no URL and may accept plain degradation.
 
     Model selection mirrors ``call_llm``: pass an explicit registered model or
-    leave it ``None`` (the default) to resolve from ``purpose`` via the canonical
-    resolver; with neither set it falls back to
-    ``DEFAULT_MODEL`` with a warning. This historically hard-defaulted to
-    ``DEFAULT_MODEL`` and ignored ``purpose`` — resolving from purpose lets
-    web-enabled callers (e.g. the news structurer) be retuned centrally in
-    ``LLM_MODELS``. Callers passing an explicit ``model`` are unaffected.
+    leave it ``None`` (the default) to resolve from a registered ``purpose``.
+    Dynamic ``lens:<name>`` purposes require an explicit ``model``.
     """
-    if purpose is None:
-        purpose = "__default__"
-        log.warning({"event": "llm_web_purpose_defaulted", "purpose": purpose})
+    purpose = validate_purpose(purpose, model=model)
     from llm.resolver import (
         CapabilityProfile,
         require_model_capabilities,

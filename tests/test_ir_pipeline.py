@@ -26,8 +26,11 @@ from ir_pipeline.config import (  # noqa: E402
     get_config,
     save_config,
 )
-from ir_pipeline.discover import discover_documents  # noqa: E402
-from ir_pipeline.discover._docmeta import classify  # noqa: E402
+from ir_pipeline.discover import (  # noqa: E402
+    discover_documents,
+    discover_history_hybrid,
+)
+from ir_pipeline.discover._docmeta import CandidateDoc, classify  # noqa: E402
 from ir_pipeline.spreadsheet import (  # noqa: E402
     _header_row,
     _parse_period,
@@ -67,6 +70,43 @@ def test_parse_period_handles_datetime_and_ddmmyyyy() -> None:
     assert _parse_period("31/03/2026") == dt.datetime(2026, 3, 31)
     assert _parse_period("2026-03-31 00:00:00") == dt.datetime(2026, 3, 31)
     assert _parse_period("not a date") is None
+
+
+def test_q4cdn_config_has_no_precise_adapter() -> None:
+    config = IrConfig(
+        ticker="ZZZ",
+        platform="q4cdn",
+        results_center_url="https://example.test/results",
+    )
+    with pytest.raises(ValueError, match=r"precise|generic|direct"):
+        discover_documents(config)
+
+
+def test_q4cdn_config_uses_generic_history_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = IrConfig(
+        ticker="ZZZ",
+        platform="q4cdn",
+        results_center_url="https://example.test/results",
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_history(*, ir_url: str, max_quarters: int, timeout_ms: int) -> list[CandidateDoc]:
+        calls.append((ir_url, max_quarters, timeout_ms))
+        return []
+
+    monkeypatch.setattr("ir_pipeline.discover.generic.discover_document_history", fake_history)
+    assert (
+        discover_history_hybrid(
+            ir_url=config.results_center_url,
+            config=config,
+            max_quarters=4,
+            timeout_ms=1234,
+        )
+        == []
+    )
+    assert calls == [(config.results_center_url, 4, 1234)]
 
 
 def test_header_row_detection_finds_offset_date_row(tmp_path: Path) -> None:
@@ -150,7 +190,7 @@ def test_config_save_load_roundtrip(tmp_path: Path) -> None:
     assert nim.kpi_name == "Risk-adjusted NIM" and nim.scale == 100.0
 
 
-def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
+def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The builder feeds the sheet structure + canonical KPIs to the LLM and
     assembles a persisted config from the mapping (LLM mocked)."""
     sheet = tmp_path / "hist.xlsx"
@@ -166,7 +206,7 @@ def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
         ),
         encoding="utf-8",
     )
-    fake = {
+    fake: dict[str, object] = {
         "Monthly ARPAC (USD)": {
             "sheet": "Managerial indicators",
             "row_label": "Average Revenue",
@@ -180,7 +220,11 @@ def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
             "scale": 100,
         },
     }
-    monkeypatch.setattr("llm.structured.call_llm_structured", lambda *a, **k: fake)
+
+    def fake_structured_call(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return fake
+
+    monkeypatch.setattr("llm.structured.call_llm_structured", fake_structured_call)
     cfg = config_builder.build_ir_config(
         "ZZ", sheet, platform="mz", results_center_url="https://x", repo_root=tmp_path
     )

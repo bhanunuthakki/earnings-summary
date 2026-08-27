@@ -8,7 +8,7 @@ sequentially:
   1. candidate status → ``building`` (the queue shows progress live)
   2. tracked_companies.list_type → ``evaluation`` (direct UPDATE — NOT
      db.track_company, whose upsert fires its own fire-and-forget onboard
-     subprocess; this script owns the sequencing) + processing_tier P2
+     subprocess; this script owns the sequencing)
   3. ``execution/onboard_ticker.py --ticker T --industry-template auto``
      (FMP fetch + quarterly refresh + transcript backfill)
   4. ``execution/build_artifacts.py --ticker T --flavor evaluation
@@ -82,14 +82,14 @@ def _promote_to_evaluation(db_path: Path, user_id: str, ticker: str) -> bool:
             return False
         if str(row[0]) == "portfolio":
             conn.execute(
-                "UPDATE tracked_companies SET archived_at = NULL, processing_tier = 'P1', "
+                "UPDATE tracked_companies SET archived_at = NULL, "
                 "brief_dirty = 1 WHERE user_id = ? AND ticker = ?",
                 (user_id, ticker),
             )
             conn.commit()
             return True
         conn.execute(
-            "UPDATE tracked_companies SET list_type = 'evaluation', processing_tier = 'P2', "
+            "UPDATE tracked_companies SET list_type = 'evaluation', "
             "brief_dirty = 1, archived_at = NULL "
             "WHERE user_id = ? AND ticker = ?",
             (user_id, ticker),

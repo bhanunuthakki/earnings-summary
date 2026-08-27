@@ -1,8 +1,7 @@
 @echo off
 REM Weekly (Friday 22:00) — regenerate narrow P2 monitoring lenses only.
 REM See execution/run_due_lenses.py for the per-tier lens set + cadence rules.
-REM Companion to run_daily_fetch_and_brief.bat (which handles P1 daily refresh +
-REM the brief_dirty queue) and run_monthly_p3_refresh.bat (P3 monthly).
+REM Companion: run_daily_fetch_and_brief.bat handles P1 daily refresh and the brief_dirty queue.
 
 setlocal
 set PYTHONUTF8=1

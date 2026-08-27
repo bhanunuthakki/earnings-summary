@@ -151,6 +151,43 @@ def test_generate_summary_spotlights_transcript_body(monkeypatch: pytest.MonkeyP
     assert prompt.index("Transcript:") < prompt.index("<<<BEGIN-")
 
 
+def test_summary_transcript_bound_preserves_short_input() -> None:
+    import llm_client
+
+    text = "Prepared remarks.\nQ&A tail."
+    assert llm_client.bound_summary_transcript(text) == text
+
+
+def test_generate_summary_bounds_long_transcript_head_and_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import llm_client
+
+    captured: list[str] = []
+    _capture_call_llm(monkeypatch, captured)
+    transcript = (
+        "HEAD-OF-TRANSCRIPT\n"
+        + "h" * 30_000
+        + "\nMIDDLE-OF-TRANSCRIPT-EXCLUDED\n"
+        + "m" * 40_000
+        + "\nTAIL-QA-TRANSCRIPT\n"
+        + "t" * 20_000
+    )
+
+    llm_client.generate_summary(transcript, ticker="NU")
+    (prompt,) = captured
+    begin = prompt.index("<<<BEGIN-UNTRUSTED-DATA")
+    evidence_start = prompt.index("\n", begin) + 1
+    evidence_end = prompt.index("\n<<<END-UNTRUSTED-DATA", evidence_start)
+    evidence = prompt[evidence_start:evidence_end]
+
+    assert "HEAD-OF-TRANSCRIPT" in evidence
+    assert "TAIL-QA-TRANSCRIPT" in evidence
+    assert "MIDDLE-OF-TRANSCRIPT-EXCLUDED" not in evidence
+    assert "transcript characters omitted from the middle" in evidence
+    assert len(evidence) <= llm_client.SUMMARY_TRANSCRIPT_CHAR_CAP
+
+
 def test_web_prompts_carry_web_content_notice(monkeypatch: pytest.MonkeyPatch) -> None:
     import llm_client
 

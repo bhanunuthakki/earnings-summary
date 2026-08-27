@@ -29,7 +29,7 @@ from operations.attention import (
 from operations.models import OperationsRegistry, OperationsSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0027_add_sizing_intent_supersessions"
+HEAD = "0028_remove_processing_tier_and_rename_research_tasks"
 NOW = datetime(2026, 8, 24, 18, 0, tzinfo=UTC)
 
 

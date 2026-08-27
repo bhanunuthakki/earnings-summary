@@ -58,7 +58,7 @@ what belongs in the amount; `total_debt_basis` explains how that amount was foun
 
 **Definition.** The evidence depth authorized for an active tracked instrument. The four levels are mutually exclusive and collectively exhaustive: `catalog` preserves identity and raw-source availability; `screened` adds compact deterministic screening metrics; `monitored` adds narrow company-specific monitoring; `governed` admits the company to the complete document, fact, provenance, brief, DCF, and research-artifact contract.
 **Derivation.** Research Level is derived vocabulary, not a new database column: active `portfolio` and `evaluation` rows are governed; active `watchlist` rows are monitored; active `index_member` rows are screened; active `none` rows are catalog. An archived row has no active Research Level and authorizes no scheduled work.
-**Not to be confused with.** Coverage Role (`list_type`) records the owner's relationship to the name; Schedule Class (`processing_tier`) controls cadence; Instrument Kind (`instrument_type`) describes the security; Lifecycle (`archived_at`) controls whether any active work is allowed. Legacy `list_type='etf'` is compatibility debt; ETF is an Instrument Kind, not a Coverage Role.
+**Not to be confused with.** Coverage Role (`list_type`) records the owner's relationship to the name; Schedule Class is derived from Coverage Role and controls cadence; Instrument Kind (`instrument_type`) describes the security; Lifecycle (`archived_at`) controls whether any active work is allowed. Legacy `list_type='etf'` is compatibility debt; ETF is an Instrument Kind, not a Coverage Role.
 
 ## Tracked Instrument State
 
@@ -71,6 +71,17 @@ Every tracked-company row is described by four independent axes. Together they a
 
 The database row is the sole membership authority. Workbooks, research directories, thesis files, cached LLM artifacts, and WACC seeds are outputs or inputs; they never create, restore, or upgrade membership.
 
+## Research Task
+
+**Definition.** A staged, owner-visible request for a bounded research pass. A task
+may carry `estimated_cost_usd`, the pre-run estimate used for approval and queue
+presentation, and `task_metadata_json`, a small lifecycle metadata object such as
+the session prompt and packet timestamps.
+**Not to be confused with.** Realized provider or LLM spend, which belongs in the
+corresponding source-cost or LLM-call ledger; or Attempt Identity, which identifies
+one execution. Research-task metadata is not a run identifier and must not be
+stored in or exposed as one.
+
 ## Filing Regime
 
 **Definition.** The regulatory framework governing an issuer's SEC periodic reporting obligations and filing document formats. The canonical regimes are:
@@ -80,6 +91,13 @@ The database row is the sole membership authority. Workbooks, research directori
 - `none`: Non-SEC registrants or unsponsored ADRs with no direct EDGAR reporting obligation (e.g. `NTDOY`, `FLKR`).
 
 **Contract.** Pipelines branch deterministically on `tracked_companies.filing_regime`. Interim quarters for `20-F`/`40-F` issuers MUST route through the 6-K exhibit ingestion pipeline rather than assuming US 10-Q XBRL availability.
+`NULL` means the regime has not yet been resolved; it is not equivalent to the
+known `none` regime. Until `none` is round-trippable through the typed company
+model and every filing router, persisted `none` values remain compatibility debt.
+The quarterly-segment router returns an explicit unsupported state for unresolved
+rows. The older `Company.interim_doc_type` and `Company.annual_doc_type` fallback
+heuristics remain compatibility debt and must not be interpreted as a resolved
+Filing Regime.
 
 ## Foreign Private Issuer (FPI)
 
@@ -269,22 +287,22 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 
 ## On My Mind
 
-**Definition.** The reverse-chronological living feed of what the analyst is currently thinking about and reading — each item indexed to themes, holdings, and overall positioning, carrying the action ladder **dismiss · save-for-later · discuss · incorporate-into-research**. The front-of-funnel where the LLM extracts and explores *before* anything is distilled.
-**Lives in.** (to be built) the capture feed surfaced in Telegram and the dashboard notecard/library; a read model over `analyst_notes` (`source='capture'`); feeds the Worldview.
+**Definition.** The reverse-chronological living feed of what the analyst is currently thinking about and reading — each item indexed to themes, holdings, and overall positioning, carrying the action ladder **dismiss · save-for-later · discuss · incorporate-into-research · worldview**. The front-of-funnel where the LLM extracts and explores *before* anything is distilled.
+**Lives in.** `src/onmymind/feed.py`, the Telegram and dashboard capture surfaces, and the `analyst_notes` read model for `source='capture'`; its `worldview` action stages a candidate Tenet.
 **Not to be confused with.** The Worldview (durable, synthesized) — On My Mind is transient working memory that feeds it.
-**Subsumes.** The **Wondering** flag and its detection (`wondering_detect`, flag `LEDGER_RESEARCH_TAP`). On My Mind is strictly broader — reading and exploration, not just self-posed questions — and absorbs it.
+**Subsumes.** The former **Wondering** concept and its retired `wondering_detect` classifier. The legacy-named `LEDGER_RESEARCH_TAP` flag still gates live `capture_intent` classification and is compatibility debt; On My Mind remains strictly broader — reading and exploration, not just self-posed questions.
 
 ## Worldview
 
 **Definition.** The durable, evolving model of how the analyst thinks — the synthesized set of Tenets that subtly conditions investment reasoning (hold / add / trim / sell / evaluate).
-**Lives in.** (to be built) a durable tenets store; injected into thesis / ask / decision reasoning via the anchor mechanism (`src/llm/anchors.py`).
+**Lives in.** Current and proposed Tenets in `insight_notes`; `src/synthesis/tenets.py` owns the store, `src/pipeline/worldview_panel.py` owns the review surface, and `src/llm/anchors.py` composes the flag-gated reasoning anchor.
 **Not to be confused with.** A per-ticker thesis (company-specific, in `micro_thesis/holdings/`) — the Worldview is cross-company, about the analyst's *own* reasoning.
 **Subsumes.** The merged `influence` analyst-notes kind (PR #701), which is superseded by Tenets.
 
 ## Tenet
 
 **Definition.** A single revisable belief-unit in the Worldview — a principle about *how the analyst invests* — with provenance to the insights that formed it; the system proposes revisions the analyst approves and flags contradictions when a new insight conflicts with a standing Tenet.
-**Lives in.** (to be built) `insight_notes` with `kind='tenet'`; composes the Worldview.
+**Lives in.** `insight_notes` with `kind='tenet'`, owned by `src/synthesis/tenets.py`; current Tenets compose the Worldview and proposed Tenets remain in the approval queue.
 **Not to be confused with.** A **conviction** (see below) — a `conviction` is a *1–5 confidence rating on a position/decision* (`bucket_for_conviction`, conviction calibration/Brier in `src/advisor/`, and the `conviction` field on `decision_capture`). A Tenet is a cross-company belief about *method*, not a confidence level on a name. Also distinct from a `musing` (an in-the-moment captured thought) and an `insight_note` of `kind='theme'` (a topic cluster, not a belief).
 **Subsumes.** — (was proposed as "Conviction" 2026-07-01; renamed to avoid collision with the entrenched `conviction` rating.)
 

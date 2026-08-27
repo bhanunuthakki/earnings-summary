@@ -1,4 +1,4 @@
-"""The Worldview review surface (P2) — the durable Tenets, not yet injected.
+"""The Worldview review surface (P2) for durable Tenets.
 
 Rendered as a flag-gated section inside the Ledger panel (front-of-funnel capture
 → durable belief in one place). Shows the live Worldview (current Tenets), the
@@ -9,6 +9,8 @@ off, so the Ledger tab is unchanged until the owner enables it.
 
 Pure render + token-only styles (guard-clean). All writes go through the
 ``/api/tenets`` routes → ``synthesis.tenets`` / ``synthesis.tenet_distill``.
+Current Tenets may also enter governed reasoning through the separately gated
+Worldview anchor in ``src.llm.anchors``.
 """
 
 from __future__ import annotations

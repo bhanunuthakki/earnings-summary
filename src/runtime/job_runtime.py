@@ -74,7 +74,6 @@ _SCHEDULER_PORTFOLIO_DB_POLICY: tuple[tuple[str, str], ...] = (
     ("ledger-synthesis", "research-synthesis"),
     ("monthly-advisor-memos", "research-synthesis"),
     ("monthly-calibration-scorecard", "llm-evaluation"),
-    ("monthly_p3_refresh", "lens-refresh"),
     ("morning_pipeline", "morning-orchestration"),
     ("refresh-business-factors", "research-synthesis"),
     ("refresh-dirty-artifacts", "artifact-refresh"),

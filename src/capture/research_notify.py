@@ -695,7 +695,7 @@ def dispatch_callback(
             return "rx_ran"
 
         if verb == "session":
-            prompt = str(task.meta.get("session_prompt") or "").strip()
+            prompt = str(task.metadata.get("session_prompt") or "").strip()
             if cqid:
                 answer(token, cqid, text="Sending the session prompt...")
             if chat_id is not None:

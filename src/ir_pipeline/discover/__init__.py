@@ -2,8 +2,10 @@
 
 The per-quarter document URLs (spreadsheet, deck, press release, transcript) are
 hash-keyed and injected by JavaScript, so a browser is needed to resolve them.
-`discover_documents` dispatches to the platform adapter named by the ticker's
-`IrConfig.platform` ("mz" → headless Playwright; "q4cdn" → URL-pattern).
+`discover_documents` dispatches to the precise adapter named by the ticker's
+`IrConfig.platform` (currently only "mz" → headless Playwright). A "q4cdn"
+config remains a generic-discovery marker; use `discover_history` or a direct
+document URL for that issuer.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ from ir_pipeline.discover._docmeta import CandidateDoc
 
 _ADAPTERS: dict[str, str] = {
     "mz": "ir_pipeline.discover.mz",
-    "q4cdn": "ir_pipeline.discover.q4cdn",
 }
 
 
@@ -32,8 +33,9 @@ def discover_documents(config: IrConfig) -> dict[str, str]:
     mod_name = _ADAPTERS.get(config.platform)
     if mod_name is None:
         raise ValueError(
-            f"No IR discovery adapter for platform {config.platform!r} "
-            f"({config.ticker}); known: {sorted(_ADAPTERS)}"
+            f"No precise IR discovery adapter for platform {config.platform!r} "
+            f"({config.ticker}); use generic discovery or a direct URL; "
+            f"known: {sorted(_ADAPTERS)}"
         )
     adapter = importlib.import_module(mod_name)
     return adapter.discover_documents(config)
