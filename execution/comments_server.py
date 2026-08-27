@@ -4558,6 +4558,7 @@ def create_app(
         start_job: list[Job] = []
         supervisor_proof_seen = False
         runtime_receipt_path = portfolio_tracker_receipt_path(repo_root)
+        supervisor_receipt_path = portfolio_tracker_receipt_path(PROJECT_ROOT)
 
         def inspect_listener() -> ListenerObservation:
             nonlocal supervisor_proof_seen
@@ -4598,7 +4599,7 @@ def create_app(
                     break
             supervisor = (
                 read_supervisor_listener_ownership(
-                    runtime_receipt_path,
+                    supervisor_receipt_path,
                     listener_owner=owner,
                     bind_host=bind_host,
                     bind_port=bind_port,
