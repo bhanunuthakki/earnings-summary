@@ -82,6 +82,26 @@ def _legacy_alias_manifest(*documents: tuple[str, str, str]) -> bytes:
     ).encode()
 
 
+def _authority_omitted_manifest(*documents: tuple[str, str, str, str]) -> bytes:
+    rows = "".join(
+        (
+            "<tr>"
+            f"<td>{sequence}</td><td>{description}</td>"
+            '<td><a href="/Archives/edgar/data/1001/'
+            f'000000100125000001/{filename}">{filename}</a></td>'
+            f"<td>{declared_type}</td><td>{size}</td>"
+            "</tr>"
+        )
+        for sequence, (filename, declared_type, description, size) in enumerate(documents, start=1)
+    )
+    return (
+        '<html><body><table class="tableFile">'
+        "<tr><th>Seq</th><th>Description</th><th>Document</th>"
+        "<th>Type</th><th>Size</th></tr>"
+        f"{rows}</table></body></html>"
+    ).encode()
+
+
 def _paper_manifest(*, scan_href: str, scan_filename: str = "scanned.pdf") -> bytes:
     return (
         '<html><body><table class="tableFile">'
@@ -127,6 +147,7 @@ def test_package_retains_primary_exhibits_and_financial_report_attachments() -> 
     ]
     assert [item.declared_type for item in result.exhibits] == ["EX-99.1", "EX-99.2"]
     assert result.attachments[1].parent_accession_number == "0000001001-25-000001"
+    assert result.attachments[1].source_url is not None
     assert result.attachments[1].source_url.endswith(
         "/1001/000000100125000001/earnings-release.htm"
     )
@@ -154,6 +175,71 @@ def test_identical_duplicate_attachment_is_exact_deduped() -> None:
         "acme-8k.htm",
         "earnings-release.htm",
     ]
+
+
+def test_authority_omitted_attachment_locators_are_retained_without_fetch_identity() -> None:
+    index_body = _index(
+        _item("annual.htm", size="1000"),
+        _item("", size="30176"),
+        _item("", size="2232"),
+    )
+    manifest_body = _authority_omitted_manifest(
+        ("annual.htm", "10-K", "Annual report", "1000"),
+        ("", "EX-10.5", "Directors deferral plan", "30176"),
+        ("", "EX-12", "Computation of ratio of earnings", "2232"),
+    )
+
+    result = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="10-K",
+        primary_document="annual.htm",
+        index_body=index_body,
+        filing_manifest_body=manifest_body,
+    )
+
+    omitted = tuple(
+        item for item in result.attachments if item.locator_status == "authority_omitted"
+    )
+    assert len(omitted) == 2
+    assert [item.sequence for item in omitted] == [2, 3]
+    assert [item.declared_type for item in omitted] == ["EX-10.5", "EX-12"]
+    assert [item.byte_size for item in omitted] == [30176, 2232]
+    assert all(item.filename is None and item.source_url is None for item in omitted)
+    assert all(item.inventory_presence == "matched" for item in omitted)
+    assert all(item.role == "exhibit" for item in omitted)
+    assert len({item.attachment_id for item in omitted}) == 2
+    assert [item.filename for item in result.attachments] == ["annual.htm", None, None]
+
+    replay = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="10-K",
+        primary_document="annual.htm",
+        index_body=index_body,
+        filing_manifest_body=manifest_body,
+    )
+    assert replay.attachments == result.attachments
+
+
+def test_authority_omitted_attachment_order_must_reconcile_exact_byte_sizes() -> None:
+    with pytest.raises(SecFilingPackageContractError, match="authority-omitted attachment"):
+        parse_sec_filing_package_inventory(
+            cik="1001",
+            accession_number="0000001001-25-000001",
+            form_type="10-K",
+            primary_document="annual.htm",
+            index_body=_index(
+                _item("annual.htm", size="1000"),
+                _item("", size="30176"),
+                _item("", size="2232"),
+            ),
+            filing_manifest_body=_authority_omitted_manifest(
+                ("annual.htm", "10-K", "Annual report", "1000"),
+                ("", "EX-10.5", "Directors deferral plan", "2232"),
+                ("", "EX-12", "Computation of ratio of earnings", "30176"),
+            ),
+        )
 
 
 def test_manifest_allows_authority_generated_complete_submission_row_without_type() -> None:
@@ -199,6 +285,7 @@ def test_legacy_accession_prefixed_link_uses_displayed_archive_filename() -> Non
     assert [item.filename for item in result.attachments] == ["0001.txt", "0002.txt"]
     assert result.attachments[0].role == "primary_document"
     assert result.attachments[1].role == "exhibit"
+    assert result.attachments[0].source_url is not None
     assert result.attachments[0].source_url.endswith("/0001.txt")
 
 

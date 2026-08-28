@@ -30,6 +30,7 @@ from provenance.sec_native_capture import (
     SecNativeCaptureHardStopError,
     SecNativeCaptureRequest,
     capture_expected_sec_documents,
+    load_expected_sec_documents,
 )
 from provenance.source_coverage import (
     CoverageAssessment,
@@ -274,6 +275,68 @@ def _request(
         batch_size=10,
         minimum_request_interval_seconds=0,
     )
+
+
+def test_fetch_candidates_exclude_authority_omitted_locators(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    coverage = SourceCoverageLedger(conn)
+    coverage.persist(
+        ExpectedDocument(
+            expected_document_id="expected-unnamed-exhibit",
+            idempotency_key="expected-unnamed-exhibit",
+            snapshot_id="inventory-snapshot",
+            expected_document_key="issuer-acme:0000000001-26-000001:attachment:opaque",
+            issuer_id="issuer-acme",
+            ticker="ACME",
+            source_kind="sec_filing",
+            document_type="sec_exhibit",
+            form_type="10-K",
+            accession_number="0000000001-26-000001",
+            source_url=None,
+            primary_document=None,
+            period_start=None,
+            period_end=datetime(2025, 12, 31, tzinfo=UTC),
+            filing_at=datetime(2026, 2, 10, tzinfo=UTC),
+            expected_at=None,
+            expectation_basis="authoritative",
+            recorded_at=STAMP,
+        )
+    )
+    coverage.persist(
+        CoverageAssessment(
+            assessment_id="coverage-unnamed-exhibit",
+            idempotency_key="coverage-unnamed-exhibit",
+            expected_document_id="expected-unnamed-exhibit",
+            revision=1,
+            coverage_status="authority_unavailable",
+            document_version_id=None,
+            extraction_run_id=None,
+            manifest_id=None,
+            index_run_id=None,
+            reason_code="sec_authority_attachment_locator_omitted",
+            reason_details=(("locator_status", "authority_omitted"),),
+            decision_kind="deterministic",
+            policy_name="source-coverage-reconcile",
+            policy_version="1",
+            policy_config_sha256=CONFIG_SHA,
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            supersedes_assessment_id=None,
+            material_dissent=False,
+        )
+    )
+    conn.commit()
+    try:
+        candidates, has_more = load_expected_sec_documents(
+            conn,
+            inventory_keys=(INVENTORY_KEY,),
+            limit=10,
+        )
+        assert [item.expected_document_id for item in candidates] == ["expected-10k"]
+        assert not has_more
+    finally:
+        conn.close()
 
 
 def test_dry_run_fetches_to_checkpoint_without_database_or_durable_blob_writes(

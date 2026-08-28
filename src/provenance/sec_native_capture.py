@@ -355,6 +355,8 @@ def load_expected_sec_documents(
         f"WHERE inventory.inventory_key IN ({placeholders}) "
         "AND expected.source_kind = 'sec_filing' "
         "AND expected.expectation_basis = 'authoritative' "
+        "AND expected.source_url IS NOT NULL "
+        "AND expected.primary_document IS NOT NULL "
         "AND (coverage.coverage_status IS NULL OR coverage.coverage_status "
         "NOT IN ('captured', 'extracted', 'indexed')) "
         "ORDER BY inventory.inventory_key, expected.expected_document_key "
