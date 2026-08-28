@@ -77,6 +77,11 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     api_xml = (CRON_DIR / api.xml).read_text(encoding="utf-8")
     assert "<BootTrigger>" in api_xml
     assert "<UserId>S-1-5-18</UserId>" in api_xml
+    assert (
+        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)</SecurityDescriptor>"
+        in api_xml
+    )
+    assert api_xml.count("<SecurityDescriptor>") == 1
     # UserId identifies LOCAL SYSTEM. Explicit ServiceAccount is rejected by
     # schtasks.exe on the target Windows host.
     assert "<LogonType>" not in api_xml
