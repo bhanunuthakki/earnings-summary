@@ -63,15 +63,17 @@ from typing import cast
 from ask import turn_cache
 from ask.packs import PACK_KEYS, load_packs
 from ask.router import route_packs
+from compute.kpi_resolver import semantic_series_identity_sql
 from llm.untrusted import spotlight
 from pipeline.confidence import (
     IssuesByTicker,
     display_issues_for_fact,
     load_unresolved_issues,
 )
+from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
     FINANCIAL_FACT,
-    KPI,
     FactOverride,
     OverrideAction,
     active_scalar_override_map,
@@ -670,18 +672,21 @@ def _fact_ref_kpi_item(
     name = str(drow[0])
     unit = str(drow[1] or "")
     tier_rank, doc_join = _tier_bits(conn, "kf")
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
     rows = _dedupe_series(
         _series_rows_conf(
             conn,
             "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
             "kf.source_doc_id{conf} "
-            f"FROM kpi_facts kf {doc_join} "
+            f"FROM {fact_relation} kf {doc_join} {semantic_join} "
             "WHERE kf.ticker = ? AND kf.kpi_definition_id = ? "
+            f"AND {semantic_where} AND {semantic_identity} "
             f"ORDER BY kf.period_end DESC, {tier_rank} DESC, kf.id DESC LIMIT 64",
             (ticker, def_id),
         )
     )
-    rows, ov_map = _overlay_fact_rows(conn, ticker, KPI, name, rows)
     if not rows:
         return None
     item = _fact_item(
@@ -692,7 +697,7 @@ def _fact_ref_kpi_item(
         conn,
         item=name,
         issues_by_ticker=issues_by_ticker,
-        override_map=ov_map,
+        override_map={},
     )
     item["fact_ref"] = f"kpi:{ticker}:{def_id}"
     return item
@@ -806,18 +811,21 @@ def _fact_evidence(
             if per_ticker >= _MAX_FACT_ITEMS_PER_TICKER:
                 break
             kpi_tier_rank, kpi_doc_join = _tier_bits(conn, "kf")
+            fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+            semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+            semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
             rows = _dedupe_series(
                 _series_rows_conf(
                     conn,
                     "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
                     "kf.source_doc_id{conf} "
-                    f"FROM kpi_facts kf {kpi_doc_join} "
+                    f"FROM {fact_relation} kf {kpi_doc_join} {semantic_join} "
                     "WHERE kf.ticker = ? AND kf.kpi_definition_id = ? "
+                    f"AND {semantic_where} AND {semantic_identity} "
                     f"ORDER BY kf.period_end DESC, {kpi_tier_rank} DESC, kf.id DESC LIMIT 64",
                     (ticker, def_id),
                 )
             )
-            rows, ov_map = _overlay_fact_rows(conn, ticker, KPI, name, rows)
             if not rows:
                 continue
             found.append(
@@ -829,7 +837,7 @@ def _fact_evidence(
                     conn,
                     item=name,
                     issues_by_ticker=issues_by_ticker,
-                    override_map=ov_map,
+                    override_map={},
                 )
             )
             per_ticker += 1

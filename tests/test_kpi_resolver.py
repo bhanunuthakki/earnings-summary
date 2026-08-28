@@ -74,6 +74,52 @@ def test_series_identity_excludes_same_label_basis_and_scope_drift() -> None:
     conn.close()
 
 
+def test_series_identity_rejects_active_override_across_definition_alias_family() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_definitions (
+          id INTEGER PRIMARY KEY,ticker TEXT,name TEXT,unit TEXT
+        );
+        CREATE TABLE kpi_facts (
+          id INTEGER PRIMARY KEY,ticker TEXT,kpi_definition_id INTEGER,
+          period_end TEXT,currency TEXT
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+          id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
+          supersedes_context_id INTEGER,status TEXT,publication_lane TEXT,
+          metric_name_as_reported TEXT,accounting_basis TEXT,
+          consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT
+        );
+        CREATE TABLE fact_overrides (
+          ticker TEXT,fact_kind TEXT,fact_key TEXT,action TEXT,status TEXT
+        );
+        INSERT INTO kpi_definitions VALUES
+          (1,'NU','Monthly ARPAC (USD)','actual'),
+          (2,'NU','Monthly ARPAC','actual');
+        INSERT INTO kpi_facts VALUES
+          (1,'NU',1,'2025-03-31','USD'),
+          (2,'NU',2,'2024-12-31','USD');
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+          (1,1,1,NULL,'admitted','current_actual','Monthly ARPAC','management',
+           'consolidated','{}','none'),
+          (2,2,1,NULL,'admitted','current_actual','Monthly ARPAC','management',
+           'consolidated','{}','none');
+        INSERT INTO fact_overrides VALUES
+          ('NU','kpi','Monthly ARPAC','replace','active');
+        """
+    )
+    assert matching_kpi_definition_ids(conn, "NU", "Monthly ARPAC (USD)") == (1, 2)
+    predicate = semantic_series_identity_sql(conn)
+    rows = conn.execute(
+        "SELECT kf.id FROM kpi_facts kf JOIN kpi_fact_semantic_contexts ksc "
+        "ON ksc.kpi_fact_id=kf.id WHERE " + predicate + " ORDER BY kf.id"
+    ).fetchall()
+    assert rows == []
+    conn.close()
+
+
 def test_definition_alias_matching_rejects_reported_label_and_scale_drift() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

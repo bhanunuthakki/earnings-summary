@@ -203,14 +203,12 @@ def _conn(db: Path) -> sqlite3.Connection:
     return c
 
 
-def test_load_kpi_series_ignores_unreviewed_override(db: Path) -> None:
+def test_load_kpi_series_fails_closed_on_unreviewed_override(db: Path) -> None:
     conn = _conn(db)
     _seed_kpi_override(conn, action=OverrideAction.REPLACE)
     conn.close()
     series = load_kpi_series("GOOG", _KPI, db_path=db)
-    by_date = {str(o.period_end)[:10]: o.value for o in series}
-    assert by_date["2025-12-31"] == 75.0
-    assert by_date["2025-09-30"] == 70.0
+    assert series == []
 
 
 def test_load_financial_series_honors_override(db: Path) -> None:
@@ -253,23 +251,20 @@ def test_fmp_derived_full_series_fails_closed_on_unreviewed_override(db: Path) -
     assert points == []
 
 
-def test_financials_kpi_series_ignores_unreviewed_override(db: Path) -> None:
+def test_financials_kpi_series_fails_closed_on_unreviewed_override(db: Path) -> None:
     conn = _conn(db)
     _seed_kpi_override(conn, action=OverrideAction.REPLACE)
     series = _kpi_series_for(conn, "GOOG", _KPI, ["2025 Q4"], ["2025 Q4"])
     conn.close()
-    assert series is not None
-    assert series.values[0] == 75.0
+    assert series is None
 
 
-def test_unreviewed_drop_override_does_not_omit_admitted_period(db: Path) -> None:
+def test_unreviewed_drop_override_makes_series_unresolved(db: Path) -> None:
     conn = _conn(db)
     _seed_kpi_override(conn, action=OverrideAction.DROP, period="Q3")
     conn.close()
     series = load_kpi_series("GOOG", _KPI, db_path=db)
-    dates = {str(o.period_end)[:10] for o in series}
-    assert "2025-09-30" in dates
-    assert "2025-12-31" in dates
+    assert series == []
 
 
 def test_no_override_is_unchanged(db: Path) -> None:

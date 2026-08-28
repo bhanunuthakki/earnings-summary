@@ -104,7 +104,7 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/prune_misscaled_capture_facts.py": 1,
     "execution/retype_misfiled_sec_ir_docs.py": 2,
     "src/allocation/eligibility.py": 1,
-    "src/ask/grounding.py": 5,
+    "src/ask/grounding.py": 3,
     "src/bear_case_grader.py": 1,
     "src/cockpit_fundamentals.py": 2,
     "src/competitive/holdings_sync.py": 1,

@@ -524,7 +524,7 @@ def test_load_kpi_series_joins_through_definitions(tmp_path: Path) -> None:
     assert s[-1].value == pytest.approx(0.27)
 
 
-def test_kpi_series_uses_canonical_view_and_ignores_unreviewed_override(tmp_path: Path) -> None:
+def test_kpi_series_uses_canonical_view_and_rejects_unreviewed_override(tmp_path: Path) -> None:
     db = _facts_db(tmp_path)
     _insert_kpi(db, "TEST", "Operating Margin", [0.20])
     conn = sqlite3.connect(str(db))
@@ -558,7 +558,7 @@ def test_kpi_series_uses_canonical_view_and_ignores_unreviewed_override(tmp_path
         conn.close()
 
     series = load_kpi_series("TEST", "Operating Margin", db_path=db)
-    assert [ob.value for ob in series] == [0.20]
+    assert series == []
 
 
 def test_kpi_series_fails_closed_without_admitted_context(tmp_path: Path) -> None:

@@ -266,7 +266,9 @@ def semantic_series_identity_sql(
     ``fact_relation`` must be the same canonical relation used by the caller's
     outer KPI query. When omitted, resolve it here so anchor selection cannot
     accidentally fall back to raw ``kpi_facts`` while the outer query uses the
-    resolved-current view.
+    resolved-current view. Any active legacy scalar ``replace`` or ``drop``
+    rejects the whole compatible definition-alias family: consumers may resume
+    only after a source-reviewed superseding fact has its own admitted head.
     """
     resolved_fact_relation = fact_relation or canonical_fact_relation(conn, "kpi_facts").sql
     columns = {
@@ -318,10 +320,41 @@ def semantic_series_identity_sql(
         f"AND {anchor_context}.status='admitted' "
         f"AND {anchor_context}.publication_lane='current_actual')"
     )
-    return (
+    admitted_identity = (
         f"((({context_alias}.id IS NULL OR {context_alias}.status='legacy_unknown') "
         f"AND NOT {admitted_anchor_exists}) OR ({qualified}))"
     )
+    override_columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(fact_overrides)").fetchall()
+    }
+    required_override_columns = {
+        "ticker",
+        "fact_kind",
+        "fact_key",
+        "action",
+        "status",
+    }
+    if not required_override_columns.issubset(override_columns):
+        return admitted_identity
+    active_overrides = conn.execute(
+        "SELECT DISTINCT ticker,fact_key FROM fact_overrides "
+        "WHERE status='active' AND action IN ('replace','drop') AND fact_kind='kpi'"
+    ).fetchall()
+    blocked_definition_ids: set[int] = set()
+    for override in active_overrides:
+        blocked_definition_ids.update(
+            matching_kpi_definition_ids(
+                conn,
+                str(override["ticker"]),
+                str(override["fact_key"]),
+            )
+        )
+    if not blocked_definition_ids:
+        return admitted_identity
+    blocked_ids_sql = ",".join(
+        str(definition_id) for definition_id in sorted(blocked_definition_ids)
+    )
+    return f"({admitted_identity}) AND {fact_alias}.kpi_definition_id NOT IN ({blocked_ids_sql})"
 
 
 def engine_formula_definition(name: str) -> str | None:

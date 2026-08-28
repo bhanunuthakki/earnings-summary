@@ -137,6 +137,26 @@ def test_series_pulls_full_history_through_resolver() -> None:
     assert sum(1 for v in series.levels_full if v is not None) == 12
 
 
+def test_alias_family_is_unresolved_when_any_member_has_active_override() -> None:
+    conn = _make_db()
+    canonical = _add_def(conn, "NU", "Monthly ARPAC (USD)", unit="actual")
+    duplicate = _add_def(conn, "NU", "Monthly ARPAC", unit="actual")
+    _add_facts(conn, "NU", canonical, _QUARTER_ENDS)
+    _add_facts(conn, "NU", duplicate, _QUARTER_ENDS[5:7])
+    conn.execute("UPDATE kpi_fact_semantic_contexts SET metric_name_as_reported='Monthly ARPAC'")
+    conn.execute(
+        "CREATE TABLE fact_overrides (ticker TEXT, fact_kind TEXT, fact_key TEXT, "
+        "action TEXT, status TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO fact_overrides VALUES ('NU','kpi','Monthly ARPAC','replace','active')"
+    )
+    conn.commit()
+
+    labels = [f"{e[:4]} Q{(int(e[5:7]) - 1) // 3 + 1}" for e in _QUARTER_ENDS]
+    assert _kpi_series_for(conn, "NU", "Monthly ARPAC", labels[-12:], labels) is None
+
+
 def test_series_dedups_coexisting_sources_to_latest() -> None:
     """An LLM-brief value and a later IR-spreadsheet restatement coexist as two
     rows for one period; the series must surface the latest-ingested (highest
