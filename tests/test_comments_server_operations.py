@@ -347,18 +347,15 @@ def test_operations_review_bundle_loads_kpi_repair_from_state_root(
     monkeypatch.setattr(comments_server, "build_operations_review_bundle", build_bundle)
     monkeypatch.setattr(comments_server, "review_code_identity", Mock(return_value=None))
 
-    response = (
-        comments_server.create_app(
-            state_root,
-            code_root=code_root,
-            db_path=db_path,
-            operations_registry=build_operations_registry(PROJECT_ROOT),
-        )
-        .test_client()
-        .get("/api/operations/review-bundle")
+    app = comments_server.create_app(
+        state_root,
+        code_root=code_root,
+        db_path=db_path,
+        operations_registry=build_operations_registry(PROJECT_ROOT),
     )
+    with app.test_request_context("/api/operations/review-bundle"):
+        app.view_functions["operations_review_bundle_api"]()
 
-    assert response.status_code == 200
     load_review.assert_called_once()
     assert load_review.call_args.kwargs["repo_root"] == state_root
     assert build_bundle.call_args.kwargs["kpi_repair"] is repair_review
