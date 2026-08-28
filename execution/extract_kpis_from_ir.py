@@ -4,8 +4,8 @@ Two-step protocol so an in-session LLM (Claude) does the structured extraction
 while the persistence stays deterministic Python:
 
   1. `--list-pending --ticker <X>`: print the IR documents for ticker X that
-     have not yet contributed any kpi_facts rows. The user (or LLM) reads each
-     PDF, populates a manifest JSON of (kpi name, value, unit) tuples per doc.
+     lack a terminal issuer coverage receipt. The user (or LLM) reads each PDF,
+     populates a manifest JSON of (kpi name, value, unit) tuples per doc.
 
   2. `--apply <manifest.json>`: read the manifest, validate it (Pydantic),
      persist into kpi_facts via src/pipeline/kpi_persistence.py, and emit
@@ -76,6 +76,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log  # noqa: E402
 from models.facts import FactLocator, LocatorKind  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
+from pipeline.document_completeness import (  # noqa: E402
+    DocumentCompletenessStatus,
+    document_completeness,
+)
 from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
 from pipeline.kpi_persistence import (  # noqa: E402
     KpiExtractionManifest,
@@ -112,18 +116,18 @@ class ManifestFile(BaseModel):
     manifests: list[KpiExtractionManifest]
 
 
-def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
-    """Return IR docs that have no kpi_facts rows tied to them yet.
+def list_pending_documents(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
+    """Return IR docs without a terminal issuer coverage receipt.
 
-    `kpi_facts.source_doc_id` provenance is the join key. A document is
-    "pending" if its id never appears in kpi_facts.
+    ``kpi_facts`` rows are extraction evidence, not a completeness signal: a
+    partial extraction must remain visible until the typed coverage ledger
+    proves every expected output was captured or explicitly rejected.
     """
     placeholders = ",".join("?" for _ in _IR_DOC_TYPES)
     sql = (
         f"SELECT d.id, d.ticker, d.doc_type, d.period_end, d.file_path "
         f"FROM documents d "
         f"WHERE d.source_type = 'ir_doc' AND d.doc_type IN ({placeholders}) "
-        f"AND NOT EXISTS (SELECT 1 FROM kpi_facts kf WHERE kf.source_doc_id = d.id) "
     )
     params: tuple[str, ...] = tuple(_IR_DOC_TYPES)
     if ticker is not None:
@@ -133,6 +137,11 @@ def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str
     cur = conn.execute(sql, params)
     out: list[dict[str, object]] = []
     for row in cur.fetchall():
+        if (
+            document_completeness(conn, int(row["id"])).status
+            is DocumentCompletenessStatus.COMPLETE
+        ):
+            continue
         out.append(
             {
                 "document_id": int(row["id"]),
@@ -180,7 +189,7 @@ def _upgrade_pdf_locators(
     """
     upgraded: list[KpiValue] = []
     changed = False
-    pdf_path: Path | None | bool = False  # False = not yet resolved (resolve lazily, once)
+    pdf_path: Path | bool | None = False  # False = not yet resolved (resolve lazily, once)
     for value in manifest.values:
         loc = value.locator
         if (
@@ -374,7 +383,7 @@ def main() -> int:
     group.add_argument(
         "--list-pending",
         action="store_true",
-        help="Print IR documents not yet attached to any kpi_facts row.",
+        help="Print IR documents without a terminal issuer coverage receipt.",
     )
     group.add_argument(
         "--apply",
@@ -412,7 +421,7 @@ def main() -> int:
     conn = open_db(args.db)
     try:
         if args.list_pending:
-            pending = _list_pending(conn, args.ticker)
+            pending = list_pending_documents(conn, args.ticker)
             print(json.dumps({"pending_count": len(pending), "documents": pending}, indent=2))
             return 0
 

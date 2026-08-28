@@ -34,6 +34,7 @@ from pathlib import Path
 import pytest
 
 from alerts.store import compute_signature_sha
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from triggers import KpiInflectionTrigger, UserStateContext
 from triggers.base import AlertDraft, Cadence, ThesisAnchor, Trigger, TriggerCandidate
 from user_state.registry import list_kpis, upsert_kpi
@@ -193,6 +194,7 @@ def _seed_kpi_facts(
             + "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (ticker, period_end, fpt, kd_id, value, unit, 1),
         )
+    admit_all_kpi_facts(conn)
     conn.commit()
 
 

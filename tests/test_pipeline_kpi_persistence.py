@@ -22,6 +22,15 @@ from pipeline.kpi_persistence import (
     reconcile_unit,
     record_validation_issue,
 )
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+)
 
 _KPI_FACTS_LOGICAL_UNIQUE = (
     "CREATE UNIQUE INDEX uq_kpi_facts_logical "
@@ -76,7 +85,30 @@ def _create_schema(conn: sqlite3.Connection, *, legacy_logical_unique: bool = Fa
             source_doc_id INTEGER NOT NULL,
             confidence FLOAT NOT NULL DEFAULT 1.0,
             extracted_by TEXT,
+            source_excerpt TEXT,
             supersedes_id INTEGER
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            supersedes_context_id INTEGER,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL,
+            publication_lane TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL,
+            consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,
+            unit_scale TEXT NOT NULL,
+            source_row_label TEXT,
+            source_column_header TEXT,
+            source_value_text TEXT,
+            status TEXT NOT NULL,
+            reason_code TEXT,
+            reviewed_by TEXT NOT NULL,
+            knowledge_at TEXT NOT NULL,
+            UNIQUE(kpi_fact_id, revision)
         );
         CREATE TABLE validation_issues (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,6 +201,83 @@ def test_persist_manifest_inserts_kpi_facts(conn: sqlite3.Connection) -> None:
     assert values == {Decimal("96"), Decimal("56")}
 
 
+def test_persist_manifest_normalizes_and_retains_scaled_count_source(
+    conn: sqlite3.Connection,
+) -> None:
+    context = KpiSemanticContext(
+        metric_name_as_reported="Customers",
+        reported_period_end=datetime(2024, 12, 31).date(),
+        period_role=KpiPeriodRole.CURRENT,
+        publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+        accounting_basis=KpiAccountingBasis.MANAGEMENT,
+        consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+        dimensions={},
+        unit_scale=KpiUnitScale.MILLIONS,
+        status=KpiSemanticStatus.ADMITTED,
+    )
+    manifest = KpiExtractionManifest(
+        ticker="NU",
+        period_end=datetime(2024, 12, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=42,
+        primary_source=SourceType.IR_DOC,
+        values=[
+            KpiValue(
+                name="Customers",
+                value=Decimal("114"),
+                unit=Unit.COUNT,
+                source_excerpt="Customers reached 114 million",
+                source_value_text="114",
+                locator=FactLocator(verbatim_snippet="Customers reached 114 million"),
+                semantic_context=context,
+            )
+        ],
+    )
+
+    assert persist_manifest(conn, run_id="count-scale", manifest=manifest).inserted == 1
+    fact = conn.execute("SELECT value,source_excerpt FROM kpi_facts").fetchone()
+    semantic = conn.execute(
+        "SELECT unit_scale,source_value_text FROM kpi_fact_semantic_contexts"
+    ).fetchone()
+    assert Decimal(str(fact["value"])) == Decimal("114000000")
+    assert fact["source_excerpt"] == "Customers reached 114 million"
+    assert tuple(semantic) == ("millions", "114")
+
+
+def test_persist_manifest_rejects_admitted_scaled_count_without_exact_source_token(
+    conn: sqlite3.Connection,
+) -> None:
+    context = KpiSemanticContext(
+        metric_name_as_reported="Customers",
+        reported_period_end=datetime(2024, 12, 31).date(),
+        period_role=KpiPeriodRole.CURRENT,
+        publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+        accounting_basis=KpiAccountingBasis.MANAGEMENT,
+        consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+        dimensions={},
+        unit_scale=KpiUnitScale.MILLIONS,
+        status=KpiSemanticStatus.ADMITTED,
+    )
+    value = KpiValue(
+        name="Customers",
+        value=Decimal("114"),
+        unit=Unit.COUNT,
+        source_excerpt="Customers reached 114 million",
+        locator=FactLocator(verbatim_snippet="Customers reached 114 million"),
+        semantic_context=context,
+    )
+    manifest = KpiExtractionManifest(
+        ticker="NU",
+        period_end=datetime(2024, 12, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=42,
+        primary_source=SourceType.IR_DOC,
+        values=[value],
+    )
+    with pytest.raises(ValueError, match="requires exact source value text"):
+        persist_manifest(conn, run_id="count-scale-missing", manifest=manifest)
+
+
 def test_persist_manifest_dedupes_on_rerun(conn: sqlite3.Connection) -> None:
     """Re-running the same manifest is a no-op (UNIQUE index dedupes)."""
     manifest = KpiExtractionManifest(
@@ -233,11 +342,8 @@ def test_record_validation_issue_inserts_row(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cumulative-series sanity guard (red-team PR2 item 4,
-# directives/monthly_red_team.md Phase 1 "KPI series sanity"). "Total
-# customers" is the explicit allowlist marker (pipeline.kpi_persistence.
-# _CUMULATIVE_KPI_NAME_MARKERS) — matches "Total customers", "Total customers
-# (millions)", etc. via the normalized-name substring check.
+# Name-agnostic series anomaly controls. A label never declares monotonicity;
+# extreme adjacent scale discontinuities are retained but quarantined.
 # ---------------------------------------------------------------------------
 
 
@@ -277,10 +383,7 @@ def test_persist_manifest_allows_normal_cumulative_growth(conn: sqlite3.Connecti
     assert result.validation_issues == 0
 
 
-def test_persist_manifest_rejects_non_monotonic_cumulative_kpi(conn: sqlite3.Connection) -> None:
-    """A later print with a LOWER value than its prior print is rejected — a
-    cumulative series should never decrease. NEVER guess-fixed; the row is
-    skipped and a NON_MONOTONIC_CUMULATIVE validation_issue is raised."""
+def test_persist_manifest_does_not_infer_monotonicity_from_name(conn: sqlite3.Connection) -> None:
     persist_manifest(
         conn,
         run_id="r1",
@@ -295,21 +398,16 @@ def test_persist_manifest_rejects_non_monotonic_cumulative_kpi(conn: sqlite3.Con
             period_end=datetime(2025, 6, 30), value=Decimal("95"), source_doc_id=2
         ),
     )
-    assert result.inserted == 0
-    assert result.validation_issues == 1
-    issue = dict(conn.execute("SELECT rule, severity, expected FROM validation_issues").fetchone())
-    assert issue["rule"] == ValidationRule.NON_MONOTONIC_CUMULATIVE.value
-    assert issue["severity"] == Severity.WARN.value
-    assert "non-monotonic" in issue["expected"].lower()
-    # And the bad value never landed in kpi_facts.
+    assert result.inserted == 1
+    assert result.validation_issues == 0
     rows = conn.execute("SELECT value FROM kpi_facts").fetchall()
-    assert [float(dict(r)["value"]) for r in rows] == [119.0]
+    assert [float(dict(r)["value"]) for r in rows] == [119.0, 95.0]
 
 
-def test_persist_manifest_rejects_unit_jump_cumulative_kpi(conn: sqlite3.Connection) -> None:
+def test_persist_manifest_quarantines_unit_jump_without_guess_fix(conn: sqlite3.Connection) -> None:
     """A raw-count row landing inside a millions-scale series (>1000x jump) —
     the exact NU 'Total customers' def 641 corruption the red-team audit
-    found — is rejected as a MAGNITUDE_JUMP, never silently stored."""
+    found — is retained with a MAGNITUDE_JUMP finding, never rescaled."""
     persist_manifest(
         conn,
         run_id="r1",
@@ -324,19 +422,19 @@ def test_persist_manifest_rejects_unit_jump_cumulative_kpi(conn: sqlite3.Connect
             period_end=datetime(2025, 6, 30), value=Decimal("114000000"), source_doc_id=2
         ),
     )
-    assert result.inserted == 0
+    assert result.inserted == 1
     assert result.validation_issues == 1
     issue = dict(conn.execute("SELECT rule, expected FROM validation_issues").fetchone())
     assert issue["rule"] == ValidationRule.MAGNITUDE_JUMP.value
     assert "unit discontinuity" in issue["expected"].lower()
+    values = [float(row[0]) for row in conn.execute("SELECT value FROM kpi_facts ORDER BY id")]
+    assert values == [119.0, 114000000.0]
 
 
-def test_persist_manifest_guard_checks_backfill_against_later_print_too(
+def test_persist_manifest_backfill_does_not_guess_monotonicity(
     conn: sqlite3.Connection,
 ) -> None:
-    """Backfilling an EARLIER period that would sit ABOVE an already-stored
-    LATER print is also rejected — the guard checks both neighbors, not just
-    'is this newer than the latest row'."""
+    """A backfill above a later print remains source evidence without an invariant."""
     persist_manifest(
         conn,
         run_id="r1",
@@ -352,16 +450,11 @@ def test_persist_manifest_guard_checks_backfill_against_later_print_too(
             period_end=datetime(2025, 3, 31), value=Decimal("115"), source_doc_id=2
         ),
     )
-    assert result.inserted == 0
-    assert result.validation_issues == 1
-    issue = dict(conn.execute("SELECT rule FROM validation_issues").fetchone())
-    assert issue["rule"] == ValidationRule.NON_MONOTONIC_CUMULATIVE.value
+    assert result.inserted == 1
+    assert result.validation_issues == 0
 
 
-def test_cumulative_guard_scoped_to_marked_kpis_only(conn: sqlite3.Connection) -> None:
-    """A non-cumulative KPI (not on the allowlist) that decreases QoQ is
-    unaffected — the guard only applies to KPIs matching the cumulative
-    markers (e.g. "Total customers"), never a blanket monotonicity rule."""
+def test_unfamiliar_metric_name_is_not_used_as_a_semantic_rule(conn: sqlite3.Connection) -> None:
     manifest1 = KpiExtractionManifest(
         ticker="NU",
         period_end=datetime(2025, 3, 31),

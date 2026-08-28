@@ -74,6 +74,9 @@ class ValidationRule(StrEnum):
     # that demotion visible rather than silent (docs/design/
     # provenance_clickthrough.md §3.3, Phase C).
     HALLUCINATED_ANCHOR = "hallucinated_anchor"
+    # A KPI shown in an owner report or Facts & Metrics lacks an admitted,
+    # source-bound semantic context (period role/scope/basis/dimensions/scale).
+    KPI_SEMANTIC_CONTEXT = "kpi_semantic_context"
 
 
 class ValidationIssue(BaseModel):

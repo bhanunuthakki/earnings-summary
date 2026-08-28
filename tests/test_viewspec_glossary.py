@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from viewspec.engine import execute_view, metric_catalog
 from viewspec.glossary import (
     fin_definition,
@@ -72,6 +73,7 @@ def db(tmp_path: Path) -> Path:
         " value, unit, source_doc_id) VALUES ('TST', '2025-12-31 00:00:00', 'Q4', 7,"
         " 18.4, 'percent', 1)"
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
     return path

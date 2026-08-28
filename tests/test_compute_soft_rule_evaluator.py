@@ -41,6 +41,19 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             unit TEXT NOT NULL,
             source_doc_id INTEGER NOT NULL
         );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            supersedes_context_id INTEGER,
+            metric_name_as_reported TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL,
+            consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,
+            unit_scale TEXT NOT NULL,
+            publication_lane TEXT NOT NULL,
+            status TEXT NOT NULL
+        );
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -114,11 +127,19 @@ def _seed_kpi(
     ).fetchone()["id"]
     for i, v in enumerate(values):
         quarter = f"Q{(i % 4) + 1}"
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
             "kpi_definition_id, value, unit, source_doc_id) "
             "VALUES (?, ?, ?, ?, ?, 'percent', 1)",
             (ticker.upper(), _quarter_end(i, start=start), quarter, kpi_id, float(v)),
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, revision, supersedes_context_id, metric_name_as_reported, "
+            "accounting_basis, consolidation_scope, dimensions_json, unit_scale, "
+            "publication_lane, status) VALUES (?, 1, NULL, ?, 'management', "
+            "'consolidated', '{}', 'none', 'current_actual', 'admitted')",
+            (cursor.lastrowid, kpi_name),
         )
     conn.commit()
 
@@ -215,6 +236,68 @@ def test_series_below_unresolved_on_insufficient_data(conn: sqlite3.Connection) 
     """Fewer observations than periods → UNRESOLVED (never silently GREEN) with
     explanatory evidence — red-team PR2's "never silently green" contract."""
     _seed_kpi(conn, "VEEV", "Non-GAAP operating margin", [37])
+    rule = SoftRule(
+        name="margin_floor_2q",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={
+                "metric": "Non-GAAP operating margin",
+                "source": "kpi",
+                "threshold": 40,
+                "periods": 2,
+            },
+        ),
+    )
+    [result] = evaluate_soft_rules("VEEV", [rule], conn)
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert "insufficient" in result.evidence.lower()
+
+
+def test_kpi_series_is_unresolved_when_latest_replacement_is_unadmitted(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_kpi(conn, "VEEV", "Non-GAAP operating margin", [42, 41])
+    kpi_id = conn.execute(
+        "SELECT id FROM kpi_definitions WHERE ticker='VEEV' AND name=?",
+        ("Non-GAAP operating margin",),
+    ).fetchone()["id"]
+    latest_period = _quarter_end(1)
+    conn.execute(
+        "INSERT INTO kpi_facts "
+        "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES ('VEEV', ?, 'Q2', ?, 39, 'percent', 2)",
+        (latest_period, kpi_id),
+    )
+    conn.commit()
+    rule = SoftRule(
+        name="margin_floor_2q",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={
+                "metric": "Non-GAAP operating margin",
+                "source": "kpi",
+                "threshold": 40,
+                "periods": 2,
+            },
+        ),
+    )
+    [result] = evaluate_soft_rules("VEEV", [rule], conn)
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert "insufficient" in result.evidence.lower()
+
+
+def test_kpi_series_is_unresolved_when_scalar_override_is_active(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_kpi(conn, "VEEV", "Non-GAAP operating margin", [42, 41])
+
+    def _active_override(*_args: object, **_kwargs: object) -> dict[tuple[str, str], object]:
+        return {("2022-06-30", "Q2"): object()}
+
+    monkeypatch.setattr(
+        "compute.soft_rule_evaluator.active_scalar_override_map",
+        _active_override,
+    )
     rule = SoftRule(
         name="margin_floor_2q",
         predicate=SoftRulePredicate(

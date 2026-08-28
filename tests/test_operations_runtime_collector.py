@@ -619,6 +619,116 @@ def test_scheduler_probe_preserves_canonical_unexpected_tasks_and_excludes_other
     assert rows[unexpected] == "Running"
 
 
+def test_scheduler_vnext_probe_hashes_registration_and_preserves_run_history(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from execution import collect_operations_runtime_observations as collector
+
+    registry = build_operations_registry(PROJECT_ROOT)
+    task = registry.scheduled_tasks[0]
+    calls = 0
+
+    def completed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        nonlocal calls
+        calls += 1
+        stdout = cast(BinaryIO, kwargs["stdout"])
+        if calls == 1:
+            stdout.write(
+                f'"TaskName","Next Run Time","Status"\n"{task.task_name}","N/A","Ready"\n'.encode()
+            )
+        else:
+            stdout.write(
+                json.dumps(
+                    [
+                        {
+                            "task_name": task.task_name,
+                            "state": "Ready",
+                            "execute": rf"C:\private\earnings-summary\cron\{task.wrapper}",
+                            "arguments": "",
+                            "working_directory": r"C:\private\earnings-summary\cron",
+                            "last_run_time": "2026-08-20T07:55:00+00:00",
+                            "next_run_time": "2026-08-21T07:55:00+00:00",
+                            "last_task_result": 0,
+                        }
+                    ]
+                ).encode()
+            )
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(collector.subprocess, "run", completed)
+
+    probe = collect_scheduler_tasks_from_system()
+    receipt = collect_scheduler_receipt(registry, OBSERVED_AT, probe=probe)
+    assert receipt.schema_version == "3"
+    assert receipt.last_successful is not None
+    row = next(item for item in receipt.last_successful.tasks if item.task_name == task.task_name)
+    assert row.registered_action_sha256 is not None
+    assert row.registered_checkout_sha256 is not None
+    assert row.registered_wrapper_sha256 is not None
+    assert row.wrapper_match is True
+    assert row.attempt_state == "succeeded"
+    assert row.last_attempted_at == datetime(2026, 8, 20, 7, 55, tzinfo=UTC)
+    assert row.last_successful_at == row.last_attempted_at
+    assert row.next_expected_at == datetime(2026, 8, 21, 7, 55, tzinfo=UTC)
+
+
+def test_scheduler_vnext_carries_success_only_for_same_registered_action(tmp_path: Path) -> None:
+    from execution import collect_operations_runtime_observations as collector
+
+    task_name = rf"{CANONICAL_TASK_NAMESPACE}morning"
+    prior_success = OBSERVED_AT - timedelta(days=1)
+    prior = SchedulerRuntimeReceipt.success(
+        observed_at=OBSERVED_AT - timedelta(hours=1),
+        tasks=(
+            SchedulerTaskReceipt(
+                task_name=task_name,
+                state="Ready",
+                registered_action_sha256="a" * 64,
+                last_attempted_at=prior_success,
+                last_successful_at=prior_success,
+                attempt_state="succeeded",
+            ),
+        ),
+    )
+    receipt_path = tmp_path / "scheduler.latest.json"
+    write_atomic_receipt(receipt_path, prior.model_dump_json())
+    current = SchedulerRuntimeReceipt.success(
+        observed_at=OBSERVED_AT,
+        tasks=(
+            SchedulerTaskReceipt(
+                task_name=task_name,
+                state="Ready",
+                registered_action_sha256="a" * 64,
+                last_attempted_at=OBSERVED_AT,
+                last_result=1,
+                attempt_state="failed",
+            ),
+        ),
+    )
+
+    merged = collector.retain_scheduler_task_successes(current, receipt_path)
+    assert merged.last_successful is not None
+    assert merged.last_successful.tasks[0].last_successful_at == prior_success
+
+    assert current.last_successful is not None
+    changed = current.model_copy(
+        update={
+            "last_successful": SchedulerReceipt(
+                observed_at=OBSERVED_AT,
+                tasks=(
+                    current.last_successful.tasks[0].model_copy(
+                        update={"registered_action_sha256": "b" * 64}
+                    ),
+                ),
+            )
+        }
+    )
+    not_merged = collector.retain_scheduler_task_successes(changed, receipt_path)
+    assert not_merged.last_successful is not None
+    assert not_merged.last_successful.tasks[0].last_successful_at is None
+
+
 @pytest.mark.parametrize(
     "payload",
     [

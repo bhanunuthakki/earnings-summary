@@ -11,6 +11,7 @@ import pytest
 
 from models.kpis import BreachStatus
 from pipeline.refresh_eval import refresh_for_tickers
+from tests.kpi_semantic_support import admit_all_kpi_facts
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -25,7 +26,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             sha256 TEXT NOT NULL,
             fetched_at TIMESTAMP NOT NULL,
             fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL
+            raw_bytes_size INTEGER NOT NULL,
+            source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
         );
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +86,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
 
 
@@ -99,8 +102,8 @@ def _seed_facts(conn: sqlite3.Connection, ticker: str) -> None:
     """Seed enough financial_facts to allow derivation."""
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
-        "sha256, fetched_at, fetch_status, raw_bytes_size) "
-        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1)",
+        "sha256, fetched_at, fetch_status, raw_bytes_size, source_quality_tier) "
+        "VALUES (?, 'sec_xbrl', 'sec_companyfacts', ?, ?, ?, 'ok', 1, 'sec_official')",
         (
             ticker,
             f"data/historical/fmp/{ticker}_income_statement_quarterly.json",

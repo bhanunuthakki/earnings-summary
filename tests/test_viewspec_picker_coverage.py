@@ -18,6 +18,7 @@ from pathlib import Path
 
 from compute.kpi_resolver import kpi_group_key
 from provenance.overrides import record_override
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from timeseries.loaders import load_segment_junction_series_with_provenance
 from viewspec.engine import execute_view, metric_catalog
 from viewspec.spec import ViewSpec
@@ -193,6 +194,7 @@ def test_catalog_surfaces_definition_origin(tmp_path: Path) -> None:
     )
     conn.execute(kpi, ("TST", "2025-09-30 00:00:00", "Q3", 1, "11", "percent", 1))
     conn.execute(kpi, ("TST", "2025-09-30 00:00:00", "Q3", 2, "0.5", "actual", 1))
+    admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
 
@@ -213,6 +215,7 @@ def test_catalog_tolerates_pre_0113_db(tmp_path: Path) -> None:
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id,"
         " value, unit, source_doc_id) VALUES ('TST','2025-09-30 00:00:00','Q3',1,'11','percent',1)"
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
 
@@ -453,6 +456,7 @@ def _seed_kpis(
                 " value, unit, source_doc_id) VALUES (?,?,?,?,?,?,1)",
                 (ticker, pe, f"Q{(f % 4) + 1}", i, str(10.0 + f), "actual"),
             )
+    admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
 
@@ -462,7 +466,8 @@ def test_kpi_group_key() -> None:
     assert kpi_group_key(f"Net Interest Income (Details){_SEP}Net interest margin") == (
         "net interest margin"
     )
-    assert kpi_group_key("Net interest margin (annualized)") == "net interest margin"
+    assert kpi_group_key("Net interest margin (%)") == "net interest margin"
+    assert kpi_group_key("Net interest margin (annualized)") != "net interest margin"
     assert kpi_group_key("Net interest margin") == "net interest margin"
     # A generic single-word leaf is NOT peeled — distinct metrics keep distinct
     # keys (no false merge).
@@ -526,9 +531,9 @@ def test_catalog_origin_marks_capture_unless_any_analyst(tmp_path: Path) -> None
     db = tmp_path / "defrag_origin.db"
     _seed_kpis(
         db,
-        [("NU", "Net interest margin", 3), ("MELI", "Net interest margin (annualized)", 2)],
+        [("NU", "Net interest margin", 3), ("MELI", "Net interest margin (%)", 2)],
         with_origin=True,
-        origins={"Net interest margin": "analyst", "Net interest margin (annualized)": "capture"},
+        origins={"Net interest margin": "analyst", "Net interest margin (%)": "capture"},
     )
     cat = metric_catalog(db, ["NU", "MELI"])
     (nim,) = [e for e in cat["kpi"] if str(e["label"]).startswith("Net interest margin")]

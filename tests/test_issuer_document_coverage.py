@@ -30,6 +30,7 @@ from provenance.source_coverage import IssuerFactCoverageReceiptRecord, SourceCo
 from report.rules import TickerRules
 from report.sections.financials import kpi_series_for
 from report.sections.segments import apply_segment_rules, build_grids, prefer_issuer_rows
+from tests.kpi_semantic_support import admit_all_kpi_facts
 
 
 def _conn() -> sqlite3.Connection:
@@ -987,6 +988,7 @@ def test_report_kpi_reader_prefers_issuer_document_over_later_vendor_row() -> No
             "(id, ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, currency, source_doc_id) "
             "VALUES (2, 'NU', '2026-06-30', 'Q2', 1, '90', 'actual', 'USD', 2)"
         )
+        admit_all_kpi_facts(conn)
         series = kpi_series_for(conn, "NU", "Monthly active customers", ["2026 Q2"], ["2026 Q2"])
         assert series is not None
         assert series.values == [100.0]
@@ -1016,10 +1018,11 @@ def test_report_kpi_reconciles_aliases_before_tier_first_selection() -> None:
             definition_id=2,
             fact_id=2,
             ticker="MELI",
-            name="Total Payment Volume (USD)",
+            name="Total Payment Volume",
             value="1000",
             doc_id=2,
         )
+        admit_all_kpi_facts(conn)
         series = kpi_series_for(conn, "MELI", "Total Payment Volume", ["2026 Q2"], ["2026 Q2"])
         assert series is not None
         # Higher quality vendor source wins; issuer origin only resolves a tie.

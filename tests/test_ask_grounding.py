@@ -83,6 +83,19 @@ CREATE TABLE kpi_facts (
     value TEXT NOT NULL, unit TEXT NOT NULL DEFAULT 'actual',
     source_doc_id INTEGER NOT NULL
 );
+CREATE TABLE kpi_fact_semantic_contexts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kpi_fact_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    supersedes_context_id INTEGER,
+    status TEXT NOT NULL,
+    publication_lane TEXT NOT NULL,
+    metric_name_as_reported TEXT NOT NULL,
+    accounting_basis TEXT NOT NULL,
+    consolidation_scope TEXT NOT NULL,
+    dimensions_json TEXT NOT NULL,
+    unit_scale TEXT NOT NULL
+);
 CREATE TABLE transcripts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER NOT NULL, ticker TEXT NOT NULL,
@@ -187,11 +200,18 @@ def repo(tmp_path: Path) -> Path:
         " VALUES (7, 'TST', 'Total Customers (millions)', 'millions')"
     )
     for pe, fpt, v in [("2025-09-30 00:00:00", "Q3", 110.0), ("2025-06-30 00:00:00", "Q2", 104.0)]:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type,"
             " kpi_definition_id, value, unit, source_doc_id) VALUES ('TST', ?, ?, 7, ?,"
             " 'millions', 1)",
             (pe, fpt, v),
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts (kpi_fact_id,status,publication_lane,"
+            "metric_name_as_reported,accounting_basis,consolidation_scope,dimensions_json,"
+            "unit_scale) VALUES (?, 'admitted', 'current_actual', ?, 'management',"
+            "'consolidated', '{}', 'millions')",
+            (cursor.lastrowid, "Total Customers (millions)"),
         )
     conn.execute(
         "INSERT INTO transcripts (id, document_id, ticker, fiscal_period_type, period_end)"
@@ -293,11 +313,22 @@ def _insert_kpi(repo: Path, def_id: int, name: str, value: float, unit: str = "p
             "INSERT INTO kpi_definitions (id, ticker, name, unit) VALUES (?, 'TST', ?, ?)",
             (def_id, name, unit),
         )
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type,"
             " kpi_definition_id, value, unit, source_doc_id)"
             " VALUES ('TST', '2025-09-30 00:00:00', 'Q3', ?, ?, ?, 1)",
             (def_id, value, unit),
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts (kpi_fact_id,status,publication_lane,"
+            "metric_name_as_reported,accounting_basis,consolidation_scope,dimensions_json,"
+            "unit_scale) VALUES (?, 'admitted', 'current_actual', ?, 'management',"
+            "'consolidated', '{}', ?)",
+            (
+                cursor.lastrowid,
+                name,
+                unit if unit in {"thousands", "millions", "billions"} else "none",
+            ),
         )
         conn.commit()
     finally:

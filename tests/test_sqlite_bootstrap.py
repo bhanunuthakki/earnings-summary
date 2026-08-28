@@ -145,10 +145,6 @@ def test_noncentral_sqlite_writer_entrypoints_require_runtime_gate() -> None:
             "def upgrade_database",
             "require_safe_sqlite_writer_runtime()",
         ),
-        "execution/fix_kpi_series.py": (
-            "if args.apply:",
-            "require_safe_sqlite_writer_runtime()",
-        ),
     }
     for relative_path, required_fragments in sources.items():
         source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")

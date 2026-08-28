@@ -36,20 +36,37 @@ _DIRECT_READ = re.compile(
     re.IGNORECASE,
 )
 
-# Pre-v2 mutation debt.  New production code must use SourceFactRepository.
+# Pre-v2 mutation debt. New general production code must use SourceFactRepository.
 _DIRECT_MUTATION_DEBT = frozenset(
     {
-        "execution/backfill_fiscal_period_stamps.py",
-        "execution/backfill_ir_deck_locators.py",
         "execution/db_gc.py",
-        "execution/fix_kpi_series.py",
-        "execution/mark_kpi_cadence.py",
-        "execution/process_report_comments.py",
         "src/ir_pipeline/ingest.py",
         "src/pipeline/kpi_persistence.py",
         "src/pipeline/restatement_detector.py",
     }
 )
+
+
+@dataclass(frozen=True)
+class _GovernedRepairMutationSurface:
+    function_name: str
+    mutation_count: int
+    retirement_criterion: str
+
+
+# One exact, append-only correction seam remains at the legacy boundary until
+# canonical source facts own KPI persistence. It is not a general extension
+# point: the test below freezes its function, write count, and retirement gate.
+_GOVERNED_REPAIR_MUTATION_SURFACES = {
+    "src/pipeline/kpi_source_review.py": _GovernedRepairMutationSurface(
+        function_name="insert_source_reviewed_kpi_supersession",
+        mutation_count=1,
+        retirement_criterion=(
+            "Retire after source-reviewed KPI corrections write directly to the canonical "
+            "source-fact plane and the legacy kpi_facts projection is trigger-owned."
+        ),
+    )
+}
 _DYNAMIC_MUTATION_DEBT = frozenset({"src/pipeline/confidence.py"})
 _RESTATEMENT_HELPER_DEBT = frozenset(
     {
@@ -65,6 +82,11 @@ _RESTATEMENT_HELPER_DEBT = frozenset(
 AUDITED_LEGACY_FACT_READS = {
     "execution/backfill_fiscal_period_stamps.py": 1,
     "execution/backfill_ir_deck_locators.py": 2,
+    # The source-reviewed repair executor deliberately checks the old row,
+    # supersession head, exact inserted successor, replay head, and crash-
+    # recovery postcondition at the legacy boundary. These are repair guards,
+    # not an analytical/product reader, and remain frozen here until cutover.
+    "execution/apply_kpi_semantic_refresh.py": 6,
     "execution/daily_fetch_and_brief.py": 2,
     # The eighth literal is an EXPLAIN QUERY PLAN safety probe that proves the
     # supersedes self-FK lookup uses the migration-owned index before deletion;
@@ -73,8 +95,7 @@ AUDITED_LEGACY_FACT_READS = {
     # attempts-grid cascade (2026-08-03 adversarial review, #7): a period
     # keeping ANY fact keeps its grid row.
     "execution/db_gc.py": 9,
-    "execution/extract_kpis_from_ir.py": 1,
-    "execution/fix_kpi_series.py": 2,
+    "execution/fix_kpi_series.py": 1,
     "execution/fmp_backpop.py": 1,
     "execution/grade_predictions.py": 1,
     "execution/mark_kpi_cadence.py": 2,
@@ -83,48 +104,50 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/prune_misscaled_capture_facts.py": 1,
     "execution/retype_misfiled_sec_ir_docs.py": 2,
     "src/allocation/eligibility.py": 1,
-    "src/ask/grounding.py": 5,
+    "src/ask/grounding.py": 3,
     "src/bear_case_grader.py": 1,
     "src/cockpit_fundamentals.py": 2,
     "src/competitive/holdings_sync.py": 1,
-    "src/compute/fmp_derived_kpis.py": 3,
+    "src/compute/fmp_derived_kpis.py": 1,
     # Shared fact-aware unit resolution moved this existing read out of the
     # seeding CLI so Ask approval and seeding use one deterministic authority.
     "src/compute/kpi_definition_units.py": 1,
     "src/compute/kpi_extract_summaries.py": 3,
-    "src/compute/kpi_resolver.py": 4,
     "src/compute/metrics_engine/io.py": 8,
     "src/compute/say_do.py": 1,
     "src/compute/segment_q4_derive.py": 1,
     "src/compute/segment_quarterly_10q.py": 1,
     "src/compute/segments.py": 1,
-    "src/compute/soft_rule_evaluator.py": 2,
-    "src/compute/thesis_evaluator.py": 2,
+    "src/compute/soft_rule_evaluator.py": 1,
     "src/credibility/observations.py": 3,
     "src/dcf/fact_drivers.py": 1,
     "src/decision_conditions.py": 4,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/key_metrics.py": 1,
-    "src/pipeline/kpi_persistence.py": 3,
+    "src/pipeline/kpi_persistence.py": 4,
+    # Exact predecessor/head reads guard the one governed append-only repair
+    # write. They are not product analytics and retire with that write seam.
+    "src/pipeline/kpi_source_review.py": 2,
     "src/pipeline/peeks.py": 3,
-    "src/pipeline/quarterly_refresh.py": 1,
     "src/pipeline/reader_tier_audit.py": 1,
-    "src/pipeline/research_cockpit.py": 1,
     "src/pipeline/restatement_detector.py": 8,
     "src/pipeline/issuer_document_coverage.py": 3,
     "src/pipeline/restatements_panel.py": 4,
-    "src/pipeline/validation_engine.py": 4,
+    "src/pipeline/validation_engine.py": 5,
     "src/provenance/financial_fact_resolution.py": 2,
     "src/provenance/integrity_audit.py": 1,
     "src/provenance/legacy_canonical_parity.py": 2,
     "src/report/metrics_view.py": 1,
     "src/report/sections/financials.py": 2,
-    "src/report/sections/thesis.py": 1,
     "src/synthesis/lenses/_shared.py": 1,
-    "src/timeseries/loaders.py": 10,
+    # Admitted semantic persistence validates the exact legacy projection row's
+    # stored unit before appending context. This is a write-boundary guard, not
+    # an analytical reader, and retires with the legacy KPI projection.
+    "src/pipeline/kpi_semantics.py": 1,
+    "src/timeseries/loaders.py": 5,
     "src/triggers/kpi_inflection.py": 1,
     "src/user_state/kpi_catalog.py": 1,
-    "src/viewspec/engine.py": 2,
+    "src/viewspec/engine.py": 1,
 }
 
 
@@ -257,8 +280,29 @@ def _legacy_read_count(path: Path) -> int:
 
 
 def test_no_new_direct_legacy_fact_mutation_surface() -> None:
-    assert _matching_files(_DIRECT_MUTATION) <= _DIRECT_MUTATION_DEBT
+    governed = frozenset(_GOVERNED_REPAIR_MUTATION_SURFACES)
+    assert _matching_files(_DIRECT_MUTATION) <= _DIRECT_MUTATION_DEBT | governed
     assert _dynamic_legacy_mutation_files() <= _DYNAMIC_MUTATION_DEBT
+
+
+def test_governed_repair_mutation_surface_is_narrow_and_retirable() -> None:
+    assert _GOVERNED_REPAIR_MUTATION_SURFACES
+    for relative, surface in _GOVERNED_REPAIR_MUTATION_SURFACES.items():
+        path = ROOT / relative
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        functions = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == surface.function_name
+        ]
+        assert len(functions) == 1, f"governed repair writer moved: {relative}"
+        mutation_count = sum(
+            len(_DIRECT_MUTATION.findall(child.value))
+            for child in ast.walk(functions[0])
+            if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        )
+        assert mutation_count == surface.mutation_count
+        assert surface.retirement_criterion.startswith("Retire after ")
 
 
 def test_no_new_legacy_restatement_helper_consumers() -> None:

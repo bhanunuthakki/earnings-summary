@@ -5,17 +5,20 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from models.facts import Unit
 from models.validation import Severity, ValidationRule
+from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 from pipeline.validation_engine import (
     _check_financial_fact_ranges,
     _check_kpi_fact_ranges,
     _check_magnitude_jumps,
     _check_source_disagreement,
     _scan_series_for_jumps,
+    check_kpi_semantic_coverage,
     run_all_checks,
 )
 
@@ -401,8 +404,57 @@ def test_source_disagreement_fires_when_fmp_vs_sec_diverge(conn: sqlite3.Connect
     assert outcome.issues_inserted == 1
 
 
+def test_owner_visible_legacy_unknown_kpi_halts_semantic_gate(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doc_id = _doc(conn, "NU", source_type="ir_doc")
+    _kpi(
+        conn,
+        ticker="NU",
+        name="Total customers",
+        unit="millions",
+        value=114.2,
+        period_end=datetime(2024, 12, 31),
+        source_doc_id=doc_id,
+    )
+
+    def _scoped(_conn: sqlite3.Connection, *, repo_root: Path) -> tuple[ScopedKpiDefinition, ...]:
+        del repo_root
+        return (
+            ScopedKpiDefinition(
+                ticker="NU",
+                name="Total customers",
+                kpi_definition_id=1,
+                reasons=("owner_visible",),
+                fact_count=1,
+                admitted_context_count=0,
+                missing_context_count=0,
+                quarantined_context_count=0,
+                legacy_unknown_context_count=1,
+                current_actual_count=0,
+                comparator_count=0,
+                guidance_target_count=0,
+                management_explanation_count=0,
+                analyst_question_count=0,
+            ),
+        )
+
+    monkeypatch.setattr("pipeline.validation_engine.scoped_kpi_definitions", _scoped)
+
+    outcome = check_kpi_semantic_coverage(conn, run_id="semantic-gate", ticker="NU")
+
+    assert outcome.issues_inserted == 1
+    issue = conn.execute(
+        "SELECT severity,rule,raw_value FROM validation_issues WHERE run_id='semantic-gate'"
+    ).fetchone()
+    assert issue is not None
+    assert issue[0] == Severity.HALT.value
+    assert issue[1] == ValidationRule.KPI_SEMANTIC_CONTEXT.value
+    assert "legacy_unknown=1" in str(issue[2])
+
+
 def test_run_all_checks_executes_every_rule(conn: sqlite3.Connection) -> None:
-    """Smoke test: empty DB -> all 4 outcomes returned with 0 issues."""
+    """Smoke test: empty DB -> every registered outcome returns 0 issues."""
     report = run_all_checks(conn, run_id="r1", ticker=None)
-    assert len(report.outcomes) == 4
+    assert len(report.outcomes) == 5
     assert all(o.issues_inserted == 0 for o in report.outcomes)

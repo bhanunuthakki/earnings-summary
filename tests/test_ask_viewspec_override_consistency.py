@@ -7,12 +7,13 @@ kpi_facts/financial_facts with NO override overlay, so ask answered the STALE FM
 number while the report (which DOES overlay) showed the CORRECTED company-doc
 figure.
 
-These tests seed an active ``replace`` (and a ``drop``) override and prove the
-overridden value now flows through ALL THREE surfaces identically:
+These tests seed active ``replace`` and ``drop`` overrides and prove the
+surfaces follow the same authority contract:
 
-* ask narrative  — ``gather_evidence`` fact text + cited chip source,
-* ViewSpec/DIY   — ``execute_view`` + ``load_*_series_with_provenance``,
-* report         — ``load_financial_series`` (the financials section's reader).
+* financial-fact overrides remain visible consistently in ask, ViewSpec, and
+  report readers;
+* unreviewed KPI scalar overrides are decision-grade unresolved everywhere
+  until a source-reviewed superseding fact has its own admitted semantic head.
 
 The chip must describe the WINNING (override) row, never the FMP row whose value
 was superseded — value/chip divergence is exactly what these readers prevent.
@@ -116,6 +117,19 @@ _SCHEMA_DDL = (
         extracted_by TEXT,
         computed_from TEXT
     );
+    CREATE TABLE kpi_fact_semantic_contexts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kpi_fact_id INTEGER NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1,
+        supersedes_context_id INTEGER,
+        status TEXT NOT NULL,
+        publication_lane TEXT NOT NULL,
+        metric_name_as_reported TEXT NOT NULL,
+        accounting_basis TEXT NOT NULL,
+        consolidation_scope TEXT NOT NULL,
+        dimensions_json TEXT NOT NULL,
+        unit_scale TEXT NOT NULL
+    );
     CREATE TABLE financial_facts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ticker TEXT NOT NULL,
@@ -198,7 +212,7 @@ def _seed_revenue_override(conn: sqlite3.Connection, *, action: OverrideAction) 
     conn.commit()
 
 
-def _seed_kpi_override(conn: sqlite3.Connection) -> None:
+def _seed_kpi_override(conn: sqlite3.Connection, *, action: OverrideAction) -> None:
     overrides.record_override(
         conn,
         ticker="GOOG",
@@ -206,11 +220,25 @@ def _seed_kpi_override(conn: sqlite3.Connection) -> None:
         fiscal_period_type="Q4",
         fact_kind=overrides.KPI,
         fact_key=_KPI,
-        action=OverrideAction.REPLACE,
-        value=_OV_GCP_GROWTH_Q4,
+        action=action,
+        value=_OV_GCP_GROWTH_Q4 if action is OverrideAction.REPLACE else None,
         unit="percent",
         source_doc_type="ir_press_release",
         created_by="test",
+    )
+    conn.commit()
+
+
+def _classify_kpi_facts(conn: sqlite3.Connection, *, status: str) -> None:
+    rows = conn.execute(
+        "SELECT id,period_end FROM kpi_facts WHERE kpi_definition_id=1 ORDER BY id"
+    ).fetchall()
+    conn.executemany(
+        "INSERT INTO kpi_fact_semantic_contexts (kpi_fact_id,status,publication_lane,"
+        "metric_name_as_reported,accounting_basis,consolidation_scope,dimensions_json,"
+        "unit_scale) VALUES (?, ?, 'current_actual', ?, 'management','consolidated',"
+        "'{}', 'none')",
+        [(int(row[0]), status, _KPI) for row in rows],
     )
     conn.commit()
 
@@ -253,6 +281,16 @@ def _ask_kpi_item(db: Path):
         scope_tickers=["GOOG"],
     )
     return next((i for i in items if i.label == f"GOOG · {_KPI}"), None)
+
+
+def _ask_kpi_fact_ref_item(db: Path):
+    items = gather_evidence(
+        "GOOG Google Cloud revenue growth — kpi:GOOG:1",
+        repo_root=db.parent.parent,
+        db_path=db,
+        scope_tickers=["GOOG"],
+    )
+    return next((i for i in items if i.fact_ref == "kpi:GOOG:1"), None)
 
 
 def _viewspec_q4_cell(db: Path, metric: object):
@@ -327,21 +365,71 @@ def test_replace_override_agrees_across_ask_viewspec_report(db: Path) -> None:
     assert cell.raw == report_q4 == _OV_REVENUE_Q4
 
 
-def test_replace_override_kpi_agrees_ask_and_viewspec(db: Path) -> None:
+@pytest.mark.parametrize("action", [OverrideAction.REPLACE, OverrideAction.DROP])
+def test_unreviewed_kpi_override_fails_closed_across_all_readers(
+    db: Path, action: OverrideAction
+) -> None:
     conn = _conn(db)
-    _seed_kpi_override(conn)
+    _classify_kpi_facts(conn, status="admitted")
+    _seed_kpi_override(conn, action=action)
     conn.close()
 
-    item = _ask_kpi_item(db)
-    assert item is not None
-    assert "Q4'25 48" in item.text  # overridden
-    assert "Q4'25 75" not in item.text  # FMP value gone
-    assert "Q3'25 70" in item.text  # untouched quarter
+    assert _ask_kpi_item(db) is None
+    assert _ask_kpi_fact_ref_item(db) is None
+    result = execute_view(
+        ViewSpec.from_dict(
+            {
+                "tickers": ["GOOG"],
+                "metrics": [{"domain": "kpi", "key": _KPI}],
+                "transform": "level",
+                "cadence": "quarterly",
+                "periods": 8,
+            }
+        ),
+        db_path=db,
+    )
+    assert result.rows == []
+    assert result.warnings == [f"GOOG: no data for kpi:{_KPI}"]
+    assert load_kpi_series_with_provenance("GOOG", _KPI, db_path=db) == []
 
+
+def test_non_admitted_kpi_fails_closed_across_all_readers(db: Path) -> None:
+    conn = _conn(db)
+    _classify_kpi_facts(conn, status="quarantined")
+    conn.close()
+
+    assert _ask_kpi_item(db) is None
+    assert _ask_kpi_fact_ref_item(db) is None
+    result = execute_view(
+        ViewSpec.from_dict(
+            {
+                "tickers": ["GOOG"],
+                "metrics": [{"domain": "kpi", "key": _KPI}],
+                "transform": "level",
+                "cadence": "quarterly",
+                "periods": 8,
+            }
+        ),
+        db_path=db,
+    )
+    assert result.rows == []
+    assert load_kpi_series_with_provenance("GOOG", _KPI, db_path=db) == []
+
+
+def test_admitted_kpi_without_override_agrees_across_all_readers(db: Path) -> None:
+    conn = _conn(db)
+    _classify_kpi_facts(conn, status="admitted")
+    conn.close()
+
+    named = _ask_kpi_item(db)
+    pinned = _ask_kpi_fact_ref_item(db)
+    assert named is not None and "Q4'25 75" in named.text
+    assert pinned is not None and "Q4'25 75" in pinned.text
     cell = _viewspec_q4_cell(db, {"domain": "kpi", "key": _KPI})
-    assert cell.raw == _OV_GCP_GROWTH_Q4
-    assert cell.source is not None
-    assert cell.source.source == "ir_press_release"
+    assert cell.raw == _FMP_GCP_GROWTH_Q4
+    sourced = load_kpi_series_with_provenance("GOOG", _KPI, db_path=db)
+    q4 = next(row for row in sourced if str(row.period_end)[:10] == "2025-12-31")
+    assert q4.value == _FMP_GCP_GROWTH_Q4
 
 
 def test_with_provenance_loader_chip_describes_override(db: Path) -> None:
@@ -363,12 +451,10 @@ def test_with_provenance_loader_chip_describes_override(db: Path) -> None:
     assert q3.provenance["source"] == "fmp_normalized"
 
     kpi_conn = _conn(db)
-    _seed_kpi_override(kpi_conn)
+    _seed_kpi_override(kpi_conn, action=OverrideAction.REPLACE)
     kpi_conn.close()
     kpi_sourced = load_kpi_series_with_provenance("GOOG", _KPI, db_path=db)
-    kpi_q4 = next(o for o in kpi_sourced if str(o.period_end)[:10] == "2025-12-31")
-    assert kpi_q4.value == _OV_GCP_GROWTH_Q4
-    assert kpi_q4.provenance["source"] == "ir_press_release"
+    assert kpi_sourced == []
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +465,7 @@ def test_with_provenance_loader_chip_describes_override(db: Path) -> None:
 def test_drop_override_omits_period_across_surfaces(db: Path) -> None:
     conn = _conn(db)
     _seed_revenue_override(conn, action=OverrideAction.DROP)
+    _classify_kpi_facts(conn, status="admitted")
     conn.close()
 
     item = _ask_revenue_item(db)
@@ -386,8 +473,8 @@ def test_drop_override_omits_period_across_surfaces(db: Path) -> None:
     assert "Q4'25" not in item.text  # dropped from the narrative series
     assert "Q3'25" in item.text  # earlier quarters remain
 
-    # A two-metric view keeps the Q4'25 column alive (the KPI still has Q4), so
-    # the dropped revenue datum reads as an empty cell, not a vanished column.
+    # The admitted KPI keeps the Q4 column alive, so the financial drop must
+    # remain visible as an empty revenue cell rather than a vanished period.
     result = execute_view(
         ViewSpec.from_dict(
             {
@@ -402,7 +489,7 @@ def test_drop_override_omits_period_across_surfaces(db: Path) -> None:
     )
     idx = result.period_labels.index("Q4'25")
     rev_row = next(r for r in result.rows if r.metric.domain == "fin")
-    assert rev_row.cells[idx].raw is None  # dropped — no Q4 revenue datum
+    assert rev_row.cells[idx].raw is None
 
     series = load_financial_series("GOOG", "revenue", db_path=db)
     dates = {str(o.period_end)[:10] for o in series}

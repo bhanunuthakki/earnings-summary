@@ -28,13 +28,15 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from itertools import pairwise
+from pathlib import Path
 
 from models.facts import Unit
 from models.validation import Severity, ValidationRule
 from pipeline.kpi_persistence import record_validation_issue
+from pipeline.kpi_semantic_scope import scoped_kpi_definitions
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,24 @@ class _RangeBound:
     min_value: Decimal | None
     max_value: Decimal | None
     halt_threshold_multiplier: Decimal = Decimal(1000)
+
+
+def _sqlite_period_text(value: object) -> str:
+    """Normalize a validated SQLite date value without trusting row typing."""
+    if isinstance(value, str):
+        return value[:10]
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"Unsupported SQLite period value: {type(value).__name__}")
+
+
+def _sqlite_int(value: object) -> int:
+    """Return an integer only after validating the SQLite boundary value."""
+    if not isinstance(value, int):
+        raise TypeError(f"Expected SQLite integer, got {type(value).__name__}")
+    return value
 
 
 # Per-line-item plausible ranges. Currency-agnostic — we do NOT enforce a
@@ -254,12 +274,11 @@ def _scan_series_for_jumps(
                 continue
             ratio = curr_val / prev_val if curr_val > prev_val else prev_val / curr_val
             if ratio > multiplier:
-                pe = curr["period_end"]
-                pe_str = pe[:10] if isinstance(pe, str) else pe.date().isoformat()
+                pe_str = _sqlite_period_text(curr["period_end"])
                 record_validation_issue(
                     conn,
                     run_id=run_id,
-                    source_doc_id=int(curr["source_doc_id"]),
+                    source_doc_id=_sqlite_int(curr["source_doc_id"]),
                     ticker=str(curr["ticker"]),
                     severity=Severity.WARN,
                     rule=ValidationRule.MAGNITUDE_JUMP,
@@ -361,7 +380,7 @@ def _check_source_disagreement(
         per_source_type: dict[str, dict[str, object]] = {}
         for e in entries:
             st = str(e["source_type"])
-            if st not in per_source_type or int(e["source_doc_id"]) > int(
+            if st not in per_source_type or _sqlite_int(e["source_doc_id"]) > _sqlite_int(
                 per_source_type[st]["source_doc_id"]
             ):
                 per_source_type[st] = e
@@ -374,12 +393,11 @@ def _check_source_disagreement(
                     continue
                 diff_pct = abs(a_val - b_val) / max(a_val, b_val) * Decimal(100)
                 if diff_pct > tolerance_pct:
-                    pe = a["period_end"]
-                    pe_str = pe[:10] if isinstance(pe, str) else pe.date().isoformat()
+                    pe_str = _sqlite_period_text(a["period_end"])
                     record_validation_issue(
                         conn,
                         run_id=run_id,
-                        source_doc_id=int(a["source_doc_id"]),
+                        source_doc_id=_sqlite_int(a["source_doc_id"]),
                         ticker=str(a["ticker"]),
                         severity=Severity.WARN,
                         rule=ValidationRule.SOURCE_DISAGREEMENT,
@@ -395,6 +413,61 @@ def _check_source_disagreement(
     conn.commit()
     return CheckOutcome(
         rule=ValidationRule.SOURCE_DISAGREEMENT,
+        issues_inserted=inserted,
+        rows_examined=examined,
+    )
+
+
+def check_kpi_semantic_coverage(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    ticker: str | None,
+) -> CheckOutcome:
+    """HALT when an owner-visible KPI lacks admitted source semantics."""
+    repo_root = Path(__file__).resolve().parents[2]
+    rows = scoped_kpi_definitions(conn, repo_root=repo_root)
+    if ticker is not None:
+        rows = tuple(row for row in rows if row.ticker == ticker.upper())
+    inserted = 0
+    examined = 0
+    for row in rows:
+        examined += row.fact_count
+        unresolved = row.kpi_definition_id is None
+        if not (
+            unresolved
+            or row.missing_context_count
+            or row.quarantined_context_count
+            or row.legacy_unknown_context_count
+        ):
+            continue
+        source_doc = None
+        if row.kpi_definition_id is not None:
+            source = conn.execute(
+                "SELECT source_doc_id FROM kpi_facts WHERE kpi_definition_id=? "
+                "ORDER BY id DESC LIMIT 1",
+                (row.kpi_definition_id,),
+            ).fetchone()
+            source_doc = int(source[0]) if source is not None else None
+        record_validation_issue(
+            conn,
+            run_id=run_id,
+            source_doc_id=source_doc,
+            ticker=row.ticker,
+            severity=Severity.HALT,
+            rule=ValidationRule.KPI_SEMANTIC_CONTEXT,
+            raw_value=(
+                f"{row.name}: missing={row.missing_context_count}, "
+                f"quarantined={row.quarantined_context_count}, "
+                f"legacy_unknown={row.legacy_unknown_context_count}, "
+                f"unresolved={unresolved}"
+            ),
+            expected="every report/Facts & Metrics KPI fact has admitted source-bound semantics",
+        )
+        inserted += 1
+    conn.commit()
+    return CheckOutcome(
+        rule=ValidationRule.KPI_SEMANTIC_CONTEXT,
         issues_inserted=inserted,
         rows_examined=examined,
     )
@@ -423,6 +496,7 @@ def run_all_checks(
     outcomes.append(_check_kpi_fact_ranges(conn, run_id=run_id, ticker=ticker))
     outcomes.append(_check_magnitude_jumps(conn, run_id=run_id, ticker=ticker))
     outcomes.append(_check_source_disagreement(conn, run_id=run_id, ticker=ticker))
+    outcomes.append(check_kpi_semantic_coverage(conn, run_id=run_id, ticker=ticker))
     return ValidationReport(
         run_id=run_id,
         started_at=started_at,

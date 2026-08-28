@@ -24,6 +24,7 @@ from provenance.evidence_ledger import (
 )
 from provenance.financial_fact_resolution import (
     FactCutoverRequest,
+    _dimensions,  # pyright: ignore[reportPrivateUsage] -- current-head seam under test
     canonical_fact_relation,
     execute_fact_cutover,
     resolve_fact_logical_key,
@@ -35,6 +36,41 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0224_expected_document_lifecycle"
 HEAD = "0225_financial_fact_resolution_cutover"
 STAMP = datetime(2026, 7, 27, 12, 0, 0)
+
+
+def test_kpi_observation_dimensions_use_only_current_semantic_head() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY,kpi_definition_id INTEGER);
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
+            supersedes_context_id INTEGER,metric_name_as_reported TEXT,
+            period_role TEXT,publication_lane TEXT,accounting_basis TEXT,
+            consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT,status TEXT
+        );
+        INSERT INTO kpi_facts VALUES (7,641);
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+          (10,7,1,NULL,'Customers','prior_year_comparator','comparator','gaap',
+           'geography','{"country":"BR"}','actual','admitted'),
+          (11,7,2,10,'Total customers','current','current_actual','management',
+           'consolidated','{}','millions','admitted');
+        """
+    )
+    row = conn.execute("SELECT * FROM kpi_facts WHERE id=7").fetchone()
+    dimensions = {item.key: item.value for item in _dimensions(conn, "kpi_facts", row)}
+    assert dimensions == {
+        "accounting_basis": "management",
+        "consolidation_scope": "consolidated",
+        "kpi_definition_id": "641",
+        "metric_name_as_reported": "Total customers",
+        "period_role": "current",
+        "publication_lane": "current_actual",
+        "semantic_status": "admitted",
+        "unit_scale": "millions",
+    }
+    conn.close()
 
 
 def _config(path: Path) -> Config:

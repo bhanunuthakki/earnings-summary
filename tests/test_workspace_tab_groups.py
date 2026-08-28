@@ -18,9 +18,12 @@ from datetime import date
 from io import StringIO
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import report.renderers.workspace_html as workspace_html  # noqa: E402
 from report.models import (  # noqa: E402
     AppendixSection,
     BearCaseSection,
@@ -56,6 +59,20 @@ from report.sections.p3_data import DecisionHistorySummary  # noqa: E402
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tab_group_tests_from_live_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep markup-only tests independent of production-owned database readers."""
+
+    def _no_sell_base_rate(*_args: object) -> None:
+        return None
+
+    def _no_you_said_strip(*_args: object) -> str:
+        return ""
+
+    monkeypatch.setattr(workspace_html, "load_graded_sell_base_rate", _no_sell_base_rate)
+    monkeypatch.setattr(workspace_html, "render_you_said_strip_for_path", _no_you_said_strip)
 
 
 def _make_spec(

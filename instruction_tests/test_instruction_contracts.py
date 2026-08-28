@@ -245,6 +245,23 @@ def test_project_rulebook_uses_manifest_classes_as_the_directive_authority() -> 
     assert "[[root:Evidence and delegation]]" in agents
 
 
+def test_project_rulebook_names_windows_db_authority_and_investment_grade_gate() -> None:
+    agents = _read("AGENTS.md")
+    folder_contract = _read("directives/folder_structure.md")
+
+    assert (
+        r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\data\portfolio.db" in agents
+    )
+    assert "/Applications/earnings-summary/data/portfolio.db" in agents
+    assert "is never a live, fallback, replica, or roster authority" in agents
+    assert "Investment-grade financial-data invariant" in agents
+    assert (
+        "Acquisition completeness and extraction completeness are separate typed receipts" in agents
+    )
+    assert "Every consumer" in agents and "provenance-aware fact resolver" in agents
+    assert "a Mac checkout-local `data/portfolio.db` is an invalid artifact" in folder_contract
+
+
 def test_design_audit_is_a_runbook_and_never_creates_its_own_schedule() -> None:
     entries = _entries()
     audit = _read("directives/design_conformance_audit.md")

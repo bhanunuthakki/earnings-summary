@@ -22,6 +22,7 @@ from provenance.overrides import (
 from report.sections.financials import (
     _kpi_cell_sources_for,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
 )
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from timeseries.loaders import load_financial_cell_provenance
 from ui.source_chip import source_chip_html
 
@@ -97,6 +98,7 @@ def _seed(conn: sqlite3.Connection) -> None:
         "unit, source_doc_id, confidence, extracted_by) VALUES "
         "('GOOG','2025-12-31 00:00:00','Q4','revenue',20941000000,'actual',1,0.94,'fmp')"
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
 
 
@@ -182,18 +184,12 @@ def test_chip_override_map_keeps_qualify_drops_drop(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_kpi_chip_reflects_replace(tmp_path: Path) -> None:
+def test_kpi_chip_rejects_unreviewed_replace(tmp_path: Path) -> None:
     conn = _conn(tmp_path / "p.db")
     _record(conn, fact_kind=overrides.KPI, fact_key=_KPI, action=OverrideAction.REPLACE)
     sources = _kpi_cell_sources_for(conn, "GOOG", _KPI, ("Q1", "Q2", "Q3", "Q4"))
     conn.close()
-    cs = sources["2025-12-31"]
-    assert cs.override == "sec_8k · 0001652044-26-000012 · googexhibit991q42025.htm"
-    assert cs.source == "sec_8k"  # no longer the FMP tier
-    assert cs.accession_number == "0001652044-26-000012"
-    assert cs.extracted_by == "cli"
-    # The chip renders the override row.
-    assert "overridden by" in source_chip_html(cs)
+    assert sources == {}
 
 
 def test_kpi_chip_qualify_adds_warn(tmp_path: Path) -> None:

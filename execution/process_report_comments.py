@@ -101,7 +101,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 import comments  # noqa: E402
 import db  # noqa: E402
-from comments import Comment, ThreadEntry  # noqa: E402
+from comments import Comment, IntentType, ThreadEntry  # noqa: E402
 from compute.holdings_sanitize import sanitize_holdings_scalars  # noqa: E402
 from llm.structured import StructuredParseError, call_llm_structured  # noqa: E402
 from llm.untrusted import spotlight  # noqa: E402
@@ -280,14 +280,15 @@ def process_comments_for_ticker(
     # First, write back any reclassified intents to the on-disk comment
     # store so subsequent runs see them — this is independent of execution.
     for item in plan:
-        c, intent = item["comment"], item["intent"]
+        c = cast(Comment, item["comment"])
+        intent = cast(IntentType, item["intent"])
         if intent != c.intent:
             comments.update_comment(repo_root, ticker, report_date, c.id, intent=intent)
 
     # Surface pass-1 errors first so they don't get lost.
     for item in plan:
         if item.get("_error") and item.get("dry") is None:
-            c: Comment = item["comment"]
+            c = cast(Comment, item["comment"])
             results.append(
                 {
                     "id": c.id,
@@ -305,7 +306,7 @@ def process_comments_for_ticker(
         if item["intent"] == "edit_thesis" and not (item.get("_error") and item.get("dry") is None)
     ]
     if edit_thesis_items:
-        batch_comments_list = [item["comment"] for item in edit_thesis_items]
+        batch_comments_list = [cast(Comment, item["comment"]) for item in edit_thesis_items]
         try:
             batch_resolution = _route_edit_thesis_batch(
                 repo_root, ticker, batch_comments_list, apply=True
@@ -317,7 +318,7 @@ def process_comments_for_ticker(
                     report_date,
                     c.id,
                     status="addressed",
-                    resolution_note=batch_resolution.get("summary", "applied"),
+                    resolution_note=cast(str, batch_resolution.get("summary", "applied")),
                 )
                 results.append(
                     {
@@ -346,8 +347,8 @@ def process_comments_for_ticker(
     # This preserves the sequencer's relative ordering of edit_structured vs
     # ask_question vs drop_kpi etc.
     for item in plan:
-        c = item["comment"]
-        intent = item["intent"]
+        c = cast(Comment, item["comment"])
+        intent = cast(IntentType, item["intent"])
         if item.get("_error") and item.get("dry") is None:
             continue  # already surfaced above
         if intent == "edit_thesis":
@@ -360,9 +361,11 @@ def process_comments_for_ticker(
                     ticker,
                     report_date,
                     c.id,
-                    append_thread=ThreadEntry(role="assistant", text=resolution["answer"]),
+                    append_thread=ThreadEntry(
+                        role="assistant", text=cast(str, resolution["answer"])
+                    ),
                     status="addressed",
-                    resolution_note=resolution.get("summary", ""),
+                    resolution_note=cast(str, resolution.get("summary", "")),
                 )
             else:
                 comments.update_comment(
@@ -371,7 +374,7 @@ def process_comments_for_ticker(
                     report_date,
                     c.id,
                     status="addressed",
-                    resolution_note=resolution.get("summary", "applied"),
+                    resolution_note=cast(str, resolution.get("summary", "applied")),
                 )
             results.append(
                 {
@@ -758,7 +761,7 @@ def _spawn_step(repo_root: Path, *, name: str, cmd: list[str], timeout: int) -> 
 
 def _as_legacy_result(item: dict[str, object]) -> dict[str, object]:
     """Shape pass-1 plan items as the dry-run output the CLI used to print."""
-    c: Comment = item["comment"]
+    c = cast(Comment, item["comment"])
     if item.get("_error") and item.get("dry") is None:
         return {
             "id": c.id,
@@ -813,8 +816,8 @@ def sequence_resolutions(
     lines: list[str] = []
     for idx, pos in enumerate(edit_positions):
         item = plan[pos]
-        c: Comment = item["comment"]
-        dry = item["dry"] or {}
+        c = cast(Comment, item["comment"])
+        dry = cast(dict[str, object], item["dry"] or {})
         lines.append(
             f"[{idx}] comment={c.id} intent={item['intent']} anchor={c.anchor.key!r}\n"
             f"     user_said: {c.comment[:280]}\n"
@@ -946,14 +949,19 @@ def _route_drop_kpi(repo_root: Path, ticker: str, c: Comment, apply: bool) -> di
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
     if not path.exists():
         return {"summary": "drop_kpi: holdings JSON not found"}
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = cast(dict[str, object], json.loads(path.read_text(encoding="utf-8")))
     removed_from: list[str] = []
     for tier_key in ("tier_1_kpis", "tier_2_kpis", "tier_3_kpis"):
         rows = payload.get(tier_key)
         if not isinstance(rows, list):
             continue
-        kept = [r for r in rows if not (isinstance(r, dict) and r.get("name") == kpi_name)]
-        if len(kept) != len(rows):
+        typed_rows = cast(list[object], rows)
+        kept: list[object] = []
+        for row in typed_rows:
+            if isinstance(row, dict) and cast(dict[str, object], row).get("name") == kpi_name:
+                continue
+            kept.append(cast(object, row))
+        if len(kept) != len(typed_rows):
             removed_from.append(tier_key)
             payload[tier_key] = kept
     if not removed_from:
@@ -1263,11 +1271,12 @@ Return ONLY the JSON object. No markdown fence, no prose.
             # Pydantic model — truncate over-long LLM-generated entries so
             # the thesis_evaluator load doesn't crash. Same for break_rules_soft.
             if field in ("break_rules", "break_rules_soft") and isinstance(value, list):
-                for rule in cast("list[object]", value):
+                for rule in cast(list[object], value):
                     if isinstance(rule, dict):
-                        narr = rule.get("narrative")
+                        rule_dict = cast(dict[str, object], rule)
+                        narr = rule_dict.get("narrative")
                         if isinstance(narr, str) and len(narr) > 500:
-                            rule["narrative"] = narr[:480].rstrip() + "..."
+                            rule_dict["narrative"] = narr[:480].rstrip() + "..."
             payload[field] = value
             touched.append(field)
 
@@ -1488,9 +1497,6 @@ markdown fence, no prose.
                     "Re-comment with explicit quarter context (e.g. 'Q3 2025')."
                 ),
             }
-        assert parsed.period_end is not None
-        period_end_dt = datetime.combine(parsed.period_end, datetime.min.time())
-
         if not apply:
             return {
                 "summary": (
@@ -1504,80 +1510,19 @@ markdown fence, no prose.
                 "dry_run": True,
             }
 
-        # Insert the synthetic ANALYST_COMMENT document row so kpi_facts has
-        # a valid source_doc_id FK. file_path encodes the comment id so we
-        # can trace back; sha256 is a stable hash of the comment text + id.
-        sha = hashlib.sha256(f"{c.id}::{c.comment}".encode()).hexdigest()
-        doc_cur = conn.execute(
-            "INSERT OR IGNORE INTO documents "
-            "(ticker, source_type, doc_type, period_end, file_path, sha256, "
-            " fetched_at, fetch_status, raw_bytes_size, source_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-            (
-                ticker.upper(),
-                # source_type stays in the SourceType enum (MANUAL_ENTRY covers
-                # any analyst-entered value); doc_type is the distinct
-                # ANALYST_COMMENT value so we can filter for comment-sourced
-                # facts in audits without colliding with the SourceType keys.
-                "manual_entry",
-                "analyst_comment",
-                period_end_dt,
-                f"comments://{ticker.upper()}/{c.id}",
-                sha,
-                datetime.now(UTC),
-                "ok",
-                len(c.comment.encode("utf-8")),
-            ),
-        )
-        if doc_cur.rowcount > 0:
-            doc_id = doc_cur.lastrowid
-        else:
-            # Already-inserted with the same sha → look it up.
-            existing = conn.execute("SELECT id FROM documents WHERE sha256 = ?", (sha,)).fetchone()
-            doc_id = int(existing["id"]) if existing else None
-        if doc_id is None:
-            return {"summary": "extract_kpi: failed to resolve synthetic document_id"}
-
-        # UPSERT the kpi_facts row. Mirrors persist_one_kpi_fact's logical-key
-        # contract, but allows source_excerpt and treats analyst-supplied
-        # values as authoritative (highest doc_id always wins on conflict).
-        conn.execute(
-            "INSERT INTO kpi_facts "
-            "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
-            " value, unit, source_doc_id, source_excerpt) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(ticker, period_end, fiscal_period_type, kpi_definition_id) "
-            "DO UPDATE SET "
-            "    value = excluded.value, "
-            "    unit = excluded.unit, "
-            "    source_doc_id = excluded.source_doc_id, "
-            "    source_excerpt = excluded.source_excerpt",
-            (
-                ticker.upper(),
-                period_end_dt,
-                fiscal_period_type,
-                int(kdef_row["id"]),
-                str(value),
-                str(kdef_row["unit"]),
-                doc_id,
-                excerpt or None,
-            ),
-        )
-        conn.commit()
-
         return {
             "summary": (
-                f"extract_kpi: upserted {kpi_name}={value} for "
-                f"{ticker} {period_end_str} (kpi_definition_id={kdef_row['id']}, "
-                f"source_doc_id={doc_id})"
+                "extract_kpi: source review required; analyst comments are question/evidence "
+                "inputs and cannot overwrite or publish company-reported facts. Use the "
+                "source-reviewed KPI supersession manifest with a primary-source document."
             ),
             "extracted_value": value,
             "period_end": period_end_str,
             "fiscal_period_type": fiscal_period_type,
             "source_excerpt": excerpt[:200] + ("..." if len(excerpt) > 200 else ""),
             "kpi_definition_id": int(kdef_row["id"]),
-            "source_doc_id": int(doc_id),
-            "dry_run": False,
+            "dry_run": True,
+            "blocked_reason": "analyst_comment_not_company_fact",
         }
     except Exception as e:
         if is_hard_stop(e):
@@ -2001,6 +1946,11 @@ def _resolve_latest_report_date(repo_root: Path, ticker: str) -> date | None:
         return date.fromisoformat(name[:10])
     except ValueError:
         return None
+
+
+# Public boundary for the comments server; keep the implementation helper
+# private while avoiding a private-symbol import across execution modules.
+resolve_latest_report_date = _resolve_latest_report_date
 
 
 def main(argv: list[str] | None = None) -> int:

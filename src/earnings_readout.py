@@ -88,6 +88,49 @@ class GenerateOutcome:
     artifact_id: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ContextSource:
+    """Typed provenance state for one prompt block.
+
+    Context that lacks a stable source id is retained for reconstructability,
+    but marked explicitly so the resulting artifact cannot be mistaken for a
+    fully document-grounded readout.
+    """
+
+    source_kind: str
+    identity_status: str
+    source_doc_id: int | None = None
+
+    def as_dict(self) -> dict[str, str | int | None]:
+        return {
+            "source_kind": self.source_kind,
+            "identity_status": self.identity_status,
+            "source_doc_id": self.source_doc_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ContextBlock:
+    """One deterministic readout input retained alongside generated markdown."""
+
+    kind: str
+    label: str
+    content: str
+    source: ContextSource
+
+    def render(self) -> str:
+        return f"## {self.label}\n{self.content}"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "label": self.label,
+            "content": self.content,
+            "content_status": "present" if self.content.strip() else "missing",
+            "source": self.source.as_dict(),
+        }
+
+
 def _active_list_type(conn: sqlite3.Connection, ticker: str) -> str | None:
     try:
         row = conn.execute(
@@ -229,14 +272,14 @@ def _surprise_text(conn: sqlite3.Connection, quarter: ReportedQuarter) -> str:
     )
 
 
-def assemble_context(
+def _context_blocks(
     db_path: Path,
     repo_root: Path,
     quarter: ReportedQuarter,
     *,
     today: date,
-) -> list[str]:
-    """Deterministic ordered source blocks; the same blocks form the cache key."""
+) -> list[ContextBlock]:
+    """Deterministic ordered input blocks with explicit source-identity state."""
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
@@ -255,22 +298,97 @@ def assemble_context(
         load_ir_anchor(repo_root, quarter.ticker),
     )
     raw_sections = (
-        (
+        ContextBlock(
+            "reported_quarter_identity",
             "Reported quarter identity",
             f"ticker={quarter.ticker}\nperiod_end={quarter.period_end}\n"
             f"fiscal_period_type={quarter.fiscal_period_type}\n"
             f"call_date={quarter.call_date or 'missing'}\n"
             f"source_document_id={quarter.document_id}",
+            ContextSource("transcript_document", "present", quarter.document_id),
         ),
-        ("Actuals versus consensus", surprise),
-        ("Tracked KPI moves", kpis),
-        ("Thesis, break rules, and prior context", anchors),
-        ("Open watch items and questions", watch_items_text(db_path, quarter.ticker)),
-        ("Call-tone change already detected", tone_text(db_path, quarter.ticker)),
-        ("Current valuation stance", valuation),
-        ("Speaker-attributed earnings-call transcript", transcript),
+        ContextBlock(
+            "actuals_vs_consensus",
+            "Actuals versus consensus",
+            surprise,
+            ContextSource("earnings_surprises", "missing"),
+        ),
+        ContextBlock(
+            "tracked_kpi_moves",
+            "Tracked KPI moves",
+            kpis,
+            ContextSource("kpi_facts", "missing"),
+        ),
+        ContextBlock(
+            "thesis_break_rules_prior_context",
+            "Thesis, break rules, and prior context",
+            anchors,
+            ContextSource("repository_anchors", "missing"),
+        ),
+        ContextBlock(
+            "open_watch_items_questions",
+            "Open watch items and questions",
+            watch_items_text(db_path, quarter.ticker),
+            ContextSource("owner_notes", "missing"),
+        ),
+        ContextBlock(
+            "call_tone_change",
+            "Call-tone change already detected",
+            tone_text(db_path, quarter.ticker),
+            ContextSource("tone_alert", "missing"),
+        ),
+        ContextBlock(
+            "current_valuation_stance",
+            "Current valuation stance",
+            valuation,
+            ContextSource("dcf_run", "missing"),
+        ),
+        ContextBlock(
+            "earnings_call_transcript",
+            "Speaker-attributed earnings-call transcript",
+            transcript,
+            ContextSource("transcript_document", "present", quarter.document_id),
+        ),
     )
-    return [f"## {label}\n{text}" for label, text in raw_sections if text.strip()]
+    return list(raw_sections)
+
+
+def assemble_context(
+    db_path: Path,
+    repo_root: Path,
+    quarter: ReportedQuarter,
+    *,
+    today: date,
+) -> list[str]:
+    """Rendered prompt blocks, preserving the established cache-input bytes."""
+    return [
+        block.render()
+        for block in _context_blocks(db_path, repo_root, quarter, today=today)
+        if block.content.strip()
+    ]
+
+
+def _context_manifest(blocks: list[ContextBlock]) -> tuple[dict[str, object], list[int]]:
+    """Persist complete ordered prompt inputs without claiming absent identity."""
+    source_doc_ids: list[int] = []
+    for block in blocks:
+        source_doc_id = block.source.source_doc_id
+        if source_doc_id is not None and source_doc_id not in source_doc_ids:
+            source_doc_ids.append(source_doc_id)
+    missing = [
+        block.kind
+        for block in blocks
+        if block.source.identity_status != "present" or not block.content.strip()
+    ]
+    return (
+        {
+            "schema_version": "post_earnings_readout_context@2",
+            "grounding_status": "complete" if not missing else "partial",
+            "missing_source_identities": missing,
+            "blocks": [block.as_dict() for block in blocks],
+        },
+        source_doc_ids,
+    )
 
 
 _PROMPT = """You are writing the canonical post-earnings readout for {ticker}'s {fpt}
@@ -313,7 +431,9 @@ def _generate_quarter(
     force: bool,
 ) -> GenerateOutcome:
     prompt_version = prompt_version_for(PURPOSE)
-    sections = assemble_context(db_path, repo_root, quarter, today=today)
+    blocks = _context_blocks(db_path, repo_root, quarter, today=today)
+    sections = [block.render() for block in blocks if block.content.strip()]
+    context_manifest, source_doc_ids = _context_manifest(blocks)
     cache_inputs: list[bytes | str] = [
         quarter.period_end,
         quarter.fiscal_period_type,
@@ -350,7 +470,8 @@ def _generate_quarter(
         model=LLM_MODELS.get(PURPOSE),
         prompt_version=prompt_version,
         cache_inputs=cache_inputs,
-        source_doc_ids=[quarter.document_id],
+        content_json=context_manifest,
+        source_doc_ids=source_doc_ids,
     )
     artifact_id: int | None = None
     was_cache_hit = False

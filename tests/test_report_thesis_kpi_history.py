@@ -79,6 +79,21 @@ def _build_repo(tmp_path: Path) -> Path:
             source_doc_id INTEGER NOT NULL DEFAULT 1,
             source_excerpt VARCHAR
         );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL DEFAULT 'current',
+            publication_lane TEXT NOT NULL DEFAULT 'current_actual',
+            accounting_basis TEXT NOT NULL DEFAULT 'gaap',
+            consolidation_scope TEXT NOT NULL DEFAULT 'consolidated',
+            dimensions_json TEXT NOT NULL DEFAULT '{}',
+            unit_scale TEXT NOT NULL DEFAULT 'none',
+            status TEXT NOT NULL DEFAULT 'admitted',
+            revision INTEGER NOT NULL DEFAULT 1,
+            supersedes_context_id INTEGER
+        );
         """
     )
     conn.commit()
@@ -109,12 +124,20 @@ def _add_facts(
     source_doc_id: int = 1,
 ) -> None:
     conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
+    kpi_name = str(
+        conn.execute("SELECT name FROM kpi_definitions WHERE id = ?", (def_id,)).fetchone()[0]
+    )
     for end in ends:
         quarter = (int(end[5:7]) - 1) // 3 + 1
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, value, unit, kpi_definition_id, "
             "fiscal_period_type, source_doc_id) VALUES (?, ?, ?, 'actual', ?, ?, ?)",
             (ticker, end, value, def_id, f"Q{quarter}", source_doc_id),
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, metric_name_as_reported, reported_period_end) VALUES (?, ?, ?)",
+            (cur.lastrowid, kpi_name, end),
         )
     conn.commit()
     conn.close()
@@ -138,10 +161,72 @@ def test_ledger_history_dedups_coexisting_sources_to_latest(tmp_path: Path) -> N
     canonical = _add_def(repo, "NU", "Monthly ARPAC (USD)")
     _add_facts(repo, "NU", canonical, _QUARTER_ENDS, value=10.0, source_doc_id=1)
     _add_facts(repo, "NU", canonical, _QUARTER_ENDS[-1:], value=20.0, source_doc_id=2)
+    conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
+    conn.execute(
+        "CREATE VIEW v_kpi_facts_resolved_current AS "
+        "SELECT * FROM kpi_facts WHERE source_doc_id = 2 OR period_end <> '2025-12-31'"
+    )
+    conn.commit()
+    conn.close()
 
     history, _ = _history(repo, "NU", "Monthly ARPAC")
     assert len(history) == 12  # one observation per quarter, not 13
     assert history[-1][1] == 20.0  # latest-ingested source wins for the restated quarter
+
+
+def test_ledger_history_uses_canonical_relation_and_fails_closed_on_kpi_override(
+    tmp_path: Path,
+) -> None:
+    repo = _build_repo(tmp_path)
+    definition = _add_def(repo, "NU", "Monthly ARPAC (USD)")
+    _add_facts(repo, "NU", definition, ["2025-12-31"], value=10.0)
+    _add_facts(repo, "NU", definition, ["2025-12-31"], value=99.0, source_doc_id=2)
+    conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
+    conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id = 1")
+    conn.execute(
+        "CREATE TABLE fact_overrides (id INTEGER, user_id TEXT, ticker TEXT, "
+        "period_end TEXT, fiscal_period_type TEXT, fact_kind TEXT, fact_key TEXT, "
+        "action TEXT, value REAL, unit TEXT, value_json TEXT, source_doc_type TEXT, "
+        "source_accession TEXT, source_exhibit TEXT, source_url TEXT, source_excerpt TEXT, "
+        "source_doc_id INTEGER, status TEXT, confidence REAL, rationale TEXT, "
+        "created_by TEXT, created_at TEXT, locator TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO fact_overrides VALUES "
+        "(1, 'bhanu', 'NU', '2025-12-31', 'Q4', 'kpi', 'Monthly ARPAC (USD)', "
+        "'replace', 777.0, 'usd', NULL, 'earnings_release', NULL, NULL, NULL, NULL, "
+        "1, 'active', 1.0, 'test', 'test', '2026-08-27', NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    history, _ = _history(repo, "NU", "Monthly ARPAC (USD)")
+    assert history == []
+
+
+def test_ledger_history_excludes_unadmitted_kpi_candidate(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path)
+    definition = _add_def(repo, "NU", "Monthly ARPAC (USD)")
+    _add_facts(repo, "NU", definition, ["2025-12-31"], value=10.0)
+    conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
+    cur = conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, value, unit, kpi_definition_id, "
+        "fiscal_period_type, source_doc_id) VALUES ('NU', '2025-12-31', 777.0, "
+        "'actual', ?, 'Q4', 2)",
+        (definition,),
+    )
+    conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id, metric_name_as_reported, reported_period_end, status) "
+        "VALUES (?, 'Monthly ARPAC (USD)', '2025-12-31', 'quarantined')",
+        (cur.lastrowid,),
+    )
+    conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id=2")
+    conn.commit()
+    conn.close()
+
+    history, _ = _history(repo, "NU", "Monthly ARPAC (USD)")
+    assert history == []
 
 
 def test_ledger_history_empty_for_unresolvable_label(tmp_path: Path) -> None:
@@ -204,6 +289,21 @@ def _build_repo_with_notes(tmp_path: Path) -> Path:
             fiscal_period_type VARCHAR NOT NULL,
             source_doc_id INTEGER NOT NULL DEFAULT 1,
             source_excerpt VARCHAR
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL DEFAULT 'current',
+            publication_lane TEXT NOT NULL DEFAULT 'current_actual',
+            accounting_basis TEXT NOT NULL DEFAULT 'gaap',
+            consolidation_scope TEXT NOT NULL DEFAULT 'consolidated',
+            dimensions_json TEXT NOT NULL DEFAULT '{}',
+            unit_scale TEXT NOT NULL DEFAULT 'none',
+            status TEXT NOT NULL DEFAULT 'admitted',
+            revision INTEGER NOT NULL DEFAULT 1,
+            supersedes_context_id INTEGER
         );
         """
     )

@@ -61,6 +61,21 @@ def _make_db() -> sqlite3.Connection:
             fiscal_period_type VARCHAR NOT NULL,
             source_doc_id INTEGER NOT NULL DEFAULT 1
         );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL DEFAULT 'current',
+            publication_lane TEXT NOT NULL DEFAULT 'current_actual',
+            accounting_basis TEXT NOT NULL DEFAULT 'gaap',
+            consolidation_scope TEXT NOT NULL DEFAULT 'consolidated',
+            dimensions_json TEXT NOT NULL DEFAULT '{}',
+            unit_scale TEXT NOT NULL DEFAULT 'none',
+            status TEXT NOT NULL DEFAULT 'admitted',
+            revision INTEGER NOT NULL DEFAULT 1,
+            supersedes_context_id INTEGER
+        );
         """
     )
     return conn
@@ -86,12 +101,23 @@ def _add_facts(
     source_doc_id: int = 1,
     unit: str = "actual",
 ) -> None:
+    kpi_name = str(
+        conn.execute("SELECT name FROM kpi_definitions WHERE id = ?", (def_id,)).fetchone()[0]
+    )
     for end in ends:
         quarter = (int(end[5:7]) - 1) // 3 + 1
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, value, unit, kpi_definition_id, "
             "fiscal_period_type, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (ticker, end, value, unit, def_id, f"Q{quarter}", source_doc_id),
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, metric_name_as_reported, reported_period_end, period_role, "
+            "publication_lane, accounting_basis, consolidation_scope, dimensions_json, "
+            "unit_scale, status) VALUES (?, ?, ?, 'current', 'current_actual', 'gaap', "
+            "'consolidated', '{}', 'none', 'admitted')",
+            (cur.lastrowid, kpi_name, end),
         )
     conn.commit()
 
@@ -111,6 +137,26 @@ def test_series_pulls_full_history_through_resolver() -> None:
     assert sum(1 for v in series.levels_full if v is not None) == 12
 
 
+def test_alias_family_is_unresolved_when_any_member_has_active_override() -> None:
+    conn = _make_db()
+    canonical = _add_def(conn, "NU", "Monthly ARPAC (USD)", unit="actual")
+    duplicate = _add_def(conn, "NU", "Monthly ARPAC", unit="actual")
+    _add_facts(conn, "NU", canonical, _QUARTER_ENDS)
+    _add_facts(conn, "NU", duplicate, _QUARTER_ENDS[5:7])
+    conn.execute("UPDATE kpi_fact_semantic_contexts SET metric_name_as_reported='Monthly ARPAC'")
+    conn.execute(
+        "CREATE TABLE fact_overrides (ticker TEXT, fact_kind TEXT, fact_key TEXT, "
+        "action TEXT, status TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO fact_overrides VALUES ('NU','kpi','Monthly ARPAC','replace','active')"
+    )
+    conn.commit()
+
+    labels = [f"{e[:4]} Q{(int(e[5:7]) - 1) // 3 + 1}" for e in _QUARTER_ENDS]
+    assert _kpi_series_for(conn, "NU", "Monthly ARPAC", labels[-12:], labels) is None
+
+
 def test_series_dedups_coexisting_sources_to_latest() -> None:
     """An LLM-brief value and a later IR-spreadsheet restatement coexist as two
     rows for one period; the series must surface the latest-ingested (highest
@@ -127,3 +173,35 @@ def test_series_dedups_coexisting_sources_to_latest() -> None:
     assert series is not None
     assert series.levels_full[-1] == 20.0  # restated value wins
     assert sum(1 for v in series.levels_full if v is not None) == 12  # one obs/quarter
+
+
+def test_series_uses_canonical_fact_relation_over_raw_candidate() -> None:
+    conn = _make_db()
+    definition = _add_def(conn, "NU", "Monthly ARPAC")
+    _add_facts(conn, "NU", definition, ["2025-12-31"], value=10.0)
+    _add_facts(conn, "NU", definition, ["2025-12-31"], value=99.0, source_doc_id=2)
+    conn.execute(
+        "CREATE VIEW v_kpi_facts_resolved_current AS "
+        "SELECT * FROM kpi_facts WHERE id = (SELECT MIN(id) FROM kpi_facts)"
+    )
+    conn.commit()
+    series = _kpi_series_for(conn, "NU", "Monthly ARPAC", ["2025 Q4"], ["2025 Q4"])
+    assert series is not None
+    assert series.values == [10.0]
+
+
+def test_series_fails_closed_without_admitted_context_and_ignores_override() -> None:
+    conn = _make_db()
+    definition = _add_def(conn, "NU", "Monthly ARPAC")
+    _add_facts(conn, "NU", definition, ["2025-12-31"], value=10.0)
+    conn.execute("DELETE FROM kpi_fact_semantic_contexts")
+    conn.execute(
+        "CREATE TABLE fact_overrides (ticker TEXT, period_end TEXT, fiscal_period_type TEXT, "
+        "fact_kind TEXT, fact_key TEXT, action TEXT, value REAL, status TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO fact_overrides VALUES "
+        "('NU','2025-12-31','Q4','kpi','Monthly ARPAC','replace',777.0,'active')"
+    )
+    conn.commit()
+    assert _kpi_series_for(conn, "NU", "Monthly ARPAC", ["2025 Q4"], ["2025 Q4"]) is None

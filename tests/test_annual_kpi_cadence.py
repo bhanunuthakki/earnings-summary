@@ -75,6 +75,24 @@ def _schema(conn: sqlite3.Connection, *, with_cadence: bool = True) -> None:
             unit TEXT NOT NULL,
             source_doc_id INTEGER NOT NULL
         );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            supersedes_context_id INTEGER,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT NOT NULL,
+            period_role TEXT NOT NULL,
+            publication_lane TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL,
+            consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,
+            unit_scale TEXT NOT NULL,
+            source_row_label TEXT,
+            source_column_header TEXT,
+            status TEXT NOT NULL,
+            reason_code TEXT
+        );
         """
     )
     conn.commit()
@@ -100,11 +118,20 @@ def _seed(
         ).fetchone()[0]
     )
     for period_end, fpt, value in rows:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO kpi_facts "
             "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
             "VALUES (?, ?, ?, ?, ?, 'percent', ?)",
             (ticker, period_end, fpt, kid, str(value), source_doc_id),
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id,revision,supersedes_context_id,metric_name_as_reported,"
+            "reported_period_end,period_role,publication_lane,accounting_basis,"
+            "consolidation_scope,dimensions_json,unit_scale,status) "
+            "VALUES (?,1,NULL,?,?,'current','current_actual','management',"
+            "'consolidated','{}','none','admitted')",
+            (cursor.lastrowid, name, period_end),
         )
     conn.commit()
     return kid
@@ -121,11 +148,13 @@ def conn() -> sqlite3.Connection:
 # --------------------------------------------------------------------------- #
 # reporting_cadence_for
 # --------------------------------------------------------------------------- #
-def test_reporting_cadence_for_annual_resolves_via_short_label(conn: sqlite3.Connection) -> None:
+def test_reporting_cadence_does_not_cross_semantic_short_label(
+    conn: sqlite3.Connection,
+) -> None:
     _seed(conn, "NU", _CAR, "annual", _CAR_FY)
     assert reporting_cadence_for(conn, "NU", _CAR) == "annual"
-    # a short break-rule label normalizes to the parenthetical-qualified definition
-    assert reporting_cadence_for(conn, "NU", "Capital adequacy ratio") == "annual"
+    # CET1 / Basel III total is a semantic qualifier, not a disposable unit.
+    assert reporting_cadence_for(conn, "NU", "Capital adequacy ratio") == "quarterly"
 
 
 def test_reporting_cadence_for_quarterly_default_and_unknown(conn: sqlite3.Connection) -> None:
@@ -134,13 +163,14 @@ def test_reporting_cadence_for_quarterly_default_and_unknown(conn: sqlite3.Conne
     assert reporting_cadence_for(conn, "NU", "No such metric") == "quarterly"
 
 
-def test_reporting_cadence_for_annual_wins_over_fragmented_duplicate(
+def test_reporting_cadence_keeps_semantically_distinct_definitions_separate(
     conn: sqlite3.Connection,
 ) -> None:
-    """A sparse quarterly duplicate must not mask the annual cadence marker."""
+    """Richness must not merge an unqualified KPI with a Basel III metric."""
     _seed(conn, "NU", "Capital adequacy ratio", "quarterly", [("2025-03-31", "Q1", 16.9)])
     _seed(conn, "NU", _CAR, "annual", _CAR_FY)
-    assert reporting_cadence_for(conn, "NU", "Capital adequacy ratio") == "annual"
+    assert reporting_cadence_for(conn, "NU", "Capital adequacy ratio") == "quarterly"
+    assert reporting_cadence_for(conn, "NU", _CAR) == "annual"
 
 
 def test_reporting_cadence_for_missing_column_defaults_quarterly() -> None:
@@ -161,7 +191,7 @@ def test_reporting_cadence_for_missing_column_defaults_quarterly() -> None:
 # --------------------------------------------------------------------------- #
 def test_fetch_history_annual_reads_fy_only_counts_years(conn: sqlite3.Connection) -> None:
     _seed(conn, "NU", _CAR, "annual", _CAR_FY + _CAR_INTERIM)
-    obs = _fetch_kpi_history(conn, "NU", "Capital adequacy ratio", 2)
+    obs = _fetch_kpi_history(conn, "NU", _CAR, 2)
     assert obs is not None
     # 2 consecutive periods == 2 YEARS (latest two FY rows), never an interim print
     assert [str(o.value) for o in obs] == ["16.6", "18.1"]
@@ -186,7 +216,7 @@ def test_evaluate_annual_rule_breaches_on_two_years(conn: sqlite3.Connection) ->
     _seed(conn, "NU", _CAR, "annual", _CAR_FY + _CAR_INTERIM)
     rule = BreakRule(
         rule_id="car_below_20",
-        kpi_name="Capital adequacy ratio",
+        kpi_name=_CAR,
         comparator=Comparator.LT,
         threshold=Decimal("20"),
         unit=Unit.PERCENT,
@@ -204,7 +234,7 @@ def test_evaluate_annual_rule_ok_when_latest_year_passes(conn: sqlite3.Connectio
     _seed(conn, "NU", _CAR, "annual", _CAR_FY + _CAR_INTERIM)
     rule = BreakRule(
         rule_id="car_below_13",
-        kpi_name="Capital adequacy ratio",
+        kpi_name=_CAR,
         comparator=Comparator.LT,
         threshold=Decimal("13"),
         unit=Unit.PERCENT,
@@ -270,7 +300,7 @@ def test_find_or_create_cadence_defensive_without_column() -> None:
 # --------------------------------------------------------------------------- #
 def test_annual_kpi_raw_for_excludes_interim(conn: sqlite3.Connection) -> None:
     _seed(conn, "NU", _CAR, "annual", _CAR_FY + _CAR_INTERIM)
-    raw = _annual_kpi_raw_for(conn, "NU", "Capital adequacy ratio")
+    raw = _annual_kpi_raw_for(conn, "NU", _CAR)
     assert raw is not None
     name, unit, by_year, src_by_year = raw
     assert name == _CAR
@@ -299,7 +329,7 @@ def test_resolve_priorities_routes_annual_off_quarterly_axis(tmp_path: Path) -> 
     c.close()
 
     resolved, kpi_series, annual_series, annual_years = _resolve_priorities(
-        ["Capital adequacy ratio", "NIM"],
+        [_CAR, "NIM"],
         line_items=[],
         ticker="NU",
         repo_root=tmp_path,

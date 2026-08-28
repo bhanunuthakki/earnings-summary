@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import os
@@ -24,8 +25,8 @@ from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, Literal, cast
+from pathlib import Path, PureWindowsPath
+from typing import Any, Literal, TypedDict, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -40,6 +41,7 @@ from operations.models import (  # noqa: E402
     RuntimeCollectionSummary,
     RuntimeProbeAttempt,
     RuntimeReceiptPair,
+    SchedulerAttemptState,
     SchedulerReceipt,
     SchedulerRuntimeReceipt,
     SchedulerTaskReceipt,
@@ -103,11 +105,36 @@ class SchedulerProbe:
     """The result of one bounded Scheduler query, without inferred health."""
 
     states: Mapping[str, SchedulerState] | None
+    details: Mapping[str, SchedulerTaskDetail] | None = None
     detail: str | None = None
 
     @classmethod
     def unavailable(cls, detail: str) -> SchedulerProbe:
         return cls(states=None, detail=detail)
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulerTaskDetail:
+    state: SchedulerState
+    registered_action_sha256: str
+    registered_checkout_sha256: str | None
+    registered_wrapper_sha256: str | None
+    registered_wrapper_name: str | None
+    last_attempted_at: datetime | None
+    next_expected_at: datetime | None
+    last_result: int | None
+
+
+class _SchedulerReceiptDetails(TypedDict, total=False):
+    registered_action_sha256: str | None
+    registered_checkout_sha256: str | None
+    registered_wrapper_sha256: str | None
+    wrapper_match: bool | None
+    last_attempted_at: datetime | None
+    last_successful_at: datetime | None
+    next_expected_at: datetime | None
+    last_result: int | None
+    attempt_state: SchedulerAttemptState
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +174,134 @@ def _scheduler_state(value: str) -> SchedulerState:
     if normalized == "disabled":
         return "Disabled"
     return "Unknown"
+
+
+def _identity_sha256(value: str) -> str:
+    normalized = value.strip().replace("/", "\\").casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _optional_scheduler_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("Scheduler timestamp is not timezone-aware")
+    return parsed
+
+
+def _registered_wrapper_name(execute: str, arguments: str) -> str | None:
+    candidates = re.findall(r'(?i)([^"\s]+\.bat)|"([^"]+\.bat)"', f"{execute} {arguments}")
+    if not candidates:
+        return None
+    value = next(part for part in candidates[-1] if part)
+    return PureWindowsPath(value).name
+
+
+def _checkout_identity(execute: str, working_directory: str) -> str | None:
+    candidate = working_directory.strip()
+    if not candidate:
+        command_path = PureWindowsPath(execute.strip().strip('"'))
+        candidate = str(command_path.parent)
+    if not candidate or candidate == ".":
+        return None
+    path = PureWindowsPath(candidate)
+    if path.name.casefold() == "cron":
+        path = path.parent
+    return _identity_sha256(str(path))
+
+
+def _collect_scheduler_details_from_system(
+    timeout: float,
+) -> Mapping[str, SchedulerTaskDetail] | None:
+    """Collect typed task history while ensuring raw action paths are never persisted."""
+
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$rows=Get-ScheduledTask -TaskPath '\\earnings-summary\\' | ForEach-Object {"
+        "$task=$_;$info=$task | Get-ScheduledTaskInfo;$action=@($task.Actions)[0];"
+        "[pscustomobject]@{task_name=($task.TaskPath+$task.TaskName);"
+        "state=[string]$task.State;execute=[string]$action.Execute;"
+        "arguments=[string]$action.Arguments;working_directory=[string]$action.WorkingDirectory;"
+        "last_run_time=if($info.LastRunTime.Year -le 1900){$null}else{"
+        "$info.LastRunTime.ToUniversalTime().ToString('o')};"
+        "next_run_time=if($info.NextRunTime.Year -le 1900){$null}else{"
+        "$info.NextRunTime.ToUniversalTime().ToString('o')};"
+        "last_task_result=[int64]$info.LastTaskResult}};"
+        "$json=ConvertTo-Json -InputObject @($rows) -Compress -Depth 3;"
+        "[Console]::Out.Write($json)"
+    )
+    with tempfile.TemporaryFile() as stdout_file:
+        try:
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                stdout=stdout_file,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if completed.returncode != 0:
+            return None
+        stdout_file.seek(0, os.SEEK_END)
+        if stdout_file.tell() > MAX_SCHEDULER_OUTPUT_BYTES:
+            return None
+        stdout_file.seek(0)
+        try:
+            payload = json.loads(
+                stdout_file.read(MAX_SCHEDULER_OUTPUT_BYTES + 1).decode("utf-8-sig")
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+    if not isinstance(payload, list):
+        return None
+    payload_items = cast(list[object], payload)
+    if len(payload_items) > MAX_SCHEDULER_ROWS:
+        return None
+    details: dict[str, SchedulerTaskDetail] = {}
+    try:
+        for raw in payload_items:
+            if not isinstance(raw, dict):
+                return None
+            raw = cast(dict[str, object], raw)
+            task_name = raw.get("task_name")
+            execute = raw.get("execute")
+            arguments = raw.get("arguments")
+            working_directory = raw.get("working_directory")
+            if not (
+                isinstance(task_name, str)
+                and isinstance(execute, str)
+                and isinstance(arguments, str)
+                and isinstance(working_directory, str)
+            ):
+                return None
+            if not task_name.casefold().startswith(CANONICAL_TASK_NAMESPACE):
+                continue
+            wrapper_name = _registered_wrapper_name(execute, arguments)
+            last_result_raw = raw.get("last_task_result")
+            last_result = last_result_raw if isinstance(last_result_raw, int) else None
+            detail = SchedulerTaskDetail(
+                state=_scheduler_state(str(raw.get("state", ""))),
+                registered_action_sha256=_identity_sha256(
+                    "\0".join((execute, arguments, working_directory))
+                ),
+                registered_checkout_sha256=_checkout_identity(execute, working_directory),
+                registered_wrapper_sha256=(
+                    _identity_sha256(wrapper_name) if wrapper_name is not None else None
+                ),
+                registered_wrapper_name=wrapper_name,
+                last_attempted_at=_optional_scheduler_timestamp(raw.get("last_run_time")),
+                next_expected_at=_optional_scheduler_timestamp(raw.get("next_run_time")),
+                last_result=last_result,
+            )
+            key = task_name.casefold()
+            if key in details:
+                return None
+            details[key] = detail
+    except (TypeError, ValueError):
+        return None
+    return details
 
 
 def _service_state(output: str, returncode: int) -> ServiceRuntimeState:
@@ -225,7 +380,7 @@ def collect_scheduler_tasks_from_system(timeout: float = 4.0) -> SchedulerProbe:
                 return SchedulerProbe.unavailable("Scheduler query exceeds bounded task rows")
     except csv.Error:
         return SchedulerProbe.unavailable("Scheduler query contains malformed CSV")
-    return SchedulerProbe(states=states)
+    return SchedulerProbe(states=states, details=_collect_scheduler_details_from_system(timeout))
 
 
 def _collect_windows_service_state(name: str, timeout: float) -> ServiceRuntimeState:
@@ -361,15 +516,59 @@ def collect_scheduler_receipt(
             SchedulerTaskReceipt(
                 task_name=task.task_name,
                 state=states.get(task.task_name.casefold(), (task.task_name, missing))[1],
+                **_scheduler_receipt_detail(
+                    current_probe.details,
+                    task.task_name,
+                    expected_wrapper=task.wrapper,
+                ),
             )
             for task in registry.scheduled_tasks
         )
         + tuple(
-            SchedulerTaskReceipt(task_name=task_name, state=state)
+            SchedulerTaskReceipt(
+                task_name=task_name,
+                state=state,
+                **_scheduler_receipt_detail(current_probe.details, task_name),
+            )
             for task_key, (task_name, state) in sorted(states.items())
             if task_key not in declared_keys
         ),
     )
+
+
+def _scheduler_receipt_detail(
+    details: Mapping[str, SchedulerTaskDetail] | None,
+    task_name: str,
+    *,
+    expected_wrapper: str | None = None,
+) -> _SchedulerReceiptDetails:
+    if details is None or (detail := details.get(task_name.casefold())) is None:
+        return {}
+    if detail.last_attempted_at is None:
+        attempt_state = "never_attempted"
+    elif detail.state == "Running":
+        attempt_state = "running"
+    elif detail.last_result == 0:
+        attempt_state = "succeeded"
+    elif detail.last_result is None:
+        attempt_state = "unknown"
+    else:
+        attempt_state = "failed"
+    return {
+        "registered_action_sha256": detail.registered_action_sha256,
+        "registered_checkout_sha256": detail.registered_checkout_sha256,
+        "registered_wrapper_sha256": detail.registered_wrapper_sha256,
+        "wrapper_match": (
+            None
+            if expected_wrapper is None or detail.registered_wrapper_name is None
+            else detail.registered_wrapper_name.casefold() == expected_wrapper.casefold()
+        ),
+        "last_attempted_at": detail.last_attempted_at,
+        "last_successful_at": (detail.last_attempted_at if attempt_state == "succeeded" else None),
+        "next_expected_at": detail.next_expected_at,
+        "last_result": detail.last_result,
+        "attempt_state": attempt_state,
+    }
 
 
 def collect_service_receipt(
@@ -446,6 +645,41 @@ def _retained_scheduler_success(path: Path) -> _RetainedSchedulerRead:
     if receipt is None:
         return _RetainedSchedulerRead(None, "absent", "no last successful evidence")
     return _RetainedSchedulerRead(receipt, "available")
+
+
+def retain_scheduler_task_successes(
+    current: SchedulerRuntimeReceipt, path: Path
+) -> SchedulerRuntimeReceipt:
+    """Carry forward a task's last success only for the same registered action."""
+
+    if current.last_successful is None:
+        return current
+    retained = _retained_scheduler_success(path).receipt
+    if retained is None:
+        return current
+    prior_by_name = {row.task_name.casefold(): row for row in retained.tasks}
+    tasks: list[SchedulerTaskReceipt] = []
+    for row in current.last_successful.tasks:
+        prior = prior_by_name.get(row.task_name.casefold())
+        can_retain = (
+            row.last_successful_at is None
+            and row.registered_action_sha256 is not None
+            and prior is not None
+            and prior.registered_action_sha256 == row.registered_action_sha256
+            and prior.last_successful_at is not None
+        )
+        tasks.append(
+            row.model_copy(update={"last_successful_at": prior.last_successful_at})
+            if can_retain and prior is not None
+            else row
+        )
+    return SchedulerRuntimeReceipt(
+        probe_attempt=current.probe_attempt,
+        last_successful=SchedulerReceipt(
+            observed_at=current.last_successful.observed_at,
+            tasks=tuple(tasks),
+        ),
+    )
 
 
 def _retained_service_success(path: Path) -> _RetainedServiceRead:
@@ -978,6 +1212,8 @@ def emit_runtime_receipts(
             service_path = service_receipt_path(repo_root)
             if scheduler.probe_attempt.availability == "unavailable":
                 scheduler = _retain_scheduler_success(scheduler, scheduler_path)
+            else:
+                scheduler = retain_scheduler_task_successes(scheduler, scheduler_path)
             if services.probe_attempt.availability == "unavailable":
                 services = _retain_service_success(services, service_path)
             pair_path = _pair_receipt_path(scheduler_path)

@@ -53,6 +53,12 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations against a live DB connection."""
     configured_url = config.get_main_option("sqlalchemy.url") or ""
+    if sys.platform == "darwin" and configured_url == "sqlite:///data/portfolio.db":
+        raise RuntimeError(
+            "refusing the unqualified Mac checkout database: /Applications/earnings-summary/"
+            "data/portfolio.db is not an authority; pass an explicit temporary/restored-snapshot "
+            "SQLite URL for Mac validation or run the guarded upgrade on the canonical Windows host"
+        )
     if configured_url.lower().startswith("sqlite"):
         require_safe_sqlite_writer_runtime()
     connectable = engine_from_config(

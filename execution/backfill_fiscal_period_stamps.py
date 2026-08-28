@@ -21,10 +21,9 @@ This script:
      `compute.kpi_extract_summaries._period_end`.
   2. Where the stored period_end differs from the re-derived one AND the
      ticker is one of the historically-affected off-cycle-FYE tickers,
-     updates BOTH the `documents` row and any dependent `kpi_facts` rows
-     (same `source_doc_id`) to the correct period_end — `fiscal_period_type`
-     is already correct (Q4 stays Q4) and does not change.
-  3. Prints a report; only writes with `--apply`.
+     reports the source-backed correction candidate.
+  3. Never mutates historical observations. Apply has been retired; corrections
+     use the reviewed append-only supersession path.
 
 Deliberately scoped to `_TICKER_QUARTER_PERIOD_END`'s tickers only (not a
 general "any documents row with a weird period_end" sweep) — see that table's
@@ -32,9 +31,7 @@ docstring for why the mapping is per-ticker and not inferable in general.
 
 Usage:
     python execution/backfill_fiscal_period_stamps.py                 # dry run
-    python execution/backfill_fiscal_period_stamps.py --apply
-    python execution/backfill_fiscal_period_stamps.py --ticker AMAT --apply
-    python execution/backfill_fiscal_period_stamps.py --db C:/path/to/portfolio.db --apply
+    python execution/backfill_fiscal_period_stamps.py --ticker AMAT
 """
 
 # pyright: reportPrivateUsage=false
@@ -95,7 +92,9 @@ def backfill(
 ) -> CorrectionResult:
     """Re-stamp llm_extracted documents (+ dependent kpi_facts) whose period_end
     doesn't match what `_period_end` now computes from their own filename."""
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    if not dry_run:
+        raise ValueError("in-place fiscal-period repair is retired; use source-backed supersession")
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=False)
     conn.row_factory = sqlite3.Row
     result = CorrectionResult()
     try:
@@ -132,20 +131,7 @@ def backfill(
                         f"{stored} -> {correct_str} (file={Path(row['file_path']).name}, "
                         f"{affected_facts} kpi_facts row(s))"
                     )
-                if not dry_run:
-                    conn.execute(
-                        "UPDATE documents SET period_end = ? WHERE id = ?",
-                        (correct_period_end, row["id"]),
-                    )
-                    fact_cur = conn.execute(
-                        "UPDATE kpi_facts SET period_end = ? WHERE source_doc_id = ?",
-                        (correct_period_end, row["id"]),
-                    )
-                    result.kpi_facts_updated += fact_cur.rowcount
-                else:
-                    result.kpi_facts_updated += affected_facts
-        if not dry_run:
-            conn.commit()
+                result.kpi_facts_updated += affected_facts
     finally:
         conn.close()
 
@@ -171,11 +157,6 @@ def main() -> int:
     parser.add_argument(
         "--ticker", default=None, help="limit to one ticker (must be Oct/Jan-FYE covered)"
     )
-    parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="write the corrected period_end values (default: dry run, report only)",
-    )
     args = parser.parse_args()
 
     db_path = (args.db or (PROJECT_ROOT / "data" / "portfolio.db")).resolve()
@@ -183,9 +164,8 @@ def main() -> int:
         print(f"DB not found: {db_path}", file=sys.stderr)
         return 1
 
-    mode = "applying" if args.apply else "dry-run"
-    print(f"{mode} fiscal-period-stamp correction on {db_path}")
-    backfill(db_path, only_ticker=args.ticker, dry_run=not args.apply)
+    print(f"dry-run fiscal-period-stamp review on {db_path}")
+    backfill(db_path, only_ticker=args.ticker, dry_run=True)
     return 0
 
 

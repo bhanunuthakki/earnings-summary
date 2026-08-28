@@ -45,6 +45,24 @@ CREATE TABLE kpi_facts (
     confidence REAL NOT NULL DEFAULT 1.0,
     locator TEXT
 );
+CREATE TABLE kpi_fact_semantic_contexts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kpi_fact_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    supersedes_context_id INTEGER,
+    metric_name_as_reported TEXT NOT NULL,
+    reported_period_end TEXT,
+    period_role TEXT NOT NULL DEFAULT 'current',
+    publication_lane TEXT NOT NULL DEFAULT 'current_actual',
+    accounting_basis TEXT NOT NULL DEFAULT 'management',
+    consolidation_scope TEXT NOT NULL DEFAULT 'consolidated',
+    dimensions_json TEXT NOT NULL DEFAULT '{}',
+    unit_scale TEXT NOT NULL DEFAULT 'none',
+    source_row_label TEXT,
+    source_column_header TEXT,
+    status TEXT NOT NULL DEFAULT 'admitted',
+    reason_code TEXT
+);
 CREATE TABLE documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
@@ -109,6 +127,11 @@ def _seed(conn: sqlite3.Connection, *, with_documents: bool = True) -> None:
             ("2025-12-31", 11.0, "Q4", 1, 0.7),
             ("2025-12-31", 11.2, "Q4", 2, 0.94),
         ],
+    )
+    conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id,metric_name_as_reported,reported_period_end) "
+        "SELECT id,'ARPAC (USD)',substr(period_end,1,10) FROM kpi_facts"
     )
     conn.commit()
 
@@ -177,6 +200,11 @@ def test_annual_kpi_series_carries_sources() -> None:
         "INSERT INTO kpi_facts (ticker, period_end, value, unit, kpi_definition_id, "
         " fiscal_period_type, source_doc_id, confidence) VALUES ('TST', ?, ?, 'percent', 3, 'FY', 4, 1.0)",
         [("2024-12-31", 18.0), ("2025-12-31", 17.1)],
+    )
+    conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id,metric_name_as_reported,reported_period_end,accounting_basis) "
+        "SELECT id,'CAR (%)',substr(period_end,1,10),'gaap' FROM kpi_facts"
     )
     conn.commit()
     raw = _annual_kpi_raw_for(conn, "TST", "CAR")
