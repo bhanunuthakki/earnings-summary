@@ -1076,7 +1076,11 @@ def test_apply_authority_accepts_pinned_runtime_code_with_separate_state_root(
     monkeypatch.setattr(refresh.sys, "platform", "win32")
     monkeypatch.setattr(refresh, "PROJECT_ROOT", code_root)
     monkeypatch.setattr(refresh, "CANONICAL_WINDOWS_STATE_ROOT", state_root)
-    monkeypatch.setattr(refresh, "review_code_identity", lambda _root: expected_code_identity)
+
+    def code_identity(_root: Path) -> str:
+        return expected_code_identity
+
+    monkeypatch.setattr(refresh, "review_code_identity", code_identity)
 
     refresh._validate_apply_authority(
         db_path=state_root / "data" / "portfolio.db",
@@ -1095,7 +1099,11 @@ def test_apply_authority_rejects_unpinned_runtime_code(
     monkeypatch.setattr(refresh.sys, "platform", "win32")
     monkeypatch.setattr(refresh, "PROJECT_ROOT", tmp_path / "runtime-code")
     monkeypatch.setattr(refresh, "CANONICAL_WINDOWS_STATE_ROOT", state_root)
-    monkeypatch.setattr(refresh, "review_code_identity", lambda _root: "b" * 64)
+
+    def code_identity(_root: Path) -> str:
+        return "b" * 64
+
+    monkeypatch.setattr(refresh, "review_code_identity", code_identity)
 
     with pytest.raises(refresh.RepairBlockedError, match="apply_code_identity_mismatch"):
         refresh._validate_apply_authority(
