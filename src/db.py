@@ -125,7 +125,11 @@ def _require_initialized_database(path: Path) -> None:
             "or run the explicit database bootstrap"
         )
     try:
-        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.READ_ONLY,
+            schema_preflight=False,
+        )
     except sqlite3.Error as exc:
         raise RuntimeError(f"portfolio database cannot be opened read-only: {path}") from exc
     try:

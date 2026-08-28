@@ -181,7 +181,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +2 Evaluation routes: bounded Cockpit dialogues and the complete L2 surface.
     # +1 governed Operations attention lifecycle action route.
     # +1 bounded read-only DCF grade-evidence projection.
-    assert len(rules) == 175
+    assert len(rules) == 176
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "company_say_do_api" not in rules
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()

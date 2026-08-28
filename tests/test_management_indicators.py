@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from compute.management_indicators import (
     IndicatorPromotionStatus,
     IndicatorRecurrence,
@@ -141,14 +140,10 @@ def test_review_status_does_not_write_a_canonical_kpi_fact() -> None:
         conn.close()
 
 
-def test_active_migration_head_installs_indicator_staging_table(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[1]
-    db_path = tmp_path / "portfolio.db"
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("version_locations", str(root / "alembic" / "versions"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path.as_posix()}")
-    command.upgrade(config, "head")
+def test_active_migration_head_installs_indicator_staging_table(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "portfolio.db")
 
     conn = sqlite3.connect(db_path)
     try:

@@ -40,6 +40,7 @@ import dcf_sheets  # noqa: E402
 import refresh_dcf  # noqa: E402
 
 from dcf import fact_sheet, redesign  # noqa: E402
+from tests.kpi_semantic_support import admit_all_kpi_facts  # noqa: E402
 
 BUILDER = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
 
@@ -1889,6 +1890,7 @@ def _seed_kpi_fact(db: Path, ticker: str, name: str, value: float, unit: str) ->
         "value, unit, source_doc_id) VALUES (?, '2025-09-30 00:00:00', 'Q3', ?, ?, ?, ?)",
         (ticker, definition_id, value, unit, document_id),
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
 

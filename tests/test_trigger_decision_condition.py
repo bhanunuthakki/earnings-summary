@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from alerts.store import compute_signature_sha
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from triggers import DecisionConditionTrigger, UserStateContext
 from triggers.base import Cadence, Trigger, TriggerCandidate
 
@@ -159,6 +160,7 @@ def _insert_kpi_series(
             "kpi_definition_id, value, unit, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (ticker, period_end, quarter, def_id, value, unit, i + 1),
         )
+    admit_all_kpi_facts(conn)
     conn.commit()
 
 

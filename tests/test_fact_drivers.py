@@ -27,6 +27,7 @@ from dcf.fact_drivers import (
 )
 from provenance import overrides
 from provenance.overrides import OverrideAction
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from viewspec.spec import MetricRef
 
 # --------------------------------------------------------------------------- #
@@ -336,6 +337,7 @@ def kpi_db(tmp_path: Path) -> Path:
             ("2025-09-30 00:00:00", "Q3", 42),  # latest
         ],
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
     return path

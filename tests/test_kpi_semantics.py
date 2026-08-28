@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from models.facts import Unit
 from pipeline.kpi_semantic_scope import scoped_kpi_definitions
 from pipeline.kpi_semantics import (
@@ -255,13 +254,10 @@ def test_semantic_audit_requires_explicit_database_path() -> None:
     assert action.required is True
 
 
-def test_active_migration_head_installs_append_only_semantic_context(tmp_path: Path) -> None:
-    db = tmp_path / "portfolio.db"
-    config = Config(str(PROJECT_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(PROJECT_ROOT / "alembic" / "versions"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db.as_posix()}")
-    command.upgrade(config, "head")
+def test_active_migration_head_installs_append_only_semantic_context(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "portfolio.db")
     conn = sqlite3.connect(db)
     try:
         assert conn.execute(

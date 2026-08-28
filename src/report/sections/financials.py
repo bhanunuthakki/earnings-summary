@@ -29,6 +29,8 @@ from compute.kpi_resolver import (
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.overrides import KPI as OVERRIDE_KPI
+from provenance.overrides import OverrideAction, chip_override_map, qualify_note
 from report.models import (
     AnnualKpiSeries,
     AnnualLineItem,
@@ -455,6 +457,20 @@ def _kpi_cell_sources_for(
             computed_from=str(r["computed_from"]) if r["computed_from"] is not None else None,
             issues=issues,
         )
+    # A qualify action does not replace the admitted fact, so preserve its
+    # warning on the source chip. Replace/drop actions are rejected above by
+    # semantic_series_identity_sql until a reviewed fact supersedes them.
+    ov_map = chip_override_map(
+        conn,
+        ticker=ticker,
+        fact_kind=OVERRIDE_KPI,
+        fact_key=resolved_name,
+        period_types=period_types,
+    )
+    for period_iso, ov in ov_map.items():
+        cell = out.get(period_iso)
+        if cell is not None and ov.action == OverrideAction.QUALIFY.value:
+            out[period_iso] = cell.model_copy(update={"issues": [*cell.issues, qualify_note(ov)]})
     return out
 
 

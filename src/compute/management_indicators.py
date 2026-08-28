@@ -19,6 +19,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from models.facts import Unit
+from provenance.selection import selected_transcripts_relation
 
 
 class IndicatorScope(StrEnum):
@@ -101,9 +102,10 @@ def _resolve_indicator_source(
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcript_segments)")}
     speaker = "ts.speaker" if "speaker" in columns else "NULL"
     time_code = "ts.time_code_start" if "time_code_start" in columns else "NULL"
+    transcripts = selected_transcripts_relation(conn)
     anchor = conn.execute(
         "SELECT tr.document_id, tr.id, tr.ticker, d.ticker "
-        "FROM transcript_segments ts JOIN transcripts tr ON tr.id=ts.transcript_id "
+        "FROM transcript_segments ts JOIN " + transcripts.sql + " tr ON tr.id=ts.transcript_id "
         "JOIN documents d ON d.id=tr.document_id "
         "WHERE ts.id=?",
         (anchor_segment_id,),
