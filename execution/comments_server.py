@@ -2067,6 +2067,17 @@ def create_app(
     @app.route("/api/operations/review-bundle", methods=["GET"])
     def operations_review_bundle_api():
         """Sanitized, typed Windows authority projection for Mac review."""
+        configured_private_origin = private_mobile_origin(
+            config_path=secret_read_path("private_mobile_base_url", repo_root=repo_root)
+        )
+        if (
+            configured_private_origin is None
+            or urllib.parse.urlparse(configured_private_origin).scheme != "https"
+        ):
+            return _client_error(
+                "private review origin is not configured as HTTPS; refusing to emit an identity",
+                503,
+            )
         operations_conn = get_operations_read_db()
         snapshot = collect_operations_snapshot(
             declared_operations,
@@ -2091,7 +2102,7 @@ def create_app(
             snapshot=snapshot,
             registry=declared_operations,
             semantic_rows=semantic_rows,
-            serving_origin=request.host_url.rstrip("/"),
+            serving_origin=configured_private_origin,
             code_instance=operations_review_code_identity,
             database_instance=database_instance,
             kpi_repair=load_kpi_repair_review(

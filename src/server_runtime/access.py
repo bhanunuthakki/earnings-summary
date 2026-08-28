@@ -107,6 +107,7 @@ def private_mobile_origin(
     try:
         parsed = urlparse(value)
         hostname = parsed.hostname or ""
+        port = parsed.port
     except ValueError:
         return None
     if (
@@ -117,6 +118,8 @@ def private_mobile_origin(
         or parsed.params
         or parsed.query
         or parsed.fragment
+        or not hostname
+        or (port is not None and not 1 <= port <= 65_535)
     ):
         return None
     if parsed.scheme == "https":
