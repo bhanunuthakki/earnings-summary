@@ -29,6 +29,7 @@ from collections.abc import Sequence
 from models.facts import Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
+from provenance.financial_fact_resolution import canonical_fact_relation
 
 # kpi_facts.fiscal_period_type values that denote a quarterly observation. The
 # §3 chart cadence is quarterly, so the chart loader measures richness over
@@ -43,27 +44,16 @@ QUARTERLY_FACT_PERIOD_TYPES: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4")
 # when a definition's reporting_cadence is 'annual' (see reporting_cadence_for).
 ANNUAL_FACT_PERIOD_TYPES: tuple[str, ...] = ("FY", "annual")
 
-# Trailing "(...)" qualifier on a stored KPI name, e.g. "Monthly ARPAC (USD)" or
-# "ROE (annualized, consolidated)". Stripped when matching a requested label to a
-# stored definition.
-_KPI_NAME_PAREN_TAIL_RX = re.compile(r"\s*\([^()]*\)\s*$")
-
 
 def normalize_kpi_name(name: str) -> str:
-    """Lowercase, collapse whitespace, drop trailing parenthetical qualifiers.
+    """Return the conservative semantic match key used on both read and write.
 
     "Monthly ARPAC (USD)" and "Monthly ARPAC" both normalize to "monthly arpac"
-    so a short label still resolves to the canonical definition. Only *trailing*
-    parentheticals are stripped; an interior qualifier is kept so genuinely
-    distinct metrics ("NIM" vs "Risk-adjusted NIM (...)") don't collide.
+    because USD is a unit-only qualifier. Semantic qualifiers such as ``(GAAP)``,
+    ``(non-GAAP)``, ``(Brazil)``, ``(active)``, or ``(consolidated)`` remain part
+    of the key. A duplicate is recoverable; a false merge corrupts the series.
     """
-    s = name.strip()
-    while True:
-        stripped = _KPI_NAME_PAREN_TAIL_RX.sub("", s).strip()
-        if stripped == s:
-            break
-        s = stripped
-    return " ".join(s.split()).lower()
+    return _canonical_match_key(name)
 
 
 # The capture-all extractor (table_extractors.generic_xbrl_capture._build_name)
@@ -122,12 +112,13 @@ def resolve_kpi_definition_name(
     already sets it).
     """
     cur = conn.cursor()
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     if period_types:
         placeholders = ",".join("?" * len(period_types))
         cur.execute(
             f"""
             SELECT kd.name AS name, COUNT(*) AS n
-            FROM kpi_facts kf
+            FROM {fact_relation} kf
             JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             WHERE kf.ticker = ?
               AND kf.fiscal_period_type IN ({placeholders})
@@ -137,9 +128,9 @@ def resolve_kpi_definition_name(
         )
     else:
         cur.execute(
-            """
+            f"""
             SELECT kd.name AS name, COUNT(*) AS n
-            FROM kpi_facts kf
+            FROM {fact_relation} kf
             JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             WHERE kf.ticker = ?
             GROUP BY kd.name
@@ -195,8 +186,9 @@ def matching_kpi_definition_ids(
     }
     if "currency" not in fact_columns:
         return tuple(int(row["id"]) for row in family if str(row["unit"]) == anchor_unit)
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     fact_currency_rows = conn.execute(
-        "SELECT kpi_definition_id, currency FROM kpi_facts WHERE ticker = ?",
+        f"SELECT kpi_definition_id, currency FROM {fact_relation} WHERE ticker = ?",
         (ticker.upper(),),
     ).fetchall()
     currencies_by_definition: dict[int, set[str | None]] = {}
@@ -206,6 +198,46 @@ def matching_kpi_definition_ids(
             str(fact["currency"]) if fact["currency"] is not None else None
         )
     anchor_currencies = currencies_by_definition.get(int(anchor["id"]), set())
+    semantic_columns = {
+        str(column["name"])
+        for column in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)").fetchall()
+    }
+
+    def latest_signature(definition_id: int) -> tuple[str, str, str, str, str] | None:
+        signature_fields = (
+            "metric_name_as_reported",
+            "accounting_basis",
+            "consolidation_scope",
+            "dimensions_json",
+            "unit_scale",
+        )
+        if not set(signature_fields).issubset(semantic_columns):
+            return None
+        row = conn.execute(
+            "SELECT " + ",".join(f"context.{field}" for field in signature_fields) + " "
+            f"FROM {fact_relation} fact JOIN kpi_fact_semantic_contexts context "
+            "ON context.kpi_fact_id=fact.id AND NOT EXISTS ("
+            "SELECT 1 FROM kpi_fact_semantic_contexts successor "
+            "WHERE successor.supersedes_context_id=context.id) "
+            "WHERE fact.kpi_definition_id=? AND context.status='admitted' "
+            "AND context.publication_lane='current_actual' "
+            "ORDER BY fact.period_end DESC,fact.id DESC LIMIT 1",
+            (definition_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return (
+            str(row[0]),
+            str(row[1]),
+            str(row[2]),
+            str(row[3]),
+            str(row[4]),
+        )
+
+    signatures = {int(row["id"]): latest_signature(int(row["id"])) for row in family}
+    anchor_signature = signatures[int(anchor["id"])]
+    if anchor_signature is None:
+        anchor_signature = next((signature for signature in signatures.values() if signature), None)
     return tuple(
         int(row["id"])
         for row in family
@@ -215,6 +247,80 @@ def matching_kpi_definition_ids(
             or not currencies_by_definition.get(int(row["id"]))
             or currencies_by_definition[int(row["id"])] == anchor_currencies
         )
+        and (
+            (anchor_signature is None and signatures[int(row["id"])] is None)
+            or signatures[int(row["id"])] == anchor_signature
+        )
+    )
+
+
+def semantic_series_identity_sql(
+    conn: sqlite3.Connection,
+    *,
+    fact_alias: str = "kf",
+    context_alias: str = "ksc",
+    fact_relation: str | None = None,
+) -> str:
+    """Restrict an admitted series to its latest basis/scope/dimension identity.
+
+    ``fact_relation`` must be the same canonical relation used by the caller's
+    outer KPI query. When omitted, resolve it here so anchor selection cannot
+    accidentally fall back to raw ``kpi_facts`` while the outer query uses the
+    resolved-current view.
+    """
+    resolved_fact_relation = fact_relation or canonical_fact_relation(conn, "kpi_facts").sql
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)").fetchall()
+    }
+    required = {
+        "metric_name_as_reported",
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions_json",
+        "unit_scale",
+        "revision",
+        "supersedes_context_id",
+        "publication_lane",
+    }
+    if not required.issubset(columns):
+        return "1=1"
+    anchor_fact = f"{fact_alias}_identity_fact"
+    anchor_context = f"{context_alias}_identity_context"
+    successor = f"{anchor_context}_successor"
+    predicates: list[str] = []
+    for field in (
+        "metric_name_as_reported",
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions_json",
+        "unit_scale",
+    ):
+        predicates.append(
+            f"{context_alias}.{field}=(SELECT {anchor_context}.{field} "
+            f"FROM {resolved_fact_relation} {anchor_fact} JOIN kpi_fact_semantic_contexts {anchor_context} "
+            f"ON {anchor_context}.kpi_fact_id={anchor_fact}.id AND NOT EXISTS ("
+            f"SELECT 1 FROM kpi_fact_semantic_contexts {successor} WHERE "
+            f"{successor}.supersedes_context_id={anchor_context}.id) "
+            f"WHERE {anchor_fact}.kpi_definition_id={fact_alias}.kpi_definition_id "
+            f"AND {anchor_context}.status='admitted' "
+            f"AND {anchor_context}.publication_lane='current_actual' "
+            f"ORDER BY {anchor_fact}.period_end DESC,{anchor_fact}.id DESC LIMIT 1)"
+        )
+    qualified = " AND ".join(predicates)
+    admitted_anchor_exists = (
+        f"EXISTS (SELECT 1 FROM {resolved_fact_relation} {anchor_fact} "
+        f"JOIN kpi_fact_semantic_contexts {anchor_context} "
+        f"ON {anchor_context}.kpi_fact_id={anchor_fact}.id AND NOT EXISTS ("
+        f"SELECT 1 FROM kpi_fact_semantic_contexts {successor} WHERE "
+        f"{successor}.supersedes_context_id={anchor_context}.id) "
+        f"WHERE {anchor_fact}.kpi_definition_id={fact_alias}.kpi_definition_id "
+        f"AND {anchor_context}.status='admitted' "
+        f"AND {anchor_context}.publication_lane='current_actual')"
+    )
+    return (
+        f"((({context_alias}.id IS NULL OR {context_alias}.status='legacy_unknown') "
+        f"AND NOT {admitted_anchor_exists}) OR ({qualified}))"
     )
 
 
@@ -281,21 +387,15 @@ def reporting_cadence_for(conn: sqlite3.Connection, ticker: str, requested: str)
 # ---------------------------------------------------------------------------
 # Write-path canonicalizer — canonical_metric_name
 #
-# `resolve_kpi_definition_name` (above) is the READ side: it unifies already-
-# fragmented duplicates at query time and is deliberately LENIENT (it strips
-# every trailing parenthetical). `canonical_metric_name` is the WRITE side: the
+# `resolve_kpi_definition_name` (above) and `canonical_metric_name` now share the
+# same conservative key: only unit surface variants may collapse. The WRITE side
+# is used by the
 # "capture every reported number" program (directives/capture_every_number_program.md)
 # routes every freshly-extracted label through it BEFORE persisting, to decide
 # whether the value joins an existing kpi_definitions row or mints a new one.
 #
-# The two paths are intentionally asymmetric — split cautiously on write, unify
-# generously on read — because the governing invariant on the write side is:
-#
-#     A FALSE MERGE of two genuinely distinct metrics is worse than a duplicate.
-#
-# A duplicate is recoverable (the read resolver defragments it; a later pass can
-# consolidate). A false merge silently routes two different metrics' facts into
-# one series and is effectively unrecoverable. So the write-side match key only
+# A duplicate is recoverable; a false merge silently routes two different
+# metrics' facts into one series. Therefore the shared match key only
 # collapses UNIT / CASING / WHITESPACE surface variants and KEEPS semantic
 # qualifiers, and a normalized match is additionally gated by unit-family
 # compatibility.
@@ -515,7 +615,8 @@ def _definition_fact_counts(conn: sqlite3.Connection, ticker: str) -> dict[int, 
         rows = conn.execute(
             "SELECT kd.id AS id, COUNT(kf.id) AS n "
             "FROM kpi_definitions kd "
-            "LEFT JOIN kpi_facts kf ON kf.kpi_definition_id = kd.id "
+            f"LEFT JOIN {canonical_fact_relation(conn, 'kpi_facts').sql} kf "
+            "ON kf.kpi_definition_id = kd.id "
             "WHERE kd.ticker = ? GROUP BY kd.id",
             (ticker.upper(),),
         ).fetchall()

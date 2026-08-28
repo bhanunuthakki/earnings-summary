@@ -15,6 +15,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 from urllib.parse import unquote
 
 import requests
@@ -107,7 +108,60 @@ BRIEFED_LIST_TYPES: tuple[str, ...] = BRIEFED_LIST_TYPE_VALUES
 BRIEFED_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in BRIEFED_LIST_TYPES) + ")"
 
 
-def get_connection() -> sqlite3.Connection:
+def _require_initialized_database(path: Path) -> None:
+    """Refuse an absent or empty canonical database on ordinary read/write paths.
+
+    ``sqlite3.connect`` creates a file before a caller has proved that it is
+    the portfolio store.  That makes a missing Mac checkout copy look like a
+    valid (but empty) source of truth.  The explicit ``init_db`` compatibility
+    helper opts into creation; normal callers must point at an existing store
+    with the bootstrap schema.
+    """
+    if os.fspath(path) == ":memory:":
+        return
+    if not path.exists():
+        raise FileNotFoundError(
+            f"portfolio database does not exist: {path}; configure the canonical DB "
+            "or run the explicit database bootstrap"
+        )
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"portfolio database cannot be opened read-only: {path}") from exc
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"portfolio database is not a readable SQLite store: {path}") from exc
+    finally:
+        conn.close()
+    if "tracked_companies" not in tables:
+        raise RuntimeError(
+            f"portfolio database is absent or uninitialized: {path}; refusing to use an empty "
+            "canonical-looking file"
+        )
+
+
+def get_connection(*, allow_create: bool = False) -> sqlite3.Connection:
+    """Open the canonical portfolio DB without silently creating a new stub.
+
+    Production callers use the default fail-closed behavior.  ``init_db`` is
+    the sole compatibility bootstrap and passes ``allow_create=True``.
+    """
+    path = Path(DB_PATH)
+    forbidden_mac_checkout = (Path(PROJECT_ROOT) / "data" / "portfolio.db").resolve()
+    if sys.platform == "darwin" and path.resolve() == forbidden_mac_checkout:
+        raise RuntimeError(
+            f"the Mac checkout database is prohibited as an authority: {path}; "
+            "use an explicit temporary/restored-snapshot database for validation or the "
+            "canonical Windows database for production state"
+        )
+    if not allow_create:
+        _require_initialized_database(path)
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
     # 30s busy_timeout: this DB is shared with sibling-branch pipelines whose
@@ -117,7 +171,7 @@ def get_connection() -> sqlite3.Connection:
     return connect_sqlite(
         DB_PATH,
         role=SQLiteConnectionRole.WRITER,
-        schema_preflight=Path(DB_PATH).exists(),
+        schema_preflight=path.exists(),
     )
 
 
@@ -127,7 +181,7 @@ def init_db() -> None:
     Production schema setup must use ``alembic upgrade head``. This helper is
     retained only for historical migration tests and compatibility tooling.
     """
-    conn = get_connection()
+    conn = get_connection(allow_create=True)
     cursor = conn.cursor()
     _create_tracked_companies(cursor)
     _create_quarterly_artifacts(cursor)
@@ -267,11 +321,12 @@ def _scan_fmp_file_for_max_date(path: str) -> str | None:
     if not isinstance(records, list):
         return None
     max_date: str | None = None
-    for rec in records:
+    for rec in cast("list[object]", records):
         if not isinstance(rec, dict):
             continue
+        record = cast("dict[str, object]", rec)
         for key in ("date", "fillingDate"):
-            v = rec.get(key)
+            v = record.get(key)
             if isinstance(v, str) and _DATE_RX.match(v[:10]):
                 d = v[:10]
                 if max_date is None or d > max_date:
@@ -320,7 +375,17 @@ def _load_sec_tickers() -> dict[str, str]:
     payload = resp.json()
     if not isinstance(payload, dict):
         raise ValueError(f"Unexpected SEC tickers payload type: {type(payload).__name__}")
-    _sec_tickers_cache = {v["ticker"]: v["title"] for v in payload.values()}
+    entries: dict[str, str] = {}
+    for raw_entry in cast("dict[object, object]", payload).values():
+        if not isinstance(raw_entry, dict):
+            raise ValueError("Unexpected SEC ticker entry type")
+        entry = cast("dict[str, object]", raw_entry)
+        ticker = entry.get("ticker")
+        title = entry.get("title")
+        if not isinstance(ticker, str) or not isinstance(title, str):
+            raise ValueError("Unexpected SEC ticker entry shape")
+        entries[ticker] = title
+    _sec_tickers_cache = entries
     return _sec_tickers_cache
 
 
@@ -585,11 +650,11 @@ def _sync_issuer_registry_safe(ticker: str, *, removed: bool) -> None:
     try:
         import issuer_registry
 
-        repo_root = os.path.dirname(DATA_DIR)  # DATA_DIR == <repo_root>/data
+        repo_root = Path(DATA_DIR).parent  # DATA_DIR == <repo_root>/data
         if removed:
             issuer_registry.deregister_issuer(repo_root, ticker.upper())
         else:
-            issuer_registry.register_issuer(repo_root, ticker.upper(), db_path=DB_PATH)
+            issuer_registry.register_issuer(repo_root, ticker.upper(), db_path=Path(DB_PATH))
     except Exception as exc:  # never break tracking on a registry hiccup
         import logging
 

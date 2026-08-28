@@ -43,15 +43,29 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-from compute.kpi_resolver import resolve_kpi_definition_name
+from compute.kpi_resolver import resolve_kpi_definition_name, semantic_series_identity_sql
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceQualityTier, SourceType
 from models.facts import Currency, FiscalPeriodType, Unit
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+    current_kpi_semantic_context,
+    persist_kpi_semantic_context,
+    semantic_admission_sql,
+    unclassified_kpi_context,
+)
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
-from provenance.overrides import OverrideAction, active_scalar_override_map
+from provenance.overrides import active_scalar_override_map
 from timeseries.loaders import reader_tier_rank_sql
 
 log = logging.getLogger(__name__)
@@ -85,6 +99,9 @@ KPI_RISK_ADJ_NIM_YOY_BPS = "Risk-adjusted NIM YoY change (bps)"
 KPI_REVENUE_YOY_DECELERATION = "Revenue YoY Growth Deceleration (YoY of YoY growth rate)"
 KPI_NPL_15D_TOTAL_YOY_PP = "NPL 15d+ total YoY change (pp)"
 KPI_CUSTOMERS_100K_YOY = "Customers >$100K ARR YoY Growth"
+KPI_NPL_15D_TOTAL_BASE = (
+    "NPL 15d+ ratio (consolidated total: early-stage 15-90d + severe 90d+, YoY-tracked)"
+)
 
 # Income-statement line items needed for margin + revenue YoY derivations.
 _REQUIRED_LINE_ITEMS: tuple[str, ...] = (
@@ -125,6 +142,7 @@ class QuarterlyFacts:
     net_income: Decimal
     gross_profit: Decimal
     source_doc_id: int
+    source_doc_ids: dict[str, int] | None = None
     capital_expenditure: Decimal | None = None
     free_cash_flow: Decimal | None = None
     operating_cash_flow: Decimal | None = None
@@ -152,14 +170,26 @@ class FmpDerivationOutcome:
     reasons: tuple[FmpDerivationReason, ...]
 
 
-def _monetary_fact_pair(value: object) -> tuple[Decimal, Currency] | None:
-    """Return a validated (value, currency) pair from the SQL aggregation bucket."""
+def _monetary_fact_cell(value: object) -> tuple[Decimal, Currency, int] | None:
+    """Return a validated value, currency, and source document cell."""
     if not isinstance(value, tuple):
         return None
-    pair = cast("tuple[object, ...]", value)
-    if len(pair) != 2 or not isinstance(pair[0], Decimal) or not isinstance(pair[1], Currency):
+    cell = cast("tuple[object, ...]", value)
+    if (
+        len(cell) != 3
+        or not isinstance(cell[0], Decimal)
+        or not isinstance(cell[1], Currency)
+        or not isinstance(cell[2], int)
+    ):
         return None
-    return (pair[0], pair[1])
+    return (cell[0], cell[1], cell[2])
+
+
+def _fact_doc_id(facts: QuarterlyFacts, line_item: str) -> int:
+    """Return the winning source document for one input, with legacy fallback."""
+    if facts.source_doc_ids is not None and line_item in facts.source_doc_ids:
+        return facts.source_doc_ids[line_item]
+    return facts.source_doc_id
 
 
 def _fetch_quarterly_facts(
@@ -167,8 +197,10 @@ def _fetch_quarterly_facts(
 ) -> tuple[list[QuarterlyFacts], list[FmpDerivationReason]]:
     """Pull standalone-quarter fundamentals for a ticker.
 
-    Accepts rows from any `fmp_income_statement` / `fmp_cashflow` document
-    EXCEPT the TTM / FY rollups (`%_ttm.json`, `%_annual.json`). The
+    Accepts rows from FMP statement documents and from the SEC XBRL adapter
+    (`source_type = 'sec_xbrl'`), whose live Companyfacts path attributes rows
+    to `sec_companyfacts_snapshot`. FMP TTM / FY rollups (`%_ttm.json`,
+    `%_annual.json`) are excluded. The
     `fiscal_period_type IN ('Q1'..'Q4')` filter is the real safety net — it
     rejects any non-quarterly leakage regardless of file naming.
 
@@ -188,11 +220,14 @@ def _fetch_quarterly_facts(
     deterministic SEC XBRL row beats an FMP row regardless of ingest order. The
     prior grouping had NO dedup (first cursor row set the source_doc_id and the
     last write won each cell in arbitrary period_end-only order), so a single key
-    could mix an FMP revenue with a SEC operating_income. ``_source_doc_id``
-    tracks the winning revenue cell's document (the anchor the derived rows'
-    provenance ties to). Doc-type is still restricted to the FMP statement docs
-    the derivers were built around; a SEC row surfaces here only when it was
-    persisted under one of those doc_types.
+    could mix an FMP revenue with a SEC operating_income. Every winning cell's
+    document identity is retained in ``QuarterlyFacts.source_doc_ids``; the
+    row-level ``source_doc_id`` remains the revenue anchor for compatibility.
+    The source-type arm is intentional: SEC Companyfacts snapshots are aggregate
+    evidence documents rather than FMP statement document types, but their
+    normalized `financial_facts` rows share the same deterministic line-item
+    contract. Semantic admission remains separately gated on every selected
+    input document carrying the `sec_official` tier.
     """
     all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS + _BALANCE_LINE_ITEMS
     placeholders = ",".join("?" * len(all_line_items))
@@ -204,7 +239,10 @@ def _fetch_quarterly_facts(
         FROM financial_facts ff
         JOIN documents d ON d.id = ff.source_doc_id
         WHERE ff.ticker = ?
-          AND d.doc_type IN ('fmp_income_statement', 'fmp_cashflow', 'fmp_balance_sheet')
+          AND (
+                d.doc_type IN ('fmp_income_statement', 'fmp_cashflow', 'fmp_balance_sheet')
+                OR d.source_type = 'sec_xbrl'
+              )
           AND d.file_path NOT LIKE '%_ttm.json'
           AND d.file_path NOT LIKE '%_annual.json'
           AND ff.line_item IN ({placeholders})
@@ -229,7 +267,11 @@ def _fetch_quarterly_facts(
             currency = Currency(str(row["currency"])) if row["currency"] is not None else None
         except ValueError:
             currency = None
-        bucket[row["line_item"]] = (Decimal(str(row["value"])), currency)
+        bucket[row["line_item"]] = (
+            Decimal(str(row["value"])),
+            currency,
+            int(row["source_doc_id"]),
+        )
         # Anchor provenance to the winning revenue cell's document (revenue is
         # the required base of every derivation). Rows arrive tier-ascending, so
         # the last revenue write is the tier-winner.
@@ -241,10 +283,10 @@ def _fetch_quarterly_facts(
     for (pe, fpt), bucket in sorted(grouped.items(), key=lambda kv: kv[0][0]):
         if not all(li in bucket for li in _REQUIRED_LINE_ITEMS):
             continue
-        required_pairs = [
-            _monetary_fact_pair(bucket[line_item]) for line_item in _REQUIRED_LINE_ITEMS
+        required_cells = [
+            _monetary_fact_cell(bucket[line_item]) for line_item in _REQUIRED_LINE_ITEMS
         ]
-        if any(pair is None for pair in required_pairs):
+        if any(cell is None for cell in required_cells):
             log.warning(
                 "fmp_derived_kpis_not_computable",
                 extra={
@@ -255,8 +297,8 @@ def _fetch_quarterly_facts(
             )
             degradations.append(FmpDerivationReason.MISSING_MONETARY_CURRENCY)
             continue
-        validated_pairs = [pair for pair in required_pairs if pair is not None]
-        required_currencies = {currency for _, currency in validated_pairs}
+        validated_cells = [cell for cell in required_cells if cell is not None]
+        required_currencies = {currency for _, currency, _ in validated_cells}
         if len(required_currencies) != 1:
             log.warning(
                 "fmp_derived_kpis_not_computable",
@@ -268,19 +310,19 @@ def _fetch_quarterly_facts(
             )
             degradations.append(FmpDerivationReason.INCOMPATIBLE_MONETARY_CURRENCY)
             continue
-        rev, operating_income, net_income, gross_profit = (value for value, _ in validated_pairs)
+        rev, operating_income, net_income, gross_profit = (value for value, _, _ in validated_cells)
         if rev == 0:
             continue
         required_currency = next(iter(required_currencies))
 
-        optional_pairs = {
-            line_item: _monetary_fact_pair(bucket.get(line_item))
+        optional_cells = {
+            line_item: _monetary_fact_cell(bucket.get(line_item))
             for line_item in _OPTIONAL_LINE_ITEMS + _BALANCE_LINE_ITEMS
         }
-        ocf_pair = optional_pairs["operating_cash_flow"]
-        capex_pair = optional_pairs["capital_expenditure"]
-        fcf_pair = optional_pairs["free_cash_flow"]
-        equity_pair = optional_pairs["total_stockholders_equity"]
+        ocf_pair = optional_cells["operating_cash_flow"]
+        capex_pair = optional_cells["capital_expenditure"]
+        fcf_pair = optional_cells["free_cash_flow"]
+        equity_pair = optional_cells["total_stockholders_equity"]
         ocf = ocf_pair[0] if ocf_pair is not None and ocf_pair[1] == required_currency else None
         capex = (
             capex_pair[0] if capex_pair is not None and capex_pair[1] == required_currency else None
@@ -311,6 +353,11 @@ def _fetch_quarterly_facts(
                 net_income=net_income,
                 gross_profit=gross_profit,
                 source_doc_id=int(cast("int", bucket["_source_doc_id"])),
+                source_doc_ids={
+                    line_item: cell[2]
+                    for line_item in all_line_items
+                    if (cell := _monetary_fact_cell(bucket.get(line_item))) is not None
+                },
                 capital_expenditure=capex,
                 free_cash_flow=fcf,
                 operating_cash_flow=ocf,
@@ -336,6 +383,7 @@ class DerivedKpiRow:
     # deriver predates lineage capture.
     computed_from: str | None = None
     currency: Currency | None = None
+    semantic_context: KpiSemanticContext | None = None
 
 
 def _lineage(display: str, inputs: list[dict[str, object]]) -> str:
@@ -389,9 +437,14 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     "operating_income ÷ revenue (%)",
                     [
                         _input_ref(
-                            "financial_fact", "operating_income", f.period_end, f.source_doc_id
+                            "financial_fact",
+                            "operating_income",
+                            f.period_end,
+                            _fact_doc_id(f, "operating_income"),
                         ),
-                        _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                        _input_ref(
+                            "financial_fact", "revenue", f.period_end, _fact_doc_id(f, "revenue")
+                        ),
                     ],
                 ),
             )
@@ -407,8 +460,15 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 computed_from=_lineage(
                     "net_income ÷ revenue (%)",
                     [
-                        _input_ref("financial_fact", "net_income", f.period_end, f.source_doc_id),
-                        _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                        _input_ref(
+                            "financial_fact",
+                            "net_income",
+                            f.period_end,
+                            _fact_doc_id(f, "net_income"),
+                        ),
+                        _input_ref(
+                            "financial_fact", "revenue", f.period_end, _fact_doc_id(f, "revenue")
+                        ),
                     ],
                 ),
             )
@@ -424,8 +484,15 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 computed_from=_lineage(
                     "gross_profit ÷ revenue (%)",
                     [
-                        _input_ref("financial_fact", "gross_profit", f.period_end, f.source_doc_id),
-                        _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                        _input_ref(
+                            "financial_fact",
+                            "gross_profit",
+                            f.period_end,
+                            _fact_doc_id(f, "gross_profit"),
+                        ),
+                        _input_ref(
+                            "financial_fact", "revenue", f.period_end, _fact_doc_id(f, "revenue")
+                        ),
                     ],
                 ),
             )
@@ -448,9 +515,14 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                                 "financial_fact",
                                 "capital_expenditure",
                                 f.period_end,
-                                f.source_doc_id,
+                                _fact_doc_id(f, "capital_expenditure"),
                             ),
-                            _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                            _input_ref(
+                                "financial_fact",
+                                "revenue",
+                                f.period_end,
+                                _fact_doc_id(f, "revenue"),
+                            ),
                         ],
                     ),
                 )
@@ -468,9 +540,17 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                         "free_cash_flow ÷ revenue (%)",
                         [
                             _input_ref(
-                                "financial_fact", "free_cash_flow", f.period_end, f.source_doc_id
+                                "financial_fact",
+                                "free_cash_flow",
+                                f.period_end,
+                                _fact_doc_id(f, "free_cash_flow"),
                             ),
-                            _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                            _input_ref(
+                                "financial_fact",
+                                "revenue",
+                                f.period_end,
+                                _fact_doc_id(f, "revenue"),
+                            ),
                         ],
                     ),
                 )
@@ -498,9 +578,17 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     computed_from=_lineage(
                         "revenue vs same quarter 1y prior (%)",
                         [
-                            _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
                             _input_ref(
-                                "financial_fact", "revenue", prior.period_end, prior.source_doc_id
+                                "financial_fact",
+                                "revenue",
+                                f.period_end,
+                                _fact_doc_id(f, "revenue"),
+                            ),
+                            _input_ref(
+                                "financial_fact",
+                                "revenue",
+                                prior.period_end,
+                                _fact_doc_id(prior, "revenue"),
                             ),
                         ],
                     ),
@@ -531,13 +619,13 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                                     "financial_fact",
                                     "operating_cash_flow",
                                     f.period_end,
-                                    f.source_doc_id,
+                                    _fact_doc_id(f, "operating_cash_flow"),
                                 ),
                                 _input_ref(
                                     "financial_fact",
                                     "operating_cash_flow",
                                     prior.period_end,
-                                    prior.source_doc_id,
+                                    _fact_doc_id(prior, "operating_cash_flow"),
                                 ),
                             ],
                         ),
@@ -568,7 +656,12 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 computed_from=_lineage(
                     "TTM net_income ÷ total_stockholders_equity (%)",
                     [
-                        _input_ref("financial_fact", "net_income", q.period_end, q.source_doc_id)
+                        _input_ref(
+                            "financial_fact",
+                            "net_income",
+                            q.period_end,
+                            _fact_doc_id(q, "net_income"),
+                        )
                         for q in window
                     ]
                     + [
@@ -576,7 +669,7 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                             "financial_fact",
                             "total_stockholders_equity",
                             cur.period_end,
-                            cur.source_doc_id,
+                            _fact_doc_id(cur, "total_stockholders_equity"),
                         )
                     ],
                 ),
@@ -893,6 +986,8 @@ class KpiSeriesPoint:
     fiscal_period_type: FiscalPeriodType
     value: Decimal
     source_doc_id: int
+    semantic_context: KpiSemanticContext | None = None
+    definition_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -934,7 +1029,7 @@ _TRANSFORM_DERIVER_SPECS: tuple[_TransformSpec, ...] = (
     # does NOT normalize-match. (curr - prior) is the pp delta directly.
     _TransformSpec(
         derived_name=KPI_NPL_15D_TOTAL_YOY_PP,
-        base_label="NPL 15d+ ratio",
+        base_label=KPI_NPL_15D_TOTAL_BASE,
         kind=TransformKind.YOY_CHANGE_PP,
         unit=Unit.PERCENT,
     ),
@@ -1035,9 +1130,66 @@ def compute_yoy_transform(
                 unit=unit,
                 source_doc_id=p.source_doc_id,
                 computed_from=computed_from,
+                semantic_context=_transform_semantic_context(
+                    current=p,
+                    prior=prior,
+                    derived_name=name,
+                    derived_unit=unit,
+                ),
             )
         )
     return out
+
+
+def _unit_scale_for(unit: Unit) -> KpiUnitScale:
+    return {
+        Unit.THOUSANDS: KpiUnitScale.THOUSANDS,
+        Unit.MILLIONS: KpiUnitScale.MILLIONS,
+        Unit.BILLIONS: KpiUnitScale.BILLIONS,
+    }.get(unit, KpiUnitScale.NONE)
+
+
+def _transform_semantic_context(
+    *,
+    current: KpiSeriesPoint,
+    prior: KpiSeriesPoint,
+    derived_name: str,
+    derived_unit: Unit,
+) -> KpiSemanticContext | None:
+    """Inherit meaning only from two mutually comparable admitted inputs."""
+    current_context = current.semantic_context
+    prior_context = prior.semantic_context
+    if current_context is None or prior_context is None:
+        return None
+    for context in (current_context, prior_context):
+        if (
+            context.status is not KpiSemanticStatus.ADMITTED
+            or context.publication_lane is not KpiPublicationLane.CURRENT_ACTUAL
+            or context.period_role is not KpiPeriodRole.CURRENT
+        ):
+            return None
+    if (
+        current.definition_id is None
+        or prior.definition_id is None
+        or current.definition_id != prior.definition_id
+        or current_context.metric_name_as_reported != prior_context.metric_name_as_reported
+        or current_context.unit_scale is not prior_context.unit_scale
+        or current_context.accounting_basis is not prior_context.accounting_basis
+        or current_context.consolidation_scope is not prior_context.consolidation_scope
+        or current_context.dimensions != prior_context.dimensions
+    ):
+        return None
+    return KpiSemanticContext(
+        metric_name_as_reported=derived_name,
+        reported_period_end=current.period_end.date(),
+        period_role=KpiPeriodRole.CURRENT,
+        publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+        accounting_basis=current_context.accounting_basis,
+        consolidation_scope=current_context.consolidation_scope,
+        dimensions=current_context.dimensions,
+        unit_scale=_unit_scale_for(derived_unit),
+        status=KpiSemanticStatus.ADMITTED,
+    )
 
 
 def _fetch_full_kpi_series(
@@ -1049,10 +1201,11 @@ def _fetch_full_kpi_series(
     """Resolve `base_label` to its canonical definition and pull the full,
     per-period-deduped series from kpi_facts (oldest-first).
 
-    Resolution + per-period source dedup mirror
-    ``thesis_evaluator._fetch_kpi_history`` (richest definition wins; highest
-    ``source_doc_id`` per ``(period_end, fiscal_period_type)`` wins) so the
-    transform reads exactly the series the evaluator and the §3 chart read.
+    Resolution + per-period selection mirror
+    ``thesis_evaluator._fetch_kpi_history``: the canonical resolved-current
+    relation owns source selection after cutover, and only legacy pre-cutover
+    fixtures use stable latest-row dedup. The transform therefore reads the
+    same fact observation as the evaluator and other governed consumers.
     Rows whose unit != ``base_unit`` are skipped (the YoY transforms assume a
     percentage scale by default); pass ``base_unit=None`` to accept any unit (for
     a level/count base). Returns ``[]`` when the label resolves to no
@@ -1061,25 +1214,42 @@ def _fetch_full_kpi_series(
     resolved = resolve_kpi_definition_name(conn, ticker, base_label)
     if resolved is None:
         return []
-    cur = conn.execute(
-        "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
-        "       kf.source_doc_id "
-        "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker = ? AND kd.name = ? "
-        "  AND kf.source_doc_id = ("
-        "      SELECT MAX(k2.source_doc_id) FROM kpi_facts k2 "
-        "      WHERE k2.ticker = kf.ticker "
-        "        AND k2.kpi_definition_id = kf.kpi_definition_id "
-        "        AND k2.period_end = kf.period_end "
-        "        AND k2.fiscal_period_type = kf.fiscal_period_type) "
-        "ORDER BY kf.period_end ASC",
-        (ticker.upper(), resolved),
-    )
-    # Company-doc overrides win over the FMP/LLM row before the YoY transform reads
-    # it: a 'replace' substitutes the authoritative value, a 'drop' omits the period.
-    ov_map = active_scalar_override_map(
-        conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved
-    )
+    fact_relation = canonical_fact_relation(conn, "kpi_facts")
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation.sql)
+    # An override is a distinct observation without its own append-only
+    # semantic admission. A transform must remain unresolved until the
+    # correction is persisted as a source-reviewed superseding KPI fact.
+    if active_scalar_override_map(conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved):
+        log.warning(
+            "fmp_derived_kpi_unreviewed_override",
+            extra={"ticker": ticker.upper(), "kpi_name": resolved},
+        )
+        return []
+    if fact_relation.selection_mode == "legacy_pre_cutover":
+        query = (
+            "WITH eligible AS ("
+            "SELECT kf.id, kf.kpi_definition_id, kf.period_end, kf.fiscal_period_type, "
+            "       kf.value, kf.unit, kf.source_doc_id, "
+            "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
+            "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
+            f"FROM {fact_relation.sql} kf "  # nosec B608 -- closed internal relation
+            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+            f"{semantic_join} WHERE kf.ticker = ? AND kd.name = ? "
+            f"AND {semantic_where} AND {semantic_identity}) "
+            "SELECT id, kpi_definition_id, period_end, fiscal_period_type, value, unit, "
+            "source_doc_id FROM eligible WHERE rn=1 ORDER BY period_end ASC"
+        )
+    else:
+        query = (
+            "SELECT kf.id, kf.kpi_definition_id, kf.period_end, kf.fiscal_period_type, "
+            "       kf.value, kf.unit, kf.source_doc_id "
+            f"FROM {fact_relation.sql} kf "  # nosec B608 -- closed internal relation
+            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+            f"{semantic_join} WHERE kf.ticker = ? AND kd.name = ? "
+            f"AND {semantic_where} AND {semantic_identity} ORDER BY kf.period_end ASC"
+        )
+    cur = conn.execute(query, (ticker.upper(), resolved))
     points: list[KpiSeriesPoint] = []
     for row in cur.fetchall():
         if base_unit is not None and Unit(row["unit"]) is not base_unit:
@@ -1087,21 +1257,18 @@ def _fetch_full_kpi_series(
         pe = row["period_end"]
         if isinstance(pe, str):
             pe = datetime.fromisoformat(pe)
-        ftype = str(row["fiscal_period_type"])
-        ov = ov_map.get((str(row["period_end"])[:10], ftype))
-        if ov is not None and ov.action == OverrideAction.DROP.value:
-            continue
-        value = (
-            Decimal(str(ov.value))
-            if (ov is not None and ov.value is not None)
-            else Decimal(str(row["value"]))
-        )
+        semantic_revision = current_kpi_semantic_context(conn, kpi_fact_id=int(row["id"]))
+        semantic_context = None if semantic_revision is None else semantic_revision.context
+        source_doc_id = int(row["source_doc_id"])
+        value = Decimal(str(row["value"]))
         points.append(
             KpiSeriesPoint(
                 period_end=pe,
                 fiscal_period_type=FiscalPeriodType(row["fiscal_period_type"]),
                 value=value,
-                source_doc_id=int(row["source_doc_id"]),
+                source_doc_id=source_doc_id,
+                semantic_context=semantic_context,
+                definition_id=int(row["kpi_definition_id"]),
             )
         )
     return points
@@ -1246,6 +1413,12 @@ def persist_derived_kpis(
         )
         if new_id is not None:
             inserted += 1
+            persist_kpi_semantic_context(
+                conn,
+                kpi_fact_id=new_id,
+                context=_derived_semantic_context(row, tier_by_doc=tier_by_doc),
+                reviewed_by=f"deterministic:{extracted_by}",
+            )
         # L10: capture the restatement instead of discarding superseded_id.
         if superseded_id is not None:
             _ = record_restatement_observation(
@@ -1253,6 +1426,62 @@ def persist_derived_kpis(
             )
     conn.commit()
     return inserted
+
+
+def _derived_semantic_context(
+    row: DerivedKpiRow, *, tier_by_doc: dict[int, str]
+) -> KpiSemanticContext:
+    """Admit only source-qualified arithmetic or inherited comparable transforms."""
+    if row.semantic_context is not None:
+        return row.semantic_context
+    refs: set[str] = set()
+    doc_ids: set[int] = set()
+    if row.computed_from is not None:
+        try:
+            payload: object = json.loads(row.computed_from)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            inputs = cast("dict[str, object]", payload).get("inputs")
+            if isinstance(inputs, list):
+                refs = {
+                    str(cast("dict[str, object]", item).get("ref"))
+                    for item in cast("list[object]", inputs)
+                    if isinstance(item, dict)
+                }
+                doc_ids = {
+                    raw_doc_id
+                    for item in cast("list[object]", inputs)
+                    if isinstance(item, dict)
+                    and isinstance(raw_doc_id := cast("dict[str, object]", item).get("doc_id"), int)
+                }
+    # financial_facts is a normalized table populated by several adapters. Its
+    # arithmetic is deterministically GAAP/consolidated only when every selected
+    # source cell is bound to an SEC-official document. FMP-normalized or unknown
+    # lineage stays explicit legacy_unknown and therefore fails closed for
+    # decision-grade consumers.
+    if (
+        refs == {"financial_fact"}
+        and doc_ids
+        and all(
+            tier_by_doc.get(doc_id) == SourceQualityTier.SEC_OFFICIAL.value for doc_id in doc_ids
+        )
+    ):
+        return KpiSemanticContext(
+            metric_name_as_reported=row.name,
+            reported_period_end=row.period_end.date(),
+            period_role=KpiPeriodRole.CURRENT,
+            publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+            accounting_basis=KpiAccountingBasis.GAAP,
+            consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+            dimensions={},
+            unit_scale=_unit_scale_for(row.unit),
+            status=KpiSemanticStatus.ADMITTED,
+        )
+    return unclassified_kpi_context(
+        metric_name_as_reported=row.name,
+        reported_period_end=row.period_end.date(),
+    )
 
 
 def derive_for_ticker_outcome(conn: sqlite3.Connection, ticker: str) -> FmpDerivationOutcome:

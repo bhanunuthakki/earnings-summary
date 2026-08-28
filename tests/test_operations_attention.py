@@ -29,7 +29,7 @@ from operations.attention import (
 from operations.models import OperationsRegistry, OperationsSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0029_retire_podcast_prototype"
+HEAD = "0032_allow_source_reviewed_kpi_supersessions"
 NOW = datetime(2026, 8, 24, 18, 0, tzinfo=UTC)
 
 

@@ -29,7 +29,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from compute.kpi_resolver import kpi_group_key
+from compute.kpi_resolver import kpi_group_key, semantic_series_identity_sql
+from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import FactOverride, get_active_overrides, override_provenance
 from report.models import CellSource
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -63,7 +65,7 @@ _CATALOG_LIMIT_PER_DOMAIN = 2000
 
 # MetricRef.domain -> fact_overrides.fact_kind, for the scalar read paths that
 # surface override-only facts (a company-doc figure FMP never carried).
-_DOMAIN_TO_OVERRIDE_KIND: dict[str, str] = {"fin": "financial_fact", "kpi": "kpi"}
+_DOMAIN_TO_OVERRIDE_KIND: dict[str, str] = {"fin": "financial_fact"}
 _SCALAR_OVERRIDE_KINDS = frozenset(_DOMAIN_TO_OVERRIDE_KIND.values())
 
 _QUARTERLY_PERIOD_TYPES: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4")
@@ -221,21 +223,21 @@ def _load_row_data(
             cells[b] = ViewCell(value=None, raw=ob.value, source=source, sources=(source,))
             if ob.unit:
                 unit = ob.unit
-        # Override-only facts (a company-doc figure FMP never carried) are now
-        # pickable — metric_catalog unions fact_overrides — so picking one must
-        # not come back empty. The loaders' overlay only rewrites EXISTING base
-        # rows; this injects the periods that exist solely as a replace
-        # override. Keyed on the resolved series name so a kpi override lands on
-        # the same series the loader read. Localized to the viewspec read path.
-        _inject_override_only(
-            cells,
-            ticker=ticker,
-            fact_kind=_DOMAIN_TO_OVERRIDE_KIND[metric.domain],
-            fact_key=load_key,
-            cadence=cadence,
-            period_types=period_types,
-            overrides=overrides,
-        )
+        # Financial override-only facts (a company-doc figure FMP never carried)
+        # remain pickable — metric_catalog unions fact_overrides — so picking one
+        # must not come back empty. KPI overrides are intentionally excluded: an
+        # active scalar override is not authoritative without independent semantic
+        # admission. Localized to the ViewsSpec read path.
+        if metric.domain == "fin":
+            _inject_override_only(
+                cells,
+                ticker=ticker,
+                fact_kind="financial_fact",
+                fact_key=load_key,
+                cadence=cadence,
+                period_types=period_types,
+                overrides=overrides,
+            )
         return cells, unit
     # seg: period-level provenance — the junction joins documents through
     # segment_periods.source_doc_id, so each cell chips its source document.
@@ -356,13 +358,17 @@ def _kpi_name_resolution(
     try:
         for ticker in dict.fromkeys(t.upper() for t in spec.tickers):
             try:
+                fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+                semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+                semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
                 rows = conn.execute(
                     "SELECT kd.name AS name, COUNT(*) AS n "
-                    "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-                    "WHERE kf.ticker = ? GROUP BY kd.name",
+                    f"FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+                    f"{semantic_join} WHERE kf.ticker = ? AND {semantic_where} "
+                    f"AND {semantic_identity} GROUP BY kd.name",
                     (ticker,),
                 ).fetchall()
-            except sqlite3.Error:
+            except (RuntimeError, sqlite3.Error):
                 continue
             by_key: dict[str, list[tuple[str, int]]] = {}
             for r in rows:
@@ -624,16 +630,20 @@ def _grouped_kpi_catalog(
     has_origin = _column_exists(conn, "kpi_definitions", "definition_origin")
     origin_select = ", kd.definition_origin AS origin" if has_origin else ""
     try:
+        fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+        semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+        semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
         rows = conn.execute(
             f"""
             SELECT kd.name AS name, kf.ticker AS ticker, COUNT(*) AS obs{origin_select}
-            FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-            WHERE kf.ticker IN ({marks})
+            FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+            {semantic_join}
+            WHERE kf.ticker IN ({marks}) AND {semantic_where} AND {semantic_identity}
             GROUP BY kd.name, kf.ticker
             """,
             tuple(symbols),
         ).fetchall()
-    except sqlite3.Error:
+    except (RuntimeError, sqlite3.Error):
         return []
     obs_by_name: dict[str, dict[str, int]] = {}
     tickers_by_key: dict[str, set[str]] = {}
@@ -689,8 +699,8 @@ def _override_token(fact_kind: str, fact_key: str) -> tuple[str, str, str] | Non
     """
     if fact_kind == "financial_fact":
         return ("fin", f"fin:{fact_key}", fact_key)
-    if fact_kind == "kpi":
-        return ("kpi", f"kpi:{fact_key}", fact_key)
+    # KPI scalar overrides are not consumer-authoritative without an independent
+    # semantic admission record, so they never become pickable view metrics.
     if fact_kind == "segment":
         parts = fact_key.split("|")
         if len(parts) == 3 and all(parts):
@@ -706,7 +716,7 @@ def _union_override_only(
     marks: str,
     limit_per_domain: int,
 ) -> None:
-    """Add picker entries for facts that exist ONLY as a ``fact_overrides`` row.
+    """Add picker entries for non-KPI facts that exist only as ``fact_overrides``.
 
     The base queries enumerate the substrate tables; a fact a company published
     that FMP never carried lives only in ``fact_overrides`` and would otherwise
@@ -722,6 +732,7 @@ def _union_override_only(
             SELECT fact_kind, fact_key, COUNT(DISTINCT ticker) AS n
             FROM fact_overrides
             WHERE ticker IN ({marks}) AND status = 'active' AND action <> 'drop'
+              AND fact_kind <> 'kpi'
             GROUP BY fact_kind, fact_key ORDER BY n DESC, fact_key ASC LIMIT ?
             """,
             (*symbols, limit_per_domain),

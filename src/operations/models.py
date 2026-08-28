@@ -12,6 +12,7 @@ SchedulerTaskState = Literal["Ready", "Running", "Disabled", "Unknown", "Missing
 ServiceState = Literal["Running", "Stopped", "Paused", "Unknown", "Missing"]
 RegistryMatch = Literal["expected", "missing", "unexpected"]
 SchedulerExpectation = Literal["required_enabled", "required_disabled", "absent_service_owned"]
+SchedulerAttemptState = Literal["never_attempted", "running", "succeeded", "failed", "unknown"]
 ProbeAvailability = Literal["available", "unavailable"]
 RUNTIME_PAIR_RECEIPT_FILENAME = "operations.runtime.pair.latest.json"
 JobHealthStatus = Literal[
@@ -132,6 +133,15 @@ class SchedulerTaskRow(FrozenModel):
     scheduler_expectation: SchedulerExpectation | None = None
     expectation_match: bool | None = None
     attention_detail: str | None = None
+    registered_action_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    registered_checkout_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    registered_wrapper_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    wrapper_match: bool | None = None
+    last_attempted_at: datetime | None = None
+    last_successful_at: datetime | None = None
+    next_expected_at: datetime | None = None
+    last_result: int | None = None
+    attempt_state: SchedulerAttemptState = "unknown"
 
 
 class SchedulerObservation(ObservationEnvelope):
@@ -151,12 +161,42 @@ class ServiceObservation(ObservationEnvelope):
 class SchedulerTaskReceipt(FrozenModel):
     task_name: str
     state: SchedulerTaskState
+    registered_action_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    registered_checkout_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    registered_wrapper_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    wrapper_match: bool | None = None
+    last_attempted_at: datetime | None = None
+    last_successful_at: datetime | None = None
+    next_expected_at: datetime | None = None
+    last_result: int | None = None
+    attempt_state: SchedulerAttemptState = "unknown"
+
+    @field_validator("last_attempted_at", "last_successful_at", "next_expected_at")
+    @classmethod
+    def _timestamps_are_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("Scheduler task timestamps must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _attempt_history_is_coherent(self) -> SchedulerTaskReceipt:
+        if self.attempt_state == "never_attempted" and self.last_attempted_at is not None:
+            raise ValueError("never-attempted Scheduler tasks cannot have a last attempt")
+        if self.attempt_state == "succeeded" and self.last_successful_at is None:
+            raise ValueError("successful Scheduler tasks require a successful timestamp")
+        if (
+            self.last_successful_at is not None
+            and self.last_attempted_at is not None
+            and self.last_successful_at > self.last_attempted_at
+        ):
+            raise ValueError("Scheduler success cannot be newer than its last attempt")
+        return self
 
 
 class SchedulerReceipt(FrozenModel):
     """One successful, bounded Scheduler probe retained as durable evidence."""
 
-    schema_version: Literal["1"] = "1"
+    schema_version: Literal["1", "2"] = "2"
     observed_at: datetime
     tasks: tuple[SchedulerTaskReceipt, ...]
 
@@ -213,7 +253,7 @@ class RuntimeProbeAttempt(FrozenModel):
 class SchedulerRuntimeReceipt(FrozenModel):
     """Current Scheduler probe availability plus independently retained evidence."""
 
-    schema_version: Literal["2"] = "2"
+    schema_version: Literal["2", "3"] = "3"
     probe_attempt: RuntimeProbeAttempt
     last_successful: SchedulerReceipt | None = None
 

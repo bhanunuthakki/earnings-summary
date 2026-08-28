@@ -276,10 +276,12 @@ def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_mi
     collect_snapshot = Mock(side_effect=collect)
     render_panel = Mock(side_effect=render)
     connections: list[sqlite3.Connection] = []
+    connection_options: list[dict[str, object]] = []
 
-    def connect(_path: Path, **_kwargs: object) -> sqlite3.Connection:
+    def connect(_path: Path, **kwargs: object) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         connections.append(conn)
+        connection_options.append(kwargs)
         return conn
 
     monkeypatch.setattr(comments_server, "build_operations_registry", build_registry)
@@ -301,6 +303,9 @@ def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_mi
     assert collect_snapshot.call_count == 1
     assert render_panel.call_count == 1
     assert len(connections) == 1
+    assert connection_options == [
+        {"role": comments_server.SQLiteConnectionRole.READ_ONLY, "schema_preflight": False}
+    ]
 
 
 def test_operations_registry_comes_from_code_root_not_minimal_runtime_root(

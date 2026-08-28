@@ -199,14 +199,11 @@ def test_transcripts_pending_extraction_excludes_scanned(
     assert transcripts_pending_extraction(conn) == []
 
 
-def test_transcripts_pending_extraction_excludes_no_catalog_tickers(
+def test_transcripts_pending_extraction_includes_no_catalog_tickers_for_novel_indicators(
     conn: sqlite3.Connection,
 ) -> None:
-    """No kpi_definitions catalog ⇒ the LLM call's outcome is predetermined,
-    so the transcript is not a target — until a catalog is seeded."""
+    """Novel management indicators remain valuable without a KPI catalog."""
     tid, _ = _seed_transcript(conn, "ZZZ", "text", "2025-12-31")
-    assert transcripts_pending_extraction(conn) == []
-    _seed_kpi_def(conn, "ZZZ", "Some KPI")
     assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
 
 
@@ -430,18 +427,29 @@ def test_extract_raises_for_unknown_transcript(conn: sqlite3.Connection) -> None
         extract_for_transcript(conn, 9999, llm_call=lambda p: '{"commitments": []}')
 
 
-def test_extract_skips_llm_when_catalog_empty(conn: sqlite3.Connection) -> None:
-    """Empty KPI catalog ⇒ zero commitments WITHOUT spending an LLM call."""
+def test_extract_scans_empty_catalog_for_novel_indicators(conn: sqlite3.Connection) -> None:
+    """No catalog still merits a scan for a staged, unpromoted measurement."""
     transcript_id, _ = _seed_transcript(conn, "ZZZ", "some transcript text", "2025-12-31")
     calls: list[str] = []
 
     def stub_llm(prompt: str) -> str:
         calls.append(prompt)
-        return '{"commitments": []}'
+        return """{
+          "commitments": [],
+          "novel_indicators": [{
+            "raw_label": "New enterprise pilots",
+            "value": "42",
+            "unit": "count",
+            "scope": "product",
+            "recurrence": "one_off",
+            "source_excerpt": "We launched 42 new enterprise pilots."
+          }]
+        }"""
 
     manifest = extract_for_transcript(conn, transcript_id, llm_call=stub_llm)
     assert manifest.commitments == []
-    assert calls == []
+    assert len(manifest.indicators) == 1
+    assert calls
 
 
 def test_extract_retries_once_with_feedback_then_succeeds(
@@ -588,4 +596,70 @@ def test_run_auto_parse_failure_records_no_scan(
     results = report["results"]
     assert len(results) == 1 and "CommitmentParseError" in str(results[0]["error"])
     n = conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0]
+    assert n == 0
+
+
+def test_run_auto_scan_failure_rolls_back_extracted_rows(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scan receipt and extracted observations are one atomic write set."""
+    mod = _load_script()
+    _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
+    _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+
+    def stub_call_llm(prompt: str, **kwargs: object) -> str:
+        return """{
+          "commitments": [{
+            "kpi_name": "AWS Revenue Growth",
+            "comparator": "ge",
+            "target_value": "20",
+            "unit": "percent",
+            "period_target": "2026-03-31",
+            "narrative": "We expect AWS to grow at least 20%."
+          }]
+        }"""
+
+    def fail_scan(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("scan receipt unavailable")
+
+    monkeypatch.setattr(mod, "call_llm", stub_call_llm)
+    monkeypatch.setattr(mod, "record_scan", fail_scan)
+
+    report = mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=False)
+
+    results = report["results"]
+    assert len(results) == 1 and "OperationalError" in str(results[0]["error"])
+    assert conn.execute("SELECT COUNT(*) FROM management_commitments").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0] == 0
+
+
+def test_run_auto_indicator_persistence_failure_records_no_scan(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing staging migration is visible and leaves the transcript pending."""
+    mod = _load_script()
+    tid, _ = _seed_transcript(conn, "ZZZ", "text", "2025-12-31")
+
+    def stub_call_llm(prompt: str, **kwargs: object) -> str:
+        return """{
+          "commitments": [],
+          "novel_indicators": [{
+            "raw_label": "New enterprise pilots",
+            "value": "42",
+            "unit": "count",
+            "scope": "product",
+            "recurrence": "one_off",
+            "source_excerpt": "We launched 42 new enterprise pilots."
+          }]
+        }"""
+
+    monkeypatch.setattr(mod, "call_llm", stub_call_llm)
+    report = mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=False)
+
+    results = report["results"]
+    assert len(results) == 1
+    assert "ManagementIndicatorSchemaError" in str(results[0]["error"])
+    n = conn.execute(
+        "SELECT COUNT(*) FROM commitment_scan_log WHERE transcript_id=?", (tid,)
+    ).fetchone()[0]
     assert n == 0

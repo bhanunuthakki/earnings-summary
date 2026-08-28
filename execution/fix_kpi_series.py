@@ -3,27 +3,25 @@
 Single-purpose idempotent CLI for red-team PR2 item 4 (KPI cumulative-series
 sanity guard — `directives/monthly_red_team.md` Phase 1 "KPI series sanity").
 
-Scans one or more cumulative-marked KPI series (the same allowlist
-`pipeline.kpi_persistence._is_cumulative_kpi` uses to guard NEW writes) for
+Scans one or more KPI series for
 two independent, already-persisted data-quality problems:
 
-  1. UNIT ERROR — a value that is a >`--jump-ratio`x (default 1000x) outlier
+  1. SCALE ANOMALY — a value that is a >`--jump-ratio`x (default 1000x) outlier
      vs its chronological neighbor(s) AND exceeds `--unit-error-floor`
      (default 1e6). This is the exact NU "Total customers" def 641
      corruption the 2026-07 red-team audit found: a raw-count row
      (114,000,000) landing inside a millions-scale series (neighbors ~110-135).
-     `--apply` divides the offending value by `--unit-scale` (default 1e6)
-     and stamps a provenance note in `kpi_facts.source_excerpt` +
-     `extracted_by`. `--dry-run` (the default) only reports it.
+     The script reports the arithmetic candidate for source review but never
+     writes it. Magnitude is evidence of an anomaly, not evidence of the
+     correct source value or scale.
   2. NON-MONOTONIC — a value that decreases from its chronological
      predecessor. Listed for manual review only — NEVER auto-fixed. Which
      side is wrong (the higher or the lower print) isn't inferable from the
      series alone; guessing would be exactly the "guess-fix" the repo's
      schema-drift rule forbids.
 
-Idempotent: re-running after `--apply` finds nothing left to fix for the rows
-already corrected (the corrected value is no longer a >jump-ratio outlier),
-so a second run is a clean no-op for that row.
+Idempotent and read-only: every run emits the same findings for the same bytes.
+Corrections use the source-reviewed append-only supersession executor.
 
 Read the AGENTS.md schema-drift rule before extending this: never widen the
 unit-error heuristic to "auto-correct" a non-monotonic row too — that
@@ -33,15 +31,11 @@ Usage:
     # Dry-run one named series (default — no writes, safe against any DB):
     python execution/fix_kpi_series.py --ticker NU --kpi-name "Total customers (millions)" --db data/portfolio.db
 
-    # Dry-run every cumulative-marked series for one ticker:
+    # Dry-run every series for one ticker:
     python execution/fix_kpi_series.py --ticker NU --db data/portfolio.db
 
     # Dry-run every cumulative-marked series across all tickers:
     python execution/fix_kpi_series.py --db data/portfolio.db
-
-    # Apply the unit-error fixes (never against prod from an agent session —
-    # the orchestrator's data pass runs --apply):
-    python execution/fix_kpi_series.py --ticker NU --kpi-name "Total customers (millions)" --db data/portfolio.db --apply
 
     # Read-only against prod (safe: SQLite URI mode=ro refuses any write):
     python execution/fix_kpi_series.py --db "file:C:/path/to/portfolio.db?mode=ro" --uri
@@ -61,15 +55,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from pydantic import BaseModel, Field  # noqa: E402
 
-from pipeline.kpi_persistence import (  # noqa: E402
-    _decimal_unit_jump,  # pyright: ignore[reportPrivateUsage]
-    _is_cumulative_kpi,  # pyright: ignore[reportPrivateUsage]
-)
-from sqlite_runtime import (  # noqa: E402
-    SQLiteConnectionRole,
-    connect_sqlite,
-    require_safe_sqlite_writer_runtime,
-)
+from pipeline.kpi_persistence import decimal_unit_jump  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _DEFAULT_UNIT_ERROR_FLOOR = Decimal("1e6")
 _DEFAULT_UNIT_SCALE = Decimal("1e6")
@@ -87,7 +74,7 @@ class KpiSeriesRow(BaseModel):
 
 
 class UnitErrorFinding(BaseModel):
-    """One row flagged as a probable unit-scale error (candidate for --apply)."""
+    """One scale anomaly whose source value and scale require review."""
 
     fact_id: int
     ticker: str
@@ -131,12 +118,10 @@ class FixKpiSeriesReport(BaseModel):
     applied: int = 0
 
 
-def _cumulative_definitions(
+def _candidate_definitions(
     conn: sqlite3.Connection, *, ticker: str | None, kpi_name: str | None
 ) -> list[tuple[int, str, str]]:
-    """Return [(id, ticker, name), ...] for kpi_definitions matching the
-    cumulative-marker allowlist, optionally scoped to one ticker and/or one
-    exact KPI name."""
+    """Return definitions in the requested scope without name-based semantics."""
     sql = "SELECT id, ticker, name FROM kpi_definitions WHERE 1=1"
     params: list[object] = []
     if ticker is not None:
@@ -146,11 +131,10 @@ def _cumulative_definitions(
         sql += " AND name = ?"
         params.append(kpi_name)
     sql += " ORDER BY ticker, name"
-    out: list[tuple[int, str, str]] = []
-    for row in conn.execute(sql, params).fetchall():
-        if _is_cumulative_kpi(str(row["name"])):
-            out.append((int(row["id"]), str(row["ticker"]), str(row["name"])))
-    return out
+    return [
+        (int(row["id"]), str(row["ticker"]), str(row["name"]))
+        for row in conn.execute(sql, params).fetchall()
+    ]
 
 
 def _series_rows(conn: sqlite3.Connection, kpi_definition_id: int) -> list[KpiSeriesRow]:
@@ -193,7 +177,7 @@ def _scan_series(
 
     A row is a UNIT_ERROR candidate when it exceeds `unit_error_floor` AND is
     a >`jump_ratio`x outlier vs at least one neighbor — matching the
-    persist-time guard's heuristic (`pipeline.kpi_persistence._decimal_unit_jump`)
+    persist-time guard's heuristic (`pipeline.kpi_persistence.decimal_unit_jump`)
     so "what counts as a unit error" can't drift between the two call sites.
     A row that decreases from its immediate predecessor (and isn't already
     claimed as a unit-error row) is NON_MONOTONIC — review-only.
@@ -207,7 +191,7 @@ def _scan_series(
         if i + 1 < len(rows):
             neighbors.append(rows[i + 1])
         is_unit_error = row.value > unit_error_floor and any(
-            _decimal_unit_jump(n.value, row.value, ratio_limit=jump_ratio) for n in neighbors
+            decimal_unit_jump(n.value, row.value, ratio_limit=jump_ratio) for n in neighbors
         )
         if is_unit_error:
             unit_error_ids.add(row.id)
@@ -252,35 +236,6 @@ def _scan_series(
     return unit_errors, non_monotonic
 
 
-def _apply_unit_error_fixes(
-    conn: sqlite3.Connection, findings: list[UnitErrorFinding], *, unit_scale: Decimal
-) -> int:
-    """Write the corrected values. Only ever touches rows in `findings`
-    (unit-error candidates) — non-monotonic rows are never written here."""
-    applied = 0
-    now = datetime.now().isoformat(timespec="seconds")
-    for f in findings:
-        note = (
-            f"fix_kpi_series.py: {f.old_value} -> {f.proposed_value} "
-            f"(unit-scale /{unit_scale:g}) at {now}"
-        )
-        cur = conn.execute(
-            "SELECT extracted_by, source_excerpt FROM kpi_facts WHERE id = ?", (f.fact_id,)
-        )
-        row = cur.fetchone()
-        prior_extracted_by = (row["extracted_by"] if row is not None else None) or ""
-        prior_excerpt = (row["source_excerpt"] if row is not None else None) or ""
-        new_extracted_by = f"{prior_extracted_by}|fix:unit_scale"[:64]
-        new_excerpt = f"{prior_excerpt} | {note}".strip(" |")[:1024]
-        conn.execute(
-            "UPDATE kpi_facts SET value = ?, extracted_by = ?, source_excerpt = ? WHERE id = ?",
-            (str(f.proposed_value), new_extracted_by, new_excerpt, f.fact_id),
-        )
-        applied += 1
-    conn.commit()
-    return applied
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -299,9 +254,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Restrict scan to one exact kpi_definitions.name (requires --ticker).",
     )
     parser.add_argument(
-        "--apply", action="store_true", help="Write the unit-error fixes. Default is dry-run."
-    )
-    parser.add_argument(
         "--jump-ratio",
         type=str,
         default=str(_DEFAULT_JUMP_RATIO),
@@ -317,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         "--unit-scale",
         type=str,
         default=str(_DEFAULT_UNIT_SCALE),
-        help=f"Divisor applied to a flagged unit-error value under --apply (default {_DEFAULT_UNIT_SCALE:g}).",
+        help=f"Display-only scale candidate for review (default {_DEFAULT_UNIT_SCALE:g}).",
     )
     args = parser.parse_args(argv)
 
@@ -332,12 +284,6 @@ def main(argv: list[str] | None = None) -> int:
     if not args.uri and not Path(args.db).exists():
         print(f"ERROR: no DB at {args.db}", file=sys.stderr)
         return 2
-    if args.apply and args.uri and "mode=ro" in db_target:
-        print("ERROR: --apply cannot run against a mode=ro URI.", file=sys.stderr)
-        return 2
-    if args.apply:
-        require_safe_sqlite_writer_runtime()
-
     if args.uri:
         # Intentional isolated-recovery seam: operators may supply a complete
         # SQLite URI whose policy cannot be safely reconstructed from a path.
@@ -345,12 +291,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         conn = connect_sqlite(
             Path(db_target),
-            role=(SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY),
-            schema_preflight=args.apply,
+            role=SQLiteConnectionRole.READ_ONLY,
+            schema_preflight=False,
         )
     conn.row_factory = sqlite3.Row
     try:
-        definitions = _cumulative_definitions(conn, ticker=args.ticker, kpi_name=args.kpi_name)
+        definitions = _candidate_definitions(conn, ticker=args.ticker, kpi_name=args.kpi_name)
         scanned_rows = 0
         all_unit_errors: list[UnitErrorFinding] = []
         all_non_monotonic: list[NonMonotonicFinding] = []
@@ -369,18 +315,14 @@ def main(argv: list[str] | None = None) -> int:
             all_unit_errors.extend(unit_errors)
             all_non_monotonic.extend(non_monotonic)
 
-        applied = 0
-        if args.apply and all_unit_errors:
-            applied = _apply_unit_error_fixes(conn, all_unit_errors, unit_scale=unit_scale)
-
         report = FixKpiSeriesReport(
             db_path=db_target,
-            apply=args.apply,
+            apply=False,
             scanned_definitions=len(definitions),
             scanned_rows=scanned_rows,
             unit_error_findings=all_unit_errors,
             non_monotonic_findings=all_non_monotonic,
-            applied=applied,
+            applied=0,
         )
         print(report.model_dump_json(indent=2))
         return 0

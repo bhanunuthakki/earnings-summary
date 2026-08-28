@@ -50,6 +50,10 @@ from compute.thesis_evaluator import (
 from compute.transcript_ingest import ingest_evidence_file
 from log_redact import redact
 from models.kpis import BreachStatus
+from pipeline.document_completeness import (
+    DocumentCompletenessStatus,
+    document_completeness,
+)
 from pipeline.sec_xbrl import CIK_MAP
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
 from pipeline.segment_cache_audit import audit_ticker_cache, segment_cache_present
@@ -582,7 +586,7 @@ _IR_PDF_DOC_TYPES: tuple[str, ...] = (
 def _stage_surface_pending_llm(
     conn: sqlite3.Connection, *, ticker: str
 ) -> tuple[StageResult, list[PendingWorkItem]]:
-    """Find IR PDFs without kpi_facts AND transcripts without management_commitments.
+    """Find IR PDFs without terminal coverage AND transcripts without commitments.
 
     Returns the stage result + a list of work items the user/LLM should pick up
     in a follow-up session.
@@ -594,11 +598,15 @@ def _stage_surface_pending_llm(
         f"SELECT d.id, d.file_path, d.period_end FROM documents d "
         f"WHERE d.ticker = ? AND d.source_type = 'ir_doc' "
         f"AND d.doc_type IN ({placeholders}) "
-        f"AND NOT EXISTS (SELECT 1 FROM kpi_facts kf WHERE kf.source_doc_id = d.id) "
         f"ORDER BY d.period_end DESC, d.id",
         (ticker.upper(), *_IR_PDF_DOC_TYPES),
     )
     for row in cur.fetchall():
+        if (
+            document_completeness(conn, int(row["id"])).status
+            is DocumentCompletenessStatus.COMPLETE
+        ):
+            continue
         pe = row["period_end"]
         if isinstance(pe, str):
             pe = datetime.fromisoformat(pe)

@@ -59,6 +59,12 @@ from typing import Any, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, Field
 
+from compute.kpi_resolver import resolve_kpi_definition_name, semantic_series_identity_sql
+from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.overrides import KPI as OVERRIDE_KPI
+from provenance.overrides import active_scalar_override_map
+
 log = logging.getLogger(__name__)
 
 
@@ -202,14 +208,75 @@ def _fetch_series(
         )
         params: tuple[Any, ...] = (ticker.upper(), metric)
     else:
-        sql = (
-            "SELECT kf.period_end, kf.value FROM kpi_facts kf "
-            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-            "WHERE kf.ticker = ? AND kd.name = ? "
-            "AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
-            "ORDER BY kf.period_end ASC"
+        resolved_name = resolve_kpi_definition_name(conn, ticker, metric)
+        if resolved_name is None:
+            return []
+        if active_scalar_override_map(
+            conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
+        ):
+            log.warning(
+                "soft_rule_kpi_unreviewed_override",
+                extra={"ticker": ticker.upper(), "kpi_name": resolved_name},
+            )
+            return []
+        fact_relation = canonical_fact_relation(conn, "kpi_facts")
+        semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+        semantic_where += " AND " + semantic_series_identity_sql(
+            conn, fact_relation=fact_relation.sql
         )
-        params = (ticker.upper(), metric)
+        if fact_relation.selection_mode == "legacy_pre_cutover":
+            sql = (
+                "WITH ranked AS ("
+                "SELECT kf.id, kf.period_end, kf.fiscal_period_type, kf.value, "
+                "kf.kpi_definition_id, "
+                "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
+                "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
+                f"FROM {fact_relation.sql} kf "
+                "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+                "WHERE kf.ticker = ? AND kd.name = ? "
+                "AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')) "
+                "SELECT kf.period_end, kf.value "
+                "FROM ranked kf "
+                f"{semantic_join} "
+                "WHERE kf.rn = 1 AND " + semantic_where + " ORDER BY kf.period_end ASC"
+            )
+        else:
+            sql = (
+                "SELECT kf.period_end, kf.value "
+                f"FROM {fact_relation.sql} kf "
+                "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+                f"{semantic_join} "
+                "WHERE kf.ticker = ? AND kd.name = ? AND "
+                + semantic_where
+                + " AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
+                "ORDER BY kf.period_end ASC"
+            )
+        try:
+            rows = conn.execute(sql, (ticker.upper(), resolved_name)).fetchall()
+        except sqlite3.Error as exc:
+            log.warning({"event": "soft_rule_fetch_failed", "metric": metric, "error": str(exc)})
+            return []
+        out: list[tuple[datetime, float]] = []
+        for row in rows:
+            period_raw = row[0]
+            if isinstance(period_raw, str):
+                try:
+                    period = datetime.fromisoformat(period_raw)
+                except ValueError:
+                    try:
+                        period = datetime.strptime(period_raw[:10], "%Y-%m-%d")
+                    except ValueError:
+                        continue
+            elif isinstance(period_raw, datetime):
+                period = period_raw
+            else:
+                continue
+            try:
+                value = float(row[1])
+            except (TypeError, ValueError):
+                continue
+            out.append((period, value))
+        return out
     try:
         rows = conn.execute(sql, params).fetchall()
     except sqlite3.Error as exc:

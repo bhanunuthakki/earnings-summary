@@ -182,6 +182,30 @@ def _bind_document_evidence(
 
 
 def _seed(c: sqlite3.Connection) -> None:
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            supersedes_context_id INTEGER,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL,
+            publication_lane TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL,
+            consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,
+            unit_scale TEXT NOT NULL,
+            source_row_label TEXT,
+            source_column_header TEXT,
+            status TEXT NOT NULL,
+            reason_code TEXT,
+            reviewed_by TEXT NOT NULL,
+            knowledge_at TEXT NOT NULL
+        )
+        """
+    )
     c.execute("INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('bhanu', ?)", (_iso(NOW),))
     c.execute(
         "INSERT INTO tracked_companies (user_id, ticker, name, list_type, instrument_type, "
@@ -263,7 +287,20 @@ def _seed(c: sqlite3.Connection) -> None:
             "VALUES ('NU', ?, 'Q1', ?, ?, ?, ?)",
             (period, def_id, value, unit, doc_ids[doc]),
         )
-        return int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+        fact_id = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+        metric_name = str(
+            c.execute("SELECT name FROM kpi_definitions WHERE id = ?", (def_id,)).fetchone()[0]
+        )
+        c.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, revision, metric_name_as_reported, reported_period_end, period_role, "
+            "publication_lane, accounting_basis, consolidation_scope, dimensions_json, unit_scale, "
+            "status, reviewed_by, knowledge_at) "
+            "VALUES (?, 1, ?, ?, 'current', 'current_actual', 'gaap', 'consolidated', '{}', "
+            "'none', 'admitted', 'test', ?)",
+            (fact_id, metric_name, period[:10], _iso(NOW)),
+        )
+        return fact_id
 
     fact(arpac_id, "2025-12-31 00:00:00", 11.2, "usd")
     stale = fact(arpac_id, "2026-03-31 00:00:00", 99.0, "usd")  # mis-extraction…
@@ -301,6 +338,13 @@ def _seed(c: sqlite3.Connection) -> None:
             "VALUES ('bhanu', 'NU', 'kpi_inflection', ?, ?, '{}', ?)",
             (_iso(NOW - timedelta(hours=5)), status, f"sig-{n}"),
         )
+    # The consolidated baseline's production view requires cutover evidence
+    # rows that this focused cockpit fixture does not seed. Keep a canonical
+    # relation over the fixture facts so reader parity is exercised directly.
+    c.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
+    c.execute(
+        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE ticker = 'NU'"
+    )
     c.commit()
 
 
@@ -374,6 +418,112 @@ def test_build_tier1_kpi_deltas(rows: dict[str, list[CockpitRow]]) -> None:
     assert roe.tone == "neutral"  # no rule references ROE
 
 
+def test_tier1_kpi_deltas_fail_closed_on_active_override(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "parity.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_definitions (
+            id INTEGER PRIMARY KEY, ticker TEXT, name TEXT, unit TEXT,
+            threshold_tier TEXT
+        );
+        CREATE TABLE kpi_facts (
+            id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
+            fiscal_period_type TEXT, kpi_definition_id INTEGER, value REAL,
+            unit TEXT, source_doc_id INTEGER, supersedes_id INTEGER
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY, kpi_fact_id INTEGER, revision INTEGER,
+            supersedes_context_id INTEGER, metric_name_as_reported TEXT,
+            reported_period_end TEXT, period_role TEXT, publication_lane TEXT,
+            accounting_basis TEXT, consolidation_scope TEXT, dimensions_json TEXT,
+            unit_scale TEXT, status TEXT, reason_code TEXT
+        );
+        CREATE TABLE fact_overrides (
+            id INTEGER, user_id TEXT, ticker TEXT, period_end TEXT,
+            fiscal_period_type TEXT, fact_kind TEXT, fact_key TEXT, action TEXT,
+            value REAL, unit TEXT, value_json TEXT, source_doc_type TEXT,
+            source_accession TEXT, source_exhibit TEXT, source_url TEXT,
+            source_excerpt TEXT, source_doc_id INTEGER, status TEXT,
+            confidence REAL, rationale TEXT, created_by TEXT, created_at TEXT,
+            locator TEXT
+        );
+        INSERT INTO kpi_definitions VALUES (1, 'NU', 'Monthly ARPAC (USD)', 'usd', 'tier_1_break');
+        INSERT INTO kpi_facts VALUES
+            (1, 'NU', '2025-09-30', 'Q3', 1, 10.0, 'usd', 1, NULL),
+            (2, 'NU', '2025-12-31', 'Q4', 1, 12.0, 'usd', 1, NULL),
+            (3, 'NU', '2025-12-31', 'Q4', 1, 777.0, 'usd', 99, NULL),
+            (4, 'NU', '2025-12-31', 'Q4', 1, 999.0, 'usd', 100, NULL);
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+            (1, 1, 1, NULL, 'Monthly ARPAC (USD)', '2025-09-30', 'current', 'current_actual',
+             'gaap', 'consolidated', '{}', 'none', 'admitted', NULL),
+            (2, 2, 1, NULL, 'Monthly ARPAC (USD)', '2025-12-31', 'current', 'current_actual',
+             'gaap', 'consolidated', '{}', 'none', 'admitted', NULL),
+            (3, 3, 1, NULL, 'Monthly ARPAC (USD)', '2025-12-31', 'current', 'current_actual',
+             'gaap', 'consolidated', '{}', 'none', 'admitted', NULL),
+            (4, 4, 1, NULL, 'Monthly ARPAC (USD)', '2025-12-31', 'current', 'current_actual',
+             'gaap', 'consolidated', '{}', 'none', 'quarantined', 'unreviewed');
+        CREATE VIEW v_kpi_facts_resolved_current AS
+            SELECT * FROM kpi_facts WHERE id IN (1, 2, 4);
+        INSERT INTO fact_overrides VALUES
+            (1, 'bhanu', 'NU', '2025-12-31', 'Q4', 'kpi', 'Monthly ARPAC (USD)',
+             'replace', 888.0, 'usd', NULL, 'earnings_release', NULL, NULL, NULL,
+             NULL, 1, 'active', 1.0, 'test', 'test', '2026-08-27', NULL);
+        """
+    )
+    try:
+        deltas = _tier1_kpi_deltas(conn, {"NU"})
+    finally:
+        conn.close()
+    assert deltas == {}
+
+
+def test_tier1_kpi_deltas_fail_closed_on_unadmitted_current_candidate(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "semantic-parity.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_definitions (
+            id INTEGER PRIMARY KEY, ticker TEXT, name TEXT, unit TEXT, threshold_tier TEXT
+        );
+        CREATE TABLE kpi_facts (
+            id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT, fiscal_period_type TEXT,
+            kpi_definition_id INTEGER, value REAL, unit TEXT, source_doc_id INTEGER,
+            supersedes_id INTEGER
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY, kpi_fact_id INTEGER, revision INTEGER,
+            supersedes_context_id INTEGER, metric_name_as_reported TEXT,
+            reported_period_end TEXT, period_role TEXT, publication_lane TEXT,
+            accounting_basis TEXT, consolidation_scope TEXT, dimensions_json TEXT,
+            unit_scale TEXT, status TEXT, reason_code TEXT
+        );
+        INSERT INTO kpi_definitions VALUES
+            (1, 'NU', 'Monthly ARPAC (USD)', 'usd', 'tier_1_break');
+        INSERT INTO kpi_facts VALUES
+            (1, 'NU', '2025-09-30', 'Q3', 1, 10.0, 'usd', 1, NULL),
+            (2, 'NU', '2025-12-31', 'Q4', 1, 777.0, 'usd', 2, NULL);
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+            (1, 1, 1, NULL, 'Monthly ARPAC (USD)', '2025-09-30', 'current',
+             'current_actual', 'gaap', 'consolidated', '{}', 'none', 'admitted', NULL),
+            (2, 2, 1, NULL, 'Monthly ARPAC (USD)', '2025-12-31', 'current',
+             'current_actual', 'gaap', 'consolidated', '{}', 'none', 'quarantined',
+             'unreviewed');
+        CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts;
+        """
+    )
+    try:
+        assert _tier1_kpi_deltas(conn, {"NU"}) == {}
+    finally:
+        conn.close()
+
+
 def test_tier1_kpi_query_does_not_scan_unrelated_fact_history(
     conn: sqlite3.Connection,
 ) -> None:
@@ -417,7 +567,10 @@ def test_tier1_kpi_query_does_not_scan_unrelated_fact_history(
         conn.set_progress_handler(None, 0)
 
     assert "NU" in deltas
-    assert progress_callbacks < 50
+    # The canonical relation and fail-closed semantic identity predicate add a
+    # bounded fixed VM cost; the guard still rejects a full unrelated-history
+    # scan (which is orders of magnitude above this budget).
+    assert progress_callbacks < 350
 
 
 def test_build_kpi_deltas_only_for_portfolio(rows: dict[str, list[CockpitRow]]) -> None:
@@ -494,6 +647,16 @@ def test_tier1_future_period_facts_excluded(conn: sqlite3.Connection) -> None:
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
         "value, unit, source_doc_id) VALUES ('NU', ?, 'Q1', ?, 88.0, 'usd', ?)",
         (f"{future} 00:00:00", arpac_id, doc_id),
+    )
+    future_fact_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id, revision, metric_name_as_reported, reported_period_end, period_role, "
+        "publication_lane, accounting_basis, consolidation_scope, dimensions_json, unit_scale, "
+        "status, reviewed_by, knowledge_at) "
+        "VALUES (?, 1, 'Monthly ARPAC (USD)', ?, 'current', 'current_actual', 'gaap', "
+        "'consolidated', '{}', 'none', 'admitted', 'test', ?)",
+        (future_fact_id, future, _iso(NOW)),
     )
     conn.commit()
     # No guard → the forward-dated row wins (proves it is present and would skew).

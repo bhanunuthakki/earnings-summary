@@ -571,7 +571,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Which tickers may use the WebSearch+LLM fallback under --source auto. "
         "DEFAULT 'none' (2026-07-25): the free yfinance journalism feed "
         "(execution/fetch_yf_news.py) now covers this, and the paid path measured "
-        "$5.74 per STORED row — 93% of its calls stored nothing after (ticker,url) "
+        "$5.74 per STORED row — 93%% of its calls stored nothing after (ticker,url) "
         "dedup, because FMP's stock-news endpoint 402s and the LLM fallback "
         "silently became the primary for the whole book. 'portfolio' = held names "
         "only (~$14/day); 'all' = the pre-2026-07 behavior. Use a non-none scope "

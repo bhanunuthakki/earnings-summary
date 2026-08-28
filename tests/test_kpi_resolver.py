@@ -7,7 +7,7 @@ a holdings/break-rule label ("Monthly ARPAC") exact-matched a near-empty
 "Monthly ARPAC (USD)" (12 rows), so the consumer rendered / evaluated an almost
 empty series even though the data was present one name-key away.
 
-The resolver matches on a parenthetical-insensitive normalized name and prefers
+The resolver matches only on unit-insensitive normalized names and prefers
 the definition with the MOST observations, so a fragmented duplicate can never
 shadow the canonical series. `period_types` scopes the richness count to the
 buckets the caller will actually read (quarterly for the chart, every period for
@@ -30,8 +30,86 @@ from compute.kpi_resolver import (  # noqa: E402
     matching_kpi_definition_ids,
     normalize_kpi_name,
     resolve_kpi_definition_name,
+    semantic_series_identity_sql,
 )
 from models.facts import Unit  # noqa: E402
+
+
+def test_series_identity_excludes_same_label_basis_and_scope_drift() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_facts (
+          id INTEGER PRIMARY KEY,kpi_definition_id INTEGER,period_end TEXT
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+          id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
+          supersedes_context_id INTEGER,status TEXT,publication_lane TEXT,
+          metric_name_as_reported TEXT,accounting_basis TEXT,
+          consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT
+        );
+        INSERT INTO kpi_facts VALUES
+          (1,7,'2024-03-31'),(2,7,'2024-06-30'),(3,7,'2024-09-30'),
+          (4,7,'2024-12-31'),(5,7,'2025-03-31');
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+          (1,1,1,NULL,'admitted','current_actual','Total customers','gaap',
+           'consolidated','{}','millions'),
+          (2,2,1,NULL,'admitted','current_actual','Total customers','non_gaap',
+           'segment','{"segment":"credit"}','millions'),
+          (3,3,1,NULL,'admitted','current_actual','Active customers','non_gaap',
+           'segment','{"segment":"credit"}','millions'),
+          (4,4,1,NULL,'admitted','current_actual','Total customers','non_gaap',
+           'segment','{"segment":"credit"}','actual'),
+          (5,5,1,NULL,'admitted','current_actual','Total customers','non_gaap',
+           'segment','{"segment":"credit"}','millions');
+        """
+    )
+    predicate = semantic_series_identity_sql(conn)
+    rows = conn.execute(
+        "SELECT kf.id FROM kpi_facts kf JOIN kpi_fact_semantic_contexts ksc "
+        "ON ksc.kpi_fact_id=kf.id WHERE " + predicate + " ORDER BY kf.id"
+    ).fetchall()
+    assert [int(row[0]) for row in rows] == [2, 5]
+    conn.close()
+
+
+def test_definition_alias_matching_rejects_reported_label_and_scale_drift() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_definitions (id INTEGER PRIMARY KEY,ticker TEXT,name TEXT,unit TEXT);
+        CREATE TABLE kpi_facts (
+          id INTEGER PRIMARY KEY,ticker TEXT,kpi_definition_id INTEGER,period_end TEXT,
+          currency TEXT
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+          id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
+          supersedes_context_id INTEGER,status TEXT,publication_lane TEXT,
+          metric_name_as_reported TEXT,accounting_basis TEXT,
+          consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT
+        );
+        INSERT INTO kpi_definitions VALUES
+          (1,'NU','Total customers','millions'),
+          (2,'NU','Total customers (millions)','millions'),
+          (3,'NU','TOTAL CUSTOMERS','millions');
+        INSERT INTO kpi_facts VALUES
+          (1,'NU',1,'2025-03-31',NULL),
+          (2,'NU',2,'2025-03-31',NULL),
+          (3,'NU',3,'2025-03-31',NULL);
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+          (1,1,1,NULL,'admitted','current_actual','Total customers','management',
+           'consolidated','{}','millions'),
+          (2,2,1,NULL,'admitted','current_actual','Active customers','management',
+           'consolidated','{}','millions'),
+          (3,3,1,NULL,'admitted','current_actual','Total customers','management',
+           'consolidated','{}','actual');
+        """
+    )
+    assert matching_kpi_definition_ids(conn, "NU", "Total customers") == (1,)
+    conn.close()
+
 
 _QUARTER_ENDS = [
     "2023-03-31",
@@ -120,19 +198,26 @@ def _add_facts(
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_strips_trailing_parenthetical() -> None:
+def test_normalize_strips_only_unit_parenthetical() -> None:
     assert normalize_kpi_name("Monthly ARPAC (USD)") == "monthly arpac"
-    assert normalize_kpi_name("ROE (annualized, consolidated)") == "roe"
-    assert normalize_kpi_name("Risk-adjusted NIM (NIM minus cost of risk)") == "risk-adjusted nim"
+    assert normalize_kpi_name("Total customers (millions)") == "total customers"
 
 
 def test_normalize_collapses_whitespace_and_case() -> None:
     assert normalize_kpi_name("  Monthly   ARPAC  ") == "monthly arpac"
 
 
-def test_normalize_strips_nested_trailing_parentheticals() -> None:
-    # Two stacked trailing qualifiers both peel off.
-    assert normalize_kpi_name("ROE (annualized) (consolidated)") == "roe"
+def test_normalize_preserves_semantic_parentheticals() -> None:
+    assert normalize_kpi_name("ROE (annualized, consolidated)") == (
+        "roe (annualized, consolidated)"
+    )
+    assert normalize_kpi_name("Operating margin (GAAP)") != normalize_kpi_name(
+        "Operating margin (non-GAAP)"
+    )
+    assert normalize_kpi_name("Total customers (Brazil)") != normalize_kpi_name(
+        "Total customers (consolidated)"
+    )
+    assert normalize_kpi_name("Customers (active)") != normalize_kpi_name("Customers (total)")
 
 
 def test_normalize_keeps_distinct_metrics_distinct() -> None:
@@ -161,13 +246,13 @@ def test_short_label_resolves_to_richest_canonical_definition() -> None:
 
 
 def test_richest_wins_even_when_exact_duplicate_present() -> None:
-    """Exactness is only a tie-breaker — observation count dominates."""
+    """A semantic qualifier never joins an unqualified series by richness."""
     conn = _make_db()
     rich = _add_def(conn, "NU", "ROE (annualized, consolidated)")
     sparse_exact = _add_def(conn, "NU", "ROE")
     _add_facts(conn, "NU", rich, _QUARTER_ENDS)  # 12 obs
     _add_facts(conn, "NU", sparse_exact, _QUARTER_ENDS[:1])  # 1 obs, exact name
-    assert resolve_kpi_definition_name(conn, "NU", "ROE") == "ROE (annualized, consolidated)"
+    assert resolve_kpi_definition_name(conn, "NU", "ROE") == "ROE"
 
 
 def test_exactness_breaks_ties_at_equal_obs() -> None:
@@ -228,8 +313,8 @@ def test_period_types_scopes_richness_count() -> None:
         period_type="FY",
     )
 
-    # All-period count (default, break-rule paths): annual-rich def wins.
-    assert resolve_kpi_definition_name(conn, "X", "Revenue") == "Revenue (GAAP)"
+    # GAAP is semantic, so the unqualified request never crosses into it.
+    assert resolve_kpi_definition_name(conn, "X", "Revenue") == "Revenue"
     # Quarterly-scoped count (chart loader): the quarterly def wins.
     assert (
         resolve_kpi_definition_name(conn, "X", "Revenue", period_types=QUARTERLY_FACT_PERIOD_TYPES)
@@ -249,8 +334,8 @@ def test_quarterly_scope_ignores_annual_only_definition() -> None:
         )
         is None
     )
-    # …but the all-period break-rule scope still finds it.
-    assert resolve_kpi_definition_name(conn, "X", "Free Cash Flow") == "Free Cash Flow (annual)"
+    # Cadence is semantic metadata, not a disposable name suffix.
+    assert resolve_kpi_definition_name(conn, "X", "Free Cash Flow") is None
 
 
 # ---------------------------------------------------------------------------

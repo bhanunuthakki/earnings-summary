@@ -796,7 +796,7 @@ def _plan_fact_row(
         period_start=period_start,
         period_end=period_end,
         fiscal_period_type=_observation_period_type(str(row["fiscal_period_type"])),
-        dimensions=_dimensions(fact_table, row),
+        dimensions=_dimensions(conn, fact_table, row),
         numeric_value=numeric_value,
         text_value=None,
         currency=_optional_text(row["currency"]) if fact_table == "financial_facts" else None,
@@ -1370,11 +1370,56 @@ def _concept_key(fact_table: FactTable, row: sqlite3.Row) -> str:
     return f"kpi_definition:{int(row['kpi_definition_id'])}"
 
 
-def _dimensions(fact_table: FactTable, row: sqlite3.Row) -> tuple[ObservationDimension, ...]:
+def _dimensions(
+    conn: sqlite3.Connection, fact_table: FactTable, row: sqlite3.Row
+) -> tuple[ObservationDimension, ...]:
     if fact_table == "financial_facts":
         return ()
-    return (
-        ObservationDimension(key="kpi_definition_id", value=str(int(row["kpi_definition_id"]))),
+    values: dict[str, str] = {
+        "kpi_definition_id": str(int(row["kpi_definition_id"])),
+    }
+    if _object_exists(conn, "kpi_fact_semantic_contexts", object_type="table"):
+        columns = {
+            str(column[1])
+            for column in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)")
+        }
+        current_predicate = (
+            " AND NOT EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts successor "
+            "WHERE successor.supersedes_context_id=context.id)"
+            if {"revision", "supersedes_context_id"}.issubset(columns)
+            else ""
+        )
+        context = conn.execute(
+            "SELECT period_role,accounting_basis,consolidation_scope,dimensions_json,"
+            "unit_scale,status,metric_name_as_reported,publication_lane "
+            "FROM kpi_fact_semantic_contexts context WHERE kpi_fact_id=?"
+            + current_predicate
+            + " ORDER BY id DESC LIMIT 1",
+            (int(row["id"]),),
+        ).fetchone()
+        if context is not None:
+            values.update(
+                {
+                    "semantic_status": str(context[5]),
+                    "period_role": str(context[0]),
+                    "accounting_basis": str(context[1]),
+                    "consolidation_scope": str(context[2]),
+                    "unit_scale": str(context[4]),
+                    "metric_name_as_reported": str(context[6]),
+                    "publication_lane": str(context[7]),
+                }
+            )
+            try:
+                dimensions = json.loads(str(context[3]))
+            except json.JSONDecodeError:
+                dimensions = {}
+            if isinstance(dimensions, dict):
+                typed_dimensions = cast("dict[str, object]", dimensions)
+                values.update(
+                    {f"scope:{key}": str(value) for key, value in typed_dimensions.items()}
+                )
+    return tuple(
+        ObservationDimension(key=key, value=value) for key, value in sorted(values.items())
     )
 
 

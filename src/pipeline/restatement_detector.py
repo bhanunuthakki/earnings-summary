@@ -578,6 +578,7 @@ def insert_kpi_with_restatement_detection(
     computed_from: str | None = None,
     formula_id: int | None = None,
     formula_version: int | None = None,
+    before_resolve: Callable[[int], None] | None = None,
 ) -> tuple[int | None, int | None]:
     """kpi_facts twin of `insert_with_restatement_detection`.
 
@@ -692,10 +693,9 @@ def insert_kpi_with_restatement_detection(
                     raise ValueError(
                         "same-document KPI currency backfill conflicts with persisted fact identity"
                     )
-                conn.execute(
-                    "UPDATE kpi_facts SET currency=? WHERE id=?", (currency, existing_currency[0])
+                raise ValueError(
+                    "same-document KPI currency enrichment requires source-reviewed supersession"
                 )
-                return (int(existing_currency[0]), supersedes_id)
             if str(stored) != currency:
                 raise ValueError("same-document KPI currency conflicts with persisted fact")
     try:
@@ -755,6 +755,8 @@ def insert_kpi_with_restatement_detection(
         return (None, None)
     new_row_id = int(cur.lastrowid) if cur.lastrowid is not None else None
     if new_row_id is not None:
+        if before_resolve is not None:
+            before_resolve(new_row_id)
         resolve_fact_row(conn, fact_table="kpi_facts", fact_row_id=new_row_id)
     return (new_row_id, supersedes_id)
 

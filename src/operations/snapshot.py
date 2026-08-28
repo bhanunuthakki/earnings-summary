@@ -4,7 +4,7 @@ import sqlite3
 import stat
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal, TypeVar, cast
+from typing import Literal, TypedDict, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -27,10 +27,12 @@ from operations.models import (
     PortfolioTrackerRuntimeObservation,
     RuntimeProbeAttempt,
     RuntimeReceiptPair,
+    SchedulerAttemptState,
     SchedulerExpectation,
     SchedulerObservation,
     SchedulerReceipt,
     SchedulerRuntimeReceipt,
+    SchedulerTaskReceipt,
     SchedulerTaskRow,
     SchedulerTaskState,
     SchemaRevisionObservation,
@@ -64,6 +66,34 @@ _T = TypeVar("_T", bound=BaseModel)
 
 class _ReceiptError(ValueError):
     pass
+
+
+class _SchedulerTaskHistory(TypedDict, total=False):
+    registered_action_sha256: str | None
+    registered_checkout_sha256: str | None
+    registered_wrapper_sha256: str | None
+    wrapper_match: bool | None
+    last_attempted_at: datetime | None
+    last_successful_at: datetime | None
+    next_expected_at: datetime | None
+    last_result: int | None
+    attempt_state: SchedulerAttemptState
+
+
+def _scheduler_row_history(row: SchedulerTaskReceipt | None) -> _SchedulerTaskHistory:
+    if row is None:
+        return {}
+    return {
+        "registered_action_sha256": row.registered_action_sha256,
+        "registered_checkout_sha256": row.registered_checkout_sha256,
+        "registered_wrapper_sha256": row.registered_wrapper_sha256,
+        "wrapper_match": row.wrapper_match,
+        "last_attempted_at": row.last_attempted_at,
+        "last_successful_at": row.last_successful_at,
+        "next_expected_at": row.next_expected_at,
+        "last_result": row.last_result,
+        "attempt_state": row.attempt_state,
+    }
 
 
 def _read_receipt(path: Path, model: type[_T]) -> _T:
@@ -322,12 +352,14 @@ def _runtime_state(
             )
 
     try:
+        scheduler_rows: dict[str, SchedulerTaskReceipt] = {}
         if receipt is None:
             supplied: list[tuple[str, SchedulerTaskState | ServiceState]] = []
             recorded_at: datetime | None = None
         elif kind == "scheduler":
             scheduler_receipt = cast(SchedulerReceipt, receipt)
             supplied = [(row.task_name, row.state) for row in scheduler_receipt.tasks]
+            scheduler_rows = {row.task_name.casefold(): row for row in scheduler_receipt.tasks}
             recorded_at = scheduler_receipt.observed_at
         else:
             service_receipt = cast(ServiceReceipt, receipt)
@@ -393,6 +425,7 @@ def _runtime_state(
                     scheduler_expectation=expectation,
                     expectation_match=expectation_match,
                     attention_detail=attention_detail,
+                    **_scheduler_row_history(scheduler_rows.get(key)),
                 )
             )
         values.extend(
@@ -400,6 +433,7 @@ def _runtime_state(
                 task_name=supplied_by_key[key][0],
                 state=cast(SchedulerTaskState, supplied_by_key[key][1]),
                 registry_match="unexpected",
+                **_scheduler_row_history(scheduler_rows.get(key)),
             )
             for key in sorted(extras)
         )

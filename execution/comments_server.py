@@ -100,9 +100,9 @@ from comments_server_settings_routes import (  # noqa: E402
     register_settings_routes,
 )
 from process_report_comments import (  # noqa: E402
-    _resolve_latest_report_date,
     preview_thesis_edits,
     process_comments_for_ticker,
+    resolve_latest_report_date,
 )
 from pydantic import ValidationError  # noqa: E402
 from refresh_dispatch import STEP_NAMES  # noqa: E402
@@ -187,9 +187,16 @@ from operations.readme_governance import (  # noqa: E402
     collect_readme_governance_status,
 )
 from operations.registry import build_operations_registry  # noqa: E402
+from operations.review_bundle import (  # noqa: E402
+    build_operations_review_bundle,
+    database_lineage_identity,
+    load_kpi_repair_review,
+    review_code_identity,
+)
 from operations.snapshot import collect_operations_snapshot  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
+from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
 from pipeline.operations_panel import (  # noqa: E402
     build_operations_panel_view,
     render_operations_panel,
@@ -576,6 +583,7 @@ def create_app(
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
     resolved_code_root = (code_root or PROJECT_ROOT).resolve()
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
+    operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
     app.config["OPERATIONS_REGISTRY"] = declared_operations
 
@@ -780,10 +788,11 @@ def create_app(
 
     @app.teardown_request
     def close_request_db(exception: BaseException | None = None) -> None:
-        db_conn = g.pop("request_read_db", None)
-        if db_conn is not None:
-            with contextlib.suppress(Exception):
-                db_conn.close()
+        for key in ("request_read_db", "request_operations_read_db"):
+            db_conn = g.pop(key, None)
+            if db_conn is not None:
+                with contextlib.suppress(Exception):
+                    db_conn.close()
         reservation = g.pop("panel_cache_reservation", None)
         if isinstance(reservation, PanelCacheReservation):
             panel_cache.abandon(reservation)
@@ -798,6 +807,18 @@ def create_app(
             conn.row_factory = sqlite3.Row
             g.request_read_db = conn
         return g.request_read_db
+
+    def get_operations_read_db() -> sqlite3.Connection:
+        """Bounded diagnostic reads must survive application schema drift."""
+        if "request_operations_read_db" not in g:
+            conn = connect_sqlite(
+                resolved_db_path,
+                role=SQLiteConnectionRole.READ_ONLY,
+                schema_preflight=False,
+            )
+            conn.row_factory = sqlite3.Row
+            g.request_operations_read_db = conn
+        return g.request_operations_read_db
 
     @app.before_request
     def csrf_origin_guard():
@@ -883,7 +904,7 @@ def create_app(
         return response
 
     @app.after_request
-    def add_cors_headers(response):
+    def add_cors_headers(response: Response) -> Response:
         # The workspace report HTML opens via file://, so its browser Origin is
         # the literal string "null"; pages served by this server carry a
         # loopback Origin. Echo back ONLY those — never "*". A wildcard let any
@@ -2043,6 +2064,46 @@ def create_app(
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
+    @app.route("/api/operations/review-bundle", methods=["GET"])
+    def operations_review_bundle_api():
+        """Sanitized, typed Windows authority projection for Mac review."""
+        operations_conn = get_operations_read_db()
+        snapshot = collect_operations_snapshot(
+            declared_operations,
+            repo_root=repo_root,
+            conn=operations_conn,
+            observed_at=datetime.now(UTC),
+            scheduler_receipt_path=scheduler_receipt_path(repo_root),
+            service_receipt_path=service_receipt_path(repo_root),
+        )
+        semantic_rows = scoped_kpi_definitions(
+            operations_conn,
+            repo_root=resolved_code_root,
+            user_id=DEFAULT_USER_ID,
+        )
+        try:
+            database_instance = database_lineage_identity(operations_conn)
+        except (sqlite3.Error, ValueError):
+            # Keep the read-only review endpoint available during schema drift,
+            # while making pin enrollment and Mac validation fail closed.
+            database_instance = None
+        bundle = build_operations_review_bundle(
+            snapshot=snapshot,
+            registry=declared_operations,
+            semantic_rows=semantic_rows,
+            serving_origin=request.host_url.rstrip("/"),
+            code_instance=operations_review_code_identity,
+            database_instance=database_instance,
+            kpi_repair=load_kpi_repair_review(
+                repo_root=resolved_code_root,
+                observed_at=snapshot.observed_at,
+            ),
+        )
+        response = app.json.response(bundle.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["ETag"] = f'"{bundle.content_sha256}"'
+        return response
+
     @app.route("/api/panel/<name>", methods=["GET"])
     def panel_fragment(name: str):
         """One analytical panel as a head/foot-less HTML fragment, for the lazy
@@ -2055,10 +2116,11 @@ def create_app(
             return _overview_fragment_response()
 
         if name == "operations":
+            operations_conn = get_operations_read_db()
             snapshot = collect_operations_snapshot(
                 declared_operations,
                 repo_root=repo_root,
-                conn=get_read_db(),
+                conn=operations_conn,
                 observed_at=datetime.now(UTC),
                 scheduler_receipt_path=scheduler_receipt_path(repo_root),
                 service_receipt_path=service_receipt_path(repo_root),
@@ -2070,7 +2132,7 @@ def create_app(
                         snapshot,
                         readme_status=_collect_current_readme_status(),
                         attention=build_attention_panel_view(
-                            get_read_db(), observed_at=snapshot.observed_at
+                            operations_conn, observed_at=snapshot.observed_at
                         ),
                     )
                 ),
@@ -3536,7 +3598,7 @@ def create_app(
         return {"counts": counts}
 
     @app.route("/api/peers/<ticker>", methods=["GET"])
-    def peers_api(ticker: str):
+    def peers_api(ticker: str) -> dict[str, object] | tuple[dict[str, str], int]:
         """The scored comparable set for one ticker (the PR #400 peer
         scoring) — the Ask thread's "+ peers" action injects these into the
         pivot universe instead of FMP's alphabetical screen head. Always
@@ -3557,16 +3619,17 @@ def create_app(
                 "error": "peer lookup failed; retry the request",
                 "correlation_id": get_correlation_id(),
             }
+        peers: list[dict[str, object]] = [
+            {
+                "ticker": r.peer_ticker,
+                "name": r.peer_name,
+                "reasons": list(r.match_reasons),
+            }
+            for r in rows
+        ]
         return {
             "ticker": sym,
-            "peers": [
-                {
-                    "ticker": r.peer_ticker,
-                    "name": r.peer_name,
-                    "reasons": list(r.match_reasons),
-                }
-                for r in rows
-            ],
+            "peers": peers,
         }
 
     def _parse_ask_turn() -> AskTurn | None:
@@ -4453,7 +4516,7 @@ def create_app(
     def start_refresh():
         if request.method == "OPTIONS":
             return ("", 204)
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
             ticker = str(body["ticker"]).upper()
             mode = body.get("mode", "stale")
@@ -4764,7 +4827,7 @@ def create_app(
         """
         if request.method == "OPTIONS":
             return ("", 204)
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         ticker = str(body.get("ticker", "")).upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
@@ -4773,7 +4836,7 @@ def create_app(
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         try:
-            quarters = int(body.get("quarters", 8))
+            quarters = int(cast(str | int, body.get("quarters", 8)))
         except (TypeError, ValueError):
             return ({"error": "quarters must be an integer"}, 400)
 
@@ -4936,7 +4999,7 @@ def create_app(
         existing CLI under execution/."""
         if request.method == "OPTIONS":
             return ("", 204)
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         action = str(body.get("action", ""))
         if action == "onboard":
             ticker = str(body.get("ticker", "")).upper()
@@ -5086,7 +5149,7 @@ def create_app(
         action_raw = payload.get("action")
         if action_raw not in ("refute", "accept", "defer"):
             return ({"error": "action must be one of refute | accept | defer"}, 400)
-        action = cast("rt_response.Action", action_raw)
+        action = action_raw
         response_md_raw = payload.get("response_md")
         response_md = str(response_md_raw) if response_md_raw is not None else None
 
@@ -5388,14 +5451,14 @@ def create_app(
 
     @app.route("/comments", methods=["POST"])
     def create_comment_endpoint():
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
-            ticker = body["ticker"]
-            report_date = _parse_date(body["report_date"])
-            anchor = comments.Anchor(**body["anchor"])
-            text = body["comment"]
-            intent = body.get("intent") or None
-            selected_text = body.get("selected_text")
+            ticker = cast(str, body["ticker"])
+            report_date = _parse_date(cast(str, body["report_date"]))
+            anchor = comments.Anchor.model_validate(body["anchor"])
+            text = cast(str, body["comment"])
+            intent = cast(comments.IntentType, body.get("intent") or None)
+            selected_text = cast(str | None, body.get("selected_text"))
         except (KeyError, ValueError, TypeError) as e:
             return ({"error": f"bad payload: {e}"}, 400)
         c = comments.append_comment(
@@ -5413,15 +5476,15 @@ def create_app(
     def patch_comment_endpoint(comment_id: str):
         if request.method == "OPTIONS":
             return ("", 204)
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
-            ticker = body["ticker"]
-            report_date = _parse_date(body["report_date"])
+            ticker = cast(str, body["ticker"])
+            report_date = _parse_date(cast(str, body["report_date"]))
         except (KeyError, ValueError, TypeError):
             return ({"error": "ticker + report_date required"}, 400)
-        status = body.get("status")
-        resolution = body.get("resolution_note")
-        intent = body.get("intent")
+        status = cast(comments.CommentStatus | None, body.get("status"))
+        resolution = cast(str | None, body.get("resolution_note"))
+        intent = cast(comments.IntentType, body.get("intent"))
         updated = comments.update_comment(
             repo_root,
             ticker,
@@ -5437,10 +5500,10 @@ def create_app(
 
     @app.route("/comments/<comment_id>", methods=["DELETE"])
     def delete_comment_endpoint(comment_id: str):
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
-            ticker = body["ticker"]
-            report_date = _parse_date(body["report_date"])
+            ticker = cast(str, body["ticker"])
+            report_date = _parse_date(cast(str, body["report_date"]))
         except (KeyError, ValueError, TypeError):
             return ({"error": "ticker + report_date required"}, 400)
         ok = comments.delete_comment(repo_root, ticker, report_date, comment_id)
@@ -5457,9 +5520,9 @@ def create_app(
         unparseable LLM response degrades at component scope (200 degraded)."""
         if request.method == "OPTIONS":
             return ("", 204)
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
-            report_date = _parse_date(body["report_date"])
+            report_date = _parse_date(cast(str, body["report_date"]))
         except (KeyError, ValueError, TypeError):
             return ({"error": "report_date required (YYYY-MM-DD)"}, 400)
         raw_ids = body.get("comment_ids")
@@ -5493,7 +5556,7 @@ def create_app(
         over /actions/stream/<job_id>."""
         if request.method == "OPTIONS":
             return ("", 204)
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         ticker = str(body.get("ticker", "")).upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
@@ -5502,7 +5565,7 @@ def create_app(
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         apply_flag = bool(body.get("apply", False))
-        report_date_str = body.get("report_date")
+        report_date_str = cast(str | None, body.get("report_date"))
         report_date: date | None = None
         if report_date_str:
             try:
@@ -5511,7 +5574,7 @@ def create_app(
                 return ({"error": "bad report_date"}, 400)
 
         if not apply_flag:
-            rd = report_date or _resolve_latest_report_date(repo_root, ticker)
+            rd = report_date or resolve_latest_report_date(repo_root, ticker)
             if rd is None:
                 return ({"error": "no report found for ticker; pass report_date"}, 404)
             try:

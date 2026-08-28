@@ -6,11 +6,8 @@ one-shot + onboarding tool that makes a definition first-class annual:
 
   1. sets ``kpi_definitions.reporting_cadence`` for every definition matching
      ``--kpi`` (exact name OR parenthetical-insensitive normalized name);
-  2. (annual only) re-tags that definition's **fiscal-year-end** kpi_facts rows
-     (``period_end`` = Dec-31, currently ``Q4``/``quarterly``) to ``FY`` so the
-     annual reader (``ANNUAL_FACT_PERIOD_TYPES``) picks them up. Genuine interim
-     prints (Q1/Q2/Q3) are left untouched — preserved, just not on the annual
-     axis;
+  2. reports fiscal-year-end facts whose period role requires a source-reviewed
+     supersession. It never retags a historical fact in place;
   3. optionally corrects the definition's ``unit`` (``--unit``) — e.g. NU's CAR
      definition was stamped ``ratio`` though every fact + the break rule are
      ``percent``.
@@ -120,14 +117,6 @@ def _convert(
                 f"UPDATE kpi_definitions SET unit = ? WHERE id IN ({placeholders})",
                 (unit.value, *def_ids),
             )
-        if cadence is ReportingCadence.ANNUAL and retag_count:
-            conn.execute(
-                f"UPDATE kpi_facts SET fiscal_period_type = 'FY' "
-                f"WHERE kpi_definition_id IN ({placeholders}) "
-                f"AND fiscal_period_type IN ({','.join('?' * len(_QUARTERLY_YEAR_END_TYPES))}) "
-                "AND substr(period_end, 1, 10) LIKE ?",
-                (*def_ids, *_QUARTERLY_YEAR_END_TYPES, f"%{_YEAR_END_SUFFIX}"),
-            )
         conn.commit()
 
     after = _fact_breakdown(conn, def_ids) if apply else before
@@ -137,7 +126,7 @@ def _convert(
         "def_ids": def_ids,
         "cadence": cadence.value,
         "unit_set": unit.value if unit is not None else None,
-        "year_end_rows_retagged_to_FY": retag_count,
+        "year_end_rows_requiring_supersession": retag_count,
         "facts_before": before,
         "facts_after": after,
         "applied": apply,

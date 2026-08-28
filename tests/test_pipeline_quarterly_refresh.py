@@ -43,7 +43,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             sha256 TEXT NOT NULL,
             fetched_at TIMESTAMP NOT NULL,
             fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL
+            raw_bytes_size INTEGER NOT NULL,
+            source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
         );
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +96,22 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE UNIQUE INDEX uq_kpi_facts_provenance
         ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL UNIQUE,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL,
+            publication_lane TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL,
+            consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,
+            unit_scale TEXT NOT NULL,
+            source_row_label TEXT,
+            source_column_header TEXT,
+            status TEXT NOT NULL,
+            reason_code TEXT
+        );
         CREATE TABLE transcripts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             document_id INTEGER NOT NULL,
@@ -476,6 +493,16 @@ def test_refresh_ticker_derives_kpis_when_facts_present(
     derive_stage = next(s for s in report.stages if s.name == StageName.DERIVE_FMP_KPIS)
     assert derive_stage.status == StageStatus.OK
     assert derive_stage.rows_processed >= 3  # OpMargin, NetMargin, GrossMargin
+    admitted = conn.execute(
+        "SELECT COUNT(*) FROM kpi_fact_semantic_contexts "
+        "WHERE status='admitted' AND publication_lane='current_actual' "
+        "AND accounting_basis='gaap' AND consolidation_scope='consolidated'"
+    ).fetchone()[0]
+    unknown = conn.execute(
+        "SELECT COUNT(*) FROM kpi_fact_semantic_contexts WHERE status='legacy_unknown'"
+    ).fetchone()[0]
+    assert admitted == 0
+    assert unknown >= 3
 
 
 def test_refresh_ticker_skips_derive_when_no_facts(
@@ -496,11 +523,42 @@ def test_refresh_ticker_skips_derive_when_no_facts(
     assert derive_stage.status == StageStatus.SKIPPED
 
 
-def test_refresh_ticker_detects_status_change(conn: sqlite3.Connection, tmp_path: Path) -> None:
-    """Prior status OK + new BREACH eval -> breach_status_changed = True."""
+def test_refresh_ticker_fmp_normalized_rule_fails_closed(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """FMP arithmetic remains unqualified and cannot trigger a decision-grade breach."""
     _seed_thesis_state(conn, "X", status=BreachStatus.OK)
     _seed_quarterly_income(conn, "X")
     _write_holdings(tmp_path, "X", threshold=50)  # 200/1000=20%, < 50% -> BREACH
+
+    report = refresh_ticker(
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
+    )
+    assert report.breach_status == BreachStatus.OK
+    assert report.breach_status_changed is False
+    latest = conn.execute(
+        "SELECT rule_evaluations_json FROM thesis_evaluations ORDER BY id DESC LIMIT 1"
+    ).fetchone()[0]
+    evaluations = json.loads(str(latest))
+    assert evaluations[0]["status"] == BreachStatus.UNRESOLVED.value
+
+
+def test_refresh_ticker_sec_official_derived_rule_can_change_status(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """SEC-official source cells qualify deterministic GAAP arithmetic for evaluation."""
+    _seed_thesis_state(conn, "X", status=BreachStatus.OK)
+    _seed_quarterly_income(conn, "X")
+    conn.execute(
+        "UPDATE documents SET source_type='sec_xbrl', source_quality_tier='sec_official' "
+        "WHERE ticker='X'"
+    )
+    conn.commit()
+    _write_holdings(tmp_path, "X", threshold=50)
 
     report = refresh_ticker(
         conn,

@@ -41,10 +41,11 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from compute.kpi_resolver import semantic_series_identity_sql
+from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
     FINANCIAL_FACT,
-    KPI,
     OverrideAction,
     chip_override_map,
     date_override_map,
@@ -1063,6 +1064,15 @@ def load_kpi_series_with_provenance(
             if _has_column(conn, "kpi_facts", "computed_from")
             else "NULL AS computed_from"
         )
+        fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+        semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+        semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
+        semantic_join2, semantic_where2 = semantic_admission_sql(
+            conn, fact_alias="kf2", context_alias="ksc2", fail_closed=True
+        )
+        semantic_identity2 = semantic_series_identity_sql(
+            conn, fact_alias="kf2", context_alias="ksc2", fact_relation=fact_relation
+        )
         rows = conn.execute(
             f"""
             SELECT kf.period_end,
@@ -1079,17 +1089,21 @@ def load_kpi_series_with_provenance(
                    d.doc_type,
                    {accession_select},
                    {tier_select}
-            FROM kpi_facts kf
+            FROM {fact_relation} kf
             JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             JOIN documents d ON d.id = kf.source_doc_id
+            {semantic_join}
             WHERE kf.ticker = ?
+              AND {semantic_where} AND {semantic_identity}
               AND kd.name = ?
               AND kf.fiscal_period_type IN ({placeholders})
               AND kf.id = (
                 SELECT kf2.id
-                FROM kpi_facts kf2
+                FROM {fact_relation} kf2
                 JOIN documents d2 ON d2.id = kf2.source_doc_id
+                {semantic_join2}
                 WHERE kf2.ticker = kf.ticker
+                  AND {semantic_where2} AND {semantic_identity2}
                   AND kf2.kpi_definition_id = kf.kpi_definition_id
                   AND kf2.period_end = kf.period_end
                   AND kf2.fiscal_period_type = kf.fiscal_period_type
@@ -1100,14 +1114,7 @@ def load_kpi_series_with_provenance(
             """,
             (ticker.upper(), kpi_name, *period_list),
         ).fetchall()
-        return _overlay_sourced_series(
-            conn,
-            ticker=ticker,
-            fact_kind=KPI,
-            fact_key=kpi_name,
-            period_types=period_list,
-            series=_sourced_rows(rows, fact_table="kpi_facts"),
-        )
+        return _sourced_rows(rows, fact_table="kpi_facts")
     except sqlite3.Error as exc:
         log.warning(
             {
@@ -1152,18 +1159,31 @@ def load_kpi_series(
             if not _has_table(conn, required):
                 return []
         has_documents = _has_table(conn, "documents")
+        fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+        semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+        semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
+        semantic_join2, semantic_where2 = semantic_admission_sql(
+            conn, fact_alias="kf2", context_alias="ksc2", fail_closed=True
+        )
+        semantic_identity2 = semantic_series_identity_sql(
+            conn, fact_alias="kf2", context_alias="ksc2", fact_relation=fact_relation
+        )
         if not has_documents:
             rows = conn.execute(
                 f"""
                 SELECT kf.period_end, kf.value
-                FROM kpi_facts kf
+                FROM {fact_relation} kf
                 JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+                {semantic_join}
                 WHERE kf.ticker = ?
+                  AND {semantic_where} AND {semantic_identity}
                   AND kd.name = ?
                   AND kf.fiscal_period_type IN ({placeholders})
                   AND kf.id = (
-                    SELECT MAX(kf2.id) FROM kpi_facts kf2
+                    SELECT MAX(kf2.id) FROM {fact_relation} kf2
+                    {semantic_join2}
                     WHERE kf2.ticker = kf.ticker
+                      AND {semantic_where2} AND {semantic_identity2}
                       AND kf2.kpi_definition_id = kf.kpi_definition_id
                       AND kf2.period_end = kf.period_end
                       AND kf2.fiscal_period_type = kf.fiscal_period_type
@@ -1172,14 +1192,7 @@ def load_kpi_series(
                 """,
                 (ticker.upper(), kpi_name, *period_list),
             ).fetchall()
-            return _overlay_scalar_series(
-                conn,
-                ticker=ticker,
-                fact_kind=KPI,
-                fact_key=kpi_name,
-                period_types=period_list,
-                series=_rows_to_series(rows),
-            )
+            return _rows_to_series(rows)
 
         has_tier = _has_column(conn, "documents", "source_quality_tier")
         rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
@@ -1188,18 +1201,22 @@ def load_kpi_series(
         rows = conn.execute(
             f"""
             SELECT kf.period_end, kf.value
-            FROM kpi_facts kf
+            FROM {fact_relation} kf
             JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             JOIN documents d ON d.id = kf.source_doc_id
+            {semantic_join}
             WHERE kf.ticker = ?
+              AND {semantic_where} AND {semantic_identity}
               AND kd.name = ?
               AND kf.fiscal_period_type IN ({placeholders})
               {as_of_clause}
               AND kf.id = (
                 SELECT kf2.id
-                FROM kpi_facts kf2
+                FROM {fact_relation} kf2
                 JOIN documents d2 ON d2.id = kf2.source_doc_id
+                {semantic_join2}
                 WHERE kf2.ticker = kf.ticker
+                  AND {semantic_where2} AND {semantic_identity2}
                   AND kf2.kpi_definition_id = kf.kpi_definition_id
                   AND kf2.period_end = kf.period_end
                   AND kf2.fiscal_period_type = kf.fiscal_period_type
@@ -1217,14 +1234,7 @@ def load_kpi_series(
                 *as_of_params,
             ),
         ).fetchall()
-        return _overlay_scalar_series(
-            conn,
-            ticker=ticker,
-            fact_kind=KPI,
-            fact_key=kpi_name,
-            period_types=period_list,
-            series=_rows_to_series(rows),
-        )
+        return _rows_to_series(rows)
     except sqlite3.Error as exc:
         log.warning(
             {

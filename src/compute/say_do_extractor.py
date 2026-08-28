@@ -22,11 +22,9 @@ Design choices:
     it is recorded in ``commitment_scan_log`` (0129) so the daily backfill
     doesn't re-scan the same transcript forever (this exact loop was burning
     ~$25/day of anonymous Sonnet calls before the marker existed).
-  - Tickers with an EMPTY kpi_definitions catalog are excluded from the
-    pending set entirely: the prompt would instruct the model to return
-    ``{"commitments": []}``, so the call's outcome is predetermined and the
-    LLM spend is pure waste. They become eligible again the moment a KPI
-    catalog is seeded (no scan marker is written for the skip).
+  - Tickers with an EMPTY kpi_definitions catalog still scan for novel or
+    one-off management indicators. They cannot yield catalog-backed
+    commitments, but the retained staging observation is still useful.
   - An unusable LLM response raises ``CommitmentParseError`` (after one
     retry-with-feedback) instead of degrading to an empty manifest — an
     empty manifest is indistinguishable from a legitimate "no commitments
@@ -47,6 +45,11 @@ from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, Field, ValidationError
 
+from compute.management_indicators import (
+    IndicatorRecurrence,
+    IndicatorScope,
+    ManagementIndicatorInput,
+)
 from compute.say_do import CommitmentExtractionManifest, CommitmentInput
 from compute.thesis_evaluator import Comparator
 from models.facts import Unit
@@ -88,6 +91,8 @@ class TranscriptContext:
     ticker: str
     period_made: datetime
     transcript_segment_id: int
+    source_doc_id: int | None = None
+    speaker: str | None = None
 
 
 class _LLMCommitment(BaseModel):
@@ -103,10 +108,32 @@ class _LLMCommitment(BaseModel):
     narrative: str = Field(min_length=1, max_length=1000)
 
 
+class _LLMManagementIndicator(BaseModel):
+    """Novel source measurement that must remain outside the KPI catalog."""
+
+    raw_label: str = Field(min_length=1, max_length=256)
+    value: Decimal
+    unit: Unit
+    scope: IndicatorScope = IndicatorScope.UNSPECIFIED
+    recurrence: IndicatorRecurrence = IndicatorRecurrence.UNKNOWN
+    source_excerpt: str = Field(min_length=1, max_length=2000)
+
+
 class _LLMResponse(BaseModel):
     """Top-level shape we expect the model to return."""
 
     commitments: list[_LLMCommitment] = Field(default_factory=list[_LLMCommitment])
+    novel_indicators: list[_LLMManagementIndicator] = Field(
+        default_factory=list[_LLMManagementIndicator]
+    )
+
+
+class TranscriptExtractionManifest(CommitmentExtractionManifest):
+    """Commitments plus unpromoted, source-bound novel indicators."""
+
+    indicators: list[ManagementIndicatorInput] = Field(
+        default_factory=list[ManagementIndicatorInput]
+    )
 
 
 def fetch_kpi_catalog(conn: sqlite3.Connection, ticker: str) -> list[tuple[str, str]]:
@@ -127,10 +154,10 @@ def fetch_kpi_catalog(conn: sqlite3.Connection, ticker: str) -> list[tuple[str, 
 def fetch_transcript_text_and_segment(
     conn: sqlite3.Connection, transcript_id: int
 ) -> tuple[str, int, datetime] | None:
-    """Return (text, segment_id, period_end) for the transcript's longest segment, or None."""
+    """Return (text, segment_id, period_end) for the longest segment, or None."""
     transcripts = selected_transcripts_relation(conn)
     cur = conn.execute(
-        "SELECT t.period_end, ts.id AS segment_id, ts.text "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        f"SELECT t.period_end, ts.id AS segment_id, ts.text "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"FROM {transcripts} t JOIN transcript_segments ts ON ts.transcript_id = t.id "
         "WHERE t.id = ? ORDER BY length(ts.text) DESC LIMIT 1",
         (transcript_id,),
@@ -142,6 +169,20 @@ def fetch_transcript_text_and_segment(
     if isinstance(period_end, str):
         period_end = datetime.fromisoformat(period_end)
     return (row["text"], int(row["segment_id"]), period_end)
+
+
+def _segment_source_metadata(conn: sqlite3.Connection, segment_id: int) -> tuple[int, str | None]:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcript_segments)")}
+    speaker = "ts.speaker" if "speaker" in columns else "NULL"
+    row = conn.execute(
+        "SELECT tr.document_id, " + speaker + " "
+        "FROM transcript_segments ts JOIN transcripts tr ON tr.id=ts.transcript_id "
+        "WHERE ts.id=?",
+        (segment_id,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        raise ValueError(f"transcript_segment_id={segment_id} has no source document")
+    return int(row[0]), str(row[1]).strip() if row[1] else None
 
 
 def scan_log_available(conn: sqlite3.Connection) -> bool:
@@ -170,11 +211,10 @@ def transcripts_pending_extraction(
 
     A transcript is pending iff ALL of:
       - it has no management_commitments rows yet;
-      - it has no commitment_scan_log row (i.e. never scanned — a recorded
-        zero-commitment scan is a real outcome, not a retry candidate);
-      - its ticker has at least one kpi_definitions row (an empty catalog
-        makes the call's outcome predetermined: the prompt tells the model
-        to return no commitments)."""
+      - it has no commitment_scan_log row (or is being re-run after a prompt
+        version reset). Novel/one-off management indicators may be relevant
+        even when the ticker has no existing KPI catalog, so catalog absence
+        must not suppress a transcript scan."""
     transcripts = selected_transcripts_relation(conn)
     sql = (
         f"SELECT t.id, t.ticker, t.period_end FROM {transcripts} t "  # nosec B608 -- trusted internal SQL shape; values remain bound
@@ -182,9 +222,6 @@ def transcripts_pending_extraction(
         "  SELECT 1 FROM management_commitments mc "
         "  JOIN transcript_segments ts ON ts.id = mc.transcript_segment_id "
         "  WHERE ts.transcript_id = t.id"
-        ") "
-        "AND EXISTS ("
-        "  SELECT 1 FROM kpi_definitions k WHERE UPPER(k.ticker) = UPPER(t.ticker)"
         ")"
     )
     if scan_log_available(conn):
@@ -266,8 +303,17 @@ Examples that DO NOT qualify (skip them):
   - Vague qualitative ("we expect strength continuing")
   - Analyst questions or third-party comments
 
-VALID KPI NAMES (use ONLY these — out-of-catalog names will be DROPPED):
+VALID KPI NAMES (use ONLY these for `commitments` — do not create a new
+catalog KPI name here):
 {catalog_lines}
+
+NOVEL / ONE-OFF MANAGEMENT INDICATORS
+For a quantitative management-reported measurement that is not an exact valid
+KPI name above, record it in `novel_indicators` instead of silently dropping
+it. Include the raw label, value, unit, scope, whether management presented it
+as recurring or one-off, and a short exact source excerpt. These are research
+staging observations, NOT canonical KPIs and must never be included in
+`commitments` unless they match a valid KPI name above.
 
 OUTPUT FORMAT
 Return ONLY valid JSON, no prose, no markdown fences, with this exact shape:
@@ -282,10 +328,20 @@ Return ONLY valid JSON, no prose, no markdown fences, with this exact shape:
       "period_target": "<YYYY-MM-DD — the END of the calendar quarter management is guiding for>",
       "narrative": "<verbatim or near-verbatim quote from the transcript, max 500 chars>"
     }}
+  ],
+  "novel_indicators": [
+    {{
+      "raw_label": "<management's label, preserving qualifiers>",
+      "value": "<numeric, no units, no commas>",
+      "unit": "<one of: actual, thousands, millions, billions, percent, ratio, bps, count>",
+      "scope": "<one of: consolidated, segment, product, geography, unspecified>",
+      "recurrence": "<one of: recurring, one_off, unknown>",
+      "source_excerpt": "<exact supporting transcript excerpt, max 2,000 chars>"
+    }}
   ]
 }}
 
-If no qualifying commitments are found, return: {{"commitments": []}}
+If neither category is found, return: {{"commitments": [], "novel_indicators": []}}
 
 TRANSCRIPT:
 ---
@@ -298,7 +354,7 @@ def parse_llm_response(
     json_text: str,
     *,
     context: TranscriptContext,
-) -> CommitmentExtractionManifest:
+) -> TranscriptExtractionManifest:
     """Parse the LLM's JSON output into a typed manifest.
 
     - Strips markdown fences if present.
@@ -341,7 +397,29 @@ def parse_llm_response(
                 raw.kpi_name,
                 e,
             )
-    return CommitmentExtractionManifest(commitments=commitments)
+    indicators: list[ManagementIndicatorInput] = []
+    if response.novel_indicators and context.source_doc_id is None:
+        raise CommitmentParseError("novel indicators require a transcript source document")
+    for raw in response.novel_indicators:
+        try:
+            indicators.append(
+                ManagementIndicatorInput(
+                    ticker=context.ticker.upper(),
+                    transcript_segment_id=context.transcript_segment_id,
+                    raw_label=raw.raw_label,
+                    value=raw.value,
+                    unit=raw.unit,
+                    scope=raw.scope,
+                    recurrence=raw.recurrence,
+                    # The persistence boundary derives the speaker from the
+                    # uniquely matched verbatim source segment.
+                    speaker=None,
+                    source_excerpt=raw.source_excerpt,
+                )
+            )
+        except (ValidationError, InvalidOperation) as e:
+            log.warning("Dropping novel management indicator due to validation error: %s", e)
+    return TranscriptExtractionManifest(commitments=commitments, indicators=indicators)
 
 
 def extract_for_transcript(
@@ -349,7 +427,7 @@ def extract_for_transcript(
     transcript_id: int,
     *,
     llm_call: Callable[[str], str],
-) -> CommitmentExtractionManifest:
+) -> TranscriptExtractionManifest:
     """Orchestrator: pull transcript, build prompt, call LLM, parse, return manifest.
 
     `llm_call` is injected so tests can stub the LLM. Production callers pass
@@ -358,10 +436,8 @@ def extract_for_transcript(
     purpose ledger, budgets and model routing.
 
     Behavior notes:
-      - Empty KPI catalog ⇒ returns an empty manifest WITHOUT calling the LLM
-        (the prompt would instruct the model to return nothing). Normal
-        selection excludes these tickers already; this guard covers direct
-        --transcript-id invocations.
+      - Empty KPI catalog still scans: it cannot yield a catalog-backed
+        commitment, but can yield a reviewable novel management indicator.
       - Unusable LLM response ⇒ ONE retry with explicit feedback, then
         CommitmentParseError. Callers must not record a scan for a transcript
         that raised."""
@@ -379,15 +455,8 @@ def extract_for_transcript(
     if transcript_data is None:
         raise ValueError(f"transcript_id={transcript_id} has no transcript_segments rows")
     text, segment_id, period_end = transcript_data
+    source_doc_id, speaker = _segment_source_metadata(conn, segment_id)
     catalog = fetch_kpi_catalog(conn, ticker)
-    if not catalog:
-        log.info(
-            "transcript_id=%d ticker=%s has no KPI catalog — skipping LLM call "
-            "(outcome is predetermined: zero commitments)",
-            transcript_id,
-            ticker,
-        )
-        return CommitmentExtractionManifest(commitments=[])
 
     prompt = build_extraction_prompt(
         ticker=ticker,
@@ -399,6 +468,8 @@ def extract_for_transcript(
         ticker=ticker,
         period_made=period_end,
         transcript_segment_id=segment_id,
+        source_doc_id=source_doc_id,
+        speaker=speaker,
     )
     response_text = llm_call(prompt)
     try:

@@ -20,7 +20,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, model_validator
 
-from compute.kpi_resolver import canonical_metric_name, normalize_kpi_name
+from compute.kpi_resolver import canonical_metric_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
 from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
@@ -28,6 +28,16 @@ from models.kpis import DefinitionOrigin, ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.confidence import score_confidence
+from pipeline.kpi_semantics import (
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+    normalize_source_numeric,
+    parse_source_numeric,
+    persist_kpi_semantic_context,
+    unclassified_kpi_context,
+)
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 
 log = logging.getLogger(__name__)
@@ -70,6 +80,10 @@ class KpiValue(BaseModel):
     # Verbatim snippet from the source document that supports the value —
     # lands in kpi_facts.source_excerpt (clipped to _SOURCE_EXCERPT_MAX).
     source_excerpt: str | None = None
+    # Exact numeric token as printed in source (for example ``"114"`` in
+    # ``"114 million customers"``). It is retained in the semantic context;
+    # deterministic code, not the extractor, applies the presentation scale.
+    source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
     # Sub-document position (alembic 0075) — e.g. FactLocator(pdf_page=7) for
     # an IR-deck extraction, or transcript_line for a transcript-anchored one.
     # Required (no None default) as of the persist-time enforcement flip
@@ -79,6 +93,9 @@ class KpiValue(BaseModel):
     # persist_manifest below, for how the two branches serialize at the
     # actual kpi_facts INSERT.
     locator: FactLocator | LegacyEscapeHatch
+    # Source-bound meaning. Legacy deterministic producers may leave this null;
+    # semantic extraction and refresh paths supply it.
+    semantic_context: KpiSemanticContext | None = None
 
     @model_validator(mode="after")
     def _monetary_currency_required(self) -> KpiValue:
@@ -335,30 +352,16 @@ reconcile_unit = _reconcile_unit
 
 
 # ---------------------------------------------------------------------------
-# Cumulative-series sanity guard (red-team PR2 item 4,
-# directives/monthly_red_team.md Phase 1 "KPI series sanity"): a KPI marked
-# cumulative (never-decreasing, e.g. a running customer count) is checked
-# against its chronological neighbors at persist time. A decrease, or a
-# >1000x unit-scale jump between adjacent prints (a raw-count row landing
-# inside a millions-scale series — the exact NU "Total customers" def 641
-# corruption the audit found), is REJECTED rather than silently written. This
-# is a small explicit allowlist (matched on the normalized name, so "Total
-# customers", "Total customers (millions)", and per-ticker variants all
-# match) rather than a new kpi_definitions column — extend the set when a new
-# cumulative-count metric needs the guard.
+# Series magnitude anomaly detector. It is intentionally name-agnostic: a
+# label is not a semantic invariant, and a decrease may be legitimate. A
+# >1000x adjacent discontinuity is retained as source evidence but quarantined
+# for review; this code never manufactures a rescaled value.
 # ---------------------------------------------------------------------------
-
-_CUMULATIVE_KPI_NAME_MARKERS: frozenset[str] = frozenset({"total customers"})
 
 _UNIT_JUMP_RATIO = Decimal("1000")
 
 
-def _is_cumulative_kpi(name: str) -> bool:
-    normalized = normalize_kpi_name(name)
-    return any(marker in normalized for marker in _CUMULATIVE_KPI_NAME_MARKERS)
-
-
-def _decimal_unit_jump(a: Decimal, b: Decimal, *, ratio_limit: Decimal = _UNIT_JUMP_RATIO) -> bool:
+def decimal_unit_jump(a: Decimal, b: Decimal, *, ratio_limit: Decimal = _UNIT_JUMP_RATIO) -> bool:
     """True when `b` is a >ratio_limit× jump from `a` in either direction."""
     lo, hi = sorted((abs(a), abs(b)))
     if lo == 0:
@@ -366,7 +369,7 @@ def _decimal_unit_jump(a: Decimal, b: Decimal, *, ratio_limit: Decimal = _UNIT_J
     return hi / lo > ratio_limit
 
 
-def _cumulative_guard_violation(
+def _magnitude_guard_violation(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -374,12 +377,10 @@ def _cumulative_guard_violation(
     period_end: datetime,
     value: Decimal,
 ) -> str | None:
-    """Return a violation reason if writing `value` at `period_end` would break
-    monotonicity or introduce a >1000x unit-scale jump versus this cumulative
-    KPI's chronologically-adjacent prints already on file. None = guard clears.
+    """Return a reason for a >1000x jump versus either adjacent observation.
 
-    Checks both neighbors (not just "latest") so a backfill anywhere in the
-    timeline — not only an append at the end — is guarded.
+    It deliberately does not apply monotonicity: that requires a declared
+    semantic invariant, never a name heuristic.
     """
     rows = conn.execute(
         "SELECT period_end, value FROM kpi_facts "
@@ -401,28 +402,16 @@ def _cumulative_guard_violation(
             prev_v, prev_pe = Decimal(str(row["value"])), row_pe.date().isoformat()
         elif row_pe > period_end and next_v is None:
             next_v, next_pe = Decimal(str(row["value"])), row_pe.date().isoformat()
-    if prev_v is not None:
-        if value < prev_v:
-            return (
-                f"non-monotonic: {value} at {period_end.date().isoformat()} < "
-                f"prior {prev_v} at {prev_pe} — cumulative series should not decrease"
-            )
-        if _decimal_unit_jump(prev_v, value):
-            return (
-                f"unit discontinuity: {prev_v} at {prev_pe} -> {value} at "
-                f"{period_end.date().isoformat()} (>{_UNIT_JUMP_RATIO}x jump)"
-            )
-    if next_v is not None:
-        if next_v < value:
-            return (
-                f"non-monotonic: next print {next_v} at {next_pe} < "
-                f"{value} at {period_end.date().isoformat()} — cumulative series should not decrease"
-            )
-        if _decimal_unit_jump(value, next_v):
-            return (
-                f"unit discontinuity: {value} at {period_end.date().isoformat()} -> "
-                f"{next_v} at {next_pe} (>{_UNIT_JUMP_RATIO}x jump)"
-            )
+    if prev_v is not None and decimal_unit_jump(prev_v, value):
+        return (
+            f"unit discontinuity: {prev_v} at {prev_pe} -> {value} at "
+            f"{period_end.date().isoformat()} (>{_UNIT_JUMP_RATIO}x jump)"
+        )
+    if next_v is not None and decimal_unit_jump(value, next_v):
+        return (
+            f"unit discontinuity: {value} at {period_end.date().isoformat()} -> "
+            f"{next_v} at {next_pe} (>{_UNIT_JUMP_RATIO}x jump)"
+        )
     return None
 
 
@@ -441,10 +430,11 @@ def _insert_kpi_fact(
     extracted_by: str | None = None,
     locator: str | None = None,
     source_excerpt: str | None = None,
-) -> bool:
+    semantic_context: KpiSemanticContext | None = None,
+) -> tuple[int | None, bool]:
     """Insert one kpi_facts row, routed through the restatement detector.
 
-    Returns True iff a row was actually written. Returns False on the
+    Returns ``(fact_id, inserted)``. ``inserted`` is false on the
     no-op path: same source_doc_id replay under the post-0059
     `uq_kpi_facts_provenance` (or same logical key under the legacy
     `uq_kpi_facts_logical`).
@@ -455,6 +445,16 @@ def _insert_kpi_fact(
     the tier+id-aware loader picks the restated value while the original
     survives for time-travel queries.
     """
+
+    def persist_semantic_context_before_resolution(fact_id: int) -> None:
+        if semantic_context is None:
+            return
+        _ = persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=fact_id,
+            context=semantic_context,
+        )
+
     new_id, superseded_id = insert_kpi_with_restatement_detection(
         conn,
         ticker=ticker,
@@ -469,13 +469,32 @@ def _insert_kpi_fact(
         extracted_by=extracted_by,
         locator=locator,
         source_excerpt=source_excerpt,
+        before_resolve=(
+            persist_semantic_context_before_resolution if semantic_context is not None else None
+        ),
     )
     # L10: capture the restatement instead of discarding superseded_id.
     if superseded_id is not None:
         _ = record_restatement_observation(
             conn, fact_table=KPI_FACTS, superseded_id=superseded_id, new_value=value
         )
-    return new_id is not None
+    if new_id is not None:
+        return new_id, True
+    existing = conn.execute(
+        "SELECT id FROM kpi_facts WHERE ticker=? AND period_end=? "
+        "AND fiscal_period_type=? AND kpi_definition_id=? AND source_doc_id=? "
+        "ORDER BY id DESC LIMIT 1",
+        (
+            ticker.upper(),
+            period_end,
+            fiscal_period_type.value,
+            kpi_definition_id,
+            source_doc_id,
+        ),
+    ).fetchone()
+    if existing is None:
+        return None, False
+    return int(existing["id"] if hasattr(existing, "keys") else existing[0]), False
 
 
 def purge_duplicate_kpi_facts(conn: sqlite3.Connection) -> int:
@@ -612,13 +631,36 @@ def persist_manifest(
     )
 
     for kpi in manifest.values:
+        excerpt = normalize_source_excerpt(kpi.source_excerpt)
+        semantic_context = kpi.semantic_context or unclassified_kpi_context(
+            metric_name_as_reported=kpi.name,
+            reported_period_end=manifest.period_end.date(),
+        )
+        source_value = kpi.source_value_text
+        if source_value is not None:
+            if excerpt is None or source_value not in excerpt:
+                raise ValueError("source value text must occur in the exact source excerpt")
+            semantic_context = semantic_context.model_copy(
+                update={"source_value_text": source_value}
+            )
+        extracted_value = kpi.value
+        if kpi.unit is Unit.COUNT and semantic_context.unit_scale is not KpiUnitScale.UNKNOWN:
+            if source_value is None:
+                if semantic_context.status is KpiSemanticStatus.ADMITTED:
+                    raise ValueError("admitted COUNT extraction requires exact source value text")
+            else:
+                extracted_value = normalize_source_numeric(
+                    parse_source_numeric(source_value),
+                    unit=kpi.unit,
+                    unit_scale=semantic_context.unit_scale,
+                )
         # Reconcile the extracted value/unit to the KPI's canonical unit (the
         # holding's break-rule unit) BEFORE validating/storing, so kpi_facts is
         # written in the unit its threshold is compared against — not the LLM's
         # per-call guess. A cross-family canonical can't be applied: keep the
         # value as-extracted and flag it rather than rescale across dimensions.
         canonical = manifest.canonical_units.get(kpi.name)
-        value, unit, unit_mismatch = _reconcile_unit(kpi.value, kpi.unit, canonical)
+        value, unit, unit_mismatch = _reconcile_unit(extracted_value, kpi.unit, canonical)
         if unit_mismatch:
             record_validation_issue(
                 conn,
@@ -681,49 +723,44 @@ def persist_manifest(
             origin=manifest.origins.get(kpi.name, manifest.origin),
         )
 
-        # Cumulative-series sanity guard: reject (never guess-fix) a write that
-        # would break monotonicity or introduce a unit-scale jump on a KPI
-        # marked cumulative. Logged loud to stderr per the schema-drift rule —
-        # the fix belongs in the data (execution/fix_kpi_series.py), not a
-        # silent persist-time rescale.
-        if _is_cumulative_kpi(store_name):
-            violation = _cumulative_guard_violation(
-                conn,
-                ticker=manifest.ticker,
-                kpi_definition_id=kpi_def_id,
-                period_end=manifest.period_end,
-                value=value,
+        violation = _magnitude_guard_violation(
+            conn,
+            ticker=manifest.ticker,
+            kpi_definition_id=kpi_def_id,
+            period_end=manifest.period_end,
+            value=value,
+        )
+        if violation is not None:
+            log.error(
+                {
+                    "event": "kpi_magnitude_quarantine",
+                    "ticker": manifest.ticker,
+                    "kpi_name": store_name,
+                    "period_end": manifest.period_end.date().isoformat(),
+                    "value": str(value),
+                    "reason": violation,
+                }
             )
-            if violation is not None:
-                log.error(
-                    {
-                        "event": "cumulative_kpi_guard_violation",
-                        "ticker": manifest.ticker,
-                        "kpi_name": store_name,
-                        "period_end": manifest.period_end.date().isoformat(),
-                        "value": str(value),
-                        "reason": violation,
-                    }
-                )
-                record_validation_issue(
-                    conn,
-                    run_id=run_id,
-                    source_doc_id=manifest.source_doc_id,
-                    ticker=manifest.ticker,
-                    severity=Severity.WARN,
-                    rule=(
-                        ValidationRule.NON_MONOTONIC_CUMULATIVE
-                        if "non-monotonic" in violation
-                        else ValidationRule.MAGNITUDE_JUMP
-                    ),
-                    raw_value=f"{store_name}={value} at {manifest.period_end.date().isoformat()}",
-                    expected=violation,
-                )
-                issues += 1
-                continue
-
-        excerpt = normalize_source_excerpt(kpi.source_excerpt)
-        was_inserted = _insert_kpi_fact(
+            record_validation_issue(
+                conn,
+                run_id=run_id,
+                source_doc_id=manifest.source_doc_id,
+                ticker=manifest.ticker,
+                severity=Severity.WARN,
+                rule=ValidationRule.MAGNITUDE_JUMP,
+                raw_value=f"{store_name}={value} at {manifest.period_end.date().isoformat()}",
+                expected=violation,
+            )
+            issues += 1
+            semantic_context = KpiSemanticContext.model_validate(
+                {
+                    **semantic_context.model_dump(),
+                    "publication_lane": KpiPublicationLane.UNCLASSIFIED,
+                    "status": KpiSemanticStatus.QUARANTINED,
+                    "reason_code": "magnitude_jump",
+                }
+            )
+        fact_id, was_inserted = _insert_kpi_fact(
             conn,
             ticker=manifest.ticker,
             period_end=manifest.period_end,
@@ -750,7 +787,14 @@ def persist_manifest(
                 ticker=manifest.ticker,
             ),
             source_excerpt=excerpt,
+            semantic_context=semantic_context,
         )
+        if fact_id is not None:
+            persist_kpi_semantic_context(
+                conn,
+                kpi_fact_id=fact_id,
+                context=semantic_context,
+            )
         if was_inserted:
             inserted += 1
         else:

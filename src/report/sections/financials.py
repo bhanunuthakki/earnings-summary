@@ -24,17 +24,11 @@ from compute.kpi_resolver import (
     matching_kpi_definition_ids,
     reporting_cadence_for,
     resolve_kpi_definition_name,
+    semantic_series_identity_sql,
 )
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
-from provenance.overrides import KPI as OVERRIDE_KPI
-from provenance.overrides import (
-    OverrideAction,
-    active_scalar_override_map,
-    chip_override_map,
-    date_override_map,
-    override_provenance,
-    qualify_note,
-)
+from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.financial_fact_resolution import canonical_fact_relation
 from report.models import (
     AnnualKpiSeries,
     AnnualLineItem,
@@ -382,6 +376,9 @@ def _kpi_cell_sources_for(
         return {}
     placeholders = ",".join("?" * len(period_types))
     definition_placeholders = ",".join("?" * len(definition_ids))
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
     issue_signals = load_unresolved_issues(conn)
     kf_cols = _kpi_facts_columns(conn)
     extracted_by_select = "kf.extracted_by" if "extracted_by" in kf_cols else "NULL AS extracted_by"
@@ -404,10 +401,12 @@ def _kpi_cell_sources_for(
                            PARTITION BY kf.period_end, kf.fiscal_period_type
                            ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
                        ) AS rn
-                FROM kpi_facts kf
+                FROM {fact_relation} kf
                 JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
                 JOIN documents d ON d.id = kf.source_doc_id
+                {semantic_join}
                 WHERE kf.ticker = ?
+                  AND {semantic_where} AND {semantic_identity}
                   AND kf.kpi_definition_id IN ({definition_placeholders})
                   AND kf.fiscal_period_type IN ({placeholders})
             )
@@ -456,24 +455,6 @@ def _kpi_cell_sources_for(
             computed_from=str(r["computed_from"]) if r["computed_from"] is not None else None,
             issues=issues,
         )
-    # Provenance-override surfacing (P6): a company-doc `replace` override swaps the
-    # chip's source fields to the filing it cites; a `qualify` adds a ⚠ note. Keeps
-    # the chip honest — the displayed number now comes from the override, not FMP.
-    ov_map = chip_override_map(
-        conn,
-        ticker=ticker,
-        fact_kind=OVERRIDE_KPI,
-        fact_key=resolved_name,
-        period_types=period_types,
-    )
-    for period_iso, ov in ov_map.items():
-        cell = out.get(period_iso)
-        if cell is None:
-            continue
-        if ov.action == OverrideAction.REPLACE.value:
-            out[period_iso] = cell.model_copy(update=override_provenance(ov))
-        elif ov.action == OverrideAction.QUALIFY.value:
-            out[period_iso] = cell.model_copy(update={"issues": [*cell.issues, qualify_note(ov)]})
     return out
 
 
@@ -536,6 +517,9 @@ def _annual_kpi_raw_for(
         return None
     placeholders = ",".join("?" * len(ANNUAL_FACT_PERIOD_TYPES))
     definition_placeholders = ",".join("?" * len(definition_ids))
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
     cur = conn.cursor()
     cur.execute(
         f"""
@@ -545,10 +529,12 @@ def _annual_kpi_raw_for(
                        PARTITION BY kf.period_end, kf.fiscal_period_type
                        ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
                    ) AS rn
-            FROM kpi_facts kf
+            FROM {fact_relation} kf
             JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             {_kpi_source_join_sql(conn)}
+            {semantic_join}
             WHERE kf.ticker = ?
+              AND {semantic_where} AND {semantic_identity}
               AND kf.kpi_definition_id IN ({definition_placeholders})
               AND kf.fiscal_period_type IN ({placeholders})
         )
@@ -560,13 +546,6 @@ def _annual_kpi_raw_for(
     rows = cur.fetchall()
     if not rows:
         return None
-    ov_dmap = date_override_map(
-        conn,
-        ticker=ticker,
-        fact_kind=OVERRIDE_KPI,
-        fact_key=resolved_name,
-        period_types=ANNUAL_FACT_PERIOD_TYPES,
-    )
     by_year: dict[int, float] = {}
     canonical_name = kpi_name
     canonical_unit = ""
@@ -574,15 +553,9 @@ def _annual_kpi_raw_for(
         canonical_name = str(r["name"])
         canonical_unit = str(r["unit"] or "")
         period_end = str(r["period_end"])[:10]
-        ov = ov_dmap.get(period_end)
-        if ov is not None and ov.action == OverrideAction.DROP.value:
-            continue
         try:
             year = int(period_end[:4])
-            if ov is not None and ov.value is not None:
-                by_year[year] = float(ov.value)
-            else:
-                by_year[year] = float(str(r["value"]))
+            by_year[year] = float(str(r["value"]))
         except ValueError:
             continue
     if not by_year:
@@ -649,6 +622,9 @@ def _kpi_series_for(
     if not definition_ids:
         return None
     definition_placeholders = ",".join("?" * len(definition_ids))
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
     cur = conn.cursor()
     # When several sources report the same KPI for one period (e.g. an LLM brief
     # value later restated by the issuer's IR spreadsheet), retain the quality-
@@ -661,10 +637,12 @@ def _kpi_series_for(
                        PARTITION BY kf.period_end, kf.fiscal_period_type
                        ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
                    ) AS rn
-            FROM kpi_facts kf
+            FROM {fact_relation} kf
             JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             {_kpi_source_join_sql(conn)}
+            {semantic_join}
             WHERE kf.ticker = ?
+              AND {semantic_where} AND {semantic_identity}
               AND kf.kpi_definition_id IN ({definition_placeholders})
               AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
         )
@@ -676,10 +654,6 @@ def _kpi_series_for(
     rows = cur.fetchall()
     if not rows:
         return None
-    # Company-doc overrides win over the displayed FMP/LLM row for a (period, Qn).
-    ov_map = active_scalar_override_map(
-        conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
-    )
     by_label: dict[str, float] = {}
     canonical_name = kpi_name
     canonical_unit = ""
@@ -695,12 +669,6 @@ def _kpi_series_for(
             continue
         quarter = (month - 1) // 3 + 1
         label = f"{year} Q{quarter}"
-        ov = ov_map.get((period_end, f"Q{quarter}"))
-        if ov is not None and ov.action == OverrideAction.DROP.value:
-            continue
-        if ov is not None and ov.value is not None:
-            by_label[label] = float(ov.value)
-            continue
         try:
             by_label[label] = float(str(r["value"]))
         except ValueError:

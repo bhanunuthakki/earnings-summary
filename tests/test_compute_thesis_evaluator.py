@@ -30,6 +30,7 @@ from compute.thesis_evaluator import (
 )
 from models.facts import Unit
 from models.kpis import BreachStatus
+from provenance.overrides import KPI, OverrideAction, record_override
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -53,6 +54,12 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             unit TEXT NOT NULL,
             source_doc_id INTEGER NOT NULL
         );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            publication_lane TEXT NOT NULL
+        );
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -64,6 +71,32 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             unit TEXT NOT NULL,
             source_doc_id INTEGER NOT NULL,
             confidence REAL NOT NULL DEFAULT 1.0
+        );
+        CREATE TABLE fact_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            fact_kind TEXT NOT NULL,
+            fact_key TEXT NOT NULL,
+            action TEXT NOT NULL,
+            value REAL,
+            unit TEXT,
+            value_json TEXT,
+            source_doc_type TEXT NOT NULL,
+            source_accession TEXT,
+            source_exhibit TEXT,
+            source_url TEXT,
+            source_excerpt TEXT,
+            source_doc_id INTEGER,
+            status TEXT NOT NULL,
+            confidence REAL,
+            rationale TEXT,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            retired_at TEXT,
+            locator TEXT
         );
         CREATE TABLE thesis_state (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,13 +143,106 @@ def _seed_kpi(
         (ticker, kpi_name),
     ).fetchone()["id"]
     for period_end_iso, val in values:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO kpi_facts "
             "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
             "VALUES (?, ?, 'Q4', ?, ?, 'percent', 1)",
             (ticker, period_end_iso, kpi_id, str(val)),
         )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, status, publication_lane) VALUES (?, 'admitted', 'current_actual')",
+            (cursor.lastrowid,),
+        )
     conn.commit()
+
+
+def test_kpi_history_uses_canonical_current_relation_and_excludes_quarantined_newer_fact(
+    conn: sqlite3.Connection,
+) -> None:
+    """Break rules must consume the same admitted current fact as other KPI readers."""
+    conn.execute(
+        "INSERT INTO kpi_definitions (id, ticker, name, unit, primary_source) "
+        "VALUES (1, 'TEST', 'Net retention', 'percent', 'ir_doc')"
+    )
+    conn.executemany(
+        "INSERT INTO kpi_facts "
+        "(id, ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES (?, 'TEST', '2025-12-31', 'Q4', 1, ?, 'percent', ?)",
+        [(1, "112", 10), (2, "999", 99)],
+    )
+    conn.executescript(
+        """
+        INSERT INTO kpi_fact_semantic_contexts
+            (id, kpi_fact_id, status, publication_lane)
+            VALUES (1, 1, 'admitted', 'current_actual');
+        INSERT INTO kpi_fact_semantic_contexts
+            (id, kpi_fact_id, status, publication_lane)
+            VALUES (2, 2, 'quarantined', 'current_actual');
+        CREATE VIEW v_kpi_facts_resolved_current AS
+            SELECT * FROM kpi_facts WHERE id = 1;
+        """
+    )
+
+    current = conn.execute(
+        "SELECT value, source_doc_id FROM v_kpi_facts_resolved_current"
+    ).fetchone()
+    history = _fetch_kpi_history(conn, "TEST", "Net retention", 1)
+
+    assert current is not None
+    assert history is not None
+    assert history[0].value == Decimal(str(current["value"])) == Decimal("112")
+    assert history[0].value != Decimal("999")
+
+
+def test_kpi_history_fails_closed_when_semantic_context_is_missing(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
+        "VALUES ('TEST', 'Unclassified metric', 'percent', 'ir_doc')"
+    )
+    kpi_id = conn.execute(
+        "SELECT id FROM kpi_definitions WHERE ticker='TEST' AND name='Unclassified metric'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO kpi_facts "
+        "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES ('TEST', '2025-12-31', 'Q4', ?, '99', 'percent', 1)",
+        (kpi_id,),
+    )
+    conn.commit()
+
+    assert _fetch_kpi_history(conn, "TEST", "Unclassified metric", 1) is None
+
+
+def test_kpi_history_rejects_override_over_admitted_fact(
+    conn: sqlite3.Connection,
+) -> None:
+    """A mutable replacement cannot borrow the underlying fact's admission."""
+    _seed_kpi(
+        conn,
+        "TEST",
+        "Net retention",
+        [("2024-12-31", 70), ("2025-12-31", 75)],
+    )
+    record_override(
+        conn,
+        ticker="TEST",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        fact_kind=KPI,
+        fact_key="Net retention",
+        action=OverrideAction.REPLACE,
+        value=48,
+        unit="percent",
+        source_doc_type="ir_press_release",
+        source_doc_id=None,
+        created_by="fixture",
+    )
+    conn.commit()
+
+    assert _fetch_kpi_history(conn, "TEST", "Net retention", 2) is None
 
 
 def test_evaluate_rule_ok_when_no_observations() -> None:
@@ -1133,11 +1259,16 @@ def test_fetch_kpi_history_dedups_coexisting_sources_to_latest(
         "SELECT id FROM kpi_definitions WHERE ticker='NU' AND name='NPL 90d+'"
     ).fetchone()["id"]
     for source_doc_id, val in ((1, 5.0), (2, 8.0)):
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
             "kpi_definition_id, value, unit, source_doc_id) "
             "VALUES ('NU', '2025-12-31', 'Q4', ?, ?, 'percent', ?)",
             (kpi_id, str(val), source_doc_id),
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, status, publication_lane) VALUES (?, 'admitted', 'current_actual')",
+            (cursor.lastrowid,),
         )
     conn.commit()
     obs = _fetch_kpi_history(conn, "NU", "NPL 90d+", 4)
@@ -1343,11 +1474,16 @@ def test_evaluate_ticker_thesis_reconciles_units_end_to_end(
     kpi_id = conn.execute(
         "SELECT id FROM kpi_definitions WHERE ticker='RBRK' AND name='Net new subscription ARR ($)'"
     ).fetchone()["id"]
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
         "kpi_definition_id, value, unit, source_doc_id) "
         "VALUES ('RBRK', '2027-01-31', 'Q4', ?, '50000000', 'actual', 1)",
         (kpi_id,),
+    )
+    conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id, status, publication_lane) VALUES (?, 'admitted', 'current_actual')",
+        (cursor.lastrowid,),
     )
     conn.commit()
 

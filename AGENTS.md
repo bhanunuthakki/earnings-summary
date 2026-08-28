@@ -2,14 +2,28 @@
 
 Loads on top of the global `AGENTS.md`. This file adds only earnings-summary facts and constraints. Cross-project safety, authority, and routing stay in the root contract; detailed global workflows live in routed procedures and load only when their trigger applies.
 
-**What this repo is.** A solo-built, pull-only, localhost equity-research platform. The business-logic library lives under `src/` (`llm`, `ui`, `compute`, `ask`, `signals`, `pipeline`, `report`, `dcf`, `models`); `execution/` holds thin single-purpose CLI entrypoints that import `src/` (data fetches, builds, the morning pipeline, and `execution/comments_server.py` — the Flask cockpit at http://127.0.0.1:7421). State lives in `data/portfolio.db` under alembic migrations; intermediate artifacts in `.tmp/`. It does run automated data pipelines (transcripts, financials, web scraping), and the layered discipline below applies to that work.
+**What this repo is.** A solo-built, pull-only, localhost equity-research platform. The business-logic library lives under `src/` (`llm`, `ui`, `compute`, `ask`, `signals`, `pipeline`, `report`, `dcf`, `models`); `execution/` holds thin single-purpose CLI entrypoints that import `src/` (data fetches, builds, the morning pipeline, and `execution/comments_server.py` — the Flask cockpit at http://127.0.0.1:7421). Production state lives only in the canonical Windows checkout's Alembic-managed `data/portfolio.db`; Mac tests use explicit temporary or restored-snapshot databases. Intermediate artifacts live in `.tmp/`. The product runs automated data pipelines (transcripts, financials, web scraping), and the layered discipline below applies to that work.
 
 ## Mac/Windows listener ownership
 
 - The always-on production-shaped host is Windows: `es-dashboard` owns loopback `127.0.0.1:7421`, and the Portfolio Tracker API owns loopback `127.0.0.1:8000`. The dashboard reaches the tracker on that same Windows host.
+- The one production database authority is `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\data\portfolio.db` on Windows. `/Applications/earnings-summary/data/portfolio.db` on Mac is never a live, fallback, replica, or roster authority and must not exist. If it appears, treat it as an invalid local artifact: do not inspect it for product facts, migrate it, seed it, or make code pass against it.
+- Mac development and tests must name an explicit disposable migrated database under a test/temp root. A Mac task that needs live roster or production facts must coordinate Windows access and use the canonical Windows database read-only or an explicitly approved provenance-bearing snapshot/export. It must never silently create the checkout-default database.
 - A Mac browser must open the exact private HTTPS origin printed by live `tailscale serve status` on Windows. Mac `127.0.0.1:7421`, a remembered Windows computer name, a raw Tailnet IP, or the DNS name from `tailscale status` is not a substitute.
 - Expose only the dashboard through Tailscale Serve. Keep both backends loopback-only; do not expose port 8000 separately and never use Funnel.
 - After a Windows or Tailscale rename, run the documented Serve reset/reapply flow, set `COMMENTS_SERVER_CORS_WHITELIST` to that exact new HTTPS origin, restart `es-dashboard`, then prove Windows-local dashboard/tracker health and Mac-to-Windows dashboard hydration.
+
+## Investment-grade financial-data invariant
+
+Identification, acquisition, parsing, storage, resolution, and surfacing of company-reported financial data are the central product contract, not best-effort enrichment.
+
+- A decision-grade fact is unusable until it carries issuer identity, an effective-dated metric-definition revision, fiscal period, explicit unit/currency/scope/basis, source-document identity and locator, immutable Observation Version, capture/extractor version, and semantic admission or disposition.
+- Preserve exact raw source bytes and management wording. Corrections and restatements supersede prior observations; they never erase them. Conflicting sources remain explicit and ranked by shared policy rather than silently merged.
+- Acquisition completeness and extraction completeness are separate typed receipts. A discovered page, downloaded document, or single extracted fact never proves that an issuer archive, document package, page, section, table, or expected fact population is complete. Unknown, partial, stale, rejected, and failed states remain visible and fail closed.
+- Definition, presentation, geography, period, unit, accounting basis, or segment changes create versioned lineage and a comparability disposition before a value can join a canonical series. Never normalize away a semantic break merely to keep a chart continuous.
+- Preserve novel and one-off management observations with speaker, source locator, raw label/value, period/scope, and recurring/promotion status even when they are not admitted to the recurring KPI database.
+- Every consumer—reports, time series, thesis evaluation, alerts, models, transcripts, and earnings readouts—uses the same provenance-aware fact resolver. User-facing outputs persist a complete source/context manifest or claim-level citations and distinguish reported fact, management claim, consensus estimate, calculation, and analyst inference.
+- A pipeline or UI may claim `decision-grade` only when source authority, completeness, semantic admission, reader parity, and reconstruction checks all pass. Otherwise report the precise degraded state and missing evidence.
 
 LLMs are probabilistic, business logic is deterministic. The 3-layer architecture below forces deterministic logic into code, leaving the LLM to handle routing and synthesis.
 

@@ -108,9 +108,9 @@ def _locator(conn: sqlite3.Connection, fact_id: int) -> FactLocator | None:
     return FactLocator.from_json(raw) if raw else None
 
 
-def test_backfill_enriches_and_leaves_honest_legacy(tmp_path: Path) -> None:
+def test_backfill_reports_enrichment_without_mutating_history(tmp_path: Path) -> None:
     conn = _seed(tmp_path)
-    result = bfl.backfill_ticker(conn, tmp_path, "NU")
+    result = bfl.backfill_ticker(conn, tmp_path, "NU", dry_run=True)
     assert result.examined == 4
     assert result.backfilled_from_excerpt == 1
     assert result.upgraded_v1_to_v2 == 1
@@ -118,37 +118,21 @@ def test_backfill_enriches_and_leaves_honest_legacy(tmp_path: Path) -> None:
     assert result.legacy_no_excerpt == 1
     assert result.legacy_excerpt_not_found == 1
 
-    # NULL + findable excerpt -> full v2 with page + bbox.
-    loc1 = _locator(conn, 1)
-    assert loc1 is not None
-    assert loc1.kind == LocatorKind.PDF_SLIDE
-    assert loc1.pdf_page == 2
-    assert loc1.pdf_bbox is not None
-    assert loc1.verbatim_snippet == _QUOTE
-
-    # v1 pdf_page -> promoted to v2 on the cited page, bbox derived.
+    assert _locator(conn, 1) is None
     loc2 = _locator(conn, 2)
     assert loc2 is not None
-    assert loc2.kind == LocatorKind.PDF_SLIDE
+    assert loc2.kind is None
     assert loc2.pdf_page == 2
-    assert loc2.pdf_bbox is not None
-
-    # No excerpt / unlocatable excerpt stay legacy — never fabricated.
+    assert loc2.pdf_bbox is None
     assert _locator(conn, 3) is None
     assert _locator(conn, 4) is None
     conn.close()
 
 
-def test_backfill_is_idempotent(tmp_path: Path) -> None:
+def test_in_place_locator_backfill_is_retired(tmp_path: Path) -> None:
     conn = _seed(tmp_path)
-    bfl.backfill_ticker(conn, tmp_path, "NU")
-    before = {int(r["id"]): r["locator"] for r in conn.execute("SELECT id, locator FROM kpi_facts")}
-    second = bfl.backfill_ticker(conn, tmp_path, "NU")
-    assert second.backfilled_from_excerpt == 0
-    assert second.upgraded_v1_to_v2 == 0
-    assert second.already_v2 == 2
-    after = {int(r["id"]): r["locator"] for r in conn.execute("SELECT id, locator FROM kpi_facts")}
-    assert after == before
+    with pytest.raises(ValueError, match="supersession"):
+        bfl.backfill_ticker(conn, tmp_path, "NU", dry_run=False)
     conn.close()
 
 
