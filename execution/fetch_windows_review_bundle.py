@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from log_redact import redact  # noqa: E402
-from operations.review_bundle import OperationsReviewBundle  # noqa: E402
+from operations.review_bundle import OperationsReviewBundle, ReviewSchedulerTask  # noqa: E402
 
 _ENDPOINT = "/api/operations/review-bundle"
 _MAX_RESPONSE_BYTES = 2_000_000
@@ -82,6 +82,34 @@ class WindowsReviewPins(BaseModel):
         return self
 
 
+def _eligible_scheduler_tasks(
+    tasks: tuple[ReviewSchedulerTask, ...],
+) -> tuple[ReviewSchedulerTask, ...]:
+    """Keep only Scheduler rows that represent required trust identities.
+
+    Unexpected rows are observable drift but are not part of the expected
+    identity set.  A task explicitly observed as Missing with a matching
+    expectation is the intentional absence lane for a service-owned task.
+    All other rows remain eligible and must pass the exact identity checks.
+    """
+
+    names = [task.task_name.casefold() for task in tasks]
+    if len(names) != len(set(names)):
+        raise ValueError("review bundle contains duplicate Scheduler task names")
+
+    return tuple(
+        task
+        for task in tasks
+        if task.registry_match != "unexpected"
+        and not (
+            task.registry_match == "expected"
+            and task.state == "Missing"
+            and task.expectation_match is True
+            and task.scheduler_expectation == "absent_service_owned"
+        )
+    )
+
+
 def seal_windows_review_pins(
     *,
     bundle: OperationsReviewBundle,
@@ -97,7 +125,7 @@ def seal_windows_review_pins(
     ):
         raise ValueError("cannot approve unavailable or unhealthy Windows authority identity")
     tasks: list[TrustedSchedulerTaskPin] = []
-    for task in bundle.scheduler.tasks:
+    for task in _eligible_scheduler_tasks(bundle.scheduler.tasks):
         if (
             task.registered_action_sha256 is None
             or task.registered_checkout_sha256 is None
@@ -239,7 +267,10 @@ def validate_pinned_identity(
     if bundle.identity.scheduler_definition_sha256 != pins.scheduler_definition_sha256:
         raise ValueError("review bundle Scheduler definition identity changed")
     expected_tasks = {pin.task_name.casefold(): pin for pin in pins.scheduler_tasks}
-    observed_tasks = {task.task_name.casefold(): task for task in bundle.scheduler.tasks}
+    observed_tasks = {
+        task.task_name.casefold(): task
+        for task in _eligible_scheduler_tasks(bundle.scheduler.tasks)
+    }
     if set(observed_tasks) != set(expected_tasks):
         raise ValueError("review bundle Scheduler task identity set changed")
     for name, expected in expected_tasks.items():

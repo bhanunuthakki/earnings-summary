@@ -31,6 +31,7 @@ from operations.models import (
 )
 from operations.review_bundle import (
     OperationsReviewBundle,
+    ReviewSchedulerTask,
     build_operations_review_bundle,
     load_kpi_repair_review,
 )
@@ -153,6 +154,15 @@ def _snapshot() -> OperationsSnapshot:
     )
 
 
+def _bundle_with_scheduler_tasks(
+    bundle: OperationsReviewBundle, tasks: tuple[ReviewSchedulerTask, ...]
+) -> OperationsReviewBundle:
+    payload = bundle.model_dump(mode="json", exclude={"content_sha256"})
+    payload["scheduler"]["tasks"] = [task.model_dump(mode="json") for task in tasks]
+    payload["content_sha256"] = canonical_sha256(payload)
+    return OperationsReviewBundle.model_validate(payload)
+
+
 def test_review_bundle_is_closed_sanitized_and_hash_validated() -> None:
     bundle = build_operations_review_bundle(
         snapshot=_snapshot(),
@@ -170,6 +180,7 @@ def test_review_bundle_is_closed_sanitized_and_hash_validated() -> None:
     assert "file_path" not in lowered
     assert "command" not in lowered
     assert bundle.scheduler.tasks[0].last_successful_at == NOW - timedelta(minutes=10)
+    assert bundle.scheduler.tasks[0].scheduler_expectation == "required_enabled"
     assert bundle.scheduler.tasks[0].wrapper_match is True
     assert bundle.kpi_repair.state == "missing"
     assert OperationsReviewBundle.model_validate_json(encoded) == bundle
@@ -363,6 +374,199 @@ def test_pin_enrollment_rejects_missing_database_lineage() -> None:
     )
     with pytest.raises(ValueError, match="unavailable or unhealthy"):
         seal_windows_review_pins(bundle=bundle, approved_by="owner", approved_at=NOW)
+
+
+def test_pin_enrollment_ignores_unexpected_and_intentional_absent_tasks() -> None:
+    from execution.fetch_windows_review_bundle import (
+        seal_windows_review_pins,
+        validate_pinned_identity,
+    )
+
+    bundle = build_operations_review_bundle(
+        snapshot=_snapshot(),
+        registry=_registry(),
+        semantic_rows=(),
+        serving_origin="https://live-host.example.ts.net",
+        code_instance="checkout-content",
+        database_instance="database-lineage",
+    )
+    unexpected = ReviewSchedulerTask(
+        task_name=r"\earnings-summary\unexpected",
+        state="Running",
+        registry_match="unexpected",
+    )
+    intentional_absent = ReviewSchedulerTask(
+        task_name=r"\earnings-summary\service_owned",
+        state="Missing",
+        registry_match="expected",
+        scheduler_expectation="absent_service_owned",
+        expectation_match=True,
+    )
+    enriched = _bundle_with_scheduler_tasks(
+        bundle, (bundle.scheduler.tasks[0], unexpected, intentional_absent)
+    )
+
+    pins = seal_windows_review_pins(bundle=enriched, approved_by="owner", approved_at=NOW)
+
+    assert tuple(pin.task_name for pin in pins.scheduler_tasks) == (r"\earnings-summary\morning",)
+    validate_pinned_identity(bundle=enriched, pins=pins, now=NOW)
+
+
+def test_pin_enrollment_keeps_required_missing_and_mismatched_tasks_blocking() -> None:
+    from execution.fetch_windows_review_bundle import seal_windows_review_pins
+
+    bundle = build_operations_review_bundle(
+        snapshot=_snapshot(),
+        registry=_registry(),
+        semantic_rows=(),
+        serving_origin="https://live-host.example.ts.net",
+        code_instance="checkout-content",
+        database_instance="database-lineage",
+    )
+    required_missing = ReviewSchedulerTask(
+        task_name=r"\earnings-summary\required_missing",
+        state="Missing",
+        registry_match="missing",
+    )
+    with pytest.raises(ValueError, match="incomplete or mismatched"):
+        seal_windows_review_pins(
+            bundle=_bundle_with_scheduler_tasks(
+                bundle, (bundle.scheduler.tasks[0], required_missing)
+            ),
+            approved_by="owner",
+            approved_at=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    "duplicate_tasks",
+    [
+        ("matching", "mismatched"),
+        ("mismatched", "matching"),
+    ],
+)
+def test_pin_enrollment_rejects_duplicate_scheduler_names_before_filtering(
+    duplicate_tasks: tuple[str, str],
+) -> None:
+    from execution.fetch_windows_review_bundle import (
+        seal_windows_review_pins,
+        validate_pinned_identity,
+    )
+
+    bundle = build_operations_review_bundle(
+        snapshot=_snapshot(),
+        registry=_registry(),
+        semantic_rows=(),
+        serving_origin="https://live-host.example.ts.net",
+        code_instance="checkout-content",
+        database_instance="database-lineage",
+    )
+    matching = bundle.scheduler.tasks[0]
+    mismatched = matching.model_copy(
+        update={"task_name": matching.task_name.upper(), "wrapper_match": False}
+    )
+    by_name = {"matching": matching, "mismatched": mismatched}
+    duplicate_bundle = _bundle_with_scheduler_tasks(
+        bundle,
+        tuple(by_name[label] for label in duplicate_tasks),
+    )
+
+    with pytest.raises(ValueError, match="duplicate Scheduler task names"):
+        seal_windows_review_pins(
+            bundle=duplicate_bundle,
+            approved_by="owner",
+            approved_at=NOW,
+        )
+
+    pins = seal_windows_review_pins(bundle=bundle, approved_by="owner", approved_at=NOW)
+    with pytest.raises(ValueError, match="duplicate Scheduler task names"):
+        validate_pinned_identity(bundle=duplicate_bundle, pins=pins, now=NOW)
+
+
+def test_required_enabled_missing_task_is_not_intentional_absence() -> None:
+    from execution.fetch_windows_review_bundle import seal_windows_review_pins
+
+    bundle = build_operations_review_bundle(
+        snapshot=_snapshot(),
+        registry=_registry(),
+        semantic_rows=(),
+        serving_origin="https://live-host.example.ts.net",
+        code_instance="checkout-content",
+        database_instance="database-lineage",
+    )
+    required_missing = ReviewSchedulerTask(
+        task_name=r"\earnings-summary\required_missing",
+        state="Missing",
+        registry_match="expected",
+        scheduler_expectation="required_enabled",
+        expectation_match=True,
+    )
+
+    with pytest.raises(ValueError, match="incomplete or mismatched"):
+        seal_windows_review_pins(
+            bundle=_bundle_with_scheduler_tasks(
+                bundle, (bundle.scheduler.tasks[0], required_missing)
+            ),
+            approved_by="owner",
+            approved_at=NOW,
+        )
+
+    mismatched = bundle.scheduler.tasks[0].model_copy(update={"wrapper_match": False})
+    with pytest.raises(ValueError, match="incomplete or mismatched"):
+        seal_windows_review_pins(
+            bundle=_bundle_with_scheduler_tasks(bundle, (mismatched,)),
+            approved_by="owner",
+            approved_at=NOW,
+        )
+
+
+def test_unexpected_to_expected_scheduler_drift_changes_pinned_set() -> None:
+    from execution.fetch_windows_review_bundle import (
+        ReviewFetchError,
+        seal_windows_review_pins,
+        validate_bundle,
+    )
+
+    origin = "https://live-host.example.ts.net"
+    bundle = build_operations_review_bundle(
+        snapshot=_snapshot(),
+        registry=_registry(),
+        semantic_rows=(),
+        serving_origin=origin,
+        code_instance="checkout-content",
+        database_instance="database-lineage",
+    )
+    unexpected = ReviewSchedulerTask(
+        task_name=r"\earnings-summary\drift",
+        state="Running",
+        registry_match="unexpected",
+    )
+    observed_unexpected = _bundle_with_scheduler_tasks(
+        bundle, (bundle.scheduler.tasks[0], unexpected)
+    )
+    pins = seal_windows_review_pins(
+        bundle=observed_unexpected, approved_by="owner", approved_at=NOW
+    )
+    expected = unexpected.model_copy(
+        update={
+            "registry_match": "expected",
+            "expectation_match": True,
+            "registered_action_sha256": "d" * 64,
+            "registered_checkout_sha256": "e" * 64,
+            "registered_wrapper_sha256": "f" * 64,
+            "wrapper_match": True,
+        }
+    )
+    drifted = _bundle_with_scheduler_tasks(bundle, (bundle.scheduler.tasks[0], expected))
+
+    with pytest.raises(ReviewFetchError, match="task identity set changed"):
+        validate_bundle(
+            drifted.model_dump_json().encode(),
+            origin=origin,
+            now=NOW,
+            max_age=timedelta(minutes=20),
+            pins=pins,
+        )
 
 
 def test_pin_manifest_is_tamper_evident() -> None:
