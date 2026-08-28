@@ -403,9 +403,10 @@ def test_sec_authority_unavailable_without_locator_does_not_claim_named_evidence
         )
 
         assert result.assessment_statuses == ("authority_unavailable",)
-        assert conn.execute(
-            "SELECT document_version_id FROM v_source_coverage_current"
-        ).fetchone()[0] is None
+        assert (
+            conn.execute("SELECT document_version_id FROM v_source_coverage_current").fetchone()[0]
+            is None
+        )
     finally:
         conn.close()
 
