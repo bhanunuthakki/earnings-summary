@@ -99,6 +99,36 @@ def _integrity_ok(db_path: Path) -> bool:
         conn.close()
 
 
+def _source_schema_revision(conn: sqlite3.Connection) -> str:
+    """Read the single current Alembic revision used in backup identity."""
+    try:
+        rows = conn.execute("SELECT version_num FROM alembic_version").fetchall()
+    except sqlite3.DatabaseError as exc:
+        raise RuntimeError("source Alembic revision is unreadable") from exc
+    if len(rows) != 1:
+        raise RuntimeError("source Alembic revision is unreadable: expected exactly one revision")
+    revision: object = rows[0][0]
+    if not isinstance(revision, str) or not revision.strip():
+        raise RuntimeError("source Alembic revision is unreadable: value is empty")
+    return revision.strip()
+
+
+def _backup_invocation_inputs(
+    dest_dir: Path,
+    retain: int,
+    schema_revision: str,
+    run_date: str,
+) -> dict[str, str | int]:
+    """Build the complete logical identity for one schema/day backup."""
+    return {
+        "backup_dir": str(dest_dir.resolve()),
+        "retain": retain,
+        "run_date": run_date,
+        "source_db": str(SRC_DB.resolve()),
+        "source_schema_revision": schema_revision,
+    }
+
+
 def _start_accounting(dest_dir: Path, retain: int) -> tuple[sqlite3.Connection, str]:
     """Claim the daily backup invocation before snapshot/encryption begins."""
     conn = connect_sqlite(
@@ -107,16 +137,18 @@ def _start_accounting(dest_dir: Path, retain: int) -> tuple[sqlite3.Connection, 
         schema_preflight=True,
     )
     try:
+        schema_revision = _source_schema_revision(conn)
+        run_date = datetime.now().date().isoformat()
         run_id = start_run(
             conn,
             directive="backup_db",
             ticker_scope=[],
-            invocation_inputs={
-                "backup_dir": str(dest_dir.resolve()),
-                "retain": retain,
-                "run_date": datetime.now().date().isoformat(),
-                "source_db": str(SRC_DB.resolve()),
-            },
+            invocation_inputs=_backup_invocation_inputs(
+                dest_dir,
+                retain,
+                schema_revision,
+                run_date,
+            ),
             deduplicate_completed=True,
         )
     except Exception:

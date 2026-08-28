@@ -17,6 +17,13 @@ from pathlib import Path
 import pytest
 from cryptography.exceptions import InvalidTag
 
+from models.runs import StageStatus
+from pipeline.run_accounting import (
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "cron"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -57,6 +64,116 @@ def _read_value(path: Path) -> str:
 def _gzip_file(src: Path, dst: Path) -> None:
     with open(src, "rb") as raw, gzip.open(dst, "wb") as gz:
         shutil.copyfileobj(raw, gz)
+
+
+def _accounting_conn(
+    schema_revision: str | None, *, include_schema_table: bool = True
+) -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    if include_schema_table:
+        conn.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
+        if schema_revision is not None:
+            conn.execute("INSERT INTO alembic_version VALUES (?)", (schema_revision,))
+    conn.execute(
+        "CREATE TABLE ingestion_runs (run_id TEXT, attempt_id TEXT, pipeline_key TEXT, "
+        "started_at TEXT, ended_at TEXT, directive TEXT, ticker_scope TEXT, status TEXT, error_summary TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE pipeline_runs (pipeline_key TEXT PRIMARY KEY, directive TEXT, "
+        "ticker_scope TEXT, first_started_at TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE pipeline_attempts (attempt_id TEXT PRIMARY KEY, pipeline_key TEXT, "
+        "started_at TEXT, ended_at TEXT, status TEXT, error_summary TEXT)"
+    )
+    return conn
+
+
+def test_backup_identity_dedupes_same_schema_and_changes_for_new_schema() -> None:
+    conn = _accounting_conn(None, include_schema_table=False)
+    try:
+        same_schema = backup_db._backup_invocation_inputs(
+            Path("/backups"),
+            14,
+            "0029_retire_podcast_prototype",
+            "2026-08-28",
+        )
+        run_id = start_run(
+            conn,
+            directive="backup_db",
+            ticker_scope=[],
+            invocation_inputs=same_schema,
+            deduplicate_completed=True,
+        )
+        end_run(conn, run_id, StageStatus.OK)
+
+        with pytest.raises(PipelineRunSuppressedError) as exc_info:
+            start_run(
+                conn,
+                directive="backup_db",
+                ticker_scope=[],
+                invocation_inputs=same_schema,
+                deduplicate_completed=True,
+            )
+        assert exc_info.value.status is StageStatus.OK
+
+        new_schema = backup_db._backup_invocation_inputs(
+            Path("/backups"),
+            14,
+            "0032_allow_source_reviewed_kpi_supersessions",
+            "2026-08-28",
+        )
+        new_run_id = start_run(
+            conn,
+            directive="backup_db",
+            ticker_scope=[],
+            invocation_inputs=new_schema,
+            deduplicate_completed=True,
+        )
+        assert new_run_id != run_id
+    finally:
+        conn.close()
+
+
+def test_start_accounting_records_current_schema_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _accounting_conn("0032_allow_source_reviewed_kpi_supersessions")
+    captured: dict[str, object] = {}
+
+    def fake_start_run(
+        conn: sqlite3.Connection,
+        directive: str,
+        ticker_scope: list[str],
+        *,
+        invocation_inputs: dict[str, str | int],
+        deduplicate_completed: bool,
+    ) -> str:
+        del conn, directive, ticker_scope
+        captured.update(invocation_inputs)
+        assert deduplicate_completed is True
+        return "backup-test"
+
+    def fake_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
+        return conn
+
+    monkeypatch.setattr(backup_db, "connect_sqlite", fake_connect)
+    monkeypatch.setattr(backup_db, "start_run", fake_start_run)
+    monkeypatch.setattr(backup_db, "SRC_DB", tmp_path / "portfolio.db")
+    try:
+        _accounting = backup_db._start_accounting(tmp_path / "backups", 14)
+        assert captured["source_schema_revision"] == "0032_allow_source_reviewed_kpi_supersessions"
+    finally:
+        conn.close()
+
+
+def test_source_schema_revision_fails_closed_when_unreadable() -> None:
+    conn = _accounting_conn(None)
+    try:
+        with pytest.raises(RuntimeError, match="source Alembic revision"):
+            backup_db._source_schema_revision(conn)
+    finally:
+        conn.close()
 
 
 def test_restore_round_trip(tmp_path: Path) -> None:

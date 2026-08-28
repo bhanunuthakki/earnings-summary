@@ -1,7 +1,8 @@
 @echo off
 REM Every ten minutes: collect bounded Scheduler and managed-service receipts.
-REM This wrapper declares the same receipt lane the child validates and borrows,
-REM preventing a wrapper/child self-deadlock while preserving cross-run exclusion.
+REM This wrapper declares the receipt lane for the managed code checkout. When
+REM product state lives elsewhere, the child also locks that exact receipt root
+REM before publication so different code checkouts cannot become competing writers.
 
 setlocal EnableExtensions
 set "PYTHONUTF8=1"
@@ -13,6 +14,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set "LOG_FILE=%LOG_DIR%\collect_operations_runtime_observations_%TS%.log"
 
 cd /d "%PROJECT_ROOT%"
-call "%PROJECT_ROOT%\cron\run_python.bat" "collect-operations-runtime-observations" "operations-runtime-receipts" execution\collect_operations_runtime_observations.py --repo-root "%PROJECT_ROOT%" --emit-receipts --json-out > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "collect-operations-runtime-observations" "operations-runtime-receipts" execution\collect_operations_runtime_observations.py --code-root "%PROJECT_ROOT%" --emit-receipts --json-out > "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%

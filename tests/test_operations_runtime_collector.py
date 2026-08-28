@@ -1037,6 +1037,81 @@ def test_service_unavailable_emit_retains_prior_success_in_v2_envelope(
     assert all("last_successful_evidence_revalidated" not in event.values() for event in events)
 
 
+def test_cli_reads_registry_from_code_root_and_writes_receipts_to_product_root(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from execution import collect_operations_runtime_observations as collector
+
+    code_root = tmp_path / "runtime-checkout"
+    product_root = tmp_path / "product-checkout"
+    registry = build_operations_registry(PROJECT_ROOT)
+    observed: dict[str, Path] = {}
+    configured_database = product_root / "data" / "portfolio.db"
+
+    def registry_for_root(root: Path) -> OperationsRegistry:
+        observed["code_root"] = root
+        return registry
+
+    def emit_for_root(
+        received_registry: OperationsRegistry,
+        root: Path,
+        observed_at: datetime,
+    ) -> tuple[SchedulerRuntimeReceipt, ServiceRuntimeReceipt, bool]:
+        assert received_registry == registry
+        observed["product_root"] = root
+        return (
+            SchedulerRuntimeReceipt.success(observed_at=observed_at, tasks=()),
+            ServiceRuntimeReceipt.success(observed_at=observed_at, services=()),
+            True,
+        )
+
+    def env_is_absent(_root: Path) -> bool:
+        return False
+
+    monkeypatch.setattr(collector, "build_operations_registry", registry_for_root)
+    monkeypatch.setattr(collector, "emit_runtime_receipts", emit_for_root)
+    monkeypatch.setattr(collector, "load_project_env", env_is_absent)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(configured_database))
+
+    assert (
+        collector.main(
+            [
+                "--code-root",
+                str(code_root),
+                "--emit-receipts",
+            ]
+        )
+        == 0
+    )
+    assert observed == {
+        "code_root": code_root.resolve(),
+        "product_root": product_root.resolve(),
+    }
+
+
+def test_collector_wrapper_routes_receipts_to_configured_product_root() -> None:
+    wrapper = PROJECT_ROOT / "cron" / "run_collect_operations_runtime_observations.bat"
+    text = wrapper.read_text(encoding="utf-8")
+
+    assert '--code-root "%PROJECT_ROOT%"' in text
+    assert "--repo-root" not in text
+
+
+def test_configured_product_root_rejects_noncanonical_database_layout(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from execution import collect_operations_runtime_observations as collector
+
+    def env_is_absent(_root: Path) -> bool:
+        return False
+
+    monkeypatch.setattr(collector, "load_project_env", env_is_absent)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "portfolio.db"))
+
+    with pytest.raises(RuntimeError, match=r"data/portfolio\.db"):
+        collector.configured_product_root(tmp_path / "runtime-checkout")
+
+
 def test_collector_clock_rollback_drops_future_retained_v2_evidence(
     tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
