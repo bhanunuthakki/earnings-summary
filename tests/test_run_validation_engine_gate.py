@@ -83,9 +83,19 @@ def test_gate_fails_closed_on_empty_owner_scope(
     from pipeline.validation_engine import ValidationReport, check_kpi_semantic_coverage
 
     conn = _conn()
-    monkeypatch.setattr(rve, "open_db", lambda _db: conn)
-    monkeypatch.setattr(rve, "start_run", lambda *_args, **_kwargs: "empty-owner")
-    monkeypatch.setattr(rve, "end_run", lambda *_args, **_kwargs: None)
+
+    def _open_db(_db: object) -> sqlite3.Connection:
+        return conn
+
+    def _start_run(*_args: object, **_kwargs: object) -> str:
+        return "empty-owner"
+
+    def _end_run(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(rve, "open_db", _open_db)
+    monkeypatch.setattr(rve, "start_run", _start_run)
+    monkeypatch.setattr(rve, "end_run", _end_run)
 
     def _empty_owner_report(
         connection: sqlite3.Connection,
