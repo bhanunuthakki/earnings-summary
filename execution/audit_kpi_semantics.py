@@ -20,6 +20,9 @@ class KpiSemanticAuditSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     scope: str
+    user_id: str
+    empty_scope: bool
+    gate_blocked: bool
     definitions: int
     facts: int
     admitted_contexts: int
@@ -38,7 +41,11 @@ class KpiSemanticAuditSummary(BaseModel):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, required=True)
-    parser.add_argument("--user-id", default="default")
+    parser.add_argument(
+        "--user-id",
+        required=True,
+        help="Explicit owner identity; the audit never guesses or defaults portfolio scope",
+    )
     parser.add_argument("--gate", action="store_true", help="Exit 2 on missing/quarantined context")
     return parser
 
@@ -54,8 +61,13 @@ def main(argv: list[str] | None = None) -> int:
     quarantined = sum(row.quarantined_context_count for row in rows)
     legacy_unknown = sum(row.legacy_unknown_context_count for row in rows)
     unresolved = sum(row.kpi_definition_id is None for row in rows)
+    empty_scope = not rows
+    gate_blocked = bool(empty_scope or missing or quarantined or legacy_unknown or unresolved)
     summary = KpiSemanticAuditSummary(
         scope="portfolio report union facts_metrics",
+        user_id=args.user_id,
+        empty_scope=empty_scope,
+        gate_blocked=gate_blocked,
         definitions=len(rows),
         facts=sum(row.fact_count for row in rows),
         admitted_contexts=sum(row.admitted_context_count for row in rows),
@@ -74,16 +86,18 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "event": "kpi_semantic_audit_completed",
+                "user_id": summary.user_id,
                 "definitions": summary.definitions,
                 "facts": summary.facts,
-                "gate_blocked": bool(missing or quarantined or legacy_unknown or unresolved),
+                "empty_scope": empty_scope,
+                "gate_blocked": gate_blocked,
             },
             sort_keys=True,
         )
         + "\n"
     )
     print(summary.model_dump_json(indent=2))
-    return 2 if args.gate and (missing or quarantined or legacy_unknown or unresolved) else 0
+    return 2 if args.gate and gate_blocked else 0
 
 
 if __name__ == "__main__":

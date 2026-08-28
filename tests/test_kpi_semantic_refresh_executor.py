@@ -46,6 +46,7 @@ from pipeline.kpi_semantics import (
     normalize_source_numeric,
 )
 from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession
+from provenance.fulltext_extractor_identity import BASE_FULLTEXT_EXTRACTOR
 
 NOW = datetime(2026, 8, 27, 20, tzinfo=UTC)
 
@@ -168,7 +169,8 @@ def _entry(**changes: object) -> refresh.RefreshEntry:
 
 def _manifest() -> refresh.RefreshManifest:
     return refresh.RefreshManifest(
-        schema_version="kpi_semantic_refresh.v3",
+        schema_version="kpi_semantic_refresh.v4",
+        user_id="bhanu",
         logical_idempotency_key="nu:2024q4:total-customers:source-review:v1",
         reviewer="owner",
         knowledge_at=NOW,
@@ -181,6 +183,10 @@ def _manifest() -> refresh.RefreshManifest:
 
 def test_manifest_binds_locator_excerpt_and_expected_row_effects() -> None:
     entry = _entry()
+    stale_schema = _manifest().model_dump(mode="json")
+    stale_schema["schema_version"] = "kpi_semantic_refresh.v3"
+    with pytest.raises(ValidationError, match=r"kpi_semantic_refresh\.v4"):
+        refresh.RefreshManifest.model_validate(stale_schema)
     with pytest.raises(ValidationError, match="fact locator hash mismatch"):
         _entry(fact_locator_sha256="f" * 64)
     with pytest.raises(ValidationError, match="supersede must expect one fact row"):
@@ -387,24 +393,28 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
         """
         CREATE TABLE documents (
           id INTEGER PRIMARY KEY,ticker TEXT,source_type TEXT,period_end TEXT,
-          sha256 TEXT,fetched_at TEXT
+          sha256 TEXT,fetched_at TEXT,file_path TEXT
         );
         CREATE TABLE evidence_document_versions (
-          document_version_id TEXT PRIMARY KEY,legacy_document_id INTEGER
+          document_version_id TEXT PRIMARY KEY,legacy_document_id INTEGER,blob_sha256 TEXT,
+          ticker TEXT
         );
         CREATE TABLE evidence_extraction_runs (
-          extraction_run_id TEXT PRIMARY KEY,document_version_id TEXT
+          extraction_run_id TEXT PRIMARY KEY,document_version_id TEXT,extractor_name TEXT,
+          extractor_config_sha256 TEXT,extractor_code_version TEXT,outcome TEXT
         );
         CREATE TABLE evidence_nodes (
-          node_id TEXT PRIMARY KEY,extraction_run_id TEXT,text TEXT,locator_sha256 TEXT
+          node_id TEXT PRIMARY KEY,extraction_run_id TEXT,text TEXT,locator_sha256 TEXT,
+          node_kind TEXT
         );
         CREATE TABLE v_legacy_document_evidence_bindings_current (
-          legacy_document_id INTEGER,evidence_node_id TEXT
+          legacy_document_id INTEGER,document_version_id TEXT,evidence_node_id TEXT,
+          scope_content_sha256 TEXT
         );
         """
     )
     conn.execute(
-        "INSERT INTO documents VALUES (?,?,?,?,?,?)",
+        "INSERT INTO documents VALUES (?,?,?,?,?,?,?)",
         (
             2,
             "NU",
@@ -412,21 +422,43 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
             "2024-12-31",
             "b" * 64,
             "2025-01-30T12:00:00+00:00",
+            "ir_documents/NU/q4.pdf",
         ),
     )
-    conn.execute("INSERT INTO evidence_document_versions VALUES ('version-2',2)")
-    conn.execute("INSERT INTO evidence_extraction_runs VALUES ('run-2','version-2')")
     conn.execute(
-        "INSERT INTO evidence_nodes VALUES (?,?,?,?)",
+        "INSERT INTO evidence_document_versions VALUES ('version-2',2,?,'NU')", ("b" * 64,)
+    )
+    conn.execute(
+        "INSERT INTO evidence_extraction_runs VALUES (?,?,?,?,?,?)",
         (
+            "run-2",
+            "version-2",
+            BASE_FULLTEXT_EXTRACTOR.name,
+            BASE_FULLTEXT_EXTRACTOR.config_sha256,
+            BASE_FULLTEXT_EXTRACTOR.code_version,
+            "succeeded",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?),(?,?,?,?,?)",
+        (
+            "root-2",
+            "run-2",
+            "NU Q4 2024 investor presentation.",
+            "e" * 64,
+            "document",
             "node-2",
             "run-2",
             "Q4 2024 | Total customers | Management KPI | Consolidated | "
             "figures in millions | Total customers reached 114 million.",
             "c" * 64,
+            "pdf_page",
         ),
     )
-    conn.execute("INSERT INTO v_legacy_document_evidence_bindings_current VALUES (2,'node-2')")
+    conn.execute(
+        "INSERT INTO v_legacy_document_evidence_bindings_current VALUES (2,'version-2','root-2',?)",
+        ("b" * 64,),
+    )
     source_type, source_ticker = refresh._validate_source_binding(conn, _entry())
     assert source_type.value == "ir_doc"
     assert source_ticker == "NU"
@@ -437,11 +469,60 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
             conn, count_entry.model_copy(update={"value": Decimal("114")})
         )
     conn.execute(
-        "UPDATE v_legacy_document_evidence_bindings_current SET evidence_node_id='other-node'"
+        "UPDATE v_legacy_document_evidence_bindings_current SET document_version_id='other-version'"
     )
-    with pytest.raises(refresh.RepairBlockedError, match="source_evidence_binding_not_exact"):
+    with pytest.raises(
+        refresh.RepairBlockedError, match="source_evidence_binding_version_mismatch"
+    ):
         refresh._validate_source_binding(conn, _entry())
-    conn.execute("UPDATE v_legacy_document_evidence_bindings_current SET evidence_node_id='node-2'")
+    conn.execute(
+        "UPDATE v_legacy_document_evidence_bindings_current SET document_version_id='version-2'"
+    )
+    conn.execute(
+        "UPDATE v_legacy_document_evidence_bindings_current SET scope_content_sha256=?",
+        ("d" * 64,),
+    )
+    with pytest.raises(
+        refresh.RepairBlockedError, match="source_evidence_binding_content_mismatch"
+    ):
+        refresh._validate_source_binding(conn, _entry())
+    conn.execute(
+        "UPDATE v_legacy_document_evidence_bindings_current SET scope_content_sha256=?",
+        ("b" * 64,),
+    )
+    conn.execute("UPDATE evidence_nodes SET node_kind='section' WHERE node_id='root-2'")
+    with pytest.raises(refresh.RepairBlockedError, match="source_evidence_binding_not_document"):
+        refresh._validate_source_binding(conn, _entry())
+    conn.execute("UPDATE evidence_nodes SET node_kind='document' WHERE node_id='root-2'")
+    conn.execute("UPDATE evidence_extraction_runs SET outcome='failed'")
+    with pytest.raises(refresh.RepairBlockedError, match="evidence_extraction_not_succeeded"):
+        refresh._validate_source_binding(conn, _entry())
+    conn.execute("UPDATE evidence_extraction_runs SET outcome='succeeded'")
+    conn.execute("UPDATE evidence_extraction_runs SET extractor_name='unreviewed-extractor'")
+    with pytest.raises(refresh.RepairBlockedError, match="evidence_extractor_not_promoted"):
+        refresh._validate_source_binding(conn, _entry())
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET extractor_name=?",
+        (BASE_FULLTEXT_EXTRACTOR.name,),
+    )
+    conn.execute("UPDATE evidence_nodes SET node_kind='document' WHERE node_id='node-2'")
+    with pytest.raises(refresh.RepairBlockedError, match="evidence_node_not_substantive"):
+        refresh._validate_source_binding(conn, _entry())
+    conn.execute("UPDATE evidence_nodes SET node_kind='pdf_page' WHERE node_id='node-2'")
+    conn.execute("UPDATE evidence_document_versions SET ticker='WIX'")
+    with pytest.raises(refresh.RepairBlockedError, match="evidence_document_issuer_mismatch"):
+        refresh._validate_source_binding(conn, _entry())
+    conn.execute("UPDATE evidence_document_versions SET ticker='NU'")
+    conn.execute(
+        "UPDATE evidence_document_versions SET blob_sha256=?",
+        ("d" * 64,),
+    )
+    with pytest.raises(refresh.RepairBlockedError, match="evidence_document_content_mismatch"):
+        refresh._validate_source_binding(conn, _entry())
+    conn.execute(
+        "UPDATE evidence_document_versions SET blob_sha256=?",
+        ("b" * 64,),
+    )
     changed_locator = FactLocator(
         pdf_page=7, verbatim_snippet="Total customers reached 115 million."
     )
@@ -624,8 +705,15 @@ def test_missing_marker_recovers_exact_committed_postcondition(
     conn.close()
 
 
-def test_dry_run_executes_exact_write_shape_then_rolls_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("cli_user_id", "expected_result"),
+    [("bhanu", 0), ("default", 2)],
+)
+def test_dry_run_binds_owner_scope_and_rolls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cli_user_id: str,
+    expected_result: int,
 ) -> None:
     manifest = _manifest()
     manifest_path = tmp_path / "manifest.json"
@@ -704,10 +792,11 @@ def test_dry_run_executes_exact_write_shape_then_rolls_back(
     )
 
     def _scoped_definitions(
-        _conn: sqlite3.Connection, *, repo_root: Path
+        _conn: sqlite3.Connection, *, repo_root: Path, user_id: str
     ) -> tuple[ScopedKpiDefinition, ...]:
         del repo_root
-        return (ScopedKpiDefinition.model_construct(kpi_definition_id=7),)
+        assert user_id == "bhanu"
+        return (ScopedKpiDefinition.model_construct(kpi_definition_id=641),)
 
     monkeypatch.setattr(
         refresh,
@@ -720,6 +809,7 @@ def test_dry_run_executes_exact_write_shape_then_rolls_back(
         _entry_value: refresh.RefreshEntry,
         _allowed: set[int],
     ) -> tuple[sqlite3.Row, refresh.SourceType]:
+        assert _allowed == {641}
         row = connection.execute(
             "SELECT 'NU' AS ticker, '2024-12-31' AS period_end, "
             "'Q4' AS fiscal_period_type, 'Total customers' AS name"
@@ -743,6 +833,8 @@ def test_dry_run_executes_exact_write_shape_then_rolls_back(
         [
             "--manifest",
             str(manifest_path),
+            "--user-id",
+            cli_user_id,
             "--db",
             str(db_path),
             "--review-bundle",
@@ -755,15 +847,21 @@ def test_dry_run_executes_exact_write_shape_then_rolls_back(
             str(receipt_root),
         ]
     )
-    assert result == 0
+    assert result == expected_result
     with sqlite3.connect(db_path) as check:
         assert check.execute("SELECT COUNT(*) FROM dry_run_probe").fetchone()[0] == 0
     receipt_files = tuple((receipt_root / "attempts").glob("*.json"))
     assert len(receipt_files) == 1
     receipt = KpiRepairAttemptReceipt.model_validate_json(receipt_files[0].read_text())
-    assert receipt.state == "passed"
-    assert receipt.inserted_fact_rows == 1
-    assert receipt.inserted_context_rows == 1
+    if cli_user_id == "bhanu":
+        assert receipt.state == "passed"
+        assert receipt.inserted_fact_rows == 1
+        assert receipt.inserted_context_rows == 1
+    else:
+        assert receipt.state == "blocked"
+        assert receipt.blocker_codes == ("manifest_user_identity_mismatch",)
+        assert receipt.inserted_fact_rows == 0
+        assert receipt.inserted_context_rows == 0
 
 
 def test_migrated_db_allows_same_source_count_supersession_with_review_attribution(
@@ -944,6 +1042,8 @@ def test_invalid_input_still_publishes_durable_failure_receipt(tmp_path: Path) -
         [
             "--manifest",
             str(invalid),
+            "--user-id",
+            "bhanu",
             "--db",
             str(tmp_path / "unused.db"),
             "--review-bundle",

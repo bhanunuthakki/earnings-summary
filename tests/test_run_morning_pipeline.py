@@ -822,8 +822,7 @@ def test_validation_gate_runs_last_with_gate_flag(
 
     validate_argv = next(c for c in fake.calls if _script_of(c) == VALIDATE_SCRIPT)
     assert "--gate" in validate_argv
-    # The gate takes neither --user-id nor --max-cost-usd.
-    assert "--user-id" not in validate_argv
+    assert validate_argv[validate_argv.index("--user-id") + 1] == "bhanu"
     assert "--max-cost-usd" not in validate_argv
 
     summary = _parse_summary(capsys.readouterr().out)

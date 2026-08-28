@@ -116,6 +116,7 @@ class FullTextBackfillRequest(BaseModel):
     repo_root: Path
     content_roots: tuple[Path, ...] = ()
     apply: bool = False
+    document_id: int | None = Field(default=None, gt=0)
     batch_size: int = Field(default=100, ge=1, le=10_000)
     max_records_per_batch: int = Field(default=50_000, ge=1, le=1_000_000)
     max_nodes_per_batch: int = Field(default=50_000, ge=1, le=1_000_000)
@@ -280,15 +281,31 @@ def backfill_fulltext_evidence(
     """
 
     _require_tables(conn, request.source_lane)
+    if request.document_id is not None and request.source_lane != "legacy":
+        raise ValueError("document_id is available only for the legacy source lane")
     root = request.repo_root.resolve()
     allowed_roots = _allowed_content_roots(request, root)
     checkpoint_path = _checkpoint_path(root, request)
-    checkpoint = _read_checkpoint(
-        checkpoint_path,
-        request.source_lane,
-        request.format_scope,
+    targeted = request.document_id is not None
+    checkpoint = (
+        FullTextBackfillCheckpoint(
+            source_lane="legacy",
+            format_scope=request.format_scope,
+            last_document_id=request.document_id - 1,
+            updated_at=datetime.now(UTC),
+        )
+        if request.document_id is not None
+        else _read_checkpoint(
+            checkpoint_path,
+            request.source_lane,
+            request.format_scope,
+        )
     )
-    if request.source_lane == "evidence_native":
+    if request.document_id is not None:
+        candidates = _candidates_for_document(conn, request.document_id)
+        if not candidates:
+            raise ValueError(f"legacy document {request.document_id} does not exist")
+    elif request.source_lane == "evidence_native":
         candidates = _evidence_native_candidates_after(
             conn, checkpoint.last_evidence_rowid, request.batch_size
         )
@@ -340,23 +357,28 @@ def backfill_fulltext_evidence(
             summary.last_evidence_rowid_after = final_candidate.evidence_rowid
             summary.last_document_version_id_after = final_candidate.document_version_id
     summary.has_more = (
-        has_evidence_native_after(conn, summary.last_evidence_rowid_after)
-        if request.source_lane == "evidence_native"
-        else _has_documents_after(conn, summary.last_document_id_after)
+        False
+        if targeted
+        else (
+            has_evidence_native_after(conn, summary.last_evidence_rowid_after)
+            if request.source_lane == "evidence_native"
+            else _has_documents_after(conn, summary.last_document_id_after)
+        )
     )
     if request.apply:
         conn.commit()
-        _write_checkpoint(
-            checkpoint_path,
-            FullTextBackfillCheckpoint(
-                source_lane=request.source_lane,
-                format_scope=request.format_scope,
-                last_document_id=summary.last_document_id_after,
-                last_evidence_rowid=summary.last_evidence_rowid_after,
-                last_document_version_id=summary.last_document_version_id_after,
-                updated_at=datetime.now(UTC),
-            ),
-        )
+        if not targeted:
+            _write_checkpoint(
+                checkpoint_path,
+                FullTextBackfillCheckpoint(
+                    source_lane=request.source_lane,
+                    format_scope=request.format_scope,
+                    last_document_id=summary.last_document_id_after,
+                    last_evidence_rowid=summary.last_evidence_rowid_after,
+                    last_document_version_id=summary.last_document_version_id_after,
+                    updated_at=datetime.now(UTC),
+                ),
+            )
         emit_structured_event(
             "fulltext_evidence_backfill_completed",
             task_id=request.task_id,
@@ -1515,6 +1537,21 @@ def _candidates_after(
         "ON document_version.legacy_document_id = document.id "
         "ORDER BY document.id, document_version.version_sequence",
         (last_document_id, batch_size),
+    ).fetchall()
+    return [_candidate_from_row(row) for row in rows]
+
+
+def _candidates_for_document(
+    conn: sqlite3.Connection, document_id: int
+) -> list[_DocumentCandidate]:
+    rows = conn.execute(
+        "SELECT document.id AS document_id, document.file_path, lower(document.sha256) "
+        "AS document_sha256, document.raw_bytes_size, document_version.document_version_id, "
+        "document_version.blob_sha256, document_version.recorded_at AS document_recorded_at "
+        "FROM documents AS document LEFT JOIN evidence_document_versions AS document_version "
+        "ON document_version.legacy_document_id = document.id WHERE document.id = ? "
+        "ORDER BY document_version.version_sequence",
+        (document_id,),
     ).fetchall()
     return [_candidate_from_row(row) for row in rows]
 

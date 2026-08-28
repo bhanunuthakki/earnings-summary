@@ -137,7 +137,9 @@ def scoped_kpi_definitions(
         "SUM(CASE WHEN context.status='legacy_unknown' THEN 1 ELSE 0 END)" if has_context else "0"
     )
     missing = (
-        "SUM(CASE WHEN context.id IS NULL THEN 1 ELSE 0 END)" if has_context else "COUNT(fact.id)"
+        "SUM(CASE WHEN fact.id IS NOT NULL AND context.id IS NULL THEN 1 ELSE 0 END)"
+        if has_context
+        else "COUNT(fact.id)"
     )
     lane_names = (
         "current_actual",

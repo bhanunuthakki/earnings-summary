@@ -386,10 +386,14 @@ def test_validation_gate_is_part_of_the_invocation_fingerprint(
         raise PipelineRunSuppressedError("pipeline_key", "attempt_id", StageStatus.IN_PROGRESS)
 
     monkeypatch.setattr(module, "start_run", _capture)
-    monkeypatch.setattr(sys, "argv", ["scheduled-job", "--gate", "--ticker", "NU"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["scheduled-job", "--gate", "--ticker", "NU", "--user-id", "bhanu"],
+    )
 
     assert module.main() == 0
-    assert captured["invocation_inputs"] == {"gate": True}
+    assert captured["invocation_inputs"] == {"gate": True, "user_id": "bhanu"}
     assert "deduplicate_completed" not in captured
 
 

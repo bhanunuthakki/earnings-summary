@@ -26,6 +26,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--batch-size", type=int, default=100, help="Documents per bounded batch")
     parser.add_argument(
+        "--document-id",
+        type=int,
+        help="Prepare exactly one legacy source document without reading or advancing a checkpoint",
+    )
+    parser.add_argument(
         "--task-id", default="evidence-ledger-backfill", help="Checkpoint namespace"
     )
     parser.add_argument(
@@ -35,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     request = BackfillRequest(
         repo_root=args.repo_root,
         apply=args.apply,
+        document_id=args.document_id,
         batch_size=args.batch_size,
         task_id=args.task_id,
     )

@@ -36,6 +36,11 @@ from provenance.evidence_links import (
     DocumentObservationLink,
     EvidenceLinkLedger,
 )
+from provenance.legacy_document_evidence import (
+    LegacyDocumentEvidenceBindingLedger,
+    LegacyDocumentEvidenceBindingRevision,
+    LegacyDocumentScopeLocator,
+)
 from provenance.selection import selected_filing_sections_relation, selected_transcripts_relation
 
 _BACKFILL_VERSION = "evidence-backfill@1"
@@ -52,6 +57,7 @@ class BackfillRequest(BaseModel):
 
     repo_root: Path
     apply: bool = False
+    document_id: int | None = Field(default=None, gt=0)
     batch_size: int = Field(default=100, ge=1, le=10_000)
     task_id: str = Field(
         default="evidence-ledger-backfill",
@@ -126,12 +132,26 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
     _require_ledger_tables(conn)
     root = request.repo_root.resolve()
     checkpoint_path = root / ".tmp" / request.task_id / "state.json"
+    targeted = request.document_id is not None
     checkpoint = (
-        _read_checkpoint(checkpoint_path)
-        if request.apply
-        else BackfillCheckpoint(last_document_id=0, updated_at=datetime.now(UTC))
+        BackfillCheckpoint(
+            last_document_id=request.document_id - 1,
+            updated_at=datetime.now(UTC),
+        )
+        if request.document_id is not None
+        else (
+            _read_checkpoint(checkpoint_path)
+            if request.apply
+            else BackfillCheckpoint(last_document_id=0, updated_at=datetime.now(UTC))
+        )
     )
-    documents = _documents_after(conn, checkpoint.last_document_id, request.batch_size)
+    documents = (
+        _documents_by_id(conn, request.document_id)
+        if request.document_id is not None
+        else _documents_after(conn, checkpoint.last_document_id, request.batch_size)
+    )
+    if targeted and not documents:
+        raise ValueError(f"legacy document {request.document_id} does not exist")
     summary = BackfillSummary(
         task_id=request.task_id,
         mode="apply" if request.apply else "dry_run",
@@ -173,7 +193,7 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
                     summary,
                 )
             else:
-                summary.records_planned += 7
+                summary.records_planned += 7 + int(_root_binding_needed(conn, document_id))
 
             _backfill_filing_sections(conn, filing_sections, chain, request.apply, summary)
             _backfill_transcript_segments(conn, transcript_segments, chain, request.apply, summary)
@@ -184,16 +204,19 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
 
     if documents:
         summary.last_document_id_after = _integer(documents[-1], "id")
-    summary.has_more = _has_documents_after(conn, summary.last_document_id_after)
+    summary.has_more = (
+        False if targeted else _has_documents_after(conn, summary.last_document_id_after)
+    )
     if request.apply:
         conn.commit()
-        _write_checkpoint(
-            checkpoint_path,
-            BackfillCheckpoint(
-                last_document_id=summary.last_document_id_after,
-                updated_at=datetime.now(UTC),
-            ),
-        )
+        if not targeted:
+            _write_checkpoint(
+                checkpoint_path,
+                BackfillCheckpoint(
+                    last_document_id=summary.last_document_id_after,
+                    updated_at=datetime.now(UTC),
+                ),
+            )
         emit_structured_event(
             "evidence_ledger_backfill_completed",
             task_id=request.task_id,
@@ -437,6 +460,69 @@ def _persist_document_chain(
         )
     )
     _account_link_result(primary_link.created, summary)
+    _ensure_root_binding(
+        conn,
+        document=document,
+        chain=chain,
+        blob_sha256=blob_sha256,
+        summary=summary,
+    )
+
+
+def _ensure_root_binding(
+    conn: sqlite3.Connection,
+    *,
+    document: sqlite3.Row,
+    chain: _DocumentChain,
+    blob_sha256: str,
+    summary: BackfillSummary,
+) -> None:
+    """Bind an unbound legacy row to its stable document anchor when supported."""
+
+    if not _has_table(conn, "legacy_document_evidence_binding_revisions"):
+        return
+    existing = conn.execute(
+        "SELECT binding_revision_id FROM legacy_document_evidence_binding_revisions "
+        "WHERE legacy_document_id=? ORDER BY revision DESC LIMIT 1",
+        (chain.legacy_document_id,),
+    ).fetchone()
+    if existing is not None:
+        summary.records_replayed += 1
+        return
+    fetched_at = _required_datetime(document, "fetched_at")
+    result = LegacyDocumentEvidenceBindingLedger(conn).persist(
+        LegacyDocumentEvidenceBindingRevision(
+            binding_revision_id=f"legacy-document-binding-{chain.legacy_document_id}-r1",
+            idempotency_key=f"legacy-document:{chain.legacy_document_id}:binding:1",
+            legacy_document_id=chain.legacy_document_id,
+            revision=1,
+            document_version_id=f"legacy-doc-{chain.legacy_document_id}",
+            evidence_node_id=chain.document_node_id,
+            scope_locator=LegacyDocumentScopeLocator(
+                source_ref=chain.legacy_source_ref,
+                accession_number=_optional_text(document, "accession_number"),
+            ),
+            scope_content_sha256=blob_sha256,
+            effective_at=fetched_at,
+            knowledge_at=fetched_at,
+            recorded_at=fetched_at,
+            supersedes_binding_revision_id=None,
+        )
+    )
+    _account_link_result(result.created, summary)
+
+
+def _root_binding_needed(conn: sqlite3.Connection, document_id: int) -> bool:
+    if not _has_table(conn, "legacy_document_evidence_binding_revisions"):
+        return False
+    return (
+        conn.execute(
+            "SELECT 1 FROM legacy_document_evidence_binding_revisions "
+            "WHERE legacy_document_id=? LIMIT 1",
+            (document_id,),
+        ).fetchone()
+        is None
+    )
 
 
 def _backfill_filing_sections(
@@ -616,6 +702,15 @@ def _documents_after(
     return conn.execute(
         "SELECT * FROM documents WHERE id > ? ORDER BY id LIMIT ?", (last_document_id, batch_size)
     ).fetchall()
+
+
+def _documents_by_id(conn: sqlite3.Connection, document_id: int) -> list[sqlite3.Row]:
+    _require_columns(
+        conn,
+        "documents",
+        {"id", "ticker", "source_type", "doc_type", "file_path", "sha256", "fetched_at"},
+    )
+    return conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchall()
 
 
 def _has_documents_after(conn: sqlite3.Connection, document_id: int) -> bool:

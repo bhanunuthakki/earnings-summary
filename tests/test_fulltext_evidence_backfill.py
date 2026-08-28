@@ -531,6 +531,43 @@ def test_apply_writes_separate_run_and_replays_exactly(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_explicit_document_id_extracts_only_that_document_without_checkpoint(
+    tmp_path: Path,
+) -> None:
+    conn, repo_root = _connection(tmp_path)
+    try:
+        _add_legacy_documents(conn, repo_root, [b"Second document.", b"Third document."])
+        request = FullTextBackfillRequest(
+            repo_root=repo_root,
+            apply=True,
+            document_id=2,
+            task_id="target-fulltext-two",
+        )
+
+        first = backfill_fulltext_evidence(conn, request)
+        second = backfill_fulltext_evidence(conn, request)
+
+        assert first.documents_considered == 1
+        assert first.last_document_id_before == 1
+        assert first.last_document_id_after == 2
+        assert first.has_more is False
+        assert second.documents_skipped_covered == 1
+        assert not (repo_root / ".tmp" / request.task_id / "state.json").exists()
+        texts = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT node.text FROM evidence_nodes AS node "
+                "JOIN evidence_extraction_runs AS run "
+                "ON run.extraction_run_id=node.extraction_run_id "
+                "WHERE run.document_version_id='legacy-doc-2'"
+            )
+        }
+        assert "Second document." in texts
+        assert "Third document." not in texts
+    finally:
+        conn.close()
+
+
 def test_dry_run_resumes_from_existing_checkpoint_without_advancing_it(
     tmp_path: Path,
 ) -> None:

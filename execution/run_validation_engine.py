@@ -28,6 +28,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from identity import DEFAULT_USER_ID  # noqa: E402
 from models.runs import StageStatus  # noqa: E402
 from models.validation import Severity  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
@@ -57,6 +58,11 @@ def halt_issue_count(conn: sqlite3.Connection, run_id: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Restrict to one ticker (default: all)")
+    parser.add_argument(
+        "--user-id",
+        default=DEFAULT_USER_ID,
+        help=f"Owner identity for portfolio KPI scope (default: {DEFAULT_USER_ID!r})",
+    )
     parser.add_argument(
         "--db",
         "--db-path",
@@ -89,12 +95,17 @@ def main() -> int:
                 conn,
                 directive="run_validation_engine",
                 ticker_scope=scope,
-                invocation_inputs={"gate": bool(args.gate)},
+                invocation_inputs={"gate": bool(args.gate), "user_id": args.user_id},
             )
         except PipelineRunSuppressedError as exc:
             print(json.dumps(suppression_payload(exc)))
             return 0
-        report = run_all_checks(conn, run_id=run_id, ticker=args.ticker)
+        report = run_all_checks(
+            conn,
+            run_id=run_id,
+            ticker=args.ticker,
+            user_id=args.user_id,
+        )
         end_run(conn, run_id, StageStatus.OK, error_summary=None)
 
         total_inserted = sum(o.issues_inserted for o in report.outcomes)
@@ -104,6 +115,7 @@ def main() -> int:
                 {
                     "run_id": run_id,
                     "ticker": args.ticker,
+                    "user_id": args.user_id,
                     "started_at": report.started_at.isoformat(),
                     "ended_at": report.ended_at.isoformat(),
                     "total_issues_inserted": total_inserted,
