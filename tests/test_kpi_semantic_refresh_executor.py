@@ -1105,6 +1105,19 @@ def test_apply_authority_rejects_unpinned_runtime_code(
         )
 
 
+def test_canonical_windows_db_lock_is_owned_by_state_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "canonical-state"
+    code_root = tmp_path / "runtime-code"
+    monkeypatch.setattr(refresh.sys, "platform", "win32")
+    monkeypatch.setattr(refresh, "PROJECT_ROOT", code_root)
+    monkeypatch.setattr(refresh, "CANONICAL_WINDOWS_STATE_ROOT", state_root)
+
+    assert refresh._repair_lock_root(state_root / "data" / "portfolio.db") == state_root
+    assert refresh._repair_lock_root(tmp_path / "disposable.db") == code_root
+
+
 def test_judge_receipt_verdict_comes_only_from_structured_sol_response(tmp_path: Path) -> None:
     manifest = _manifest()
     dry_run = seal_attempt(

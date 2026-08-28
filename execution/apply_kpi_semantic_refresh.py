@@ -299,6 +299,13 @@ def _validate_apply_authority(
         raise RepairBlockedError("apply_code_identity_mismatch")
 
 
+def _repair_lock_root(db_path: Path) -> Path:
+    canonical_db = CANONICAL_WINDOWS_STATE_ROOT / "data" / "portfolio.db"
+    if sys.platform == "win32" and db_path.resolve() == canonical_db.resolve():
+        return CANONICAL_WINDOWS_STATE_ROOT
+    return PROJECT_ROOT
+
+
 def _validate_source_binding(
     conn: sqlite3.Connection, entry: RefreshEntry
 ) -> tuple[SourceType, str]:
@@ -691,7 +698,12 @@ def main(argv: list[str] | None = None) -> int:
                 or judge.purpose != "kpi_source_repair"
             ):
                 raise RepairBlockedError("judge_receipt_not_authorizing")
-        with JobLock(PROJECT_ROOT, "kpi-semantic-refresh", ["portfolio-db"], wait_s=0):
+        with JobLock(
+            _repair_lock_root(args.db),
+            "kpi-semantic-refresh",
+            ["portfolio-db"],
+            wait_s=0,
+        ):
             conn = open_db(args.db)
             try:
                 actual_revision = _schema_revision(conn)
