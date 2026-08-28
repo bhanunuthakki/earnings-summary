@@ -49,6 +49,7 @@ def test_canonical_manifest_exists_and_passes_deterministic_inventory() -> None:
     for r in receipt.results:
         assert r.path_exists is True, f"Path for {r.subsystem_id} must exist"
         assert r.entrypoints_valid is True, f"Entrypoints for {r.subsystem_id} must be valid"
+        assert r.test_commands_valid is True, f"Test commands for {r.subsystem_id} must be valid"
         assert r.docs_valid is True, f"Docs for {r.subsystem_id} must be valid"
         assert r.python_syntax_pass is True, f"Python syntax for {r.subsystem_id} must pass"
         assert r.version_ownership_valid is True, (
@@ -98,6 +99,47 @@ def test_manifest_validator_catches_missing_and_corrupt_files(tmp_path: Path) ->
     assert any("Base path does not exist" in iss for iss in receipt.results[0].issues)
     assert any("Entrypoint file missing" in iss for iss in receipt.results[0].issues)
     assert any("Documentation file missing" in iss for iss in receipt.results[0].issues)
+
+
+def test_manifest_validator_rejects_unbound_authority_and_missing_test_target(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(
+        (PROJECT_ROOT / "reconstruction_manifest.json").read_text(encoding="utf-8")
+    )
+    subsystem = payload["subsystems"][0]
+    subsystem["test_commands"] = ["pytest tests/does_not_exist.py -q"]
+    subsystem["ownership_paths"][0] = {
+        "field": "version_ownership",
+        "path": "authority/does_not_exist.py",
+        "kind": "file",
+        "required_in_checkout": True,
+    }
+    manifest = tmp_path / "invalid.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = verify_manifest(manifest, PROJECT_ROOT)
+    result = next(row for row in receipt.results if row.subsystem_id == "core_data_layer")
+    assert receipt.all_subsystems_pass is False
+    assert result.test_commands_valid is False
+    assert any("does_not_exist.py" in issue for issue in result.issues)
+    assert result.version_ownership_valid is False
+    assert any("must be an existing file" in issue for issue in result.issues)
+
+
+def test_readme_has_distinct_fresh_and_existing_upgrade_branches() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    fresh = readme.split("#### Fresh install (new database)", 1)[1].split(
+        "#### Existing database upgrade", 1
+    )[0]
+    existing = readme.split("#### Existing database upgrade", 1)[1].split("On a fresh install", 1)[
+        0
+    ]
+    assert "--phase0-backup-restore-receipt" not in fresh
+    assert "--phase0-backup-restore-receipt $EarningsSummaryPhase0ReceiptPath" in existing
+    assert "$EarningsSummaryAttemptId" in fresh and "$EarningsSummaryAttemptId" in existing
+    assert "create_sqlite_snapshot.py" in existing
+    assert "backup_restore_readiness_receipt.py" in existing
 
 
 def test_manifest_validator_catches_missing_ownership_and_invalid_tier(tmp_path: Path) -> None:
@@ -330,6 +372,12 @@ def test_manifest_validator_checks_structured_ownership_paths_and_containment(
     write_manifest(
         [
             {
+                "field": "version_ownership",
+                "path": "valid_dir/script.py",
+                "kind": "file",
+                "required_in_checkout": True,
+            },
+            {
                 "field": "backup_ownership",
                 "path": "valid_dir/README.md",
                 "kind": "file",
@@ -352,7 +400,7 @@ def test_manifest_validator_checks_structured_ownership_paths_and_containment(
     receipt = verify_manifest(fake_manifest, tmp_path)
     assert receipt.results[0].backup_ownership_valid is False
     assert any(
-        "ownership_paths[1].path must be an existing directory" in issue
+        "ownership_paths[2].path must be an existing directory" in issue
         for issue in receipt.results[0].issues
     )
 

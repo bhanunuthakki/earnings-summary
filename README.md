@@ -31,10 +31,24 @@ pip install -r requirements.txt
 pip install -e ".[dev]"
 ```
 
-Initialize a new SQLite database or safely upgrade an existing one through the guarded bootstrap seam. For an existing canonical database, first create a governed reader snapshot, verify its manifest and source identity, and retain the resulting Phase-0 receipt for the locked migration preflight:
+#### Fresh install (new database)
+
+For a new canonical database, use a new disposable Phase-0 directory for this attempt and run the guarded bootstrap seam without a live-database receipt:
 
 ```powershell
-$EarningsSummaryPhase0Root = Join-Path $EarningsSummaryDbRoot '.tmp\phase0'
+$EarningsSummaryAttemptId = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
+$EarningsSummaryPhase0Root = Join-Path $EarningsSummaryDbRoot (Join-Path '.tmp\phase0' $EarningsSummaryAttemptId)
+New-Item -ItemType Directory -Force $EarningsSummaryPhase0Root | Out-Null
+python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path $EarningsSummaryDbPath --repo-root $EarningsSummaryCodeRoot --runtime-root $EarningsSummaryCodeRoot
+```
+
+#### Existing database upgrade (Phase 0 required)
+
+For an existing canonical database, create a governed reader snapshot and receipt under a new attempt/version path, then pass that receipt to the locked migration preflight:
+
+```powershell
+$EarningsSummaryAttemptId = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
+$EarningsSummaryPhase0Root = Join-Path $EarningsSummaryDbRoot (Join-Path '.tmp\phase0' $EarningsSummaryAttemptId)
 New-Item -ItemType Directory -Force $EarningsSummaryPhase0Root | Out-Null
 $EarningsSummarySnapshotPath = Join-Path $EarningsSummaryPhase0Root 'portfolio.db'
 $EarningsSummaryPhase0ReceiptPath = Join-Path $EarningsSummaryPhase0Root 'backup-restore-readiness.json'

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import shlex
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -53,7 +54,7 @@ REQUIRED_SUBSYSTEM_FIELDS = (
     "exit_ready_boundary",
 )
 OWNERSHIP_FIELDS = frozenset({"version_ownership", "backup_ownership"})
-OWNERSHIP_KINDS = frozenset({"file", "directory"})
+OWNERSHIP_KINDS = frozenset({"file", "directory", "non_path"})
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class SubsystemCheckResult:
     name: str
     path_exists: bool
     entrypoints_valid: bool
+    test_commands_valid: bool
     docs_valid: bool
     python_syntax_pass: bool
     version_ownership_valid: bool
@@ -275,9 +277,7 @@ def _validate_ownership_paths(
             continue
 
         entry = cast(dict[str, object], raw_entry)
-        missing = [
-            key for key in ("field", "path", "kind", "required_in_checkout") if key not in entry
-        ]
+        missing = [key for key in ("field", "kind", "required_in_checkout") if key not in entry]
         if missing:
             issues.append(f"{prefix} missing required keys: {', '.join(missing)}")
             for field in validity:
@@ -285,7 +285,6 @@ def _validate_ownership_paths(
             continue
 
         field = entry["field"]
-        path_value = entry["path"]
         kind = entry["kind"]
         required = entry["required_in_checkout"]
         entry_field = field if isinstance(field, str) else None
@@ -294,17 +293,29 @@ def _validate_ownership_paths(
             for valid_field in validity:
                 validity[valid_field] = False
             entry_field = None
-        if not isinstance(path_value, str) or not path_value.strip():
-            issues.append(f"{prefix}.path must be a non-empty string")
-            if entry_field is not None:
-                validity[entry_field] = False
-            continue
         if not isinstance(kind, str) or kind not in OWNERSHIP_KINDS:
             issues.append(f"{prefix}.kind must be one of {sorted(OWNERSHIP_KINDS)}")
             if entry_field is not None:
                 validity[entry_field] = False
         if not isinstance(required, bool):
             issues.append(f"{prefix}.required_in_checkout must be a boolean")
+            if entry_field is not None:
+                validity[entry_field] = False
+            continue
+
+        if kind == "non_path":
+            evidence = entry.get("evidence")
+            if not isinstance(evidence, str) or not evidence.strip():
+                issues.append(
+                    f"{prefix}.evidence must be a non-empty string for non_path ownership"
+                )
+                if entry_field is not None:
+                    validity[entry_field] = False
+            continue
+
+        path_value = entry.get("path")
+        if not isinstance(path_value, str) or not path_value.strip():
+            issues.append(f"{prefix}.path must be a non-empty string")
             if entry_field is not None:
                 validity[entry_field] = False
             continue
@@ -348,6 +359,55 @@ def _validate_ownership_paths(
                     validity[entry_field] = False
 
     return validity, issues
+
+
+def _validate_test_commands(repo_root: Path, raw_commands: object) -> tuple[bool, list[str]]:
+    """Validate pytest commands and every declared test target they name."""
+    if not isinstance(raw_commands, list):
+        return False, ["'test_commands' must be a list"]
+    issues: list[str] = []
+    for index, raw_command in enumerate(cast(list[object], raw_commands)):
+        prefix = f"test_commands[{index}]"
+        if not isinstance(raw_command, str) or not raw_command.strip():
+            issues.append(f"{prefix} must be a non-empty string")
+            continue
+        try:
+            tokens = shlex.split(raw_command)
+        except ValueError as exc:
+            issues.append(f"{prefix} is not shell-parseable: {exc}")
+            continue
+        if not tokens or not (
+            tokens[0] == "pytest"
+            or tokens[:3] == [sys.executable, "-m", "pytest"]
+            or (tokens[:2] == ["python", "-m"] and len(tokens) > 2 and tokens[2] == "pytest")
+        ):
+            issues.append(f"{prefix} must invoke pytest directly")
+            continue
+        targets = [token for token in tokens[1:] if not token.startswith("-") and token != "pytest"]
+        if (
+            tokens[0] in {"python", sys.executable}
+            and len(tokens) >= 3
+            and tokens[1:3] == ["-m", "pytest"]
+        ):
+            targets = [token for token in tokens[3:] if not token.startswith("-")]
+        if not targets:
+            issues.append(f"{prefix} must declare at least one test target")
+            continue
+        for target in targets:
+            normalized = target.replace("\\", "/")
+            parts = tuple(part for part in normalized.split("/") if part)
+            if (
+                normalized.startswith(("/", "//"))
+                or (len(normalized) >= 3 and normalized[1:3] == ":/")
+                or ".." in parts
+                or not normalized.startswith("tests/")
+            ):
+                issues.append(f"{prefix} target must be a workspace-relative tests path: {target}")
+                continue
+            matches = list(repo_root.glob(normalized))
+            if not matches or not all(path.is_file() for path in matches):
+                issues.append(f"{prefix} target does not match an existing test file: {target}")
+    return not issues, issues
 
 
 def check_dependency_dag(
@@ -413,6 +473,7 @@ def verify_manifest(
                     name="Manifest File",
                     path_exists=False,
                     entrypoints_valid=False,
+                    test_commands_valid=False,
                     docs_valid=False,
                     python_syntax_pass=False,
                     version_ownership_valid=False,
@@ -445,6 +506,7 @@ def verify_manifest(
                     name="Manifest File",
                     path_exists=True,
                     entrypoints_valid=False,
+                    test_commands_valid=False,
                     docs_valid=False,
                     python_syntax_pass=False,
                     version_ownership_valid=False,
@@ -494,6 +556,7 @@ def verify_manifest(
         sub_issues: list[str] = []
         path_exists = False
         entrypoints_valid = True
+        test_commands_valid = True
         docs_valid = True
         python_syntax_pass = True
         version_valid = bool(version_ownership)
@@ -520,6 +583,19 @@ def verify_manifest(
         sub_issues.extend(ownership_issues)
         version_valid = version_valid and ownership_validity["version_ownership"]
         backup_valid = backup_valid and ownership_validity["backup_ownership"]
+        ownership_fields_bound: set[str] = set()
+        if isinstance(ownership_paths_raw, list):
+            for raw_entry in cast(list[object], ownership_paths_raw):
+                if isinstance(raw_entry, dict):
+                    field_value = cast(dict[str, object], raw_entry).get("field")
+                    if isinstance(field_value, str):
+                        ownership_fields_bound.add(field_value)
+        for ownership_field in OWNERSHIP_FIELDS - ownership_fields_bound:
+            sub_issues.append(f"{ownership_field} lacks bound typed ownership evidence")
+            if ownership_field == "version_ownership":
+                version_valid = False
+            else:
+                backup_valid = False
 
         if sub_id == "core_data_layer" and not alembic_graph_valid:
             sub_issues.extend(alembic_graph_issues)
@@ -532,6 +608,11 @@ def verify_manifest(
 
         if not isinstance(invariants_raw, list) or len(cast(list[object], invariants_raw)) == 0:
             sub_issues.append("Invariants must be a non-empty list of invariant statements")
+
+        test_commands_valid, test_command_issues = _validate_test_commands(
+            repo_root, item.get("test_commands")
+        )
+        sub_issues.extend(test_command_issues)
 
         # 1. Check subsystem base path
         base_path = repo_root / path_str
@@ -597,6 +678,7 @@ def verify_manifest(
                 name=name,
                 path_exists=path_exists,
                 entrypoints_valid=entrypoints_valid,
+                test_commands_valid=test_commands_valid,
                 docs_valid=docs_valid,
                 python_syntax_pass=python_syntax_pass,
                 version_ownership_valid=version_valid,
