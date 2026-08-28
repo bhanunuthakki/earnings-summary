@@ -14,11 +14,11 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Literal, cast
+from typing import Literal, Self, cast
 from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _ACCESSION = re.compile(r"^\d{10}-\d{2}-\d{6}$")
 _SAFE_FILENAME = re.compile(r"^[^/\\\x00-\x1f]+$")
@@ -55,21 +55,33 @@ AttachmentRole = Literal[
     "supporting_attachment",
 ]
 SourceInventoryPresence = Literal["matched", "index_only", "manifest_only"]
+AttachmentLocatorStatus = Literal["available", "authority_omitted"]
 
 
 class SecFilingPackageAttachment(_Closed):
     attachment_id: str = Field(min_length=64, max_length=64)
     parent_accession_number: str
-    filename: str
+    filename: str | None
     declared_type: str | None
     sequence: int | None = Field(default=None, gt=0)
     description: str | None
     index_media_icon: str | None
     byte_size: int | None = Field(default=None, ge=0)
     last_modified_at: datetime | None
-    source_url: str
+    source_url: str | None
+    locator_status: AttachmentLocatorStatus
     role: AttachmentRole
     inventory_presence: SourceInventoryPresence
+
+    @model_validator(mode="after")
+    def _validate_locator(self) -> Self:
+        if self.locator_status == "available":
+            valid = self.filename is not None and self.source_url is not None
+        else:
+            valid = self.filename is None and self.source_url is None
+        if not valid:
+            raise ValueError("attachment locator status conflicts with filename or source URL")
+        return self
 
 
 class ParsedSecFilingPackage(_Closed):
@@ -87,7 +99,7 @@ class ParsedSecFilingPackage(_Closed):
 
 
 class _ArchiveItem(_Closed):
-    name: str
+    name: str | None
     type: str
     size: str
     last_modified: str = Field(alias="last-modified")
@@ -96,10 +108,10 @@ class _ArchiveItem(_Closed):
 class _ManifestDocument(_Closed):
     declared_type: str | None
     sequence: int | None = Field(default=None, gt=0)
-    filename: str
+    filename: str | None
     description: str | None
     byte_size: int | None = Field(default=None, ge=0)
-    source_url: str
+    source_url: str | None
 
 
 def filing_package_index_url(cik: str, accession_number: str) -> str:
@@ -160,8 +172,11 @@ def parse_sec_filing_package_inventory(
         cik=normalized_cik,
         accession_number=accession,
     )
-    archive_by_name = {item.name: item for item in archive_items}
-    primary_manifest = submission_documents.get(primary)
+    archive_by_name = {item.name: item for item in archive_items if item.name is not None}
+    manifest_by_name = {
+        item.filename: item for item in submission_documents if item.filename is not None
+    }
+    primary_manifest = manifest_by_name.get(primary)
     if primary_manifest is None:
         raise SecFilingPackageContractError(
             "primary document is not present in filing-index manifest"
@@ -175,18 +190,18 @@ def parse_sec_filing_package_inventory(
         )
 
     base = f"{_ARCHIVE_BASE}/{int(normalized_cik)}/{accession.replace('-', '')}"
-    ordered_names = [item.name for item in archive_items]
-    ordered_names.extend(name for name in submission_documents if name not in archive_by_name)
+    ordered_names = [item.name for item in archive_items if item.name is not None]
+    ordered_names.extend(name for name in manifest_by_name if name not in archive_by_name)
     attachments: list[SecFilingPackageAttachment] = []
     for name in ordered_names:
         item = archive_by_name.get(name)
-        manifest = submission_documents.get(name)
+        manifest = manifest_by_name.get(name)
         declared_type = (
             None
             if manifest is None or manifest.declared_type is None
             else manifest.declared_type.upper()
         )
-        index_byte_size = None if item is None else _byte_size(item.size, item.name)
+        index_byte_size = None if item is None else _byte_size(item.size, name)
         byte_size = (
             index_byte_size
             if index_byte_size is not None
@@ -250,10 +265,107 @@ def parse_sec_filing_package_inventory(
                 byte_size=byte_size,
                 last_modified_at=modified,
                 source_url=f"{base}/{name}" if manifest is None else manifest.source_url,
+                locator_status="available",
                 role=role,
                 inventory_presence=presence,
             )
         )
+    archive_unnamed = tuple(item for item in archive_items if item.name is None)
+    manifest_unnamed = tuple(item for item in submission_documents if item.filename is None)
+    if len(archive_unnamed) != len(manifest_unnamed):
+        raise SecFilingPackageContractError(
+            "authority-omitted attachment counts conflict between archive index and manifest"
+        )
+    index_response_sha256 = hashlib.sha256(index_body).hexdigest()
+    manifest_response_sha256 = hashlib.sha256(filing_manifest_body).hexdigest()
+    for authority_ordinal, (item, manifest) in enumerate(
+        zip(archive_unnamed, manifest_unnamed, strict=True)
+    ):
+        index_byte_size = _byte_size(
+            item.size,
+            f"authority-omitted attachment {authority_ordinal}",
+        )
+        if (
+            index_byte_size is None
+            or manifest.byte_size is None
+            or index_byte_size != manifest.byte_size
+        ):
+            raise SecFilingPackageContractError(
+                "authority-omitted attachment order or byte size conflicts "
+                "between archive index and manifest"
+            )
+        if manifest.sequence is None:
+            raise SecFilingPackageContractError(
+                "authority-omitted attachment requires a manifest sequence"
+            )
+        try:
+            modified = datetime.strptime(item.last_modified, "%Y-%m-%d %H:%M:%S")
+        except ValueError as exc:
+            raise SecFilingPackageContractError(
+                "authority-omitted attachment has invalid last-modified"
+            ) from exc
+        declared_type = None if manifest.declared_type is None else manifest.declared_type.upper()
+        role = _role(
+            filename=None,
+            declared_type=declared_type,
+            primary_document=primary,
+        )
+        identity = json.dumps(
+            {
+                "accession_number": accession,
+                "authority_ordinal": authority_ordinal,
+                "byte_size": index_byte_size,
+                "declared_type": declared_type,
+                "description": manifest.description,
+                "filename": None,
+                "index_media_icon": item.type.strip() or None,
+                "index_response_sha256": index_response_sha256,
+                "inventory_presence": "matched",
+                "last_modified_at": modified.isoformat(),
+                "locator_status": "authority_omitted",
+                "manifest_response_sha256": manifest_response_sha256,
+                "role": role,
+                "sequence": manifest.sequence,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        attachments.append(
+            SecFilingPackageAttachment(
+                attachment_id=hashlib.sha256(identity.encode()).hexdigest(),
+                parent_accession_number=accession,
+                filename=None,
+                declared_type=declared_type,
+                sequence=manifest.sequence,
+                description=manifest.description,
+                index_media_icon=item.type.strip() or None,
+                byte_size=index_byte_size,
+                last_modified_at=modified,
+                source_url=None,
+                locator_status="authority_omitted",
+                role=role,
+                inventory_presence="matched",
+            )
+        )
+    attachments_by_name = {
+        attachment.filename: attachment
+        for attachment in attachments
+        if attachment.filename is not None
+    }
+    unnamed_attachments = iter(
+        attachment for attachment in attachments if attachment.filename is None
+    )
+    authority_ordered: list[SecFilingPackageAttachment] = []
+    for item in archive_items:
+        authority_ordered.append(
+            next(unnamed_attachments) if item.name is None else attachments_by_name[item.name]
+        )
+    authority_ordered.extend(
+        attachments_by_name[document.filename]
+        for document in submission_documents
+        if document.filename is not None and document.filename not in archive_by_name
+    )
+    attachments = authority_ordered
     return ParsedSecFilingPackage(
         cik=normalized_cik,
         accession_number=accession,
@@ -267,7 +379,7 @@ def parse_sec_filing_package_inventory(
 
 def _archive_items(values: list[object]) -> tuple[_ArchiveItem, ...]:
     by_name: dict[str, _ArchiveItem] = {}
-    ordered_names: list[str] = []
+    ordered_items: list[_ArchiveItem] = []
     for index, raw in enumerate(values):
         if not isinstance(raw, dict):
             raise SecFilingPackageContractError(f"archive item {index} must be an object")
@@ -277,19 +389,26 @@ def _archive_items(values: list[object]) -> tuple[_ArchiveItem, ...]:
             raise SecFilingPackageContractError(
                 f"archive item {index} violates the authority contract"
             ) from exc
-        name = _filename(item.name, label="attachment filename")
+        name = (
+            None
+            if item.name is None or not item.name.strip()
+            else _filename(item.name, label="attachment filename")
+        )
         normalized = item.model_copy(update={"name": name})
+        if name is None:
+            ordered_items.append(normalized)
+            continue
         prior = by_name.get(name)
         if prior is None:
             by_name[name] = normalized
-            ordered_names.append(name)
+            ordered_items.append(normalized)
         elif prior != normalized:
             raise SecFilingPackageContractError(
                 f"duplicate attachment {name!r} has conflicting metadata"
             )
-    if not ordered_names:
+    if not ordered_items:
         raise SecFilingPackageContractError("archive index contains no attachments")
-    return tuple(by_name[name] for name in ordered_names)
+    return tuple(ordered_items)
 
 
 def _manifest_documents(
@@ -297,9 +416,10 @@ def _manifest_documents(
     *,
     cik: str,
     accession_number: str,
-) -> dict[str, _ManifestDocument]:
+) -> tuple[_ManifestDocument, ...]:
     soup = BeautifulSoup(body, "html.parser")
-    result: dict[str, _ManifestDocument] = {}
+    result: list[_ManifestDocument] = []
+    by_name: dict[str, _ManifestDocument] = {}
     tables = soup.select("table.tableFile")
     if not tables:
         raise SecFilingPackageContractError("filing-index manifest contains no attachment tables")
@@ -354,7 +474,10 @@ def _manifest_documents(
                 cik=cik,
                 accession_number=accession_number,
             )
-            byte_size = _byte_size(size_text, filename)
+            byte_size = _byte_size(
+                size_text,
+                filename or f"authority-omitted attachment sequence {sequence}",
+            )
             document = _ManifestDocument(
                 declared_type=declared_type,
                 sequence=sequence,
@@ -363,21 +486,25 @@ def _manifest_documents(
                 byte_size=byte_size,
                 source_url=source_url,
             )
-            prior = result.get(filename)
+            if filename is None:
+                result.append(document)
+                continue
+            prior = by_name.get(filename)
             if prior is None:
-                result[filename] = document
+                by_name[filename] = document
+                result.append(document)
             elif prior != document:
                 raise SecFilingPackageContractError(
                     f"duplicate manifest filename {filename!r} has conflicting metadata"
                 )
     if not result:
         raise SecFilingPackageContractError("filing-index manifest contains no documents")
-    sequences = [item.sequence for item in result.values() if item.sequence is not None]
+    sequences = [item.sequence for item in result if item.sequence is not None]
     if len(sequences) != len(set(sequences)):
         raise SecFilingPackageContractError(
             "filing-index manifest contains duplicate document sequences"
         )
-    return result
+    return tuple(result)
 
 
 def _manifest_reference(
@@ -389,7 +516,7 @@ def _manifest_reference(
     sequence: int | None,
     cik: str,
     accession_number: str,
-) -> tuple[str, str]:
+) -> tuple[str | None, str | None]:
     parsed = urlparse(href)
     if (parsed.scheme or parsed.netloc) and (
         parsed.scheme.lower() != "https" or parsed.netloc.lower() != "www.sec.gov"
@@ -409,6 +536,12 @@ def _manifest_reference(
             )
         document_path = parsed.path
     prefix = f"/Archives/edgar/data/{int(cik)}/{accession_number.replace('-', '')}/"
+    if document_path == prefix and not displayed_filename.strip():
+        if sequence is None:
+            raise SecFilingPackageContractError(
+                "authority-omitted attachment requires a manifest sequence"
+            )
+        return None, None
     if not document_path.startswith(prefix):
         displayed = _filename(
             displayed_filename,
@@ -453,15 +586,15 @@ def _manifest_reference(
 
 def _role(
     *,
-    filename: str,
+    filename: str | None,
     declared_type: str | None,
     primary_document: str,
 ) -> AttachmentRole:
-    if filename == primary_document:
+    if filename is not None and filename == primary_document:
         return "primary_document"
-    if (
-        declared_type is not None and _FINANCIAL_EXHIBIT_TYPE.fullmatch(declared_type)
-    ) or _is_financial_filename(filename):
+    if (declared_type is not None and _FINANCIAL_EXHIBIT_TYPE.fullmatch(declared_type)) or (
+        filename is not None and _is_financial_filename(filename)
+    ):
         return "financial_report"
     if declared_type is not None and _EXHIBIT_TYPE.fullmatch(declared_type):
         return "exhibit"

@@ -895,6 +895,25 @@ def build_expected_documents(
                 "financial_report": "sec_financial_report",
                 "supporting_attachment": "sec_supporting_attachment",
             }[attachment.role]
+            has_locator = attachment.locator_status == "available"
+            reason_details = [
+                ("attachment_id", attachment.attachment_id),
+                (
+                    "declared_type",
+                    attachment.declared_type or "index_only",
+                ),
+                (
+                    "inventory_presence",
+                    attachment.inventory_presence,
+                ),
+                ("locator_status", attachment.locator_status),
+                ("parent_expected_document_key", parent_key),
+                ("role", attachment.role),
+            ]
+            if attachment.sequence is not None:
+                reason_details.append(("sequence", str(attachment.sequence)))
+            if attachment.byte_size is not None:
+                reason_details.append(("byte_size", str(attachment.byte_size)))
             expected_documents.append(
                 ExpectedDocumentImport(
                     expected_document_key=(f"{parent_key}:attachment:{attachment.attachment_id}"),
@@ -907,25 +926,13 @@ def build_expected_documents(
                     filing_at=datetime.fromisoformat(filing.filing_date),
                     expectation_basis="authoritative",
                     absence=ExplicitAbsence(
-                        coverage_status="available",
-                        reason_code="sec_authority_package_inventory",
-                        reason_details=tuple(
-                            sorted(
-                                (
-                                    ("attachment_id", attachment.attachment_id),
-                                    (
-                                        "declared_type",
-                                        attachment.declared_type or "index_only",
-                                    ),
-                                    (
-                                        "inventory_presence",
-                                        attachment.inventory_presence,
-                                    ),
-                                    ("parent_expected_document_key", parent_key),
-                                    ("role", attachment.role),
-                                )
-                            )
+                        coverage_status=("available" if has_locator else "authority_unavailable"),
+                        reason_code=(
+                            "sec_authority_package_inventory"
+                            if has_locator
+                            else "sec_authority_attachment_locator_omitted"
                         ),
+                        reason_details=tuple(sorted(reason_details)),
                     ),
                 )
             )

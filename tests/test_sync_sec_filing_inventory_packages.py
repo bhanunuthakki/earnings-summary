@@ -12,6 +12,10 @@ import requests
 
 from execution import sync_sec_filing_inventory as sync
 from filings.edgar_fetch import HardStopError, TransientError
+from filings.sec_filing_package_inventory import (
+    ParsedSecFilingPackage,
+    SecFilingPackageAttachment,
+)
 from filings.sec_submissions_inventory import (
     HistoricalComponent,
     SecFilingInventoryEntry,
@@ -616,6 +620,67 @@ def test_expected_document_preserves_missing_sec_primary_as_authority_unavailabl
     assert document.absence is not None
     assert document.absence.coverage_status == "authority_unavailable"
     assert document.absence.reason_code == "sec_authority_primary_document_unavailable"
+
+
+def test_expected_document_preserves_authority_omitted_attachment_without_locator() -> None:
+    filing = _filing("0000001001-25-000001", "annual.htm", form_type="10-K")
+    package = ParsedSecFilingPackage(
+        cik="0000001001",
+        accession_number=filing.accession_number,
+        form_type=filing.form_type,
+        primary_document="annual.htm",
+        index_url="https://www.sec.gov/Archives/edgar/data/1001/000000100125000001/index.json",
+        filing_manifest_url=(
+            "https://www.sec.gov/Archives/edgar/data/1001/000000100125000001/"
+            "0000001001-25-000001-index.html"
+        ),
+        attachments=(
+            SecFilingPackageAttachment(
+                attachment_id="a" * 64,
+                parent_accession_number=filing.accession_number,
+                filename="annual.htm",
+                declared_type="10-K",
+                sequence=1,
+                description="Annual report",
+                index_media_icon="text.gif",
+                byte_size=1000,
+                last_modified_at=None,
+                source_url=filing.primary_document_url,
+                locator_status="available",
+                role="primary_document",
+                inventory_presence="matched",
+            ),
+            SecFilingPackageAttachment(
+                attachment_id="b" * 64,
+                parent_accession_number=filing.accession_number,
+                filename=None,
+                declared_type="EX-10.5",
+                sequence=2,
+                description="Directors deferral plan",
+                index_media_icon=None,
+                byte_size=30176,
+                last_modified_at=None,
+                source_url=None,
+                locator_status="authority_omitted",
+                role="exhibit",
+                inventory_presence="matched",
+            ),
+        ),
+    )
+
+    documents = sync.build_expected_documents(
+        issuer_id=filing.issuer_id,
+        filings=(filing,),
+        packages=(package,),
+    )
+
+    omitted = documents[1]
+    assert omitted.source_url is None
+    assert omitted.primary_document is None
+    assert omitted.absence is not None
+    assert omitted.absence.coverage_status == "authority_unavailable"
+    assert omitted.absence.reason_code == "sec_authority_attachment_locator_omitted"
+    assert dict(omitted.absence.reason_details)["locator_status"] == "authority_omitted"
 
 
 def test_expected_documents_preserve_inventory_only_accession_roots() -> None:

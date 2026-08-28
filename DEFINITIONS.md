@@ -50,6 +50,20 @@ Inventory Presence preserves an authority disagreement for one item; the enclosi
 inventory still separately proves whether every required authority response was
 captured and reconciled.
 
+## Attachment Locator Status
+
+**Definition.** The SEC authority's ability to identify a fetchable locator for one
+declared filing-package attachment. Its values are `available` when both an exact
+filename and SEC archive URL are present, and `authority_omitted` when the SEC
+directory and filing manifest declare the same attachment in matching authority
+order and byte size but publish neither filename nor fetchable document URL.
+**Lives in.** `SecFilingPackageAttachment.locator_status` and the corresponding
+expected-document coverage reason details.
+**Not to be confused with.** Source Inventory Presence. An authority-omitted
+attachment may be `matched` across both inventory surfaces while remaining
+unfetchable; consumers requiring document bytes must exclude it and retain the
+explicit `authority_unavailable` coverage disposition.
+
 ## Attempt Identity
 
 **Definition.** The unique identity of one execution attempt, including retries.
