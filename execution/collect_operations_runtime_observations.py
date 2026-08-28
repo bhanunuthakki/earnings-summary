@@ -1364,7 +1364,7 @@ def build_runtime_summary(
     )
 
 
-def _configured_product_root(code_root: Path) -> Path:
+def configured_product_root(code_root: Path) -> Path:
     """Resolve the product-state root from the canonical database authority."""
 
     load_project_env(code_root)
@@ -1405,7 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
     root = (
         arguments.repo_root.resolve()
         if arguments.repo_root is not None
-        else _configured_product_root(code_root)
+        else configured_product_root(code_root)
     )
     registry = build_operations_registry(code_root)
     observed_at = datetime.now(UTC)

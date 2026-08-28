@@ -1065,9 +1065,12 @@ def test_cli_reads_registry_from_code_root_and_writes_receipts_to_product_root(
             True,
         )
 
+    def env_is_absent(_root: Path) -> bool:
+        return False
+
     monkeypatch.setattr(collector, "build_operations_registry", registry_for_root)
     monkeypatch.setattr(collector, "emit_runtime_receipts", emit_for_root)
-    monkeypatch.setattr(collector, "load_project_env", lambda _root: False)
+    monkeypatch.setattr(collector, "load_project_env", env_is_absent)
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(configured_database))
 
     assert (
@@ -1099,11 +1102,14 @@ def test_configured_product_root_rejects_noncanonical_database_layout(
 ) -> None:
     from execution import collect_operations_runtime_observations as collector
 
-    monkeypatch.setattr(collector, "load_project_env", lambda _root: False)
+    def env_is_absent(_root: Path) -> bool:
+        return False
+
+    monkeypatch.setattr(collector, "load_project_env", env_is_absent)
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "portfolio.db"))
 
     with pytest.raises(RuntimeError, match=r"data/portfolio\.db"):
-        collector._configured_product_root(tmp_path / "runtime-checkout")
+        collector.configured_product_root(tmp_path / "runtime-checkout")
 
 
 def test_collector_clock_rollback_drops_future_retained_v2_evidence(
