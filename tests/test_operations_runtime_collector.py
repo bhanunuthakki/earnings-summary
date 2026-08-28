@@ -781,9 +781,9 @@ def test_service_missing_row_is_available_on_production_probe_path(
 
     def missing(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         command = cast(list[str], args[0])
-        if "state=" in command:
+        if command[0].casefold() == "powershell.exe":
             cast(BinaryIO, kwargs["stdout"]).write(
-                "\n".join(f"SERVICE_NAME: {service.name}" for service in registry.services).encode()
+                "\n".join(service.name for service in registry.services).encode()
             )
             return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
         return subprocess.CompletedProcess(
@@ -819,7 +819,7 @@ def test_service_namespace_nonzero_is_unavailable_without_declared_fallback(
     probe = collector.collect_services_from_system(registry)
 
     assert probe.states is None
-    assert probe.detail == "Service namespace enumeration failed: sc.exe returned status 5"
+    assert probe.detail == "Service namespace enumeration failed: PowerShell returned status 5"
 
 
 def test_service_namespace_output_is_bounded_before_materialization(
@@ -903,8 +903,12 @@ def test_production_service_probe_discovers_bounded_es_namespace_extra(
 
     def query(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         command = cast(list[str], args[0])
-        if "state=" in command:
-            cast(BinaryIO, kwargs["stdout"]).write(f"SERVICE_NAME: {unexpected_name}\n".encode())
+        if command[0].casefold() == "powershell.exe":
+            assert "Get-Service -Name 'es-*'" in command[-1]
+            assert "-ErrorAction Stop" in command[-1]
+            assert "SilentlyContinue" not in command[-1]
+            assert "state=" not in command
+            cast(BinaryIO, kwargs["stdout"]).write(f"{unexpected_name}\n".encode())
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=0,
@@ -971,9 +975,9 @@ def test_mixed_service_missing_and_launch_failure_is_fail_closed(
         nonlocal calls
         calls += 1
         command = cast(list[str], args[0])
-        if "state=" in command:
+        if command[0].casefold() == "powershell.exe":
             cast(BinaryIO, kwargs["stdout"]).write(
-                "\n".join(f"SERVICE_NAME: {service.name}" for service in registry.services).encode()
+                "\n".join(service.name for service in registry.services).encode()
             )
             return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
         if calls == 2:
