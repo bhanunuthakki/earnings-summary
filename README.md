@@ -31,13 +31,19 @@ pip install -r requirements.txt
 pip install -e ".[dev]"
 ```
 
-Initialize a new SQLite database or safely upgrade an existing one through the guarded bootstrap seam:
+Initialize a new SQLite database or safely upgrade an existing one through the guarded bootstrap seam. For an existing canonical database, first create a governed reader snapshot, verify its manifest and source identity, and retain the resulting Phase-0 receipt for the locked migration preflight:
 
 ```powershell
-python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path $EarningsSummaryDbPath --repo-root $EarningsSummaryCodeRoot --runtime-root $EarningsSummaryCodeRoot
+$EarningsSummaryPhase0Root = Join-Path $EarningsSummaryDbRoot '.tmp\phase0'
+New-Item -ItemType Directory -Force $EarningsSummaryPhase0Root | Out-Null
+$EarningsSummarySnapshotPath = Join-Path $EarningsSummaryPhase0Root 'portfolio.db'
+$EarningsSummaryPhase0ReceiptPath = Join-Path $EarningsSummaryPhase0Root 'backup-restore-readiness.json'
+python execution/create_sqlite_snapshot.py --source-path $EarningsSummaryDbPath --destination-path $EarningsSummarySnapshotPath
+python execution/backup_restore_readiness_receipt.py --source-db $EarningsSummaryDbPath --snapshot-db $EarningsSummarySnapshotPath --manifest "$EarningsSummarySnapshotPath.manifest.json" > $EarningsSummaryPhase0ReceiptPath
+python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path $EarningsSummaryDbPath --repo-root $EarningsSummaryCodeRoot --runtime-root $EarningsSummaryCodeRoot --phase0-backup-restore-receipt $EarningsSummaryPhase0ReceiptPath
 ```
 
-The upgrader uses the shared write lock, validates SQLite integrity, backs up versioned databases before mutation, and refuses to guess a baseline for a non-empty unversioned database. Do not replace it with an ad-hoc migration command for an operator database.
+The snapshot and receipt bind the exact source database to a verified restored copy and its manifest; do not edit or reuse them after the source changes. The upgrader revalidates that receipt under the shared write lock, validates SQLite integrity, backs up versioned databases before mutation, and refuses to guess a baseline for a non-empty unversioned database. Do not replace this sequence with an ad-hoc migration command for an operator database.
 
 On a fresh install, mirror the checked-in holding theses into the database after the schema upgrade:
 

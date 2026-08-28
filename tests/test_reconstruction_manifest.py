@@ -508,9 +508,16 @@ def test_readme_separates_windows_runtime_from_mac_disposable_database() -> None
         "upgrade_database.py --db-path $EarningsSummaryDbPath --repo-root $EarningsSummaryCodeRoot --runtime-root $EarningsSummaryCodeRoot"
         in windows_section
     )
+    assert "create_sqlite_snapshot.py --source-path $EarningsSummaryDbPath" in windows_section
+    assert (
+        "backup_restore_readiness_receipt.py --source-db $EarningsSummaryDbPath" in windows_section
+    )
+    assert "--snapshot-db $EarningsSummarySnapshotPath" in windows_section
+    assert '"$EarningsSummarySnapshotPath.manifest.json"' in windows_section
+    assert "--phase0-backup-restore-receipt $EarningsSummaryPhase0ReceiptPath" in windows_section
     assert "--db-path data/portfolio.db" not in windows_section
     assert "--repo-root . --runtime-root ." not in windows_section
-    assert "sync_thesis_state.py --db $EarningsSummaryDbPath --apply" in windows_section
+    assert "sync_thesis_state.py --apply --db $EarningsSummaryDbPath" in windows_section
     assert "EARNINGS_SUMMARY_DB_PATH" in mac_section
     assert "mktemp -d" in mac_section
     assert "--db-path data/portfolio.db" not in mac_section
