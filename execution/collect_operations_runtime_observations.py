@@ -402,10 +402,22 @@ def _enumerate_repo_service_names(
     """Bound discovery to declared names plus the repo-owned ``es-`` namespace."""
 
     declared = {service.name.casefold(): service.name for service in registry.services}
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        (
+            "$ErrorActionPreference='Stop'; "
+            "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
+            "Get-Service -Name 'es-*' -ErrorAction SilentlyContinue | "
+            "ForEach-Object { $_.Name }"
+        ),
+    ]
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
             completed = subprocess.run(
-                ["sc.exe", "query", "state=", "all"],
+                command,
                 stdout=stdout_file,
                 stderr=stderr_file,
                 check=False,
@@ -429,26 +441,16 @@ def _enumerate_repo_service_names(
             return "Service namespace enumeration is not valid UTF-8"
     if completed.returncode != 0:
         return (
-            f"Service namespace enumeration failed: sc.exe returned status {completed.returncode}"
+            "Service namespace enumeration failed: "
+            f"PowerShell returned status {completed.returncode}"
         )
-    valid_records = 0
     for line in enumeration_output.splitlines():
-        if "SERVICE_NAME:" not in line:
+        name = line.strip()
+        if not name:
             continue
-        record = re.match(r"^\s*SERVICE_NAME:\s*(\S+)\s*$", line)
-        if record is None:
-            return "Service namespace enumeration contains malformed SERVICE_NAME record"
-        valid_records += 1
-        name = record.group(1)
-        if name.casefold().startswith("es-"):
-            declared.setdefault(name.casefold(), name)
-    if valid_records == 0:
-        known_empty = re.search(
-            r"(?im)^\s*(?:\[sc\]\s*)?enumqueryservicesstatus\s*:\s*success\s*$",
-            enumeration_output,
-        ) or re.search(r"(?im)^\s*no_services\s*:\s*(?:true|ok|success)\s*$", enumeration_output)
-        if not known_empty:
-            return "Service namespace enumeration contains no valid SERVICE_NAME records"
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", name) is None or not name.casefold().startswith("es-"):
+            return "Service namespace enumeration contains malformed service name"
+        declared.setdefault(name.casefold(), name)
     if len(declared) > MAX_SERVICE_ROWS:
         return "Service namespace enumeration exceeds bounded service rows"
     return tuple(declared.values())
