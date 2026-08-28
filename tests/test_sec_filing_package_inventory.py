@@ -7,6 +7,7 @@ import json
 import pytest
 
 from filings.sec_filing_package_inventory import (
+    SecFilingPackageAttachment,
     SecFilingPackageContractError,
     parse_sec_filing_package_inventory,
 )
@@ -239,6 +240,35 @@ def test_authority_omitted_attachment_order_must_reconcile_exact_byte_sizes() ->
                 ("", "EX-10.5", "Directors deferral plan", "2232"),
                 ("", "EX-12", "Computation of ratio of earnings", "30176"),
             ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("filename", "source_url"),
+    [
+        ("orphaned.htm", None),
+        (None, "https://www.sec.gov/Archives/edgar/data/1001/orphaned.htm"),
+    ],
+)
+def test_authority_omitted_locator_rejects_partial_identity(
+    filename: str | None,
+    source_url: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="locator status"):
+        SecFilingPackageAttachment(
+            attachment_id="a" * 64,
+            parent_accession_number="0000001001-25-000001",
+            filename=filename,
+            declared_type="EX-10.5",
+            sequence=2,
+            description="Material agreement",
+            index_media_icon="text.gif",
+            byte_size=100,
+            last_modified_at=None,
+            source_url=source_url,
+            locator_status="authority_omitted",
+            role="exhibit",
+            inventory_presence="matched",
         )
 
 

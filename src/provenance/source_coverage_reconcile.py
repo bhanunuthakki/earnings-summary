@@ -659,11 +659,22 @@ def _assessment(
     policy_sha: str,
 ) -> CoverageAssessment:
     status: CoverageStatus
-    document = _exact_document(
-        conn,
-        imported,
-        issuer_id=request.issuer_id,
-        reconciled_at=request.reconciled_at,
+    unavailable_without_locator = (
+        imported.source_kind == "sec_filing"
+        and imported.source_url is None
+        and imported.primary_document is None
+        and imported.absence is not None
+        and imported.absence.coverage_status == "authority_unavailable"
+    )
+    document = (
+        None
+        if unavailable_without_locator
+        else _exact_document(
+            conn,
+            imported,
+            issuer_id=request.issuer_id,
+            reconciled_at=request.reconciled_at,
+        )
     )
     if document is None:
         if imported.absence is None:

@@ -75,8 +75,11 @@ class SecFilingPackageAttachment(_Closed):
 
     @model_validator(mode="after")
     def _validate_locator(self) -> Self:
-        has_locator = self.filename is not None and self.source_url is not None
-        if (self.locator_status == "available") != has_locator:
+        if self.locator_status == "available":
+            valid = self.filename is not None and self.source_url is not None
+        else:
+            valid = self.filename is None and self.source_url is None
+        if not valid:
             raise ValueError("attachment locator status conflicts with filename or source URL")
         return self
 

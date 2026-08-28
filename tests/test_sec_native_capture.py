@@ -30,6 +30,7 @@ from provenance.sec_native_capture import (
     SecNativeCaptureHardStopError,
     SecNativeCaptureRequest,
     capture_expected_sec_documents,
+    load_captured_sec_filing_package,
     load_expected_sec_documents,
 )
 from provenance.source_coverage import (
@@ -335,6 +336,76 @@ def test_fetch_candidates_exclude_authority_omitted_locators(tmp_path: Path) -> 
         )
         assert [item.expected_document_id for item in candidates] == ["expected-10k"]
         assert not has_more
+    finally:
+        conn.close()
+
+
+def test_captured_package_excludes_authority_omitted_financial_locator(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    coverage = SourceCoverageLedger(conn)
+    coverage.persist(
+        ExpectedDocument(
+            expected_document_id="expected-unnamed-financial",
+            idempotency_key="expected-unnamed-financial",
+            snapshot_id="inventory-snapshot",
+            expected_document_key="issuer-acme:0000000001-26-000001:attachment:opaque-financial",
+            issuer_id="issuer-acme",
+            ticker="ACME",
+            source_kind="sec_filing",
+            document_type="sec_financial_report",
+            form_type="10-K",
+            accession_number="0000000001-26-000001",
+            source_url=None,
+            primary_document=None,
+            period_start=None,
+            period_end=datetime(2025, 12, 31, tzinfo=UTC),
+            filing_at=datetime(2026, 2, 10, tzinfo=UTC),
+            expected_at=None,
+            expectation_basis="authoritative",
+            recorded_at=STAMP,
+        )
+    )
+    coverage.persist(
+        CoverageAssessment(
+            assessment_id="coverage-unnamed-financial",
+            idempotency_key="coverage-unnamed-financial",
+            expected_document_id="expected-unnamed-financial",
+            revision=1,
+            coverage_status="authority_unavailable",
+            document_version_id=None,
+            extraction_run_id=None,
+            manifest_id=None,
+            index_run_id=None,
+            reason_code="sec_authority_attachment_locator_omitted",
+            reason_details=(("locator_status", "authority_omitted"),),
+            decision_kind="deterministic",
+            policy_name="source-coverage-reconcile",
+            policy_version="1",
+            policy_config_sha256=CONFIG_SHA,
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            supersedes_assessment_id=None,
+            material_dissent=False,
+        )
+    )
+    conn.commit()
+    try:
+        capture_expected_sec_documents(
+            conn,
+            _request(tmp_path, apply=True),
+            session=FakeSession([FakeResponse()]),
+        )
+
+        members = load_captured_sec_filing_package(
+            conn,
+            inventory_key=INVENTORY_KEY,
+            accession_number="0000000001-26-000001",
+        )
+
+        assert [member.expected_document_id for member in members] == ["expected-10k"]
     finally:
         conn.close()
 

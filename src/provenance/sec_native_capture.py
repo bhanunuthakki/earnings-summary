@@ -269,6 +269,8 @@ def load_captured_sec_filing_package(
         "LEFT JOIN evidence_content_blobs AS blob ON blob.sha256=document.blob_sha256 "
         "WHERE inventory.inventory_key=? AND expected.accession_number=? "
         "AND expected.document_type IN ('filing','sec_financial_report') "
+        "AND expected.source_url IS NOT NULL "
+        "AND expected.primary_document IS NOT NULL "
         "ORDER BY CASE expected.document_type WHEN 'filing' THEN 0 ELSE 1 END,"
         "expected.expected_document_key",
         (inventory_key, accession_number),

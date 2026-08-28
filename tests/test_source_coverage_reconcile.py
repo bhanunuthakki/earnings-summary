@@ -363,6 +363,53 @@ def test_explicit_authority_unavailable_status_is_preserved(tmp_path: Path) -> N
         conn.close()
 
 
+def test_sec_authority_unavailable_without_locator_does_not_claim_named_evidence(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    try:
+        _seed_evidence(conn)
+        _seed_document(
+            conn,
+            document_version_id="named-exhibit-doc",
+            document_key="ACME:2026Q1:named-exhibit",
+            observation_id="named-exhibit-observation",
+            source_url="https://www.sec.gov/Archives/edgar/data/123456/000012345626000001/named.htm",
+            issuer_id="issuer-acme",
+            ticker="ACME",
+            document_type="sec_exhibit",
+            form_type="10-Q",
+            accession_number="0000123456-26-000001",
+        )
+        omitted = ExpectedDocumentImport(
+            expected_document_key="ACME:2026Q1:attachment:opaque",
+            source_kind="sec_filing",
+            document_type="sec_exhibit",
+            form_type="10-Q",
+            accession_number="0000123456-26-000001",
+            source_url=None,
+            primary_document=None,
+            expectation_basis="authoritative",
+            absence=ExplicitAbsence(
+                coverage_status="authority_unavailable",
+                reason_code="sec_authority_attachment_locator_omitted",
+                reason_details=(("locator_status", "authority_omitted"),),
+            ),
+        )
+
+        result = reconcile_source_coverage(
+            conn,
+            _request(apply=True, expected=(omitted,)),
+        )
+
+        assert result.assessment_statuses == ("authority_unavailable",)
+        assert conn.execute(
+            "SELECT document_version_id FROM v_source_coverage_current"
+        ).fetchone()[0] is None
+    finally:
+        conn.close()
+
+
 def test_cli_parses_closed_json_and_stays_read_only_without_apply(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
