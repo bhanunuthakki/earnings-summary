@@ -195,7 +195,7 @@ def test_fact_without_terminal_receipt_is_pending() -> None:
     conn = _conn()
     conn.execute("INSERT INTO kpi_facts VALUES (7, 1)")
     assert document_completeness(conn, 1).status == "pending"
-    assert [item["document_id"] for item in extract_ir._list_pending(conn, None)] == [1]
+    assert [item["document_id"] for item in extract_ir.list_pending_documents(conn, None)] == [1]
 
 
 def test_malformed_receipt_envelope_fails_closed_as_pending() -> None:
@@ -219,7 +219,7 @@ def test_malformed_receipt_envelope_fails_closed_as_pending() -> None:
 
     assert result.status == "pending"
     assert result.reason == "invalid_receipt"
-    assert [item["document_id"] for item in extract_ir._list_pending(conn, None)] == [1]
+    assert [item["document_id"] for item in extract_ir.list_pending_documents(conn, None)] == [1]
 
 
 def test_partial_receipt_is_pending() -> None:
@@ -227,7 +227,7 @@ def test_partial_receipt_is_pending() -> None:
     first, second = _expected("Revenue"), _expected("Margin")
     _receipt_rows(conn, [_result(first, "captured"), _result(second, "missing")])
     assert document_completeness(conn, 1).status == "pending"
-    assert [item["document_id"] for item in extract_ir._list_pending(conn, None)] == [1]
+    assert [item["document_id"] for item in extract_ir.list_pending_documents(conn, None)] == [1]
 
 
 def test_complete_receipt_is_terminal() -> None:
@@ -235,7 +235,7 @@ def test_complete_receipt_is_terminal() -> None:
     first, second = _expected("Revenue"), _expected("Margin")
     _receipt_rows(conn, [_result(first, "captured"), _result(second, "captured")])
     assert document_completeness(conn, 1).status == "complete"
-    assert extract_ir._list_pending(conn, None) == []
+    assert extract_ir.list_pending_documents(conn, None) == []
 
 
 def test_terminal_looking_receipt_without_application_manifest_is_pending() -> None:
@@ -251,7 +251,7 @@ def test_terminal_looking_receipt_without_application_manifest_is_pending() -> N
 
     assert result.status == "pending"
     assert result.reason == "invalid_receipt"
-    assert [item["document_id"] for item in extract_ir._list_pending(conn, None)] == [1]
+    assert [item["document_id"] for item in extract_ir.list_pending_documents(conn, None)] == [1]
 
 
 def test_rejected_expected_fact_is_terminal() -> None:
@@ -271,4 +271,4 @@ def test_rejected_expected_fact_is_terminal() -> None:
         ],
     )
     assert document_completeness(conn, 1).status == "complete"
-    assert extract_ir._list_pending(conn, None) == []
+    assert extract_ir.list_pending_documents(conn, None) == []

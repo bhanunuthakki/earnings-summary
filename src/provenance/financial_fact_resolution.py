@@ -1390,7 +1390,7 @@ def _dimensions(
             else ""
         )
         context = conn.execute(
-            "SELECT period_role,accounting_basis,consolidation_scope,dimensions_json,"
+            "SELECT period_role,accounting_basis,consolidation_scope,dimensions_json,"  # nosec B608
             "unit_scale,status,metric_name_as_reported,publication_lane "
             "FROM kpi_fact_semantic_contexts context WHERE kpi_fact_id=?"
             + current_predicate

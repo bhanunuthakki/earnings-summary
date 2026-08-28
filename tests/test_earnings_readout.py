@@ -5,8 +5,42 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import pytest
+
+
+def _readout_text(*_args: object, **_kwargs: object) -> str:
+    return "readout"
+
+
+def _no_budget_skip(*_args: object, **_kwargs: object) -> None:
+    return None
+
+
+def _net_retention_text(*_args: object, **_kwargs: object) -> str:
+    return "- Net retention: 112%"
+
+
+def _valuation_live_text(*_args: object, **_kwargs: object) -> str:
+    return "live $10"
+
+
+def _watch_item_text(*_args: object, **_kwargs: object) -> str:
+    return "- [watch] Verify"
+
+
+def _tone_softened_text(*_args: object, **_kwargs: object) -> str:
+    return "Tone softened"
+
+
+def _thesis_anchor_text(*_args: object, **_kwargs: object) -> str:
+    return "Thesis anchor"
+
+
+def _empty_text(*_args: object, **_kwargs: object) -> str:
+    return ""
+
 
 _DDL = """
 CREATE TABLE tracked_companies (
@@ -203,13 +237,13 @@ def test_readout_persists_ordered_context_manifest_and_marks_missing_identity(
     import earnings_readout
     from llm_artifact_store import read_current
 
-    monkeypatch.setattr(earnings_readout, "call_llm", lambda *a, **k: "readout")
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: None)
-    monkeypatch.setattr(earnings_readout, "kpi_text", lambda *a, **k: "- Net retention: 112%")
-    monkeypatch.setattr(earnings_readout, "valuation_text", lambda *a, **k: "live $10")
-    monkeypatch.setattr(earnings_readout, "watch_items_text", lambda *a, **k: "- [watch] Verify")
-    monkeypatch.setattr(earnings_readout, "tone_text", lambda *a, **k: "Tone softened")
-    monkeypatch.setattr(earnings_readout, "compose_anchor_block", lambda *a: "Thesis anchor")
+    monkeypatch.setattr(earnings_readout, "call_llm", _readout_text)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
+    monkeypatch.setattr(earnings_readout, "kpi_text", _net_retention_text)
+    monkeypatch.setattr(earnings_readout, "valuation_text", _valuation_live_text)
+    monkeypatch.setattr(earnings_readout, "watch_items_text", _watch_item_text)
+    monkeypatch.setattr(earnings_readout, "tone_text", _tone_softened_text)
+    monkeypatch.setattr(earnings_readout, "compose_anchor_block", _thesis_anchor_text)
 
     assert earnings_readout.generate_for_ticker(db, db.parent, "NU").status == "generated"
     artifact = read_current(
@@ -221,10 +255,12 @@ def test_readout_persists_ordered_context_manifest_and_marks_missing_identity(
 
     assert artifact is not None
     assert isinstance(artifact.content_json, dict)
-    manifest = artifact.content_json
+    manifest = cast(dict[str, object], artifact.content_json)
     assert manifest["schema_version"] == "post_earnings_readout_context@2"
     assert manifest["grounding_status"] == "partial"
-    blocks = manifest["blocks"]
+    raw_blocks = manifest["blocks"]
+    assert isinstance(raw_blocks, list)
+    blocks = cast(list[dict[str, object]], raw_blocks)
     assert [block["kind"] for block in blocks] == [
         "reported_quarter_identity",
         "actuals_vs_consensus",
@@ -238,9 +274,15 @@ def test_readout_persists_ordered_context_manifest_and_marks_missing_identity(
     assert all(block["content"] for block in blocks)
     assert all(block["content_status"] == "present" for block in blocks)
     transcript = blocks[-1]
-    assert transcript["source"]["source_doc_id"] == 102
-    assert transcript["source"]["identity_status"] == "present"
-    assert any(block["source"]["identity_status"] == "missing" for block in blocks[:-1])
+    transcript_source = transcript["source"]
+    assert isinstance(transcript_source, dict)
+    typed_transcript_source = cast(dict[str, object], transcript_source)
+    assert typed_transcript_source["source_doc_id"] == 102
+    assert typed_transcript_source["identity_status"] == "present"
+    block_sources = [block["source"] for block in blocks[:-1]]
+    assert all(isinstance(source, dict) for source in block_sources)
+    typed_block_sources = cast(list[dict[str, object]], block_sources)
+    assert any(source["identity_status"] == "missing" for source in typed_block_sources)
     assert artifact.source_doc_ids == [102]
 
 
@@ -250,14 +292,14 @@ def test_readout_manifest_preserves_empty_blocks_and_fails_grounding_closed(
     import earnings_readout
     from llm_artifact_store import read_current
 
-    monkeypatch.setattr(earnings_readout, "call_llm", lambda *a, **k: "readout")
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: None)
-    monkeypatch.setattr(earnings_readout, "_surprise_text", lambda *a, **k: "")
-    monkeypatch.setattr(earnings_readout, "kpi_text", lambda *a, **k: "")
-    monkeypatch.setattr(earnings_readout, "valuation_text", lambda *a, **k: "")
-    monkeypatch.setattr(earnings_readout, "watch_items_text", lambda *a, **k: "")
-    monkeypatch.setattr(earnings_readout, "tone_text", lambda *a, **k: "")
-    monkeypatch.setattr(earnings_readout, "compose_anchor_block", lambda *a: "")
+    monkeypatch.setattr(earnings_readout, "call_llm", _readout_text)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
+    monkeypatch.setattr(earnings_readout, "_surprise_text", _empty_text)
+    monkeypatch.setattr(earnings_readout, "kpi_text", _empty_text)
+    monkeypatch.setattr(earnings_readout, "valuation_text", _empty_text)
+    monkeypatch.setattr(earnings_readout, "watch_items_text", _empty_text)
+    monkeypatch.setattr(earnings_readout, "tone_text", _empty_text)
+    monkeypatch.setattr(earnings_readout, "compose_anchor_block", _empty_text)
 
     assert earnings_readout.generate_for_ticker(db, db.parent, "NU").status == "generated"
     artifact = read_current(
@@ -268,13 +310,15 @@ def test_readout_manifest_preserves_empty_blocks_and_fails_grounding_closed(
     )
 
     assert artifact is not None
-    manifest = artifact.content_json
+    manifest = cast(dict[str, object], artifact.content_json)
     assert isinstance(manifest, dict)
     assert manifest["schema_version"] == "post_earnings_readout_context@2"
     assert manifest["grounding_status"] == "partial"
-    blocks = manifest["blocks"]
+    raw_blocks = manifest["blocks"]
+    assert isinstance(raw_blocks, list)
+    blocks = cast(list[dict[str, object]], raw_blocks)
     assert len(blocks) == 8
-    empty_kinds = {block["kind"] for block in blocks if block["content_status"] == "missing"}
+    empty_kinds = {str(block["kind"]) for block in blocks if block["content_status"] == "missing"}
     assert empty_kinds == {
         "actuals_vs_consensus",
         "tracked_kpi_moves",
@@ -283,7 +327,9 @@ def test_readout_manifest_preserves_empty_blocks_and_fails_grounding_closed(
         "call_tone_change",
         "current_valuation_stance",
     }
-    assert empty_kinds <= set(manifest["missing_source_identities"])
+    missing_source_identities = manifest["missing_source_identities"]
+    assert isinstance(missing_source_identities, list)
+    assert empty_kinds <= set(cast(list[str], missing_source_identities))
 
 
 def test_legacy_readout_without_context_manifest_still_reads(db: Path) -> None:

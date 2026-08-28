@@ -290,9 +290,13 @@ def test_kpi_series_is_unresolved_when_scalar_override_is_active(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_kpi(conn, "VEEV", "Non-GAAP operating margin", [42, 41])
+
+    def _active_override(*_args: object, **_kwargs: object) -> dict[tuple[str, str], object]:
+        return {("2022-06-30", "Q2"): object()}
+
     monkeypatch.setattr(
         "compute.soft_rule_evaluator.active_scalar_override_map",
-        lambda *_args, **_kwargs: {("2022-06-30", "Q2"): object()},
+        _active_override,
     )
     rule = SoftRule(
         name="margin_floor_2q",

@@ -34,6 +34,7 @@ def _context(*, status: KpiSemanticStatus = KpiSemanticStatus.ADMITTED) -> KpiSe
         metric_name_as_reported="Total customers",
         reported_period_end=date(2024, 12, 31),
         period_role=KpiPeriodRole.CURRENT,
+        publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
         accounting_basis=KpiAccountingBasis.MANAGEMENT,
         consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
         dimensions={},
@@ -54,8 +55,8 @@ def _semantic_table(conn: sqlite3.Connection) -> None:
 
 
 def test_source_qualified_comparator_uses_a_separate_publication_lane() -> None:
-    context = KpiSemanticContext(
-        **{
+    context = KpiSemanticContext.model_validate(
+        {
             **_context().model_dump(),
             "period_role": KpiPeriodRole.PRIOR_YEAR_COMPARATOR,
             "publication_lane": KpiPublicationLane.COMPARATOR,
@@ -67,8 +68,8 @@ def test_source_qualified_comparator_uses_a_separate_publication_lane() -> None:
 
 def test_admitted_context_requires_scale_and_scoped_dimensions() -> None:
     with pytest.raises(ValidationError, match="source unit scale"):
-        KpiSemanticContext(
-            **{
+        KpiSemanticContext.model_validate(
+            {
                 **_context().model_dump(),
                 "unit_scale": KpiUnitScale.UNKNOWN,
             }
@@ -161,8 +162,8 @@ def test_unclassified_producer_context_is_explicitly_quarantined() -> None:
     assert context.unit_scale is KpiUnitScale.UNKNOWN
     assert context.reason_code == "producer_missing_semantic_context"
     with pytest.raises(ValidationError, match="require dimensions"):
-        KpiSemanticContext(
-            **{
+        KpiSemanticContext.model_validate(
+            {
                 **_context().model_dump(),
                 "consolidation_scope": KpiConsolidationScope.GEOGRAPHY,
                 "dimensions": {},
@@ -204,6 +205,7 @@ def test_admission_sql_excludes_explicit_quarantine_but_keeps_legacy() -> None:
             metric_name_as_reported="Customers",
             reported_period_end=date(2023, 12, 31),
             period_role=KpiPeriodRole.PRIOR_YEAR_COMPARATOR,
+            publication_lane=KpiPublicationLane.COMPARATOR,
             accounting_basis=KpiAccountingBasis.MANAGEMENT,
             consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
             unit_scale=KpiUnitScale.MILLIONS,

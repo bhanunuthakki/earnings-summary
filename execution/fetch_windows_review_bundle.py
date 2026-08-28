@@ -155,9 +155,20 @@ def _payload_sha256(value: object) -> str:
 
 
 def _fetch(url: str, *, timeout_seconds: float) -> bytes:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path != _ENDPOINT
+    ):
+        raise ReviewFetchError("review bundle URL must be the exact HTTPS endpoint")
     request = Request(url, headers={"Accept": "application/json"}, method="GET")
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310
             declared = response.headers.get("Content-Length")
             if declared is not None and int(declared) > _MAX_RESPONSE_BYTES:
                 raise ReviewFetchError("review bundle exceeds the bounded response size")

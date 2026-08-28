@@ -116,7 +116,7 @@ class ManifestFile(BaseModel):
     manifests: list[KpiExtractionManifest]
 
 
-def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
+def list_pending_documents(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
     """Return IR docs without a terminal issuer coverage receipt.
 
     ``kpi_facts`` rows are extraction evidence, not a completeness signal: a
@@ -421,7 +421,7 @@ def main() -> int:
     conn = open_db(args.db)
     try:
         if args.list_pending:
-            pending = _list_pending(conn, args.ticker)
+            pending = list_pending_documents(conn, args.ticker)
             print(json.dumps({"pending_count": len(pending), "documents": pending}, indent=2))
             return 0
 

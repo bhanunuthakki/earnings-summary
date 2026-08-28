@@ -214,8 +214,10 @@ def matching_kpi_definition_ids(
         if not set(signature_fields).issubset(semantic_columns):
             return None
         row = conn.execute(
-            "SELECT " + ",".join(f"context.{field}" for field in signature_fields) + " "
-            f"FROM {fact_relation} fact JOIN kpi_fact_semantic_contexts context "
+            "SELECT "  # nosec B608
+            + ",".join(f"context.{field}" for field in signature_fields)
+            + " "
+            f"FROM {fact_relation} fact JOIN kpi_fact_semantic_contexts context "  # nosec B608
             "ON context.kpi_fact_id=fact.id AND NOT EXISTS ("
             "SELECT 1 FROM kpi_fact_semantic_contexts successor "
             "WHERE successor.supersedes_context_id=context.id) "
@@ -299,7 +301,7 @@ def semantic_series_identity_sql(
         "unit_scale",
     ):
         predicates.append(
-            f"{context_alias}.{field}=(SELECT {anchor_context}.{field} "
+            f"{context_alias}.{field}=(SELECT {anchor_context}.{field} "  # nosec B608
             f"FROM {resolved_fact_relation} {anchor_fact} JOIN kpi_fact_semantic_contexts {anchor_context} "
             f"ON {anchor_context}.kpi_fact_id={anchor_fact}.id AND NOT EXISTS ("
             f"SELECT 1 FROM kpi_fact_semantic_contexts {successor} WHERE "
@@ -311,7 +313,7 @@ def semantic_series_identity_sql(
         )
     qualified = " AND ".join(predicates)
     admitted_anchor_exists = (
-        f"EXISTS (SELECT 1 FROM {resolved_fact_relation} {anchor_fact} "
+        f"EXISTS (SELECT 1 FROM {resolved_fact_relation} {anchor_fact} "  # nosec B608
         f"JOIN kpi_fact_semantic_contexts {anchor_context} "
         f"ON {anchor_context}.kpi_fact_id={anchor_fact}.id AND NOT EXISTS ("
         f"SELECT 1 FROM kpi_fact_semantic_contexts {successor} WHERE "

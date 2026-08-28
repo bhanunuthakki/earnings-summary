@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
@@ -8,13 +9,14 @@ from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from execution import apply_kpi_semantic_refresh as refresh
 from execution import record_kpi_repair_judgment as record_judgment
+from execution.backup_restore_readiness_receipt import BackupRestoreReadinessReceipt
+from execution.fetch_windows_review_bundle import WindowsReviewPins
 from models.facts import FactLocator, Unit
 from operations.kpi_repair_receipts import (
     KpiRepairAttemptReceipt,
@@ -23,12 +25,21 @@ from operations.kpi_repair_receipts import (
     seal_attempt,
     seal_judgment,
 )
+from operations.review_bundle import (
+    OperationsReviewBundle,
+    ReviewIdentity,
+    ReviewObservation,
+    ReviewScheduler,
+    ReviewSchema,
+)
+from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
     KpiPeriodRole,
     KpiPublicationLane,
     KpiSemanticContext,
+    KpiSemanticContextRevision,
     KpiSemanticStatus,
     KpiUnitScale,
     current_kpi_semantic_context,
@@ -37,6 +48,62 @@ from pipeline.kpi_semantics import (
 from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession
 
 NOW = datetime(2026, 8, 27, 20, tzinfo=UTC)
+
+
+def _accept_pinned_identity(**_kwargs: object) -> None:
+    return None
+
+
+def _no_receipt_reasons(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+    return ()
+
+
+def _source_nu(
+    _conn: sqlite3.Connection, _entry: refresh.RefreshEntry
+) -> tuple[refresh.SourceType, str]:
+    return refresh.SourceType.IR_DOC, "NU"
+
+
+def _source_wix(
+    _conn: sqlite3.Connection, _entry: refresh.RefreshEntry
+) -> tuple[refresh.SourceType, str]:
+    return refresh.SourceType.IR_DOC, "WIX"
+
+
+def _pins() -> WindowsReviewPins:
+    return WindowsReviewPins.model_construct()
+
+
+def _backup(manifest: refresh.RefreshManifest) -> BackupRestoreReadinessReceipt:
+    return BackupRestoreReadinessReceipt.model_construct(
+        evidence_id=manifest.backup_restore_evidence_id
+    )
+
+
+def _review_bundle(
+    manifest: refresh.RefreshManifest,
+    db_path: Path,
+    *,
+    observed_at: datetime = NOW,
+    scheduler_recorded_at: datetime = NOW,
+) -> OperationsReviewBundle:
+    observation = ReviewObservation.model_construct(
+        state="current", observed_at=observed_at, evidence_recorded_at=scheduler_recorded_at
+    )
+    return OperationsReviewBundle.model_construct(
+        observed_at=observed_at,
+        identity=ReviewIdentity.model_construct(
+            database_instance_sha256=hashlib.sha256(str(db_path.resolve()).encode()).hexdigest()
+        ),
+        database=observation,
+        schema_revision=ReviewSchema.model_construct(
+            observation=observation,
+            actual_heads=(manifest.expected_schema_revision,),
+            matches=True,
+        ),
+        scheduler=ReviewScheduler.model_construct(observation=observation, tasks=()),
+        content_sha256=manifest.review_bundle_sha256,
+    )
 
 
 def _context() -> KpiSemanticContext:
@@ -256,38 +323,35 @@ def test_external_evidence_rejects_stale_review_and_scheduler_receipt(
 ) -> None:
     manifest = _manifest()
     db_path = tmp_path / "restored.db"
-    identity = hashlib.sha256(str(db_path.resolve()).encode()).hexdigest()
-    schema = SimpleNamespace(matches=True, actual_heads=(manifest.expected_schema_revision,))
-    bundle = SimpleNamespace(
-        content_sha256=manifest.review_bundle_sha256,
+    bundle = _review_bundle(
+        manifest,
+        db_path,
         observed_at=NOW - timedelta(hours=1),
-        identity=SimpleNamespace(database_instance_sha256=identity),
-        schema_revision=schema,
-        scheduler=SimpleNamespace(
-            observation=SimpleNamespace(evidence_recorded_at=NOW, state="current")
-        ),
     )
-    backup = SimpleNamespace(evidence_id=manifest.backup_restore_evidence_id)
-    monkeypatch.setattr(refresh, "validate_receipt_for_source", lambda *args, **kwargs: ())
-    monkeypatch.setattr(refresh, "validate_pinned_identity", lambda **_kwargs: None)
+    backup = _backup(manifest)
+    monkeypatch.setattr(refresh, "validate_receipt_for_source", _no_receipt_reasons)
+    monkeypatch.setattr(refresh, "validate_pinned_identity", _accept_pinned_identity)
     with pytest.raises(refresh.RepairBlockedError, match="review_bundle_stale"):
         refresh._validate_external_evidence(
             manifest=manifest,
             db_path=db_path,
             review_bundle=bundle,
-            trusted_pins=SimpleNamespace(),
+            trusted_pins=_pins(),
             backup=backup,
             now=NOW,
             max_review_age=timedelta(minutes=20),
         )
-    bundle.observed_at = NOW
-    bundle.scheduler.observation.evidence_recorded_at = NOW - timedelta(hours=1)
+    bundle = _review_bundle(
+        manifest,
+        db_path,
+        scheduler_recorded_at=NOW - timedelta(hours=1),
+    )
     with pytest.raises(refresh.RepairBlockedError, match="scheduler_runtime_evidence_stale"):
         refresh._validate_external_evidence(
             manifest=manifest,
             db_path=db_path,
             review_bundle=bundle,
-            trusted_pins=SimpleNamespace(),
+            trusted_pins=_pins(),
             backup=backup,
             now=NOW,
             max_review_age=timedelta(minutes=20),
@@ -298,7 +362,7 @@ def test_external_evidence_rejects_untrusted_host_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest = _manifest()
-    bundle = SimpleNamespace(content_sha256=manifest.review_bundle_sha256)
+    bundle = OperationsReviewBundle.model_construct(content_sha256=manifest.review_bundle_sha256)
 
     def reject(**_kwargs: object) -> None:
         raise ValueError("trusted_host_identity_mismatch")
@@ -309,8 +373,8 @@ def test_external_evidence_rejects_untrusted_host_identity(
             manifest=manifest,
             db_path=tmp_path / "unused.db",
             review_bundle=bundle,
-            trusted_pins=SimpleNamespace(),
-            backup=SimpleNamespace(),
+            trusted_pins=_pins(),
+            backup=_backup(manifest),
             now=NOW,
             max_review_age=timedelta(minutes=20),
         )
@@ -460,7 +524,7 @@ def test_entry_rejects_cross_issuer_source_for_every_action(
     monkeypatch.setattr(
         refresh,
         "_validate_source_binding",
-        lambda _conn, _entry: (refresh.SourceType.IR_DOC, "WIX"),
+        _source_wix,
     )
     changes: dict[str, object] = {"action": action}
     if action == "bind_existing":
@@ -482,7 +546,7 @@ def test_entry_rejects_cross_issuer_definition_for_every_action(
     monkeypatch.setattr(
         refresh,
         "_validate_source_binding",
-        lambda _conn, _entry: (refresh.SourceType.IR_DOC, "NU"),
+        _source_nu,
     )
     changes: dict[str, object] = {"action": action}
     if action == "bind_existing":
@@ -504,7 +568,7 @@ def test_entry_rejects_definition_unit_mismatch_for_every_action(
     monkeypatch.setattr(
         refresh,
         "_validate_source_binding",
-        lambda _conn, _entry: (refresh.SourceType.IR_DOC, "NU"),
+        _source_nu,
     )
     changes: dict[str, object] = {"action": action}
     if action == "bind_existing":
@@ -538,10 +602,23 @@ def test_missing_marker_recovers_exact_committed_postcondition(
         expected_inserted_fact_rows=0,
     )
     manifest = _manifest().model_copy(update={"entries": (entry,)})
+
+    def _current_context(
+        _conn: sqlite3.Connection, *, kpi_fact_id: int
+    ) -> KpiSemanticContextRevision:
+        return KpiSemanticContextRevision(
+            id=1,
+            kpi_fact_id=kpi_fact_id,
+            revision=1,
+            context=refresh._context_for_entry(entry),
+            reviewed_by="owner",
+            knowledge_at=NOW,
+        )
+
     monkeypatch.setattr(
         refresh,
         "current_kpi_semantic_context",
-        lambda *_args, **_kwargs: SimpleNamespace(context=refresh._context_for_entry(entry)),
+        _current_context,
     )
     assert refresh._detect_applied_postcondition(conn, manifest=manifest) == (10,)
     conn.close()
@@ -567,29 +644,48 @@ def test_dry_run_executes_exact_write_shape_then_rolls_back(
     conn.commit()
     conn.close()
 
-    fake_bundle = SimpleNamespace(
-        content_sha256=manifest.review_bundle_sha256,
-        identity=SimpleNamespace(database_instance_sha256="9" * 64),
+    fake_bundle = _review_bundle(manifest, db_path).model_copy(
+        update={
+            "identity": ReviewIdentity.model_construct(
+                database_instance_sha256=hashlib.sha256(b"test-lineage").hexdigest()
+            )
+        }
     )
-    fake_backup = SimpleNamespace(evidence_id=manifest.backup_restore_evidence_id)
+    fake_backup = _backup(manifest)
+
+    def _parse_bundle(_payload: str | bytes | bytearray) -> OperationsReviewBundle:
+        return fake_bundle
+
+    def _parse_backup(_payload: str | bytes | bytearray) -> BackupRestoreReadinessReceipt:
+        return fake_backup
+
+    def _parse_pins(_payload: str | bytes | bytearray) -> WindowsReviewPins:
+        return _pins()
+
     monkeypatch.setattr(
         refresh.OperationsReviewBundle,
         "model_validate_json",
-        staticmethod(lambda _payload: fake_bundle),
+        staticmethod(_parse_bundle),
     )
     monkeypatch.setattr(
         refresh.BackupRestoreReadinessReceipt,
         "model_validate_json",
-        staticmethod(lambda _payload: fake_backup),
+        staticmethod(_parse_backup),
     )
     monkeypatch.setattr(
         refresh.WindowsReviewPins,
         "model_validate_json",
-        staticmethod(lambda _payload: SimpleNamespace()),
+        staticmethod(_parse_pins),
     )
-    monkeypatch.setattr(refresh, "_validate_external_evidence", lambda **_kwargs: None)
-    monkeypatch.setattr(refresh, "database_lineage_identity", lambda _conn: "test-lineage")
-    fake_bundle.identity.database_instance_sha256 = hashlib.sha256(b"test-lineage").hexdigest()
+
+    def _accept_external_evidence(**_kwargs: object) -> None:
+        return None
+
+    def _test_lineage(_conn: sqlite3.Connection) -> str:
+        return "test-lineage"
+
+    monkeypatch.setattr(refresh, "_validate_external_evidence", _accept_external_evidence)
+    monkeypatch.setattr(refresh, "database_lineage_identity", _test_lineage)
 
     def open_test_db(path: Path) -> sqlite3.Connection:
         connection = sqlite3.connect(path)
@@ -597,28 +693,44 @@ def test_dry_run_executes_exact_write_shape_then_rolls_back(
         return connection
 
     monkeypatch.setattr(refresh, "open_db", open_test_db)
+
+    def _job_lock(*_args: object, **_kwargs: object) -> nullcontext[None]:
+        return nullcontext()
+
     monkeypatch.setattr(
         refresh,
         "JobLock",
-        lambda *_args, **_kwargs: nullcontext(),
+        _job_lock,
     )
+
+    def _scoped_definitions(
+        _conn: sqlite3.Connection, *, repo_root: Path
+    ) -> tuple[ScopedKpiDefinition, ...]:
+        del repo_root
+        return (ScopedKpiDefinition.model_construct(kpi_definition_id=7),)
+
     monkeypatch.setattr(
         refresh,
         "scoped_kpi_definitions",
-        lambda *_args, **_kwargs: (SimpleNamespace(kpi_definition_id=7),),
+        _scoped_definitions,
     )
+
+    def _validated_entry(
+        connection: sqlite3.Connection,
+        _entry_value: refresh.RefreshEntry,
+        _allowed: set[int],
+    ) -> tuple[sqlite3.Row, refresh.SourceType]:
+        row = connection.execute(
+            "SELECT 'NU' AS ticker, '2024-12-31' AS period_end, "
+            "'Q4' AS fiscal_period_type, 'Total customers' AS name"
+        ).fetchone()
+        assert isinstance(row, sqlite3.Row)
+        return row, refresh.SourceType.IR_DOC
+
     monkeypatch.setattr(
         refresh,
         "_validate_entry",
-        lambda *_args, **_kwargs: (
-            {
-                "ticker": "NU",
-                "period_end": "2024-12-31",
-                "fiscal_period_type": "Q4",
-                "name": "Total customers",
-            },
-            SimpleNamespace(value="ir_doc"),
-        ),
+        _validated_entry,
     )
 
     def simulated_apply(connection: sqlite3.Connection, **_kwargs: object) -> tuple[int, int, int]:

@@ -226,7 +226,7 @@ def _fetch_series(
         )
         if fact_relation.selection_mode == "legacy_pre_cutover":
             sql = (
-                "WITH ranked AS ("
+                "WITH ranked AS ("  # nosec B608
                 "SELECT kf.id, kf.period_end, kf.fiscal_period_type, kf.value, "
                 "kf.kpi_definition_id, "
                 "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
@@ -235,14 +235,14 @@ def _fetch_series(
                 "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
                 "WHERE kf.ticker = ? AND kd.name = ? "
                 "AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')) "
-                "SELECT kf.period_end, kf.value "
+                "SELECT kf.period_end, kf.value "  # nosec B608
                 "FROM ranked kf "
                 f"{semantic_join} "
                 "WHERE kf.rn = 1 AND " + semantic_where + " ORDER BY kf.period_end ASC"
             )
         else:
             sql = (
-                "SELECT kf.period_end, kf.value "
+                "SELECT kf.period_end, kf.value "  # nosec B608
                 f"FROM {fact_relation.sql} kf "
                 "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
                 f"{semantic_join} "

@@ -418,7 +418,7 @@ def _check_source_disagreement(
     )
 
 
-def _check_kpi_semantic_coverage(
+def check_kpi_semantic_coverage(
     conn: sqlite3.Connection,
     *,
     run_id: str,
@@ -496,7 +496,7 @@ def run_all_checks(
     outcomes.append(_check_kpi_fact_ranges(conn, run_id=run_id, ticker=ticker))
     outcomes.append(_check_magnitude_jumps(conn, run_id=run_id, ticker=ticker))
     outcomes.append(_check_source_disagreement(conn, run_id=run_id, ticker=ticker))
-    outcomes.append(_check_kpi_semantic_coverage(conn, run_id=run_id, ticker=ticker))
+    outcomes.append(check_kpi_semantic_coverage(conn, run_id=run_id, ticker=ticker))
     return ValidationReport(
         run_id=run_id,
         started_at=started_at,

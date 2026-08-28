@@ -53,7 +53,7 @@ def portfolio_tickers(conn: sqlite3.Connection, *, user_id: str = "default") -> 
     if "archived_at" in columns:
         predicates.append("archived_at IS NULL")
     rows = conn.execute(
-        "SELECT DISTINCT UPPER(ticker) FROM tracked_companies WHERE "
+        "SELECT DISTINCT UPPER(ticker) FROM tracked_companies WHERE "  # nosec B608
         + " AND ".join(predicates)
         + " ORDER BY UPPER(ticker)",
         tuple(params),
@@ -156,7 +156,7 @@ def scoped_kpi_definitions(
         for lane in lane_names
     ]
     rows = conn.execute(
-        f"SELECT definition.id,UPPER(definition.ticker),definition.name,COUNT(fact.id),"
+        f"SELECT definition.id,UPPER(definition.ticker),definition.name,COUNT(fact.id),"  # nosec B608
         f"{admitted},{quarantined},{legacy_unknown},{missing},{','.join(lane_counts)} "
         "FROM kpi_definitions definition "
         "LEFT JOIN kpi_facts fact ON fact.kpi_definition_id=definition.id "

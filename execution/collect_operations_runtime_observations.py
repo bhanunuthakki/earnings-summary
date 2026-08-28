@@ -647,7 +647,7 @@ def _retained_scheduler_success(path: Path) -> _RetainedSchedulerRead:
     return _RetainedSchedulerRead(receipt, "available")
 
 
-def _retain_scheduler_task_successes(
+def retain_scheduler_task_successes(
     current: SchedulerRuntimeReceipt, path: Path
 ) -> SchedulerRuntimeReceipt:
     """Carry forward a task's last success only for the same registered action."""
@@ -1213,7 +1213,7 @@ def emit_runtime_receipts(
             if scheduler.probe_attempt.availability == "unavailable":
                 scheduler = _retain_scheduler_success(scheduler, scheduler_path)
             else:
-                scheduler = _retain_scheduler_task_successes(scheduler, scheduler_path)
+                scheduler = retain_scheduler_task_successes(scheduler, scheduler_path)
             if services.probe_attempt.availability == "unavailable":
                 services = _retain_service_success(services, service_path)
             pair_path = _pair_receipt_path(scheduler_path)

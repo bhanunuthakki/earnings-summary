@@ -104,7 +104,7 @@ def _resolve_indicator_source(
     time_code = "ts.time_code_start" if "time_code_start" in columns else "NULL"
     transcripts = selected_transcripts_relation(conn)
     anchor = conn.execute(
-        "SELECT tr.document_id, tr.id, tr.ticker, d.ticker "
+        "SELECT tr.document_id, tr.id, tr.ticker, d.ticker "  # nosec B608
         "FROM transcript_segments ts JOIN " + transcripts.sql + " tr ON tr.id=ts.transcript_id "
         "JOIN documents d ON d.id=tr.document_id "
         "WHERE ts.id=?",
@@ -121,7 +121,11 @@ def _resolve_indicator_source(
             f"{transcript_ticker}/{document_ticker}"
         )
     rows = conn.execute(
-        "SELECT ts.id, ts.seq, " + speaker + ", " + time_code + ", ts.text "
+        "SELECT ts.id, ts.seq, "  # nosec B608
+        + speaker
+        + ", "
+        + time_code
+        + ", ts.text "
         "FROM transcript_segments ts WHERE ts.transcript_id=? ORDER BY ts.seq, ts.id",
         (int(anchor[1]),),
     ).fetchall()

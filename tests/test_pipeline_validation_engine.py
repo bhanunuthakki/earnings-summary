@@ -5,19 +5,20 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
-from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
 from models.facts import Unit
 from models.validation import Severity, ValidationRule
+from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 from pipeline.validation_engine import (
     _check_financial_fact_ranges,
     _check_kpi_fact_ranges,
-    _check_kpi_semantic_coverage,
     _check_magnitude_jumps,
     _check_source_disagreement,
     _scan_series_for_jumps,
+    check_kpi_semantic_coverage,
     run_all_checks,
 )
 
@@ -416,22 +417,31 @@ def test_owner_visible_legacy_unknown_kpi_halts_semantic_gate(
         period_end=datetime(2024, 12, 31),
         source_doc_id=doc_id,
     )
-    monkeypatch.setattr(
-        "pipeline.validation_engine.scoped_kpi_definitions",
-        lambda *_args, **_kwargs: (
-            SimpleNamespace(
+
+    def _scoped(_conn: sqlite3.Connection, *, repo_root: Path) -> tuple[ScopedKpiDefinition, ...]:
+        del repo_root
+        return (
+            ScopedKpiDefinition(
                 ticker="NU",
                 name="Total customers",
                 kpi_definition_id=1,
+                reasons=("owner_visible",),
                 fact_count=1,
+                admitted_context_count=0,
                 missing_context_count=0,
                 quarantined_context_count=0,
                 legacy_unknown_context_count=1,
+                current_actual_count=0,
+                comparator_count=0,
+                guidance_target_count=0,
+                management_explanation_count=0,
+                analyst_question_count=0,
             ),
-        ),
-    )
+        )
 
-    outcome = _check_kpi_semantic_coverage(conn, run_id="semantic-gate", ticker="NU")
+    monkeypatch.setattr("pipeline.validation_engine.scoped_kpi_definitions", _scoped)
+
+    outcome = check_kpi_semantic_coverage(conn, run_id="semantic-gate", ticker="NU")
 
     assert outcome.issues_inserted == 1
     issue = conn.execute(

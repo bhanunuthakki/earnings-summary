@@ -175,7 +175,7 @@ def _segment_source_metadata(conn: sqlite3.Connection, segment_id: int) -> tuple
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcript_segments)")}
     speaker = "ts.speaker" if "speaker" in columns else "NULL"
     row = conn.execute(
-        "SELECT tr.document_id, " + speaker + " "
+        "SELECT tr.document_id, " + speaker + " "  # nosec B608
         "FROM transcript_segments ts JOIN transcripts tr ON tr.id=ts.transcript_id "
         "WHERE ts.id=?",
         (segment_id,),

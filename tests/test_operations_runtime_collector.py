@@ -707,10 +707,11 @@ def test_scheduler_vnext_carries_success_only_for_same_registered_action(tmp_pat
         ),
     )
 
-    merged = collector._retain_scheduler_task_successes(current, receipt_path)
+    merged = collector.retain_scheduler_task_successes(current, receipt_path)
     assert merged.last_successful is not None
     assert merged.last_successful.tasks[0].last_successful_at == prior_success
 
+    assert current.last_successful is not None
     changed = current.model_copy(
         update={
             "last_successful": SchedulerReceipt(
@@ -723,7 +724,7 @@ def test_scheduler_vnext_carries_success_only_for_same_registered_action(tmp_pat
             )
         }
     )
-    not_merged = collector._retain_scheduler_task_successes(changed, receipt_path)
+    not_merged = collector.retain_scheduler_task_successes(changed, receipt_path)
     assert not_merged.last_successful is not None
     assert not_merged.last_successful.tasks[0].last_successful_at is None
 

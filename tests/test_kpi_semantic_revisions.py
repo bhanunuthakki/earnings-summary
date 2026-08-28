@@ -107,7 +107,9 @@ def test_semantic_context_can_mature_without_rewriting_the_fact() -> None:
     assert rows[1]["id"] == second
     assert rows[1]["supersedes_context_id"] == first
     assert conn.execute("SELECT value FROM kpi_facts WHERE id=1").fetchone()[0] == "95"
-    assert current_kpi_semantic_context(conn, kpi_fact_id=1).revision == 2
+    current = current_kpi_semantic_context(conn, kpi_fact_id=1)
+    assert current is not None
+    assert current.revision == 2
 
 
 def test_semantic_context_identical_replay_is_idempotent() -> None:

@@ -473,7 +473,8 @@ def persist_kpi_semantic_context(
         values.append(observed.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     placeholders = ",".join("?" for _ in values)
     cursor = conn.execute(
-        f"INSERT INTO {table} ({','.join(insert_fields)}) VALUES ({placeholders})", values
+        f"INSERT INTO {table} ({','.join(insert_fields)}) VALUES ({placeholders})",  # nosec B608
+        values,
     )
     if cursor.lastrowid is None:
         raise RuntimeError("semantic context insert did not return an identity")
@@ -518,7 +519,7 @@ def semantic_admission_sql(
     columns = _columns(conn, table)
     if {"revision", "supersedes_context_id"}.issubset(columns):
         join = (
-            f"LEFT JOIN {table} {context_alias} ON {context_alias}.kpi_fact_id={fact_alias}.id "
+            f"LEFT JOIN {table} {context_alias} ON {context_alias}.kpi_fact_id={fact_alias}.id "  # nosec B608
             f"AND NOT EXISTS (SELECT 1 FROM {table} {context_alias}_successor "
             f"WHERE {context_alias}_successor.supersedes_context_id={context_alias}.id)"
         )

@@ -12,7 +12,7 @@ must degrade at the per-KPI scope (skip the value, keep extracting).
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -90,7 +90,9 @@ def test_llm_extract_prompt_offers_only_valid_unit_enum_tokens(
     # Sanity: the canned response still parses through the existing path.
     assert out["GMV"]["value"] == Decimal("1200000000")
     assert out["GMV"]["currency"] == Currency.USD
-    assert out["GMV"]["reported_period_end"].isoformat() == "2026-03-31"
+    reported_period_end = out["GMV"]["reported_period_end"]
+    assert isinstance(reported_period_end, date)
+    assert reported_period_end.isoformat() == "2026-03-31"
     assert str(out["GMV"]["period_role"]) == "current"
     assert str(out["GMV"]["consolidation_scope"]) == "consolidated"
 
