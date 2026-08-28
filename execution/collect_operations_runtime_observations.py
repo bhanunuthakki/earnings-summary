@@ -410,7 +410,7 @@ def _enumerate_repo_service_names(
         (
             "$ErrorActionPreference='Stop'; "
             "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
-            "Get-Service -Name 'es-*' -ErrorAction SilentlyContinue | "
+            "Get-Service -Name 'es-*' -ErrorAction Stop | "
             "ForEach-Object { $_.Name }"
         ),
     ]

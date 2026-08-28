@@ -905,6 +905,8 @@ def test_production_service_probe_discovers_bounded_es_namespace_extra(
         command = cast(list[str], args[0])
         if command[0].casefold() == "powershell.exe":
             assert "Get-Service -Name 'es-*'" in command[-1]
+            assert "-ErrorAction Stop" in command[-1]
+            assert "SilentlyContinue" not in command[-1]
             assert "state=" not in command
             cast(BinaryIO, kwargs["stdout"]).write(f"{unexpected_name}\n".encode())
             return subprocess.CompletedProcess(
