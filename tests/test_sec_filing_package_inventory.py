@@ -374,6 +374,30 @@ def test_same_accession_alternate_cik_locator_is_preserved() -> None:
     )
 
 
+def test_alternate_cik_legacy_alias_uses_displayed_archive_filename() -> None:
+    manifest = _legacy_alias_manifest(("0001.txt", "10-Q", "Quarterly report")).replace(
+        b"/Archives/edgar/data/1001/",
+        b"/Archives/edgar/data/2002/",
+    )
+
+    result = parse_sec_filing_package_inventory(
+        cik="1001",
+        accession_number="0000001001-25-000001",
+        form_type="10-Q",
+        primary_document="0001.txt",
+        index_body=_index(_item("0001.txt")),
+        filing_manifest_body=manifest,
+    )
+
+    primary = result.attachments[0]
+    assert primary.filename == "0001.txt"
+    assert primary.inventory_presence == "matched"
+    assert primary.source_url == (
+        "https://www.sec.gov/Archives/edgar/data/2002/000000100125000001/"
+        "0000001001-25-000001-0001.txt"
+    )
+
+
 @pytest.mark.parametrize(
     "replacement",
     [
