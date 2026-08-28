@@ -558,6 +558,8 @@ def _manifest_reference(
             )
             if linked_filename == displayed:
                 return linked_filename, f"{_SEC_ORIGIN}{document_path}"
+            if linked_filename == f"{accession_number}-{displayed}":
+                return displayed, f"{_SEC_ORIGIN}{document_path}"
         if (
             _VPRR_PDF.fullmatch(document_path)
             and displayed == "scanned.pdf"
