@@ -1364,7 +1364,17 @@ def build_runtime_summary(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=PROJECT_ROOT,
+        help="State root that owns the emitted runtime receipts",
+    )
+    parser.add_argument(
+        "--code-root",
+        type=Path,
+        help="Code checkout that owns the Operations registry; defaults to --repo-root",
+    )
     parser.add_argument(
         "--emit-receipts",
         action="store_true",
@@ -1374,7 +1384,8 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     root = arguments.repo_root.resolve()
-    registry = build_operations_registry(root)
+    code_root = (arguments.code_root or arguments.repo_root).resolve()
+    registry = build_operations_registry(code_root)
     observed_at = datetime.now(UTC)
     lock_ok = True
     if arguments.emit_receipts:

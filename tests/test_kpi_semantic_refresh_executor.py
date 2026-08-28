@@ -1064,6 +1064,47 @@ def test_invalid_input_still_publishes_durable_failure_receipt(tmp_path: Path) -
     assert receipt.blocker_codes[0].startswith("invalid_input_")
 
 
+def test_apply_authority_accepts_pinned_runtime_code_with_separate_state_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "canonical-state"
+    code_root = tmp_path / "runtime-code"
+    expected_code_identity = "a" * 64
+    bundle = OperationsReviewBundle.model_construct(
+        identity=ReviewIdentity.model_construct(code_instance_sha256=expected_code_identity)
+    )
+    monkeypatch.setattr(refresh.sys, "platform", "win32")
+    monkeypatch.setattr(refresh, "PROJECT_ROOT", code_root)
+    monkeypatch.setattr(refresh, "CANONICAL_WINDOWS_STATE_ROOT", state_root)
+    monkeypatch.setattr(refresh, "review_code_identity", lambda _root: expected_code_identity)
+
+    refresh._validate_apply_authority(
+        db_path=state_root / "data" / "portfolio.db",
+        receipt_root=state_root / "data" / "operations" / "kpi_repairs",
+        review_bundle=bundle,
+    )
+
+
+def test_apply_authority_rejects_unpinned_runtime_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "canonical-state"
+    bundle = OperationsReviewBundle.model_construct(
+        identity=ReviewIdentity.model_construct(code_instance_sha256="a" * 64)
+    )
+    monkeypatch.setattr(refresh.sys, "platform", "win32")
+    monkeypatch.setattr(refresh, "PROJECT_ROOT", tmp_path / "runtime-code")
+    monkeypatch.setattr(refresh, "CANONICAL_WINDOWS_STATE_ROOT", state_root)
+    monkeypatch.setattr(refresh, "review_code_identity", lambda _root: "b" * 64)
+
+    with pytest.raises(refresh.RepairBlockedError, match="apply_code_identity_mismatch"):
+        refresh._validate_apply_authority(
+            db_path=state_root / "data" / "portfolio.db",
+            receipt_root=state_root / "data" / "operations" / "kpi_repairs",
+            review_bundle=bundle,
+        )
+
+
 def test_judge_receipt_verdict_comes_only_from_structured_sol_response(tmp_path: Path) -> None:
     manifest = _manifest()
     dry_run = seal_attempt(

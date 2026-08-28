@@ -1037,6 +1037,53 @@ def test_service_unavailable_emit_retains_prior_success_in_v2_envelope(
     assert all("last_successful_evidence_revalidated" not in event.values() for event in events)
 
 
+def test_cli_separates_code_registry_from_receipt_state_root(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from execution import collect_operations_runtime_observations as collector
+
+    code_root = tmp_path / "runtime-code"
+    state_root = tmp_path / "canonical-state"
+    registry = build_operations_registry(PROJECT_ROOT)
+    observed: dict[str, Path] = {}
+
+    def registry_for_root(root: Path) -> OperationsRegistry:
+        observed["code_root"] = root
+        return registry
+
+    def emit_for_root(
+        _registry: OperationsRegistry,
+        root: Path,
+        _observed_at: datetime,
+    ) -> tuple[SchedulerRuntimeReceipt, ServiceRuntimeReceipt, bool]:
+        observed["state_root"] = root
+        return (
+            SchedulerRuntimeReceipt.success(observed_at=OBSERVED_AT, tasks=()),
+            ServiceRuntimeReceipt.success(observed_at=OBSERVED_AT, services=()),
+            True,
+        )
+
+    monkeypatch.setattr(collector, "build_operations_registry", registry_for_root)
+    monkeypatch.setattr(collector, "emit_runtime_receipts", emit_for_root)
+
+    assert (
+        collector.main(
+            [
+                "--repo-root",
+                str(state_root),
+                "--code-root",
+                str(code_root),
+                "--emit-receipts",
+            ]
+        )
+        == 0
+    )
+    assert observed == {
+        "code_root": code_root.resolve(),
+        "state_root": state_root.resolve(),
+    }
+
+
 def test_collector_clock_rollback_drops_future_retained_v2_evidence(
     tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

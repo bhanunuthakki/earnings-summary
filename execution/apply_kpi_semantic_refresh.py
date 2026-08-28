@@ -22,7 +22,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_WINDOWS_REPO_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary")
+CANONICAL_WINDOWS_STATE_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary")
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
@@ -47,6 +47,7 @@ from operations.kpi_repair_receipts import (  # noqa: E402
 from operations.review_bundle import (  # noqa: E402
     OperationsReviewBundle,
     database_lineage_identity,
+    review_code_identity,
 )
 from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
 from pipeline.kpi_semantics import (  # noqa: E402
@@ -278,6 +279,24 @@ def _validate_external_evidence(
     )
     if reasons:
         raise RepairBlockedError(reasons[0])
+
+
+def _validate_apply_authority(
+    *,
+    db_path: Path,
+    receipt_root: Path,
+    review_bundle: OperationsReviewBundle,
+) -> None:
+    if sys.platform != "win32":
+        raise RepairBlockedError("apply_requires_windows_authority")
+    canonical_db = CANONICAL_WINDOWS_STATE_ROOT / "data" / "portfolio.db"
+    canonical_receipt_root = CANONICAL_WINDOWS_STATE_ROOT / "data" / "operations" / "kpi_repairs"
+    if db_path.resolve() != canonical_db.resolve():
+        raise RepairBlockedError("apply_database_is_not_canonical_windows_authority")
+    if receipt_root.resolve() != canonical_receipt_root.resolve():
+        raise RepairBlockedError("apply_receipt_root_is_not_canonical_operations_surface")
+    if review_code_identity(PROJECT_ROOT) != review_bundle.identity.code_instance_sha256:
+        raise RepairBlockedError("apply_code_identity_mismatch")
 
 
 def _validate_source_binding(
@@ -641,18 +660,11 @@ def main(argv: list[str] | None = None) -> int:
             max_review_age=timedelta(seconds=args.max_review_age_seconds),
         )
         if args.apply:
-            if sys.platform != "win32":
-                raise RepairBlockedError("apply_requires_windows_authority")
-            canonical_db = CANONICAL_WINDOWS_REPO_ROOT / "data" / "portfolio.db"
-            canonical_receipt_root = (
-                CANONICAL_WINDOWS_REPO_ROOT / "data" / "operations" / "kpi_repairs"
+            _validate_apply_authority(
+                db_path=args.db,
+                receipt_root=receipt_root,
+                review_bundle=review_bundle,
             )
-            if PROJECT_ROOT.resolve() != CANONICAL_WINDOWS_REPO_ROOT.resolve():
-                raise RepairBlockedError("apply_checkout_is_not_canonical_windows_authority")
-            if args.db.resolve() != canonical_db.resolve():
-                raise RepairBlockedError("apply_database_is_not_canonical_windows_authority")
-            if receipt_root != canonical_receipt_root.resolve():
-                raise RepairBlockedError("apply_receipt_root_is_not_canonical_operations_surface")
             if args.approved_manifest_sha256 != manifest_sha:
                 raise RepairBlockedError("owner_manifest_approval_mismatch")
             if args.judge_receipt is None:

@@ -68,6 +68,22 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
     )
     assert collector_step.raw_lane == "operations-runtime-receipts"
     assert collector_step.effective_lane == ("operations-runtime-receipts",)
+    assert collector_step.command == (
+        r"execution\collect_operations_runtime_observations.py",
+        "--repo-root",
+        "%STATE_ROOT%",
+        "--code-root",
+        "%PROJECT_ROOT%",
+        "--emit-receipts",
+        "--json-out",
+    )
+    collector_xml = (
+        PROJECT_ROOT / "cron" / "collect_operations_runtime_observations.task.xml"
+    ).read_text(encoding="utf-8")
+    assert r"runtime\earnings-summary\cron\run_collect_operations_runtime_observations.bat" in (
+        collector_xml
+    )
+    assert r"scratch\earnings-summary" in collector_xml
     tracker_api = next(
         task
         for task in registry.scheduled_tasks
