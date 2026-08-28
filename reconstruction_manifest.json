@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2026-08-15.2",
+  "manifest_version": "2026-08-28.1",
   "workspace_name": "earnings-summary",
   "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
   "canonical_runtime": {
@@ -34,8 +34,13 @@
         "AGENTS.md",
         "directives/cross_asset_data_model.md"
       ],
-      "version_ownership": "alembic_version table (head revision 0270+) and alembic/versions/ DDL migrations",
-      "backup_ownership": "repo-maintenance/backup_scratch.ps1 online SQLite snapshot (db_snapshots/portfolio.db) and data/portfolio.db WAL mode",
+      "version_ownership": "alembic/versions/ migration graph and alembic_version table; verification discovers the active head and requires exactly one head",
+      "backup_ownership": "cron/backup_db.py online SQLite snapshot and execution/restore_drill.py throwaway restore verification; canonical Windows database authority uses WAL mode",
+      "ownership_paths": [
+        {"field": "version_ownership", "path": "alembic/versions", "kind": "directory", "required_in_checkout": true},
+        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
+        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+      ],
       "state_classification": "durable_database",
       "reconstruction_tier": "tier_0_data_backbone",
       "invariants": [
@@ -67,6 +72,9 @@
       ],
       "version_ownership": "Git commit SHA & execution script CLI parameter specifications",
       "backup_ownership": "Git version control (code) and ephemeral checkpoint state in .tmp/ (excluded from static backup)",
+      "ownership_paths": [
+        {"field": "backup_ownership", "path": ".tmp", "kind": "directory", "required_in_checkout": false}
+      ],
       "state_classification": "deterministic_orchestration",
       "reconstruction_tier": "tier_1_pipeline_execution",
       "invariants": [
@@ -98,6 +106,10 @@
       ],
       "version_ownership": "Issuer Acquisition Policy hash & source policy versioning",
       "backup_ownership": "Git version control (code) and immutable source documents in ir_documents/ and transcripts/",
+      "ownership_paths": [
+        {"field": "backup_ownership", "path": "ir_documents", "kind": "directory", "required_in_checkout": false},
+        {"field": "backup_ownership", "path": "transcripts", "kind": "directory", "required_in_checkout": false}
+      ],
       "state_classification": "source_ingestion_adapter",
       "reconstruction_tier": "tier_1_pipeline_execution",
       "invariants": [
@@ -127,7 +139,11 @@
         "directives/data_provenance.md"
       ],
       "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas",
-      "backup_ownership": "Git version control (formulas, DCF models, compute code) and data/portfolio.db derived tables",
+      "backup_ownership": "Git version control (formulas, DCF models, compute code) plus cron/backup_db.py and execution/restore_drill.py for derived database tables",
+      "ownership_paths": [
+        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
+        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+      ],
       "state_classification": "deterministic_compute",
       "reconstruction_tier": "tier_1_pipeline_execution",
       "invariants": [
@@ -157,7 +173,11 @@
         "HOW_TO_USE_REPORTS.md"
       ],
       "version_ownership": "Playbook revision & research lens template versioning",
-      "backup_ownership": "Git version control (lens logic, report generators) and research artifacts in data/portfolio.db",
+      "backup_ownership": "Git version control (lens logic, report generators) plus cron/backup_db.py and execution/restore_drill.py for research artifacts",
+      "ownership_paths": [
+        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
+        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+      ],
       "state_classification": "synthesis_research_lens",
       "reconstruction_tier": "tier_2_synthesis_lens",
       "invariants": [
@@ -190,6 +210,9 @@
       ],
       "version_ownership": "Model ladder configuration version & eval dataset SHA-256 hashes",
       "backup_ownership": "Git version control (eval cases, grader rubrics, CLI routers) and evals/ test corpus",
+      "ownership_paths": [
+        {"field": "version_ownership", "path": "evals", "kind": "directory", "required_in_checkout": true}
+      ],
       "state_classification": "eval_router_harness",
       "reconstruction_tier": "tier_2_synthesis_lens",
       "invariants": [
@@ -218,7 +241,11 @@
         "directives/design_language.md"
       ],
       "version_ownership": "Governance surface contract version & circuit state schema",
-      "backup_ownership": "Git version control (telemetry renderers) and provider circuit rows in data/portfolio.db",
+      "backup_ownership": "Git version control (telemetry renderers) plus cron/backup_db.py and execution/restore_drill.py for provider circuit rows",
+      "ownership_paths": [
+        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
+        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+      ],
       "state_classification": "governance_telemetry",
       "reconstruction_tier": "tier_3_presentation_cockpit",
       "invariants": [
@@ -249,6 +276,7 @@
       ],
       "version_ownership": "Design system token dictionary & CSS custom variable contract",
       "backup_ownership": "Git version control (server routes, UI templates, design tokens)",
+      "ownership_paths": [],
       "state_classification": "interactive_cockpit",
       "reconstruction_tier": "tier_3_presentation_cockpit",
       "invariants": [
@@ -277,7 +305,11 @@
         "DEFINITIONS.md"
       ],
       "version_ownership": "Journal note schema version & thesis state revision stamps",
-      "backup_ownership": "repo-maintenance/backup_scratch.ps1 online SQLite snapshot (analyst_notes, decisions tables)",
+      "backup_ownership": "cron/backup_db.py online SQLite snapshot and execution/restore_drill.py throwaway restore verification for analyst notes and decision tables",
+      "ownership_paths": [
+        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
+        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+      ],
       "state_classification": "durable_memory",
       "reconstruction_tier": "tier_0_data_backbone",
       "invariants": [
@@ -305,6 +337,7 @@
       ],
       "version_ownership": "Batch script Git versioning & Task Scheduler XML task definitions",
       "backup_ownership": "Git version control (cron batch scripts, scheduler documentation)",
+      "ownership_paths": [],
       "state_classification": "scheduled_automation",
       "reconstruction_tier": "tier_1_pipeline_execution",
       "invariants": [
@@ -333,7 +366,8 @@
         "AGENTS.md"
       ],
       "version_ownership": "pyproject.toml tool configurations & requirements.lock pinned dependencies",
-      "backup_ownership": "Git version control (tests, fixtures, lint/typecheck configuration)",
+      "backup_ownership": "Git version control (tests, fixtures, lint and type-check configuration)",
+      "ownership_paths": [],
       "state_classification": "hermetic_verification",
       "reconstruction_tier": "tier_0_data_backbone",
       "invariants": [
