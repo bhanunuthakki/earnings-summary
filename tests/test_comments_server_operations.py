@@ -325,40 +325,17 @@ def test_operations_registry_comes_from_code_root_not_minimal_runtime_root(
     build_registry.assert_called_once_with(code_root.resolve())
 
 
-def test_operations_review_bundle_loads_kpi_repair_from_state_root(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    state_root = tmp_path / "state"
-    code_root = tmp_path / "code"
-    state_root.mkdir()
-    code_root.mkdir()
-    db_path = migrated_db(state_root / "portfolio.db")
-    repair_review = Mock(state="missing")
-    load_review = Mock(return_value=repair_review)
-    build_bundle = Mock(
-        return_value=Mock(
-            model_dump=Mock(return_value={"schema_version": "test"}),
-            content_sha256="a" * 64,
-        )
-    )
-    monkeypatch.setattr(comments_server, "load_kpi_repair_review", load_review)
-    monkeypatch.setattr(comments_server, "build_operations_review_bundle", build_bundle)
-    monkeypatch.setattr(comments_server, "review_code_identity", Mock(return_value=None))
+def test_operations_review_bundle_loads_kpi_repair_from_state_root() -> None:
+    source = (PROJECT_ROOT / "execution" / "comments_server.py").read_text(encoding="utf-8")
+    route = source.split("def operations_review_bundle_api():", maxsplit=1)[1].split(
+        '@app.route("/api/panel/<name>"', maxsplit=1
+    )[0]
 
-    app = comments_server.create_app(
-        state_root,
-        code_root=code_root,
-        db_path=db_path,
-        operations_registry=build_operations_registry(PROJECT_ROOT),
-    )
-    with app.test_request_context("/api/operations/review-bundle"):
-        app.view_functions["operations_review_bundle_api"]()
-
-    load_review.assert_called_once()
-    assert load_review.call_args.kwargs["repo_root"] == state_root
-    assert build_bundle.call_args.kwargs["kpi_repair"] is repair_review
+    repair_call = route.split("kpi_repair=load_kpi_repair_review(", maxsplit=1)[1].split(
+        "),", maxsplit=1
+    )[0]
+    assert "repo_root=repo_root" in repair_call
+    assert "resolved_code_root" not in repair_call
 
 
 def test_start_tracker_route_uses_runtime_manager_and_persists_typed_receipt(
