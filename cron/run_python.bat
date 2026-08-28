@@ -22,7 +22,7 @@ set "TRIGGER_ARG="
 if /I "%ES_JOB_TRIGGER_KIND%"=="service" set "TRIGGER_ARG=--trigger-kind service"
 set "ES_JOB_TRIGGER_KIND="
 set "REPO_ROOT_ARG="
-if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG=--repo-root "%ES_JOB_STATE_ROOT%"
+if /I "%~1"=="collect-operations-runtime-observations" if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG=--repo-root "%ES_JOB_STATE_ROOT%"
 set "ES_JOB_STATE_ROOT="
 
 "%PYTHON_EXE%" -u "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" "%PROJECT_ROOT%\cron\job_runtime.py" %REPO_ROOT_ARG% %TRIGGER_ARG% --scheduler-wrapper --python-executable "%PYTHON_EXE%" --python-bootstrap "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" -- %*

@@ -89,10 +89,15 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
     ).read_text(encoding="utf-8")
     shared_wrapper = (PROJECT_ROOT / "cron" / "run_python.bat").read_text(encoding="utf-8")
     assert 'set "ES_JOB_STATE_ROOT=%STATE_ROOT%"' in collector_wrapper
-    assert 'if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG=--repo-root "%ES_JOB_STATE_ROOT%"' in (
-        shared_wrapper
+    collector_gate = (
+        'if /I "%~1"=="collect-operations-runtime-observations" '
+        'if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG=--repo-root "%ES_JOB_STATE_ROOT%"'
     )
+    assert collector_gate in shared_wrapper
     assert 'set "ES_JOB_STATE_ROOT="' in shared_wrapper
+    assert "if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG" not in shared_wrapper.replace(
+        collector_gate, ""
+    )
     tracker_api = next(
         task
         for task in registry.scheduled_tasks
