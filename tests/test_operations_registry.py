@@ -84,6 +84,15 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
         collector_xml
     )
     assert r"scratch\earnings-summary" in collector_xml
+    collector_wrapper = (
+        PROJECT_ROOT / "cron" / "run_collect_operations_runtime_observations.bat"
+    ).read_text(encoding="utf-8")
+    shared_wrapper = (PROJECT_ROOT / "cron" / "run_python.bat").read_text(encoding="utf-8")
+    assert 'set "ES_JOB_STATE_ROOT=%STATE_ROOT%"' in collector_wrapper
+    assert 'if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG=--repo-root "%ES_JOB_STATE_ROOT%"' in (
+        shared_wrapper
+    )
+    assert 'set "ES_JOB_STATE_ROOT="' in shared_wrapper
     tracker_api = next(
         task
         for task in registry.scheduled_tasks

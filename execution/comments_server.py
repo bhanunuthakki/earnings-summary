@@ -2095,7 +2095,7 @@ def create_app(
             code_instance=operations_review_code_identity,
             database_instance=database_instance,
             kpi_repair=load_kpi_repair_review(
-                repo_root=resolved_code_root,
+                repo_root=repo_root,
                 observed_at=snapshot.observed_at,
             ),
         )
