@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from enum import StrEnum
 from pathlib import Path
 
@@ -15,6 +16,20 @@ from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
+_FORBIDDEN_MAC_CHECKOUT_DB = (
+    Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
+).resolve()
+
+
+def _reject_forbidden_mac_checkout_database(path: str | os.PathLike[str]) -> None:
+    """Prevent every connection path from treating the Mac checkout as authority."""
+    if sys.platform != "darwin" or os.fspath(path) == ":memory:":
+        return
+    if Path(path).expanduser().resolve() == _FORBIDDEN_MAC_CHECKOUT_DB:
+        raise RuntimeError(
+            "Mac checkout database is prohibited; use an explicit disposable test database "
+            "or approved provenance-bearing export of the canonical Windows database"
+        )
 
 
 def sqlite_version_is_wal_reset_safe(version: tuple[int, int, int]) -> bool:
@@ -64,6 +79,7 @@ def connect_sqlite(
     destinations are new, caller-owned local files used by backup or isolated
     synthetic tooling and intentionally retain the default journal mode.
     """
+    _reject_forbidden_mac_checkout_database(path)
     if role is SQLiteConnectionRole.WRITER:
         require_safe_sqlite_writer_runtime()
 

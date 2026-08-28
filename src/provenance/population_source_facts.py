@@ -75,6 +75,7 @@ _EXCLUSION_REASONS = (
     "incomplete_extraction_run",
     "after_data_cutoff",
     "no_selected_subject_binding_as_of_cutoff",
+    "kpi_semantic_context_not_admitted",
 )
 _SEMANTIC_CELL_BATCH_SIZE = 400
 _SEMANTIC_CELL_CACHE_SIZE = 4096
@@ -775,6 +776,11 @@ def _exclusion_reason(
 ) -> str | None:
     if str(row["observation_status"]) == "derived":
         return _EXCLUSION_REASONS[0]
+    if (
+        str(row["fact_table"]) == "kpi_facts"
+        and _legacy_dimension_value(str(row["dimensions_json"]), "semantic_status") != "admitted"
+    ):
+        return _EXCLUSION_REASONS[6]
     if str(row["source_type"]) == "llm_extracted":
         return _EXCLUSION_REASONS[1]
     if str(row["doc_type"]) not in _ELIGIBLE_DOCUMENT_TYPES:
@@ -789,6 +795,23 @@ def _exclusion_reason(
         or row["reporting_entity_id"] is None
     ):
         return _EXCLUSION_REASONS[5]
+    return None
+
+
+def _legacy_dimension_value(raw_json: str, key: str) -> str | None:
+    try:
+        parsed = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list):
+        return None
+    for item in cast("list[object]", parsed):
+        if isinstance(item, dict):
+            item_object = cast("dict[str, object]", item)
+            if str(item_object.get("key")) != key:
+                continue
+            value = item_object.get("value")
+            return None if value is None else str(value)
     return None
 
 
@@ -1044,6 +1067,20 @@ def _source_fact_from_row(
         "non_gaap",
         "other",
     ] = "management" if str(row["fact_table"]) == "kpi_facts" else "other"
+    consolidation_scope: Literal[
+        "consolidated", "parent_only", "subsidiary", "segment", "other"
+    ] = "other"
+    if str(row["fact_table"]) == "kpi_facts":
+        semantic_basis = _legacy_dimension_value(str(row["dimensions_json"]), "accounting_basis")
+        if semantic_basis == "non_gaap":
+            accounting_basis = "non_gaap"
+        elif semantic_basis == "management":
+            accounting_basis = "management"
+        semantic_scope = _legacy_dimension_value(str(row["dimensions_json"]), "consolidation_scope")
+        if semantic_scope == "consolidated":
+            consolidation_scope = "consolidated"
+        elif semantic_scope == "segment":
+            consolidation_scope = "segment"
     unit_key = str(row["unit"] or "unknown")
     currency_value = row["currency"]
     currency = (
@@ -1069,7 +1106,7 @@ def _source_fact_from_row(
         taxonomy_name="earnings-summary-legacy",
         taxonomy_version=_SOURCE_TAXONOMY_VERSION,
         accounting_basis=accounting_basis,
-        consolidation_scope="other",
+        consolidation_scope=consolidation_scope,
         period_kind=period_kind,
         period_start=period_start,
         period_end=period_end,

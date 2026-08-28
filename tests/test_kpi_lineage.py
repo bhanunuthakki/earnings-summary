@@ -36,6 +36,7 @@ from report.models import CellSource
 from report.sections.financials import (
     _kpi_cell_sources_for,  # pyright: ignore[reportPrivateUsage]
 )
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from ui.source_chip import source_chip_html
 from viewspec.engine import _cell_source  # pyright: ignore[reportPrivateUsage]
 
@@ -428,6 +429,7 @@ def test_kpi_cell_sources_carry_lineage_and_issues() -> None:
         "VALUES ('r', 'TST', 'warn', 'plausible_range', 'Operating Margin (GAAP)=20.0 percent', "
         " '2026-06-01')"
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
     out = _kpi_cell_sources_for(conn, "TST", "Operating Margin (GAAP)", ("Q1", "Q2", "Q3", "Q4"))
     conn.close()

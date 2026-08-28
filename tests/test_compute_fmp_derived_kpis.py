@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
@@ -35,7 +36,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             sha256 TEXT NOT NULL,
             fetched_at TIMESTAMP NOT NULL,
             fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL
+            raw_bytes_size INTEGER NOT NULL,
+            source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
         );
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +73,11 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             kpi_definition_id INTEGER NOT NULL,
             value NUMERIC(24, 6) NOT NULL,
             unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL
+            source_doc_id INTEGER NOT NULL,
+            confidence REAL DEFAULT 1.0,
+            extracted_by TEXT,
+            supersedes_id INTEGER,
+            computed_from TEXT
         );
         CREATE UNIQUE INDEX uq_kpi_facts_provenance
         ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
@@ -88,12 +94,28 @@ def conn() -> sqlite3.Connection:
     return c
 
 
-def _insert_doc(conn: sqlite3.Connection, ticker: str, file_path: str) -> int:
+def _insert_doc(
+    conn: sqlite3.Connection,
+    ticker: str,
+    file_path: str,
+    *,
+    source_type: str = "fmp",
+    doc_type: str = "fmp_income_statement",
+    source_quality_tier: str = "fmp_normalized",
+) -> int:
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
-        "sha256, fetched_at, fetch_status, raw_bytes_size) "
-        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1)",
-        (ticker, file_path, "a" * 64, datetime.now()),
+        "sha256, fetched_at, fetch_status, raw_bytes_size, source_quality_tier) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'ok', 1, ?)",
+        (
+            ticker,
+            source_type,
+            doc_type,
+            file_path,
+            "a" * 64,
+            datetime.now(),
+            source_quality_tier,
+        ),
     )
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
@@ -275,6 +297,58 @@ def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) 
     assert by_name[KPI_OPERATING_MARGIN_GAAP] == Decimal("20")  # 20/100*100
     assert by_name[KPI_NET_MARGIN_GAAP] == Decimal("15")  # 15/100*100
     assert by_name[KPI_GROSS_MARGIN_GAAP] == Decimal("40")  # 40/100*100
+
+
+def test_derived_lineage_preserves_each_winning_cell_document(
+    conn: sqlite3.Connection,
+) -> None:
+    """A mixed-source period must not relabel every input as the revenue document."""
+    fmp_doc = _insert_doc(conn, "MIX", "data/historical/fmp/MIX_income_statement_quarterly.json")
+    sec_doc = _insert_doc(
+        conn,
+        "MIX",
+        "data/historical/sec/MIX_companyfacts.json",
+        source_type="sec_xbrl",
+        doc_type="sec_companyfacts_snapshot",
+        source_quality_tier="sec_official",
+    )
+    pe = datetime(2024, 12, 31)
+    for line, value in (
+        ("revenue", 100),
+        ("operating_income", 10),
+        ("net_income", 8),
+        ("gross_profit", 40),
+    ):
+        _insert_fact(
+            conn,
+            ticker="MIX",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=value,
+            source_doc_id=fmp_doc,
+        )
+    _insert_fact(
+        conn,
+        ticker="MIX",
+        period_end=pe,
+        fpt="Q4",
+        line_item="operating_income",
+        value=20,
+        source_doc_id=sec_doc,
+    )
+    conn.commit()
+
+    derive_for_ticker(conn, "MIX")
+    raw = conn.execute(
+        "SELECT kf.computed_from FROM kpi_facts kf "
+        "JOIN kpi_definitions kd ON kd.id=kf.kpi_definition_id "
+        "WHERE kf.ticker='MIX' AND kd.name=?",
+        (KPI_OPERATING_MARGIN_GAAP,),
+    ).fetchone()[0]
+    assert raw is not None
+    inputs = {entry["item"]: entry["doc_id"] for entry in json.loads(str(raw))["inputs"]}
+    assert inputs == {"operating_income": sec_doc, "revenue": fmp_doc}
 
 
 def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:

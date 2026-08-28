@@ -42,6 +42,7 @@ from seed_kpi_registry import (  # noqa: E402
     main,
 )
 
+from tests.kpi_semantic_support import admit_all_kpi_facts  # noqa: E402
 from triggers import KpiInflectionTrigger, UserStateContext  # noqa: E402
 from user_state import registry  # noqa: E402
 
@@ -155,6 +156,7 @@ def _seed_kpi_facts(
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (ticker, period_end, fpt, kd_id, value, unit, 1),
             )
+        admit_all_kpi_facts(conn)
         conn.commit()
     finally:
         conn.close()

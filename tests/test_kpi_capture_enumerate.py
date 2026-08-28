@@ -55,9 +55,9 @@ def _const_caller(response: str) -> Callable[..., object]:
 
 _ENUMERATE_JSON = (
     "[\n"
-    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "Revenue was $1.2 billion"},\n'
-    '  {"label": "Net interest margin", "value": 17.8, "unit": "percent", "source_excerpt": "NIM of 17.8%"},\n'
-    '  {"label": "Customers", "value": 118000000, "unit": "count", "source_excerpt": "118 million customers"}\n'
+    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "Revenue was $1.2 billion", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
+    '  {"label": "Net interest margin", "value": 17.8, "unit": "percent", "source_excerpt": "NIM of 17.8%", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "management", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
+    '  {"label": "Customers", "value": 118000000, "unit": "count", "source_excerpt": "118 million customers", "source_value_text": "118", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "management", "consolidation_scope": "consolidated", "source_unit_scale": "millions"}\n'
     "]"
 )
 
@@ -211,6 +211,28 @@ def _make_capture_db(db_path: Path) -> None:
             confidence FLOAT NOT NULL DEFAULT 1.0, extracted_by TEXT,
             locator TEXT, source_excerpt TEXT, supersedes_id INTEGER
         );
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            supersedes_context_id INTEGER,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL,
+            publication_lane TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL,
+            consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,
+            unit_scale TEXT NOT NULL,
+            source_row_label TEXT,
+            source_column_header TEXT,
+            source_value_text TEXT,
+            status TEXT NOT NULL,
+            reason_code TEXT,
+            reviewed_by TEXT NOT NULL,
+            knowledge_at TEXT NOT NULL,
+            UNIQUE(kpi_fact_id, revision)
+        );
         CREATE TABLE validation_issues (
             id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
             source_doc_id INTEGER, ticker TEXT, severity TEXT NOT NULL, rule TEXT NOT NULL,
@@ -285,6 +307,14 @@ def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
     # Facts carry provenance back to the registered brief doc.
     fact_count = conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0]
     assert fact_count == 3
+    customer = conn.execute(
+        "SELECT f.value,c.unit_scale,c.source_value_text,f.source_excerpt "
+        "FROM kpi_facts f JOIN kpi_definitions d ON d.id=f.kpi_definition_id "
+        "JOIN kpi_fact_semantic_contexts c ON c.kpi_fact_id=f.id "
+        "WHERE d.name='Customers'"
+    ).fetchone()
+    assert Decimal(str(customer["value"])) == Decimal("118000000")
+    assert tuple(customer)[1:] == ("millions", "118", "118 million customers")
     assert [
         row[0]
         for row in conn.execute(
@@ -317,8 +347,8 @@ def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
 # ACTUAL magnitude cap must drop it while the sane Revenue fact lands.
 _ABSURD_ENUMERATE_JSON = (
     "[\n"
-    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "x"},\n'
-    '  {"label": "Treasury stock", "value": 4609988545000000, "unit": "actual", "currency": "USD", "source_excerpt": "y"}\n'
+    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "x", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
+    '  {"label": "Treasury stock", "value": 4609988545000000, "unit": "actual", "currency": "USD", "source_excerpt": "y", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"}\n'
     "]"
 )
 

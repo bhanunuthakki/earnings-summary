@@ -12,7 +12,7 @@ must degrade at the per-KPI scope (skip the value, keep extracting).
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -66,6 +66,11 @@ def test_llm_extract_prompt_offers_only_valid_unit_enum_tokens(
                 "unit": "actual",
                 "currency": "USD",
                 "confidence": 0.9,
+                "reported_period_end": "2026-03-31",
+                "period_role": "current",
+                "accounting_basis": "management",
+                "consolidation_scope": "consolidated",
+                "source_unit_scale": "none",
             }
         }
 
@@ -83,14 +88,13 @@ def test_llm_extract_prompt_offers_only_valid_unit_enum_tokens(
     # The money convention is spelled out with a full-figure example.
     assert "1200000000" in prompt
     # Sanity: the canned response still parses through the existing path.
-    assert out == {
-        "GMV": {
-            "value": Decimal("1200000000"),
-            "unit": "actual",
-            "currency": Currency.USD,
-            "confidence": 0.9,
-        }
-    }
+    assert out["GMV"]["value"] == Decimal("1200000000")
+    assert out["GMV"]["currency"] == Currency.USD
+    reported_period_end = out["GMV"]["reported_period_end"]
+    assert isinstance(reported_period_end, date)
+    assert reported_period_end.isoformat() == "2026-03-31"
+    assert str(out["GMV"]["period_role"]) == "current"
+    assert str(out["GMV"]["consolidation_scope"]) == "consolidated"
 
 
 # --- Canonical-unit mapping from holdings break-rules (problem 2) -------------
@@ -310,6 +314,12 @@ def test_build_manifest_threads_canonical_units_onto_manifest() -> None:
     # Build time keeps the extracted unit; reconciliation is persist's job.
     assert manifest.values[0].unit is Unit.ACTUAL
     assert manifest.values[0].value == Decimal("115000000")
+    assert manifest.values[0].semantic_context is not None
+    assert manifest.values[0].semantic_context.status.value == "quarantined"
+    assert (
+        manifest.values[0].semantic_context.reason_code
+        == "synthesized_source_requires_primary_review"
+    )
 
 
 def test_build_manifest_canonical_units_default_empty() -> None:

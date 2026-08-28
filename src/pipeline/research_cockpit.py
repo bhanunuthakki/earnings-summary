@@ -54,12 +54,17 @@ from cockpit_fundamentals import (
 from cockpit_fundamentals import (
     read_materialized_fundamentals,
 )
+from compute.kpi_resolver import semantic_series_identity_sql
 from compute.thesis_evaluation_episodes import episode_history_source
 from dashboard._styles import COCKPIT_CSS
 from dcf.latest import latest_dcf_rows
 from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from pipeline.freshness import freshness_verdict
+from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.overrides import KPI as OVERRIDE_KPI
+from provenance.overrides import active_scalar_override_map
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
 from ui import living_grid as lg
 from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
@@ -880,6 +885,25 @@ def _tier1_kpi_deltas(
         return {}
     marks = ",".join("?" for _ in tickers)
     ticker_params: tuple[str, ...] = tuple(sorted(tickers))
+    definition_rows = _safe_rows(
+        conn,
+        "SELECT id,ticker,name FROM kpi_definitions WHERE threshold_tier = 'tier_1_break' "
+        f"AND ticker IN ({marks})",
+        ticker_params,
+    )
+    definition_ids = tuple(
+        int(row["id"])
+        for row in definition_rows
+        if not active_scalar_override_map(
+            conn,
+            ticker=str(row["ticker"]),
+            fact_kind=OVERRIDE_KPI,
+            fact_key=str(row["name"]),
+        )
+    )
+    if not definition_ids:
+        return {}
+    definition_marks = ",".join("?" for _ in definition_ids)
     # Pull the small tier-1 slice first, then resolve its self-contained
     # restatement chains in memory. The former global NOT IN subquery scanned
     # every kpi_facts row merely to find supersedes_id values. A restatement
@@ -887,18 +911,30 @@ def _tier1_kpi_deltas(
     # present in this result. Future rows remain in the slice until after the
     # superseded-id set is built, preserving the prior query's rule that a
     # future-dated correction still retires its predecessor.
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+    semantic_join, semantic_where = semantic_admission_sql(
+        conn, fact_alias="f", context_alias="ksc", fail_closed=True
+    )
+    semantic_identity = semantic_series_identity_sql(
+        conn,
+        fact_alias="f",
+        context_alias="ksc",
+        fact_relation=fact_relation,
+    )
     rows = _safe_rows(
         conn,
-        "SELECT f.id AS fact_id, f.supersedes_id AS supersedes_id, "
-        "       f.ticker AS ticker, d.id AS def_id, d.name AS name, f.unit AS unit, "
-        "       f.period_end AS period_end, date(f.period_end) AS period_date, "
-        "       f.value AS value "
-        "FROM kpi_facts f JOIN kpi_definitions d ON d.id = f.kpi_definition_id "
-        "WHERE d.threshold_tier = 'tier_1_break' AND f.ticker IN ("
-        + marks
-        + ") "
-        + "ORDER BY f.ticker, d.id, f.period_end DESC",
-        ticker_params,
+        f"SELECT f.id AS fact_id, f.supersedes_id AS supersedes_id, "
+        f"       f.ticker AS ticker, d.id AS def_id, d.name AS name, f.unit AS unit, "
+        f"       f.period_end AS period_end, date(f.period_end) AS period_date, "
+        f"       f.value AS value "
+        f"FROM (SELECT * FROM {fact_relation} "
+        f"WHERE ticker IN ({marks}) AND kpi_definition_id IN ({definition_marks})) f "
+        "JOIN kpi_definitions d ON d.id = f.kpi_definition_id AND d.ticker = f.ticker "
+        f"{semantic_join} "
+        "WHERE d.threshold_tier = 'tier_1_break' "
+        f"AND {semantic_where} AND {semantic_identity} "
+        "ORDER BY f.ticker, d.id, f.period_end DESC",
+        (*ticker_params, *definition_ids),
     )
     superseded_ids = {int(r["supersedes_id"]) for r in rows if r["supersedes_id"] is not None}
     as_of_iso = as_of.isoformat() if as_of is not None else None

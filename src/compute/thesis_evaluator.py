@@ -36,6 +36,7 @@ from compute.kpi_resolver import (
     ANNUAL_FACT_PERIOD_TYPES,
     reporting_cadence_for,
     resolve_kpi_definition_name,
+    semantic_series_identity_sql,
 )
 from compute.soft_rule_evaluator import (
     SoftRule,
@@ -58,8 +59,10 @@ from compute.thesis_evaluation_episodes import (
 from models.facts import Unit
 from models.kpis import BreachStatus
 from models.unit_convert import convert_unit
+from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
-from provenance.overrides import OverrideAction, active_scalar_override_map
+from provenance.overrides import active_scalar_override_map
 from thesis_reunderwrite_gate import ReUnderwriteBlockedError, evaluate_gate
 
 log = logging.getLogger(__name__)
@@ -413,12 +416,11 @@ def _fetch_kpi_history(
     values, never a year-end value paired with an interim one. Quarterly KPIs are
     unchanged (every period type is read, as before).
 
-    Coexisting rows for one period (an LLM brief value plus the issuer's later
-    IR-spreadsheet restatement) are deduped to the latest-ingested source per
-    logical key — highest ``source_doc_id`` wins — matching the §3 chart loader
-    and the §2 ledger so the consecutive-periods check sees one observation per
-    period. Joined to kpi_definitions on name; ordered by period_end DESC so the
-    caller sees newest-first.
+    Facts come from the canonical current relation, so an unresolved or
+    otherwise non-current candidate cannot become a break-rule input merely
+    because it was ingested later. Explicitly quarantined semantic contexts are
+    excluded as well. This keeps the evaluator aligned with the governed KPI
+    read path rather than maintaining another source-ranking rule.
     """
     resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
     if resolved_name is None:
@@ -436,42 +438,70 @@ def _fetch_kpi_history(
         period_filter = f" AND kf.fiscal_period_type IN ({placeholders})"
         params.extend(ANNUAL_FACT_PERIOD_TYPES)
     params.append(n_periods)
-    cur = conn.execute(
-        "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit "
-        "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker = ? AND kd.name = ?" + period_filter + " "
-        "  AND kf.source_doc_id = ("
-        "      SELECT MAX(k2.source_doc_id) FROM kpi_facts k2 "
-        "      WHERE k2.ticker = kf.ticker "
-        "        AND k2.kpi_definition_id = kf.kpi_definition_id "
-        "        AND k2.period_end = kf.period_end "
-        "        AND k2.fiscal_period_type = kf.fiscal_period_type) "
-        "ORDER BY kf.period_end DESC LIMIT ?",
-        params,
-    )
-    # Company-doc overrides win over the FMP/LLM row for this (period, type):
-    # a 'replace' substitutes the authoritative value, a 'drop' omits the period.
+    fact_relation = canonical_fact_relation(conn, "kpi_facts")
+    # Thesis decisions are decision-grade consumers, not a shadow rollout.
+    # Missing/legacy semantic context must remain unresolved rather than
+    # silently entering a break-rule series.
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_where += " AND " + semantic_series_identity_sql(conn)
+    if fact_relation.selection_mode == "legacy_pre_cutover":
+        # Pre-cutover fixtures have no canonical resolver relation. Preserve
+        # their historic one-row-per-period shape by stable fact-row identity;
+        # this is deliberately not a source-document ranking policy.
+        query = (
+            "WITH eligible AS ("
+            "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
+            "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
+            "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
+            f"FROM {fact_relation.sql} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical relation is a closed internal identifier
+            f"{semantic_join} "
+            "WHERE kf.ticker = ? AND kd.name = ? AND " + semantic_where + period_filter + ") "
+            "SELECT period_end, fiscal_period_type, value, unit FROM eligible "
+            "WHERE rn = 1 ORDER BY period_end DESC LIMIT ?"
+        )
+    else:
+        query = (
+            "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit "
+            f"FROM {fact_relation.sql} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical relation is a closed internal identifier
+            f"{semantic_join} "
+            "WHERE kf.ticker = ? AND kd.name = ? AND " + semantic_where + period_filter + " "
+            "ORDER BY kf.period_end DESC LIMIT ?"
+        )
+    cur = conn.execute(query, params)
+    # Decision-grade thesis inputs never inherit admission from a mutable scalar
+    # override. A corrected value becomes eligible only after it is persisted as
+    # a source-reviewed superseding fact with its own admitted semantic head.
     ov_map = active_scalar_override_map(
         conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
     )
     out: list[KpiObservation] = []
     for row in cur.fetchall():
-        pe_str = str(row["period_end"])[:10]
-        ftype = str(row["fiscal_period_type"])
-        ov = ov_map.get((pe_str, ftype))
-        if ov is not None and ov.action == OverrideAction.DROP.value:
-            continue
+        period_key = str(row["period_end"])[:10]
+        period_type = str(row["fiscal_period_type"])
+        ov = ov_map.get((period_key, period_type))
+        if ov is not None:
+            log.warning(
+                "thesis_kpi_history_unreviewed_override",
+                extra={
+                    "ticker": ticker.upper(),
+                    "kpi_name": resolved_name,
+                    "period_end": period_key,
+                    "fiscal_period_type": period_type,
+                    "override_id": ov.id,
+                    "override_action": ov.action,
+                },
+            )
+            return None
         period = row["period_end"]
         if isinstance(period, str):
             period = datetime.fromisoformat(period)
-        if ov is not None and ov.value is not None:
-            value = Decimal(str(ov.value))
-            unit = Unit(ov.unit) if ov.unit else Unit(row["unit"])
-        else:
-            value = Decimal(str(row["value"]))
-            unit = Unit(row["unit"])
+        value = Decimal(str(row["value"]))
+        unit = Unit(row["unit"])
         out.append(KpiObservation(period_end=period, value=value, unit=unit))
-    return out
+    # The definition resolver can find fact-carrying definitions whose rows are
+    # all semantically missing, quarantined, or non-current.  That is an
+    # unevaluable decision input, not a passing empty series.
+    return out or None
 
 
 def _compare(value: Decimal, comparator: Comparator, threshold: Decimal) -> bool:

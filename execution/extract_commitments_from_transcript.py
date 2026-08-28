@@ -16,8 +16,8 @@ Three modes:
      layers — a transcript is skipped when it already has a commitment row,
      when a commitment_scan_log row records a prior scan (zero-commitment
      scans included: they were re-scanned daily at full LLM cost before the
-     marker existed), or when its ticker has no kpi_definitions catalog
-     (the call's outcome is predetermined).
+     marker existed). Tickers without a KPI catalog remain eligible because
+     they can still contain novel, reviewable management indicators.
 
 LLM governance: calls go through the canonical `call_llm` entry point with
 purpose="saydo_commitment_extract" (LLM_MODELS pin, llm_budgets cap, ledger
@@ -57,11 +57,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from compute.management_indicators import (  # noqa: E402
+    ManagementIndicatorExtractionManifest,
+    persist_indicators,
+)
 from compute.say_do import (  # noqa: E402
     CommitmentExtractionManifest,
+    persist_commitment,
     persist_manifest,
 )
 from compute.say_do_extractor import (  # noqa: E402
+    TranscriptExtractionManifest,
     extract_for_transcript,
     record_scan,
     transcripts_pending_extraction,
@@ -92,9 +98,8 @@ def _governed_llm_call(ticker: str) -> Callable[[str], str]:
 def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
     """Return transcripts (one row per transcript) that --auto would target.
 
-    Mirrors transcripts_pending_extraction's selection (no commitments, never
-    scanned, ticker has a KPI catalog) but carries segment counts for the
-    human-readable listing."""
+    Mirrors transcripts_pending_extraction's selection (no commitments and
+    never scanned) but carries segment counts for the human-readable listing."""
     pending = {tid for tid, _tk, _pe in transcripts_pending_extraction(conn, ticker=ticker)}
     if not pending:
         return []
@@ -175,7 +180,7 @@ def _run_auto(
             )
             continue
 
-        n_extracted = len(manifest.commitments)
+        n_extracted = len(manifest.commitments) + len(manifest.indicators)
         if dry_run:
             results.append(
                 {
@@ -199,16 +204,37 @@ def _run_auto(
             )
             continue
 
-        ids = persist_manifest(conn, manifest)
-        record_scan(conn, tid, n_extracted=n_extracted, prompt_version=version)
-        total_inserted += len(ids)
+        try:
+            # Stage novel indicators first. If migration 0031 is absent (or
+            # a source-bound observation cannot persist), no completion
+            # marker may be written and the transcript remains retryable.
+            indicator_ids = persist_indicators(
+                conn, ManagementIndicatorExtractionManifest(indicators=manifest.indicators)
+            )
+            ids = [persist_commitment(conn, commitment=item) for item in manifest.commitments]
+            record_scan(conn, tid, n_extracted=n_extracted, prompt_version=version)
+        except Exception as e:
+            conn.rollback()
+            log.warning("persist failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
+            results.append(
+                {
+                    "transcript_id": tid,
+                    "ticker": tk,
+                    "extracted": n_extracted,
+                    "inserted": 0,
+                    "error": f"{type(e).__name__}: {e}"[:200],
+                }
+            )
+            continue
+        total_inserted += len(ids) + len(indicator_ids)
         results.append(
             {
                 "transcript_id": tid,
                 "ticker": tk,
                 "extracted": n_extracted,
-                "inserted": len(ids),
+                "inserted": len(ids) + len(indicator_ids),
                 "commitment_ids": ids,
+                "management_indicator_ids": indicator_ids,
             }
         )
     return {
@@ -280,9 +306,22 @@ def main(argv: list[str] | None = None) -> int:
 
         with open(args.apply, encoding="utf-8") as f:
             payload = json.load(f)
-        manifest = CommitmentExtractionManifest.model_validate(payload)
-        ids = persist_manifest(conn, manifest)
-        print(json.dumps({"inserted": len(ids), "commitment_ids": ids}, indent=2))
+        manifest = TranscriptExtractionManifest.model_validate(payload)
+        indicator_ids = persist_indicators(
+            conn, ManagementIndicatorExtractionManifest(indicators=manifest.indicators)
+        )
+        ids = persist_manifest(conn, CommitmentExtractionManifest(commitments=manifest.commitments))
+        conn.commit()
+        print(
+            json.dumps(
+                {
+                    "inserted": len(ids) + len(indicator_ids),
+                    "commitment_ids": ids,
+                    "management_indicator_ids": indicator_ids,
+                },
+                indent=2,
+            )
+        )
         return 0
     finally:
         conn.close()

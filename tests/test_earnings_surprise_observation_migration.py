@@ -18,7 +18,7 @@ from execution.ingest_earnings_surprises import ingest_one_ticker
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0029_retire_podcast_prototype"
+ACTIVE_HEAD = "0032_allow_source_reviewed_kpi_supersessions"
 
 
 def _config(path: Path) -> Config:

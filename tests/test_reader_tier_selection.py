@@ -234,13 +234,12 @@ def test_grounding_fin_item_surfaces_sec_provenance(repo: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fmp_derived_fetch_is_deterministic_within_fmp_scope(repo: Path) -> None:
-    """``_fetch_quarterly_facts`` is doc_type-scoped to the FMP statement docs, so
-    it never sees SEC companyfacts rows. Within that scope the tier-aware order
-    makes a same-tier collision (two FMP docs reporting one cell) resolve to the
-    HIGHER-id (later-ingested) row deterministically — the prior period_end-only
-    order left it arbitrary. Seed two FMP docs for one Q1 cell set; the higher-id
-    doc's values must win every cell and anchor the provenance."""
+def test_fmp_derived_fetch_uses_canonical_winners_per_cell(repo: Path) -> None:
+    """Derived inputs share the canonical source-resolution contract.
+
+    SEC wins the revenue collision, while the later FMP document supplies the
+    other statement cells that have no SEC observation.
+    """
     import compute.fmp_derived_kpis as fmp_derived
 
     conn = _conn(repo)
@@ -278,12 +277,11 @@ def test_fmp_derived_fetch_is_deterministic_within_fmp_scope(repo: Path) -> None
         q1 = [f for f in facts if str(f.period_end)[:10] == "2026-03-31"]
         assert len(q1) == 1
         f = q1[0]
-        # The higher-id FMP doc (3) wins every cell + anchors provenance.
-        assert int(f.revenue) == 95_000
+        assert int(f.revenue) == _SEC_Q_REVENUE
         assert int(f.operating_income) == 19000
         assert int(f.net_income) == 14000
         assert int(f.gross_profit) == 37000
-        assert f.source_doc_id == 3
+        assert f.source_doc_id == 1
     finally:
         conn.close()
 

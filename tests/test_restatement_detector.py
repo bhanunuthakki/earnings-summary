@@ -104,6 +104,27 @@ def _make_schema(db_path: Path) -> None:
             );
             CREATE UNIQUE INDEX uq_kpi_facts_provenance
               ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
+            CREATE TABLE kpi_fact_semantic_contexts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kpi_fact_id INTEGER NOT NULL REFERENCES kpi_facts(id),
+                revision INTEGER NOT NULL,
+                supersedes_context_id INTEGER REFERENCES kpi_fact_semantic_contexts(id),
+                metric_name_as_reported TEXT NOT NULL,
+                reported_period_end TEXT NOT NULL,
+                period_role TEXT NOT NULL,
+                publication_lane TEXT NOT NULL,
+                accounting_basis TEXT NOT NULL,
+                consolidation_scope TEXT NOT NULL,
+                dimensions_json TEXT NOT NULL,
+                unit_scale TEXT NOT NULL,
+                source_row_label TEXT,
+                source_column_header TEXT,
+                status TEXT NOT NULL,
+                reason_code TEXT,
+                reviewed_by TEXT NOT NULL,
+                knowledge_at TEXT NOT NULL,
+                UNIQUE(kpi_fact_id, revision)
+            );
             """
         )
         conn.commit()
@@ -995,6 +1016,28 @@ def _seed_kpi_definition(conn: sqlite3.Connection, *, ticker: str, name: str) ->
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
+def _admit_kpi_fact(
+    conn: sqlite3.Connection,
+    *,
+    kpi_fact_id: int,
+    metric_name: str,
+    reported_period_end: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO kpi_fact_semantic_contexts (
+            kpi_fact_id, revision, supersedes_context_id,
+            metric_name_as_reported, reported_period_end, period_role,
+            publication_lane, accounting_basis, consolidation_scope,
+            dimensions_json, unit_scale, status, reviewed_by, knowledge_at
+        ) VALUES (?, 1, NULL, ?, ?, 'current', 'current_actual',
+                  'management', 'consolidated', '{}', 'none', 'admitted',
+                  'test-fixture', '2024-02-15T12:00:00Z')
+        """,
+        (kpi_fact_id, metric_name, reported_period_end),
+    )
+
+
 def test_kpi_restatement_chain_two_rows_with_supersedes_link(
     fixture_db: Path,
 ) -> None:
@@ -1126,8 +1169,7 @@ def test_kpi_same_document_replay_is_noop(fixture_db: Path) -> None:
         conn.close()
 
 
-def test_kpi_same_document_currency_backfill_and_conflict_fail_closed(fixture_db: Path) -> None:
-    """A legacy NULL currency can be healed once; a conflicting retry cannot."""
+def test_kpi_same_document_currency_enrichment_requires_supersession(fixture_db: Path) -> None:
     conn = sqlite3.connect(str(fixture_db))
     conn.row_factory = sqlite3.Row
     try:
@@ -1152,24 +1194,22 @@ def test_kpi_same_document_currency_backfill_and_conflict_fail_closed(fixture_db
             source_doc_id=doc,
         )
         assert row_id is not None
-        backfilled_id, _ = insert_kpi_with_restatement_detection(
-            conn,
-            ticker="NVO",
-            period_end=datetime.fromisoformat("2026-06-30"),
-            fiscal_period_type="Q2",
-            kpi_definition_id=definition_id,
-            value=Decimal("100"),
-            unit="actual",
-            currency="USD",
-            source_doc_id=doc,
-        )
-        assert backfilled_id == row_id
+        with pytest.raises(ValueError, match="source-reviewed supersession"):
+            insert_kpi_with_restatement_detection(
+                conn,
+                ticker="NVO",
+                period_end=datetime.fromisoformat("2026-06-30"),
+                fiscal_period_type="Q2",
+                kpi_definition_id=definition_id,
+                value=Decimal("100"),
+                unit="actual",
+                currency="USD",
+                source_doc_id=doc,
+            )
         assert (
             conn.execute("SELECT currency FROM kpi_facts WHERE id=?", (row_id,)).fetchone()[0]
-            == "USD"
+            is None
         )
-        # Currency may only backfill a NULL row when value and unit are the
-        # same fact, never as a way to synthesize a mixed scale/currency row.
         other_row_id, _ = insert_kpi_with_restatement_detection(
             conn,
             ticker="NVO",
@@ -1193,7 +1233,7 @@ def test_kpi_same_document_currency_backfill_and_conflict_fail_closed(fixture_db
                 currency="USD",
                 source_doc_id=doc,
             )
-        with pytest.raises(ValueError, match="currency conflicts"):
+        with pytest.raises(ValueError, match="source-reviewed supersession"):
             insert_kpi_with_restatement_detection(
                 conn,
                 ticker="NVO",
@@ -1237,7 +1277,7 @@ def test_kpi_loader_returns_restated_value_by_default(fixture_db: Path) -> None:
         )
         kpi_def_id = _seed_kpi_definition(conn, ticker="MELI", name="Revenue Growth (FXN)")
         conn.commit()
-        insert_kpi_with_restatement_detection(
+        original_id, _ = insert_kpi_with_restatement_detection(
             conn,
             ticker="MELI",
             period_end=datetime.fromisoformat("2023-03-31"),
@@ -1247,7 +1287,7 @@ def test_kpi_loader_returns_restated_value_by_default(fixture_db: Path) -> None:
             unit="percent",
             source_doc_id=q_doc,
         )
-        insert_kpi_with_restatement_detection(
+        restated_id, _ = insert_kpi_with_restatement_detection(
             conn,
             ticker="MELI",
             period_end=datetime.fromisoformat("2023-03-31"),
@@ -1257,6 +1297,15 @@ def test_kpi_loader_returns_restated_value_by_default(fixture_db: Path) -> None:
             unit="percent",
             source_doc_id=fy_doc,
         )
+        assert original_id is not None
+        assert restated_id is not None
+        for fact_id in (original_id, restated_id):
+            _admit_kpi_fact(
+                conn,
+                kpi_fact_id=fact_id,
+                metric_name="Revenue Growth (FXN)",
+                reported_period_end="2023-03-31",
+            )
         conn.commit()
     finally:
         conn.close()
@@ -1300,7 +1349,7 @@ def test_kpi_loader_prefers_sec_official_over_llm_extracted(
         )
         kpi_def_id = _seed_kpi_definition(conn, ticker="MELI", name="Operating Margin (GAAP)")
         for doc, val in [(ir_doc, Decimal("13.0")), (fmp_doc, Decimal("13.5"))]:
-            insert_kpi_with_restatement_detection(
+            fact_id, _ = insert_kpi_with_restatement_detection(
                 conn,
                 ticker="MELI",
                 period_end=datetime.fromisoformat("2023-03-31"),
@@ -1309,6 +1358,13 @@ def test_kpi_loader_prefers_sec_official_over_llm_extracted(
                 value=val,
                 unit="percent",
                 source_doc_id=doc,
+            )
+            assert fact_id is not None
+            _admit_kpi_fact(
+                conn,
+                kpi_fact_id=fact_id,
+                metric_name="Operating Margin (GAAP)",
+                reported_period_end="2023-03-31",
             )
         conn.commit()
     finally:

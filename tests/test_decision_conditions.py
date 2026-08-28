@@ -40,6 +40,7 @@ from decision_conditions import (
     record_socratic_decisions,
 )
 from llm.structured import StructuredParseError
+from tests.kpi_semantic_support import admit_all_kpi_facts
 
 # ---------------------------------------------------------------------------
 # Fixture DB — decisions in the post-0086 shape + the source tables
@@ -618,6 +619,7 @@ def test_attach_conditions_stamps_baseline_and_breached_at_attach(
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
         "value, unit, source_doc_id) VALUES ('NU', '2026-03-31', 'Q1', 2, 12.0, 'actual', 1)"
     )
+    admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
 

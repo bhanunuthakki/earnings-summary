@@ -1,6 +1,4 @@
-"""Tests for execution/fix_kpi_series.py — unit-error detection/fix,
-non-monotonic detection (review-only, never auto-fixed), idempotence, and
---apply guardrails.
+"""Tests for the read-only KPI anomaly detector.
 
 Uses the same by-file-path import pattern as
 test_backfill_fiscal_period_stamps.py (execution/ scripts aren't on the
@@ -125,49 +123,41 @@ def test_dry_run_finds_unit_error_and_non_monotonic_without_writing(
     conn.close()
 
 
-def test_apply_corrects_only_the_unit_error_row(tmp_path: Path, fix_mod: Any) -> None:
+def test_apply_is_not_an_available_mutation_path(tmp_path: Path, fix_mod: Any) -> None:
     db_path = _build_db(tmp_path)
-    rc = fix_mod.main(["--db", str(db_path), "--ticker", "NU", "--apply"])
-    assert rc == 0
+    with pytest.raises(SystemExit) as exc:
+        fix_mod.main(["--db", str(db_path), "--ticker", "NU", "--apply"])
+    assert exc.value.code == 2
 
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    fixed = conn.execute(
-        "SELECT value, extracted_by, source_excerpt FROM kpi_facts WHERE period_end = '2025-06-30'"
-    ).fetchone()
-    assert float(fixed["value"]) == pytest.approx(114.0)
-    assert "fix:unit_scale" in fixed["extracted_by"]
-    assert "fix_kpi_series.py" in fixed["source_excerpt"]
-
-    # The non-monotonic row is NEVER auto-fixed — still the original value.
-    untouched = conn.execute(
-        "SELECT value FROM kpi_facts WHERE period_end = '2024-12-31'"
-    ).fetchone()[0]
-    assert float(untouched) == 95.0
+    values = conn.execute("SELECT value FROM kpi_facts ORDER BY id").fetchall()
+    assert [float(row[0]) for row in values] == [
+        109.7,
+        95.0,
+        119.0,
+        114000000.0,
+        110.0,
+        114.0,
+    ]
     conn.close()
 
 
-def test_apply_is_idempotent(
+def test_read_only_scan_is_idempotent(
     tmp_path: Path, fix_mod: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A second --apply run finds nothing left to fix — the corrected value
-    is no longer a >jump-ratio outlier."""
     db_path = _build_db(tmp_path)
-    fix_mod.main(["--db", str(db_path), "--ticker", "NU", "--apply"])
-    capsys.readouterr()  # discard first run's output
-
-    rc = fix_mod.main(["--db", str(db_path), "--ticker", "NU", "--apply"])
+    fix_mod.main(["--db", str(db_path), "--ticker", "NU"])
+    first = json.loads(capsys.readouterr().out)
+    rc = fix_mod.main(["--db", str(db_path), "--ticker", "NU"])
     assert rc == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["unit_error_findings"] == []
-    assert report["applied"] == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second == first
 
 
-def test_scoped_to_cumulative_marked_kpis_only(
+def test_scale_anomaly_scan_does_not_infer_semantics_from_metric_name(
     tmp_path: Path, fix_mod: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A non-cumulative KPI with a huge outlier value is never scanned — the
-    guard only applies to KPIs matching the cumulative-name allowlist."""
+    """A large discontinuity is reviewable even when its label is unfamiliar."""
     db_path = tmp_path / "portfolio.db"
     conn = sqlite3.connect(db_path)
     _create_schema(conn)
@@ -191,38 +181,15 @@ def test_scoped_to_cumulative_marked_kpis_only(
     rc = fix_mod.main(["--db", str(db_path), "--ticker", "NU"])
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["scanned_definitions"] == 0
-    assert report["unit_error_findings"] == []
+    assert report["scanned_definitions"] == 1
+    assert len(report["unit_error_findings"]) == 1
 
 
 def test_apply_rejected_against_readonly_uri(tmp_path: Path, fix_mod: Any) -> None:
-    """--apply combined with a mode=ro URI is rejected before any connection
-    attempt — the explicit safety rail for prod dry-runs."""
     db_path = _build_db(tmp_path)
-    rc = fix_mod.main(["--db", f"file:{db_path}?mode=ro", "--uri", "--apply"])
-    assert rc == 2
-
-
-def test_apply_uri_requires_safe_sqlite_before_connection(
-    fix_mod: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The arbitrary-URI repair seam cannot bypass the WAL-reset gate."""
-    opened = False
-
-    def unsafe_runtime() -> None:
-        raise RuntimeError("unsafe SQLite test sentinel")
-
-    def unexpected_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
-        nonlocal opened
-        opened = True
-        raise AssertionError("connection opened before runtime gate")
-
-    monkeypatch.setattr(fix_mod, "require_safe_sqlite_writer_runtime", unsafe_runtime)
-    monkeypatch.setattr(fix_mod.sqlite3, "connect", unexpected_connect)
-
-    with pytest.raises(RuntimeError, match="unsafe SQLite test sentinel"):
-        fix_mod.main(["--db", "file:C:/isolated-copy.db", "--uri", "--apply"])
-    assert opened is False
+    with pytest.raises(SystemExit) as exc:
+        fix_mod.main(["--db", f"file:{db_path}?mode=ro", "--uri", "--apply"])
+    assert exc.value.code == 2
 
 
 def test_readonly_uri_dry_run_reports_cleanly(

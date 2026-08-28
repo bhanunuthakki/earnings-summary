@@ -77,7 +77,7 @@ def test_graph_selection_follows_stamped_database_and_explicit_locations(tmp_pat
     assert historical.get_main_option("version_locations", "") == ""
     with sqlite3.connect(historical_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0029_retire_podcast_prototype",
+            "0032_allow_source_reviewed_kpi_supersessions",
         )
 
     active_db = tmp_path / "active.db"
@@ -86,7 +86,7 @@ def test_graph_selection_follows_stamped_database_and_explicit_locations(tmp_pat
     upgrade(explicitly_active, "head")
     with sqlite3.connect(active_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0029_retire_podcast_prototype",
+            "0032_allow_source_reviewed_kpi_supersessions",
         )
 
     explicitly_archived_db = tmp_path / "explicitly-archived.db"

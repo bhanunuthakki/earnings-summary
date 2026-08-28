@@ -87,6 +87,24 @@ def _facts_db(tmp_path: Path) -> Path:
                 unit VARCHAR NOT NULL,
                 source_doc_id INTEGER NOT NULL
             );
+            CREATE TABLE kpi_fact_semantic_contexts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kpi_fact_id INTEGER NOT NULL,
+                metric_name_as_reported TEXT NOT NULL,
+                reported_period_end TEXT,
+                period_role TEXT NOT NULL DEFAULT 'current',
+                publication_lane TEXT NOT NULL DEFAULT 'current_actual',
+                accounting_basis TEXT NOT NULL DEFAULT 'gaap',
+                consolidation_scope TEXT NOT NULL DEFAULT 'consolidated',
+                dimensions_json TEXT NOT NULL DEFAULT '{}',
+                unit_scale TEXT NOT NULL DEFAULT 'none',
+                source_row_label TEXT,
+                source_column_header TEXT,
+                status TEXT NOT NULL DEFAULT 'admitted',
+                reason_code TEXT,
+                revision INTEGER NOT NULL DEFAULT 1,
+                supersedes_context_id INTEGER
+            );
             CREATE TABLE segment_periods (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker VARCHAR(16) NOT NULL,
@@ -164,10 +182,18 @@ def _insert_kpi(
         for i, v in enumerate(values):
             period_end = (base + timedelta(days=90 * i)).strftime("%Y-%m-%d %H:%M:%S")
             quarter = f"Q{(i % 4) + 1}"
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO kpi_facts(ticker, period_end, fiscal_period_type, "
                 "kpi_definition_id, value, unit, source_doc_id) VALUES (?,?,?,?,?,?,?)",
                 (ticker, period_end, quarter, int(kpi_def_id), float(v), "actual", 1),
+            )
+            conn.execute(
+                "INSERT INTO kpi_fact_semantic_contexts "
+                "(kpi_fact_id, metric_name_as_reported, reported_period_end, period_role, "
+                "publication_lane, accounting_basis, consolidation_scope, dimensions_json, "
+                "unit_scale, status) VALUES (?, ?, ?, 'current', 'current_actual', 'gaap', "
+                "'consolidated', '{}', 'none', 'admitted')",
+                (cur.lastrowid, kpi_name, period_end[:10]),
             )
         conn.commit()
     finally:
@@ -496,6 +522,53 @@ def test_load_kpi_series_joins_through_definitions(tmp_path: Path) -> None:
     assert len(s) == 6
     assert s[0].value == pytest.approx(0.20)
     assert s[-1].value == pytest.approx(0.27)
+
+
+def test_kpi_series_uses_canonical_view_and_rejects_unreviewed_override(tmp_path: Path) -> None:
+    db = _facts_db(tmp_path)
+    _insert_kpi(db, "TEST", "Operating Margin", [0.20])
+    conn = sqlite3.connect(str(db))
+    try:
+        cur = conn.execute(
+            "INSERT INTO kpi_facts(ticker, period_end, fiscal_period_type, "
+            "kpi_definition_id, value, unit, source_doc_id) "
+            "SELECT ticker, period_end, fiscal_period_type, kpi_definition_id, "
+            "99.0, unit, source_doc_id FROM kpi_facts WHERE id = 1"
+        )
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, metric_name_as_reported, reported_period_end) "
+            "VALUES (?, 'Operating Margin', '2020-03-31')",
+            (cur.lastrowid,),
+        )
+        conn.execute(
+            "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id = 1"
+        )
+        conn.execute(
+            "CREATE TABLE fact_overrides (ticker TEXT, period_end TEXT, "
+            "fiscal_period_type TEXT, fact_kind TEXT, fact_key TEXT, action TEXT, "
+            "value REAL, status TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO fact_overrides VALUES "
+            "('TEST', '2020-03-31', 'Q1', 'kpi', 'Operating Margin', 'replace', 777.0, 'active')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    series = load_kpi_series("TEST", "Operating Margin", db_path=db)
+    assert series == []
+
+
+def test_kpi_series_fails_closed_without_admitted_context(tmp_path: Path) -> None:
+    db = _facts_db(tmp_path)
+    _insert_kpi(db, "TEST", "Operating Margin", [0.20])
+    conn = sqlite3.connect(str(db))
+    conn.execute("DELETE FROM kpi_fact_semantic_contexts")
+    conn.commit()
+    conn.close()
+    assert load_kpi_series("TEST", "Operating Margin", db_path=db) == []
 
 
 def test_load_kpi_series_unknown_kpi_returns_empty(tmp_path: Path) -> None:

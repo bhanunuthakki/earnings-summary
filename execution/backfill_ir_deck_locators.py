@@ -137,10 +137,12 @@ def backfill_ticker(
     ticker: str,
     *,
     force: bool = False,
-    dry_run: bool = False,
+    dry_run: bool = True,
 ) -> TickerBackfill:
     """Enrich every IR-PDF-sourced kpi_facts row for one ticker (see module
     docstring for the three enrichment cases and the legacy floor)."""
+    if not dry_run:
+        raise ValueError("in-place locator backfill is retired; use source-backed supersession")
     out = TickerBackfill(ticker=ticker)
     rows = conn.execute(
         "SELECT kf.id, kf.locator, kf.source_excerpt, d.file_path "
@@ -175,7 +177,6 @@ def backfill_ticker(
             _log("backfill_missing_pdf", ticker=ticker, fact_id=fact_id, path=row["file_path"])
             continue
 
-        new_loc: FactLocator | None = None
         if loc is not None and loc.pdf_page is not None:
             # v1 pdf_page (or bbox-less v2): promote/enrich on the cited page.
             snippet = excerpt or (loc.verbatim_snippet or "")
@@ -183,7 +184,7 @@ def backfill_ticker(
                 out.legacy_no_excerpt += 1
                 continue
             bbox = loc.pdf_bbox or find_quote_bbox(pdf_path, loc.pdf_page, snippet)
-            new_loc = pdf_slide_locator(pdf_page=loc.pdf_page, verbatim_snippet=snippet, bbox=bbox)
+            _ = pdf_slide_locator(pdf_page=loc.pdf_page, verbatim_snippet=snippet, bbox=bbox)
             if is_v2 and bbox is None:
                 # --force re-derivation found nothing new; don't churn the row.
                 out.already_v2 += 1
@@ -208,24 +209,11 @@ def backfill_ticker(
                 out.legacy_excerpt_not_found += 1
                 continue
             page, bbox = hit
-            new_loc = pdf_slide_locator(pdf_page=page, verbatim_snippet=excerpt, bbox=bbox)
+            _ = pdf_slide_locator(pdf_page=page, verbatim_snippet=excerpt, bbox=bbox)
             if bbox is not None:
                 out.bbox_added += 1
             out.backfilled_from_excerpt += 1
 
-        if not dry_run:
-            conn.execute(
-                "UPDATE kpi_facts SET locator = ? WHERE id = ?", (new_loc.to_json(), fact_id)
-            )
-            _log(
-                "backfill_locator_written",
-                ticker=ticker,
-                fact_id=fact_id,
-                page=new_loc.pdf_page,
-                has_bbox=new_loc.pdf_bbox is not None,
-            )
-    if not dry_run:
-        conn.commit()
     return out
 
 
@@ -245,9 +233,6 @@ def main() -> int:
         "retry bbox derivation after a PyMuPDF upgrade).",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="Report what would be written; no DB updates."
-    )
-    parser.add_argument(
         "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
     )
     parser.add_argument(
@@ -261,17 +246,17 @@ def main() -> int:
 
     conn = open_db(args.db)
     conn.execute("PRAGMA busy_timeout = 30000")
-    result = BackfillResult(db=str(args.db), dry_run=bool(args.dry_run), force=bool(args.force))
+    result = BackfillResult(db=str(args.db), dry_run=True, force=bool(args.force))
     try:
         tickers = _priority_ordered_tickers(conn, list(args.ticker))
-        _log("backfill_start", tickers=tickers, dry_run=args.dry_run, force=args.force)
+        _log("backfill_start", tickers=tickers, dry_run=True, force=args.force)
         for ticker in tickers:
             tb = backfill_ticker(
                 conn,
                 Path(args.repo_root),
                 ticker,
                 force=bool(args.force),
-                dry_run=bool(args.dry_run),
+                dry_run=True,
             )
             result.tickers.append(tb)
             _log("backfill_ticker_done", **tb.model_dump())

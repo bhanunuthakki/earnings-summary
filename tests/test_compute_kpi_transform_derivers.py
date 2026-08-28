@@ -34,6 +34,16 @@ from compute.kpi_resolver import resolve_kpi_definition_name
 from compute.thesis_evaluator import evaluate_ticker_thesis
 from models.facts import FiscalPeriodType, Unit
 from models.kpis import BreachStatus
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+)
+from provenance.overrides import KPI, OverrideAction, record_override
 
 _NIM_BASE = "Risk-adjusted NIM (NIM minus cost of risk)"
 _NPL_BASE_FULL = (
@@ -103,6 +113,53 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE UNIQUE INDEX uq_kpi_facts_provenance
         ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
+        CREATE TABLE kpi_fact_semantic_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_fact_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            supersedes_context_id INTEGER,
+            metric_name_as_reported TEXT NOT NULL,
+            reported_period_end TEXT,
+            period_role TEXT NOT NULL,
+            publication_lane TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL,
+            consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,
+            unit_scale TEXT NOT NULL,
+            source_row_label TEXT,
+            source_column_header TEXT,
+            status TEXT NOT NULL,
+            reason_code TEXT,
+            reviewed_by TEXT NOT NULL,
+            knowledge_at TEXT NOT NULL,
+            UNIQUE(kpi_fact_id, revision)
+        );
+        CREATE TABLE fact_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            fact_kind TEXT NOT NULL,
+            fact_key TEXT NOT NULL,
+            action TEXT NOT NULL,
+            value REAL,
+            unit TEXT,
+            value_json TEXT,
+            source_doc_type TEXT NOT NULL,
+            source_accession TEXT,
+            source_exhibit TEXT,
+            source_url TEXT,
+            source_excerpt TEXT,
+            source_doc_id INTEGER,
+            status TEXT NOT NULL,
+            confidence REAL,
+            rationale TEXT,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            retired_at TEXT,
+            locator TEXT
+        );
         """
     )
     conn.execute(
@@ -141,11 +198,22 @@ def _seed_base_kpi(
         "SELECT id FROM kpi_definitions WHERE ticker = ? AND name = ?", (ticker, name)
     ).fetchone()["id"]
     for period_end, fpt, value in points:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
             "kpi_definition_id, value, unit, source_doc_id, extracted_by) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, 'ir')",
             (ticker, period_end, fpt, def_id, str(value), unit, source_doc_id),
+        )
+        assert cursor.lastrowid is not None
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts ("
+            "kpi_fact_id, revision, metric_name_as_reported, reported_period_end, "
+            "period_role, publication_lane, accounting_basis, consolidation_scope, "
+            "dimensions_json, unit_scale, status, reviewed_by, knowledge_at) "
+            "VALUES (?, 1, ?, ?, 'current', 'current_actual', 'management', "
+            "'consolidated', '{}', 'none', 'admitted', 'fixture', "
+            "'2026-04-01T00:00:00Z')",
+            (int(cursor.lastrowid), name, period_end),
         )
     conn.commit()
 
@@ -178,12 +246,39 @@ def _seed_quarterly_income(
     conn.commit()
 
 
+def _seed_override_document(conn: sqlite3.Connection) -> int:
+    cursor = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size, period_end) "
+        "VALUES ('NU', 'ir_doc', 'ir_pdf', 'ir/nu-override.pdf', ?, ?, 'ok', 1, ?)",
+        ("c" * 64, datetime(2026, 4, 3), datetime(2025, 12, 31)),
+    )
+    assert cursor.lastrowid is not None
+    return int(cursor.lastrowid)
+
+
 def _q4(year: int, value: float) -> KpiSeriesPoint:
     return KpiSeriesPoint(
         period_end=datetime(year, 12, 31),
         fiscal_period_type=FiscalPeriodType.Q4,
         value=Decimal(str(value)),
         source_doc_id=1,
+    )
+
+
+def _admitted_context(
+    *, name: str = _NIM_BASE, unit_scale: KpiUnitScale = KpiUnitScale.NONE
+) -> KpiSemanticContext:
+    return KpiSemanticContext(
+        metric_name_as_reported=name,
+        reported_period_end=datetime(2025, 12, 31).date(),
+        period_role=KpiPeriodRole.CURRENT,
+        publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+        accounting_basis=KpiAccountingBasis.MANAGEMENT,
+        consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+        dimensions={},
+        unit_scale=unit_scale,
+        status=KpiSemanticStatus.ADMITTED,
     )
 
 
@@ -286,6 +381,68 @@ def test_yoy_transform_skips_points_without_same_quarter_prior() -> None:
     assert rows == []
 
 
+def test_transform_does_not_admit_mismatched_input_scales() -> None:
+    points = [
+        KpiSeriesPoint(
+            datetime(2024, 12, 31),
+            FiscalPeriodType.Q4,
+            Decimal("1"),
+            1,
+            semantic_context=_admitted_context(unit_scale=KpiUnitScale.MILLIONS),
+            definition_id=7,
+        ),
+        KpiSeriesPoint(
+            datetime(2025, 12, 31),
+            FiscalPeriodType.Q4,
+            Decimal("100"),
+            1,
+            semantic_context=_admitted_context(unit_scale=KpiUnitScale.NONE),
+            definition_id=7,
+        ),
+    ]
+    rows = compute_yoy_transform(
+        points,
+        kind=TransformKind.YOY_PCT_GROWTH,
+        name=KPI_CUSTOMERS_100K_YOY,
+        unit=Unit.PERCENT,
+    )
+    assert len(rows) == 1
+    assert rows[0].semantic_context is None
+
+
+@pytest.mark.parametrize(
+    ("current_definition_id", "current_name"),
+    [(8, _NIM_BASE), (7, "Renamed risk-adjusted NIM")],
+)
+def test_transform_does_not_admit_definition_or_label_discontinuity(
+    current_definition_id: int, current_name: str
+) -> None:
+    prior = KpiSeriesPoint(
+        datetime(2024, 12, 31),
+        FiscalPeriodType.Q4,
+        Decimal("10"),
+        1,
+        semantic_context=_admitted_context(name=_NIM_BASE),
+        definition_id=7,
+    )
+    current = KpiSeriesPoint(
+        datetime(2025, 12, 31),
+        FiscalPeriodType.Q4,
+        Decimal("9"),
+        1,
+        semantic_context=_admitted_context(name=current_name),
+        definition_id=current_definition_id,
+    )
+    rows = compute_yoy_transform(
+        [prior, current],
+        kind=TransformKind.YOY_CHANGE_BPS,
+        name=KPI_RISK_ADJ_NIM_YOY_BPS,
+        unit=Unit.BPS,
+    )
+    assert len(rows) == 1
+    assert rows[0].semantic_context is None
+
+
 # ---------------------------------------------------------------------------
 # DB-backed: base resolution + derive_for_ticker materialization
 # ---------------------------------------------------------------------------
@@ -305,6 +462,131 @@ def test_derive_kpi_transforms_materializes_nim_series(conn: sqlite3.Connection)
     assert len(nim) == 2
     assert {r.value for r in nim} == {Decimal("-100")}
     assert all(r.unit is Unit.BPS for r in nim)
+
+
+def test_transform_reads_canonical_resolved_fact_not_highest_document_id(
+    conn: sqlite3.Connection,
+) -> None:
+    """The canonical view, not source_doc_id ordering, selects the transform input."""
+    _seed_base_kpi(
+        conn,
+        "NU",
+        _NIM_BASE,
+        [("2024-12-31", "Q4", 10.0), ("2025-12-31", "Q4", 9.0)],
+    )
+    conn.execute(
+        "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size, period_end) "
+        "VALUES (2, 'NU', 'ir_doc', 'ir_pdf', 'ir/nu-competing.pdf', ?, ?, 'ok', 1, ?)",
+        ("b" * 64, datetime(2026, 4, 2), datetime(2025, 12, 31)),
+    )
+    definition_id = conn.execute(
+        "SELECT id FROM kpi_definitions WHERE ticker='NU' AND name=?", (_NIM_BASE,)
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
+        "kpi_definition_id, value, unit, source_doc_id, extracted_by) "
+        "VALUES ('NU', '2025-12-31', 'Q4', ?, '50', 'percent', 2, 'ir')",
+        (definition_id,),
+    )
+    conn.execute(
+        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE source_doc_id=1"
+    )
+    conn.commit()
+
+    rows = derive_kpi_transforms(conn, "NU")
+    nim = [row for row in rows if row.name == KPI_RISK_ADJ_NIM_YOY_BPS]
+    assert len(nim) == 1
+    assert nim[0].value == Decimal("-100")
+
+
+def test_transform_fails_closed_on_unreviewed_override(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_base_kpi(
+        conn,
+        "NU",
+        _NIM_BASE,
+        [("2024-12-31", "Q4", 10.0), ("2025-12-31", "Q4", 9.0)],
+    )
+    override_doc_id = _seed_override_document(conn)
+    record_override(
+        conn,
+        ticker="NU",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        fact_kind=KPI,
+        fact_key=_NIM_BASE,
+        action=OverrideAction.REPLACE,
+        value=8,
+        unit="percent",
+        source_doc_type="ir_pdf",
+        source_doc_id=override_doc_id,
+        created_by="fixture",
+    )
+    conn.commit()
+
+    rows = derive_kpi_transforms(conn, "NU")
+    nim = [row for row in rows if row.name == KPI_RISK_ADJ_NIM_YOY_BPS]
+    assert nim == []
+
+
+def test_transform_rejects_override_without_source_document(
+    conn: sqlite3.Connection,
+) -> None:
+    """A document-type label alone cannot make an override attributable."""
+    _seed_base_kpi(
+        conn,
+        "NU",
+        _NIM_BASE,
+        [("2024-12-31", "Q4", 10.0), ("2025-12-31", "Q4", 9.0)],
+    )
+    record_override(
+        conn,
+        ticker="NU",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        fact_kind=KPI,
+        fact_key=_NIM_BASE,
+        action=OverrideAction.REPLACE,
+        value=8,
+        unit="percent",
+        source_doc_type="ir_pdf",
+        source_doc_id=None,
+        created_by="fixture",
+    )
+    conn.commit()
+
+    rows = derive_kpi_transforms(conn, "NU")
+    assert all(row.name != KPI_RISK_ADJ_NIM_YOY_BPS for row in rows)
+
+
+def test_transform_rejects_override_unit_mismatch(conn: sqlite3.Connection) -> None:
+    _seed_base_kpi(
+        conn,
+        "NU",
+        _NIM_BASE,
+        [("2024-12-31", "Q4", 10.0), ("2025-12-31", "Q4", 9.0)],
+    )
+    override_doc_id = _seed_override_document(conn)
+    record_override(
+        conn,
+        ticker="NU",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        fact_kind=KPI,
+        fact_key=_NIM_BASE,
+        action=OverrideAction.REPLACE,
+        value=8,
+        unit="count",
+        source_doc_type="ir_pdf",
+        source_doc_id=override_doc_id,
+        created_by="fixture",
+    )
+    conn.commit()
+
+    rows = derive_kpi_transforms(conn, "NU")
+    assert all(row.name != KPI_RISK_ADJ_NIM_YOY_BPS for row in rows)
 
 
 def test_derive_for_ticker_persists_transform_series(conn: sqlite3.Connection) -> None:
@@ -342,11 +624,11 @@ def test_derive_for_ticker_transforms_are_idempotent(conn: sqlite3.Connection) -
     assert inserted_second == 0
 
 
-def test_revenue_deceleration_derives_over_phase1_revenue_yoy(
+def test_revenue_deceleration_fails_closed_on_legacy_derived_input(
     conn: sqlite3.Connection,
 ) -> None:
-    """Phase ordering: phase-1 derives Revenue YoY Growth from financial_facts,
-    then phase-2 derives its deceleration from that freshly-persisted base."""
+    """Phase one may persist a legacy-qualified base, but phase two cannot
+    promote that unadmitted value into a decision-grade transform."""
     _seed_quarterly_income(
         conn,
         "NU",
@@ -368,11 +650,17 @@ def test_revenue_deceleration_derives_over_phase1_revenue_yoy(
         datetime.fromisoformat(str(dict(r)["period_end"])).year: Decimal(str(dict(r)["value"]))
         for r in decel
     }
-    assert 2025 in by_year and 2026 in by_year
-    assert by_year[2025] == Decimal("70")  # (100-30)/100*100
+    assert by_year == {}
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM kpi_facts kf JOIN kpi_definitions kd "
+            "ON kd.id=kf.kpi_definition_id WHERE kd.name='Revenue YoY Growth (USD)'"
+        ).fetchone()[0]
+        > 0
+    )
 
 
-def test_sparse_npl_base_resolves_but_yields_no_derived_rows(
+def test_exact_npl_base_resolves_but_yields_no_derived_rows(
     conn: sqlite3.Connection,
 ) -> None:
     """The NPL base label resolves to the verbose extracted def (proving base
@@ -389,9 +677,9 @@ def test_sparse_npl_base_resolves_but_yields_no_derived_rows(
             ("2026-03-31", "Q1", 11.5),
         ],
     )
-    # Base resolution succeeds: the short spec label reaches the verbose def that
-    # the rule's own label ("NPL 15d+ total") does NOT normalize-match.
-    assert resolve_kpi_definition_name(conn, "NU", "NPL 15d+ ratio") == _NPL_BASE_FULL
+    # Company-specific transform registration uses the exact reviewed metric
+    # identity. Semantic parentheticals are not stripped by fuzzy normalization.
+    assert resolve_kpi_definition_name(conn, "NU", _NPL_BASE_FULL) == _NPL_BASE_FULL
     # But no YoY pairs -> no derived NPL series materialized.
     derive_for_ticker(conn, "NU")
     npl_def = conn.execute(

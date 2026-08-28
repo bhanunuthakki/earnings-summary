@@ -69,6 +69,21 @@ CREATE TABLE kpi_facts (
     source_doc_id INTEGER NOT NULL,
     locator TEXT
 );
+CREATE TABLE kpi_fact_semantic_contexts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kpi_fact_id INTEGER NOT NULL,
+    metric_name_as_reported TEXT NOT NULL,
+    reported_period_end TEXT,
+    period_role TEXT NOT NULL DEFAULT 'current',
+    publication_lane TEXT NOT NULL DEFAULT 'current_actual',
+    accounting_basis TEXT NOT NULL DEFAULT 'gaap',
+    consolidation_scope TEXT NOT NULL DEFAULT 'consolidated',
+    dimensions_json TEXT NOT NULL DEFAULT '{}',
+    unit_scale TEXT NOT NULL DEFAULT 'none',
+    status TEXT NOT NULL DEFAULT 'admitted',
+    revision INTEGER NOT NULL DEFAULT 1,
+    supersedes_context_id INTEGER
+);
 CREATE TABLE segment_periods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
@@ -177,10 +192,20 @@ def _seed(db: Path) -> None:
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id,"
         " value, unit, source_doc_id, locator) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
-    conn.execute(kpi, ("TST", "2025-09-30 00:00:00", "Q3", 1, 11.0, "percent", 1, None))
+    cur = conn.execute(kpi, ("TST", "2025-09-30 00:00:00", "Q3", 1, 11.0, "percent", 1, None))
     conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id, metric_name_as_reported, reported_period_end) VALUES (?, 'ROE', '2025-09-30')",
+        (cur.lastrowid,),
+    )
+    cur = conn.execute(
         kpi,
         ("TST", "2025-12-31 00:00:00", "Q4", 1, 12.5, "percent", 2, '{"section":"MD&A"}'),
+    )
+    conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id, metric_name_as_reported, reported_period_end) VALUES (?, 'ROE', '2025-12-31')",
+        (cur.lastrowid,),
     )
     # One segment slice across two periods.
     conn.execute(
@@ -284,6 +309,53 @@ def test_kpi_sourced_loader(db: Path) -> None:
     assert obs[-1].provenance["locator"] == '{"section":"MD&A"}'
     assert obs[-1].provenance["source"] == "sec_official"
     assert load_kpi_series_with_provenance("TST", "missing", db_path=db) == []
+
+
+def test_viewspec_uses_canonical_kpi_relation_over_raw_candidate(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
+            "kpi_definition_id, value, unit, source_doc_id, locator) "
+            "VALUES ('TST', '2025-12-31 00:00:00', 'Q4', 1, 99.0, 'percent', 1, NULL)"
+        )
+        fact_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, metric_name_as_reported, reported_period_end) "
+            "VALUES (?, 'ROE', '2025-12-31')",
+            (fact_id,),
+        )
+        conn.execute(
+            "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id < 3"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    result = execute_view(_spec(metrics=["kpi:ROE"]), db_path=db)
+    cells = next(iter(result.rows)).cells
+    assert [cell.raw for cell in cells] == [11.0, 12.5]
+
+
+def test_viewspec_fails_closed_on_unadmitted_kpi_override(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("DELETE FROM kpi_fact_semantic_contexts")
+        conn.execute(
+            "CREATE TABLE fact_overrides (ticker TEXT, period_end TEXT, "
+            "fiscal_period_type TEXT, fact_kind TEXT, fact_key TEXT, action TEXT, "
+            "value REAL, status TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO fact_overrides VALUES "
+            "('TST','2025-12-31','Q4','kpi','ROE','replace',777.0,'active')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    result = execute_view(_spec(metrics=["kpi:ROE"]), db_path=db)
+    assert result.rows == []
+    assert any("no data for kpi:ROE" in warning for warning in result.warnings)
 
 
 def test_sourced_loader_requires_documents(tmp_path: Path) -> None:

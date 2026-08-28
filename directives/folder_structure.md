@@ -69,8 +69,8 @@ tool/runtime directories such as `.git`, `.venv`, and caches.
 | `directives/` | Canonical contracts, runbooks, drafts, and history classified by `directive_manifest.json`. |
 | `tests/` | Application tests; may use application fixtures. |
 | `instruction_tests/` | Standalone instruction and hook tests; never imports `tests/conftest.py` or opens the app DB. |
-| `alembic/` | Append-only migrations governing `data/portfolio.db`. |
-| `data/` | Durable local application state and source caches. Preserve unless a specific recovery or deletion workflow authorizes mutation. |
+| `alembic/` | Append-only migrations governing the canonical Windows checkout's `data/portfolio.db` and explicit disposable migrated test databases. |
+| `data/` | Durable source caches and host-owned application state. The production `portfolio.db` exists only in the canonical Windows checkout; a Mac checkout-local `data/portfolio.db` is an invalid artifact, not a replica or fallback. Preserve legitimate source caches unless a specific recovery or deletion workflow authorizes mutation. |
 | `.tmp/` | Resumable intermediates, checkpoints, and disposable task state. Safe to clear only when no active run depends on it. |
 | `.cache/` | Optional reproducible cache with an explicit TTL or invalidation rule. |
 | `output/` | Canonical generated application deliverables, including `output/research/<TICKER>/`. Reproducible unless a directive says otherwise. |
@@ -92,3 +92,4 @@ tool/runtime directories such as `.git`, `.venv`, and caches.
 4. New top-level directories require updating this contract and its validator evidence in the same change.
 5. Root-level scripts and memos are prohibited. Use `execution/`, `scripts/`, `docs/`, or a registered historical location.
 6. A path's lifecycle comes from this contract and the owning directive, not from whether it is currently gitignored or absent.
+7. On Mac, application and test commands must use an explicit temporary, restored-snapshot, or approved read-only database path. They must never create or infer live state from checkout-local `data/portfolio.db`.

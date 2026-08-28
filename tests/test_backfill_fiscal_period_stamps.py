@@ -1,6 +1,4 @@
-"""Tests for execution/backfill_fiscal_period_stamps.py — dry-run reporting,
---apply writes to both documents and dependent kpi_facts, idempotence, and
-ticker scoping.
+"""Tests for the retired, read-only fiscal-period repair detector.
 
 Uses the same by-file-path import pattern as
 test_backfill_llm_extracted_parents.py (execution/ scripts aren't on the
@@ -131,45 +129,27 @@ def test_dry_run_reports_without_writing(tmp_path: Path, backfill_mod: Any) -> N
     conn.close()
 
 
-def test_apply_corrects_document_and_dependent_kpi_facts(tmp_path: Path, backfill_mod: Any) -> None:
+def test_in_place_apply_is_retired(tmp_path: Path, backfill_mod: Any) -> None:
     db_path = tmp_path / "portfolio.db"
     _seed_db(db_path)
-    amat_doc_id = _doc_id(db_path, "sha-amat-q4")
-
-    result = backfill_mod.backfill(db_path, dry_run=False, log=False)
-    assert result.corrected == 1
-    assert result.kpi_facts_updated == 1
+    with pytest.raises(ValueError, match="supersession"):
+        backfill_mod.backfill(db_path, dry_run=False, log=False)
 
     conn = sqlite3.connect(db_path)
     doc_row = conn.execute(
-        "SELECT period_end FROM documents WHERE id = ?", (amat_doc_id,)
+        "SELECT period_end FROM documents WHERE id = ?", (_doc_id(db_path, "sha-amat-q4"),)
     ).fetchone()
-    assert doc_row[0][:10] == "2025-10-31"
-
-    fact_row = conn.execute(
-        "SELECT period_end, fiscal_period_type FROM kpi_facts WHERE source_doc_id = ?",
-        (amat_doc_id,),
-    ).fetchone()
-    assert fact_row[0][:10] == "2025-10-31"
-    assert fact_row[1] == "Q4"  # fiscal_period_type is untouched — only the date changes
-
-    # VEEV's already-correct row must be untouched.
-    veev_row = conn.execute(
-        "SELECT period_end FROM documents WHERE sha256 = 'sha-veev-q1'"
-    ).fetchone()
-    assert veev_row[0] == "2025-04-30 00:00:00"
+    assert doc_row[0][:10] == "2025-12-31"
     conn.close()
 
 
-def test_apply_is_idempotent(tmp_path: Path, backfill_mod: Any) -> None:
+def test_read_only_scan_is_idempotent(tmp_path: Path, backfill_mod: Any) -> None:
     db_path = tmp_path / "portfolio.db"
     _seed_db(db_path)
 
-    backfill_mod.backfill(db_path, dry_run=False, log=False)
-    second = backfill_mod.backfill(db_path, dry_run=False, log=False)
-
-    assert second.corrected == 0
-    assert second.unchanged == 2
+    first = backfill_mod.backfill(db_path, dry_run=True, log=False)
+    second = backfill_mod.backfill(db_path, dry_run=True, log=False)
+    assert second == first
 
 
 def test_ticker_filter_scopes_the_scan(tmp_path: Path, backfill_mod: Any) -> None:

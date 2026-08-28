@@ -13,7 +13,8 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0029_retire_podcast_prototype"
+HEAD = "0032_allow_source_reviewed_kpi_supersessions"
+SCHEDULE_CLASS_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",
@@ -231,7 +232,7 @@ def test_schedule_class_migration_preserves_research_storage_and_derives_downgra
         )
 
     config = _config(path)
-    command.upgrade(config, "head")
+    command.upgrade(config, SCHEDULE_CLASS_REVISION)
     with sqlite3.connect(path) as conn:
         tracked_columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")

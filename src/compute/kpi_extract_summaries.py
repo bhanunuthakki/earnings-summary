@@ -38,7 +38,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal, cast
@@ -73,6 +73,15 @@ from pipeline.kpi_persistence import (
     guard_llm_extracted_parent,
     persist_manifest,
     record_validation_issue,
+)
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
 )
 from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
 from pipeline.restatement_detector import table_has_column
@@ -126,11 +135,25 @@ class _KpiSummaryValue(BaseModel):
     currency: Currency | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     source_excerpt: str | None = Field(default=None, max_length=200)
+    source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
+    reported_period_end: date
+    period_role: KpiPeriodRole
+    accounting_basis: KpiAccountingBasis
+    consolidation_scope: KpiConsolidationScope
+    dimensions: dict[str, str] = Field(default_factory=dict)
+    source_unit_scale: KpiUnitScale
+    source_row_label: str | None = Field(default=None, max_length=512)
+    source_column_header: str | None = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
     def _require_currency_for_actual(self) -> _KpiSummaryValue:
         if self.unit == "actual" and self.currency is None:
             raise ValueError("actual monetary KPI values require an explicit currency")
+        if self.unit == "count" and self.source_unit_scale is not KpiUnitScale.UNKNOWN:
+            if self.source_value_text is None:
+                raise ValueError("COUNT values require the exact source numeric token")
+            if self.source_excerpt is None or self.source_value_text not in self.source_excerpt:
+                raise ValueError("source numeric token must occur in source_excerpt")
         return self
 
 
@@ -148,6 +171,15 @@ class _EnumeratedKpi(BaseModel):
     unit: Literal["percent", "actual", "count", "ratio", "bps"]
     currency: Currency | None = None
     source_excerpt: str = Field(min_length=1, max_length=200)
+    source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
+    reported_period_end: date
+    period_role: KpiPeriodRole
+    accounting_basis: KpiAccountingBasis
+    consolidation_scope: KpiConsolidationScope
+    dimensions: dict[str, str] = Field(default_factory=dict)
+    source_unit_scale: KpiUnitScale
+    source_row_label: str | None = Field(default=None, max_length=512)
+    source_column_header: str | None = Field(default=None, max_length=512)
 
     @field_validator("label", "source_excerpt")
     @classmethod
@@ -161,6 +193,11 @@ class _EnumeratedKpi(BaseModel):
     def _require_currency_for_actual(self) -> _EnumeratedKpi:
         if self.unit == "actual" and self.currency is None:
             raise ValueError("actual monetary KPI values require an explicit currency")
+        if self.unit == "count" and self.source_unit_scale is not KpiUnitScale.UNKNOWN:
+            if self.source_value_text is None:
+                raise ValueError("COUNT values require the exact source numeric token")
+            if self.source_value_text not in self.source_excerpt:
+                raise ValueError("source numeric token must occur in source_excerpt")
         return self
 
 
@@ -692,6 +729,14 @@ For EACH of the KPI names below, find the value reported FOR THIS QUARTER (not g
     Use only those five unit tokens; if unsure between "actual" and a scaled form, always pick "actual" with the full figure.
   - "confidence": float 0.0-1.0; lower if you had to estimate from context
   - "source_excerpt": the VERBATIM snippet (under 200 characters) copied character-for-character from the document that contains the reported value — the sentence or table line you read it from. Never paraphrase or reformat; if you cannot quote it exactly, omit this field.
+  - "source_value_text": for every count, the EXACT numeric token copied from source BEFORE expansion (for example "12.5" from "12.5 million customers"). It must occur verbatim in source_excerpt.
+  - "reported_period_end": ISO date for the value itself, not the document publication date.
+  - "period_role": EXACTLY ONE of "current" | "prior_period_comparator" | "prior_year_comparator" | "guidance" | "unknown".
+  - "accounting_basis": EXACTLY ONE of "gaap" | "non_gaap" | "management" | "unknown". Operational KPIs explicitly defined by management use "management".
+  - "consolidation_scope": EXACTLY ONE of "consolidated" | "geography" | "segment" | "product" | "other" | "unknown".
+  - "dimensions": an object of explicit qualifiers, for example {{"geography":"Brazil"}} or {{"customer_type":"active"}}; use {{}} only when the source is consolidated/unqualified.
+  - "source_unit_scale": EXACTLY ONE of "none" | "thousands" | "millions" | "billions" | "unknown", describing the source presentation before numeric expansion.
+  - "source_row_label" and "source_column_header": verbatim table coordinates when present; otherwise omit them.
 
 If a KPI is not disclosed in the document, OMIT IT from the response. Do not guess.
 
@@ -854,7 +899,18 @@ def _build_manifest(
                 currency=currency,
                 confidence=confidence,
                 source_excerpt=excerpt,
+                source_value_text=(
+                    str(payload["source_value_text"])
+                    if payload.get("source_value_text") is not None
+                    else None
+                ),
                 locator=locator,
+                semantic_context=_semantic_context_for_payload(
+                    name=name,
+                    payload=payload,
+                    expected_period_end=period_end,
+                    allow_admission=False,
+                ),
             )
         )
 
@@ -934,7 +990,16 @@ Return a JSON ARRAY. Each element:
   "value": <numeric only, no unit symbols>,
   "unit": EXACTLY ONE of "percent" | "actual" | "count" | "ratio" | "bps",
   "currency": "ISO currency code required for every actual monetary value (e.g. USD, BRL, DKK); omit for counts and rates",
-  "source_excerpt": "<verbatim snippet under 200 characters, copied character-for-character, that contains the value>"
+  "source_excerpt": "<verbatim snippet under 200 characters, copied character-for-character, that contains the value>",
+  "source_value_text": "<for counts, the exact numeric token before scale expansion; it must occur in source_excerpt>",
+  "reported_period_end": "<ISO date for this value>",
+  "period_role": "current | prior_period_comparator | prior_year_comparator | guidance | unknown",
+  "accounting_basis": "gaap | non_gaap | management | unknown",
+  "consolidation_scope": "consolidated | geography | segment | product | other | unknown",
+  "dimensions": {{"<axis>":"<member>"}},
+  "source_unit_scale": "none | thousands | millions | billions | unknown",
+  "source_row_label": "<verbatim table row label when present>",
+  "source_column_header": "<verbatim table column header when present>"
 }}
 
 Unit conventions (identical to our standard):
@@ -946,7 +1011,7 @@ Unit conventions (identical to our standard):
   - "bps"     — only when the document states the metric in basis points.
 
 Rules:
-  - THIS-period reported actuals only. Skip guidance/outlook for a future period and explicit prior-period comparatives.
+  - THIS-period reported actuals only. Skip guidance/outlook for a future period and explicit prior-period comparatives. Classify period_role before deciding; never relabel a comparator as current.
   - One row per distinct metric; do not duplicate. Do not invent — if you cannot quote it verbatim, omit it.
   - Return at most {max_facts} rows. Return ONLY the JSON array — no markdown fence, no commentary.
 
@@ -1043,7 +1108,18 @@ def _build_capture_manifest(
                 currency=currency,
                 confidence=0.85,
                 source_excerpt=excerpt,
+                source_value_text=(
+                    str(row["source_value_text"])
+                    if row.get("source_value_text") is not None
+                    else None
+                ),
                 locator=located_or_hatch,
+                semantic_context=_semantic_context_for_payload(
+                    name=name,
+                    payload=row,
+                    expected_period_end=period_end,
+                    allow_admission=primary_source is not SourceType.LLM_EXTRACTED,
+                ),
             )
         )
     return KpiExtractionManifest(
@@ -1226,6 +1302,101 @@ def _coerce_period_end(raw: object) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def _semantic_context_for_payload(
+    *,
+    name: str,
+    payload: Mapping[str, object],
+    expected_period_end: datetime,
+    allow_admission: bool,
+) -> KpiSemanticContext:
+    """Admit only a source-classified current-period, fully-scoped KPI value."""
+    raw_end = payload.get("reported_period_end")
+    if isinstance(raw_end, datetime):
+        reported_end = raw_end.date()
+    elif isinstance(raw_end, date):
+        reported_end = raw_end
+    elif isinstance(raw_end, str):
+        try:
+            reported_end = date.fromisoformat(raw_end[:10])
+        except ValueError:
+            reported_end = None
+    else:
+        reported_end = None
+    try:
+        period_role = KpiPeriodRole(str(payload.get("period_role") or "unknown"))
+    except ValueError:
+        period_role = KpiPeriodRole.UNKNOWN
+    try:
+        basis = KpiAccountingBasis(str(payload.get("accounting_basis") or "unknown"))
+    except ValueError:
+        basis = KpiAccountingBasis.UNKNOWN
+    try:
+        scope = KpiConsolidationScope(str(payload.get("consolidation_scope") or "unknown"))
+    except ValueError:
+        scope = KpiConsolidationScope.UNKNOWN
+    try:
+        unit_scale = KpiUnitScale(str(payload.get("source_unit_scale") or "unknown"))
+    except ValueError:
+        unit_scale = KpiUnitScale.UNKNOWN
+    dimensions_raw = payload.get("dimensions")
+    dimensions = (
+        {
+            str(key): str(value)
+            for key, value in cast("dict[object, object]", dimensions_raw).items()
+        }
+        if isinstance(dimensions_raw, dict)
+        else {}
+    )
+    reason: str | None = None
+    if not allow_admission:
+        reason = "synthesized_source_requires_primary_review"
+    elif period_role is not KpiPeriodRole.CURRENT:
+        reason = f"period_role_{period_role.value}"
+    elif reported_end != expected_period_end.date():
+        reason = "reported_period_mismatch"
+    elif basis is KpiAccountingBasis.UNKNOWN:
+        reason = "accounting_basis_unknown"
+    elif scope is KpiConsolidationScope.UNKNOWN:
+        reason = "consolidation_scope_unknown"
+    elif unit_scale is KpiUnitScale.UNKNOWN:
+        reason = "unit_scale_unknown"
+    elif (
+        scope
+        in {
+            KpiConsolidationScope.GEOGRAPHY,
+            KpiConsolidationScope.SEGMENT,
+            KpiConsolidationScope.PRODUCT,
+        }
+        and not dimensions
+    ):
+        reason = "scope_dimensions_missing"
+    status = KpiSemanticStatus.ADMITTED if reason is None else KpiSemanticStatus.QUARANTINED
+    return KpiSemanticContext(
+        metric_name_as_reported=name,
+        reported_period_end=reported_end,
+        period_role=period_role,
+        publication_lane={
+            KpiPeriodRole.CURRENT: KpiPublicationLane.CURRENT_ACTUAL,
+            KpiPeriodRole.PRIOR_PERIOD_COMPARATOR: KpiPublicationLane.COMPARATOR,
+            KpiPeriodRole.PRIOR_YEAR_COMPARATOR: KpiPublicationLane.COMPARATOR,
+            KpiPeriodRole.GUIDANCE: KpiPublicationLane.GUIDANCE_TARGET,
+            KpiPeriodRole.UNKNOWN: KpiPublicationLane.UNCLASSIFIED,
+        }[period_role],
+        accounting_basis=basis,
+        consolidation_scope=scope,
+        dimensions=dimensions,
+        unit_scale=unit_scale,
+        source_row_label=(
+            str(payload["source_row_label"]) if payload.get("source_row_label") else None
+        ),
+        source_column_header=(
+            str(payload["source_column_header"]) if payload.get("source_column_header") else None
+        ),
+        status=status,
+        reason_code=reason,
+    )
 
 
 def _currency_for_monetary_value(raw: object, unit: Unit, name: str) -> Currency | None:

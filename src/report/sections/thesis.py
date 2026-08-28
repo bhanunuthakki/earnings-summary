@@ -22,8 +22,13 @@ from compute.kpi_resolver import (
     normalize_kpi_name,
     reporting_cadence_for,
     resolve_kpi_definition_name,
+    semantic_series_identity_sql,
 )
 from compute.thesis_evaluation_episodes import episode_history_source
+from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.overrides import KPI as OVERRIDE_KPI
+from provenance.overrides import active_scalar_override_map
 from report.kpi_naming import kpi_qualifier
 from report.models import (
     BreakRuleEvaluation,
@@ -579,6 +584,10 @@ def _kpi_history_conn(
     resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
     if resolved_name is None:
         return [], None
+    if active_scalar_override_map(
+        conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
+    ):
+        return [], None
     # Defensive: source_excerpt may not exist on pre-0033 DBs. Detect column.
     has_excerpt_col = any(
         c["name"] == "source_excerpt"
@@ -586,6 +595,16 @@ def _kpi_history_conn(
     )
     cols = "f.period_end, f.value" + (
         ", f.source_excerpt" if has_excerpt_col else ", NULL AS source_excerpt"
+    )
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+    semantic_join, semantic_where = semantic_admission_sql(
+        conn, fact_alias="f", context_alias="ksc", fail_closed=True
+    )
+    semantic_identity = semantic_series_identity_sql(
+        conn,
+        fact_alias="f",
+        context_alias="ksc",
+        fact_relation=fact_relation,
     )
     # Annual-cadence KPI → read FY rows only (clean annual sparkline + YoY).
     period_filter = ""
@@ -601,16 +620,11 @@ def _kpi_history_conn(
     cursor.execute(
         f"""
         SELECT {cols}
-        FROM kpi_facts f
+        FROM {fact_relation} f
         JOIN kpi_definitions d ON d.id = f.kpi_definition_id
+        {semantic_join}
         WHERE d.ticker = ? AND d.name = ?{period_filter}
-          AND f.source_doc_id = (
-              SELECT MAX(f2.source_doc_id) FROM kpi_facts f2
-              WHERE f2.ticker = f.ticker
-                AND f2.kpi_definition_id = f.kpi_definition_id
-                AND f2.period_end = f.period_end
-                AND f2.fiscal_period_type = f.fiscal_period_type
-          )
+          AND {semantic_where} AND {semantic_identity}
         ORDER BY f.period_end ASC
         """,
         params,
