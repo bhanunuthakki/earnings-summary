@@ -685,6 +685,95 @@ def test_operations_route_uses_runtime_root_canonical_receipts(
     assert captured["observed_at"].tzinfo is UTC
 
 
+def test_operations_review_bundle_uses_configured_private_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured_origin = "https://review.example.ts.net"
+    captured: dict[str, object] = {}
+
+    class _Bundle:
+        content_sha256 = "a" * 64
+
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            assert mode == "json"
+            return {"serving_origin": captured["serving_origin"]}
+
+    def configured_private_origin(**_: object) -> str:
+        return configured_origin
+
+    def connect(*_: object, **__: object) -> sqlite3.Connection:
+        return sqlite3.connect(":memory:")
+
+    def semantic_rows(*_: object, **__: object) -> tuple[()]:
+        return ()
+
+    def no_database_lineage(_: sqlite3.Connection) -> None:
+        return None
+
+    def no_repair_review(**_: object) -> None:
+        return None
+
+    def snapshot(*_: object, **__: object) -> Mock:
+        return Mock()
+
+    monkeypatch.setattr(comments_server, "private_mobile_origin", configured_private_origin)
+    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
+    monkeypatch.setattr(comments_server, "scoped_kpi_definitions", semantic_rows)
+    monkeypatch.setattr(comments_server, "database_lineage_identity", no_database_lineage)
+    monkeypatch.setattr(comments_server, "load_kpi_repair_review", no_repair_review)
+    monkeypatch.setattr(comments_server, "collect_operations_snapshot", snapshot)
+
+    def build_bundle(**kwargs: object) -> _Bundle:
+        captured.update(kwargs)
+        return _Bundle()
+
+    monkeypatch.setattr(comments_server, "build_operations_review_bundle", build_bundle)
+    response = (
+        comments_server.create_app(tmp_path)
+        .test_client()
+        .get("/api/operations/review-bundle", base_url="http://127.0.0.1:7421")
+    )
+
+    assert response.status_code == 200
+    assert captured["serving_origin"] == configured_origin
+
+
+def test_operations_review_bundle_fails_closed_without_private_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supplied_origin = (
+        "https://user%40example.com@desktop.example.ts.net:99999/private?token=hidden#fragment"
+    )
+    monkeypatch.setenv("EARNINGS_SUMMARY_PRIVATE_BASE_URL", supplied_origin)
+    response = (
+        comments_server.create_app(tmp_path)
+        .test_client()
+        .get("/api/operations/review-bundle", base_url="https://review.example.ts.net")
+    )
+
+    assert response.status_code == 503
+    assert "refusing to emit an identity" in response.get_json()["error"]
+    assert supplied_origin not in response.get_data(as_text=True)
+    assert "user%40example.com" not in response.get_data(as_text=True)
+
+
+def test_operations_review_bundle_fails_closed_for_loopback_http_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def loopback_private_origin(**_: object) -> str:
+        return "http://127.0.0.1:7421"
+
+    monkeypatch.setattr(comments_server, "private_mobile_origin", loopback_private_origin)
+    response = (
+        comments_server.create_app(tmp_path)
+        .test_client()
+        .get("/api/operations/review-bundle", base_url="http://127.0.0.1:7421")
+    )
+
+    assert response.status_code == 503
+    assert "not configured as HTTPS" in response.get_json()["error"]
+
+
 @pytest.mark.parametrize(
     ("case", "expected"),
     (("current", "Current"), ("stale", "Stale"), ("missing", "Missing"), ("invalid", "Invalid")),
