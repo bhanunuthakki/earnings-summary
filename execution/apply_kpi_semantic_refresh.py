@@ -62,6 +62,9 @@ from pipeline.kpi_semantics import (  # noqa: E402
 )
 from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
+from provenance.fulltext_extractor_identity import (  # noqa: E402
+    resolve_fulltext_extractor_identity,
+)
 from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
 
 _SHA256 = r"^[0-9a-f]{64}$"
@@ -173,7 +176,8 @@ class RefreshEntry(BaseModel):
 class RefreshManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_refresh.v3"]
+    schema_version: Literal["kpi_semantic_refresh.v4"]
+    user_id: str = Field(min_length=1, max_length=128)
     logical_idempotency_key: str = Field(min_length=1, max_length=256)
     reviewer: str = Field(min_length=1, max_length=128)
     knowledge_at: datetime
@@ -280,7 +284,8 @@ def _validate_source_binding(
     conn: sqlite3.Connection, entry: RefreshEntry
 ) -> tuple[SourceType, str]:
     document = conn.execute(
-        "SELECT ticker,source_type,period_end,sha256,fetched_at FROM documents WHERE id=?",
+        "SELECT ticker,source_type,period_end,sha256,fetched_at,file_path "
+        "FROM documents WHERE id=?",
         (entry.source_doc_id,),
     ).fetchone()
     if document is None:
@@ -295,7 +300,9 @@ def _validate_source_binding(
     if source_type not in _REVIEWABLE_SOURCE_TYPES:
         raise RepairBlockedError("source_type_not_reviewable")
     evidence = conn.execute(
-        "SELECT node.text,node.locator_sha256 FROM evidence_nodes node "
+        "SELECT node.text,node.locator_sha256,node.node_kind,run.document_version_id,"
+        "run.extractor_name,run.extractor_config_sha256,run.extractor_code_version,"
+        "run.outcome,version.blob_sha256,version.ticker FROM evidence_nodes node "
         "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
         "JOIN evidence_document_versions version ON version.document_version_id=run.document_version_id "
         "WHERE node.node_id=? AND version.legacy_document_id=?",
@@ -303,13 +310,48 @@ def _validate_source_binding(
     ).fetchone()
     if evidence is None:
         raise RepairBlockedError("evidence_node_not_bound_to_source")
+    if str(evidence["outcome"]) != "succeeded":
+        raise RepairBlockedError("evidence_extraction_not_succeeded")
+    if str(evidence["node_kind"]) not in {
+        "section",
+        "passage",
+        "table",
+        "table_row",
+        "table_cell",
+        "pdf_page",
+    }:
+        raise RepairBlockedError("evidence_node_not_substantive")
+    extractor = resolve_fulltext_extractor_identity(str(document["file_path"]), None)
+    if (
+        str(evidence["extractor_name"]) != extractor.name
+        or str(evidence["extractor_config_sha256"]) != extractor.config_sha256
+        or str(evidence["extractor_code_version"]) != extractor.code_version
+    ):
+        raise RepairBlockedError("evidence_extractor_not_promoted")
+    if str(evidence["ticker"]).upper() != str(document["ticker"]).upper():
+        raise RepairBlockedError("evidence_document_issuer_mismatch")
+    if str(evidence["blob_sha256"]) != entry.source_content_sha256:
+        raise RepairBlockedError("evidence_document_content_mismatch")
     binding = conn.execute(
-        "SELECT evidence_node_id FROM v_legacy_document_evidence_bindings_current "
-        "WHERE legacy_document_id=?",
+        "SELECT binding.document_version_id,binding.scope_content_sha256,"
+        "bound_node.node_kind,bound_run.document_version_id AS bound_node_document_version_id "
+        "FROM v_legacy_document_evidence_bindings_current AS binding "
+        "JOIN evidence_nodes AS bound_node ON bound_node.node_id=binding.evidence_node_id "
+        "JOIN evidence_extraction_runs AS bound_run "
+        "ON bound_run.extraction_run_id=bound_node.extraction_run_id "
+        "WHERE binding.legacy_document_id=?",
         (entry.source_doc_id,),
     ).fetchone()
-    if binding is None or str(binding["evidence_node_id"]) != entry.evidence_node_id:
-        raise RepairBlockedError("source_evidence_binding_not_exact")
+    if binding is None:
+        raise RepairBlockedError("source_evidence_binding_missing")
+    if str(binding["node_kind"]) != "document":
+        raise RepairBlockedError("source_evidence_binding_not_document")
+    if str(binding["document_version_id"]) != str(evidence["document_version_id"]):
+        raise RepairBlockedError("source_evidence_binding_version_mismatch")
+    if str(binding["bound_node_document_version_id"]) != str(binding["document_version_id"]):
+        raise RepairBlockedError("source_evidence_binding_node_version_mismatch")
+    if str(binding["scope_content_sha256"]) != entry.source_content_sha256:
+        raise RepairBlockedError("source_evidence_binding_content_mismatch")
     if str(evidence["locator_sha256"] or "") != entry.evidence_locator_sha256:
         raise RepairBlockedError("evidence_locator_mismatch")
     evidence_text = str(evidence["text"])
@@ -500,6 +542,11 @@ def _detect_applied_postcondition(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--user-id",
+        required=True,
+        help="Explicit owner identity; must exactly match the signed repair manifest",
+    )
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--review-bundle", type=Path, required=True)
     parser.add_argument("--trusted-review-pins", type=Path, required=True)
@@ -580,6 +627,8 @@ def main(argv: list[str] | None = None) -> int:
     publish_marker = False
     marker = receipt_root / "by_logical_key" / f"{logical_key_sha}.json"
     try:
+        if args.user_id != manifest.user_id:
+            raise RepairBlockedError("manifest_user_identity_mismatch")
         if args.max_review_age_seconds <= 0:
             raise RepairBlockedError("invalid_review_age")
         _validate_external_evidence(
@@ -680,7 +729,11 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         allowed = {
                             row.kpi_definition_id
-                            for row in scoped_kpi_definitions(conn, repo_root=PROJECT_ROOT)
+                            for row in scoped_kpi_definitions(
+                                conn,
+                                repo_root=PROJECT_ROOT,
+                                user_id=manifest.user_id,
+                            )
                             if row.kpi_definition_id is not None
                         }
                         validated = [

@@ -259,7 +259,7 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         STAGE_VALIDATE,
         "Stage 3 - data validation gate (run_validation_engine.py --gate)",
         "run_validation_engine.py",
-        ("--gate",),
+        ("--gate", "--user-id", "{user_id}"),
         600,
         (STAGE_FEED,),
         ("skip_triggers", "skip_validation"),

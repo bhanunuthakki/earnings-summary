@@ -36,6 +36,11 @@ def main(argv: list[str] | None = None) -> int:
         "--batch-size", type=int, default=100, help="Document ids per bounded batch"
     )
     parser.add_argument(
+        "--document-id",
+        type=int,
+        help="Extract exactly one legacy document without reading or advancing a checkpoint",
+    )
+    parser.add_argument(
         "--max-records",
         type=int,
         default=50_000,
@@ -68,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=args.repo_root,
         content_roots=tuple(args.content_roots or ()),
         apply=args.apply,
+        document_id=args.document_id,
         batch_size=args.batch_size,
         max_records_per_batch=args.max_records,
         max_nodes_per_batch=args.max_nodes,

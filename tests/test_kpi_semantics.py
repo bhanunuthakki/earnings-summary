@@ -247,13 +247,41 @@ def test_scope_is_report_union_facts_metrics_for_portfolio_only(tmp_path: Path) 
         ("NU", "NIM", ("report",)),
         ("NU", "Total customers", ("facts_metrics",)),
     ]
+    assert rows[0].fact_count == 0
+    assert rows[0].missing_context_count == 0
+    assert rows[1].fact_count == 1
+    assert rows[1].missing_context_count == 0
 
 
 def test_semantic_audit_requires_explicit_database_path() -> None:
     from execution.audit_kpi_semantics import build_parser
 
-    action = next(item for item in build_parser()._actions if item.dest == "db")
-    assert action.required is True
+    actions = {item.dest: item for item in build_parser()._actions}
+    assert actions["db"].required is True
+    assert actions["user_id"].required is True
+
+
+def test_semantic_audit_gate_fails_closed_on_empty_owner_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from execution.audit_kpi_semantics import main
+
+    db_path = tmp_path / "empty-owner.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        "CREATE TABLE tracked_companies(ticker TEXT,list_type TEXT,user_id TEXT,archived_at TEXT);"
+        "CREATE TABLE kpi_definitions(id INTEGER PRIMARY KEY,ticker TEXT,name TEXT);"
+    )
+    conn.close()
+
+    assert main(["--db", str(db_path), "--user-id", "bhanu", "--gate"]) == 2
+    captured = capsys.readouterr()
+    event = json.loads(captured.err)
+    summary = json.loads(captured.out)
+    assert event["gate_blocked"] is True
+    assert event["empty_scope"] is True
+    assert summary["gate_blocked"] is True
+    assert summary["empty_scope"] is True
 
 
 def test_active_migration_head_installs_append_only_semantic_context(

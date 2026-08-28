@@ -423,12 +423,30 @@ def check_kpi_semantic_coverage(
     *,
     run_id: str,
     ticker: str | None,
+    user_id: str,
 ) -> CheckOutcome:
     """HALT when an owner-visible KPI lacks admitted source semantics."""
     repo_root = Path(__file__).resolve().parents[2]
-    rows = scoped_kpi_definitions(conn, repo_root=repo_root)
+    rows = scoped_kpi_definitions(conn, repo_root=repo_root, user_id=user_id)
     if ticker is not None:
         rows = tuple(row for row in rows if row.ticker == ticker.upper())
+    if not rows:
+        record_validation_issue(
+            conn,
+            run_id=run_id,
+            source_doc_id=None,
+            ticker=ticker.upper() if ticker is not None else None,
+            severity=Severity.HALT,
+            rule=ValidationRule.KPI_SEMANTIC_CONTEXT,
+            raw_value=f"owner_scope_empty:user_id={user_id}",
+            expected="a non-empty owner-visible report/Facts & Metrics KPI scope",
+        )
+        conn.commit()
+        return CheckOutcome(
+            rule=ValidationRule.KPI_SEMANTIC_CONTEXT,
+            issues_inserted=1,
+            rows_examined=0,
+        )
     inserted = 0
     examined = 0
     for row in rows:
@@ -487,6 +505,7 @@ def run_all_checks(
     conn: sqlite3.Connection,
     *,
     run_id: str,
+    user_id: str,
     ticker: str | None = None,
 ) -> ValidationReport:
     """Execute every rule family. ticker=None scans all tickers."""
@@ -496,7 +515,14 @@ def run_all_checks(
     outcomes.append(_check_kpi_fact_ranges(conn, run_id=run_id, ticker=ticker))
     outcomes.append(_check_magnitude_jumps(conn, run_id=run_id, ticker=ticker))
     outcomes.append(_check_source_disagreement(conn, run_id=run_id, ticker=ticker))
-    outcomes.append(check_kpi_semantic_coverage(conn, run_id=run_id, ticker=ticker))
+    outcomes.append(
+        check_kpi_semantic_coverage(
+            conn,
+            run_id=run_id,
+            ticker=ticker,
+            user_id=user_id,
+        )
+    )
     return ValidationReport(
         run_id=run_id,
         started_at=started_at,

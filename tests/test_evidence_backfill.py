@@ -14,7 +14,11 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
-from provenance.evidence_backfill import BackfillRequest, backfill_legacy_evidence
+from provenance.evidence_backfill import (
+    BackfillRequest,
+    backfill_legacy_evidence,
+    ensure_legacy_document_evidence,
+)
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
 from provenance.integrity_audit import AuditOptions, audit_connection
@@ -114,6 +118,35 @@ def _request(
         apply=apply,
         batch_size=batch_size,
         task_id=task_id,
+    )
+
+
+def _install_binding_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE legacy_document_evidence_binding_revisions (
+            binding_revision_id TEXT PRIMARY KEY,
+            idempotency_key TEXT UNIQUE NOT NULL,
+            legacy_document_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            document_version_id TEXT NOT NULL,
+            evidence_node_id TEXT NOT NULL,
+            scope_locator_json TEXT NOT NULL,
+            scope_locator_sha256 TEXT NOT NULL,
+            scope_content_sha256 TEXT NOT NULL,
+            effective_at TEXT NOT NULL,
+            knowledge_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            supersedes_binding_revision_id TEXT
+        );
+        CREATE VIEW v_legacy_document_evidence_bindings_current AS
+        SELECT binding.* FROM legacy_document_evidence_binding_revisions AS binding
+        WHERE NOT EXISTS (
+            SELECT 1 FROM legacy_document_evidence_binding_revisions AS newer
+            WHERE newer.legacy_document_id = binding.legacy_document_id
+              AND newer.revision > binding.revision
+        );
+        """
     )
 
 
@@ -231,6 +264,52 @@ def test_apply_is_idempotent_and_uses_only_active_evidence(tmp_path: Path) -> No
         )
         assert second.records_created == 0
         assert second.records_replayed == 9
+    finally:
+        conn.close()
+
+
+def test_targeted_legacy_document_capture_creates_idempotent_root_binding(
+    tmp_path: Path,
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        _install_binding_schema(conn)
+
+        first = ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=1)
+        second = ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=1)
+
+        binding = conn.execute(
+            "SELECT legacy_document_id,revision,document_version_id,evidence_node_id,"
+            "scope_content_sha256 FROM v_legacy_document_evidence_bindings_current"
+        ).fetchone()
+        assert tuple(binding) == (
+            1,
+            1,
+            "legacy-doc-1",
+            "legacy-node-doc-1",
+            conn.execute("SELECT sha256 FROM documents WHERE id=1").fetchone()[0],
+        )
+        assert first.records_created == 10
+        assert second.records_created == 0
+        assert second.records_replayed == 10
+    finally:
+        conn.close()
+
+
+def test_binding_aware_dry_run_accounts_for_the_planned_root_binding(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        _install_binding_schema(conn)
+
+        result = backfill_legacy_evidence(conn, _request(repo_root, apply=False))
+
+        assert result.records_planned == 10
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM legacy_document_evidence_binding_revisions"
+            ).fetchone()[0]
+            == 0
+        )
     finally:
         conn.close()
 
@@ -480,6 +559,48 @@ def test_apply_checkpoints_and_resumes_bounded_documents(tmp_path: Path) -> None
         assert second.documents_backfilled == 1
         assert second.has_more is False
         assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_explicit_document_id_is_bounded_and_checkpoint_free(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        raw = b"<html>second official filing</html>"
+        path = repo_root / "data" / "BETA_10q.html"
+        path.write_bytes(raw)
+        conn.execute(
+            "INSERT INTO documents VALUES (2, 'BETA', 'sec_edgar', '10-Q', NULL, NULL, "
+            "?, ?, '2026-07-21', 'ok', ?, NULL, NULL)",
+            ("data/BETA_10q.html", hashlib.sha256(raw).hexdigest(), len(raw)),
+        )
+        conn.commit()
+
+        request = BackfillRequest(
+            repo_root=repo_root,
+            apply=True,
+            document_id=2,
+            task_id="target-document-two",
+        )
+        result = backfill_legacy_evidence(conn, request)
+
+        assert result.documents_considered == 1
+        assert result.last_document_id_before == 1
+        assert result.last_document_id_after == 2
+        assert result.has_more is False
+        assert not (repo_root / ".tmp" / request.task_id / "state.json").exists()
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id=1"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id=2"
+            ).fetchone()[0]
+            == 1
+        )
     finally:
         conn.close()
 

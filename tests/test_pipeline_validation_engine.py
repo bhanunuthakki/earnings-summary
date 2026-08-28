@@ -418,8 +418,15 @@ def test_owner_visible_legacy_unknown_kpi_halts_semantic_gate(
         source_doc_id=doc_id,
     )
 
-    def _scoped(_conn: sqlite3.Connection, *, repo_root: Path) -> tuple[ScopedKpiDefinition, ...]:
+    observed_user_ids: list[str] = []
+
+    def _scoped(
+        _conn: sqlite3.Connection, *, repo_root: Path, user_id: str
+    ) -> tuple[ScopedKpiDefinition, ...]:
         del repo_root
+        observed_user_ids.append(user_id)
+        if user_id != "bhanu":
+            return ()
         return (
             ScopedKpiDefinition(
                 ticker="NU",
@@ -441,9 +448,29 @@ def test_owner_visible_legacy_unknown_kpi_halts_semantic_gate(
 
     monkeypatch.setattr("pipeline.validation_engine.scoped_kpi_definitions", _scoped)
 
-    outcome = check_kpi_semantic_coverage(conn, run_id="semantic-gate", ticker="NU")
+    wrong_owner = check_kpi_semantic_coverage(
+        conn,
+        run_id="wrong-owner",
+        ticker="NU",
+        user_id="default",
+    )
+    outcome = check_kpi_semantic_coverage(
+        conn,
+        run_id="semantic-gate",
+        ticker="NU",
+        user_id="bhanu",
+    )
 
+    assert wrong_owner.rows_examined == 0
+    assert wrong_owner.issues_inserted == 1
     assert outcome.issues_inserted == 1
+    assert observed_user_ids == ["default", "bhanu"]
+    wrong_owner_issue = conn.execute(
+        "SELECT severity,raw_value FROM validation_issues WHERE run_id='wrong-owner'"
+    ).fetchone()
+    assert wrong_owner_issue is not None
+    assert wrong_owner_issue[0] == Severity.HALT.value
+    assert wrong_owner_issue[1] == "owner_scope_empty:user_id=default"
     issue = conn.execute(
         "SELECT severity,rule,raw_value FROM validation_issues WHERE run_id='semantic-gate'"
     ).fetchone()
@@ -454,7 +481,7 @@ def test_owner_visible_legacy_unknown_kpi_halts_semantic_gate(
 
 
 def test_run_all_checks_executes_every_rule(conn: sqlite3.Connection) -> None:
-    """Smoke test: empty DB -> every registered outcome returns 0 issues."""
-    report = run_all_checks(conn, run_id="r1", ticker=None)
+    """Smoke test: empty KPI owner scope fails closed while other rules stay quiet."""
+    report = run_all_checks(conn, run_id="r1", ticker=None, user_id="bhanu")
     assert len(report.outcomes) == 5
-    assert all(o.issues_inserted == 0 for o in report.outcomes)
+    assert [outcome.issues_inserted for outcome in report.outcomes] == [0, 0, 0, 0, 1]
