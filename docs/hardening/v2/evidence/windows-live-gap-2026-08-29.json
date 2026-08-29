@@ -1,0 +1,63 @@
+{
+  "$schema": "earnings-summary.windows-live-gap.v1",
+  "issue": "BHA-20",
+  "observed_at": "2026-08-29T03:25:55Z",
+  "observation_method": "Background HTTPS GET requests to the private origin previously resolved from live Tailscale Serve status in this task and revalidated by current successful probes; the hostname is deliberately not persisted as remembered network identity.",
+  "health": {
+    "path": "/healthz",
+    "http_status": 200,
+    "status": "ok"
+  },
+  "portfolio": {
+    "path": "/api/work-os/portfolio",
+    "http_status": 200,
+    "status": "degraded",
+    "tracker_state": "unavailable",
+    "allocation_state": "unavailable",
+    "allocation_reason_codes": [
+      "health_unavailable"
+    ],
+    "total_market_value": null,
+    "warnings": [
+      "portfolio_tracker_unavailable",
+      "portfolio_allocation_unavailable"
+    ]
+  },
+  "company_desk": {
+    "path": "/api/work-os/companies/AAPL/desk",
+    "http_status": 200,
+    "status": "degraded",
+    "position_state": "unavailable",
+    "warnings_include": [
+      "portfolio_tracker_unavailable"
+    ]
+  },
+  "scheduler_acl": {
+    "task": "\\earnings-summary\\portfolio_tracker_api",
+    "status": "activation_incomplete",
+    "required_sddl": "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)",
+    "missing_proof": [
+      "Task re-registration under the required SDDL",
+      "Live task principal, action, and ACL receipt",
+      "Successful tracker health and dashboard hydration after activation"
+    ]
+  },
+  "findings": [
+    {
+      "id": "OPS-BHA20-TRACKER-LIVE",
+      "severity": "high",
+      "owner": "BHA-20",
+      "confidence": "high",
+      "fix": "Restore the Windows portfolio tracker service/task and prove tracker-backed allocation and position hydration."
+    },
+    {
+      "id": "OPS-BHA20-SCHEDULER-ACL",
+      "severity": "high",
+      "owner": "BHA-20",
+      "confidence": "high",
+      "fix": "Re-register the task under the required SDDL and retain principal/action/ACL proof."
+    }
+  ],
+  "mutation_disposition": "Not performed: no background Windows management channel was available, and foreground Chrome or remote-desktop navigation was prohibited for this run.",
+  "overall": "BLOCK"
+}
