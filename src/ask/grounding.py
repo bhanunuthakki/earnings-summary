@@ -1676,11 +1676,7 @@ commentary. If the evidence cannot support every clause of an answer, return
 exactly: "I don't have enough sourced evidence to answer that."
 """
     read_exception = (
-        ""
-        if strict
-        else """A figure the evidence doesn't cover must either come from a file
-you actually opened with the Read tool — name that file inline — or be
-flagged as unverified. """
+        "" if strict else "A figure the evidence doesn't cover must be flagged as unverified. "
     )
     return f"""EVIDENCE — numbered sources retrieved for this question. Cite with [n]
 immediately after each claim a source supports (e.g. "NPLs rose to 7.2% [1][3]"):

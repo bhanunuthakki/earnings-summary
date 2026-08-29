@@ -29,16 +29,21 @@ def stream_llm_text(
     full_prompt: str,
     *,
     purpose: str = "ask_answer",
-    allow_read: bool = True,
+    allow_read: bool = False,
 ) -> Iterator[dict[str, object]]:
-    """Stream through the canonical LLM policy, budget, and ledger seam."""
+    """Stream through the canonical tool-free Ask policy seam.
+
+    ``allow_read`` remains as a compatibility argument for existing callers,
+    but is intentionally ignored: Ask retrieval is deterministic and the
+    Claude subprocess must never receive file, shell, MCP, or plugin access.
+    """
     from llm.cli import stream_llm
 
+    del allow_read
     yield from stream_llm(
         full_prompt,
         purpose=purpose,
         scope="ask",
-        allowed_tools=("Read",) if allow_read else (),
     )
 
 
