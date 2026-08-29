@@ -208,6 +208,8 @@ def _child_names(element: ET.Element | None) -> tuple[str, ...]:
 
 def extract_xml_metadata(path: Path) -> XmlTaskMetadata:
     root = ElementTree.parse(path).getroot()
+    if root is None:
+        raise ValueError("task XML has no root element")
     uri = _text(root, f".//{NS}URI")
     if uri is None:
         raise ValueError("missing RegistrationInfo/URI")
@@ -350,6 +352,8 @@ def rendered_xml_bytes(task: TaskSpec, *, cron_dir: Path, project_root: Path) ->
     """Render XML whose action is rooted in the checkout invoking generation."""
     tree = ElementTree.parse(cron_dir / task.xml)
     root = tree.getroot()
+    if root is None:
+        raise ValueError(f"{task.xml}: task XML has no root element")
     command = root.find(f".//{NS}Actions/{NS}Exec/{NS}Command")
     if command is None:
         raise ValueError(f"{task.xml}: missing Actions/Exec/Command")
@@ -386,6 +390,7 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         ")",
         "$ErrorActionPreference = 'Stop'",
         "$renderDir = Join-Path $RepoRoot '.tmp\\scheduler_tasks'",
+        "$taskSecurityScript = Join-Path $RepoRoot 'cron\\apply_task_security_descriptor.ps1'",
         "& $Python (Join-Path $RepoRoot 'execution\\generate_cron_artifacts.py') "
         "--project-root $RepoRoot --render-dir $renderDir --check",
         "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
@@ -393,13 +398,14 @@ def generated_registration_script(manifest: TaskManifest) -> str:
     for task in manifest.tasks:
         if task.task_name.casefold() in SERVICE_OWNED_TASKS:
             continue
-        lines.append(
-            f"& schtasks.exe /Create /TN '{task.task_name}' "
-            f"/XML (Join-Path $renderDir '{task.xml}') /F"
-        )
+        rendered_xml = f"(Join-Path $renderDir '{task.xml}')"
+        lines.append(f"& schtasks.exe /Create /TN '{task.task_name}' /XML {rendered_xml} /F")
         lines.append(
             f"if ($LASTEXITCODE -ne 0) {{ "
             f"throw 'Failed to register scheduled task {task.task_name}' }}"
+        )
+        lines.append(
+            f"& $taskSecurityScript -TaskPath '{task.task_name}' -RenderedXmlPath {rendered_xml}"
         )
     return "\n".join(lines) + "\n"
 

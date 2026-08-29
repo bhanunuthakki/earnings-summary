@@ -434,7 +434,7 @@ $TrackerApiXml = (schtasks.exe /Query `
 if ($LASTEXITCODE -ne 0) { throw 'portfolio_tracker_api is not registered' }
 $ExpectedTrackerApiAction = Join-Path $EarningsSummaryCodeRoot 'cron\run_portfolio_tracker_api.bat'
 foreach ($Expected in @(
-  'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)',
+  'D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;IU)',
   '<UserId>S-1-5-18</UserId>',
   "<Command>$ExpectedTrackerApiAction</Command>"
 )) {
@@ -442,6 +442,11 @@ foreach ($Expected in @(
     throw "portfolio_tracker_api live XML mismatch: $Expected"
   }
 }
+
+& (Join-Path $EarningsSummaryCodeRoot 'cron\apply_task_security_descriptor.ps1') `
+  -TaskPath '\earnings-summary\portfolio_tracker_api' `
+  -RenderedXmlPath (Join-Path $EarningsSummaryCodeRoot 'cron\portfolio_tracker_api.task.xml') `
+  -VerifyOnly
 
 $TrackerRefreshXml = (schtasks.exe /Query `
   /TN '\earnings-summary\refresh_portfolio_tracker' /XML | Out-String)
@@ -460,10 +465,23 @@ file-specific `FR` token is also insufficient. Windows treats execute access as
 capable of task control, so the Operations collector must remain query-only and
 must not expose Scheduler mutation through its API surface.
 
+`schtasks.exe /Create /XML` retains the XML `SecurityDescriptor` property but
+does not apply it as the registered task's actual task DACL on the production Windows
+host. The generated registration script therefore calls the Task Scheduler COM
+`SetSecurityDescriptor` method after creation, using
+`TASK_DONT_ADD_PRINCIPAL_ACE`, and fails unless an immediate
+`GetSecurityDescriptor` readback proves the protected, allow-only actual task
+DACL. Windows maps the declaration's generic rights when attaching the
+descriptor: `GA` becomes mask `0x1f01ff`, and `GRGX` becomes `0x1200a9`. A failed
+postcondition restores and verifies the prior actual task access semantics before
+failing loudly. Do not register this task with a raw `schtasks.exe /Create`
+command outside that generated path.
+
 The verifier must report no missing, extra, disabled, schedule-mismatched, or
-wrong-checkout Scheduler declarations. The XML checks additionally prove the
-API's exact SDDL, LOCAL SYSTEM principal (`S-1-5-18`), and both tracker actions.
-Do not infer those properties from source XML or a successful health endpoint.
+wrong-checkout Scheduler declarations. The live XML checks prove the API's
+declared SDDL, LOCAL SYSTEM principal (`S-1-5-18`), and both tracker actions; only
+the COM `GetSecurityDescriptor(4)` check proves the actual task DACL. Do not infer
+those properties from source XML or a successful health endpoint.
 
 ## Test fire (without waiting for the schedule)
 
