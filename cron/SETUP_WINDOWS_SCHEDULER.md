@@ -66,7 +66,7 @@ The generated registration script creates both declarations. Run it elevated and
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which snapshots the canonical database with SQLite's online-backup API, compresses it locally, and publishes only an authenticated AES-256-GCM `.gz.enc` envelope to `ES_DB_BACKUP_DIR` (default: `%USERPROFILE%\My Drive\earnings-summary-db-backups`). The key stays in the external secrets directory. Fires 15 minutes before the 03:00 refresh chain and retains the newest `ES_DB_BACKUP_RETAIN` encrypted snapshots (default 14). |
+| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which snapshots the canonical database with SQLite's online-backup API, compresses it locally, and publishes only an authenticated AES-256-GCM `.gz.enc` envelope to `ES_DB_BACKUP_DIR`. When that variable is unset, both backup and restore choose the first existing mounted `<drive>:\My Drive` from `D:` through `Z:` (for example, `G:\My Drive`), then fall back to `C:\Users\Bhanu\My Drive`; the backup folder is `earnings-summary-db-backups` beneath that root. The key stays in the external secrets directory. Fires 15 minutes before the 03:00 refresh chain and retains the newest `ES_DB_BACKUP_RETAIN` encrypted snapshots (default 14). |
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -171,7 +171,7 @@ The scheduled counterpart to the daily `backup_db` — a backup you have never r
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest authenticated encrypted** backup to a throwaway temp path and verifies AES-GCM authentication, decryption, gunzip, `PRAGMA integrity_check`, core-table row counts, and a soft schema-version match. **Never touches the live DB** except to record one `ingestion_runs` row. Exit 0 = passed, 1 = a hard check failed, 2 = no encrypted snapshot found. Plain `.gz` files are ignored except by the explicit one-time migration utility. |
+| `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest authenticated encrypted** backup to a throwaway temp path and verifies AES-GCM authentication, decryption, gunzip, `PRAGMA integrity_check`, core-table row counts, and an exact schema-version match against the live DB when its Alembic revision is available (otherwise requiring a valid versioned snapshot). **Never touches the live DB** except to record one `ingestion_runs` row. Exit 0 = passed, 1 = a hard check failed, 2 = no encrypted snapshot found. Plain `.gz` files are ignored except by the explicit one-time migration utility. |
 
 ### Backup inventory and non-destructive restore verification
 

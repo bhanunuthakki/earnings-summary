@@ -165,6 +165,15 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
     assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)" in runbook
     assert "S-1-5-18" in runbook
 
+    # Keep the operator path contract aligned with backup_db.py and
+    # restore_db.py: mounted Drive roots D:..Z: win over the stale C: mirror.
+    assert "first existing mounted `<drive>:\\My Drive` from `D:` through `Z:`" in runbook
+    assert "`G:\\My Drive`" in runbook
+    assert "`C:\\Users\\Bhanu\\My Drive`" in runbook
+    assert "%USERPROFILE%\\My Drive" not in runbook
+    assert "an exact schema-version match against the live DB" in runbook
+    assert "a soft schema-version match" not in runbook
+
     assert "cron/restore_db.py --list" in runbook
     assert "cron/restore_db.py --latest" in runbook
     assert "--to $EarningsSummaryRecoveryDbPath" in runbook
