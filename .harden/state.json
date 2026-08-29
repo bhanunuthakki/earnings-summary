@@ -19,7 +19,7 @@
     "scheduled_work": true
   },
   "fingerprints": {
-    "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+    "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
     "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
     "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
     "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -72,16 +72,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:30Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -96,15 +98,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:30Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -119,15 +123,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:30Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -142,15 +148,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:13:39Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -165,15 +173,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:13:39Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -191,16 +201,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:30Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -216,16 +228,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:30Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -241,16 +255,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:30Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -266,16 +282,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:30Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -290,15 +308,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:45Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -313,15 +333,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:45Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -336,15 +358,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:45Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -359,15 +383,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:45Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -382,15 +408,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:45Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -406,16 +434,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:12:45Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -431,16 +461,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:13:39Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -455,15 +487,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:13:39Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -482,16 +516,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/windows-live-gap-2026-08-29.json"
+          "docs/hardening/v2/evidence/windows-live-gap-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/windows-live-gap-2026-08-29.json": "sha256:87dc1e73493ad7a7727cdef7f141cd009c7ae54197455bcd8dc462ef7902ec58"
+          "docs/hardening/v2/evidence/windows-live-gap-2026-08-29.json": "sha256:87dc1e73493ad7a7727cdef7f141cd009c7ae54197455bcd8dc462ef7902ec58",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:13:39Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -507,16 +543,18 @@
         "finding_rules": {},
         "evidence": [
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
           "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
-          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd"
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:13:39Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -531,15 +569,17 @@
         "open_findings": [],
         "finding_rules": {},
         "evidence": [
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
         ],
         "evidence_hashes": {
-          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d"
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
         },
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
-        "run_at": "2026-08-29T03:30:57Z",
+        "run_at": "2026-08-29T04:13:39Z",
         "fingerprints": {
-          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"

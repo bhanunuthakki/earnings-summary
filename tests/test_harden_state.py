@@ -29,27 +29,50 @@ def test_harden_state_json_structure() -> None:
     }
     assert set(data["gates"]) == {"L0", "L1"}
 
-    l1 = data["gates"]["L1"]
-    required_passes = {
-        "product-feature",
-        "architecture-reviewer",
-        "data-foundation",
-        "qa-test-strategy",
-        "sec-llm",
-        "docs-support-readiness",
+    expected_verdicts = {
+        "L0": {
+            "idea-evaluator": "PASS",
+            "product-feature": "ADVISORY",
+            "architecture-reviewer": "ADVISORY",
+            "legal-compliance": "ADVISORY",
+            "finops-pricing": "ADVISORY",
+        },
+        "L1": {
+            "product-feature": "PASS",
+            "architecture-reviewer": "PASS",
+            "data-foundation": "PASS",
+            "qa-test-strategy": "PASS",
+            "ux-design": "HOLD",
+            "frontend-web": "HOLD",
+            "llm-evals-orchestrator": "HOLD",
+            "sec-appsec": "HOLD",
+            "sec-authz": "HOLD",
+            "sec-llm": "PASS",
+            "api-surface-designer": "ADVISORY",
+            "legal-compliance": "ADVISORY",
+            "operations-readiness": "BLOCK",
+            "docs-support-readiness": "PASS",
+            "finops-pricing": "ADVISORY",
+        },
     }
-    required_holds = {
-        "ux-design",
-        "frontend-web",
-        "llm-evals-orchestrator",
-        "sec-appsec",
-        "sec-authz",
-    }
-    assert {name for name, gate in l1.items() if gate["verdict"] == "PASS"} == required_passes
-    assert {name for name, gate in l1.items() if gate["verdict"] == "HOLD"} == required_holds
+    assert {
+        rung: {name: gate["verdict"] for name, gate in gates.items()}
+        for rung, gates in data["gates"].items()
+    } == expected_verdicts
+
+    assert len(data["capabilities"]) == 1
+    capability = data["capabilities"][0]
+    receipt_id = "codex-gpt-5-6-sol-high-2026-08-28-v1"
+    assert capability["receipt_id"] == receipt_id
+    assert capability["status"] == "AVAILABLE"
+    assert capability["role"] == "blocking-specialist"
+    assert capability["receipt_hash"] == (
+        "sha256:f33b18c36076d466f391bacd8a348fb960a4673ac6452da0fbb2dd4049aee64a"
+    )
+    qualified_rubrics = set(capability["qualified_rubrics"])
 
     for rung in data["gates"].values():
-        for gate in rung.values():
+        for expert, gate in rung.items():
             assert isinstance(gate["open_findings"], list)
             assert set(gate["evidence"]) == set(gate["evidence_hashes"])
             for relative_path, expected_hash in gate["evidence_hashes"].items():
@@ -60,12 +83,20 @@ def test_harden_state_json_structure() -> None:
                 assert expected_hash == f"sha256:{actual_hash}"
             if gate["verdict"] in {"PASS", "ADVISORY"}:
                 assert gate["verdict_basis"] == "model_receipt"
-                assert gate["capability_receipt"]
+                assert gate["capability_receipt"] == receipt_id
+                assert expert in qualified_rubrics
                 assert gate["open_findings"] == []
             elif gate["verdict"] == "HOLD":
                 assert gate["verdict_basis"] == "none"
                 assert gate["capability_receipt"] == ""
                 assert gate["open_findings"] == []
+            elif gate["verdict"] == "BLOCK":
+                assert gate["verdict_basis"] == "model_receipt"
+                assert gate["capability_receipt"] == receipt_id
+                assert expert in qualified_rubrics
+                assert gate["open_findings"]
+            else:
+                raise AssertionError(f"unexpected verdict: {gate['verdict']}")
 
 
 def test_harden_state_has_operational_caveats() -> None:
