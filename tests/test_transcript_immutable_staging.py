@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -18,6 +19,11 @@ from transcripts.immutable_staging import (
     install_transcript_output,
     read_staged_transcript,
     stage_transcript_artifact,
+)
+
+REQUIRES_HANDLE_OWNED_STAGING = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="Darwin has no handle-owned anonymous staging primitive",
 )
 
 
@@ -64,6 +70,55 @@ def _read(artifact: StagedTranscriptArtifact) -> bytes:
     )
 
 
+def _preconstructed_artifact(
+    source: Path,
+    private_root: Path,
+    payload: bytes,
+) -> StagedTranscriptArtifact:
+    """Build typed provenance for validation branches that do no filesystem read."""
+
+    source = source.resolve()
+    private_root = private_root.resolve()
+    source_metadata = source.stat()
+    root_metadata = private_root.stat()
+    digest = _digest(payload)
+    return StagedTranscriptArtifact(
+        source_path=source,
+        source_device=int(source_metadata.st_dev),
+        source_inode=int(source_metadata.st_ino),
+        staging_root=private_root,
+        staging_root_device=int(root_metadata.st_dev),
+        staging_root_inode=int(root_metadata.st_ino),
+        staged_path=private_root / f"{digest}.transcript",
+        sha256=digest,
+        size_bytes=len(payload),
+    )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin-only staging contract")
+def test_darwin_staging_fails_closed_before_persistence(tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+
+    with pytest.raises(
+        TranscriptStagingError,
+        match="handle-owned anonymous staging",
+    ):
+        stage_transcript_artifact(
+            source,
+            private_root,
+            expected_sha256=_digest(payload),
+            expected_size_bytes=len(payload),
+            max_bytes=1024,
+        )
+
+    assert list(private_root.iterdir()) == []
+
+
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_consumer_uses_only_snapshot_after_source_changes(tmp_path: Path) -> None:
     source = tmp_path / "source.txt"
     private_root = tmp_path / "private"
@@ -83,6 +138,7 @@ def test_consumer_uses_only_snapshot_after_source_changes(tmp_path: Path) -> Non
     assert _read(artifact) == payload
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_stage_is_content_addressed_and_replay_is_exact(tmp_path: Path) -> None:
     source = tmp_path / "source.txt"
     private_root = tmp_path / "private"
@@ -100,6 +156,7 @@ def test_stage_is_content_addressed_and_replay_is_exact(tmp_path: Path) -> None:
     assert tuple(private_root.iterdir()) == (first.staged_path,)
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_concurrent_replay_commits_one_complete_snapshot(tmp_path: Path) -> None:
     source = tmp_path / "source.txt"
     private_root = tmp_path / "private"
@@ -151,6 +208,7 @@ def test_existing_content_address_collision_fails_closed(tmp_path: Path) -> None
     assert target.read_bytes() == b"forged collision"
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_output_install_is_exclusive_read_only_and_idempotent(tmp_path: Path) -> None:
     output_root = tmp_path / "raw"
     output_root.mkdir()
@@ -250,6 +308,7 @@ def test_output_install_rejects_hardlink_without_mutating_victim(tmp_path: Path)
     assert victim.read_bytes() == b"victim"
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_consumer_rejects_staged_byte_tampering(tmp_path: Path) -> None:
     source = tmp_path / "source.txt"
     private_root = tmp_path / "private"
@@ -264,6 +323,7 @@ def test_consumer_rejects_staged_byte_tampering(tmp_path: Path) -> None:
         _read(artifact)
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_consumer_rejects_writable_snapshot_even_when_bytes_match(tmp_path: Path) -> None:
     source = tmp_path / "source.txt"
     private_root = tmp_path / "private"
@@ -280,8 +340,9 @@ def test_consumer_revalidates_forged_model_construct_path(tmp_path: Path) -> Non
     source = tmp_path / "source.txt"
     private_root = tmp_path / "private"
     private_root.mkdir()
-    source.write_bytes(b"authorized")
-    artifact = _stage(source, private_root)
+    payload = b"authorized"
+    source.write_bytes(payload)
+    artifact = _preconstructed_artifact(source, private_root, payload)
     outside = tmp_path / "outside.txt"
     outside.write_bytes(b"authorized")
     forged = StagedTranscriptArtifact.model_construct(
@@ -371,6 +432,7 @@ def test_stage_rejects_simulated_windows_reparse_points(
         _stage(source, private_root)
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_read_rejects_simulated_staged_reparse_point(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -393,6 +455,7 @@ def test_read_rejects_simulated_staged_reparse_point(
         _read(artifact)
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_consumer_rejects_hardlinked_staged_file(tmp_path: Path) -> None:
     source = tmp_path / "source.txt"
     private_root = tmp_path / "private"
@@ -464,7 +527,7 @@ def test_public_boundary_rejects_wrong_runtime_types(tmp_path: Path) -> None:
             expected_size_bytes=str(len(payload)),
             max_bytes=1024,
         )
-    artifact = _stage(source, private_root)
+    artifact = _preconstructed_artifact(source, private_root, payload)
     with pytest.raises(TranscriptStagingError, match="source identity"):
         _call_untyped(
             read_staged_transcript,
@@ -505,7 +568,7 @@ def test_read_requires_independent_root_source_digest_and_length(tmp_path: Path)
     private_root.mkdir()
     payload = b"authorized"
     source.write_bytes(payload)
-    artifact = _stage(source, private_root)
+    artifact = _preconstructed_artifact(source, private_root, payload)
 
     with pytest.raises(TypeError):
         _call_untyped(read_staged_transcript, artifact)
@@ -565,7 +628,7 @@ def test_coordinated_receipt_root_source_and_digest_forgery_is_rejected(
     payload = b"authorized"
     substituted = b"substitute"
     source.write_bytes(payload)
-    artifact = _stage(source, trusted_root)
+    artifact = _preconstructed_artifact(source, trusted_root, payload)
     attacker_source = tmp_path / "attacker-source.txt"
     attacker_source.write_bytes(substituted)
     attacker_target = attacker_root / f"{_digest(substituted)}.transcript"
@@ -607,7 +670,7 @@ def test_model_construct_and_copy_cannot_forge_expected_length(tmp_path: Path) -
     private_root.mkdir()
     payload = b"authorized"
     source.write_bytes(payload)
-    artifact = _stage(source, private_root)
+    artifact = _preconstructed_artifact(source, private_root, payload)
     constructed = StagedTranscriptArtifact.model_construct(
         source_path=artifact.source_path,
         source_device=artifact.source_device,
@@ -665,6 +728,7 @@ def test_source_swap_between_lstat_and_open_is_rejected(
     assert list(private_root.iterdir()) == []
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_root_swap_between_lstat_and_open_is_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -698,6 +762,7 @@ def test_root_swap_between_lstat_and_open_is_rejected(
         _read(artifact)
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_staged_target_swap_between_lstat_and_open_is_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -766,6 +831,7 @@ def test_source_hardlink_is_rejected(tmp_path: Path) -> None:
         _stage(source, private_root, payload=payload)
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_atomic_install_failure_cleans_temporary_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -835,6 +901,7 @@ def test_windows_substituted_temporary_cannot_poison_canonical_target(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX anonymous-temporary contract")
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_posix_temporary_has_no_mutable_name(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -871,6 +938,7 @@ def test_posix_temporary_has_no_mutable_name(
     assert tuple(private_root.iterdir()) == (artifact.staged_path,)
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_cleanup_never_deletes_a_replacement_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -915,6 +983,7 @@ def test_cleanup_never_deletes_a_replacement_path(
     assert list(private_root.iterdir()) == []
 
 
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_cleanup_never_chmods_a_replacement_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1024,6 +1093,7 @@ def test_failed_installed_target_is_removed_through_owned_handle(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX non-destructive cleanup contract")
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_posix_failed_install_never_unlinks_a_substituted_victim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1160,6 +1230,7 @@ def test_windows_open_root_handle_blocks_commit_redirection(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX dir_fd contract")
+@REQUIRES_HANDLE_OWNED_STAGING
 def test_posix_root_replacement_cannot_redirect_commit_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
