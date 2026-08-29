@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+import unicodedata
 from enum import StrEnum
 from pathlib import Path
 
@@ -21,11 +22,34 @@ _FORBIDDEN_MAC_CHECKOUT_DB = (
 ).resolve()
 
 
-def _reject_forbidden_mac_checkout_database(path: str | os.PathLike[str]) -> None:
+def _normalized_component(value: str) -> str:
+    """Compare one filesystem component using macOS's Unicode/case rules."""
+    return unicodedata.normalize("NFC", value).casefold()
+
+
+def _is_forbidden_mac_checkout_database(path: str | os.PathLike[str]) -> bool:
+    candidate = Path(path).expanduser().resolve(strict=False)
+    if candidate == _FORBIDDEN_MAC_CHECKOUT_DB:
+        return True
+
+    candidate_parent = candidate.parent
+    forbidden_parent = _FORBIDDEN_MAC_CHECKOUT_DB.parent
+    if not candidate_parent.exists() or not forbidden_parent.exists():
+        return False
+    try:
+        same_parent = candidate_parent.samefile(forbidden_parent)
+    except OSError:
+        return False
+    return same_parent and _normalized_component(candidate.name) == _normalized_component(
+        _FORBIDDEN_MAC_CHECKOUT_DB.name
+    )
+
+
+def reject_forbidden_mac_checkout_database(path: str | os.PathLike[str]) -> None:
     """Prevent every connection path from treating the Mac checkout as authority."""
     if sys.platform != "darwin" or os.fspath(path) == ":memory:":
         return
-    if Path(path).expanduser().resolve() == _FORBIDDEN_MAC_CHECKOUT_DB:
+    if _is_forbidden_mac_checkout_database(path):
         raise RuntimeError(
             "Mac checkout database is prohibited; use an explicit disposable test database "
             "or approved provenance-bearing export of the canonical Windows database"
@@ -79,7 +103,7 @@ def connect_sqlite(
     destinations are new, caller-owned local files used by backup or isolated
     synthetic tooling and intentionally retain the default journal mode.
     """
-    _reject_forbidden_mac_checkout_database(path)
+    reject_forbidden_mac_checkout_database(path)
     if role is SQLiteConnectionRole.WRITER:
         require_safe_sqlite_writer_runtime()
 

@@ -32,7 +32,11 @@ from models.artifacts import (
 from pipeline.queries import ANALYZED_LIST_TYPE_VALUES, BRIEFED_LIST_TYPE_VALUES
 from runtime.python_process import managed_python_argv
 from sec_identity import sec_user_agent
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from sqlite_runtime import (
+    SQLiteConnectionRole,
+    connect_sqlite,
+    reject_forbidden_mac_checkout_database,
+)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -157,13 +161,7 @@ def get_connection(*, allow_create: bool = False) -> sqlite3.Connection:
     the sole compatibility bootstrap and passes ``allow_create=True``.
     """
     path = Path(DB_PATH)
-    forbidden_mac_checkout = (Path(PROJECT_ROOT) / "data" / "portfolio.db").resolve()
-    if sys.platform == "darwin" and path.resolve() == forbidden_mac_checkout:
-        raise RuntimeError(
-            f"the Mac checkout database is prohibited as an authority: {path}; "
-            "use an explicit temporary/restored-snapshot database for validation or the "
-            "canonical Windows database for production state"
-        )
+    reject_forbidden_mac_checkout_database(path)
     if not allow_create:
         _require_initialized_database(path)
     if not os.path.exists(DATA_DIR):
