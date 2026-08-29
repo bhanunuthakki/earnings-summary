@@ -79,16 +79,28 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     assert "<BootTrigger>" in api_xml
     assert "<UserId>S-1-5-18</UserId>" in api_xml
     assert (
-        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;BU)</SecurityDescriptor>"
+        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)</SecurityDescriptor>"
         in api_xml
     )
-    assert "(A;;FR;;;BU)" not in api_xml
+    for forbidden_query_ace in (
+        "(A;;GRGX;;;BU)",
+        "(A;;GRGX;;;AU)",
+        "(A;;GR;;;IU)",
+        "(A;;FR;;;IU)",
+    ):
+        assert forbidden_query_ace not in api_xml
     assert api_xml.count("<SecurityDescriptor>") == 1
     rendered_api_xml = rendered_xml_bytes(api, cron_dir=CRON_DIR, project_root=PROJECT_ROOT).decode(
         "utf-16"
     )
-    assert "(A;;GR;;;BU)" in rendered_api_xml
-    assert "(A;;FR;;;BU)" not in rendered_api_xml
+    assert "(A;;GRGX;;;IU)" in rendered_api_xml
+    for forbidden_query_ace in (
+        "(A;;GRGX;;;BU)",
+        "(A;;GRGX;;;AU)",
+        "(A;;GR;;;IU)",
+        "(A;;FR;;;IU)",
+    ):
+        assert forbidden_query_ace not in rendered_api_xml
     # UserId identifies LOCAL SYSTEM. Explicit ServiceAccount is rejected by
     # schtasks.exe on the target Windows host.
     assert "<LogonType>" not in api_xml
@@ -112,6 +124,22 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     assert {task.wrapper for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("run_*.bat") if path.name != "run_python.bat"
     }
+
+
+def test_operations_runtime_collector_keeps_scheduler_access_query_only() -> None:
+    collector = (
+        PROJECT_ROOT / "execution" / "collect_operations_runtime_observations.py"
+    ).read_text(encoding="utf-8")
+
+    assert '["schtasks.exe", "/Query", "/FO", "CSV"]' in collector
+    for forbidden_operation in (
+        '"/Run"',
+        '"/End"',
+        '"/Change"',
+        '"/Delete"',
+        "SetSecurityDescriptor",
+    ):
+        assert forbidden_operation not in collector
 
 
 def test_source_xml_preserves_exact_expected_disabled_lanes() -> None:
@@ -172,7 +200,10 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
 
     assert "execution/verify_cron_registration.py" in runbook
     assert "schtasks.exe /Query" in runbook
-    assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;BU)" in runbook
+    assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)" in runbook
+    assert "`GR` alone can expose the" in runbook
+    assert "do not broaden it to Builtin or Authenticated" in runbook
+    assert "must remain query-only" in runbook
     assert "S-1-5-18" in runbook
 
     # Keep the operator path contract aligned with backup_db.py and

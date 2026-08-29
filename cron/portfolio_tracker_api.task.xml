@@ -3,7 +3,7 @@
   <RegistrationInfo>
     <Description>Always-on Portfolio Tracker API listener. Runs as LOCAL SYSTEM at boot and fails closed unless its explicit root and loopback API URL are available to that account.</Description>
     <URI>\earnings-summary\portfolio_tracker_api</URI>
-    <SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;BU)</SecurityDescriptor>
+    <SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)</SecurityDescriptor>
   </RegistrationInfo>
   <Triggers>
     <BootTrigger>
