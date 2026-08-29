@@ -72,12 +72,17 @@ Literal values live only in executable masters.
 - Status colors communicate status only and must retain a non-color cue.
 - Raw colors, ad-hoc opacity, gradients, and consumer aliases are prohibited.
 
-### Shape, depth, and motion
+### Shape and depth
 
 - Shape comes from registered control and family recipes: radius, border, shadow, blur, and transform.
 - Use elevation only to explain layering or focus.
-- Motion uses the registered transition vocabulary and honors reduced-motion.
-- Different corners, shadows, motion, or overlay geometry require a master change.
+- Different corners, shadows, or overlay geometry require a master change.
+
+### Motion
+
+- Animate only for feedback, state legibility, spatial continuity, or preventing jarring change—never decoration.
+- Keep frequent/keyboard flows and updates instant; values, charts, evidence and reading position stay stable.
+- Occasional overlays/disclosures may use an anchored recipe. Masters own timing, properties and reduced motion; `directives/interaction_contract.md` owns behavior.
 
 ### Spacing, grids, and indents
 
@@ -113,12 +118,11 @@ Recipes include semantics, keyboard access, focus, labels, contrast, non-color c
 
 The shared `frontend-quality` procedure owns the generic rubric. This project narrows it:
 
-- Use only the four visible roles needed by the hierarchy; sans remains prose/labels and mono
-  remains limited to the named financial, code, ticker, timestamp, and locator roles.
+- Keep the four registered type roles and sans/mono uses; hierarchy must not add another.
 - Start in normal flow and use registered family recipes. Every nested boxed region needs a named
   semantic, state, interaction, or ownership boundary; flatten the rest.
-- Accent remains interaction/selection/focus/unread only, while status retains its separate
-  semantic role and non-color cue. Decorative left rails and ornamental variation are not recipes.
+- Accent is interaction/selection/focus/unread; status keeps its own role and non-color cue.
+  Decorative rails and ornamental variation are not recipes.
 - Equivalent sections share a registered composition grammar. Bullets and indentation represent
   actual content structure, not texture; subtitles add information rather than repeat titles.
 - Before the composed guard, perform the page-level reduction pass: remove non-semantic
@@ -150,8 +154,8 @@ For a legitimate new visual need:
 
 1. Identify the owning global or family master. If none exists, add one typed
    master entry rather than styling the consumer.
-2. Add the smallest closed vocabulary: semantic token, component variant, family
-   recipe, or exact dynamic/runtime contract. Do not add an open-ended style bag.
+2. Add the smallest closed vocabulary: semantic token, component variant, family recipe, or exact
+   dynamic/runtime contract; no open style bag. For motion, record purpose, frequency, input, anchor/direction, reduced motion, and layout/paint exceptions.
 3. Add a red/green adversarial test that proves the requested decision passes and
    a nearby drift attempt fails.
 4. Update `src/ui/design_registry.py` with owner and rationale when the census,
@@ -179,8 +183,4 @@ python execution/verify_design_conformance.py --check --route-canaries
 python -m pytest tests/test_design_registry.py tests/test_design_conformance_canonical.py tests/test_design_sync.py tests/test_ui_controls.py -q
 ```
 
-Route canaries use production renders at both widths, wait for hydration, walk light/open-shadow
-DOM, and check archetype, anatomy, type, spacing, shape, depth, alignment, fit, and reduced motion.
-
-Report-renderer changes require workspace golden regeneration and diff review;
-generated React changes require the design-system check/build.
+Renderer changes require golden diff review; generated React changes require the design-system check/build.
