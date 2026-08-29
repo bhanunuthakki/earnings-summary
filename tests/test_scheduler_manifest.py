@@ -79,10 +79,12 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     assert "<BootTrigger>" in api_xml
     assert "<UserId>S-1-5-18</UserId>" in api_xml
     assert (
-        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)</SecurityDescriptor>"
+        "<SecurityDescriptor>D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;IU)</SecurityDescriptor>"
         in api_xml
     )
     for forbidden_query_ace in (
+        "(A;;FA;;;SY)",
+        "(A;;FA;;;BA)",
         "(A;;GRGX;;;BU)",
         "(A;;GRGX;;;AU)",
         "(A;;GR;;;IU)",
@@ -95,6 +97,8 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     )
     assert "(A;;GRGX;;;IU)" in rendered_api_xml
     for forbidden_query_ace in (
+        "(A;;FA;;;SY)",
+        "(A;;FA;;;BA)",
         "(A;;GRGX;;;BU)",
         "(A;;GRGX;;;AU)",
         "(A;;GR;;;IU)",
@@ -169,7 +173,51 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     ]
     assert first_script.count("schtasks.exe /Create") == len(registered_tasks)
     assert first_script.count("Failed to register scheduled task") == len(registered_tasks)
+    tracker_create = (
+        "& schtasks.exe /Create /TN '\\earnings-summary\\portfolio_tracker_api' "
+        "/XML (Join-Path $renderDir 'portfolio_tracker_api.task.xml') /F"
+    )
+    tracker_acl = (
+        "& $taskSecurityScript -TaskPath '\\earnings-summary\\portfolio_tracker_api' "
+        "-RenderedXmlPath (Join-Path $renderDir 'portfolio_tracker_api.task.xml')"
+    )
+    assert tracker_create in first_script
+    assert tracker_acl in first_script
+    assert first_script.index(tracker_create) < first_script.index(tracker_acl)
+    assert first_script.count("& $taskSecurityScript -TaskPath") == len(registered_tasks)
     assert "| Windows service |" in first_doc
+
+
+def test_task_security_descriptor_helper_is_fail_closed_and_rollback_safe() -> None:
+    helper = (CRON_DIR / "apply_task_security_descriptor.ps1").read_text(encoding="utf-8")
+
+    assert "'/t:Task/t:RegistrationInfo/t:SecurityDescriptor'" in helper
+    assert "'/t:Task/t:RegistrationInfo/t:URI'" in helper
+    assert "Rendered task XML URI does not exactly match TaskPath" in helper
+    assert "$TaskDontAddPrincipalAce = 0x10" in helper
+    assert "$registeredTask.GetSecurityDescriptor(" in helper
+    assert "$previousDescriptor" in helper
+    assert "$registeredTask.SetSecurityDescriptor(" in helper
+    assert "Rollback readback did not match" in helper
+    assert "DiscretionaryAclProtected" in helper
+    assert "AccessAllowed" in helper
+    assert "S-1-5-18" in helper
+    assert "S-1-5-32-544" in helper
+    assert "S-1-5-4" in helper
+    assert "[uint32]268435456" in helper
+    assert "[uint32]2684354560" in helper
+    assert "[uint32]2032127" in helper
+    assert "[uint32]1179817" in helper
+    assert "unexpected trustee" in helper
+    assert "unexpected access mask" in helper
+    assert "nonzero ACE flags" in helper
+    assert "Assert-DeclaredQueryOnlyTaskDacl" in helper
+    assert "Assert-ActualQueryOnlyTaskDacl" in helper
+    assert "Get-DaclSemanticSignature" in helper
+    assert '"protected=$protected;daclNull=$daclNull;"' in helper
+    assert '"aceCount=$($aceSignatures.Count);aces=' in helper
+    assert "$VerifyOnly" in helper
+    assert "GetSddlForm" not in helper
 
 
 def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract() -> None:
@@ -200,10 +248,16 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
 
     assert "execution/verify_cron_registration.py" in runbook
     assert "schtasks.exe /Query" in runbook
-    assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)" in runbook
+    assert "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;IU)" in runbook
     assert "`GR` alone can expose the" in runbook
     assert "do not broaden it to Builtin or Authenticated" in runbook
     assert "must remain query-only" in runbook
+    assert "SetSecurityDescriptor" in runbook
+    assert "GetSecurityDescriptor(4)" in runbook
+    assert "-VerifyOnly" in runbook
+    assert "0x1f01ff" in runbook
+    assert "0x1200a9" in runbook
+    assert "actual task DACL" in runbook
     assert "S-1-5-18" in runbook
 
     # Keep the operator path contract aligned with backup_db.py and
