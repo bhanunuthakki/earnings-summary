@@ -41,6 +41,7 @@ class ContentRouteContext:
     safe_ticker: Callable[[str], str]
     build_ticker_command_center: Callable[[Path, str], _TickerCommandCenter]
     linked_gsheet: Callable[[Path, str], tuple[str | None, str | None]]
+    probe_tracker: Callable[[], tuple[bool, str]]
     fetch_live_portfolio: Callable[[], LivePortfolio]
     default_user_id: str
 
@@ -442,12 +443,22 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             validated = context.safe_ticker(ticker)
         except ValueError:
             abort(400)
+        tracker_alive, tracker_url = context.probe_tracker()
+        live = (
+            context.fetch_live_portfolio()
+            if tracker_alive
+            else LivePortfolio(
+                available=False,
+                api_url=tracker_url,
+                error="tracker liveness probe failed (connection refused or timed out)",
+            )
+        )
         try:
             payload = build_company_desk(
                 repo_root,
                 context.get_read_db(),
                 validated,
-                live=context.fetch_live_portfolio(),
+                live=live,
             )
         except LookupError:
             abort(404)

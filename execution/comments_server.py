@@ -164,7 +164,7 @@ from integrations.portfolio_allocation import fetch_portfolio_allocation  # noqa
 from integrations.portfolio_offline_snapshot import (  # noqa: E402
     read_configured_offline_portfolio_snapshot,
 )
-from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
+from integrations.portfolio_tracker_client import fetch_live_portfolio, probe_tracker  # noqa: E402
 from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from llm.postprocess import strip_inline_markdown  # noqa: E402
@@ -4506,6 +4506,7 @@ def create_app(
             safe_ticker=ticker_validation.safe_ticker,
             build_ticker_command_center=build_ticker_command_center,
             linked_gsheet=_linked_gsheet,
+            probe_tracker=probe_tracker,
             fetch_live_portfolio=fetch_live_portfolio,
             default_user_id=DEFAULT_USER_ID,
         ),
