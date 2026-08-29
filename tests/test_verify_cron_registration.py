@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import cast
@@ -553,6 +554,13 @@ def test_main_exit_code_one_on_missing(tmp_path: Path) -> None:
     assert rc == 1
 
 
+def test_main_exit_code_two_only_when_scheduler_unavailable(tmp_path: Path) -> None:
+    _write_task_xml(tmp_path / "t.task.xml", r"\earnings-summary\t", "03:00:00")
+    with patch("execution.verify_cron_registration._query_schtasks", return_value=None):
+        rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 2
+
+
 def test_main_exit_code_one_on_extra_scheduler_task(tmp_path: Path) -> None:
     expected = r"\earnings-summary\daily"
     stale = r"\earnings-summary\stale_required_writer"
@@ -568,6 +576,36 @@ def test_main_exit_code_one_on_extra_scheduler_task(tmp_path: Path) -> None:
         patch("execution.verify_cron_registration._query_task_commands", return_value=None),
     ):
         rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 1
+
+
+def test_main_exit_code_one_on_manifest_error_with_empty_manifest(
+    tmp_path: Path,
+) -> None:
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir()
+    (cron_dir / "orphan.task.xml").write_text("<Task/>", encoding="utf-8")
+    (cron_dir / "run_orphan.bat").write_text("@echo off\n", encoding="utf-8")
+    manifest = tmp_path / "task_manifest.json"
+    manifest.write_text(
+        json.dumps({"version": 1, "namespace": r"\earnings-summary", "tasks": []}),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "execution.verify_cron_registration._query_schtasks",
+        return_value={},
+    ):
+        rc = main(
+            [
+                "--cron-dir",
+                str(cron_dir),
+                "--manifest",
+                str(manifest),
+                "--quiet",
+            ]
+        )
+
     assert rc == 1
 
 

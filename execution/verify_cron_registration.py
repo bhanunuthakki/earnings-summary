@@ -652,18 +652,18 @@ def main(argv: list[str] | None = None) -> int:
     # "Nothing to check" means zero *.task.xml files on disk — NOT zero that
     # happened to parse. If every file failed to parse, xml_tasks is empty but
     # report.unparseable is not, and that must surface as a problem (exit 1),
-    # never a false all-clear.
+    # never a false all-clear. Manifest/source-tree errors likewise take exit 1
+    # even when a valid-but-empty manifest leaves no XML tasks to count.
     total_found = len(xml_tasks) + len(report.unparseable) + len(report.no_uri)
-    if total_found == 0:
-        sys.stderr.write("WARNING: no *.task.xml files found — nothing to check.\n")
-        return 0
-
     # If schtasks was unreachable, every task ends up in "missing" — return 2
     # (scheduler query failure) rather than 1 (task mismatch).
     if report.scheduler_unavailable:
         return 2
-
-    return 1 if report.has_problems else 0
+    if report.has_problems:
+        return 1
+    if total_found == 0:
+        sys.stderr.write("WARNING: no *.task.xml files found — nothing to check.\n")
+    return 0
 
 
 if __name__ == "__main__":
