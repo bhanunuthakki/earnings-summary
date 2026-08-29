@@ -57,6 +57,8 @@ _SOURCE_ALLOWLIST: tuple[tuple[str, int], ...] = (
     ("requirements.txt", 4_000),
     ("start_comments_server.bat", 4_000),
     ("execution/upgrade_database.py", 10_000),
+    ("execution/create_sqlite_snapshot.py", 6_000),
+    ("execution/backup_restore_readiness_receipt.py", 12_000),
     ("execution/update_readme.py", 18_000),
     ("tests/test_readme_updater.py", 12_000),
     ("directives/llm_calls.md", 12_000),
@@ -83,6 +85,8 @@ _CLI_CONTRACT_PATHS = (
     "execution/generate_cron_artifacts.py",
     "execution/update_readme.py",
     "execution/upgrade_database.py",
+    "execution/create_sqlite_snapshot.py",
+    "execution/backup_restore_readiness_receipt.py",
     "execution/verify_cron_registration.py",
 )
 

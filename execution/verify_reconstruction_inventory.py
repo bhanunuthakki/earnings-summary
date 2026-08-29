@@ -5,8 +5,9 @@ Validates:
   2. Existence of all declared subsystem root paths, entrypoints, and documentation references.
   3. Syntax correctness of all declared Python entrypoints via `ast.parse`.
   4. Acyclicity and completeness of the subsystem dependency graph (DAG validation).
-  5. Correctness of reconstruction tiers, invariants, and exit-ready boundary declarations.
-  6. Emits a deterministic, typed JSON verification receipt for replacement-agent drills.
+  5. Acyclicity, reachability, and single-head completeness of active Alembic migrations.
+  6. Correctness of reconstruction tiers, invariants, and exit-ready boundary declarations.
+  7. Emits a deterministic, typed JSON verification receipt for replacement-agent drills.
 
 Usage:
   python execution/verify_reconstruction_inventory.py [--manifest PATH] [--receipt PATH] [--json]
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import shlex
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -45,11 +47,30 @@ REQUIRED_SUBSYSTEM_FIELDS = (
     "documentation",
     "version_ownership",
     "backup_ownership",
+    "ownership_paths",
     "state_classification",
     "reconstruction_tier",
     "invariants",
     "exit_ready_boundary",
 )
+OWNERSHIP_FIELDS = frozenset({"version_ownership", "backup_ownership"})
+OWNERSHIP_KINDS = frozenset({"file", "directory"})
+CANONICAL_SUBSYSTEM_IDS = frozenset(
+    {
+        "core_data_layer",
+        "pipeline_execution",
+        "source_adapters",
+        "financial_compute_engine",
+        "synthesis_research_lenses",
+        "llm_router_eval_harness",
+        "operations_governance_hub",
+        "ui_cockpit_server",
+        "user_state_journal_memory",
+        "cron_automation_scheduler",
+        "test_and_verification_suite",
+    }
+)
+SUPPORTED_PYTEST_FLAGS = frozenset({"-q"})
 
 
 @dataclass(frozen=True)
@@ -58,6 +79,7 @@ class SubsystemCheckResult:
     name: str
     path_exists: bool
     entrypoints_valid: bool
+    test_commands_valid: bool
     docs_valid: bool
     python_syntax_pass: bool
     version_ownership_valid: bool
@@ -78,6 +100,332 @@ class ManifestVerificationReceipt:
     total_issues_count: int
     dependency_graph_acyclic: bool
     results: list[SubsystemCheckResult]
+
+
+def check_alembic_graph(repo_root: Path) -> tuple[bool, list[str]]:
+    """Verify that active Alembic migrations form one complete DAG.
+
+    The check intentionally derives the head from the active directory rather
+    than naming a historical revision, so archived migrations and future
+    migrations cannot silently make the manifest stale. Every node must be
+    reachable from a base and lead to the sole active head; this also catches
+    disconnected cycles that a head-count check alone would miss.
+    """
+    versions_dir = repo_root / "alembic" / "versions"
+    if not versions_dir.is_dir():
+        return False, ["Active Alembic versions directory does not exist: alembic/versions"]
+
+    revisions: dict[str, Path] = {}
+    parents_by_revision: dict[str, tuple[str, ...]] = {}
+    issues: list[str] = []
+    migration_files = sorted(
+        path for path in versions_dir.glob("*.py") if path.name != "__init__.py"
+    )
+    if not migration_files:
+        return False, ["Active Alembic versions directory contains no migration files"]
+    for path in migration_files:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError) as exc:
+            issues.append(
+                f"Alembic migration cannot be parsed: {path.relative_to(repo_root)} ({exc})"
+            )
+            continue
+        values: dict[str, object] = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in {"revision", "down_revision"}:
+                    if value is None:
+                        issues.append(
+                            f"Alembic migration has a non-literal {target.id}: {path.relative_to(repo_root)}"
+                        )
+                        continue
+                    try:
+                        values[target.id] = ast.literal_eval(value)
+                    except (ValueError, SyntaxError):
+                        issues.append(
+                            f"Alembic migration has a non-literal {target.id}: {path.relative_to(repo_root)}"
+                        )
+        revision = values.get("revision")
+        if not isinstance(revision, str) or not revision.strip():
+            issues.append(
+                f"Alembic migration has no non-empty revision: {path.relative_to(repo_root)}"
+            )
+            continue
+        if revision in revisions:
+            issues.append(f"Duplicate Alembic revision '{revision}' in active graph")
+            continue
+        revisions[revision] = path
+        down_revision = values.get("down_revision")
+        migration_path = str(path.relative_to(repo_root))
+        if down_revision is None:
+            parents_by_revision[revision] = ()
+        elif isinstance(down_revision, str) and down_revision.strip():
+            parents_by_revision[revision] = (down_revision,)
+        elif isinstance(down_revision, (tuple, list)):
+            candidate_parents = cast(tuple[object, ...] | list[object], down_revision)
+            if all(isinstance(item, str) and item.strip() for item in candidate_parents):
+                parents_by_revision[revision] = tuple(cast(str, item) for item in candidate_parents)
+            else:
+                issues.append(f"Alembic migration has an invalid down_revision: {migration_path}")
+                parents_by_revision[revision] = ()
+        else:
+            issues.append(f"Alembic migration has an invalid down_revision: {migration_path}")
+            parents_by_revision[revision] = ()
+
+    revision_ids = set(revisions)
+    parents = {
+        parent for revision_parents in parents_by_revision.values() for parent in revision_parents
+    }
+    unknown_parents = sorted(parents - revision_ids)
+    if unknown_parents:
+        issues.append(
+            "Alembic graph references missing parent revisions: " + ", ".join(unknown_parents)
+        )
+    children_by_revision: dict[str, set[str]] = {revision: set() for revision in revisions}
+    for revision, revision_parents in parents_by_revision.items():
+        for parent in revision_parents:
+            if parent in children_by_revision:
+                children_by_revision[parent].add(revision)
+
+    heads = sorted(revision for revision, children in children_by_revision.items() if not children)
+    if len(heads) != 1:
+        issues.append(
+            f"Alembic migration graph must have exactly one active head; found {len(heads)}: {', '.join(heads) or 'none'}"
+        )
+
+    # Three-colour DFS across every node detects cycles, including components
+    # disconnected from the otherwise valid primary migration chain.
+    visit_state: dict[str, int] = {revision: 0 for revision in revisions}
+    cycle_paths: list[str] = []
+
+    def visit(revision: str, path: list[str]) -> None:
+        visit_state[revision] = 1
+        path.append(revision)
+        for child in sorted(children_by_revision[revision]):
+            if visit_state[child] == 0:
+                visit(child, path)
+            elif visit_state[child] == 1:
+                cycle_start = path.index(child)
+                cycle_paths.append(" -> ".join([*path[cycle_start:], child]))
+        path.pop()
+        visit_state[revision] = 2
+
+    for revision in sorted(revisions):
+        if visit_state[revision] == 0:
+            visit(revision, [])
+    for cycle in cycle_paths:
+        issues.append(f"Alembic migration cycle detected: {cycle}")
+
+    bases = sorted(
+        revision
+        for revision, revision_parents in parents_by_revision.items()
+        if not revision_parents
+    )
+    reachable_from_base: set[str] = set()
+    pending = list(bases)
+    while pending:
+        revision = pending.pop()
+        if revision in reachable_from_base:
+            continue
+        reachable_from_base.add(revision)
+        pending.extend(sorted(children_by_revision[revision] - reachable_from_base))
+    unreachable_from_base = sorted(revision_ids - reachable_from_base)
+    if unreachable_from_base:
+        issues.append(
+            "Alembic migration nodes are not reachable from a base: "
+            + ", ".join(unreachable_from_base)
+        )
+
+    if len(heads) == 1:
+        reaches_head: set[str] = set()
+        pending = [heads[0]]
+        while pending:
+            revision = pending.pop()
+            if revision in reaches_head:
+                continue
+            reaches_head.add(revision)
+            pending.extend(
+                parent for parent in parents_by_revision[revision] if parent in revision_ids
+            )
+        cannot_reach_head = sorted(revision_ids - reaches_head)
+        if cannot_reach_head:
+            issues.append(
+                f"Alembic migration nodes cannot reach sole active head '{heads[0]}': "
+                + ", ".join(cannot_reach_head)
+            )
+    return not issues, issues
+
+
+def _validate_ownership_paths(
+    repo_root: Path,
+    raw_paths: object,
+) -> tuple[dict[str, bool], list[str]]:
+    """Validate structured ownership paths without requiring runtime directories.
+
+    ``required_in_checkout`` distinguishes version-controlled authorities from
+    runtime-created or externally populated directories. Every path is still
+    required to be workspace-relative, even when its presence is optional.
+    """
+    validity = {field: True for field in OWNERSHIP_FIELDS}
+    issues: list[str] = []
+    if not isinstance(raw_paths, list):
+        return (
+            {field: False for field in OWNERSHIP_FIELDS},
+            ["'ownership_paths' must be a list of structured path entries"],
+        )
+
+    workspace_root = repo_root.resolve()
+    for index, raw_entry in enumerate(cast(list[object], raw_paths)):
+        prefix = f"ownership_paths[{index}]"
+        if not isinstance(raw_entry, dict):
+            issues.append(f"{prefix} must be an object")
+            for field in validity:
+                validity[field] = False
+            continue
+
+        entry = cast(dict[str, object], raw_entry)
+        missing = [key for key in ("field", "kind", "required_in_checkout") if key not in entry]
+        if missing:
+            issues.append(f"{prefix} missing required keys: {', '.join(missing)}")
+            for field in validity:
+                validity[field] = False
+            continue
+
+        field = entry["field"]
+        kind = entry["kind"]
+        required = entry["required_in_checkout"]
+        entry_field = field if isinstance(field, str) else None
+        if entry_field not in OWNERSHIP_FIELDS:
+            issues.append(f"{prefix}.field must be one of {sorted(OWNERSHIP_FIELDS)}")
+            for valid_field in validity:
+                validity[valid_field] = False
+            entry_field = None
+        if not isinstance(kind, str) or kind not in OWNERSHIP_KINDS:
+            issues.append(f"{prefix}.kind must be one of {sorted(OWNERSHIP_KINDS)}")
+            if entry_field is not None:
+                validity[entry_field] = False
+        if not isinstance(required, bool):
+            issues.append(f"{prefix}.required_in_checkout must be a boolean")
+            if entry_field is not None:
+                validity[entry_field] = False
+            continue
+
+        path_value = entry.get("path")
+        if not isinstance(path_value, str) or not path_value.strip():
+            issues.append(f"{prefix}.path must be a non-empty string")
+            if entry_field is not None:
+                validity[entry_field] = False
+            continue
+
+        ownership_path = path_value.strip()
+        normalized = ownership_path.replace("\\", "/")
+        path_parts = tuple(part for part in normalized.split("/") if part)
+        is_drive_absolute = len(normalized) >= 3 and normalized[1:3] == ":/"
+        if normalized.startswith("/") or normalized.startswith("//") or is_drive_absolute:
+            issues.append(f"{prefix}.path escapes workspace root: {ownership_path}")
+            if entry_field is not None:
+                validity[entry_field] = False
+            continue
+        if ".." in path_parts:
+            issues.append(f"{prefix}.path escapes workspace root: {ownership_path}")
+            if entry_field is not None:
+                validity[entry_field] = False
+            continue
+
+        candidate = (repo_root / Path(*path_parts)).resolve()
+        try:
+            candidate.relative_to(workspace_root)
+        except ValueError:
+            issues.append(f"{prefix}.path escapes workspace root: {ownership_path}")
+            if entry_field is not None:
+                validity[entry_field] = False
+            continue
+
+        # Runtime/external paths are intentionally allowed to be absent. If an
+        # optional path is present, its declared file-vs-directory type remains
+        # part of the manifest contract; checkout-owned paths also fail closed
+        # when missing.
+        if required or candidate.exists():
+            if kind == "file" and not candidate.is_file():
+                issues.append(f"{prefix}.path must be an existing file: {ownership_path}")
+                if entry_field is not None:
+                    validity[entry_field] = False
+            elif kind == "directory" and not candidate.is_dir():
+                issues.append(f"{prefix}.path must be an existing directory: {ownership_path}")
+                if entry_field is not None:
+                    validity[entry_field] = False
+
+    return validity, issues
+
+
+def _validate_test_commands(repo_root: Path, raw_commands: object) -> tuple[bool, list[str]]:
+    """Validate pytest commands and every declared test target they name."""
+    if not isinstance(raw_commands, list):
+        return False, ["'test_commands' must be a list"]
+    if not raw_commands:
+        return False, ["'test_commands' must contain at least one command"]
+    issues: list[str] = []
+    for index, raw_command in enumerate(cast(list[object], raw_commands)):
+        prefix = f"test_commands[{index}]"
+        if not isinstance(raw_command, str) or not raw_command.strip():
+            issues.append(f"{prefix} must be a non-empty string")
+            continue
+        try:
+            tokens = shlex.split(raw_command)
+        except ValueError as exc:
+            issues.append(f"{prefix} is not shell-parseable: {exc}")
+            continue
+        if not tokens or not (
+            tokens[0] == "pytest"
+            or tokens[:3] == [sys.executable, "-m", "pytest"]
+            or (tokens[:2] == ["python", "-m"] and len(tokens) > 2 and tokens[2] == "pytest")
+        ):
+            issues.append(f"{prefix} must invoke pytest directly")
+            continue
+        unsupported_flags = {
+            token
+            for token in tokens
+            if token.startswith("-") and token not in SUPPORTED_PYTEST_FLAGS
+        }
+        if unsupported_flags:
+            issues.append(
+                f"{prefix} contains unsupported pytest flags: {sorted(unsupported_flags)}"
+            )
+            continue
+        targets = [token for token in tokens[1:] if not token.startswith("-") and token != "pytest"]
+        if (
+            tokens[0] in {"python", sys.executable}
+            and len(tokens) >= 3
+            and tokens[1:3] == ["-m", "pytest"]
+        ):
+            targets = [token for token in tokens[3:] if not token.startswith("-")]
+        if not targets:
+            issues.append(f"{prefix} must declare at least one test target")
+            continue
+        for target in targets:
+            normalized = target.replace("\\", "/")
+            parts = tuple(part for part in normalized.split("/") if part)
+            if (
+                normalized.startswith(("/", "//"))
+                or (len(normalized) >= 3 and normalized[1:3] == ":/")
+                or ".." in parts
+                or not normalized.startswith("tests/")
+            ):
+                issues.append(f"{prefix} target must be a workspace-relative tests path: {target}")
+                continue
+            matches = list(repo_root.glob(normalized))
+            if not matches or not all(path.is_file() for path in matches):
+                issues.append(f"{prefix} target does not match an existing test file: {target}")
+    return not issues, issues
 
 
 def check_dependency_dag(
@@ -143,6 +491,7 @@ def verify_manifest(
                     name="Manifest File",
                     path_exists=False,
                     entrypoints_valid=False,
+                    test_commands_valid=False,
                     docs_valid=False,
                     python_syntax_pass=False,
                     version_ownership_valid=False,
@@ -175,6 +524,7 @@ def verify_manifest(
                     name="Manifest File",
                     path_exists=True,
                     entrypoints_valid=False,
+                    test_commands_valid=False,
                     docs_valid=False,
                     python_syntax_pass=False,
                     version_ownership_valid=False,
@@ -200,10 +550,19 @@ def verify_manifest(
         issues_total.append(f"Expected exactly 11 subsystems, found {len(subsystems)}")
 
     subsystem_ids: set[str] = {str(item.get("id", "")) for item in subsystems if "id" in item}
+    if len(subsystem_ids) != len(subsystems):
+        issues_total.append("Subsystem IDs must be unique")
+    missing_ids = sorted(CANONICAL_SUBSYSTEM_IDS - subsystem_ids)
+    unexpected_ids = sorted(subsystem_ids - CANONICAL_SUBSYSTEM_IDS)
+    if missing_ids:
+        issues_total.append("Missing canonical subsystem IDs: " + ", ".join(missing_ids))
+    if unexpected_ids:
+        issues_total.append("Unexpected subsystem IDs: " + ", ".join(unexpected_ids))
 
     # Verify dependency DAG
     dag_acyclic, dag_issues = check_dependency_dag(subsystems, subsystem_ids)
     issues_total.extend(dag_issues)
+    alembic_graph_valid, alembic_graph_issues = check_alembic_graph(repo_root)
 
     for item in subsystems:
         sub_id = str(item.get("id", "unnamed"))
@@ -212,6 +571,7 @@ def verify_manifest(
         entrypoints_raw = item.get("entrypoints", [])
         docs_raw = item.get("documentation", [])
         dependencies_raw = item.get("dependencies", [])
+        ownership_paths_raw = item.get("ownership_paths")
         version_ownership = str(item.get("version_ownership", "")).strip()
         backup_ownership = str(item.get("backup_ownership", "")).strip()
         state_classification = str(item.get("state_classification", "")).strip()
@@ -222,6 +582,7 @@ def verify_manifest(
         sub_issues: list[str] = []
         path_exists = False
         entrypoints_valid = True
+        test_commands_valid = True
         docs_valid = True
         python_syntax_pass = True
         version_valid = bool(version_ownership)
@@ -242,6 +603,30 @@ def verify_manifest(
         if not exit_ready_boundary:
             sub_issues.append("Empty or missing 'exit_ready_boundary'")
 
+        ownership_validity, ownership_issues = _validate_ownership_paths(
+            repo_root, ownership_paths_raw
+        )
+        sub_issues.extend(ownership_issues)
+        version_valid = version_valid and ownership_validity["version_ownership"]
+        backup_valid = backup_valid and ownership_validity["backup_ownership"]
+        ownership_fields_bound: set[str] = set()
+        if isinstance(ownership_paths_raw, list):
+            for raw_entry in cast(list[object], ownership_paths_raw):
+                if isinstance(raw_entry, dict):
+                    field_value = cast(dict[str, object], raw_entry).get("field")
+                    if isinstance(field_value, str):
+                        ownership_fields_bound.add(field_value)
+        for ownership_field in OWNERSHIP_FIELDS - ownership_fields_bound:
+            sub_issues.append(f"{ownership_field} lacks bound typed ownership evidence")
+            if ownership_field == "version_ownership":
+                version_valid = False
+            else:
+                backup_valid = False
+
+        if sub_id == "core_data_layer" and not alembic_graph_valid:
+            sub_issues.extend(alembic_graph_issues)
+            version_valid = False
+
         if reconstruction_tier not in VALID_RECONSTRUCTION_TIERS:
             sub_issues.append(
                 f"Invalid reconstruction_tier: '{reconstruction_tier}'. Expected one of {sorted(VALID_RECONSTRUCTION_TIERS)}"
@@ -249,6 +634,11 @@ def verify_manifest(
 
         if not isinstance(invariants_raw, list) or len(cast(list[object], invariants_raw)) == 0:
             sub_issues.append("Invariants must be a non-empty list of invariant statements")
+
+        test_commands_valid, test_command_issues = _validate_test_commands(
+            repo_root, item.get("test_commands")
+        )
+        sub_issues.extend(test_command_issues)
 
         # 1. Check subsystem base path
         base_path = repo_root / path_str
@@ -314,6 +704,7 @@ def verify_manifest(
                 name=name,
                 path_exists=path_exists,
                 entrypoints_valid=entrypoints_valid,
+                test_commands_valid=test_commands_valid,
                 docs_valid=docs_valid,
                 python_syntax_pass=python_syntax_pass,
                 version_ownership_valid=version_valid,
