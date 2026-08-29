@@ -79,10 +79,16 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     assert "<BootTrigger>" in api_xml
     assert "<UserId>S-1-5-18</UserId>" in api_xml
     assert (
-        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)</SecurityDescriptor>"
+        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;BU)</SecurityDescriptor>"
         in api_xml
     )
+    assert "(A;;FR;;;BU)" not in api_xml
     assert api_xml.count("<SecurityDescriptor>") == 1
+    rendered_api_xml = rendered_xml_bytes(api, cron_dir=CRON_DIR, project_root=PROJECT_ROOT).decode(
+        "utf-16"
+    )
+    assert "(A;;GR;;;BU)" in rendered_api_xml
+    assert "(A;;FR;;;BU)" not in rendered_api_xml
     # UserId identifies LOCAL SYSTEM. Explicit ServiceAccount is rejected by
     # schtasks.exe on the target Windows host.
     assert "<LogonType>" not in api_xml
@@ -166,7 +172,7 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
 
     assert "execution/verify_cron_registration.py" in runbook
     assert "schtasks.exe /Query" in runbook
-    assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)" in runbook
+    assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;BU)" in runbook
     assert "S-1-5-18" in runbook
 
     # Keep the operator path contract aligned with backup_db.py and

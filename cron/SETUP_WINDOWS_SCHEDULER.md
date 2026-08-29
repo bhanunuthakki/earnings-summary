@@ -434,7 +434,7 @@ $TrackerApiXml = (schtasks.exe /Query `
 if ($LASTEXITCODE -ne 0) { throw 'portfolio_tracker_api is not registered' }
 $ExpectedTrackerApiAction = Join-Path $EarningsSummaryCodeRoot 'cron\run_portfolio_tracker_api.bat'
 foreach ($Expected in @(
-  'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)',
+  'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;BU)',
   '<UserId>S-1-5-18</UserId>',
   "<Command>$ExpectedTrackerApiAction</Command>"
 )) {
@@ -451,6 +451,11 @@ if (-not $TrackerRefreshXml.Contains("<Command>$ExpectedTrackerRefreshAction</Co
   throw 'refresh_portfolio_tracker live action does not target the runtime checkout'
 }
 ```
+
+`GR` is the Task Scheduler generic-read grant required by the unprivileged
+Operations collector. Do not substitute the file-specific `FR` token: the
+task can appear as `Missing` to the independent review plane even while it is
+running under LOCAL SYSTEM.
 
 The verifier must report no missing, extra, disabled, schedule-mismatched, or
 wrong-checkout Scheduler declarations. The XML checks additionally prove the
