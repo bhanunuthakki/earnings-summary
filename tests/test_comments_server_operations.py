@@ -325,6 +325,19 @@ def test_operations_registry_comes_from_code_root_not_minimal_runtime_root(
     build_registry.assert_called_once_with(code_root.resolve())
 
 
+def test_operations_review_bundle_loads_kpi_repair_from_state_root() -> None:
+    source = (PROJECT_ROOT / "execution" / "comments_server.py").read_text(encoding="utf-8")
+    route = source.split("def operations_review_bundle_api():", maxsplit=1)[1].split(
+        '@app.route("/api/panel/<name>"', maxsplit=1
+    )[0]
+
+    repair_call = route.split("kpi_repair=load_kpi_repair_review(", maxsplit=1)[1].split(
+        "),", maxsplit=1
+    )[0]
+    assert "repo_root=repo_root" in repair_call
+    assert "resolved_code_root" not in repair_call
+
+
 def test_start_tracker_route_uses_runtime_manager_and_persists_typed_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

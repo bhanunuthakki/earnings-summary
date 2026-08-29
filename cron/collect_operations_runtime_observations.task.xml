@@ -45,7 +45,7 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_collect_operations_runtime_observations.bat</Command>
+      <Command>%USERPROFILE%\.gemini\antigravity\runtime\earnings-summary\cron\run_collect_operations_runtime_observations.bat</Command>
     </Exec>
   </Actions>
 </Task>
