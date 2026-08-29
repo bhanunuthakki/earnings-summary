@@ -1,14 +1,37 @@
 # Setting up the earnings-summary crons on Windows Task Scheduler
 
-This is the one-time wiring for the scheduled tasks defined in this folder.
-All crons run as `InteractiveToken` under `%USERNAME%`, log to
-`.tmp/cron_logs/<task>_<TS>.log`, and are registered under the
-`\earnings-summary\` namespace so they show up grouped in the Task Scheduler
-GUI.
+This is the operator runbook for the scheduled tasks defined in this folder.
+The manifest owns each task's principal: most jobs run as the interactive user,
+while `portfolio_tracker_api` runs as LOCAL SYSTEM. Jobs log to
+`.tmp/cron_logs/<task>_<TS>.log` and Scheduler-backed declarations are grouped
+under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-45 scheduled tasks total — the authoritative set is `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic human-readable inventory. Run `python execution/sqlite_bootstrap.py execution/generate_cron_artifacts.py --check` to validate exact XML/wrapper coverage and generated artifacts, then `python execution/sqlite_bootstrap.py execution/verify_cron_registration.py` to compare the manifest with live Task Scheduler state. Registration uses `cron/register_tasks.generated.ps1`, which renders every XML action against the checkout invoking it before calling `schtasks`; adding a declaration here does not register or run it. A monthly disaster-recovery drill (15th, 09:00) restores the latest backup to a throwaway path and verifies it (see **Disaster-recovery drill** below). The five daily data-chain tasks run in sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 05:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (typed 20-stage manifest with atomic checkpoint/resume); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); and a weekly Thursday audit verifies every declared task is registered and on schedule. Session distillation remains available only as an explicit, operator-reviewed maintenance CLI.
+45 operational declarations total — 44 Task Scheduler registrations and one
+separately managed Windows service. The authoritative set is
+`cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
+human-readable inventory. Run
+`python execution/sqlite_bootstrap.py execution/generate_cron_artifacts.py --check`
+to validate exact XML/wrapper coverage and generated artifacts, then
+`python execution/sqlite_bootstrap.py execution/verify_cron_registration.py` to
+compare the manifest with live Task Scheduler state. Registration uses
+`cron/register_tasks.generated.ps1`, which renders every XML action against the
+checkout invoking it before calling `schtasks`; adding a declaration here does
+not register or run it. A monthly disaster-recovery drill (15th, 09:00)
+restores the latest backup to a throwaway path and verifies it (see
+**Disaster-recovery drill** below). The five daily data-chain tasks run in
+sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at
+05:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (typed
+20-stage manifest with atomic checkpoint/resume); an eighth (02:45) backs up
+the database before the chain starts; the hourly catch-up is independent; the
+weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer,
+the IR-spreadsheet KPI series, and the IR-document corpus — including a
+twice-weekly rescan of the names whose IR crawl is still failing (a
+bot-protected site that may start cooperating); and a weekly Thursday audit
+verifies every declared task is registered and on schedule. Session
+distillation remains available only as an explicit, operator-reviewed
+maintenance CLI.
 
 The retired `\earnings-summary\monthly_p3_refresh` task is no longer declared or registered by this checkout. On each Windows host where it was previously installed, run this one-time manual cleanup. This repository change does not execute the command or mutate Windows Task Scheduler:
 
@@ -37,7 +60,7 @@ rows, and archived migrations remain retained evidence.
 | `earnings-summary\portfolio_tracker_api` | Boot, LOCAL SYSTEM | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | The sole always-on API owner. It requires system-visible `PORTFOLIO_TRACKER_ROOT` and loopback-only `PORTFOLIO_TRACKER_API_URL`; a missing/unsafe value fails instead of guessing a checkout, interpreter, or bind address. It proves its child PID owns the configured loopback endpoint and writes a receipt heartbeat every five minutes; lost proof stops the child before Scheduler retries. |
 | `earnings-summary\refresh_portfolio_tracker` | Daily 07:30 | `refresh_portfolio_tracker.task.xml` | `run_refresh_portfolio_tracker.bat` | Runs the read-only receipt producer: typed HealthV1/database, snapshot, currency, reconciliation, and account-coverage evidence. It does not start the API or claim listener ownership; before attribution it verifies through Task Scheduler COM that the exact registered task and this checkout wrapper are running. Its refresh and Scheduler planes are expected current for 26 hours, while the API listener remains on the five-minute/15-minute heartbeat contract. |
 
-The generated registration script creates both declarations. Run it elevated and pass the intended checkout as `-RepoRoot`; it renders the registered action to that absolute checkout path before calling `schtasks`. LOCAL SYSTEM reads only machine-visible environment values, so user-scoped variables and a user `.env` are not a configuration source for the API task. To roll back only this runtime registration, use elevated `schtasks /Delete /TN "\\earnings-summary\\portfolio_tracker_api" /F` and `schtasks /Delete /TN "\\earnings-summary\\refresh_portfolio_tracker" /F`, then run `execution/verify_cron_registration.py` so the missing declarations are explicit rather than silently assumed healthy.
+The generated registration script creates both declarations. Run it elevated and pass the intended checkout as `-RepoRoot`; it renders the registered action to that absolute checkout path before calling `schtasks`. LOCAL SYSTEM reads only machine-visible environment values, so user-scoped variables and a user `.env` are not a configuration source for the API task. Roll back a bad Scheduler change by restoring the last known-good manifest, XML, wrappers, and generated artifacts in the canonical runtime checkout, rerunning **Install or re-register**, and completing **Verify live state**. Deleting these required tasks is retirement, not rollback.
 
 ### Pre-chain backup
 
@@ -150,17 +173,92 @@ The scheduled counterpart to the daily `backup_db` — a backup you have never r
 |---|---|---|---|---|
 | `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest authenticated encrypted** backup to a throwaway temp path and verifies AES-GCM authentication, decryption, gunzip, `PRAGMA integrity_check`, core-table row counts, and a soft schema-version match. **Never touches the live DB** except to record one `ingestion_runs` row. Exit 0 = passed, 1 = a hard check failed, 2 = no encrypted snapshot found. Plain `.gz` files are ignored except by the explicit one-time migration utility. |
 
-### Re-registering after a schedule change
+### Backup inventory and non-destructive restore verification
 
-Editing a `*.task.xml` only changes the repo definition — the **live** Windows task keeps its old trigger until you re-import it. After changing a schedule, re-run its `schtasks /create /f` (overwrite) so the registered trigger matches the XML; otherwise `verify_cron` reports a SCHEDULE MISMATCH. The 2026-06 stagger pass moved three jobs to de-conflict same-minute LLM work — re-register these three if they were already installed:
+Run these commands from the canonical runtime checkout. The durable state stays
+at `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\data\portfolio.db`;
+the runtime checkout is code, not a second database authority. The restore host
+must have `ES_DB_BACKUP_KEY_FILE` pointing at the escrowed key and, when the
+default Google Drive directory is not used, `ES_DB_BACKUP_DIR` pointing at the
+encrypted backup directory.
 
-```cmd
-schtasks /create /f /tn "earnings-summary\refresh_dirty_artifacts" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_dirty_artifacts.task.xml"   REM 04:00 -> 05:00
+```powershell
+$EarningsSummaryCodeRoot = 'C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary'
+$EarningsSummaryDataRoot = 'C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary'
+$EarningsSummaryDbPath = Join-Path $EarningsSummaryDataRoot 'data\portfolio.db'
+$env:EARNINGS_SUMMARY_DB_PATH = $EarningsSummaryDbPath
+$EarningsSummaryAttemptId = [guid]::NewGuid().ToString('N')
+$EarningsSummaryRecoveryRoot = Join-Path $env:TEMP "earnings-summary-recovery-$EarningsSummaryAttemptId"
+$EarningsSummaryRecoveryDbPath = Join-Path $EarningsSummaryRecoveryRoot 'portfolio.db'
+New-Item -ItemType Directory -Path $EarningsSummaryRecoveryRoot -ErrorAction Stop | Out-Null
+Set-Location $EarningsSummaryCodeRoot
 
-schtasks /create /f /tn "earnings-summary\model_eval_sweep" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\model_eval_sweep.task.xml"           REM Sun 02:00 -> Sat 20:00
+python execution/sqlite_bootstrap.py cron/restore_db.py --list
+if ($LASTEXITCODE -ne 0) { throw 'backup listing failed' }
+
+python execution/sqlite_bootstrap.py cron/restore_db.py --latest `
+  --to $EarningsSummaryRecoveryDbPath --schema-policy exact
+if ($LASTEXITCODE -ne 0) { throw 'non-destructive restore verification failed' }
 ```
+
+`--latest` authenticates and decrypts the selected `.gz.enc`, restores only to
+the unique sibling/temp path, and verifies integrity, quick-check, foreign keys,
+and the exact Alembic head. `cron/restore_db.py` intentionally refuses the
+canonical live path. Do not use `--force` against the live database or turn the
+verified sibling into a live replacement while any service or scheduled writer
+is running.
+
+### Guarded recovery and rollback
+
+A verified sibling is the recovery input, not permission to overwrite live
+state. For an owner-approved recovery window:
+
+1. Record the chosen encrypted backup name and the successful restore receipt.
+2. Stop `es-dashboard`, stop the `portfolio_tracker_api` task, disable the
+   `\earnings-summary\` scheduled writers, and verify no process owns
+   `portfolio.db`, `portfolio.db-wal`, or `portfolio.db-shm`.
+3. Preserve the current canonical database as an attempt-identified rollback
+   file beside it. Keep its WAL/SHM state with that rollback set; do not copy a
+   live SQLite file independently.
+4. Only while every writer remains stopped, replace the canonical database with
+   the already verified recovery database. Re-enable/register the fleet from
+   the current runtime checkout and run the live checks in **Verify live state**.
+5. If service health, schema, Scheduler actions, or dashboard hydration fails,
+   stop all writers again and restore the preserved rollback set. Do not delete
+   either recovery receipt until the owner accepts the recovered state.
+
+The repository deliberately has no unattended live-replacement command. The
+offline writer-stop proof and retained rollback copy are required guards.
+
+### Durable-state export
+
+For an owner-requested plaintext export, create a verified reader snapshot at a
+named protected destination outside both checkouts:
+
+```powershell
+$EarningsSummaryExportRoot = Join-Path $env:USERPROFILE 'Documents\earnings-summary-exports'
+$EarningsSummaryExportDbPath = Join-Path $EarningsSummaryExportRoot "portfolio-$EarningsSummaryAttemptId.db"
+New-Item -ItemType Directory -Path $EarningsSummaryExportRoot -ErrorAction Stop | Out-Null
+python execution/sqlite_bootstrap.py execution/create_sqlite_snapshot.py `
+  --source-path $EarningsSummaryDbPath `
+  --destination-path $EarningsSummaryExportDbPath
+if ($LASTEXITCODE -ne 0) { throw 'durable-state export failed' }
+```
+
+The export contains the canonical SQLite application state and the adjacent
+strict `<snapshot>.manifest.json` provenance/integrity receipt. It does not
+include `.env`, encryption keys, external Portfolio Tracker state, loose source
+corpora, or generated outputs. This export is sensitive plaintext, unlike the
+encrypted backup envelope: restrict access, move both files together, and use
+the encrypted backup workflow for unattended or cloud retention.
+
+### Re-registering after an XML or security change
+
+Editing a `*.task.xml`, wrapper, trigger, principal, or security descriptor does
+not change the live Windows task. Re-run the complete generated registration
+command in **Install or re-register** after every such change. The generated
+script uses `/F` and replaces every Scheduler-backed manifest declaration, so a
+partial hand-maintained import cannot leave old triggers or ACLs behind.
 
 ## Shared job runtime — exit codes & the schema-drift guard
 
@@ -253,8 +351,18 @@ ORDER BY COUNT(*) DESC;
 - `.env` next to `pyproject.toml` containing `FMP_API_KEY=...` and optionally
   `FMP_TIER=premium|starter|basic` (defaults to `basic` if unset — set
   `FMP_TIER=premium` when you have a paid sub to unlock the full rate).
-- The repo cloned at `%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary`
-  — or any path you set in `PROJECT_ROOT` at the top of each `.bat`.
+- Canonical code checkout at
+  `C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary`. Wrappers resolve
+  their code root from their own registered action; do not edit them to point at
+  the scratch directory.
+- Canonical durable-state root at
+  `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary`. Keep
+  `data\portfolio.db` there; never create a runtime-checkout database as a
+  fallback.
+- A machine-visible `EARNINGS_SUMMARY_DB_PATH` set to that canonical database
+  path for scheduled/service processes. The LOCAL SYSTEM tracker API also
+  requires its documented machine-visible `PORTFOLIO_TRACKER_ROOT` and
+  loopback-only `PORTFOLIO_TRACKER_API_URL` values.
 - Claude Code CLI on PATH and authed (only required by `daily_fetch_and_brief`
   for §8/§9 generation; the worker falls back to Gemini if the CLI fails).
 - The optional `ir` extra (required by `refresh_ir_kpis` and
@@ -265,111 +373,32 @@ ORDER BY COUNT(*) DESC;
   exit non-zero (ImportError) and are logged as failures, but the batch still
   completes — every other task is unaffected.
 
-## Install
+## Install or re-register
 
-From an **admin** PowerShell or `cmd` window, run one `schtasks /create` per
-task:
+From an **elevated PowerShell** window, validate the canonical manifest and run
+the generated installer from the runtime checkout. Always pass `-RepoRoot`
+explicitly so every rendered action points at that checkout:
 
-```cmd
-schtasks /create /tn "earnings-summary\backup_db" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\backup_db.task.xml"
+```powershell
+$EarningsSummaryCodeRoot = 'C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary'
+$EarningsSummaryPython = (Get-Command python.exe -ErrorAction Stop).Source
+Set-Location $EarningsSummaryCodeRoot
 
-schtasks /create /tn "earnings-summary\refresh_cache" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_cache.task.xml" ^
-  /ru "%USERNAME%"
+& $EarningsSummaryPython execution/sqlite_bootstrap.py `
+  execution/generate_cron_artifacts.py --check
+if ($LASTEXITCODE -ne 0) { throw 'scheduler source validation failed' }
 
-schtasks /create /tn "earnings-summary\refresh_dirty_artifacts" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_dirty_artifacts.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\run_morning_pipeline" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_morning_pipeline.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\scan_ir_transcripts" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\scan_ir_transcripts.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\backfill_transcripts" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\backfill_transcripts.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\fetch_fmp_earnings_calendar" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_fmp_earnings_calendar.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\backfill_earnings_surprises" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\backfill_earnings_surprises.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\daily_fetch_and_brief" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\daily_fetch_and_brief.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\onboard_pending" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\onboard_pending_tickers.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\weekly_p2_lens_refresh" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_p2_lens_refresh.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\weekly_synthesis" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_synthesis.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\refresh_ir_kpis" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_ir_kpis.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\discover_ir_documents" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\discover_ir_documents.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\discover_ir_failing" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\discover_ir_failing.task.xml"
-
-schtasks /create /tn "earnings-summary\verify_cron" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\verify_cron.task.xml"
-
-schtasks /create /tn "earnings-summary\submit_saydo_batch" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\submit_saydo_batch.task.xml"
-
-schtasks /create /tn "earnings-summary\red_team" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\red_team.task.xml"
-
-schtasks /create /tn "earnings-summary\fetch_macro_series" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_macro_series.task.xml"
-
-schtasks /create /tn "earnings-summary\model_eval_sweep" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\model_eval_sweep.task.xml"
-
-schtasks /create /tn "earnings-summary\grade_calibration" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\grade_calibration.task.xml"
-
-schtasks /create /tn "earnings-summary\weekly_validation" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_validation.task.xml"
-
-schtasks /create /tn "earnings-summary\weekly_cleanup" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_cleanup.task.xml"
-
-schtasks /create /tn "earnings-summary\weekly_score_stances" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_score_stances.task.xml"
-
-schtasks /create /tn "earnings-summary\monthly_advisor_memos" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\monthly_advisor_memos.task.xml"
-
-schtasks /create /tn "earnings-summary\monthly_calibration_scorecard" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\monthly_calibration_scorecard.task.xml"
-
-schtasks /create /tn "earnings-summary\restore_drill" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\restore_drill.task.xml"
+& (Join-Path $EarningsSummaryCodeRoot 'cron\register_tasks.generated.ps1') `
+  -Python $EarningsSummaryPython `
+  -RepoRoot $EarningsSummaryCodeRoot
+if ($LASTEXITCODE -ne 0) { throw 'scheduler registration failed' }
 ```
 
-The `/tn` value is the registered task name (used by all `schtasks` commands
-below); the `/xml` value is the file in this folder. Note that the
-`onboard_pending` task name doesn't match its XML filename — that's fine, the
-filename is just for humans.
+This is the only supported bulk registration path. It registers every
+Scheduler-backed declaration in `cron/task_manifest.json`, including
+`\earnings-summary\portfolio_tracker_api` and
+`\earnings-summary\refresh_portfolio_tracker`; the separately managed Windows
+service declaration remains identified as such in `cron/TASKS.generated.md`.
 
 ### Migrating from PR #172's `run_triggers` cron
 
@@ -383,14 +412,45 @@ stage doesn't double-fire:
 schtasks /delete /tn "earnings-summary\run_triggers" /f
 ```
 
-## Verify
+## Verify live state
 
-```cmd
-schtasks /query /tn "earnings-summary\<task>" /v /fo LIST
+Registration success is not live proof. In the same elevated PowerShell, run
+the manifest-wide verifier and then inspect the two Portfolio Tracker XML
+registrations whose ownership and ACL are operationally significant:
+
+```powershell
+Set-Location $EarningsSummaryCodeRoot
+& $EarningsSummaryPython execution/sqlite_bootstrap.py `
+  execution/verify_cron_registration.py
+if ($LASTEXITCODE -ne 0) { throw 'live Scheduler manifest verification failed' }
+
+$TrackerApiXml = (schtasks.exe /Query `
+  /TN '\earnings-summary\portfolio_tracker_api' /XML | Out-String)
+if ($LASTEXITCODE -ne 0) { throw 'portfolio_tracker_api is not registered' }
+$ExpectedTrackerApiAction = Join-Path $EarningsSummaryCodeRoot 'cron\run_portfolio_tracker_api.bat'
+foreach ($Expected in @(
+  'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)',
+  '<UserId>S-1-5-18</UserId>',
+  "<Command>$ExpectedTrackerApiAction</Command>"
+)) {
+  if (-not $TrackerApiXml.Contains($Expected)) {
+    throw "portfolio_tracker_api live XML mismatch: $Expected"
+  }
+}
+
+$TrackerRefreshXml = (schtasks.exe /Query `
+  /TN '\earnings-summary\refresh_portfolio_tracker' /XML | Out-String)
+if ($LASTEXITCODE -ne 0) { throw 'refresh_portfolio_tracker is not registered' }
+$ExpectedTrackerRefreshAction = Join-Path $EarningsSummaryCodeRoot 'cron\run_refresh_portfolio_tracker.bat'
+if (-not $TrackerRefreshXml.Contains("<Command>$ExpectedTrackerRefreshAction</Command>")) {
+  throw 'refresh_portfolio_tracker live action does not target the runtime checkout'
+}
 ```
 
-You should see `Status: Ready` and a `Next Run Time` consistent with the
-cadence in the table above.
+The verifier must report no missing, extra, disabled, schedule-mismatched, or
+wrong-checkout Scheduler declarations. The XML checks additionally prove the
+API's exact SDDL, LOCAL SYSTEM principal (`S-1-5-18`), and both tracker actions.
+Do not infer those properties from source XML or a successful health endpoint.
 
 ## Test fire (without waiting for the schedule)
 
@@ -472,7 +532,7 @@ Then check:
 You can also run any wrapper directly to bypass the scheduler entirely:
 
 ```cmd
-%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_<task>.bat
+C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary\cron\run_<task>.bat
 ```
 
 ## Uninstall
@@ -483,6 +543,6 @@ schtasks /delete /tn "earnings-summary\<task>" /f
 
 ## Edit the schedule
 
-Open Task Scheduler → Task Scheduler Library → `earnings-summary` →
-`<task>` → Properties → Triggers tab. Or edit the XML and re-import with
-`/create /f` to overwrite.
+Edit the canonical XML, regenerate/check artifacts, and rerun **Install or
+re-register**. Do not hand-edit live Scheduler properties: the next generated
+registration would correctly replace them from source.
