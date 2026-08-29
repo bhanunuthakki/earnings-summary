@@ -198,25 +198,27 @@ def test_unconverted_fx_reason_fails_a_non_usd_reporter_at_fx_1(tmp_path: Path) 
     mod = importlib.util.module_from_spec(spec)
     # Register before exec: the script defines dataclasses, and dataclass
     # resolution looks the defining module up in sys.modules.
+    previous = _sys.modules.get("refresh_dcf")
     _sys.modules["refresh_dcf"] = mod
     try:
         spec.loader.exec_module(mod)
-    except BaseException:
-        _sys.modules.pop("refresh_dcf", None)
-        raise
-
-    fmp = tmp_path / "data" / "historical" / "fmp"
-    fmp.mkdir(parents=True)
-    (fmp / "TSM_income_statement_quarterly.json").write_text(
-        json.dumps([{"reportedCurrency": "TWD"}]), encoding="utf-8"
-    )
-    reason = mod._unconverted_fx_reason(tmp_path, "TSM", 1.0)
-    assert reason is not None and "TWD" in reason
-    # Converted workbook (fx != 1.0) passes; USD reporter at 1.0 passes; missing
-    # cache stays quiet (a USD name with no cache must not fail its refresh).
-    assert mod._unconverted_fx_reason(tmp_path, "TSM", 0.031) is None
-    (fmp / "NU_income_statement_quarterly.json").write_text(
-        json.dumps([{"reportedCurrency": "USD"}]), encoding="utf-8"
-    )
-    assert mod._unconverted_fx_reason(tmp_path, "NU", 1.0) is None
-    assert mod._unconverted_fx_reason(tmp_path, "GOOG", 1.0) is None
+        fmp = tmp_path / "data" / "historical" / "fmp"
+        fmp.mkdir(parents=True)
+        (fmp / "TSM_income_statement_quarterly.json").write_text(
+            json.dumps([{"reportedCurrency": "TWD"}]), encoding="utf-8"
+        )
+        reason = mod._unconverted_fx_reason(tmp_path, "TSM", 1.0)
+        assert reason is not None and "TWD" in reason
+        # Converted workbook (fx != 1.0) passes; USD reporter at 1.0 passes; missing
+        # cache stays quiet (a USD name with no cache must not fail its refresh).
+        assert mod._unconverted_fx_reason(tmp_path, "TSM", 0.031) is None
+        (fmp / "NU_income_statement_quarterly.json").write_text(
+            json.dumps([{"reportedCurrency": "USD"}]), encoding="utf-8"
+        )
+        assert mod._unconverted_fx_reason(tmp_path, "NU", 1.0) is None
+        assert mod._unconverted_fx_reason(tmp_path, "GOOG", 1.0) is None
+    finally:
+        if previous is None:
+            _sys.modules.pop("refresh_dcf", None)
+        else:
+            _sys.modules["refresh_dcf"] = previous
