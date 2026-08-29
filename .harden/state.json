@@ -19,7 +19,7 @@
     "scheduled_work": true
   },
   "fingerprints": {
-    "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+    "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
     "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
     "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
     "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -81,7 +81,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -104,7 +104,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -127,7 +127,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -150,7 +150,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -173,7 +173,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -200,7 +200,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -225,7 +225,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -250,7 +250,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -275,7 +275,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -298,7 +298,7 @@
         "capability_receipt": "",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -321,7 +321,7 @@
         "capability_receipt": "",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -344,7 +344,7 @@
         "capability_receipt": "",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -367,7 +367,7 @@
         "capability_receipt": "",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -390,7 +390,7 @@
         "capability_receipt": "",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -415,7 +415,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -440,7 +440,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -463,7 +463,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -491,7 +491,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -516,7 +516,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
@@ -539,7 +539,7 @@
         "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
         "run_at": "2026-08-29T03:30:57Z",
         "fingerprints": {
-          "worktree": "sha256:60005d3818bca7f26e4c57c88aa6982e3b74bdf8faa01407c3cf97c1b29e34e8",
+          "worktree": "sha256:63692072c6bfffe8b0e84faad31bf4322dbbaaeba9fcea08a44e588dc4096f73",
           "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
           "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
           "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
