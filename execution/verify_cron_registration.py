@@ -10,6 +10,8 @@ metadata, then queries ``schtasks /query /fo csv`` for each declared task.
                 false all-clear over files it never actually checked
   no_uri    — file parsed but contains no <URI> (structurally incomplete task)
   missing   — XML exists but no matching task is registered
+  extra     — a live task in the product namespace is not Scheduler-owned by
+              the manifest (service-owned declarations are excluded)
   disabled  — registered but the task's Status is not Ready/Running
   mismatch  — registered but the scheduled trigger time differs from the XML
   wrong_root— registered, enabled and on-schedule, but the action executes a
@@ -23,7 +25,7 @@ Human-readable table is printed to stdout.  Exit code:
 
   0  all tasks parsed, registered, enabled, and schedule matches
   1  one or more tasks have a problem (manifest / unparseable / no_uri /
-     missing / disabled / mismatch)
+     missing / extra / disabled / mismatch / wrong_root)
   2  could not query the scheduler (non-Windows or permission error)
 
 Intended to run weekly via Task Scheduler (see cron/verify_cron.task.xml) and
@@ -57,6 +59,7 @@ from runtime.service_registry import (  # noqa: E402
     managed_service_for_role,
 )
 from scheduler_manifest import (  # noqa: E402
+    SERVICE_OWNED_TASKS,
     TaskManifest,
     load_manifest,
     validate_source_tree,
@@ -93,6 +96,7 @@ class TaskReport:
     unparseable: list[str] = field(default_factory=list[str])  # "name: error"
     no_uri: list[str] = field(default_factory=list[str])  # filenames
     missing: list[str] = field(default_factory=list[str])
+    extra: list[str] = field(default_factory=list[str])
     disabled: list[str] = field(default_factory=list[str])
     mismatch: list[tuple[str, str, str]] = field(
         default_factory=list[tuple[str, str, str]]
@@ -109,6 +113,7 @@ class TaskReport:
             or self.unparseable
             or self.no_uri
             or self.missing
+            or self.extra
             or self.disabled
             or self.mismatch
             or self.wrong_root
@@ -369,6 +374,37 @@ def compare(
 
     live = _query_schtasks()
     report.scheduler_unavailable = live is None
+
+    # Exact-set check for this product's Scheduler namespace. The generated
+    # installer creates/replaces declared tasks but cannot retire an old task,
+    # so stale registrations must fail the verifier instead of remaining an
+    # invisible second writer. Service-owned declarations (currently the
+    # capture poller) remain outside the Scheduler-owned set and are allowed by
+    # their dedicated service-health compatibility seam below.
+    if manifest is not None:
+        declared_names = {task.task_name.casefold() for task in manifest.tasks}
+        namespace_prefixes = {manifest.namespace.rstrip("\\").casefold() + "\\"}
+    else:
+        declared_names = {task.task_name.casefold() for task in xml_tasks}
+        namespace_prefixes = {
+            name.rpartition("\\")[0] + "\\" for name in declared_names if "\\" in name
+        }
+    scheduler_owned_names = declared_names - SERVICE_OWNED_TASKS
+    service_owned_names = declared_names & SERVICE_OWNED_TASKS
+    allowed_live_names = scheduler_owned_names | service_owned_names
+    if live is not None:
+        report.extra.extend(
+            sorted(
+                (
+                    task_info.get("name") or task_name
+                    for task_name, task_info in live.items()
+                    if any(task_name.startswith(prefix) for prefix in namespace_prefixes)
+                    and task_name not in allowed_live_names
+                ),
+                key=str.casefold,
+            )
+        )
+
     # Which checkout each task actually executes from. A task can be
     # registered, enabled and on-schedule while running a *different* clone of
     # this repo — same wrapper filename, different root, its own data/
@@ -483,6 +519,15 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
             print(f"    x  {name}")
         print()
 
+    if report.extra:
+        print(
+            f"  EXTRA ({len(report.extra)}) — live in the product namespace but not "
+            "Scheduler-owned by the manifest:"
+        )
+        for name in report.extra:
+            print(f"    x  {name}")
+        print()
+
     if report.disabled:
         print(f"  DISABLED ({len(report.disabled)}) — registered but not Ready:")
         for desc in report.disabled:
@@ -509,6 +554,7 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
         + len(report.unparseable)
         + len(report.no_uri)
         + len(report.missing)
+        + len(report.extra)
         + len(report.disabled)
         + len(report.mismatch)
         + len(report.wrong_root)
@@ -526,6 +572,7 @@ def report_payload(report: TaskReport, xml_tasks: list[_XmlTask]) -> dict[str, o
         "unparseable": report.unparseable,
         "no_uri": report.no_uri,
         "missing": report.missing,
+        "extra": report.extra,
         "disabled": report.disabled,
         "mismatch": [
             {"task": name, "xml_time": xml_time, "scheduler_time": scheduler_time}
@@ -605,18 +652,18 @@ def main(argv: list[str] | None = None) -> int:
     # "Nothing to check" means zero *.task.xml files on disk — NOT zero that
     # happened to parse. If every file failed to parse, xml_tasks is empty but
     # report.unparseable is not, and that must surface as a problem (exit 1),
-    # never a false all-clear.
+    # never a false all-clear. Manifest/source-tree errors likewise take exit 1
+    # even when a valid-but-empty manifest leaves no XML tasks to count.
     total_found = len(xml_tasks) + len(report.unparseable) + len(report.no_uri)
-    if total_found == 0:
-        sys.stderr.write("WARNING: no *.task.xml files found — nothing to check.\n")
-        return 0
-
     # If schtasks was unreachable, every task ends up in "missing" — return 2
     # (scheduler query failure) rather than 1 (task mismatch).
     if report.scheduler_unavailable:
         return 2
-
-    return 1 if report.has_problems else 0
+    if report.has_problems:
+        return 1
+    if total_found == 0:
+        sys.stderr.write("WARNING: no *.task.xml files found — nothing to check.\n")
+    return 0
 
 
 if __name__ == "__main__":

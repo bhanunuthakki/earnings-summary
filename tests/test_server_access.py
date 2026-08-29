@@ -84,6 +84,23 @@ def test_private_mobile_origin_requires_secure_origin_only_url(
     assert private_mobile_origin(explicit="http://127.0.0.1:7421") == "http://127.0.0.1:7421"
 
 
+@pytest.mark.parametrize(
+    "origin",
+    (
+        "https://:443",
+        "https://desktop.example.ts.net:not-a-port",
+        "https://desktop.example.ts.net:0",
+        "https://desktop.example.ts.net:65536",
+        "https://user%40example.com@desktop.example.ts.net",
+        "https://desktop.example.ts.net/mobile",
+        "https://desktop.example.ts.net?next=evil",
+        "https://desktop.example.ts.net#fragment",
+    ),
+)
+def test_private_mobile_origin_rejects_malformed_or_unsafe_https_origins(origin: str) -> None:
+    assert private_mobile_origin(explicit=origin) is None
+
+
 def test_report_capability_is_stable_and_never_empty(tmp_path: Path) -> None:
     store = ReportCapabilityStore(tmp_path)
     first = store.load_or_create()

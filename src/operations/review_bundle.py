@@ -18,6 +18,7 @@ from operations.models import (
     ObservationState,
     OperationsRegistry,
     OperationsSnapshot,
+    SchedulerExpectation,
 )
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 
@@ -60,6 +61,7 @@ class ReviewSchedulerTask(_FrozenModel):
     task_name: str = Field(min_length=1, max_length=240)
     state: Literal["Ready", "Running", "Disabled", "Unknown", "Missing"]
     registry_match: Literal["expected", "missing", "unexpected"]
+    scheduler_expectation: SchedulerExpectation | None = None
     expectation_match: bool | None = None
     registered_action_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     registered_checkout_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
@@ -346,6 +348,7 @@ def build_operations_review_bundle(
                     task_name=row.task_name,
                     state=row.state,
                     registry_match=row.registry_match,
+                    scheduler_expectation=row.scheduler_expectation,
                     expectation_match=row.expectation_match,
                     registered_action_sha256=row.registered_action_sha256,
                     registered_checkout_sha256=row.registered_checkout_sha256,

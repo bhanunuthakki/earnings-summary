@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -44,6 +45,11 @@ def _work_os_app_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture(name="work_os_client")
 def _work_os_client(work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
+    monkeypatch.setattr(
+        comments_server,
+        "probe_tracker",
+        lambda: (True, "http://tracker.test"),
+    )
     monkeypatch.setattr(
         comments_server,
         "fetch_live_portfolio",
@@ -897,6 +903,7 @@ def test_company_desk_api_fetches_one_canonical_tracker_snapshot(
             ],
         )
 
+    monkeypatch.setattr(comments_server, "probe_tracker", lambda: (True, "http://tracker.test"))
     monkeypatch.setattr(comments_server, "fetch_live_portfolio", fetch)
     client = comments_server.create_app(work_os_app_repo).test_client()
 
@@ -908,6 +915,34 @@ def test_company_desk_api_fetches_one_canonical_tracker_snapshot(
     assert payload["position"]["weight_pct"] == pytest.approx(12.345)
     assert payload["position"]["market_value"] == pytest.approx(12_345.0)
     assert payload["position"]["position_source"] == "portfolio_tracker_api"
+
+
+def test_company_desk_api_probe_down_returns_promptly_without_tracker_fetch(
+    work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_company_state(work_os_app_repo)
+    monkeypatch.setattr(
+        comments_server,
+        "probe_tracker",
+        lambda: (False, "http://127.0.0.1:8000"),
+    )
+
+    def fetch() -> LivePortfolio:
+        time.sleep(1.0)
+        return LivePortfolio(available=True, api_url="http://127.0.0.1:8000")
+
+    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fetch)
+    client = comments_server.create_app(work_os_app_repo).test_client()
+
+    started = time.monotonic()
+    response = client.get("/api/work-os/companies/nu/desk")
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
+    payload = response.get_json()
+    assert payload["position"]["position_state"] == "unavailable"
+    assert "portfolio_tracker_unavailable" in payload["warnings"]
 
 
 def test_company_desk_degrades_when_optional_tables_are_absent(

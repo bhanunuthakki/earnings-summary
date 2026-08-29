@@ -34,6 +34,7 @@ from pydantic import ValidationError
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from db_paths import configured_db_path  # noqa: E402
 from log_redact import sanitize_operational_text  # noqa: E402
 from operations.models import (  # noqa: E402
     RUNTIME_PAIR_RECEIPT_FILENAME,
@@ -58,6 +59,7 @@ from runtime.job_runtime import (  # noqa: E402
     JobLock,
     inherited_lock_is_valid,
 )
+from runtime.secrets import load_project_env  # noqa: E402
 
 SchedulerState = SchedulerTaskState
 ServiceRuntimeState = ServiceState
@@ -1362,18 +1364,34 @@ def build_runtime_summary(
     )
 
 
+def configured_product_root(code_root: Path) -> Path:
+    """Resolve the product-state root from the canonical database authority."""
+
+    load_project_env(code_root)
+    database = configured_db_path(code_root)
+    if database.name.casefold() != "portfolio.db" or database.parent.name.casefold() != "data":
+        raise RuntimeError(
+            "configured database must be <product-root>/data/portfolio.db; "
+            "pass --repo-root explicitly for an isolated layout"
+        )
+    return database.parent.parent.resolve()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="State root that owns the emitted runtime receipts",
+        help=(
+            "Product-state root that owns the published runtime receipts; "
+            "defaults to the root containing the configured data/portfolio.db"
+        ),
     )
     parser.add_argument(
         "--code-root",
         type=Path,
-        help="Code checkout that owns the Operations registry; defaults to --repo-root",
+        default=PROJECT_ROOT,
+        help="Deployed code root that owns the canonical operations registry",
     )
     parser.add_argument(
         "--emit-receipts",
@@ -1383,8 +1401,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json-out", action="store_true", help="emit a structured summary")
     arguments = parser.parse_args(argv)
 
-    root = arguments.repo_root.resolve()
-    code_root = (arguments.code_root or arguments.repo_root).resolve()
+    code_root = arguments.code_root.resolve()
+    root = (
+        arguments.repo_root.resolve()
+        if arguments.repo_root is not None
+        else configured_product_root(code_root)
+    )
     registry = build_operations_registry(code_root)
     observed_at = datetime.now(UTC)
     lock_ok = True

@@ -19,6 +19,7 @@ from scheduler_manifest import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CRON_DIR = PROJECT_ROOT / "cron"
 MANIFEST_PATH = CRON_DIR / "task_manifest.json"
+RUNBOOK_PATH = CRON_DIR / "SETUP_WINDOWS_SCHEDULER.md"
 EXPECTED_DISABLED_TASKS = {
     r"\earnings-summary\backfill_transcripts",
     r"\earnings-summary\discover_ir_documents",
@@ -77,6 +78,11 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     api_xml = (CRON_DIR / api.xml).read_text(encoding="utf-8")
     assert "<BootTrigger>" in api_xml
     assert "<UserId>S-1-5-18</UserId>" in api_xml
+    assert (
+        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)</SecurityDescriptor>"
+        in api_xml
+    )
+    assert api_xml.count("<SecurityDescriptor>") == 1
     # UserId identifies LOCAL SYSTEM. Explicit ServiceAccount is rejected by
     # schtasks.exe on the target Windows host.
     assert "<LogonType>" not in api_xml
@@ -126,6 +132,55 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert first_script.count("schtasks.exe /Create") == len(registered_tasks)
     assert first_script.count("Failed to register scheduled task") == len(registered_tasks)
     assert "| Windows service |" in first_doc
+
+
+def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract() -> None:
+    runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
+    normalized = runbook.casefold()
+    manifest = load_manifest(MANIFEST_PATH)
+    generated_registration = (CRON_DIR / "register_tasks.generated.ps1").read_text(encoding="utf-8")
+    scheduler_tasks = [
+        task
+        for task in manifest.tasks
+        if task.task_name.casefold() != r"\earnings-summary\capture_poller".casefold()
+    ]
+
+    assert f"{len(manifest.tasks)} operational declarations" in runbook
+    assert f"{len(scheduler_tasks)} Task Scheduler registrations" in runbook
+    assert r"C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary" in runbook
+    assert r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary" in runbook
+    assert "register_tasks.generated.ps1" in runbook
+    assert "-RepoRoot $EarningsSummaryCodeRoot" in runbook
+    assert "schtasks /create /tn" not in normalized
+    assert r"scratch\earnings-summary\cron" not in normalized
+    for tracker_task in (
+        r"\earnings-summary\portfolio_tracker_api",
+        r"\earnings-summary\refresh_portfolio_tracker",
+    ):
+        assert tracker_task in runbook
+        assert tracker_task in generated_registration
+
+    assert "execution/verify_cron_registration.py" in runbook
+    assert "schtasks.exe /Query" in runbook
+    assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)" in runbook
+    assert "S-1-5-18" in runbook
+
+    # Keep the operator path contract aligned with backup_db.py and
+    # restore_db.py: mounted Drive roots D:..Z: win over the stale C: mirror.
+    assert "first existing mounted `<drive>:\\My Drive` from `D:` through `Z:`" in runbook
+    assert "`G:\\My Drive`" in runbook
+    assert "`C:\\Users\\Bhanu\\My Drive`" in runbook
+    assert "%USERPROFILE%\\My Drive" not in runbook
+    assert "an exact schema-version match against the live DB" in runbook
+    assert "a soft schema-version match" not in runbook
+
+    assert "cron/restore_db.py --list" in runbook
+    assert "cron/restore_db.py --latest" in runbook
+    assert "--to $EarningsSummaryRecoveryDbPath" in runbook
+    assert "execution/create_sqlite_snapshot.py" in runbook
+    assert "$EarningsSummaryExportDbPath" in runbook
+    assert ".manifest.json" in runbook
+    assert "rollback" in normalized
 
 
 def test_rendered_actions_point_to_invoking_checkout(tmp_path: Path) -> None:

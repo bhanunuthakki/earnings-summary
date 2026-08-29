@@ -14,34 +14,78 @@ Useful references: [the operator guide](HOW_TO_USE_REPORTS.md), [the data-pipeli
 
 ## Quick start
 
+### Canonical Windows runtime / product use
+
+The canonical production-shaped code checkout and product-state database live on Windows, but they have distinct roots. The code checkout is `C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary`; the canonical database root is `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary`, with the database at `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\data\portfolio.db`. Run the following commands from the Windows code checkout; never create or use a relative `data\portfolio.db` inside the runtime checkout, and never use this Windows database for Mac development:
+
 Requirements: Python 3.11 or later. From the repository root, activate your preferred virtual environment and install runtime plus development dependencies:
 
 ```powershell
+$EarningsSummaryCodeRoot = 'C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary'
+$EarningsSummaryDbRoot = 'C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary'
+$EarningsSummaryDbPath = Join-Path $EarningsSummaryDbRoot 'data\portfolio.db'
+Set-Location $EarningsSummaryCodeRoot
+$env:EARNINGS_SUMMARY_DB_PATH = $EarningsSummaryDbPath
+
 pip install -r requirements.txt
 pip install -e ".[dev]"
 ```
 
-Initialize a new SQLite database or safely upgrade an existing one through the guarded bootstrap seam:
+#### Fresh install (new database)
+
+For a new canonical database, use a new disposable Phase-0 directory for this attempt and run the guarded bootstrap seam without a live-database receipt:
 
 ```powershell
-python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path data/portfolio.db --repo-root .
+$EarningsSummaryAttemptId = [guid]::NewGuid().ToString('N')
+$EarningsSummaryPhase0Root = Join-Path $EarningsSummaryDbRoot (Join-Path '.tmp\phase0' $EarningsSummaryAttemptId)
+New-Item -ItemType Directory -Force $EarningsSummaryPhase0Root | Out-Null
+python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path $EarningsSummaryDbPath --repo-root $EarningsSummaryCodeRoot --runtime-root $EarningsSummaryCodeRoot
 ```
 
-The upgrader uses the shared write lock, validates SQLite integrity, backs up versioned databases before mutation, and refuses to guess a baseline for a non-empty unversioned database. Do not replace it with an ad-hoc migration command for an operator database.
+#### Existing database upgrade (Phase 0 required)
+
+For an existing canonical database, create a governed reader snapshot and receipt under a new attempt/version path, then pass that receipt to the locked migration preflight:
+
+```powershell
+$EarningsSummaryAttemptId = [guid]::NewGuid().ToString('N')
+$EarningsSummaryPhase0Root = Join-Path $EarningsSummaryDbRoot (Join-Path '.tmp\phase0' $EarningsSummaryAttemptId)
+New-Item -ItemType Directory -Force $EarningsSummaryPhase0Root | Out-Null
+$EarningsSummarySnapshotPath = Join-Path $EarningsSummaryPhase0Root 'portfolio.db'
+$EarningsSummaryPhase0ReceiptPath = Join-Path $EarningsSummaryPhase0Root 'backup-restore-readiness.json'
+python execution/create_sqlite_snapshot.py --source-path $EarningsSummaryDbPath --destination-path $EarningsSummarySnapshotPath
+python execution/backup_restore_readiness_receipt.py --source-db $EarningsSummaryDbPath --snapshot-db $EarningsSummarySnapshotPath --manifest "$EarningsSummarySnapshotPath.manifest.json" > $EarningsSummaryPhase0ReceiptPath
+python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path $EarningsSummaryDbPath --repo-root $EarningsSummaryCodeRoot --runtime-root $EarningsSummaryCodeRoot --phase0-backup-restore-receipt $EarningsSummaryPhase0ReceiptPath
+```
+
+The snapshot and receipt bind the exact source database to a verified restored copy and its manifest; do not edit or reuse them after the source changes. The upgrader revalidates that receipt under the shared write lock, validates SQLite integrity, backs up versioned databases before mutation, and refuses to guess a baseline for a non-empty unversioned database. Do not replace this sequence with an ad-hoc migration command for an operator database.
 
 On a fresh install, mirror the checked-in holding theses into the database after the schema upgrade:
 
 ```powershell
-python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply
+python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply --db $EarningsSummaryDbPath
 ```
 
 Start the Work OS with the same bootstrap seam:
 
 ```powershell
-python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421 --repo-root .
+python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421 --repo-root $EarningsSummaryCodeRoot
 ```
 
 Open `http://127.0.0.1:7421` in a browser. On Windows, [start_comments_server.bat](start_comments_server.bat) is an alternative launcher that locates a managed `venv` or `.venv` and starts the same local server.
+
+### Mac development
+
+Mac development and tests must use a disposable database outside this checkout. The following command creates a temporary database path and binds the server and its internal consumers to it; do not omit `EARNINGS_SUMMARY_DB_PATH` or substitute `./data/portfolio.db`:
+
+```bash
+MAC_DB_DIR="$(mktemp -d /tmp/earnings-summary-db.XXXXXX)"
+export EARNINGS_SUMMARY_DB_PATH="$MAC_DB_DIR/portfolio.db"
+python3 execution/sqlite_bootstrap.py execution/upgrade_database.py \
+  --db-path "$EARNINGS_SUMMARY_DB_PATH" --repo-root . --runtime-root . --allow-isolated-db
+python3 execution/sqlite_bootstrap.py execution/comments_server.py --port 7421 --repo-root .
+```
+
+For Mac product use against the always-on runtime, do not start a local server or open Mac `127.0.0.1:7421`. On Windows, run `tailscale serve status` and open the exact private HTTPS origin it reports. A remembered hostname, raw Tailnet IP, or the DNS name from `tailscale status` is not a substitute.
 
 Use the command center for normal operator work. Its documented surface includes portfolio and ticker views, on-demand refreshes, report comments, research conversation, and proposal review. [How to use the workspace reports](HOW_TO_USE_REPORTS.md#command-center-start-here) is the source of truth for supported screens and request shapes.
 

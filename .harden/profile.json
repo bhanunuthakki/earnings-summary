@@ -1,0 +1,17 @@
+{
+  "deployment": "distributed-client",
+  "identity": "single-user",
+  "commerce": "personal",
+  "surfaces": [
+    "cli",
+    "api",
+    "web"
+  ],
+  "data": [
+    "durable",
+    "external",
+    "sensitive"
+  ],
+  "llm": "tool-using",
+  "scheduled_work": true
+}

@@ -164,7 +164,7 @@ from integrations.portfolio_allocation import fetch_portfolio_allocation  # noqa
 from integrations.portfolio_offline_snapshot import (  # noqa: E402
     read_configured_offline_portfolio_snapshot,
 )
-from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
+from integrations.portfolio_tracker_client import fetch_live_portfolio, probe_tracker  # noqa: E402
 from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from llm.postprocess import strip_inline_markdown  # noqa: E402
@@ -2067,6 +2067,17 @@ def create_app(
     @app.route("/api/operations/review-bundle", methods=["GET"])
     def operations_review_bundle_api():
         """Sanitized, typed Windows authority projection for Mac review."""
+        configured_private_origin = private_mobile_origin(
+            config_path=secret_read_path("private_mobile_base_url", repo_root=repo_root)
+        )
+        if (
+            configured_private_origin is None
+            or urllib.parse.urlparse(configured_private_origin).scheme != "https"
+        ):
+            return _client_error(
+                "private review origin is not configured as HTTPS; refusing to emit an identity",
+                503,
+            )
         operations_conn = get_operations_read_db()
         snapshot = collect_operations_snapshot(
             declared_operations,
@@ -2091,7 +2102,7 @@ def create_app(
             snapshot=snapshot,
             registry=declared_operations,
             semantic_rows=semantic_rows,
-            serving_origin=request.host_url.rstrip("/"),
+            serving_origin=configured_private_origin,
             code_instance=operations_review_code_identity,
             database_instance=database_instance,
             kpi_repair=load_kpi_repair_review(
@@ -4495,6 +4506,7 @@ def create_app(
             safe_ticker=ticker_validation.safe_ticker,
             build_ticker_command_center=build_ticker_command_center,
             linked_gsheet=_linked_gsheet,
+            probe_tracker=probe_tracker,
             fetch_live_portfolio=fetch_live_portfolio,
             default_user_id=DEFAULT_USER_ID,
         ),

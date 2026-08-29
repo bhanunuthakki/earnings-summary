@@ -70,8 +70,6 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
     assert collector_step.effective_lane == ("operations-runtime-receipts",)
     assert collector_step.command == (
         r"execution\collect_operations_runtime_observations.py",
-        "--repo-root",
-        "%STATE_ROOT%",
         "--code-root",
         "%PROJECT_ROOT%",
         "--emit-receipts",
@@ -83,21 +81,7 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
     assert r"runtime\earnings-summary\cron\run_collect_operations_runtime_observations.bat" in (
         collector_xml
     )
-    assert r"scratch\earnings-summary" in collector_xml
-    collector_wrapper = (
-        PROJECT_ROOT / "cron" / "run_collect_operations_runtime_observations.bat"
-    ).read_text(encoding="utf-8")
-    shared_wrapper = (PROJECT_ROOT / "cron" / "run_python.bat").read_text(encoding="utf-8")
-    assert 'set "ES_JOB_STATE_ROOT=%STATE_ROOT%"' in collector_wrapper
-    collector_gate = (
-        'if /I "%~1"=="collect-operations-runtime-observations" '
-        'if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG=--repo-root "%ES_JOB_STATE_ROOT%"'
-    )
-    assert collector_gate in shared_wrapper
-    assert 'set "ES_JOB_STATE_ROOT="' in shared_wrapper
-    assert "if defined ES_JOB_STATE_ROOT set REPO_ROOT_ARG" not in shared_wrapper.replace(
-        collector_gate, ""
-    )
+    assert "<Arguments>" not in collector_xml
     tracker_api = next(
         task
         for task in registry.scheduled_tasks

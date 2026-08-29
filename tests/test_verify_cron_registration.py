@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import cast
@@ -193,6 +194,59 @@ def test_compare_all_ok(tmp_path: Path) -> None:
     assert not report.mismatch
 
 
+def test_compare_flags_stale_required_writer_as_extra(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = r"\earnings-summary\daily"
+    stale = r"\earnings-summary\stale_required_writer"
+    _write_task_xml(tmp_path / "daily.task.xml", expected, "03:00:00")
+
+    with (
+        patch(
+            "execution.verify_cron_registration._query_schtasks",
+            return_value={
+                expected.lower(): _ready(expected),
+                stale.lower(): _ready(stale),
+            },
+        ),
+        patch("execution.verify_cron_registration._query_task_commands", return_value=None),
+    ):
+        report, xml_tasks = compare(tmp_path)
+
+    assert report.has_problems
+    assert report.extra == [stale]
+    payload = report_payload(report, xml_tasks)
+    assert payload["status"] == "failed"
+    assert payload["extra"] == [stale]
+
+    _print_report(report, xml_tasks)
+    output = capsys.readouterr().out
+    assert "EXTRA" in output
+    assert stale in output
+
+
+def test_compare_ignores_live_tasks_outside_product_namespace(tmp_path: Path) -> None:
+    expected = r"\earnings-summary\daily"
+    unrelated = r"\Microsoft\Windows\Maintenance\WinSAT"
+    _write_task_xml(tmp_path / "daily.task.xml", expected, "03:00:00")
+
+    with (
+        patch(
+            "execution.verify_cron_registration._query_schtasks",
+            return_value={
+                expected.lower(): _ready(expected),
+                unrelated.lower(): _ready(unrelated),
+            },
+        ),
+        patch("execution.verify_cron_registration._query_task_commands", return_value=None),
+    ):
+        report, _xml_tasks = compare(tmp_path)
+
+    assert not report.has_problems
+    assert report.extra == []
+
+
 def test_compare_missing_task(tmp_path: Path) -> None:
     _write_task_xml(tmp_path / "missing.task.xml", r"\earnings-summary\not_registered", "04:00:00")
 
@@ -287,6 +341,7 @@ def test_capture_poller_disabled_is_ok_when_service_is_running(tmp_path: Path) -
         report, _xml_tasks = compare(tmp_path)
 
     assert not report.has_problems
+    assert report.extra == []
     assert report.disabled == []
     assert report.ok == [rf"{task_name} (scheduler disabled; es-poller service running)"]
     mock_service.assert_called_once_with("es-poller")
@@ -306,6 +361,7 @@ def test_capture_poller_absent_is_ok_when_service_is_running(tmp_path: Path) -> 
         report, _xml_tasks = compare(tmp_path)
 
     assert not report.has_problems
+    assert report.extra == []
     assert report.missing == []
     assert report.ok == [rf"{task_name} (scheduler absent; es-poller service running)"]
     mock_service.assert_called_once_with("es-poller")
@@ -495,6 +551,61 @@ def test_main_exit_code_one_on_missing(tmp_path: Path) -> None:
     with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
         mock_q.return_value = {}
         rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 1
+
+
+def test_main_exit_code_two_only_when_scheduler_unavailable(tmp_path: Path) -> None:
+    _write_task_xml(tmp_path / "t.task.xml", r"\earnings-summary\t", "03:00:00")
+    with patch("execution.verify_cron_registration._query_schtasks", return_value=None):
+        rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 2
+
+
+def test_main_exit_code_one_on_extra_scheduler_task(tmp_path: Path) -> None:
+    expected = r"\earnings-summary\daily"
+    stale = r"\earnings-summary\stale_required_writer"
+    _write_task_xml(tmp_path / "daily.task.xml", expected, "03:00:00")
+    with (
+        patch(
+            "execution.verify_cron_registration._query_schtasks",
+            return_value={
+                expected.lower(): _ready(expected),
+                stale.lower(): _ready(stale),
+            },
+        ),
+        patch("execution.verify_cron_registration._query_task_commands", return_value=None),
+    ):
+        rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 1
+
+
+def test_main_exit_code_one_on_manifest_error_with_empty_manifest(
+    tmp_path: Path,
+) -> None:
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir()
+    (cron_dir / "orphan.task.xml").write_text("<Task/>", encoding="utf-8")
+    (cron_dir / "run_orphan.bat").write_text("@echo off\n", encoding="utf-8")
+    manifest = tmp_path / "task_manifest.json"
+    manifest.write_text(
+        json.dumps({"version": 1, "namespace": r"\earnings-summary", "tasks": []}),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "execution.verify_cron_registration._query_schtasks",
+        return_value={},
+    ):
+        rc = main(
+            [
+                "--cron-dir",
+                str(cron_dir),
+                "--manifest",
+                str(manifest),
+                "--quiet",
+            ]
+        )
+
     assert rc == 1
 
 

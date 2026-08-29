@@ -10,12 +10,16 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import upgrade_database as upgrade_database_module
 from upgrade_database import ACTIVE_HEAD, UpgradeDatabaseError, upgrade_database
 
 from execution import portfolio_readiness_receipt as readiness_module
+from execution.backup_restore_readiness_receipt import collect_backup_restore_receipt
+from execution.create_sqlite_snapshot import create_snapshot
+from sqlite_snapshot import SnapshotRequest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -361,6 +365,40 @@ def test_upgrade_database_creates_fresh_db_and_is_idempotent(tmp_path: Path) -> 
     assert created.status == "created"
     assert repeated.status == "already_current"
     assert _revision(db_path) == ACTIVE_HEAD
+
+
+def test_documented_phase0_sequence_is_repeatable_across_source_changes(tmp_path: Path) -> None:
+    db_path = tmp_path / "disposable" / "portfolio.db"
+    db_path.parent.mkdir()
+    fresh = upgrade_database(db_path, repo_root=ROOT, runtime_root=ROOT, allow_isolated_db=True)
+    assert fresh.status == "created"
+
+    for attempt in range(2):
+        attempt_root = tmp_path / ".tmp" / "phase0" / f"attempt-{uuid4().hex}"
+        snapshot = attempt_root / "portfolio.db"
+        manifest = attempt_root / "portfolio.db.manifest.json"
+        attempt_root.mkdir(parents=True)
+        snapshot_result = create_snapshot(
+            SnapshotRequest(source_path=db_path, destination_path=snapshot)
+        )
+        assert snapshot_result.manifest_path == manifest
+        receipt = collect_backup_restore_receipt(
+            source_db=db_path, snapshot_db=snapshot, manifest_path=manifest
+        )
+        assert receipt.verified is True
+        (attempt_root / "receipt.json").write_text(receipt.model_dump_json(), encoding="utf-8")
+        repeated = upgrade_database(
+            db_path,
+            repo_root=ROOT,
+            runtime_root=ROOT,
+            phase0_backup_restore_receipt=attempt_root / "receipt.json",
+            allow_isolated_db=True,
+        )
+        assert repeated.status == "already_current"
+        if attempt == 0:
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("PRAGMA user_version = 1")
+                conn.commit()
 
 
 def test_upgrade_database_bridges_archived_revision_with_verified_backup(

@@ -908,11 +908,11 @@ def _model_for(purpose: str) -> str:
 # 1200s; unset, behavior is identical to the prior hardcoded default.
 DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("CLAUDE_CLI_TIMEOUT_SECONDS", "1200"))
 
-# Web-search-enabled call: same subprocess as _call_claude but with the
-# Claude CLI's --allowedTools flag turned on so the model can run WebSearch
-# / WebFetch as part of producing its answer. Used by the memo generator
-# for the "Recent Developments" section so memos cite real news URLs
-# instead of leaning on a stale FMP news pre-pull.
+# Web-search-enabled call: same subprocess as _call_claude, but explicitly
+# enables only Claude's WebSearch/WebFetch tools. ``--safe-mode`` prevents
+# user/project customizations from widening that set. Used by the memo
+# generator for the "Recent Developments" section so memos cite real news
+# URLs instead of leaning on a stale FMP news pre-pull.
 CLAUDE_WEB_TOOLS = "WebSearch WebFetch"
 CLAUDE_WEB_TIMEOUT_SECONDS = 1800  # web fetches add round-trips; bigger cap
 
@@ -1306,6 +1306,12 @@ def _call_claude(
                     "--output-format",
                     "json",
                     "--no-session-persistence",
+                    # Claude Code 2.1.239: safe mode prevents user/project
+                    # customizations and an empty --tools value disables every
+                    # built-in, MCP, and plugin tool for plain calls.
+                    "--safe-mode",
+                    "--tools",
+                    "",
                 ],
                 input=prompt,
                 capture_output=True,
@@ -1998,7 +2004,7 @@ def stream_llm(
     *,
     purpose: str,
     scope: str = "ask",
-    allowed_tools: tuple[str, ...] = ("Read",),
+    allowed_tools: tuple[str, ...] = (),
     timeout_seconds: float | None = None,
 ) -> Iterator[dict[str, object]]:
     """Canonical governed streaming LLM entry point.
@@ -2041,6 +2047,12 @@ def stream_llm(
         yield {"type": "error", "error": "answer transport is not configured"}
         return
 
+    # Ask is grounded by deterministic retrieval before this subprocess is
+    # started. Claude Code 2.1.239 therefore gets no tools at all: safe mode
+    # blocks customizations and an empty --tools value blocks built-ins, MCP,
+    # and plugins. Keep the legacy parameter for caller compatibility, but do
+    # not let any caller widen this security boundary.
+    del allowed_tools
     cmd = [
         claude_bin,
         "-p",
@@ -2049,9 +2061,10 @@ def stream_llm(
         "--output-format",
         "stream-json",
         "--no-session-persistence",
+        "--safe-mode",
+        "--tools",
+        "",
     ]
-    if allowed_tools:
-        cmd.extend(["--allowedTools", " ".join(allowed_tools)])
     cmd.append("--verbose")
 
     started_at = datetime.now(UTC)
@@ -2487,6 +2500,13 @@ def call_llm_with_web(
         "json",
         # See _call_claude: nothing resumes, so persisting the session is waste.
         "--no-session-persistence",
+        # Web is the only Claude path allowed to use tools. Keep safe mode so
+        # user/project customizations cannot add tools behind this allowlist;
+        # --tools is the enabled-tool set and --allowedTools is the permission
+        # gate required by Claude Code's CLI contract.
+        "--safe-mode",
+        "--tools",
+        *CLAUDE_WEB_TOOLS.split(),
         "--allowedTools",
         *CLAUDE_WEB_TOOLS.split(),
         # Hard cost ceiling so the web path (the only agentic, multi-tool call)

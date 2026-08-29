@@ -1,37 +1,589 @@
 {
-  "$schema": "internal://harden-state/v1",
-  "current_rung": "L1",
-  "is_multitenant_target": false,
-  "last_audit_timestamp": "2026-08-15T17:22:00Z",
-  "controlling_commit_sha": "32e91f33",
+  "$schema": "internal://harden-state/v2",
+  "target_rung": "L1",
+  "profile": {
+    "deployment": "distributed-client",
+    "identity": "single-user",
+    "commerce": "personal",
+    "surfaces": [
+      "cli",
+      "api",
+      "web"
+    ],
+    "data": [
+      "durable",
+      "external",
+      "sensitive"
+    ],
+    "llm": "tool-using",
+    "scheduled_work": true
+  },
+  "fingerprints": {
+    "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+    "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+    "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+    "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+  },
+  "capabilities": [
+    {
+      "receipt_id": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+      "status": "AVAILABLE",
+      "role": "blocking-specialist",
+      "runtime": "codex",
+      "model_id": "gpt-5.6-sol",
+      "effort": "high",
+      "qualified_rubrics": [
+        "api-surface-designer",
+        "architecture-reviewer",
+        "data-foundation",
+        "docs-support-readiness",
+        "finops-pricing",
+        "frontend-web",
+        "idea-evaluator",
+        "legal-compliance",
+        "llm-evals-orchestrator",
+        "operations-readiness",
+        "payments",
+        "product-analytics",
+        "product-feature",
+        "qa-test-strategy",
+        "sec-appsec",
+        "sec-authz",
+        "sec-llm",
+        "tenant-boundaries",
+        "ux-design"
+      ],
+      "limitations": [
+        "Qualification covers hardening-gate verdict classification against the retained 38-case corpus; repository-specific deterministic verification remains required.",
+        "Two non-threshold disagreements are retained: idea-evidence-empty HOLD to BLOCK and llm-governed-normal PASS to HOLD."
+      ],
+      "receipt_hash": "sha256:f33b18c36076d466f391bacd8a348fb960a4673ac6452da0fbb2dd4049aee64a"
+    }
+  ],
   "gates": {
-    "L1": {
+    "L0": {
+      "idea-evaluator": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "PASS",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:30Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "product-feature": {
+        "mode": "A",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "ADVISORY",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:30Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
       "architecture-reviewer": {
-        "verdict": "PASS",
-        "open_findings": 0,
-        "last_run": "2026-08-15",
-        "operational_dependencies": [
-          "BHA-19: Production clone rehearsal managed separately",
-          "BHA-20: Cloud managed runtime activation managed separately"
-        ]
+        "mode": "A",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "ADVISORY",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:30Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
       },
-      "data-engineer": {
-        "verdict": "PASS",
-        "open_findings": 0,
-        "last_run": "2026-08-15",
-        "reconstruction_manifest_subsystems": "11/11 PASS"
+      "legal-compliance": {
+        "mode": "A",
+        "applicability": "APPLICABLE",
+        "rationale": "selected for data, users, distribution, or commerce obligations",
+        "verdict": "ADVISORY",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:13:39Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
       },
-      "llm-evals-orchestrator": {
+      "finops-pricing": {
+        "mode": "A",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "ADVISORY",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:13:39Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      }
+    },
+    "L1": {
+      "product-feature": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
         "verdict": "PASS",
-        "open_findings": 0,
-        "last_run": "2026-08-15",
-        "provider_neutral_contract": "BHA-56 ENFORCED"
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:30Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "architecture-reviewer": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "PASS",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:30Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "data-foundation": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected for durable, external, or sensitive data",
+        "verdict": "PASS",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:30Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
       },
       "qa-test-strategy": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
         "verdict": "PASS",
-        "open_findings": 0,
-        "last_run": "2026-08-15",
-        "hermetic_test_count": 106
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:30Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "ux-design": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected for a human-facing interface",
+        "verdict": "HOLD",
+        "verdict_basis": "none",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "",
+        "run_at": "2026-08-29T04:12:45Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "frontend-web": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected for a web surface",
+        "verdict": "HOLD",
+        "verdict_basis": "none",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "",
+        "run_at": "2026-08-29T04:12:45Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "llm-evals-orchestrator": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected because the product calls an LLM",
+        "verdict": "HOLD",
+        "verdict_basis": "none",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "",
+        "run_at": "2026-08-29T04:12:45Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "sec-appsec": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "HOLD",
+        "verdict_basis": "none",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "",
+        "run_at": "2026-08-29T04:12:45Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "sec-authz": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected because the profile declares an identity boundary",
+        "verdict": "HOLD",
+        "verdict_basis": "none",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "",
+        "run_at": "2026-08-29T04:12:45Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "sec-llm": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected because the product calls an LLM",
+        "verdict": "PASS",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:12:45Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "api-surface-designer": {
+        "mode": "A",
+        "applicability": "APPLICABLE",
+        "rationale": "selected for a product-owned API surface",
+        "verdict": "ADVISORY",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:13:39Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "legal-compliance": {
+        "mode": "A",
+        "applicability": "APPLICABLE",
+        "rationale": "selected for data, users, distribution, or commerce obligations",
+        "verdict": "ADVISORY",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:13:39Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "operations-readiness": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected for durable state, scheduled work, distribution, or hosting",
+        "verdict": "BLOCK",
+        "verdict_basis": "model_receipt",
+        "open_findings": [
+          "OPS-BHA20-TRACKER-LIVE",
+          "OPS-BHA20-SCHEDULER-ACL"
+        ],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/windows-live-gap-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/windows-live-gap-2026-08-29.json": "sha256:87dc1e73493ad7a7727cdef7f141cd009c7ae54197455bcd8dc462ef7902ec58",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:13:39Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "docs-support-readiness": {
+        "mode": "B",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "PASS",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/validation-summary-2026-08-29.json": "sha256:fdf1f7aacb9b38022728bfe8fcca5db2d69b5244b6e9dcbe787618eaaddbefcd",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:13:39Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
+      },
+      "finops-pricing": {
+        "mode": "A",
+        "applicability": "APPLICABLE",
+        "rationale": "selected by the maturity matrix",
+        "verdict": "ADVISORY",
+        "verdict_basis": "model_receipt",
+        "open_findings": [],
+        "finding_rules": {},
+        "evidence": [
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json"
+        ],
+        "evidence_hashes": {
+          "docs/hardening/v2/evidence/audit-run-2026-08-29.json": "sha256:96c23817fa5ba31d746fa9cc24223b9d20370d729052a1674db3f01f9cd4de3d",
+          "docs/hardening/v2/evidence/audit-reissue-2026-08-29.json": "sha256:47a56f6b8f5456322f00a418592b96aff3c9f306ce8f07105e1788404aeaac2f"
+        },
+        "capability_receipt": "codex-gpt-5-6-sol-high-2026-08-28-v1",
+        "run_at": "2026-08-29T04:13:39Z",
+        "fingerprints": {
+          "worktree": "sha256:fd6242f6b6d593be5e9b1d0472cdb14a9f96d5d1ba4cf39fb41ccbb7707ccc06",
+          "profile": "sha256:d3f79765325166f54762b23a21270ff9debc8aebe6108adecb3d1a1246e723f6",
+          "matrix": "sha256:97315a4fef79a0bd407aac5c03aab80ead3f7acb76c6d3e874599205419f11a1",
+          "rubrics": "sha256:396b793874eef33ee398ceb18dd86d09876a2a7f62b52318f1f7eda82eff122d"
+        }
       }
     }
   }
