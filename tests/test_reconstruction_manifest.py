@@ -145,6 +145,20 @@ def test_manifest_validator_rejects_unsupported_test_flag_and_duplicate_ids(tmp_
     assert any("unsupported pytest flags" in issue for issue in receipt.results[0].issues)
 
 
+def test_manifest_validator_rejects_unconstrained_non_path_evidence(tmp_path: Path) -> None:
+    payload = json.loads(
+        (PROJECT_ROOT / "reconstruction_manifest.json").read_text(encoding="utf-8")
+    )
+    payload["subsystems"][1]["ownership_paths"][0]["evidence"] = "git:arbitrary prose"
+    manifest = tmp_path / "invalid.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = verify_manifest(manifest, PROJECT_ROOT)
+    pipeline = next(row for row in receipt.results if row.subsystem_id == "pipeline_execution")
+    assert pipeline.version_ownership_valid is False
+    assert any("supported typed prefix" in issue for issue in pipeline.issues)
+
+
 def test_readme_has_distinct_fresh_and_existing_upgrade_branches() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     fresh = readme.split("#### Fresh install (new database)", 1)[1].split(
@@ -156,6 +170,9 @@ def test_readme_has_distinct_fresh_and_existing_upgrade_branches() -> None:
     assert "--phase0-backup-restore-receipt" not in fresh
     assert "--phase0-backup-restore-receipt $EarningsSummaryPhase0ReceiptPath" in existing
     assert "$EarningsSummaryAttemptId" in fresh and "$EarningsSummaryAttemptId" in existing
+    assert fresh.count("[guid]::NewGuid().ToString('N')") == 1
+    assert existing.count("[guid]::NewGuid().ToString('N')") == 1
+    assert "Get-Date -Format 'yyyyMMdd_HHmmss_fff'" not in readme
     assert "create_sqlite_snapshot.py" in existing
     assert "backup_restore_readiness_receipt.py" in existing
 
