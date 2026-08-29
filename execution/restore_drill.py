@@ -77,20 +77,41 @@ class _AutoSnapshot:
 _AUTO_SNAPSHOT = _AutoSnapshot()
 
 
+class SchemaRevisionError(RuntimeError):
+    """The live database cannot provide one unambiguous Alembic revision."""
+
+
 def _alembic_version(db_path: Path) -> str | None:
-    """The single ``alembic_version.version_num`` for *db_path*, or None if the
-    file isn't a readable SQLite DB / has no alembic_version table."""
+    """Return the one valid live Alembic revision, or ``None`` for no rows.
+
+    A readable ``alembic_version`` table with zero rows uses the VERSIONED
+    policy because there is no live revision to compare against. A missing or
+    malformed table, multiple rows, and invalid values are different: accepting
+    a snapshot when the live database has unreadable, ambiguous, or malformed
+    schema state would bypass the exact-schema gate, so those conditions fail
+    closed.
+    """
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return None
+    except sqlite3.Error as exc:
+        raise SchemaRevisionError(f"live database is unreadable: {exc}") from None
     try:
-        row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-    except sqlite3.DatabaseError:
-        return None
+        try:
+            rows = conn.execute("SELECT version_num FROM alembic_version").fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise SchemaRevisionError(f"live Alembic revision is unreadable: {exc}") from None
     finally:
         conn.close()
-    return str(row[0]) if row else None
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise SchemaRevisionError(
+            f"live Alembic revision is ambiguous: expected exactly one row, found {len(rows)}"
+        )
+    value: object = rows[0][0]
+    if not isinstance(value, str) or not value.strip():
+        raise SchemaRevisionError("live Alembic revision is invalid: expected one non-empty string")
+    return value.strip()
 
 
 def _row_counts(db_path: Path, tables: tuple[str, ...]) -> dict[str, int]:
@@ -143,7 +164,16 @@ def run_drill(
     tmpdir = Path(tempfile.mkdtemp(prefix="restore_drill."))
     target = tmpdir / "drill.db"
     try:
-        live_ver = _alembic_version(live_db) if live_db.exists() else None
+        try:
+            live_ver = _alembic_version(live_db) if live_db.exists() else None
+        except SchemaRevisionError as exc:
+            return False, {
+                "status": "schema_unreadable",
+                "error": str(exc),
+                "live_schema": None,
+                "schema_match": False,
+                "schema_policy": restore_db.SchemaCompatibilityPolicy.EXACT.value,
+            }
         schema_policy = (
             restore_db.SchemaCompatibilityPolicy.EXACT
             if live_ver is not None
@@ -294,7 +324,11 @@ def main(argv: list[str] | None = None) -> int:
 
     snapshot = _latest_snapshot(args.backup_dir)
     snapshot_digest = _snapshot_sha256(snapshot) if snapshot is not None else None
-    live_schema = _alembic_version(args.db) if args.db.exists() else None
+    try:
+        live_schema = _alembic_version(args.db) if args.db.exists() else None
+    except SchemaRevisionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     try:
         accounting = _start_accounting(
             args.db,

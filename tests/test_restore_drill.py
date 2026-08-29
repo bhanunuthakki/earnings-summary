@@ -2,10 +2,10 @@
 """Tests for execution/restore_drill.py — the monthly DB restore drill.
 
 The drill restores the newest backup snapshot to a throwaway temp file and
-verifies it (integrity via restore_db + core-table row counts + a soft schema
-match). These tests build synthetic .gz snapshots in tmp_path and never touch a
-real DB; ingestion_runs bookkeeping is skipped by pointing --db at a path that
-does not exist.
+verifies it (integrity via restore_db + core-table row counts + an exact schema
+match when the live revision is available). These tests build synthetic .gz
+snapshots in tmp_path and never touch a real DB; ingestion_runs bookkeeping is
+skipped by pointing --db at a path that does not exist.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,13 @@ def _make_snapshot(
     return encrypted
 
 
+def _restore_call_recorder(calls: list[object]) -> Callable[..., None]:
+    def _record(*_args: object, **_kwargs: object) -> None:
+        calls.append(True)
+
+    return _record
+
+
 def test_drill_passes_on_healthy_snapshot(tmp_path: Path) -> None:
     bdir = tmp_path / "backups"
     bdir.mkdir()
@@ -81,7 +89,142 @@ def test_drill_passes_on_healthy_snapshot(tmp_path: Path) -> None:
     assert summary["quick_check"] == "ok"
     assert summary["foreign_key_violation_count"] == 0
     assert summary["schema_policy"] == "versioned"
-    assert summary["schema_match"] is True  # live absent → soft check passes
+    assert summary["schema_match"] is True  # live absent → versioned fallback
+
+
+def test_zero_live_revisions_use_versioned_fallback(tmp_path: Path) -> None:
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    _make_snapshot(bdir, version="0113_x")
+
+    live = tmp_path / "live.db"
+    conn = sqlite3.connect(str(live))
+    conn.execute("CREATE TABLE alembic_version (version_num TEXT)")
+    conn.commit()
+    conn.close()
+
+    ok, summary = restore_drill.run_drill(bdir, live)
+
+    assert ok is True
+    assert summary["status"] == "ok"
+    assert summary["schema_policy"] == "versioned"
+    assert summary["schema_match"] is True
+
+
+def test_missing_live_revision_table_fails_closed_before_restore_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    _make_snapshot(bdir)
+
+    live = tmp_path / "live.db"
+    sqlite3.connect(str(live)).close()
+
+    restore_calls: list[object] = []
+    monkeypatch.setattr(
+        restore_drill.restore_db,
+        "restore_snapshot",
+        _restore_call_recorder(restore_calls),
+    )
+
+    ok, summary = restore_drill.run_drill(bdir, live)
+
+    assert ok is False
+    assert summary["status"] == "schema_unreadable"
+    assert "alembic_version" in str(summary["error"])
+    assert restore_calls == []
+
+
+def test_corrupt_live_database_fails_closed_before_restore_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    _make_snapshot(bdir)
+
+    live = tmp_path / "live.db"
+    live.write_bytes(b"not a SQLite database")
+
+    restore_calls: list[object] = []
+    monkeypatch.setattr(
+        restore_drill.restore_db,
+        "restore_snapshot",
+        _restore_call_recorder(restore_calls),
+    )
+
+    ok, summary = restore_drill.run_drill(bdir, live)
+
+    assert ok is False
+    assert summary["status"] == "schema_unreadable"
+    assert restore_calls == []
+
+
+def test_multiple_live_revisions_fail_before_restore_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    _make_snapshot(bdir)
+
+    live = tmp_path / "live.db"
+    conn = sqlite3.connect(str(live))
+    conn.execute("CREATE TABLE alembic_version (version_num TEXT)")
+    conn.executemany(
+        "INSERT INTO alembic_version VALUES (?)",
+        [("0113_x",), ("0114_y",)],
+    )
+    conn.commit()
+    conn.close()
+
+    restore_calls: list[object] = []
+    monkeypatch.setattr(
+        restore_drill.restore_db,
+        "restore_snapshot",
+        _restore_call_recorder(restore_calls),
+    )
+
+    ok, summary = restore_drill.run_drill(bdir, live)
+
+    assert ok is False
+    assert summary["status"] == "schema_unreadable"
+    assert "exactly one row" in str(summary["error"])
+    assert restore_calls == []
+
+
+@pytest.mark.parametrize("invalid", [None, "", "   ", 123])
+def test_invalid_live_revision_fails_closed_before_restore_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: object,
+) -> None:
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    _make_snapshot(bdir)
+
+    live = tmp_path / "live.db"
+    conn = sqlite3.connect(str(live))
+    conn.execute("CREATE TABLE alembic_version (version_num)")
+    conn.execute("INSERT INTO alembic_version VALUES (?)", (invalid,))
+    conn.commit()
+    conn.close()
+
+    restore_calls: list[object] = []
+    monkeypatch.setattr(
+        restore_drill.restore_db,
+        "restore_snapshot",
+        _restore_call_recorder(restore_calls),
+    )
+
+    ok, summary = restore_drill.run_drill(bdir, live)
+
+    assert ok is False
+    assert summary["status"] == "schema_unreadable"
+    assert "non-empty string" in str(summary["error"])
+    assert restore_calls == []
 
 
 def test_drill_fails_on_empty_core_tables(tmp_path: Path) -> None:
@@ -222,6 +365,7 @@ class TestArchiveDrillLeg:
         conn = sqlite3.connect(live)
         conn.executescript(
             """
+            CREATE TABLE alembic_version (version_num TEXT);
             CREATE TABLE financial_facts (
                 id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
                 fiscal_period_type TEXT, line_item TEXT, value NUMERIC,
