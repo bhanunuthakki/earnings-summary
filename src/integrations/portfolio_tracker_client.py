@@ -1075,7 +1075,7 @@ def fetch_portfolio_analytics(
             "positioning",
         ),
         ("policy", "/api/policy", _parse_policy, "policy"),
-        ("beta", f"/api/portfolio/beta{q(window)}", _parse_beta, "beta"),
+        ("beta", f"/api/portfolio/beta{q(window)}", parse_beta, "beta"),
         ("drawdown", f"/api/portfolio/drawdown{q(window)}", _parse_drawdown, "drawdown"),
         (
             "exit_quality",
@@ -1275,7 +1275,7 @@ def _parse_policy(data: dict[str, object]) -> PolicyMix:
     )
 
 
-def _parse_beta(data: dict[str, object]) -> BetaStats:
+def parse_beta(data: dict[str, object]) -> BetaStats:
     raw_notes = data.get("notes")
     notes = (
         [n for n in cast("list[object]", raw_notes) if isinstance(n, str)]
@@ -1952,7 +1952,7 @@ def _fetch_portfolio_analytics_v1(
         risk = client.get_risk(start_date=start_date, end_date=end_date)
         if risk.available and risk.data is not None:
             if want("beta"):
-                out.beta = _parse_beta(_dump_model(risk.data.beta))
+                out.beta = parse_beta(_dump_model(risk.data.beta))
             if want("drawdown"):
                 out.drawdown = _parse_drawdown(_dump_model(risk.data.drawdown))
             note_meta(risk.meta)

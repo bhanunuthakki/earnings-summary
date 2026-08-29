@@ -22,12 +22,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 SCHEDULED_TASK_NAME = r"\earnings-summary\refresh_portfolio_tracker"
 SCHEDULER_PROOF_TIMEOUT_SECONDS = 5.0
 
-from operations.paths import portfolio_tracker_receipt_path  # noqa: E402
+from operations.paths import (  # noqa: E402
+    configured_product_state_root,
+    portfolio_tracker_receipt_path,
+)
 from runtime.portfolio_tracker import produce_daily_refresh_receipt  # noqa: E402
 
 
 def canonical_scheduler_task_is_running(
-    repo_root: Path,
+    code_root: Path,
     *,
     windows: bool | None = None,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -42,7 +45,7 @@ def canonical_scheduler_task_is_running(
 
     if not (os.name == "nt" if windows is None else windows):
         return False
-    wrapper = (repo_root / "cron" / "run_refresh_portfolio_tracker.bat").resolve()
+    wrapper = (code_root / "cron" / "run_refresh_portfolio_tracker.bat").resolve()
     expected_wrapper = json.dumps(str(wrapper))
     current_pid = os.getpid()
     script = (
@@ -97,24 +100,46 @@ def canonical_scheduler_task_is_running(
     return getattr(result, "returncode", 1) == 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        help=(
+            "Product-state root that owns the shared runtime receipt; defaults to the "
+            "root containing EARNINGS_SUMMARY_DB_PATH"
+        ),
+    )
+    parser.add_argument(
+        "--code-root",
+        type=Path,
+        default=PROJECT_ROOT,
+        help="Deployed code root whose registered Scheduler wrapper is verified",
+    )
     parser.add_argument("--api-url", default=os.environ.get("PORTFOLIO_TRACKER_API_URL"))
     parser.add_argument(
         "--scheduled-task",
         action="store_true",
         help="record a successful receipt only for the canonical Scheduler wrapper",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.api_url:
         parser.error("PORTFOLIO_TRACKER_API_URL or --api-url is required")
-    if args.scheduled_task and not canonical_scheduler_task_is_running(args.repo_root):
+    code_root = args.code_root.resolve()
+    try:
+        state_root = (
+            args.repo_root.resolve()
+            if args.repo_root is not None
+            else configured_product_state_root(code_root)
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.scheduled_task and not canonical_scheduler_task_is_running(code_root):
         parser.error("canonical refresh_portfolio_tracker Scheduler context is not running")
     now = datetime.now(UTC)
     receipt = produce_daily_refresh_receipt(
         api_url=args.api_url,
-        receipt_path=portfolio_tracker_receipt_path(args.repo_root),
+        receipt_path=portfolio_tracker_receipt_path(state_root),
         now=now,
         daily_refresh_owner="portfolio-tracker-refresh" if args.scheduled_task else None,
         scheduler_task_name=(SCHEDULED_TASK_NAME if args.scheduled_task else None),

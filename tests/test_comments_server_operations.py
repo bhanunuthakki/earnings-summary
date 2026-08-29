@@ -33,6 +33,7 @@ from operations.attention import (  # noqa: E402
 )
 from operations.models import OperationsRegistry, OperationsSnapshot  # noqa: E402
 from operations.paths import (  # noqa: E402
+    portfolio_tracker_activation_receipt_path,
     portfolio_tracker_receipt_path,
     scheduler_receipt_path,
     service_receipt_path,
@@ -338,7 +339,7 @@ def test_operations_review_bundle_loads_kpi_repair_from_state_root() -> None:
     assert "resolved_code_root" not in repair_call
 
 
-def test_start_tracker_route_uses_runtime_manager_and_persists_typed_receipt(
+def test_start_tracker_route_uses_separate_state_root_activation_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tracker_root = tmp_path.parent / "portfolio-tracker"
@@ -366,9 +367,10 @@ def test_start_tracker_route_uses_runtime_manager_and_persists_typed_receipt(
             captured.update(kwargs)
 
         def ensure_running(self, **kwargs: object) -> RuntimeReceipt:
+            captured["ensure_running_kwargs"] = kwargs
             config = captured["config"]
             assert isinstance(config, RuntimeConfig)
-            receipt = RuntimeReceipt(
+            return RuntimeReceipt(
                 idempotency_key=config.idempotency_key,
                 lifecycle_state="started",
                 recorded_at=now,
@@ -380,9 +382,6 @@ def test_start_tracker_route_uses_runtime_manager_and_persists_typed_receipt(
                     health=health,
                 ),
             )
-            path = kwargs["receipt_path"]
-            assert isinstance(path, Path)
-            return write_runtime_receipt(path, receipt)
 
     monkeypatch.setattr(comments_server, "PortfolioTrackerRuntimeManager", _Manager)
     monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
@@ -392,11 +391,99 @@ def test_start_tracker_route_uses_runtime_manager_and_persists_typed_receipt(
     assert response.status_code == 200
     config = captured["config"]
     assert isinstance(config, RuntimeConfig)
-    assert config.idempotency_key.startswith("portfolio-tracker-refresh:")
-    receipt_path = tmp_path / ".tmp" / "operations" / "runtime" / "portfolio-tracker.latest.json"
-    assert (
-        RuntimeReceipt.model_validate_json(receipt_path.read_bytes()).lifecycle_state == "started"
+    assert config.idempotency_key.startswith("portfolio-tracker-activation:")
+    assert captured["ensure_running_kwargs"] == {
+        "receipt_path": portfolio_tracker_activation_receipt_path(tmp_path),
+        "receipt_writer": comments_server.write_tracker_activation_receipt,
+    }
+    assert not portfolio_tracker_receipt_path(tmp_path).exists()
+
+
+def test_start_tracker_route_rejects_injected_success_with_nonpositive_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker_root = tmp_path.parent / "portfolio-tracker"
+    tracker_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8000")
+    now = datetime.now(UTC)
+    health = HealthV1.model_validate(
+        {
+            "status": "ok",
+            "schema_version": "1.0.0",
+            "generated_at": now.isoformat(),
+            "database_ok": True,
+            "migration_version": "0023",
+            "providers": [],
+            "active_account_count": 1,
+            "latest_snapshot_date": now.date().isoformat(),
+            "is_stale": False,
+            "links": {},
+        }
     )
+
+    class _Manager:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def ensure_running(self, **_: object) -> RuntimeReceipt:
+            return RuntimeReceipt(
+                idempotency_key="portfolio-tracker-activation:2026-08-29",
+                lifecycle_state="started",
+                recorded_at=now,
+                listener=ListenerObservation.model_construct(
+                    healthy=True,
+                    owner="portfolio-tracker-service",
+                    pid=0,
+                    health=health,
+                ),
+            )
+
+    monkeypatch.setattr(comments_server, "PortfolioTrackerRuntimeManager", _Manager)
+
+    response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
+
+    assert response.status_code == 503
+    assert "health/ownership proof" in response.get_json()["error"]
+
+
+def test_start_tracker_route_persists_safe_scheduler_failure_without_overwriting_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker_root = tmp_path.parent / "portfolio-tracker"
+    tracker_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8000")
+
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=False, endpoint="/health")
+
+    def fail_scheduler_start() -> None:
+        raise portfolio_tracker_runtime.SchedulerActivationError("scheduler_start_nonzero")
+
+    monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
+    monkeypatch.setattr(
+        comments_server,
+        "start_portfolio_tracker_scheduler_task",
+        fail_scheduler_start,
+    )
+
+    response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
+
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "scheduler_start_nonzero"
+    activation = portfolio_tracker_runtime.TrackerActivationReceipt.model_validate_json(
+        portfolio_tracker_activation_receipt_path(tmp_path).read_bytes()
+    )
+    assert activation.lifecycle_state == "failed"
+    assert activation.failure_code == "scheduler_start_nonzero"
+    assert activation.scheduler_task_name == r"\earnings-summary\portfolio_tracker_api"
+    assert activation.idempotency_key.startswith("portfolio-tracker-activation:")
+    assert not portfolio_tracker_receipt_path(tmp_path).exists()
 
 
 def test_start_tracker_route_requires_explicit_api_url(
@@ -485,19 +572,25 @@ def test_start_tracker_route_rejects_healthy_listener_without_matching_registry_
     response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
 
     assert response.status_code == 503
-    assert "health/ownership proof" in response.get_json()["error"]
+    assert response.get_json()["error"] == "listener_owner_unverified"
+    activation = portfolio_tracker_runtime.TrackerActivationReceipt.model_validate_json(
+        portfolio_tracker_activation_receipt_path(tmp_path).read_bytes()
+    )
+    assert activation.lifecycle_state == "failed"
+    assert activation.failure_code == "listener_owner_unverified"
 
 
 def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    supervisor_root = tmp_path.parent / "runtime-checkout"
-    supervisor_root.mkdir(exist_ok=True)
-    tracker_root = tmp_path.parent / "portfolio-tracker"
-    tracker_root.mkdir(exist_ok=True)
+    state_root = tmp_path / "runtime-state"
+    code_root = tmp_path / "deployed-code"
+    tracker_root = tmp_path / "portfolio-tracker"
+    state_root.mkdir()
+    code_root.mkdir()
+    tracker_root.mkdir()
     monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
     monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8000")
-    monkeypatch.setattr(comments_server, "PROJECT_ROOT", supervisor_root)
     now = datetime.now(UTC)
     health = HealthV1.model_validate(
         {
@@ -513,8 +606,10 @@ def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
             "links": {},
         }
     )
+    expected_receipt_path = portfolio_tracker_receipt_path(state_root)
+    expected_lease_path = expected_receipt_path.with_name("portfolio-tracker.activation.lease")
     write_runtime_receipt(
-        portfolio_tracker_receipt_path(supervisor_root),
+        expected_receipt_path,
         RuntimeReceipt(
             idempotency_key="portfolio-tracker-refresh:2026-08-27",
             lifecycle_state="already_running",
@@ -556,19 +651,58 @@ def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
         assert require_exclusive is True
         return True
 
+    receipt_reads: list[Path] = []
+    lease_paths: list[Path] = []
+    real_read_supervisor_listener_ownership = comments_server.read_supervisor_listener_ownership
+    real_atomic_file_lease = comments_server.AtomicFileLease
+
+    def read_supervisor_listener_ownership(
+        receipt_path: Path,
+        *,
+        listener_owner: str,
+        bind_host: str,
+        bind_port: int,
+        observed_at: datetime,
+    ) -> ListenerObservation | None:
+        receipt_reads.append(receipt_path)
+        return real_read_supervisor_listener_ownership(
+            receipt_path,
+            listener_owner=listener_owner,
+            bind_host=bind_host,
+            bind_port=bind_port,
+            observed_at=observed_at,
+        )
+
+    def atomic_file_lease(path: Path) -> portfolio_tracker_runtime.AtomicFileLease:
+        lease_paths.append(path)
+        return real_atomic_file_lease(path)
+
     monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
+    monkeypatch.setattr(
+        comments_server,
+        "read_supervisor_listener_ownership",
+        read_supervisor_listener_ownership,
+    )
+    monkeypatch.setattr(comments_server, "AtomicFileLease", atomic_file_lease)
     monkeypatch.setattr(
         portfolio_tracker_runtime, "endpoint_owner_matches_pid", endpoint_owner_matches
     )
     monkeypatch.setattr(comments_server, "Registry", _Registry)
     response = (
-        comments_server.create_app(tmp_path, code_root=PROJECT_ROOT)
+        comments_server.create_app(
+            state_root,
+            code_root=code_root,
+            operations_registry=build_operations_registry(PROJECT_ROOT),
+        )
         .test_client()
         .post("/actions/start-tracker")
     )
 
     assert response.status_code == 200
     assert response.get_json()["lifecycle_state"] == "already_running"
+    assert receipt_reads == [expected_receipt_path]
+    assert lease_paths == [expected_lease_path]
+    assert not portfolio_tracker_receipt_path(code_root).exists()
 
 
 def test_start_tracker_route_rejects_exited_popen_even_when_registry_job_says_running(
@@ -642,7 +776,7 @@ def test_start_tracker_route_rejects_exited_popen_even_when_registry_job_says_ru
     response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
 
     assert response.status_code == 503
-    assert "health/ownership proof" in response.get_json()["error"]
+    assert response.get_json()["error"] == "listener_owner_unverified"
 
 
 def test_operations_route_uses_runtime_root_canonical_receipts(

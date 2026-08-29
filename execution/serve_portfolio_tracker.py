@@ -3,6 +3,8 @@
 This is the long-running Scheduler entrypoint for the tracker.  It accepts no
 implicit sibling checkout or network bind: both the tracker root and the
 loopback API URL must be configured explicitly before it launches uvicorn.
+Its mutable receipt is rooted at the explicit product-state root or the root
+containing the configured canonical database, never at the code checkout.
 """
 
 from __future__ import annotations
@@ -20,7 +22,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
-from operations.paths import portfolio_tracker_receipt_path  # noqa: E402
+from operations.paths import (  # noqa: E402
+    configured_product_state_root,
+    portfolio_tracker_receipt_path,
+)
 from runtime.portfolio_tracker import (  # noqa: E402
     AtomicFileLease,
     ListenerObservation,
@@ -31,7 +36,7 @@ from runtime.portfolio_tracker import (  # noqa: E402
     endpoint_owner_matches_pid,
     health_is_healthy,
     parse_tracker_bind_url,
-    write_runtime_receipt,
+    write_runtime_receipt_under_lease,
 )
 
 LISTENER_OWNER = "portfolio-tracker-service"
@@ -130,9 +135,9 @@ class TrackerServiceSupervisor:
         lifecycle_state: LifecycleState,
         listener: ListenerObservation,
         failure: str | None,
-    ) -> RuntimeReceipt:
+    ) -> RuntimeReceipt | None:
         now = self._now()
-        return write_runtime_receipt(
+        return write_runtime_receipt_under_lease(
             self._receipt_path,
             RuntimeReceipt(
                 idempotency_key=derive_daily_refresh_idempotency_key(now),
@@ -162,7 +167,41 @@ class TrackerServiceSupervisor:
             return f"child cleanup failed: {type(exc).__name__}"
         return None
 
+    def _write_failure_after_cleanup(
+        self,
+        *,
+        listener: ListenerObservation,
+        cleanup_error: str | None,
+        failure: str,
+    ) -> None:
+        failure_detail = (
+            failure
+            if cleanup_error is None or cleanup_error in failure
+            else f"{failure}; {cleanup_error}"
+        )
+        persisted = self._write(
+            lifecycle_state="failed",
+            listener=listener,
+            failure=failure_detail,
+        )
+        if cleanup_error is not None and (
+            persisted is None
+            or persisted.lifecycle_state != "failed"
+            or persisted.failure_detail is None
+            or cleanup_error not in persisted.failure_detail
+        ):
+            raise RuntimeError(f"{cleanup_error}; failure receipt evidence unavailable")
+
     def run(self) -> int:
+        try:
+            return self._run()
+        except Exception as exc:
+            cleanup_error = self._stop_child()
+            if cleanup_error is not None:
+                raise RuntimeError(f"tracker supervisor failed and {cleanup_error}") from exc
+            raise
+
+    def _run(self) -> int:
         manager = PortfolioTrackerRuntimeManager(
             config=RuntimeConfig(
                 listener_owner=LISTENER_OWNER,
@@ -174,26 +213,36 @@ class TrackerServiceSupervisor:
             now=self._now,
             lease=AtomicFileLease(self._receipt_path.with_suffix(".lease")),
         )
-        started = manager.ensure_running()
+        started = manager.ensure_running(receipt_path=self._receipt_path)
+        if started.lifecycle_state == "ownership_conflict":
+            if self._process is None:
+                # Losing the initial decision is terminal for this supervisor.
+                # Reacquiring later to report failure would make the loser a
+                # second writer after the canonical owner releases.
+                return 1
+            cleanup_error = self._stop_child()
+            if cleanup_error is not None:
+                self._write_failure_after_cleanup(
+                    listener=started.listener.model_copy(update={"healthy": False}),
+                    cleanup_error=cleanup_error,
+                    failure=(
+                        f"{started.failure_detail or 'listener ownership conflict'}; "
+                        f"{cleanup_error}"
+                    ),
+                )
+            return 1
         if (
             started.lifecycle_state not in {"started", "already_running"}
             or started.listener.owner != LISTENER_OWNER
             or started.listener.pid is None
         ):
             cleanup_error = self._stop_child()
-            self._write(
-                lifecycle_state="failed",
+            self._write_failure_after_cleanup(
                 listener=started.listener,
-                failure=cleanup_error
-                or started.failure_detail
-                or "listener ownership proof is missing",
+                cleanup_error=cleanup_error,
+                failure=started.failure_detail or "listener ownership proof is missing",
             )
             return 1
-        self._write(
-            lifecycle_state=started.lifecycle_state,
-            listener=started.listener,
-            failure=None,
-        )
         last_listener = started.listener
         while self._process is not None:
             try:
@@ -209,11 +258,10 @@ class TrackerServiceSupervisor:
                 or listener.pid != self._process.pid
             ):
                 cleanup_error = self._stop_child()
-                self._write(
-                    lifecycle_state="failed",
+                self._write_failure_after_cleanup(
                     listener=listener,
-                    failure=cleanup_error
-                    or "listener health or endpoint ownership proof is missing",
+                    cleanup_error=cleanup_error,
+                    failure="listener health or endpoint ownership proof is missing",
                 )
                 return 1
             self._write(lifecycle_state="already_running", listener=listener, failure=None)
@@ -229,25 +277,38 @@ class TrackerServiceSupervisor:
         return 1
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tracker-root", default=os.environ.get("PORTFOLIO_TRACKER_ROOT"))
     parser.add_argument("--api-url", default=os.environ.get("PORTFOLIO_TRACKER_API_URL"))
-    args = parser.parse_args()
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        help=(
+            "Product-state root that owns the supervisor receipt; defaults to the root "
+            "containing EARNINGS_SUMMARY_DB_PATH"
+        ),
+    )
+    args = parser.parse_args(argv)
     try:
-        argv = tracker_server_argv(
+        server_argv = tracker_server_argv(
             tracker_root_raw=args.tracker_root,
             api_url=args.api_url,
+        )
+        state_root = (
+            args.repo_root.resolve()
+            if args.repo_root is not None
+            else configured_product_state_root(PROJECT_ROOT)
         )
     except ValueError as exc:
         parser.error(str(exc))
     assert args.tracker_root is not None
     tracker_root = Path(args.tracker_root).expanduser().resolve()
     return TrackerServiceSupervisor(
-        argv=argv,
+        argv=server_argv,
         tracker_root=tracker_root,
         api_url=str(args.api_url),
-        receipt_path=portfolio_tracker_receipt_path(PROJECT_ROOT),
+        receipt_path=portfolio_tracker_receipt_path(state_root),
     ).run()
 
 
