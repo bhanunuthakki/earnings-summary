@@ -55,6 +55,8 @@ REQUIRED_SUBSYSTEM_FIELDS = (
 )
 OWNERSHIP_FIELDS = frozenset({"version_ownership", "backup_ownership"})
 OWNERSHIP_KINDS = frozenset({"file", "directory", "non_path"})
+NON_PATH_EVIDENCE_PREFIXES = ("git:", "schema:", "runtime:", "external:")
+SUPPORTED_PYTEST_FLAGS = frozenset({"-q"})
 
 
 @dataclass(frozen=True)
@@ -305,9 +307,13 @@ def _validate_ownership_paths(
 
         if kind == "non_path":
             evidence = entry.get("evidence")
-            if not isinstance(evidence, str) or not evidence.strip():
+            if (
+                not isinstance(evidence, str)
+                or not evidence.startswith(NON_PATH_EVIDENCE_PREFIXES)
+                or len(evidence.split(":", 1)[1].strip()) < 3
+            ):
                 issues.append(
-                    f"{prefix}.evidence must be a non-empty string for non_path ownership"
+                    f"{prefix}.evidence must use a supported typed prefix for non_path ownership"
                 )
                 if entry_field is not None:
                     validity[entry_field] = False
@@ -365,6 +371,8 @@ def _validate_test_commands(repo_root: Path, raw_commands: object) -> tuple[bool
     """Validate pytest commands and every declared test target they name."""
     if not isinstance(raw_commands, list):
         return False, ["'test_commands' must be a list"]
+    if not raw_commands:
+        return False, ["'test_commands' must contain at least one command"]
     issues: list[str] = []
     for index, raw_command in enumerate(cast(list[object], raw_commands)):
         prefix = f"test_commands[{index}]"
@@ -382,6 +390,16 @@ def _validate_test_commands(repo_root: Path, raw_commands: object) -> tuple[bool
             or (tokens[:2] == ["python", "-m"] and len(tokens) > 2 and tokens[2] == "pytest")
         ):
             issues.append(f"{prefix} must invoke pytest directly")
+            continue
+        unsupported_flags = {
+            token
+            for token in tokens
+            if token.startswith("-") and token not in SUPPORTED_PYTEST_FLAGS
+        }
+        if unsupported_flags:
+            issues.append(
+                f"{prefix} contains unsupported pytest flags: {sorted(unsupported_flags)}"
+            )
             continue
         targets = [token for token in tokens[1:] if not token.startswith("-") and token != "pytest"]
         if (
@@ -532,6 +550,8 @@ def verify_manifest(
         issues_total.append(f"Expected exactly 11 subsystems, found {len(subsystems)}")
 
     subsystem_ids: set[str] = {str(item.get("id", "")) for item in subsystems if "id" in item}
+    if len(subsystem_ids) != len(subsystems):
+        issues_total.append("Subsystem IDs must be unique")
 
     # Verify dependency DAG
     dag_acyclic, dag_issues = check_dependency_dag(subsystems, subsystem_ids)

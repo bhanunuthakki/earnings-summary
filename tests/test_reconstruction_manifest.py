@@ -127,6 +127,24 @@ def test_manifest_validator_rejects_unbound_authority_and_missing_test_target(
     assert any("must be an existing file" in issue for issue in result.issues)
 
 
+def test_manifest_validator_rejects_unsupported_test_flag_and_duplicate_ids(tmp_path: Path) -> None:
+    payload = json.loads(
+        (PROJECT_ROOT / "reconstruction_manifest.json").read_text(encoding="utf-8")
+    )
+    payload["subsystems"][1]["id"] = payload["subsystems"][0]["id"]
+    manifest = tmp_path / "invalid.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = verify_manifest(manifest, PROJECT_ROOT)
+    assert receipt.all_subsystems_pass is False
+    assert receipt.total_issues_count > 0
+    payload["subsystems"][1]["id"] = "pipeline_execution"
+    payload["subsystems"][0]["test_commands"] = ["pytest tests/test_sqlite_runtime.py --bogus"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = verify_manifest(manifest, PROJECT_ROOT)
+    assert any("unsupported pytest flags" in issue for issue in receipt.results[0].issues)
+
+
 def test_readme_has_distinct_fresh_and_existing_upgrade_branches() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     fresh = readme.split("#### Fresh install (new database)", 1)[1].split(
