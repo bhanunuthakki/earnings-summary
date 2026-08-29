@@ -54,8 +54,22 @@ REQUIRED_SUBSYSTEM_FIELDS = (
     "exit_ready_boundary",
 )
 OWNERSHIP_FIELDS = frozenset({"version_ownership", "backup_ownership"})
-OWNERSHIP_KINDS = frozenset({"file", "directory", "non_path"})
-NON_PATH_EVIDENCE_IDS = frozenset({"git:repository-history"})
+OWNERSHIP_KINDS = frozenset({"file", "directory"})
+CANONICAL_SUBSYSTEM_IDS = frozenset(
+    {
+        "core_data_layer",
+        "pipeline_execution",
+        "source_adapters",
+        "financial_compute_engine",
+        "synthesis_research_lenses",
+        "llm_router_eval_harness",
+        "operations_governance_hub",
+        "ui_cockpit_server",
+        "user_state_journal_memory",
+        "cron_automation_scheduler",
+        "test_and_verification_suite",
+    }
+)
 SUPPORTED_PYTEST_FLAGS = frozenset({"-q"})
 
 
@@ -305,16 +319,6 @@ def _validate_ownership_paths(
                 validity[entry_field] = False
             continue
 
-        if kind == "non_path":
-            evidence = entry.get("evidence")
-            if not isinstance(evidence, str) or evidence not in NON_PATH_EVIDENCE_IDS:
-                issues.append(
-                    f"{prefix}.evidence must use a supported typed prefix for non_path ownership"
-                )
-                if entry_field is not None:
-                    validity[entry_field] = False
-            continue
-
         path_value = entry.get("path")
         if not isinstance(path_value, str) or not path_value.strip():
             issues.append(f"{prefix}.path must be a non-empty string")
@@ -548,6 +552,12 @@ def verify_manifest(
     subsystem_ids: set[str] = {str(item.get("id", "")) for item in subsystems if "id" in item}
     if len(subsystem_ids) != len(subsystems):
         issues_total.append("Subsystem IDs must be unique")
+    missing_ids = sorted(CANONICAL_SUBSYSTEM_IDS - subsystem_ids)
+    unexpected_ids = sorted(subsystem_ids - CANONICAL_SUBSYSTEM_IDS)
+    if missing_ids:
+        issues_total.append("Missing canonical subsystem IDs: " + ", ".join(missing_ids))
+    if unexpected_ids:
+        issues_total.append("Unexpected subsystem IDs: " + ", ".join(unexpected_ids))
 
     # Verify dependency DAG
     dag_acyclic, dag_issues = check_dependency_dag(subsystems, subsystem_ids)

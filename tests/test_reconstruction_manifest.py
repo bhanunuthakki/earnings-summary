@@ -161,7 +161,19 @@ def test_manifest_validator_rejects_unconstrained_non_path_evidence(tmp_path: Pa
     receipt = verify_manifest(manifest, PROJECT_ROOT)
     pipeline = next(row for row in receipt.results if row.subsystem_id == "pipeline_execution")
     assert pipeline.version_ownership_valid is False
-    assert any("supported typed prefix" in issue for issue in pipeline.issues)
+    assert any("must be one of" in issue for issue in pipeline.issues)
+
+
+def test_manifest_validator_rejects_noncanonical_subsystem_id(tmp_path: Path) -> None:
+    payload = json.loads(
+        (PROJECT_ROOT / "reconstruction_manifest.json").read_text(encoding="utf-8")
+    )
+    payload["subsystems"][7]["id"] = "invented_replacement_subsystem"
+    manifest = tmp_path / "invalid.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = verify_manifest(manifest, PROJECT_ROOT)
+    assert receipt.all_subsystems_pass is False
+    assert receipt.total_issues_count > 0
 
 
 def test_readme_has_distinct_fresh_and_existing_upgrade_branches() -> None:
