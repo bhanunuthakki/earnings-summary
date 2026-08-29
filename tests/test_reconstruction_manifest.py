@@ -149,7 +149,12 @@ def test_manifest_validator_rejects_unconstrained_non_path_evidence(tmp_path: Pa
     payload = json.loads(
         (PROJECT_ROOT / "reconstruction_manifest.json").read_text(encoding="utf-8")
     )
-    payload["subsystems"][1]["ownership_paths"][0]["evidence"] = "git:arbitrary prose"
+    payload["subsystems"][1]["ownership_paths"][0] = {
+        "field": "version_ownership",
+        "kind": "non_path",
+        "evidence": "git:nothing-checkable",
+        "required_in_checkout": False,
+    }
     manifest = tmp_path / "invalid.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 

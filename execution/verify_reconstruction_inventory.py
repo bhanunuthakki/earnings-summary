@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import re
 import shlex
 import sys
 from dataclasses import asdict, dataclass
@@ -56,7 +55,7 @@ REQUIRED_SUBSYSTEM_FIELDS = (
 )
 OWNERSHIP_FIELDS = frozenset({"version_ownership", "backup_ownership"})
 OWNERSHIP_KINDS = frozenset({"file", "directory", "non_path"})
-NON_PATH_EVIDENCE = re.compile(r"^(git|schema|runtime|external):[a-z0-9][a-z0-9_.-]*$")
+NON_PATH_EVIDENCE_IDS = frozenset({"git:repository-history"})
 SUPPORTED_PYTEST_FLAGS = frozenset({"-q"})
 
 
@@ -308,7 +307,7 @@ def _validate_ownership_paths(
 
         if kind == "non_path":
             evidence = entry.get("evidence")
-            if not isinstance(evidence, str) or not NON_PATH_EVIDENCE.fullmatch(evidence):
+            if not isinstance(evidence, str) or evidence not in NON_PATH_EVIDENCE_IDS:
                 issues.append(
                     f"{prefix}.evidence must use a supported typed prefix for non_path ownership"
                 )
