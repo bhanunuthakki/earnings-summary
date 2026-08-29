@@ -434,7 +434,7 @@ $TrackerApiXml = (schtasks.exe /Query `
 if ($LASTEXITCODE -ne 0) { throw 'portfolio_tracker_api is not registered' }
 $ExpectedTrackerApiAction = Join-Path $EarningsSummaryCodeRoot 'cron\run_portfolio_tracker_api.bat'
 foreach ($Expected in @(
-  'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;BU)',
+  'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)',
   '<UserId>S-1-5-18</UserId>',
   "<Command>$ExpectedTrackerApiAction</Command>"
 )) {
@@ -452,10 +452,13 @@ if (-not $TrackerRefreshXml.Contains("<Command>$ExpectedTrackerRefreshAction</Co
 }
 ```
 
-`GR` is the Task Scheduler generic-read grant required by the unprivileged
-Operations collector. Do not substitute the file-specific `FR` token: the
-task can appear as `Missing` to the independent review plane even while it is
-running under LOCAL SYSTEM.
+`GRGX` grants the Task Scheduler read/query access required by the unprivileged
+Operations collector. The grant is limited to `IU` (Interactive Users), matching
+the collector's `InteractiveToken`; do not broaden it to Builtin or Authenticated
+Users. `GR` alone can expose the folder but still deny `GetTask`, and the
+file-specific `FR` token is also insufficient. Windows treats execute access as
+capable of task control, so the Operations collector must remain query-only and
+must not expose Scheduler mutation through its API surface.
 
 The verifier must report no missing, extra, disabled, schedule-mismatched, or
 wrong-checkout Scheduler declarations. The XML checks additionally prove the
