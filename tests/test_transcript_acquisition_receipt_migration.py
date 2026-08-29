@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import sys
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -28,10 +29,79 @@ from transcripts.acquisition_semantics import (
     TranscriptAcquisitionRequest,
     TranscriptProvider,
 )
+from transcripts.immutable_staging import StagedTranscriptArtifact
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0017_add_owner_decision_checkpoints"
 HEAD = "0018_add_transcript_acquisition_receipts"
+
+
+@pytest.fixture
+def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use typed staged provenance while migration assertions run on Darwin."""
+
+    if sys.platform != "darwin":
+        return
+    from pipeline import transcript_acquisition as acquisition
+
+    payloads: dict[str, bytes] = {}
+
+    def stage(
+        source_path: Path,
+        private_root: Path,
+        *,
+        expected_sha256: str,
+        expected_size_bytes: int,
+        max_bytes: int,
+    ) -> StagedTranscriptArtifact:
+        del max_bytes
+        payload = source_path.read_bytes()
+        assert len(payload) == expected_size_bytes
+        assert hashlib.sha256(payload).hexdigest() == expected_sha256
+        source = source_path.resolve()
+        root = private_root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        source_metadata = source.stat()
+        root_metadata = root.stat()
+        payloads[expected_sha256] = payload
+        return StagedTranscriptArtifact(
+            source_path=source,
+            source_device=int(source_metadata.st_dev),
+            source_inode=int(source_metadata.st_ino),
+            staging_root=root,
+            staging_root_device=int(root_metadata.st_dev),
+            staging_root_inode=int(root_metadata.st_ino),
+            staged_path=root / f"{expected_sha256}.transcript",
+            sha256=expected_sha256,
+            size_bytes=expected_size_bytes,
+        )
+
+    def read(
+        artifact: StagedTranscriptArtifact,
+        *,
+        trusted_staging_root: Path,
+        trusted_staging_root_device: int,
+        trusted_staging_root_inode: int,
+        expected_source_path: Path,
+        expected_source_device: int,
+        expected_source_inode: int,
+        expected_sha256: str,
+        expected_size_bytes: int,
+    ) -> bytes:
+        del (
+            trusted_staging_root,
+            trusted_staging_root_device,
+            trusted_staging_root_inode,
+            expected_source_path,
+            expected_source_device,
+            expected_source_inode,
+        )
+        assert artifact.sha256 == expected_sha256
+        assert artifact.size_bytes == expected_size_bytes
+        return payloads[artifact.sha256]
+
+    monkeypatch.setattr(acquisition, "stage_transcript_artifact", stage)
+    monkeypatch.setattr(acquisition, "read_staged_transcript", read)
 
 
 def _config(path: Path) -> Config:
@@ -44,6 +114,7 @@ def _config(path: Path) -> Config:
 def test_0018_receipts_are_append_only_and_projection_bound(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
+    darwin_staging_double: None,
 ) -> None:
     repo_root = tmp_path / "repo"
     config_path = repo_root / "micro_thesis" / "ir_config" / "ACME.json"

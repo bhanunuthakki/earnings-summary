@@ -23,6 +23,122 @@ from transcripts.acquisition_semantics import (
     TranscriptAuthorizationStatus,
     TranscriptProvider,
 )
+from transcripts.immutable_staging import StagedTranscriptArtifact, TranscriptStagingError
+
+
+@pytest.fixture
+def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace unavailable Darwin staging with a typed, read-only test seam."""
+
+    if sys.platform != "darwin":
+        return
+    from execution import fetch_qa_transcript as fetch
+    from pipeline import transcript_acquisition as acquisition
+
+    def stage(
+        source_path: Path,
+        private_root: Path,
+        *,
+        expected_sha256: str,
+        expected_size_bytes: int,
+        max_bytes: int,
+    ) -> StagedTranscriptArtifact:
+        del max_bytes
+        payload = source_path.read_bytes()
+        assert len(payload) == expected_size_bytes
+        assert hashlib.sha256(payload).hexdigest() == expected_sha256
+        source = source_path.resolve()
+        root = private_root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        source_metadata = source.stat()
+        root_metadata = root.stat()
+        staged_path = root / f"{expected_sha256}.transcript"
+        if staged_path.exists():
+            existing_payload = staged_path.read_bytes()
+            if (
+                len(existing_payload) != expected_size_bytes
+                or hashlib.sha256(existing_payload).hexdigest() != expected_sha256
+            ):
+                raise TranscriptStagingError("existing staged transcript does not match")
+        else:
+            staged_path.write_bytes(payload)
+            staged_path.chmod(0o400)
+        return StagedTranscriptArtifact(
+            source_path=source,
+            source_device=int(source_metadata.st_dev),
+            source_inode=int(source_metadata.st_ino),
+            staging_root=root,
+            staging_root_device=int(root_metadata.st_dev),
+            staging_root_inode=int(root_metadata.st_ino),
+            staged_path=staged_path,
+            sha256=expected_sha256,
+            size_bytes=expected_size_bytes,
+        )
+
+    def read(
+        artifact: StagedTranscriptArtifact,
+        *,
+        trusted_staging_root: Path,
+        trusted_staging_root_device: int,
+        trusted_staging_root_inode: int,
+        expected_source_path: Path,
+        expected_source_device: int,
+        expected_source_inode: int,
+        expected_sha256: str,
+        expected_size_bytes: int,
+    ) -> bytes:
+        root = trusted_staging_root.resolve()
+        expected_staged_path = root / f"{expected_sha256}.transcript"
+        if (
+            artifact.source_path != expected_source_path.resolve()
+            or artifact.source_device != expected_source_device
+            or artifact.source_inode != expected_source_inode
+            or artifact.staging_root != root
+            or artifact.staging_root_device != trusted_staging_root_device
+            or artifact.staging_root_inode != trusted_staging_root_inode
+            or artifact.staged_path != expected_staged_path
+            or artifact.sha256 != expected_sha256
+            or artifact.size_bytes != expected_size_bytes
+        ):
+            raise TranscriptStagingError("staged transcript provenance does not match")
+        try:
+            root_metadata = root.stat()
+            payload = expected_staged_path.read_bytes()
+        except OSError as exc:
+            raise TranscriptStagingError("staged transcript is unavailable") from exc
+        if (
+            int(root_metadata.st_dev) != trusted_staging_root_device
+            or int(root_metadata.st_ino) != trusted_staging_root_inode
+            or len(payload) != expected_size_bytes
+            or hashlib.sha256(payload).hexdigest() != expected_sha256
+        ):
+            raise TranscriptStagingError(
+                "staged transcript identity, digest, or size does not match"
+            )
+        return payload
+
+    def install(
+        payload: bytes,
+        output_root: Path,
+        target_name: str,
+        *,
+        expected_sha256: str,
+        expected_size_bytes: int,
+    ) -> Path:
+        assert len(payload) == expected_size_bytes
+        assert hashlib.sha256(payload).hexdigest() == expected_sha256
+        assert Path(target_name).name == target_name
+        output_root.mkdir(parents=True, exist_ok=True)
+        target = output_root / target_name
+        if target.exists():
+            assert target.read_bytes() == payload
+        else:
+            target.write_bytes(payload)
+        return target
+
+    monkeypatch.setattr(acquisition, "stage_transcript_artifact", stage)
+    monkeypatch.setattr(acquisition, "read_staged_transcript", read)
+    monkeypatch.setattr(fetch, "install_transcript_output", install)
 
 
 def _stored_company(path: Path, *, role: str = "portfolio") -> None:
@@ -67,6 +183,7 @@ def _issuer_config(repo_root: Path, ticker: str = "ACME") -> None:
 def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
 ) -> None:
     from execution import fetch_qa_transcript as fetch
 
@@ -314,6 +431,7 @@ def test_quarterly_authorizes_and_stages_before_run_accounting(
 
 def test_staged_existing_issuer_bytes_are_exact_and_replay_is_content_addressed(
     tmp_path: Path,
+    darwin_staging_double: None,
 ) -> None:
     from pipeline.transcript_acquisition import (
         read_authorized_transcript,
@@ -384,6 +502,7 @@ def test_staged_existing_issuer_bytes_are_exact_and_replay_is_content_addressed(
 def test_same_hash_is_unique_and_artifact_cannot_cross_document_identity(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
+    darwin_staging_double: None,
 ) -> None:
     from pipeline.transcript_acquisition import (
         TranscriptAcquisitionDeniedError,
@@ -467,6 +586,7 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
 ) -> None:
     from execution import fetch_qa_transcript as fetch
     from execution import ingest_transcripts as ingest
@@ -544,6 +664,7 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
 ) -> None:
     from execution import fetch_qa_transcript as fetch
 
@@ -611,6 +732,7 @@ def test_authorized_fetch_replays_after_post_receipt_output_failure(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
 ) -> None:
     from execution import fetch_qa_transcript as fetch
 
@@ -683,10 +805,10 @@ def test_invalid_durable_replay_never_falls_through_to_network(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
     damage: str,
 ) -> None:
     from execution import fetch_qa_transcript as fetch
-    from transcripts.immutable_staging import TranscriptStagingError
 
     repo_root = tmp_path / "repo"
     _issuer_config(repo_root)
@@ -796,6 +918,7 @@ def test_output_install_rejects_hardlink_without_mutating_victim(
 def test_new_receipt_rejects_latent_or_changed_stored_target(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
+    darwin_staging_double: None,
 ) -> None:
     from pipeline.transcript_acquisition import (
         require_authorized_transcript_request,
