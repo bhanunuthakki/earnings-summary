@@ -93,9 +93,11 @@ def test_get_connection_refuses_missing_or_empty_database(
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Mac checkout authority guard")
 def test_get_connection_rejects_exact_mac_checkout_path(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The checkout guard cannot be bypassed by mutating PROJECT_ROOT."""
     forbidden = PROJECT_ROOT / "data" / "portfolio.db"
+    monkeypatch.setattr(db, "PROJECT_ROOT", str(tmp_path))
     monkeypatch.setattr(db, "DB_PATH", str(forbidden))
     monkeypatch.setattr(db, "DATA_DIR", str(forbidden.parent))
 
