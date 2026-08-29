@@ -23,7 +23,7 @@ from transcripts.acquisition_semantics import (
     TranscriptAuthorizationStatus,
     TranscriptProvider,
 )
-from transcripts.immutable_staging import StagedTranscriptArtifact
+from transcripts.immutable_staging import StagedTranscriptArtifact, TranscriptStagingError
 
 
 @pytest.fixture
@@ -34,8 +34,6 @@ def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
         return
     from execution import fetch_qa_transcript as fetch
     from pipeline import transcript_acquisition as acquisition
-
-    payloads: dict[str, bytes] = {}
 
     def stage(
         source_path: Path,
@@ -54,7 +52,17 @@ def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
         root.mkdir(parents=True, exist_ok=True)
         source_metadata = source.stat()
         root_metadata = root.stat()
-        payloads[expected_sha256] = payload
+        staged_path = root / f"{expected_sha256}.transcript"
+        if staged_path.exists():
+            existing_payload = staged_path.read_bytes()
+            if (
+                len(existing_payload) != expected_size_bytes
+                or hashlib.sha256(existing_payload).hexdigest() != expected_sha256
+            ):
+                raise TranscriptStagingError("existing staged transcript does not match")
+        else:
+            staged_path.write_bytes(payload)
+            staged_path.chmod(0o400)
         return StagedTranscriptArtifact(
             source_path=source,
             source_device=int(source_metadata.st_dev),
@@ -62,7 +70,7 @@ def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
             staging_root=root,
             staging_root_device=int(root_metadata.st_dev),
             staging_root_inode=int(root_metadata.st_ino),
-            staged_path=root / f"{expected_sha256}.transcript",
+            staged_path=staged_path,
             sha256=expected_sha256,
             size_bytes=expected_size_bytes,
         )
@@ -79,17 +87,35 @@ def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
         expected_sha256: str,
         expected_size_bytes: int,
     ) -> bytes:
-        del (
-            trusted_staging_root,
-            trusted_staging_root_device,
-            trusted_staging_root_inode,
-            expected_source_path,
-            expected_source_device,
-            expected_source_inode,
-        )
-        assert artifact.sha256 == expected_sha256
-        assert artifact.size_bytes == expected_size_bytes
-        return payloads[artifact.sha256]
+        root = trusted_staging_root.resolve()
+        expected_staged_path = root / f"{expected_sha256}.transcript"
+        if (
+            artifact.source_path != expected_source_path.resolve()
+            or artifact.source_device != expected_source_device
+            or artifact.source_inode != expected_source_inode
+            or artifact.staging_root != root
+            or artifact.staging_root_device != trusted_staging_root_device
+            or artifact.staging_root_inode != trusted_staging_root_inode
+            or artifact.staged_path != expected_staged_path
+            or artifact.sha256 != expected_sha256
+            or artifact.size_bytes != expected_size_bytes
+        ):
+            raise TranscriptStagingError("staged transcript provenance does not match")
+        try:
+            root_metadata = root.stat()
+            payload = expected_staged_path.read_bytes()
+        except OSError as exc:
+            raise TranscriptStagingError("staged transcript is unavailable") from exc
+        if (
+            int(root_metadata.st_dev) != trusted_staging_root_device
+            or int(root_metadata.st_ino) != trusted_staging_root_inode
+            or len(payload) != expected_size_bytes
+            or hashlib.sha256(payload).hexdigest() != expected_sha256
+        ):
+            raise TranscriptStagingError(
+                "staged transcript identity, digest, or size does not match"
+            )
+        return payload
 
     def install(
         payload: bytes,
@@ -775,18 +801,14 @@ def test_authorized_fetch_replays_after_post_receipt_output_failure(
 
 
 @pytest.mark.parametrize("damage", ["delete", "tamper"])
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="durable staged-file mutation requires the production staging primitive",
-)
 def test_invalid_durable_replay_never_falls_through_to_network(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
     damage: str,
 ) -> None:
     from execution import fetch_qa_transcript as fetch
-    from transcripts.immutable_staging import TranscriptStagingError
 
     repo_root = tmp_path / "repo"
     _issuer_config(repo_root)
