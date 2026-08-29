@@ -94,10 +94,14 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     api_wrapper = (CRON_DIR / api.wrapper).read_text(encoding="utf-8")
     assert "if not defined portfolio_tracker_root" in api_wrapper.casefold()
     assert "if not defined portfolio_tracker_api_url" in api_wrapper.casefold()
+    assert "earnings_summary_db_path" in api_wrapper.casefold()
     assert "execution\\serve_portfolio_tracker.py" in api_wrapper
     refresh_wrapper = (CRON_DIR / refresh.wrapper).read_text(encoding="utf-8")
     assert "if not defined portfolio_tracker_api_url" in refresh_wrapper.casefold()
+    assert "earnings_summary_db_path" in refresh_wrapper.casefold()
     assert "execution\\refresh_portfolio_tracker.py" in refresh_wrapper
+    assert '--code-root "%project_root%"' in refresh_wrapper.casefold()
+    assert '--repo-root "%project_root%"' not in refresh_wrapper.casefold()
     assert "serve_portfolio_tracker.py" not in refresh_wrapper
     assert {task.wrapper for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("run_*.bat") if path.name != "run_python.bat"

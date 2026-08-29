@@ -35,7 +35,7 @@ from integrations.portfolio_tracker_client import (
 )
 from pipeline.portfolio_panel import (
     WindowSelection,
-    _backfill_warning,
+    backfill_warning,
     compose_portfolio_page,
     compose_risk_page,
     compose_synthesis_page,
@@ -650,7 +650,11 @@ def test_render_offline_shows_start_hint() -> None:
         )
     )
     assert "isn't running" in html  # humane lede, not a raw requests repr
-    assert "uvicorn portfolio_tracker.api.main:app" in html  # the manual hint
+    assert "Windows Task Scheduler" in html
+    assert r"\earnings-summary\portfolio_tracker_api" in html
+    assert "uvicorn portfolio_tracker.api.main:app" not in html
+    assert "check the log below" not in html
+    assert "inspect the Scheduler task details below" in html
     # PR6: a one-click start button wired to /actions/start-tracker. Class-
     # scoped (Phase-5 verifier fix 4): the banner renders in BOTH the Health
     # and Allocation composites, so ids would collide across the document.
@@ -792,10 +796,10 @@ def test_fetch_analytics_parses_all_endpoints(mock_tracker: None) -> None:
 
 def test_beta_significance_absent_is_tristate_none() -> None:
     # An older tracker that predates the trio: missing key → None, not False.
-    payload = {k: v for k, v in _BETA.items() if not k.startswith("alpha_t")}
+    payload: dict[str, object] = {k: v for k, v in _BETA.items() if not k.startswith("alpha_t")}
     payload.pop("alpha_significant")
     payload.pop("alpha_std_error_annualized_pct")
-    beta = ptc._parse_beta(payload)
+    beta = ptc.parse_beta(payload)
     assert beta.alpha_significant is None
     assert beta.alpha_t_stat is None
     assert beta.alpha_std_error_annualized_pct is None
@@ -1046,7 +1050,8 @@ def test_compose_page_offline_renders_single_note() -> None:
     # Tracker fully down → exactly ONE offline note (the live section's, which
     # carries the start hint) — not a second analytics offline panel.
     assert html.count("offline-tech") == 1
-    assert "uvicorn portfolio_tracker.api.main:app" in html
+    assert "Windows Task Scheduler" in html
+    assert "uvicorn portfolio_tracker.api.main:app" not in html
     assert "Portfolio analytics" not in html
     # The synthesis layer moved to its own sub-tab — Performance carries none
     # of it (no insights grid, no next-dollar, no lens memo).
@@ -1541,11 +1546,11 @@ def _perf_series(*, unreliable: bool, observed: str | None) -> PerformanceSeries
 
 
 def test_backfill_warning_absent_when_window_is_observed() -> None:
-    assert _backfill_warning(_perf_series(unreliable=False, observed="2026-05-09")) == ""
+    assert backfill_warning(_perf_series(unreliable=False, observed="2026-05-09")) == ""
 
 
 def test_backfill_warning_names_the_observed_boundary_and_the_bias() -> None:
-    html = _backfill_warning(_perf_series(unreliable=True, observed="2026-05-09"))
+    html = backfill_warning(_perf_series(unreliable=True, observed="2026-05-09"))
     assert "modeled, not measured" in html
     # The boundary has to be in the copy — "some of this is modeled" without
     # saying how far back is not actionable.
@@ -1555,7 +1560,7 @@ def test_backfill_warning_names_the_observed_boundary_and_the_bias() -> None:
 
 
 def test_backfill_warning_handles_a_fully_modeled_window() -> None:
-    html = _backfill_warning(_perf_series(unreliable=True, observed=None))
+    html = backfill_warning(_perf_series(unreliable=True, observed=None))
     assert "No part of this window" in html
 
 
@@ -1566,7 +1571,7 @@ def test_backfill_warning_does_not_claim_survivorship() -> None:
     # 33 reconstructed at 2024-01-01 against 12 held today on the live book.
     # The real limit is per-account transaction COVERAGE, and the dominant
     # error is contributions made before a feed started, not vanished losers.
-    html = _backfill_warning(_perf_series(unreliable=True, observed="2026-05-09"))
+    html = backfill_warning(_perf_series(unreliable=True, observed="2026-05-09"))
     assert "only see positions you still hold" not in html
     assert "exited losers" not in html
     assert "transaction history reaches" in html

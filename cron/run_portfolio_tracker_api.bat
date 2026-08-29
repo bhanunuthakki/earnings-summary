@@ -20,6 +20,10 @@ if not defined PORTFOLIO_TRACKER_API_URL (
   echo ERROR: PORTFOLIO_TRACKER_API_URL is required for portfolio-tracker-service. 1>&2
   exit /b 1
 )
+if not defined EARNINGS_SUMMARY_DB_PATH (
+  echo ERROR: EARNINGS_SUMMARY_DB_PATH is required for the product-state receipt root. 1>&2
+  exit /b 1
+)
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "portfolio-tracker-api" "portfolio-tracker-api" execution\serve_portfolio_tracker.py --tracker-root "%PORTFOLIO_TRACKER_ROOT%" --api-url "%PORTFOLIO_TRACKER_API_URL%" > "%LOG_FILE%" 2>&1

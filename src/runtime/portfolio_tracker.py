@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import ntpath
 import os
 import stat
 import subprocess
@@ -17,7 +18,7 @@ from typing import Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from integrations.portfolio_tracker_v1 import HealthV1
 
@@ -28,6 +29,25 @@ LEASE_RELEASE_DEADLINE_SECONDS = 0.5
 HEALTH_RESPONSE_CLOCK_SKEW = timedelta(seconds=5)
 SUPERVISOR_LISTENER_RECEIPT_MAX_AGE = timedelta(minutes=15)
 SUPERVISOR_LISTENER_BIND = ("127.0.0.1", 8000)
+PORTFOLIO_TRACKER_SCHEDULER_TASK = r"\earnings-summary\portfolio_tracker_api"
+SCHEDULER_START_TIMEOUT_SECONDS = 5.0
+SchedulerActivationFailureCode = Literal[
+    "scheduler_unavailable",
+    "scheduler_start_timeout",
+    "scheduler_start_nonzero",
+    "scheduler_start_failed",
+]
+TrackerActivationFailureCode = Literal[
+    "scheduler_unavailable",
+    "scheduler_start_timeout",
+    "scheduler_start_nonzero",
+    "scheduler_start_failed",
+    "listener_health_timeout",
+    "listener_health_invalid",
+    "listener_owner_unverified",
+    "activation_ownership_conflict",
+    "activation_failed",
+]
 
 
 class RuntimeConfig(BaseModel):
@@ -40,6 +60,14 @@ class LeaseReleaseError(RuntimeError):
     """A runtime operation cannot claim success while its lease is orphaned."""
 
 
+class SchedulerActivationError(RuntimeError):
+    """A safe, typed failure at the Windows Scheduler activation boundary."""
+
+    def __init__(self, failure_code: SchedulerActivationFailureCode) -> None:
+        self.failure_code = failure_code
+        super().__init__(failure_code)
+
+
 class ListenerObservation(BaseModel):
     healthy: bool
     owner: str | None = None
@@ -47,6 +75,13 @@ class ListenerObservation(BaseModel):
     job_id: str | None = None
     health_checked_at: datetime | None = None
     health: HealthV1 | None = None
+
+    @field_validator("pid")
+    @classmethod
+    def _positive_pid(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("listener PID must be positive")
+        return value
 
 
 def health_is_healthy(health: HealthV1 | None, *, now: datetime) -> bool:
@@ -100,6 +135,36 @@ def is_loopback_bind_host(host: str) -> bool:
         return ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def start_portfolio_tracker_scheduler_task() -> None:
+    """Request the canonical LOCAL SYSTEM tracker task without leaking output."""
+
+    if os.name != "nt":
+        raise SchedulerActivationError("scheduler_unavailable")
+    system_root = os.environ.get("SYSTEMROOT", "").strip()
+    if not system_root:
+        raise SchedulerActivationError("scheduler_unavailable")
+    scheduler_executable = ntpath.join(system_root, "System32", "schtasks.exe")
+    try:
+        result = subprocess.run(
+            [
+                scheduler_executable,
+                "/Run",
+                "/TN",
+                PORTFOLIO_TRACKER_SCHEDULER_TASK,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=SCHEDULER_START_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise SchedulerActivationError("scheduler_start_timeout") from None
+    except (OSError, subprocess.SubprocessError):
+        raise SchedulerActivationError("scheduler_start_failed") from None
+    if result.returncode != 0:
+        raise SchedulerActivationError("scheduler_start_nonzero")
 
 
 def read_supervisor_listener_ownership(
@@ -186,10 +251,63 @@ class RuntimeReceipt(BaseModel):
         return value
 
 
+class TrackerActivationReceipt(BaseModel):
+    """Dashboard-owned attempt evidence, separate from live supervisor truth."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["1"] = RUNTIME_RECEIPT_SCHEMA_VERSION
+    idempotency_key: str
+    scheduler_task_name: Literal[r"\earnings-summary\portfolio_tracker_api"] = (
+        PORTFOLIO_TRACKER_SCHEDULER_TASK
+    )
+    lifecycle_state: Literal["already_running", "started", "ownership_conflict", "failed"]
+    recorded_at: datetime
+    listener: ListenerObservation
+    failure_code: TrackerActivationFailureCode | None = None
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _activation_key(cls, value: str) -> str:
+        if not value.startswith("portfolio-tracker-activation:"):
+            raise ValueError("activation receipt requires an activation idempotency key")
+        return value
+
+    @field_validator("recorded_at")
+    @classmethod
+    def _aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("activation receipt timestamp must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _failure_matches_lifecycle(self) -> TrackerActivationReceipt:
+        if self.listener.pid is not None and self.listener.pid <= 0:
+            raise ValueError("listener PID must be positive")
+        failed = self.lifecycle_state in {"failed", "ownership_conflict"}
+        if failed != (self.failure_code is not None):
+            raise ValueError("activation failure code must match the lifecycle state")
+        if not failed and (
+            not self.listener.healthy
+            or self.listener.owner != "portfolio-tracker-service"
+            or self.listener.pid is None
+            or self.listener.pid <= 0
+            or not health_is_healthy(self.listener.health, now=self.recorded_at)
+        ):
+            raise ValueError("successful activation requires fresh listener ownership proof")
+        return self
+
+
 def derive_daily_refresh_idempotency_key(recorded_at: datetime) -> str:
     """Derive the daily key from the producer clock; callers cannot supply it."""
 
     return f"portfolio-tracker-refresh:{recorded_at.astimezone(UTC).date().isoformat()}"
+
+
+def derive_activation_idempotency_key(recorded_at: datetime) -> str:
+    """Derive activation identity separately from daily refresh identity."""
+
+    return f"portfolio-tracker-activation:{recorded_at.astimezone(UTC).date().isoformat()}"
 
 
 ProcessLiveness = Literal["alive", "dead", "unknown"]
@@ -633,32 +751,47 @@ class PortfolioTrackerRuntimeManager:
         self._sleep = sleep
         self._startup_timeout_seconds = startup_timeout_seconds
 
-    def ensure_running(self, *, receipt_path: Path | None = None) -> RuntimeReceipt:
-        if self._lease is not None and not self._lease.acquire():
+    def ensure_running(
+        self,
+        *,
+        receipt_path: Path | None = None,
+        receipt_writer: Callable[[Path, RuntimeReceipt], RuntimeReceipt] | None = None,
+    ) -> RuntimeReceipt:
+        lease = self._lease
+        if receipt_path is not None and lease is None:
+            lease = AtomicFileLease(receipt_path.with_suffix(".lease"))
+        if lease is not None and not lease.acquire():
             return RuntimeReceipt(
                 idempotency_key=self._config.idempotency_key,
                 lifecycle_state="ownership_conflict",
                 recorded_at=self._now(),
                 listener=ListenerObservation(healthy=False),
-                failure_detail=self._lease.last_conflict_detail
+                failure_detail=lease.last_conflict_detail
                 or "another portfolio-tracker runtime owner holds the atomic lease",
             )
         try:
             receipt = self._ensure_running()
-            return (
-                write_runtime_receipt(receipt_path, receipt)
-                if receipt_path is not None
-                else receipt
-            )
-        finally:
-            if (
-                self._lease is not None
-                and not self._lease.release()
-                and (not self._lease.acquire() or not self._lease.release())
-            ):
+        except Exception:
+            if lease is not None and not lease.release():
                 raise LeaseReleaseError(
-                    self._lease.last_conflict_detail or "runtime lease release failed"
+                    lease.last_conflict_detail or "runtime lease release failed"
+                ) from None
+            raise
+        if receipt_path is None:
+            if lease is not None and not lease.release():
+                raise LeaseReleaseError(
+                    lease.last_conflict_detail or "runtime lease release failed"
                 )
+            return receipt
+        assert lease is not None
+        writer = receipt_writer or write_runtime_receipt
+        return _persist_receipt_and_release(
+            path=receipt_path,
+            receipt=receipt,
+            lease=lease,
+            writer=writer,
+            release_failure="runtime lease release failed",
+        )
 
     def _ensure_running(self) -> RuntimeReceipt:
         try:
@@ -674,9 +807,11 @@ class PortfolioTrackerRuntimeManager:
                 listener=before,
                 failure_detail="listener is healthy or occupied by an unexpected owner",
             )
-        if before.healthy and not health_is_healthy(before.health, now=before_now):
-            return self._failed("listener_health_invalid", before)
         if before.healthy:
+            if not health_is_healthy(before.health, now=before_now):
+                return self._failed("listener_health_invalid", before)
+            if before.owner != self._config.listener_owner or before.pid is None or before.pid <= 0:
+                return self._failed("listener_owner_unverified", before)
             return RuntimeReceipt(
                 idempotency_key=self._config.idempotency_key,
                 lifecycle_state="already_running",
@@ -688,7 +823,12 @@ class PortfolioTrackerRuntimeManager:
         try:
             self._start_listener(self._config)
         except Exception as exc:
-            return self._failed(type(exc).__name__, before)
+            detail = (
+                exc.failure_code
+                if isinstance(exc, SchedulerActivationError)
+                else type(exc).__name__
+            )
+            return self._failed(detail, before)
         deadline = time.monotonic() + self._startup_timeout_seconds
         after = before
         while True:
@@ -708,6 +848,8 @@ class PortfolioTrackerRuntimeManager:
                 after.healthy
                 and health_is_healthy(after.health, now=self._now())
                 and after.owner == self._config.listener_owner
+                and after.pid is not None
+                and after.pid > 0
             ):
                 return RuntimeReceipt(
                     idempotency_key=self._config.idempotency_key,
@@ -768,13 +910,127 @@ def write_runtime_receipt(path: Path, receipt: RuntimeReceipt) -> RuntimeReceipt
                 )
             }
         )
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
     try:
         temporary.write_text(receipt.model_dump_json(), encoding="utf-8")
         temporary.replace(path)
         return RuntimeReceipt.model_validate_json(path.read_bytes())
     except (OSError, ValidationError, ValueError) as exc:
         raise RuntimeError(f"runtime receipt persistence failed: {type(exc).__name__}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _restore_receipt_snapshot(path: Path, previous: bytes | None) -> None:
+    """Restore the exact pre-write bytes while the caller still owns the lease."""
+
+    if previous is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.rollback")
+    try:
+        temporary.write_bytes(previous)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _persist_receipt_and_release(
+    *,
+    path: Path,
+    receipt: RuntimeReceipt,
+    lease: AtomicFileLease,
+    writer: Callable[[Path, RuntimeReceipt], RuntimeReceipt],
+    release_failure: str,
+) -> RuntimeReceipt:
+    """Persist under exclusive ownership and roll back if release cannot complete."""
+
+    try:
+        previous = path.read_bytes()
+    except FileNotFoundError:
+        previous = None
+    except OSError as exc:
+        if not lease.release():
+            raise LeaseReleaseError(lease.last_conflict_detail or release_failure) from exc
+        raise RuntimeError(f"receipt snapshot failed: {type(exc).__name__}") from exc
+    try:
+        persisted = writer(path, receipt)
+    except Exception as write_error:
+        try:
+            _restore_receipt_snapshot(path, previous)
+        except OSError as rollback_error:
+            lease.release()
+            raise RuntimeError("receipt write failed and rollback failed") from rollback_error
+        if not lease.release():
+            raise LeaseReleaseError(lease.last_conflict_detail or release_failure) from write_error
+        raise write_error
+    if lease.release():
+        return persisted
+    try:
+        _restore_receipt_snapshot(path, previous)
+    except OSError as exc:
+        lease.release()
+        raise LeaseReleaseError(f"{release_failure}; receipt rollback failed") from exc
+    lease.release()
+    raise LeaseReleaseError(lease.last_conflict_detail or release_failure)
+
+
+def write_runtime_receipt_under_lease(path: Path, receipt: RuntimeReceipt) -> RuntimeReceipt | None:
+    """Merge and persist the shared receipt only while owning its canonical lease."""
+
+    lease = AtomicFileLease(path.with_suffix(".lease"))
+    if not lease.acquire():
+        return None
+    return _persist_receipt_and_release(
+        path=path,
+        receipt=receipt,
+        lease=lease,
+        writer=write_runtime_receipt,
+        release_failure="shared runtime receipt lease release failed",
+    )
+
+
+def write_tracker_activation_receipt(path: Path, receipt: RuntimeReceipt) -> RuntimeReceipt:
+    """Persist one truthful activation attempt after its lease releases cleanly."""
+
+    known_failure_codes = frozenset(
+        {
+            "scheduler_unavailable",
+            "scheduler_start_timeout",
+            "scheduler_start_nonzero",
+            "scheduler_start_failed",
+            "listener_health_timeout",
+            "listener_health_invalid",
+            "listener_owner_unverified",
+        }
+    )
+    failure_code: TrackerActivationFailureCode | None = None
+    if receipt.lifecycle_state == "ownership_conflict":
+        failure_code = "activation_ownership_conflict"
+    elif receipt.lifecycle_state == "failed":
+        failure_code = cast(
+            "TrackerActivationFailureCode",
+            receipt.failure_detail
+            if receipt.failure_detail in known_failure_codes
+            else "activation_failed",
+        )
+    activation = TrackerActivationReceipt(
+        idempotency_key=receipt.idempotency_key,
+        lifecycle_state=receipt.lifecycle_state,
+        recorded_at=receipt.recorded_at,
+        listener=receipt.listener,
+        failure_code=failure_code,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(activation.model_dump_json(), encoding="utf-8")
+        temporary.replace(path)
+        TrackerActivationReceipt.model_validate_json(path.read_bytes())
+        return receipt
+    except (OSError, ValidationError, ValueError) as exc:
+        raise RuntimeError(f"activation receipt persistence failed: {type(exc).__name__}") from exc
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -960,7 +1216,13 @@ def produce_daily_refresh_receipt(
             scheduler=scheduler,
             failure_detail=detail,
         )
-        return write_runtime_receipt(receipt_path, receipt)
+        return _persist_receipt_and_release(
+            path=receipt_path,
+            receipt=receipt,
+            lease=lease,
+            writer=write_runtime_receipt,
+            release_failure="daily lease release failed",
+        )
     finally:
         if not lease.release():
             raise LeaseReleaseError(lease.last_conflict_detail or "daily lease release failed")
@@ -976,8 +1238,13 @@ __all__ = [
     "RefreshEvidence",
     "RuntimeConfig",
     "RuntimeReceipt",
+    "SchedulerActivationError",
     "SchedulerEvidence",
+    "TrackerActivationReceipt",
+    "derive_activation_idempotency_key",
     "derive_daily_refresh_idempotency_key",
     "produce_daily_refresh_receipt",
     "write_runtime_receipt",
+    "write_runtime_receipt_under_lease",
+    "write_tracker_activation_receipt",
 ]

@@ -19,6 +19,418 @@ from runtime.portfolio_tracker import RuntimeReceipt
 tracker_server_argv = server.tracker_server_argv
 
 
+def _healthy_tracker(now: datetime) -> HealthV1:
+    return HealthV1.model_validate(
+        {
+            "status": "ok",
+            "schema_version": "1.0.0",
+            "generated_at": now.isoformat(),
+            "database_ok": True,
+            "migration_version": "0023",
+            "providers": [],
+            "active_account_count": 1,
+            "latest_snapshot_date": now.date().isoformat(),
+            "is_stale": False,
+            "links": {},
+        }
+    )
+
+
+@pytest.mark.parametrize("explicit_state_root", (True, False))
+def test_scheduler_supervisor_writes_receipt_to_product_state_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_state_root: bool,
+) -> None:
+    code_root = tmp_path / "runtime-code"
+    state_root = tmp_path / "product-state"
+    tracker_root = tmp_path / "portfolio-tracker"
+    (tracker_root / ".venv" / "bin").mkdir(parents=True)
+    (tracker_root / ".venv" / "bin" / "python").touch()
+    (state_root / "data").mkdir(parents=True)
+    monkeypatch.setattr(server, "PROJECT_ROOT", code_root)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(state_root / "data" / "portfolio.db"))
+    captured: dict[str, object] = {}
+
+    class _Supervisor:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def run(self) -> int:
+            return 0
+
+    monkeypatch.setattr(server, "TrackerServiceSupervisor", _Supervisor)
+    argv = [
+        "--tracker-root",
+        str(tracker_root),
+        "--api-url",
+        "http://127.0.0.1:8000",
+    ]
+    if explicit_state_root:
+        argv.extend(("--repo-root", str(state_root)))
+
+    assert server.main(argv) == 0
+    assert captured["receipt_path"] == (
+        state_root / ".tmp" / "operations" / "runtime" / "portfolio-tracker.latest.json"
+    )
+    assert not str(captured["receipt_path"]).startswith(str(code_root))
+
+
+def test_scheduled_refresh_proves_code_root_but_writes_state_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code_root = tmp_path / "runtime-code"
+    state_root = tmp_path / "product-state"
+    (state_root / "data").mkdir(parents=True)
+    monkeypatch.setattr(refresh, "PROJECT_ROOT", code_root)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(state_root / "data" / "portfolio.db"))
+    scheduler_proof_roots: list[Path] = []
+    captured: dict[str, object] = {}
+
+    def scheduler_is_running(code_root_argument: Path) -> bool:
+        scheduler_proof_roots.append(code_root_argument)
+        return True
+
+    def produce_receipt(**kwargs: object) -> RuntimeReceipt:
+        captured.update(kwargs)
+        now = kwargs["now"]
+        assert isinstance(now, datetime)
+        return RuntimeReceipt(
+            idempotency_key="portfolio-tracker-refresh:2026-08-29",
+            lifecycle_state="already_running",
+            recorded_at=now,
+            listener=runtime.ListenerObservation(healthy=False),
+        )
+
+    monkeypatch.setattr(refresh, "canonical_scheduler_task_is_running", scheduler_is_running)
+    monkeypatch.setattr(refresh, "produce_daily_refresh_receipt", produce_receipt)
+
+    assert (
+        refresh.main(
+            [
+                "--code-root",
+                str(code_root),
+                "--api-url",
+                "http://127.0.0.1:8000",
+                "--scheduled-task",
+            ]
+        )
+        == 0
+    )
+    assert scheduler_proof_roots == [code_root.resolve()]
+    assert captured["receipt_path"] == (
+        state_root / ".tmp" / "operations" / "runtime" / "portfolio-tracker.latest.json"
+    )
+
+
+def test_supervisor_losing_shared_receipt_lease_never_writes(
+    tmp_path: Path,
+) -> None:
+    receipt_path = tmp_path / "portfolio-tracker.latest.json"
+    owner = runtime.AtomicFileLease(receipt_path.with_suffix(".lease"))
+    assert owner.acquire()
+    try:
+        supervisor = server.TrackerServiceSupervisor(
+            argv=("python", "-m", "uvicorn"),
+            tracker_root=tmp_path,
+            api_url="http://127.0.0.1:8000",
+            receipt_path=receipt_path,
+            now=lambda: datetime(2026, 8, 29, 8, tzinfo=UTC),
+            launch=lambda *_args, **_kwargs: pytest.fail("losing writer must not launch"),
+        )
+
+        assert supervisor.run() == 1
+        assert not receipt_path.exists()
+    finally:
+        assert owner.release()
+
+
+def test_supervisor_initial_lease_loser_never_reacquires_to_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt_path = tmp_path / "portfolio-tracker.latest.json"
+
+    class _InitialConflictLease:
+        last_conflict_detail = "canonical writer held lease at initial decision"
+
+        def __init__(self, _path: Path) -> None:
+            pass
+
+        def acquire(self) -> bool:
+            return False
+
+        def release(self) -> bool:
+            return True
+
+    # Only the supervisor's initial decision loses. The shared writer helper
+    # still sees a free canonical lease, reproducing release-between-steps.
+    monkeypatch.setattr(server, "AtomicFileLease", _InitialConflictLease)
+    supervisor = server.TrackerServiceSupervisor(
+        argv=("python", "-m", "uvicorn"),
+        tracker_root=tmp_path,
+        api_url="http://127.0.0.1:8000",
+        receipt_path=receipt_path,
+        now=lambda: datetime(2026, 8, 29, 8, tzinfo=UTC),
+        launch=lambda *_args, **_kwargs: pytest.fail("losing writer must not launch"),
+    )
+
+    assert supervisor.run() == 1
+    assert not receipt_path.exists()
+
+
+def test_supervisor_cleans_up_child_when_initial_receipt_persistence_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+
+    class _Process:
+        pid = 4321
+        terminated = False
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, *, timeout: float) -> int:
+            assert timeout == 10.0
+            return 0
+
+    process = _Process()
+    supervisor = server.TrackerServiceSupervisor(
+        argv=("python", "-m", "uvicorn"),
+        tracker_root=tmp_path,
+        api_url="http://127.0.0.1:8000",
+        receipt_path=tmp_path / "receipt.json",
+        now=lambda: now,
+        launch=lambda *_args, **_kwargs: cast(subprocess.Popen[bytes], process),
+    )
+    observations = iter(
+        (
+            runtime.ListenerObservation(healthy=False),
+            runtime.ListenerObservation(
+                healthy=True,
+                owner="portfolio-tracker-service",
+                pid=process.pid,
+                health_checked_at=now,
+                health=_healthy_tracker(now),
+            ),
+        )
+    )
+    monkeypatch.setattr(supervisor, "_inspect_listener", lambda: next(observations))
+
+    def fail_receipt_write(_path: Path, _receipt: RuntimeReceipt) -> RuntimeReceipt:
+        raise RuntimeError("receipt failed")
+
+    monkeypatch.setattr(
+        runtime,
+        "write_runtime_receipt",
+        fail_receipt_write,
+    )
+
+    with pytest.raises(RuntimeError, match="receipt failed"):
+        supervisor.run()
+
+    assert process.terminated is True
+
+
+def test_supervisor_cleans_up_child_when_heartbeat_persistence_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+
+    class _Process:
+        pid = 4321
+        terminated = False
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, *, timeout: float) -> int:
+            if timeout == server.HEARTBEAT_SECONDS:
+                raise subprocess.TimeoutExpired("uvicorn", timeout)
+            assert timeout == 10.0
+            return 0
+
+    process = _Process()
+    supervisor = server.TrackerServiceSupervisor(
+        argv=("python", "-m", "uvicorn"),
+        tracker_root=tmp_path,
+        api_url="http://127.0.0.1:8000",
+        receipt_path=tmp_path / "receipt.json",
+        now=lambda: now,
+        launch=lambda *_args, **_kwargs: cast(subprocess.Popen[bytes], process),
+    )
+    healthy = runtime.ListenerObservation(
+        healthy=True,
+        owner="portfolio-tracker-service",
+        pid=process.pid,
+        health_checked_at=now,
+        health=_healthy_tracker(now),
+    )
+    observations = iter((runtime.ListenerObservation(healthy=False), healthy, healthy))
+    monkeypatch.setattr(supervisor, "_inspect_listener", lambda: next(observations))
+
+    def fail_heartbeat_write(_path: Path, _receipt: RuntimeReceipt) -> RuntimeReceipt | None:
+        raise RuntimeError("heartbeat failed")
+
+    monkeypatch.setattr(
+        server,
+        "write_runtime_receipt_under_lease",
+        fail_heartbeat_write,
+    )
+
+    with pytest.raises(RuntimeError, match="heartbeat failed"):
+        supervisor.run()
+
+    assert process.terminated is True
+
+
+def test_supervisor_records_cleanup_failure_after_post_launch_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+
+    class _Process:
+        pid = 4321
+        terminate_attempted = False
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminate_attempted = True
+            raise OSError("terminate failed")
+
+    process = _Process()
+    receipt_path = tmp_path / "receipt.json"
+    supervisor = server.TrackerServiceSupervisor(
+        argv=("python", "-m", "uvicorn"),
+        tracker_root=tmp_path,
+        api_url="http://127.0.0.1:8000",
+        receipt_path=receipt_path,
+        now=lambda: now,
+        launch=lambda *_args, **_kwargs: cast(subprocess.Popen[bytes], process),
+    )
+    observations = iter(
+        (
+            runtime.ListenerObservation(healthy=False),
+            runtime.ListenerObservation(
+                healthy=True,
+                owner="unexpected-owner",
+                pid=999,
+                health_checked_at=now,
+                health=_healthy_tracker(now),
+            ),
+        )
+    )
+    monkeypatch.setattr(supervisor, "_inspect_listener", lambda: next(observations))
+
+    assert supervisor.run() == 1
+    assert process.terminate_attempted is True
+    receipt = runtime.RuntimeReceipt.model_validate_json(receipt_path.read_bytes())
+    assert receipt.lifecycle_state == "failed"
+    assert receipt.failure_detail is not None
+    assert "child cleanup failed: OSError" in receipt.failure_detail
+
+
+def test_supervisor_raises_when_cleanup_failure_receipt_loses_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+
+    class _Process:
+        pid = 4321
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            raise OSError("terminate failed")
+
+    process = _Process()
+    supervisor = server.TrackerServiceSupervisor(
+        argv=("python", "-m", "uvicorn"),
+        tracker_root=tmp_path,
+        api_url="http://127.0.0.1:8000",
+        receipt_path=tmp_path / "receipt.json",
+        now=lambda: now,
+        launch=lambda *_args, **_kwargs: cast(subprocess.Popen[bytes], process),
+    )
+    observations = iter(
+        (
+            runtime.ListenerObservation(healthy=False),
+            runtime.ListenerObservation(
+                healthy=True,
+                owner="unexpected-owner",
+                pid=999,
+                health_checked_at=now,
+                health=_healthy_tracker(now),
+            ),
+        )
+    )
+    monkeypatch.setattr(supervisor, "_inspect_listener", lambda: next(observations))
+
+    def lose_receipt_lease(_path: Path, _receipt: RuntimeReceipt) -> None:
+        return None
+
+    monkeypatch.setattr(server, "write_runtime_receipt_under_lease", lose_receipt_lease)
+
+    with pytest.raises(RuntimeError, match="child cleanup failed: OSError"):
+        supervisor.run()
+
+
+def test_supervisor_raises_when_cleanup_failure_receipt_is_superseded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+
+    class _Process:
+        pid = 4321
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            raise OSError("terminate failed")
+
+    process = _Process()
+    supervisor = server.TrackerServiceSupervisor(
+        argv=("python", "-m", "uvicorn"),
+        tracker_root=tmp_path,
+        api_url="http://127.0.0.1:8000",
+        receipt_path=tmp_path / "receipt.json",
+        now=lambda: now,
+        launch=lambda *_args, **_kwargs: cast(subprocess.Popen[bytes], process),
+    )
+    healthy = runtime.ListenerObservation(
+        healthy=True,
+        owner="unexpected-owner",
+        pid=999,
+        health_checked_at=now,
+        health=_healthy_tracker(now),
+    )
+    observations = iter((runtime.ListenerObservation(healthy=False), healthy))
+    monkeypatch.setattr(supervisor, "_inspect_listener", lambda: next(observations))
+
+    def return_superseding_receipt(_path: Path, _receipt: RuntimeReceipt) -> RuntimeReceipt:
+        return RuntimeReceipt(
+            idempotency_key="portfolio-tracker-refresh:2026-08-20",
+            lifecycle_state="already_running",
+            recorded_at=now,
+            listener=healthy,
+        )
+
+    monkeypatch.setattr(server, "write_runtime_receipt_under_lease", return_superseding_receipt)
+
+    with pytest.raises(RuntimeError, match="child cleanup failed: OSError"):
+        supervisor.run()
+
+
 def test_scheduled_refresh_context_requires_running_canonical_windows_task(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 

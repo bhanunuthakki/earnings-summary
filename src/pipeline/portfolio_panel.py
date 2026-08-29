@@ -428,7 +428,6 @@ _START_TRACKER_JS = """
   if (!btn || btn.dataset.wired) return;
   btn.dataset.wired = '1';
   var msg = banner.querySelector('.pf-start-msg');
-  var log = banner.querySelector('.pf-start-log');
   function reinject(target, html) {
     target.innerHTML = html;
     var scripts = target.querySelectorAll('script');
@@ -441,7 +440,7 @@ _START_TRACKER_JS = """
   }
   function pollPanel(tries) {
     if (tries <= 0) {
-      msg.textContent = 'tracker still not reachable — check the log below';
+      msg.textContent = 'tracker still not reachable — inspect the Scheduler task details below';
       CCAction.release(btn);
       return;
     }
@@ -475,19 +474,6 @@ _START_TRACKER_JS = """
           return;
         }
         msg.textContent = 'starting — waiting for the configured tracker API…';
-        log.hidden = false;
-        if (res.ok && res.j.stream_url) {
-          try {
-            var es = new EventSource(res.j.stream_url);
-            es.onmessage = function (ev) {
-              try {
-                var f = JSON.parse(ev.data);
-                if (f.line) { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
-                if (f.event === 'done') { es.close(); }
-              } catch (e) {}
-            };
-          } catch (e) {}
-        }
         pollPanel(30);
       }).catch(function () { msg.textContent = 'network error — start-tracker request failed'; CCAction.release(btn); });
   }
@@ -692,7 +678,7 @@ def _performance_section(
             tone=_tone(finals["Portfolio"]),
         )
     )
-    warn = _backfill_warning(perf)
+    warn = backfill_warning(perf)
     return (
         f"{head}"
         f'<div class="kpi-strip">{"".join(cards)}</div>'
@@ -703,7 +689,7 @@ def _performance_section(
     )
 
 
-def _backfill_warning(perf: PerformanceSeries) -> str:
+def backfill_warning(perf: PerformanceSeries) -> str:
     """The "this window is modeled, not measured" banner.
 
     Names the actual defect. Two earlier versions of this copy were wrong in
@@ -3441,11 +3427,11 @@ def _tracker_offline_banner(
         "Start tracker</button>"
         '<span class="pf-start-msg muted">starting automatically…</span>'
         "</div>"
-        '<pre class="pf-start-log cli-hint" hidden></pre>'
-        '<details class="offline-tech"><summary>Start it manually · technical detail</summary>'
-        '<pre class="cli-hint">Configure PORTFOLIO_TRACKER_API_URL, then run '
-        "uvicorn portfolio_tracker.api.main:app --host &lt;configured-host&gt; "
-        "--port &lt;configured-port&gt; or use the ownership-checked Start tracker action.</pre>"
+        '<details class="offline-tech"><summary>Activation recovery · technical detail</summary>'
+        '<pre class="cli-hint">The listener is owned only by Windows Task Scheduler. '
+        "Use Start tracker; if it fails, inspect "
+        "\\earnings-summary\\portfolio_tracker_api and its supervisor receipt. "
+        "Do not launch uvicorn directly.</pre>"
         f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
         f"{f' — {escape(live.error)}' if live.error else ''}</p>"
         "</details>"

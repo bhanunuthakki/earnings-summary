@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import subprocess
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -1413,6 +1414,327 @@ def test_tracker_bind_parser_is_explicit_and_fail_closed(
     assert parse_tracker_bind_url(api_url) == expected
 
 
+def test_tracker_scheduler_start_uses_canonical_task_without_exposing_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args,
+            returncode=0,
+            stdout="ignored scheduler output",
+            stderr="ignored scheduler error",
+        )
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    runtime.start_portfolio_tracker_scheduler_task()
+
+    assert calls == [
+        (
+            [
+                r"C:\Windows\System32\schtasks.exe",
+                "/Run",
+                "/TN",
+                runtime.PORTFOLIO_TRACKER_SCHEDULER_TASK,
+            ],
+            {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "timeout": runtime.SCHEDULER_START_TIMEOUT_SECONDS,
+                "check": False,
+            },
+        )
+    ]
+
+
+def test_tracker_scheduler_start_rejects_nonzero_without_exposing_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    def run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args,
+            returncode=5,
+            stdout="sensitive stdout",
+            stderr="sensitive stderr",
+        )
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    with pytest.raises(runtime.SchedulerActivationError) as exc_info:
+        runtime.start_portfolio_tracker_scheduler_task()
+
+    assert exc_info.value.failure_code == "scheduler_start_nonzero"
+    assert "sensitive" not in str(exc_info.value)
+
+
+def test_tracker_scheduler_start_redacts_subprocess_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    def run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(
+            args,
+            timeout=runtime.SCHEDULER_START_TIMEOUT_SECONDS,
+            output="sensitive stdout",
+            stderr="sensitive stderr",
+        )
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    with pytest.raises(runtime.SchedulerActivationError) as exc_info:
+        runtime.start_portfolio_tracker_scheduler_task()
+
+    assert exc_info.value.failure_code == "scheduler_start_timeout"
+    assert "sensitive" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("windows", (False, True))
+def test_tracker_scheduler_start_fails_closed_when_scheduler_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    monkeypatch.setattr(runtime.os, "name", "nt" if windows else "posix")
+    monkeypatch.delenv("SYSTEMROOT", raising=False)
+
+    with pytest.raises(runtime.SchedulerActivationError) as exc_info:
+        runtime.start_portfolio_tracker_scheduler_task()
+
+    assert exc_info.value.failure_code == "scheduler_unavailable"
+
+
+def test_tracker_scheduler_start_maps_oserror_without_exposing_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    def run(_args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise OSError("sensitive scheduler path")
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    with pytest.raises(runtime.SchedulerActivationError) as exc_info:
+        runtime.start_portfolio_tracker_scheduler_task()
+
+    assert exc_info.value.failure_code == "scheduler_start_failed"
+    assert "sensitive" not in str(exc_info.value)
+
+
+def test_runtime_manager_persists_typed_scheduler_activation_failure(
+    tmp_path: Path,
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    receipt_path = tmp_path / "portfolio-tracker.activation.latest.json"
+
+    def fail_start(_config: runtime.RuntimeConfig) -> None:
+        raise runtime.SchedulerActivationError("scheduler_start_nonzero")
+
+    manager = runtime.PortfolioTrackerRuntimeManager(
+        config=runtime.RuntimeConfig(
+            listener_owner="portfolio-tracker-service",
+            daily_refresh_owner="portfolio-tracker-service",
+            idempotency_key="portfolio-tracker-activation:2026-08-29",
+        ),
+        inspect_listener=lambda: runtime.ListenerObservation(healthy=False),
+        start_listener=fail_start,
+        now=lambda: datetime(2026, 8, 29, 8, tzinfo=UTC),
+    )
+
+    result = manager.ensure_running(
+        receipt_path=receipt_path,
+        receipt_writer=runtime.write_tracker_activation_receipt,
+    )
+
+    assert result.lifecycle_state == "failed"
+    assert result.failure_detail == "scheduler_start_nonzero"
+    persisted = runtime.TrackerActivationReceipt.model_validate_json(receipt_path.read_bytes())
+    assert persisted.failure_code == "scheduler_start_nonzero"
+    assert persisted.idempotency_key == result.idempotency_key
+
+
+def test_runtime_manager_persists_activation_while_exclusive_lease_is_held(
+    tmp_path: Path,
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    class _ObservedLease:
+        last_conflict_detail: str | None = None
+        held = False
+
+        def acquire(self) -> bool:
+            self.held = True
+            return True
+
+        def release(self) -> bool:
+            self.held = False
+            return True
+
+    lease = _ObservedLease()
+    writer_observations: list[bool] = []
+
+    def writer(path: Path, receipt: runtime.RuntimeReceipt) -> runtime.RuntimeReceipt:
+        writer_observations.append(lease.held)
+        return runtime.write_tracker_activation_receipt(path, receipt)
+
+    result = runtime.PortfolioTrackerRuntimeManager(
+        config=runtime.RuntimeConfig(
+            listener_owner="portfolio-tracker-service",
+            daily_refresh_owner="portfolio-tracker-service",
+            idempotency_key="portfolio-tracker-activation:2026-08-29",
+        ),
+        inspect_listener=lambda: runtime.ListenerObservation(healthy=False),
+        start_listener=lambda _config: (_ for _ in ()).throw(
+            runtime.SchedulerActivationError("scheduler_start_nonzero")
+        ),
+        now=lambda: datetime(2026, 8, 29, 8, tzinfo=UTC),
+        lease=cast(Any, lease),
+    ).ensure_running(
+        receipt_path=tmp_path / "activation.latest.json",
+        receipt_writer=writer,
+    )
+
+    assert result.lifecycle_state == "failed"
+    assert writer_observations == [True]
+    assert lease.held is False
+
+
+def test_runtime_manager_persists_failure_for_healthy_unowned_listener(
+    tmp_path: Path,
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    receipt_path = tmp_path / "activation.latest.json"
+    result = runtime.PortfolioTrackerRuntimeManager(
+        config=runtime.RuntimeConfig(
+            listener_owner="portfolio-tracker-service",
+            daily_refresh_owner="portfolio-tracker-service",
+            idempotency_key="portfolio-tracker-activation:2026-08-29",
+        ),
+        inspect_listener=lambda: runtime.ListenerObservation(
+            healthy=True,
+            health=_health(),
+        ),
+        start_listener=lambda _config: pytest.fail("unowned listener must not be accepted"),
+        now=lambda: datetime(2026, 8, 29, 8, tzinfo=UTC),
+        lease=runtime.AtomicFileLease(tmp_path / "activation.lease"),
+    ).ensure_running(
+        receipt_path=receipt_path,
+        receipt_writer=runtime.write_tracker_activation_receipt,
+    )
+
+    assert result.lifecycle_state == "failed"
+    assert result.failure_detail == "listener_owner_unverified"
+    persisted = runtime.TrackerActivationReceipt.model_validate_json(receipt_path.read_bytes())
+    assert persisted.lifecycle_state == "failed"
+    assert persisted.failure_code == "listener_owner_unverified"
+
+
+def test_activation_receipt_schema_rejects_unowned_success() -> None:
+    import runtime.portfolio_tracker as runtime
+
+    with pytest.raises(ValueError, match="fresh listener ownership proof"):
+        runtime.TrackerActivationReceipt(
+            idempotency_key="portfolio-tracker-activation:2026-08-29",
+            lifecycle_state="already_running",
+            recorded_at=datetime(2026, 8, 20, 12, tzinfo=UTC),
+            listener=runtime.ListenerObservation(
+                healthy=True,
+                health=_health(),
+            ),
+        )
+
+
+@pytest.mark.parametrize("invalid_pid", (0, -1))
+def test_activation_manager_and_schema_reject_nonpositive_pid(invalid_pid: int) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    observed = runtime.ListenerObservation.model_construct(
+        healthy=True,
+        owner="portfolio-tracker-service",
+        pid=invalid_pid,
+        health=_health(),
+    )
+    result = runtime.PortfolioTrackerRuntimeManager(
+        config=runtime.RuntimeConfig(
+            listener_owner="portfolio-tracker-service",
+            daily_refresh_owner="portfolio-tracker-service",
+            idempotency_key="portfolio-tracker-activation:2026-08-29",
+        ),
+        inspect_listener=lambda: observed,
+        start_listener=lambda _config: pytest.fail("invalid PID must not be accepted"),
+        now=lambda: datetime(2026, 8, 20, 12, tzinfo=UTC),
+    ).ensure_running()
+
+    assert result.lifecycle_state == "failed"
+    assert result.failure_detail == "listener_owner_unverified"
+    with pytest.raises(ValueError, match="listener PID must be positive"):
+        runtime.TrackerActivationReceipt(
+            idempotency_key="portfolio-tracker-activation:2026-08-29",
+            lifecycle_state="already_running",
+            recorded_at=datetime(2026, 8, 20, 12, tzinfo=UTC),
+            listener=observed,
+        )
+    with pytest.raises(ValueError, match="listener PID must be positive"):
+        runtime.TrackerActivationReceipt(
+            idempotency_key="portfolio-tracker-activation:2026-08-29",
+            lifecycle_state="failed",
+            recorded_at=datetime(2026, 8, 20, 12, tzinfo=UTC),
+            listener=observed,
+            failure_code="activation_failed",
+        )
+
+
+@pytest.mark.parametrize("invalid_pid", (0, -1))
+def test_listener_observation_rejects_nonpositive_pid(invalid_pid: int) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    with pytest.raises(ValueError, match="listener PID must be positive"):
+        runtime.ListenerObservation(healthy=False, pid=invalid_pid)
+
+
+def test_runtime_manager_losing_activation_lease_does_not_write_receipt(tmp_path: Path) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    lease_path = tmp_path / "activation.lease"
+    receipt_path = tmp_path / "activation.latest.json"
+    owner = runtime.AtomicFileLease(lease_path)
+    assert owner.acquire()
+    try:
+        result = runtime.PortfolioTrackerRuntimeManager(
+            config=runtime.RuntimeConfig(
+                listener_owner="portfolio-tracker-service",
+                daily_refresh_owner="portfolio-tracker-service",
+                idempotency_key="portfolio-tracker-refresh:2026-08-29",
+            ),
+            inspect_listener=lambda: pytest.fail("losing writer must not inspect"),
+            start_listener=lambda _config: pytest.fail("losing writer must not start"),
+            now=lambda: datetime(2026, 8, 29, 8, tzinfo=UTC),
+            lease=runtime.AtomicFileLease(lease_path),
+        ).ensure_running(receipt_path=receipt_path)
+    finally:
+        assert owner.release()
+
+    assert result.lifecycle_state == "ownership_conflict"
+    assert not receipt_path.exists()
+
+
 def test_report_keeps_unavailable_distinct_from_not_held(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1722,7 +2044,9 @@ def test_runtime_manager_is_idempotent_when_health_is_already_attributed() -> No
     assert evidence.refresh is not None and evidence.refresh.snapshot_as_of == "2026-08-20"
 
 
-def test_runtime_manager_fails_loudly_when_lease_release_deadline_expires() -> None:
+def test_runtime_manager_fails_loudly_before_persist_when_lease_release_deadline_expires(
+    tmp_path: Path,
+) -> None:
     from runtime.portfolio_tracker import (
         LeaseReleaseError,
         ListenerObservation,
@@ -1751,8 +2075,10 @@ def test_runtime_manager_fails_loudly_when_lease_release_deadline_expires() -> N
         lease=cast(Any, _OrphanedLease()),
     )
 
+    receipt_path = tmp_path / "activation.latest.json"
     with pytest.raises(LeaseReleaseError, match="lease release deadline"):
-        manager.ensure_running()
+        manager.ensure_running(receipt_path=receipt_path)
+    assert not receipt_path.exists()
 
 
 def test_runtime_manager_never_reports_started_without_health_and_owner_proof() -> None:
@@ -1796,6 +2122,7 @@ def test_runtime_manager_started_requires_post_launch_health_and_expected_owner(
             ListenerObservation(
                 healthy=True,
                 owner="portfolio-tracker-service",
+                pid=42,
                 health=_health(),
             ),
         )
@@ -1816,6 +2143,7 @@ def test_runtime_manager_started_requires_post_launch_health_and_expected_owner(
     assert len(starts) == 1
     assert receipt.lifecycle_state == "started"
     assert receipt.listener.owner == "portfolio-tracker-service"
+    assert receipt.listener.pid == 42
 
 
 def test_runtime_lease_failure_receipt_and_atomic_round_trip(tmp_path: Path) -> None:
@@ -2248,6 +2576,55 @@ def test_daily_refresh_scheduler_context_is_attributable_without_owning_listener
     assert receipt.scheduler is not None
     assert receipt.scheduler.task_name == r"\earnings-summary\refresh_portfolio_tracker"
     assert receipt.scheduler.terminal_result == "success"
+
+
+def test_daily_refresh_release_failure_rolls_back_success_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import integrations.portfolio_tracker_v1 as v1
+    import runtime.portfolio_tracker as runtime
+    from integrations.portfolio_tracker_v1 import V1Fetch
+
+    class _ReadOnlyClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get_health(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=_health())
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(
+                available=True,
+                endpoint="/portfolio-snapshot",
+                data=_snapshot_from_positions(_positions()),
+            )
+
+    class _ReleaseFailureLease:
+        last_conflict_detail = "daily lease release deadline exceeded"
+
+        def __init__(self, _path: Path) -> None:
+            pass
+
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> bool:
+            return False
+
+    monkeypatch.setattr(v1, "TrackerV1Client", _ReadOnlyClient)
+    monkeypatch.setattr(runtime, "AtomicFileLease", _ReleaseFailureLease)
+    receipt_path = tmp_path / "receipt.json"
+
+    with pytest.raises(runtime.LeaseReleaseError, match="daily lease release"):
+        runtime.produce_daily_refresh_receipt(
+            api_url="http://tracker.test",
+            receipt_path=receipt_path,
+            now=datetime(2026, 8, 20, 12, tzinfo=UTC),
+            daily_refresh_owner="portfolio-tracker-refresh",
+            scheduler_task_name=r"\earnings-summary\refresh_portfolio_tracker",
+        )
+
+    assert not receipt_path.exists()
 
 
 def test_daily_refresh_scheduled_failure_replaces_prior_success_with_typed_failure(
