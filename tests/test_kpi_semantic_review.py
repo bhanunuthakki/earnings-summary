@@ -445,17 +445,17 @@ def test_match_budget_and_document_snapshot_reuse_are_explicit(
 def test_exact_match_budget_is_complete_and_overflow_consumes_only_one_more(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original_token_matches = review_module._token_matches
+    original_finditer = re.finditer
     consumed = 0
 
-    def counted_token_matches(text: str, token: str) -> Iterator[re.Match[str]]:
+    def counted_finditer(pattern: str, string: str, flags: int = 0) -> Iterator[re.Match[str]]:
         nonlocal consumed
-        for match in original_token_matches(text, token):
+        for match in original_finditer(pattern, string, flags):
             consumed += 1
             yield match
 
     monkeypatch.setattr(review_module, "MAX_EVIDENCE_MATCHES_SCANNED_PER_FACT", 3)
-    monkeypatch.setattr(review_module, "_token_matches", counted_token_matches)
+    monkeypatch.setattr(re, "finditer", counted_finditer)
 
     exact = _database()
     _document(exact, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
