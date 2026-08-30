@@ -7,10 +7,12 @@ test on PR 2's end-to-end path.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -26,7 +28,7 @@ def _force_complete(job: Job, *, lines: list[str], exit_code: int = 0) -> None:
     """Simulate the reader thread completing without ever running a subprocess."""
     job.lines.extend(lines)
     job.exit_code = exit_code
-    job._done.set()
+    cast("threading.Event", job.__dict__["_done"]).set()
 
 
 # ---- registry ------------------------------------------------------------
@@ -116,9 +118,8 @@ def test_stream_yields_start_log_done_in_order():
     t.start()
     time.sleep(0.05)
     # Push two log lines + complete the job
-    with job._lock:
-        job.lines.append("first")
-        job.lines.append("second")
+    job.lines.append("first")
+    job.lines.append("second")
     time.sleep(0.2)
     _force_complete(job, lines=["third"], exit_code=0)
     t.join(timeout=2.0)
@@ -134,8 +135,7 @@ def test_stream_yields_start_log_done_in_order():
 def test_snapshot_reports_running_state_and_line_count():
     r = Registry()
     job = _quick_job(r)
-    with job._lock:
-        job.lines.extend(["a", "b", "c"])
+    job.lines.extend(["a", "b", "c"])
     snap = job.snapshot()
     assert snap["is_running"] is True
     assert snap["line_count"] == 3
@@ -161,15 +161,19 @@ def test_repo_registry_wraps_interactive_writer_with_shared_lock(tmp_path: Path)
         process.stdout = iter(())
         process.wait.return_value = 0
         process.returncode = 0
-        job = r.start(ticker="NU", kind="refresh-full", argv=["python", "writer.py"])
-        assert job._reader is not None
-        job._reader.join(timeout=2)
+        r.start(ticker="NU", kind="refresh-full", argv=["python", "writer.py"])
 
     command = popen.call_args.args[0]
     assert command[1] == str(tmp_path / "execution/sqlite_bootstrap.py")
     assert command[2] == str(tmp_path / "src/runtime/job_runtime.py")
     assert command[3:7] == ["--job", "interactive-refresh-full", "--write-set", "portfolio-db"]
     assert command[-3:] == ["--", "python", "writer.py"]
+    environment = popen.call_args.kwargs["env"]
+    assert environment is not None
+    assert environment["PYTHONPATH"].split(os.pathsep)[:2] == [
+        str(tmp_path.resolve()),
+        str(tmp_path.resolve() / "src"),
+    ]
 
 
 def test_explicit_read_only_job_is_not_wrapped(tmp_path: Path):
@@ -182,3 +186,24 @@ def test_explicit_read_only_job_is_not_wrapped(tmp_path: Path):
         spawn=False,
     )
     assert job.write_sets == ()
+
+
+def test_unlocked_job_inherits_parent_environment(tmp_path: Path):
+    r = Registry(repo_root=tmp_path)
+    with patch("dispatch_registry.subprocess.Popen") as popen:
+        process = popen.return_value
+        process.stdout = iter(())
+        process.wait.return_value = 0
+        process.returncode = 0
+        job = r.start(
+            ticker="_REPO",
+            kind="tracker-server",
+            argv=["server", "--port", "8000"],
+            write_sets=[],
+        )
+        deadline = time.monotonic() + 2
+        while job.is_running and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not job.is_running
+
+    assert popen.call_args.kwargs["env"] is None

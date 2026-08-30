@@ -17,6 +17,7 @@ acceptable.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -41,7 +42,7 @@ class Job:
     kind: str  # e.g. "refresh-stale", "refresh-full" — registry slot key
     argv: list[str]
     started_at: datetime
-    lines: list[str] = field(default_factory=list)
+    lines: list[str] = field(default_factory=list[str])
     exit_code: int | None = None
     # Working directory for the subprocess (PR6: the tracker-server job runs
     # from the sibling checkout so it finds its own .env / data files). None →
@@ -49,26 +50,36 @@ class Job:
     cwd: str | None = None
     lock_repo_root: str | None = None
     write_sets: tuple[str, ...] = ()
-    _process: subprocess.Popen | None = field(default=None, repr=False)
+    _process: subprocess.Popen[str] | None = field(default=None, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _reader: threading.Thread | None = field(default=None, repr=False)
 
-    def _start_subprocess(self) -> None:
+    def start_subprocess(self) -> None:
         """Spawn the process and a background reader. Idempotent — second call is a no-op."""
         if self._process is not None:
             return
         argv = self.argv
+        child_env: dict[str, str] | None = None
         if self.lock_repo_root is not None and self.write_sets:
-            runtime = Path(self.lock_repo_root) / "src" / "runtime" / "job_runtime.py"
+            root = Path(self.lock_repo_root).resolve()
+            runtime = root / "src" / "runtime" / "job_runtime.py"
             argv = [
-                *managed_python_argv(self.lock_repo_root, runtime),
+                *managed_python_argv(root, runtime),
                 "--job",
                 f"interactive-{self.kind}",
             ]
             for write_set in self.write_sets:
                 argv.extend(["--write-set", write_set])
-            argv.extend(["--repo-root", self.lock_repo_root, "--", *self.argv])
+            argv.extend(["--repo-root", str(root), "--", *self.argv])
+            python_path = [str(root), str(root / "src")]
+            inherited_python_path = os.environ.get("PYTHONPATH")
+            if inherited_python_path:
+                python_path.append(inherited_python_path)
+            child_env = {
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(python_path),
+            }
         self._process = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
@@ -78,6 +89,7 @@ class Job:
             encoding="utf-8",
             errors="replace",
             cwd=self.cwd,
+            env=child_env,
         )
         self._reader = threading.Thread(target=self._consume_output, daemon=True)
         self._reader.start()
@@ -215,7 +227,7 @@ class Registry:
             self._slots[slot] = job_id
 
         if spawn:
-            job._start_subprocess()
+            job.start_subprocess()
         return job
 
     def get(self, job_id: str) -> Job | None:
