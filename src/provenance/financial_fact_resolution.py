@@ -476,6 +476,7 @@ def resolve_fact_logical_key(
     logical_key: str,
     knowledge_cutoff: datetime,
     recorded_at: datetime,
+    persist: bool = True,
 ) -> FactResolutionResult:
     """Resolve all current candidates available at the cutoff under policy v2."""
 
@@ -548,6 +549,16 @@ def resolve_fact_logical_key(
         material_dissent=material_dissent,
         checks=checks,
     )
+    if not persist:
+        return FactResolutionResult(
+            resolution_id=resolution_id,
+            logical_key=logical_key,
+            candidate_count=len(candidates),
+            selected_observation_id=selected.observation_id,
+            resolution_status=status,
+            material_dissent=material_dissent,
+            created=False,
+        )
     ledger = ObservationResolutionLedger(conn)
     persisted = ledger.persist_resolution(
         ResolutionRevision(
@@ -602,6 +613,7 @@ def resolve_fact_row(
     fact_table: FactTable,
     fact_row_id: int,
     knowledge_cutoff: datetime | None = None,
+    persist: bool = True,
 ) -> FactResolutionResult | None:
     """Resolve the row's complete logical key when the 0225 cutover is installed.
 
@@ -642,7 +654,52 @@ def resolve_fact_row(
         logical_key=str(row[0]),
         knowledge_cutoff=cutoff,
         recorded_at=cutoff,
+        persist=persist,
     )
+
+
+def require_exact_canonical_fact_row(
+    conn: sqlite3.Connection,
+    *,
+    fact_table: FactTable,
+    fact_row_id: int,
+    knowledge_cutoff: datetime,
+    persist: bool = True,
+) -> FactResolutionResult:
+    """Require the requested row—not merely its logical key—to win resolution."""
+
+    latest = conn.execute(
+        "SELECT observation_id FROM fact_observation_revisions "
+        "WHERE fact_table=? AND fact_row_id=? "
+        "ORDER BY fact_revision DESC LIMIT 1",
+        (fact_table, fact_row_id),
+    ).fetchone()
+    if latest is None:
+        raise RuntimeError(f"{fact_table}.id {fact_row_id} has no immutable observation")
+    result = resolve_fact_row(
+        conn,
+        fact_table=fact_table,
+        fact_row_id=fact_row_id,
+        knowledge_cutoff=knowledge_cutoff,
+        persist=persist,
+    )
+    if (
+        result is None
+        or result.resolution_status != "resolved"
+        or result.selected_observation_id != str(latest[0])
+    ):
+        raise RuntimeError(f"{fact_table}.id {fact_row_id} is not the exact resolved observation")
+    if persist:
+        canonical = canonical_fact_relation(conn, fact_table)
+        if (
+            conn.execute(
+                f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+                (fact_row_id,),
+            ).fetchone()
+            is None
+        ):
+            raise RuntimeError(f"{fact_table}.id {fact_row_id} is absent from canonical facts")
+    return result
 
 
 def capture_fact_row_observation(
@@ -1099,13 +1156,42 @@ def _load_complete_candidates(
         "FROM fact_observation_revisions AS link "
         "JOIN reported_observations AS observation USING (observation_id) "
         "JOIN documents AS document ON document.id = link.source_document_id "
-        "WHERE link.logical_key = ? AND observation.available_at <= ? "
+        "WHERE link.logical_key = :logical_key "
+        "AND julianday(observation.available_at) <= julianday(:knowledge_cutoff) "
         "AND link.fact_revision = (SELECT MAX(latest.fact_revision) "
         "FROM fact_observation_revisions AS latest "
         "WHERE latest.fact_table = link.fact_table "
         "AND latest.fact_row_id = link.fact_row_id) "
+        "AND ((link.fact_table = 'financial_facts' AND NOT EXISTS ("
+        "SELECT 1 FROM financial_facts AS successor "
+        "JOIN fact_observation_revisions AS successor_link "
+        "ON successor_link.fact_table = 'financial_facts' "
+        "AND successor_link.fact_row_id = successor.id "
+        "JOIN reported_observations AS successor_observation "
+        "ON successor_observation.observation_id = successor_link.observation_id "
+        "WHERE successor.supersedes_id = link.fact_row_id "
+        "AND successor_link.fact_revision = (SELECT MAX(latest_successor.fact_revision) "
+        "FROM fact_observation_revisions AS latest_successor "
+        "WHERE latest_successor.fact_table = successor_link.fact_table "
+        "AND latest_successor.fact_row_id = successor_link.fact_row_id) "
+        "AND julianday(successor_observation.available_at) "
+        "<= julianday(:knowledge_cutoff))) OR "
+        "(link.fact_table = 'kpi_facts' AND NOT EXISTS ("
+        "SELECT 1 FROM kpi_facts AS successor "
+        "JOIN fact_observation_revisions AS successor_link "
+        "ON successor_link.fact_table = 'kpi_facts' "
+        "AND successor_link.fact_row_id = successor.id "
+        "JOIN reported_observations AS successor_observation "
+        "ON successor_observation.observation_id = successor_link.observation_id "
+        "WHERE successor.supersedes_id = link.fact_row_id "
+        "AND successor_link.fact_revision = (SELECT MAX(latest_successor.fact_revision) "
+        "FROM fact_observation_revisions AS latest_successor "
+        "WHERE latest_successor.fact_table = successor_link.fact_table "
+        "AND latest_successor.fact_row_id = successor_link.fact_row_id) "
+        "AND julianday(successor_observation.available_at) "
+        "<= julianday(:knowledge_cutoff)))) "
         "ORDER BY link.observation_id",
-        (logical_key, knowledge_cutoff),
+        {"logical_key": logical_key, "knowledge_cutoff": knowledge_cutoff},
     ).fetchall()
     candidates: list[_Candidate] = []
     for row in rows:

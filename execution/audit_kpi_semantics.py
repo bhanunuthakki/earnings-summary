@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition, scoped_kpi_definitions  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 class KpiSemanticAuditSummary(BaseModel):
@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    conn = open_db(args.db)
+    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = scoped_kpi_definitions(conn, repo_root=PROJECT_ROOT, user_id=args.user_id)
     finally:

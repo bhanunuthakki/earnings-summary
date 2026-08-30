@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -13,6 +15,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from execution import backfill_financial_fact_resolutions as cutover_cli
 from pipeline.restatement_detector import insert_with_restatement_detection
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -28,8 +31,11 @@ from provenance.financial_fact_resolution import (
     canonical_fact_relation,
     execute_fact_cutover,
     resolve_fact_logical_key,
+    resolve_fact_row,
 )
 from provenance.integrity_audit import AuditOptions, audit_connection
+from run_lock import hold_run_lock
+from sqlite_runtime import SQLiteConnectionRole
 from timeseries.loaders import load_financial_series
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -300,6 +306,7 @@ def _insert_kpi_fact(
     document_id: int,
     value: str,
     unit: str,
+    supersedes_id: int | None = None,
 ) -> int:
     conn.execute(
         "INSERT OR IGNORE INTO kpi_definitions (id, ticker, name, unit) "
@@ -309,13 +316,253 @@ def _insert_kpi_fact(
     cursor = conn.execute(
         "INSERT INTO kpi_facts "
         "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, "
-        "source_doc_id, confidence, extracted_by, locator) "
+        "source_doc_id, confidence, extracted_by, locator, supersedes_id) "
         "VALUES ('ACME', '2026-06-30', 'Q2', 1, ?, ?, ?, 0.95, "
-        "'deterministic:test', '{\"pdf_page\":3}')",
-        (value, unit, document_id),
+        "'deterministic:test', '{\"pdf_page\":3}', ?)",
+        (value, unit, document_id, supersedes_id),
     )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
+
+
+def test_targeted_resolution_preview_is_read_only(tmp_path: Path) -> None:
+    _, conn = _database(tmp_path)
+    try:
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="SEC")
+        fact_id = _insert_kpi_fact(conn, document_id=1, value="114.2", unit="millions")
+
+        preview = resolve_fact_row(
+            conn,
+            fact_table="kpi_facts",
+            fact_row_id=fact_id,
+            knowledge_cutoff=STAMP,
+            persist=False,
+        )
+
+        assert preview is not None
+        assert preview.resolution_status == "resolved"
+        assert preview.selected_observation_id == f"kpi_facts:{fact_id}:r1"
+        assert (
+            conn.execute("SELECT COUNT(*) FROM observation_resolution_revisions").fetchone()[0] == 0
+        )
+        assert conn.execute("SELECT COUNT(*) FROM fact_resolution_outcomes").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_resolution_keeps_predecessor_until_successor_is_available(
+    tmp_path: Path,
+) -> None:
+    _, conn = _database(tmp_path)
+    successor_clock = datetime(2026, 7, 28, 12, 0, 0)
+    try:
+        _seed_document(
+            conn,
+            document_id=1,
+            source_tier="sec_official",
+            value_suffix="original",
+            source_clock=STAMP,
+        )
+        predecessor_id = _insert_kpi_fact(conn, document_id=1, value="100", unit="millions")
+        _seed_document(
+            conn,
+            document_id=2,
+            source_tier="sec_official",
+            value_suffix="correction",
+            source_clock=successor_clock,
+        )
+        successor_id = _insert_kpi_fact(
+            conn,
+            document_id=2,
+            value="101",
+            unit="millions",
+            supersedes_id=predecessor_id,
+        )
+        # Recreate a legacy timestamp representation without weakening the
+        # production append-only schema: this disposable fixture is never
+        # persisted beyond the test.
+        conn.execute("DROP TRIGGER trg_reported_observations_append_only")
+        conn.execute(
+            "UPDATE reported_observations SET available_at=REPLACE(available_at,' ','T') "
+            "WHERE observation_id=?",
+            (f"kpi_facts:{successor_id}:r1",),
+        )
+        stored_successor_clock = str(
+            conn.execute(
+                "SELECT observation.available_at "
+                "FROM fact_observation_revisions AS revision "
+                "JOIN reported_observations AS observation USING (observation_id) "
+                "WHERE revision.fact_table='kpi_facts' AND revision.fact_row_id=?",
+                (successor_id,),
+            ).fetchone()[0]
+        )
+        assert "T" in stored_successor_clock
+
+        before = resolve_fact_row(
+            conn,
+            fact_table="kpi_facts",
+            fact_row_id=predecessor_id,
+            knowledge_cutoff=STAMP,
+            persist=False,
+        )
+        after = resolve_fact_row(
+            conn,
+            fact_table="kpi_facts",
+            fact_row_id=successor_id,
+            knowledge_cutoff=successor_clock,
+            persist=False,
+        )
+
+        assert before is not None
+        assert before.selected_observation_id == f"kpi_facts:{predecessor_id}:r1"
+        assert after is not None
+        assert after.selected_observation_id == f"kpi_facts:{successor_id}:r1"
+    finally:
+        conn.close()
+
+
+def test_targeted_resolution_cli_previews_then_applies_one_fact(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = migrated_db(tmp_path / "targeted-resolution.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP.isoformat()),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="SEC")
+        fact_id = _insert_kpi_fact(conn, document_id=1, value="114.2", unit="millions")
+        conn.commit()
+    finally:
+        conn.close()
+    args = [
+        "--db",
+        str(db_path),
+        "--fact-table",
+        "kpi_facts",
+        "--fact-row-id",
+        str(fact_id),
+        "--knowledge-cutoff",
+        STAMP.isoformat(),
+    ]
+
+    assert cutover_cli.main(args) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["resolution_status"] == "resolved"
+    check = sqlite3.connect(db_path)
+    try:
+        assert (
+            check.execute("SELECT COUNT(*) FROM observation_resolution_revisions").fetchone()[0]
+            == 0
+        )
+    finally:
+        check.close()
+
+    lock_held = False
+    actual_hold_run_lock = cutover_cli.hold_run_lock
+    actual_connect_sqlite = cutover_cli.connect_sqlite
+
+    @contextmanager
+    def tracked_target_lock(path: Path, *, owner: str) -> Generator[object, None, None]:
+        nonlocal lock_held
+        assert path == db_path
+        with actual_hold_run_lock(path, owner=owner, timeout_s=0) as lock:
+            lock_held = True
+            try:
+                yield lock
+            finally:
+                lock_held = False
+
+    def checked_connect(
+        path: Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool = False,
+    ) -> sqlite3.Connection:
+        if role is SQLiteConnectionRole.WRITER:
+            assert lock_held, "writer connection opened before exact database lock"
+        return actual_connect_sqlite(path, role=role, schema_preflight=schema_preflight)
+
+    monkeypatch.setattr(cutover_cli, "hold_run_lock", tracked_target_lock)
+    monkeypatch.setattr(cutover_cli, "connect_sqlite", checked_connect)
+    decoy_db = tmp_path / "decoy.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(decoy_db))
+    with hold_run_lock(decoy_db, owner="decoy-environment-lock", timeout_s=0):
+        assert cutover_cli.main([*args, "--apply"]) == 0
+        applied = json.loads(capsys.readouterr().out)
+    assert applied["resolution_status"] == "resolved"
+    check = sqlite3.connect(db_path)
+    try:
+        assert check.execute(
+            "SELECT id FROM v_kpi_facts_resolved_current WHERE id=?", (fact_id,)
+        ).fetchone() == (fact_id,)
+    finally:
+        check.close()
+
+
+def test_targeted_resolution_rejects_predecessor_and_commits_exact_successor(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(tmp_path / "targeted-exact-row.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP.isoformat()),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="old")
+        predecessor_id = _insert_kpi_fact(conn, document_id=1, value="100", unit="millions")
+        _seed_document(conn, document_id=2, source_tier="sec_official", value_suffix="new")
+        successor_id = _insert_kpi_fact(
+            conn,
+            document_id=2,
+            value="101",
+            unit="millions",
+            supersedes_id=predecessor_id,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    base_args = [
+        "--db",
+        str(db_path),
+        "--fact-table",
+        "kpi_facts",
+        "--knowledge-cutoff",
+        STAMP.isoformat(),
+        "--apply",
+    ]
+    with pytest.raises(RuntimeError, match="is not the exact resolved observation"):
+        cutover_cli.main([*base_args, "--fact-row-id", str(predecessor_id)])
+
+    check = sqlite3.connect(db_path)
+    try:
+        assert check.execute(
+            "SELECT COUNT(*) FROM observation_resolution_revisions"
+        ).fetchone() == (0,)
+        assert check.execute("SELECT COUNT(*) FROM fact_resolution_outcomes").fetchone() == (0,)
+    finally:
+        check.close()
+
+    assert cutover_cli.main([*base_args, "--fact-row-id", str(successor_id)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["selected_observation_id"] == f"kpi_facts:{successor_id}:r1"
+    check = sqlite3.connect(db_path)
+    try:
+        assert check.execute(
+            "SELECT id FROM v_kpi_facts_resolved_current WHERE id=?", (successor_id,)
+        ).fetchone() == (successor_id,)
+    finally:
+        check.close()
 
 
 def test_migration_captures_every_insert_and_semantic_update_and_blocks_delete(

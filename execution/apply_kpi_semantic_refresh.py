@@ -66,8 +66,12 @@ from pipeline.kpi_semantics import (  # noqa: E402
     persist_kpi_semantic_context,
     validate_admitted_unit_scale,
 )
-from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession  # noqa: E402
+from pipeline.kpi_source_review import (  # noqa: E402
+    insert_source_reviewed_kpi_supersession,
+    require_canonical_kpi_resolution,
+)
 from pipeline.queries import open_db  # noqa: E402
+from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
 from provenance.fulltext_extractor_identity import (  # noqa: E402
     resolve_fulltext_extractor_identity,
 )
@@ -535,6 +539,14 @@ def _apply_entry(
         )
         if context_id is None:
             raise RepairBlockedError("semantic_context_insert_unavailable")
+        try:
+            require_canonical_kpi_resolution(
+                conn,
+                fact_row_id=entry.old_fact_id,
+                knowledge_cutoff=manifest.knowledge_at,
+            )
+        except (sqlite3.Error, ValueError, RuntimeError) as exc:
+            raise RepairBlockedError("canonical_fact_resolution_failed") from exc
         return 0, 1, entry.old_fact_id
     del source_type
     try:
@@ -560,6 +572,21 @@ def _apply_entry(
     return 1, 1, new_fact_id
 
 
+def _require_canonical_result_heads(
+    conn: sqlite3.Connection, *, result_heads: tuple[int, ...]
+) -> None:
+    canonical = canonical_fact_relation(conn, "kpi_facts")
+    for head_id in result_heads:
+        if (
+            conn.execute(
+                f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+                (head_id,),
+            ).fetchone()
+            is None
+        ):
+            raise RepairBlockedError("result_fact_not_canonically_resolved")
+
+
 def _verify_replay(
     conn: sqlite3.Connection,
     *,
@@ -579,6 +606,15 @@ def _verify_replay(
         ).fetchone()
         if head is None:
             raise RepairBlockedError("replay_fact_head_changed")
+        canonical = canonical_fact_relation(conn, "kpi_facts")
+        if (
+            conn.execute(
+                f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+                (head_id,),
+            ).fetchone()
+            is None
+        ):
+            raise RepairBlockedError("replay_fact_not_canonically_resolved")
         context = current_kpi_semantic_context(conn, kpi_fact_id=head_id)
         if context is None or context.context != _context_for_entry(entry):
             raise RepairBlockedError("replay_semantic_context_changed")
@@ -613,6 +649,15 @@ def _detect_applied_postcondition(
             head_id = int(row["id"])
         context = current_kpi_semantic_context(conn, kpi_fact_id=head_id)
         if context is None or context.context != _context_for_entry(entry):
+            return None
+        canonical = canonical_fact_relation(conn, "kpi_facts")
+        if (
+            conn.execute(
+                f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+                (head_id,),
+            ).fetchone()
+            is None
+        ):
             return None
         heads.append(head_id)
     return tuple(heads)
@@ -847,6 +892,7 @@ def main(argv: list[str] | None = None) -> int:
                         ):
                             raise RepairBlockedError("context_row_effect_total_mismatch")
                         result_heads = tuple(heads)
+                        _require_canonical_result_heads(conn, result_heads=result_heads)
                         if args.apply:
                             conn.commit()
                             state = "applied"
