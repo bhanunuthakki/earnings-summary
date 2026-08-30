@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brief Library — Scope 1 mockup</title>
+  <style>
+    /*
+      ISOLATED PROTOTYPE ONLY.
+      This file is not imported by production. Approval of this mockup does not
+      approve these local CSS values or fixtures for the shipped Work OS family.
+    */
+    :root {
+      color-scheme: dark;
+      --bg: #08090b;
+      --surface: #101115;
+      --surface-raised: #15171c;
+      --surface-hover: #181b21;
+      --border: #262930;
+      --border-strong: #343842;
+      --text: #ececf0;
+      --text-soft: #c6c8ce;
+      --muted: #858993;
+      --muted-2: #666a74;
+      --accent: #8aa9ff;
+      --accent-soft: rgba(138, 169, 255, 0.12);
+      --ok: #55d58b;
+      --ok-soft: rgba(85, 213, 139, 0.12);
+      --warn: #e7c06b;
+      --warn-soft: rgba(231, 192, 107, 0.12);
+      --post: #8eb6ff;
+      --brief: #c6a2ff;
+      --pre: #75d7cf;
+      --portfolio: #6fd0ae;
+      --evaluation: #e7c06b;
+      --radius: 7px;
+      --radius-pill: 999px;
+      --sidebar: 246px;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+    button { font: inherit; }
+    button { color: inherit; }
+    .prototype-note {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border);
+      background: #0d0f13;
+      color: var(--text-soft);
+      font-size: 12px;
+    }
+    .prototype-note strong { color: var(--text); font-weight: 650; }
+    .review-key { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .review-number {
+      width: 20px;
+      height: 20px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--border-strong);
+      border-radius: 50%;
+      color: var(--text);
+      background: var(--surface-raised);
+      font: 700 11px var(--mono);
+    }
+    .app { min-height: calc(100vh - 42px); display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); }
+    .sidebar {
+      min-height: calc(100vh - 42px);
+      padding: 16px 14px;
+      border-right: 1px solid var(--border);
+      background: #0c0d10;
+    }
+    .brand {
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px 14px;
+      border-bottom: 1px solid #1a1c22;
+      font: 650 13px var(--mono);
+      letter-spacing: .07em;
+    }
+    .brand-mark { color: var(--accent); }
+    .nav-group { margin-top: 25px; }
+    .nav-label { margin: 0 8px 8px; color: var(--muted-2); font-size: 10px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+    .nav-item {
+      min-height: 35px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 3px 0;
+      padding: 0 10px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 580;
+    }
+    .nav-item.active { color: var(--text); background: var(--surface-raised); border-color: var(--border); }
+    .nav-icon { width: 17px; color: var(--muted-2); text-align: center; }
+    .nav-item.active .nav-icon { color: var(--accent); }
+    .main { min-width: 0; }
+    .crumbs {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      padding: 0 28px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .crumbs strong { color: var(--text-soft); font-weight: 600; }
+    .content { width: min(1160px, calc(100% - 48px)); margin: 0 auto; padding: 30px 0 56px; }
+    .page-head { margin-bottom: 16px; }
+    .eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 4px 0 4px; font-size: 21px; line-height: 1.25; letter-spacing: -.015em; }
+    .subtitle { margin: 0; color: var(--muted); font-size: 12px; }
+    .filter-strip {
+      min-height: 48px;
+      display: flex;
+      align-items: stretch;
+      margin-bottom: 12px;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .filter-label {
+      display: flex;
+      align-items: center;
+      padding-right: 15px;
+      color: var(--muted-2);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+    .facet-shell { position: relative; display: flex; min-width: 0; align-items: stretch; }
+    .facet-shell + .facet-shell::before { content: ""; width: 1px; height: 20px; align-self: center; background: var(--border); }
+    .facet-trigger {
+      min-width: 172px;
+      max-width: 236px;
+      height: 46px;
+      border: 0;
+      outline: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 0 13px 0 15px;
+      background: transparent;
+      color: var(--text-soft);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: left;
+    }
+    .facet-trigger:hover { color: var(--text); }
+    .facet-trigger:focus-visible,
+    .facet-trigger[aria-expanded="true"] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+    .facet-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .facet-chevron { flex: none; color: var(--muted); font-size: 15px; line-height: 1; transform: translateY(-1px); }
+    .facet-trigger[aria-expanded="true"] .facet-chevron { transform: rotate(180deg) translateY(-1px); }
+    .facet-popover {
+      position: absolute;
+      z-index: 40;
+      inset-block-start: calc(100% + 5px);
+      inset-inline-start: 7px;
+      min-width: max(220px, calc(100% - 7px));
+      max-width: 320px;
+      max-height: 292px;
+      overflow-y: auto;
+      padding: 5px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--surface-raised);
+      box-shadow: 0 18px 44px rgba(0, 0, 0, .42);
+    }
+    .facet-popover[hidden] { display: none; }
+    .facet-option {
+      width: 100%;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border: 0;
+      border-radius: 5px;
+      padding: 7px 9px;
+      background: transparent;
+      color: var(--text-soft);
+      cursor: pointer;
+      font-size: 12px;
+      text-align: left;
+    }
+    .facet-option:hover,
+    .facet-option:focus-visible { outline: 0; color: var(--text); background: var(--surface-hover); }
+    .facet-option[aria-selected="true"] { color: var(--accent); background: var(--accent-soft); }
+    .facet-option-count { flex: none; color: var(--muted); font: 10px var(--mono); }
+    .facet-empty { padding: 12px 10px; color: var(--muted); font-size: 11px; }
+    .filter-spacer { flex: 1; }
+    .clear-button {
+      align-self: center;
+      border: 0;
+      padding: 7px 0 7px 15px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .clear-button:hover { color: var(--text); }
+    .clear-button:disabled { opacity: .35; cursor: default; }
+
+    .report-list { display: grid; gap: 7px; }
+    .report-row {
+      min-height: 72px;
+      display: grid;
+      grid-template-columns: minmax(150px, 190px) minmax(320px, 1fr) auto;
+      align-items: center;
+      gap: 16px;
+      padding: 9px 10px 9px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .report-row:hover { background: var(--surface-raised); border-color: var(--border-strong); }
+    .report-copy { min-width: 0; }
+    .report-title {
+      max-width: 18ch;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 680;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+    .chips { min-width: 0; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+    .chip {
+      min-height: 22px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 7px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
+      color: var(--text-soft);
+      background: transparent;
+      font-size: 10px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .chip.mono { font-family: var(--mono); }
+    .chip.kind-post { border-color: rgba(142, 182, 255, .34); color: var(--post); background: rgba(142, 182, 255, .10); }
+    .chip.kind-brief { border-color: rgba(198, 162, 255, .34); color: var(--brief); background: rgba(198, 162, 255, .10); }
+    .chip.kind-pre { border-color: rgba(117, 215, 207, .34); color: var(--pre); background: rgba(117, 215, 207, .10); }
+    .chip.coverage-portfolio { border-color: rgba(111, 208, 174, .34); color: var(--portfolio); background: rgba(111, 208, 174, .10); }
+    .chip.coverage-evaluation { border-color: rgba(231, 192, 107, .34); color: var(--evaluation); background: rgba(231, 192, 107, .10); }
+    .chip.status { border-color: rgba(85, 213, 139, .28); color: var(--ok); background: var(--ok-soft); }
+    .chip.status.warn { border-color: rgba(231, 192, 107, .28); color: var(--warn); background: var(--warn-soft); }
+    .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+    .open-button {
+      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      padding: 0 12px;
+      background: transparent;
+      color: var(--text-soft);
+      font-size: 11px;
+      font-weight: 650;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .open-button:hover, .open-button:focus-visible { border-color: var(--accent); color: var(--text); background: var(--accent-soft); outline: 0; }
+    .empty { padding: 40px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--muted); text-align: center; font-size: 12px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+    @media (max-width: 980px) {
+      :root { --sidebar: 68px; }
+      .brand { justify-content: center; padding-inline: 0; }
+      .brand-name, .nav-label, .nav-text { display: none; }
+      .nav-item { justify-content: center; padding: 0; }
+      .nav-icon { width: auto; }
+      .prototype-note { justify-content: flex-start; overflow-x: auto; }
+      .content { width: min(100% - 32px, 920px); }
+      .report-row { grid-template-columns: minmax(145px, 170px) minmax(240px, 1fr) auto; gap: 12px; }
+      .facet-trigger { min-width: 145px; }
+    }
+
+    @media (max-width: 720px) {
+      .content { width: calc(100% - 24px); padding-top: 22px; }
+      .crumbs { padding-inline: 16px; }
+      .filter-strip { align-items: stretch; flex-wrap: wrap; }
+      .filter-label { width: 100%; min-height: 32px; padding: 8px 12px 0; }
+      .facet-shell { flex: 1 1 33%; }
+      .facet-shell + .facet-shell::before { display: none; }
+      .facet-trigger { width: 100%; min-width: 0; max-width: none; padding-left: 12px; }
+      .facet-popover { position: fixed; inset: auto 12px 12px 80px; width: auto; min-width: 0; max-width: none; max-height: min(52vh, 360px); }
+      .filter-spacer { display: none; }
+      .clear-button { margin: 0 12px 7px auto; }
+      .report-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; }
+      .chips { grid-column: 1 / -1; }
+      .row-actions { grid-column: 2; grid-row: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-note" aria-label="Feedback areas represented in this mockup">
+    <strong>Scope 1 mockup</strong>
+    <span class="review-key"><span class="review-number">1</span> Quiet, faceted filters</span>
+    <span class="review-key"><span class="review-number">2</span> One compact report per row</span>
+    <span class="review-key"><span class="review-number">3</span> Colored metadata chips</span>
+  </div>
+
+  <div class="app">
+    <aside class="sidebar" aria-label="Application navigation">
+      <div class="brand"><span class="brand-mark">[·]</span><span class="brand-name">Counterread</span></div>
+      <div class="nav-group">
+        <div class="nav-label">L1 · Portfolio Intelligence</div>
+        <div class="nav-item"><span class="nav-icon">▦</span><span class="nav-text">Portfolio Cockpit</span></div>
+        <div class="nav-item"><span class="nav-icon">⌁</span><span class="nav-text">Performance</span></div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">L2 · Research Engine</div>
+        <div class="nav-item"><span class="nav-icon">ϟ</span><span class="nav-text">Company Desk</span></div>
+        <div class="nav-item"><span class="nav-icon">☷</span><span class="nav-text">Evaluation</span></div>
+        <div class="nav-item active"><span class="nav-icon">▤</span><span class="nav-text">Brief Library</span></div>
+        <div class="nav-item"><span class="nav-icon">▥</span><span class="nav-text">Fact &amp; Metric Playground</span></div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">L3 · Operations &amp; Governance</div>
+        <div class="nav-item"><span class="nav-icon">▧</span><span class="nav-text">Decision Audit Log</span></div>
+        <div class="nav-item"><span class="nav-icon">ϟ</span><span class="nav-text">Operations</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="crumbs">Workspaces&nbsp;&nbsp;/&nbsp;&nbsp;<strong>Brief Library</strong></div>
+      <section class="content" aria-labelledby="page-title">
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">Research Engine</div>
+            <h1 id="page-title">Brief Library</h1>
+            <p class="subtitle">Pre-earnings preparation, post-earnings readouts, and complete research briefs.</p>
+          </div>
+        </header>
+
+        <div class="filter-strip" aria-label="Brief Library filters">
+          <div class="filter-label">Filter</div>
+          <div class="facet-shell" data-facet-shell="kind">
+            <button class="facet-trigger" id="kindFilter" type="button" aria-label="Artifact type" aria-haspopup="listbox" aria-expanded="false" aria-controls="kindOptions">
+              <span class="facet-trigger-label" data-facet-label></span><span class="facet-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div class="facet-popover" id="kindOptions" role="listbox" aria-label="Artifact type options" hidden></div>
+          </div>
+          <div class="facet-shell" data-facet-shell="ticker">
+            <button class="facet-trigger" id="tickerFilter" type="button" aria-label="Company" aria-haspopup="listbox" aria-expanded="false" aria-controls="tickerOptions">
+              <span class="facet-trigger-label" data-facet-label></span><span class="facet-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div class="facet-popover" id="tickerOptions" role="listbox" aria-label="Company options" hidden></div>
+          </div>
+          <div class="facet-shell" data-facet-shell="coverage">
+            <button class="facet-trigger" id="coverageFilter" type="button" aria-label="Coverage" aria-haspopup="listbox" aria-expanded="false" aria-controls="coverageOptions">
+              <span class="facet-trigger-label" data-facet-label></span><span class="facet-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div class="facet-popover" id="coverageOptions" role="listbox" aria-label="Coverage options" hidden></div>
+          </div>
+          <div class="filter-spacer"></div>
+          <button class="clear-button" id="clearFilters" type="button">Clear</button>
+        </div>
+
+        <div class="report-list" id="reportList"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const reports = [
+      { ticker: "ABNB", company: "Airbnb", kind: "brief", kindLabel: "Brief", quarter: "Q2 2026", coverage: "evaluation", generated: "Shared body", status: "Available" },
+      { ticker: "BKNG", company: "Booking Holdings", kind: "post", kindLabel: "Post-Earnings", quarter: "Q2 2026", coverage: "portfolio", generated: "Generated Aug 25", status: "Available" },
+      { ticker: "CRWD", company: "CrowdStrike", kind: "pre", kindLabel: "Pre-Earnings", quarter: "Q2 2026", coverage: "evaluation", generated: "Prepared Aug 21", status: "Review" },
+      { ticker: "MELI", company: "MercadoLibre", kind: "post", kindLabel: "Post-Earnings", quarter: "Q2 2026", coverage: "portfolio", generated: "Generated Aug 25", status: "Available" },
+      { ticker: "WIX", company: "Wix.com", kind: "brief", kindLabel: "Brief", quarter: "Q2 2026", coverage: "portfolio", generated: "Shared body", status: "Available" },
+      { ticker: "META", company: "Meta Platforms", kind: "post", kindLabel: "Post-Earnings", quarter: "Q2 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" },
+      { ticker: "VEEV", company: "Veeva Systems", kind: "brief", kindLabel: "Brief", quarter: "Q2 2026", coverage: "portfolio", generated: "Shared body", status: "Available" },
+      { ticker: "NOW", company: "ServiceNow", kind: "post", kindLabel: "Post-Earnings", quarter: "Q2 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" },
+      { ticker: "UBER", company: "Uber Technologies", kind: "post", kindLabel: "Post-Earnings", quarter: "Q2 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" },
+      { ticker: "WIX", company: "Wix.com", kind: "post", kindLabel: "Post-Earnings", quarter: "Q2 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" },
+      { ticker: "RBRK", company: "Rubrik", kind: "post", kindLabel: "Post-Earnings", quarter: "Q1 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" },
+      { ticker: "VEEV", company: "Veeva Systems", kind: "post", kindLabel: "Post-Earnings", quarter: "Q1 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" },
+      { ticker: "BN", company: "Brookfield Corporation", kind: "post", kindLabel: "Post-Earnings", quarter: "Q1 2026", coverage: "portfolio", generated: "Generated Aug 25", status: "Available" },
+      { ticker: "NU", company: "Nu Holdings", kind: "post", kindLabel: "Post-Earnings", quarter: "Q1 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" },
+      { ticker: "NVO", company: "Novo Nordisk", kind: "post", kindLabel: "Post-Earnings", quarter: "Q1 2026", coverage: "portfolio", generated: "Generated Aug 22", status: "Available" }
+    ];
+
+    const facets = {
+      kind: {
+        name: "Artifact type",
+        trigger: document.getElementById("kindFilter"),
+        triggerLabel: document.querySelector('[data-facet-shell="kind"] [data-facet-label]'),
+        menu: document.getElementById("kindOptions"),
+        all: "All artifact types",
+        labels: { post: "Post-Earnings", brief: "Briefs", pre: "Pre-Earnings" }
+      },
+      ticker: {
+        name: "Company",
+        trigger: document.getElementById("tickerFilter"),
+        triggerLabel: document.querySelector('[data-facet-shell="ticker"] [data-facet-label]'),
+        menu: document.getElementById("tickerOptions"),
+        all: "All companies",
+        labels: Object.fromEntries(reports.map(report => [report.ticker, `${report.ticker} · ${report.company}`]))
+      },
+      coverage: {
+        name: "Coverage",
+        trigger: document.getElementById("coverageFilter"),
+        triggerLabel: document.querySelector('[data-facet-shell="coverage"] [data-facet-label]'),
+        menu: document.getElementById("coverageOptions"),
+        all: "All coverage",
+        labels: { portfolio: "Portfolio", evaluation: "Evaluation" }
+      }
+    };
+
+    const state = { kind: "", ticker: "", coverage: "" };
+    let openFacetKey = "";
+    const facetQueries = { kind: "", ticker: "", coverage: "" };
+
+    function matches(report, ignoredFacet = "") {
+      return Object.keys(state).every(key => key === ignoredFacet || !state[key] || report[key] === state[key]);
+    }
+
+    function countsFor(key) {
+      const counts = new Map();
+      reports.filter(report => matches(report, key)).forEach(report => {
+        counts.set(report[key], (counts.get(report[key]) || 0) + 1);
+      });
+      return counts;
+    }
+
+    function labelFor(key, value) {
+      return facets[key].labels[value] || value;
+    }
+
+    function updateFacetTrigger(key) {
+      const facet = facets[key];
+      const query = facetQueries[key];
+      if (openFacetKey === key && query) {
+        facet.triggerLabel.textContent = query;
+        facet.trigger.setAttribute("aria-label", `${facet.name} search: ${query}`);
+        return;
+      }
+      const counts = countsFor(key);
+      const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+      const selectedCount = state[key] ? counts.get(state[key]) || 0 : total;
+      const selectedLabel = state[key] ? labelFor(key, state[key]) : facet.all;
+      facet.triggerLabel.textContent = `${selectedLabel} · ${selectedCount}`;
+      facet.trigger.setAttribute("aria-label", `${facet.name}: ${selectedLabel}`);
+    }
+
+    function renderFacetMenu(key) {
+      const facet = facets[key];
+      updateFacetTrigger(key);
+      const counts = countsFor(key);
+      const query = facetQueries[key].trim().toUpperCase();
+      const entries = [...counts.entries()]
+        .sort((a, b) => labelFor(key, a[0]).localeCompare(labelFor(key, b[0])))
+        .filter(([value]) => !query || labelFor(key, value).toUpperCase().includes(query));
+      const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+      const allOption = query ? "" : `
+        <button class="facet-option" type="button" role="option" data-value="" aria-selected="${state[key] === ""}">
+          <span>${facet.all}</span><span class="facet-option-count">${total}</span>
+        </button>`;
+      const options = entries.map(([value, count]) => `
+        <button class="facet-option" type="button" role="option" data-value="${value}" aria-selected="${state[key] === value}">
+          <span>${labelFor(key, value)}</span><span class="facet-option-count">${count}</span>
+        </button>`).join("");
+      facet.menu.innerHTML = allOption + options || `<div class="facet-empty">No matching options</div>`;
+      facet.menu.querySelectorAll(".facet-option").forEach(option => {
+        option.addEventListener("click", () => {
+          state[key] = option.dataset.value || "";
+          closeFacets();
+          render();
+          facet.trigger.focus();
+        });
+        option.addEventListener("keydown", event => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          option.click();
+        });
+      });
+    }
+
+    function syncFacets() {
+      Object.keys(facets).forEach(key => {
+        const counts = countsFor(key);
+        if (state[key] && !counts.has(state[key])) state[key] = "";
+      });
+
+      Object.keys(facets).forEach(key => {
+        updateFacetTrigger(key);
+        if (openFacetKey === key) renderFacetMenu(key);
+      });
+    }
+
+    function closeFacets() {
+      Object.values(facets).forEach(facet => {
+        facet.menu.hidden = true;
+        facet.trigger.setAttribute("aria-expanded", "false");
+      });
+      openFacetKey = "";
+      Object.keys(facetQueries).forEach(key => { facetQueries[key] = ""; });
+      Object.keys(facets).forEach(updateFacetTrigger);
+    }
+
+    function openFacet(key, query = "") {
+      const wasOpen = openFacetKey === key;
+      closeFacets();
+      if (wasOpen && !query) return;
+      openFacetKey = key;
+      facetQueries[key] = query;
+      const facet = facets[key];
+      facet.menu.hidden = false;
+      facet.trigger.setAttribute("aria-expanded", "true");
+      renderFacetMenu(key);
+    }
+
+    function moveFacetFocus(delta) {
+      if (!openFacetKey) return;
+      const options = [...facets[openFacetKey].menu.querySelectorAll(".facet-option")];
+      if (!options.length) return;
+      const current = options.indexOf(document.activeElement);
+      const next = current < 0 ? (delta > 0 ? 0 : options.length - 1) : (current + delta + options.length) % options.length;
+      options[next].focus();
+    }
+
+    function chip(text, classes = "") {
+      return `<span class="chip ${classes}">${text}</span>`;
+    }
+
+    function shortQuarter(quarter) {
+      return String(quarter).replace(/ (20)(\d{2})$/, " $2");
+    }
+
+    function render() {
+      syncFacets();
+      const visible = reports.filter(report => matches(report));
+      document.getElementById("clearFilters").disabled = !Object.values(state).some(Boolean);
+      document.getElementById("reportList").innerHTML = visible.length ? visible.map(report => `
+        <article class="report-row">
+          <div class="report-copy">
+            <div class="report-title">${report.ticker} ${shortQuarter(report.quarter)} ${report.kindLabel}</div>
+          </div>
+          <div class="chips" aria-label="Report details">
+            ${chip(report.kindLabel, `kind-${report.kind}`)}
+            ${chip(report.coverage === "portfolio" ? "Portfolio" : "Evaluation", `coverage-${report.coverage}`)}
+            ${chip(report.generated)}
+          </div>
+          <div class="row-actions">
+            ${chip(report.status, report.status === "Available" ? "status" : "status warn")}
+            <button class="open-button" type="button" aria-label="Open ${report.ticker} ${report.kindLabel}">Open <span aria-hidden="true">→</span></button>
+          </div>
+        </article>
+      `).join("") : `<div class="empty">No persisted research artifacts match these filters.</div>`;
+    }
+
+    Object.keys(facets).forEach(key => {
+      facets[key].trigger.addEventListener("click", event => {
+        event.stopPropagation();
+        openFacet(key);
+      });
+    });
+
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".facet-shell")) closeFacets();
+    });
+
+    document.addEventListener("keydown", event => {
+      const typingTarget = event.target.matches("input, textarea, [contenteditable='true']");
+      const printable = event.key.length === 1 && /^[a-z0-9.-]$/i.test(event.key);
+      if (event.metaKey || event.ctrlKey || event.altKey || typingTarget) return;
+
+      if (event.key === "Escape" && openFacetKey) {
+        event.preventDefault();
+        const trigger = facets[openFacetKey].trigger;
+        closeFacets();
+        trigger.focus();
+        return;
+      }
+
+      if (event.key === "ArrowDown" && openFacetKey) {
+        event.preventDefault();
+        moveFacetFocus(1);
+        return;
+      }
+
+      if (event.key === "ArrowUp" && openFacetKey) {
+        event.preventDefault();
+        moveFacetFocus(-1);
+        return;
+      }
+
+      if (openFacetKey && event.key === "Backspace") {
+        event.preventDefault();
+        facetQueries[openFacetKey] = facetQueries[openFacetKey].slice(0, -1);
+        renderFacetMenu(openFacetKey);
+        facets[openFacetKey].trigger.focus();
+        return;
+      }
+
+      if (printable) {
+        event.preventDefault();
+        const focusedFacetKey = Object.keys(facets).find(key => facets[key].trigger === event.target);
+        const targetKey = openFacetKey || focusedFacetKey || "ticker";
+        if (!openFacetKey) openFacet(targetKey, event.key);
+        else {
+          facetQueries[targetKey] += event.key;
+          renderFacetMenu(targetKey);
+        }
+        facets[targetKey].trigger.focus();
+      }
+    });
+
+    document.getElementById("clearFilters").addEventListener("click", () => {
+      closeFacets();
+      Object.keys(state).forEach(key => { state[key] = ""; });
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

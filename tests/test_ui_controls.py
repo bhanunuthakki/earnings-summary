@@ -36,6 +36,7 @@ from ui.conformance_scan import (  # noqa: E402
 )
 from ui.controls import (  # noqa: E402
     controls_css,
+    controls_js,
     icon_svg,
     k_empty,
     panel_section_title,
@@ -111,6 +112,62 @@ def test_single_selects_lose_native_chrome_and_gain_the_chevron() -> None:
     assert "background-image: var(--k-chevron)" in sel
     # Multi-selects keep no chevron (no arrow to draw) — but stay skinned.
     assert "select[multiple]" in css
+
+
+def test_searchable_single_select_owns_visuals_keyboard_and_dynamic_adoption() -> None:
+    css = controls_css("dark")
+    js = controls_js()
+
+    for selector in (
+        ".k-select-shell",
+        ".k-select-trigger",
+        ".k-select-menu",
+        ".k-select-option",
+        ".k-select-native",
+    ):
+        assert selector in css
+    assert "background: var(--surface)" in css
+    assert ".k-select-option[hidden] { display: none !important; }" in css
+    assert ".k-select-shell > .k-select-menu" in css
+    assert '[data-k-select-shell="true"] > .k-select-menu' in css
+    assert "position: fixed; inset-block: auto" in css
+    assert "inset-inline: var(--sp-3)" in css
+    assert "select:not([multiple])" in js
+    assert "new MutationObserver" in js
+    assert "role', 'combobox'" in js
+    assert "role', 'listbox'" in js
+    assert "aria-activedescendant" in js
+    assert "ArrowDown" in js and "ArrowUp" in js
+    assert "Backspace" in js and "Escape" in js
+    assert "data-k-select-default" in js
+    assert "new Event('change', { bubbles: true })" in js
+    assert 'type="search"' not in js
+
+
+def test_searchable_single_select_keeps_multi_select_semantics_native() -> None:
+    js = controls_js()
+
+    assert "select.multiple" in js
+    assert "select:not([multiple])" in js
+
+
+def test_every_standalone_select_document_adopts_the_global_runtime() -> None:
+    standalone_owners: list[Path] = []
+    for path in SRC.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "<select" in source and ("<!doctype" in source or "<html" in source):
+            standalone_owners.append(path)
+            assert "controls_js" in source, path.relative_to(SRC)
+            assert "data-k-select-runtime" in source, path.relative_to(SRC)
+
+    assert standalone_owners
+    for relative in (
+        "pipeline/work_os_shell.py",
+        "report/renderers/workspace_html.py",
+    ):
+        source = (SRC / relative).read_text(encoding="utf-8")
+        assert "controls_js" in source
+        assert "data-k-select-runtime" in source
 
 
 def test_one_focus_ring_from_tokens() -> None:

@@ -2050,7 +2050,13 @@ def render_discovery_compare_peek(repo_root: Path, db_path: Path, tickers: list[
 # --------------------------------------------------------------------------- #
 
 
-def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> str | None:
+def render_earnings_prep_peek(
+    db_path: Path,
+    repo_root: Path,
+    ticker: str,
+    *,
+    artifact_id: int | None = None,
+) -> str | None:
     """The on-demand earnings-prep memo for one upcoming name.
 
     Sections, each best-effort (a missing table drops its block, never the
@@ -2086,7 +2092,14 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
     finally:
         conn.close()
 
-    brief = _prep_brief_block(db_path, t, next_er.isoformat() if next_er else None)
+    brief = _prep_brief_block(
+        db_path,
+        t,
+        next_er.isoformat() if next_er else None,
+        artifact_id=artifact_id,
+    )
+    if brief is None:
+        return None
     events = _prep_events_block(db_path, t)
     watch = _prep_watch_items(db_path, t)
 
@@ -2106,12 +2119,42 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
     )
 
 
-def _prep_brief_block(db_path: Path, t: str, er_iso: str | None) -> str:
+def _prep_brief_block(
+    db_path: Path,
+    t: str,
+    er_iso: str | None,
+    *,
+    artifact_id: int | None = None,
+) -> str | None:
     """The pre-generated pre-earnings brief (owner ruling 2026-07-31), served
     instantly when one exists for THIS upcoming ER date — keyed exactly the
     way the stage-1c generator persisted it, so a brief for a past quarter
     can never masquerade as current. Absent (no calendar date, no artifact,
     pre-0260 DB) the peek simply keeps its deterministic assembly."""
+    if artifact_id is not None:
+        try:
+            from earnings_brief import PURPOSE as _BRIEF_PURPOSE
+            from llm_artifact_store import read_artifact
+
+            art = read_artifact(artifact_id, db_path=db_path)
+        except Exception:
+            return None
+        if (
+            art is None
+            or art.ticker != t
+            or art.scope != "ticker"
+            or art.purpose != _BRIEF_PURPOSE
+            or art.superseded_by_id is not None
+            or not (art.content_md or "").strip()
+        ):
+            return None
+        exact_period = str(art.fiscal_period or "")
+        stamp = art.generated_at.date().isoformat()
+        return (
+            '<div class="prep-sec"><h4>Pre-earnings brief</h4>'
+            f'<div class="synthesis-body">{render_prose((art.content_md or "")[:20000])}</div>'
+            f'<p class="muted">{escape(f"generated {stamp} · for ER {exact_period}")}</p></div>'
+        )
     if not er_iso:
         return ""
     try:

@@ -15,7 +15,7 @@ def render_brief_reader_shell() -> str:
               aria-label="Back to research workspace">Back</button>
     </div>
     <div class="work-os-reader-masthead">
-      <div class="k-card-meta">Full Research Brief</div>
+      <div class="k-card-meta">Brief</div>
       <h2 class="k-card-title" id="workOsBriefReaderTitle">Research brief</h2>
       <div class="k-card-meta" id="workOsBriefReaderMeta">Persisted governed artifact</div>
     </div>
@@ -163,14 +163,14 @@ def render_brief_library_shell() -> str:
       <div><div class="k-card-meta">Research Engine</div><h2 class="k-card-title">Brief Library</h2><div class="k-card-meta">Quarter-indexed earnings readouts and full research briefs with stable identity and freshness</div></div>
       <div class="research-actions">
         <label class="k-card-meta" for="briefKindFilter">Artifact</label>
-        <select class="k-select" id="briefKindFilter"><option value="">All</option><option value="earnings_readout">Earnings readouts</option><option value="full_brief">Full briefs</option></select>
+        <select class="k-select" id="briefKindFilter" aria-label="Artifact type"><option value="">All artifacts</option><option value="full_brief">Brief</option><option value="pre_earnings">Pre-Earnings</option><option value="post_earnings">Post-Earnings</option></select>
         <label class="k-card-meta" for="briefTickerFilter">Ticker</label>
-        <select class="k-select" id="briefTickerFilter"><option value="">All companies</option></select>
+        <select class="k-select" id="briefTickerFilter" aria-label="Ticker" data-k-select-default="true"><option value="">All companies</option></select>
         <label class="k-card-meta" for="briefRoleFilter">Coverage</label>
-        <select class="k-select" id="briefRoleFilter"><option value="">All</option><option value="portfolio">Portfolio</option><option value="evaluation">Evaluation</option><option value="unknown">Unknown</option></select>
+        <select class="k-select" id="briefRoleFilter" aria-label="Coverage"><option value="">All coverage</option><option value="portfolio">Portfolio</option><option value="evaluation">Evaluation</option><option value="unknown">Unknown</option></select>
       </div>
     </header>
-    <div class="research-library-grid" id="workOsBriefLibrary"><div class="k-well" role="status">Open Brief Library to load persisted artifacts.</div></div>
+    <div class="research-library-list" id="workOsBriefLibrary"><div class="k-well" role="status">Open Brief Library to load persisted artifacts.</div></div>
     <div class="k-well" id="briefLibraryWarnings" hidden></div>
   </div>
 </section>

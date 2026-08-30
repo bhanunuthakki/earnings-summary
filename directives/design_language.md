@@ -94,6 +94,7 @@ Use the canonical primitives rather than lookalikes:
 | Action | `.k-btn` with a registered intent/size variant |
 | Filled status | `.k-pill` with a status variant |
 | Filter, kind, or outline tag | `.k-chip` with a registered variant |
+| Dropdown | Searchable Single-Select (`ui.controls`) |
 | Callout or grouped context | `.k-well` |
 | Ticker plus company | `ticker_label()` |
 | Stored or model-generated prose | `ui.prose.render_prose()` |

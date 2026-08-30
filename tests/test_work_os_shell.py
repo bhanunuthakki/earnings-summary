@@ -646,7 +646,7 @@ def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hyd
     # their separate stat label/number semantics.
     assert '<h2 class="k-card-title" id="workOsBriefReaderTitle">' in html
     assert '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>' in html
-    assert '<h3 class="k-card-title">' in html
+    assert '<h3 class="k-card-title research-library-row-title">' in html
     assert 'class="k-stat-cell"><div class="stat-heading">Owner posture</div>' in html
     assert 'class="stat-number" id="deskLivePrice"' in html
 
@@ -741,22 +741,48 @@ def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> Non
     assert "grid-template-columns: minmax(0, 1fr) var(--rail-lg);" in html
 
 
-def test_brief_library_filters_rebuild_tickers_and_expose_accessible_clear_action() -> None:
+def test_brief_library_facets_refresh_from_exact_server_counts_and_can_clear() -> None:
     html = render_work_os_shell()
 
     assert 'class="k-btn k-btn-quiet k-btn-sm"' in html
     assert "data-clear-brief-filters" in html
     assert 'aria-label="Clear Brief Library filters"' in html
-    assert "function workOsPopulateBriefTickerOptions" in html
-    assert "const compatibleCompanies = companies.filter(function (company)" in html
-    assert "const selectedTickerIsCompatible = Array.from(tickerFilter.options).some" in html
-    assert "if (!selectedTickerIsCompatible) tickerFilter.value = '';" in html
-    assert "roleFilter.addEventListener('change', function ()" in html
-    assert "workOsPopulateBriefTickerOptions(tickerFilter, roleFilter.value);" in html
+    assert "function workOsUpdateBriefFacet" in html
+    assert "workOsBriefFacetCounts(payload, 'artifact_kind')" in html
+    assert "workOsBriefFacetCounts(payload, 'ticker')" in html
+    assert "workOsBriefFacetCounts(payload, 'coverage_role')" in html
+    assert "params.set('artifact_kind', kindFilter.value)" in html
+    assert "roleFilter.addEventListener('change', workOsRenderBriefLibrary)" in html
+    assert "select.value = compatible ? selected : '';" in html
+    assert "if (kindCleared || tickerCleared || roleCleared)" in html
     assert (
         "data-clear-brief-filters"
         in html.split("No persisted research artifacts match these filters.", 1)[1]
     )
+
+
+def test_brief_library_uses_global_searchable_facets_and_compact_artifact_rows() -> None:
+    html = render_work_os_shell()
+    library = _screen_fragment(html, "screen-brief-library")
+    runtime = html.split("async function workOsRenderBriefLibrary", 1)[1].split(
+        "window.switchCompanyWorkspace", 1
+    )[0]
+
+    assert 'data-k-select-default="true"' in library
+    assert 'class="research-library-list" id="workOsBriefLibrary"' in library
+    assert "research-library-grid" not in library
+    assert "research-library-card" not in runtime
+    assert "research-library-row" in runtime
+    assert "workOsBriefFacetCounts" in runtime
+    assert "workOsArtifactTitle" in runtime
+    assert "quarter ended " not in runtime.lower()
+    assert "data-artifact-kind" in runtime
+    assert "data-coverage-role" in runtime
+    assert "controls_js" not in html
+    assert "data-k-select-runtime" in html
+    assert ".research-library-row-copy { display: contents; }" in WORK_OS_CSS
+    assert ".research-library-row-chips { grid-column: 1 / -1; grid-row: 2; }" in WORK_OS_CSS
+    assert ".research-library-row-action { grid-column: 2; grid-row: 1;" in WORK_OS_CSS
 
 
 def test_l2_l3_mobile_uses_target_scoped_block_without_mutating_rail_signature() -> None:
@@ -1199,7 +1225,7 @@ def test_company_desk_renders_governed_valuation_provenance() -> None:
     assert "Governed valuation snapshot" in html
     assert "positionState === 'not_held' ? 'Not held' : 'Weight unavailable'" in html
     company_desk_runtime = html.split("async function workOsRenderCompanyDesk", 1)[1].split(
-        "function workOsBriefFilterCompanies", 1
+        "function workOsBriefFacetCounts", 1
     )[0]
     assert "company.current_weight_pct" not in company_desk_runtime
     assert "position.position_source === 'portfolio_tracker_api'" in company_desk_runtime
@@ -1291,16 +1317,20 @@ def test_home_and_library_surface_latest_earnings_readouts_before_full_briefs() 
     assert "node.tagName === 'TR'" in html
     assert "event.target.closest('button, a')" in html
     assert 'id="briefKindFilter"' in html
-    assert '<option value="earnings_readout">Earnings readouts</option>' in html
-    assert "const hydratedReadouts = workOsPortfolioHydration" in html
-    assert "const readoutItems = hydratedReadouts" in html
-    assert "await workOsEnsurePortfolioHydration()" in html
+    assert '<option value="post_earnings">Post-Earnings</option>' in html
+    assert (
+        "const hydratedReadouts = workOsPortfolioHydration"
+        not in html.split("async function workOsRenderBriefLibrary", 1)[1].split(
+            "window.switchCompanyWorkspace", 1
+        )[0]
+    )
+    assert "workOsBriefFacetCounts(payload, 'artifact_kind')" in html
     assert "let workOsPortfolioLoading = null" in html
-    assert "Read earnings readout &rarr;" in html
-    assert "readoutCards + briefCards" in html
+    assert "Open artifact →" in html
+    assert "data-open-library-artifact" in html
     assert "#screen-brief-library .research-actions" in html
     assert "grid-template-columns: auto minmax(0, 1fr)" in html
-    assert ".research-library-card .k-btn" in html
+    assert ".research-library-row-action" in html
     assert "min-block-size: var(--touch-target-size)" in html
     assert "workOsPortfolioHydration = null" in html
     assert "await workOsEnsurePortfolioHydration()" in html

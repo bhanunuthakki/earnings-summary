@@ -1,8 +1,13 @@
 "></span><span class="k-label">HALT</span></span>`). The tone rides the dot (prov_severity_tone); the uppercase word is a plain .k-label. THE one place halt/warn/grey is decided — an unknown severity degrades to a muted dot, never the wrong color. .k-prov-sev is layout only. */ .k-prov-sev { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
+"></span><span class="k-label">HALT</span></span>`). The tone rides the dot (prov_severity_tone); the uppercase word is a plain .k-label. THE one place halt/warn/grey is decided — an unknown severity degrades to a muted dot, never the wrong color. .k-prov-sev is layout only. */ .k-prov-sev { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 * { box-sizing: border-box; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: var(--radius-full); border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: var(--radius-full); border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+*::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-track { background: transparent; }
 .accent { color: var(--accent); }
 .badge .dot { width: var(--dot-size); height: var(--dot-size); border-radius: 50%; }
@@ -16,11 +21,16 @@
 .break-status-unresolved { color: var(--muted); }
 .break-status-warn { color: var(--warn); }
 .card-dismissing { transform: scale(0.97) translateY(var(--lift-md)) !important; opacity: 0 !important; max-height: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; margin-top: 0 !important; margin-bottom: 0 !important; border-color: transparent !important; }
+.card-dismissing { transform: scale(0.97) translateY(var(--lift-md)) !important; opacity: 0 !important; max-height: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; margin-top: 0 !important; margin-bottom: 0 !important; border-color: transparent !important; }
+.card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-4); }
 .card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-4); }
 .card-grid-risk { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-4); }
+.card-grid-risk { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-4); }
+.card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-4); }
 .card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-4); }
 .cc-act-collapse { transition: height var(--transition), margin var(--transition), padding var(--transition), border-width var(--transition); height: 0 !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; border-width: 0 !important; overflow: hidden !important; }
 .cc-act-leave { transition: opacity var(--transition), transform var(--transition); opacity: 0; transform: translateY(var(--lift-md)); pointer-events: none; }
+.cc-drawer-head, .cc-peek-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 .cc-drawer-head, .cc-peek-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 .chart-cell { display: block; }
 .chart-empty { font-size: var(--fs-body); color: var(--muted); padding: var(--sp-2) var(--sp-3); background: var(--paper); border-radius: var(--radius); margin-block: var(--sp-2); margin-inline: initial; }
@@ -187,7 +197,10 @@
 .decision-outcome.partial { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .decision-thesis { font-size: var(--fs-body); color: var(--fg-soft); line-height: 1.55; margin: 0; }
 .desk-stats-strip { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+.desk-stats-strip { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
 .desk-tabs-bar { display: flex; gap: var(--sp-2); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-1); margin: var(--sp-2) 0; }
+.desk-tabs-bar { display: flex; gap: var(--sp-2); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-1); margin: var(--sp-2) 0; }
+.drill-handle:hover { color: var(--accent); border-bottom-style: solid; background-color: var(--accent-soft); }
 .drill-handle:hover { color: var(--accent); border-bottom-style: solid; background-color: var(--accent-soft); }
 .elevator-block::before { content: 'Elevator pitch'; display: block; font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: var(--sp-2); }
 .eyebrow { font-size: var(--fs-caption); font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: var(--sp-2); }
@@ -234,103 +247,232 @@
 .ir-summary { font-size: var(--fs-body); color: var(--fg-soft); line-height: 1.5; margin: 0; }
 .ir-type { font-size: var(--fs-caption); font-weight: 600; padding: var(--sp-1) var(--sp-2); border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; }
 .k-action-card { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.k-action-card { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.k-band-v { display: block; font-family: var(--mono); font-size: var(--fs-title); font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
 .k-band-v { display: block; font-family: var(--mono); font-size: var(--fs-title); font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
 .k-band-x { display: block; font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1); line-height: 1.45; }
+.k-band-x { display: block; font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1); line-height: 1.45; }
+.k-btn-danger { border-color: transparent; color: var(--bad); }
 .k-btn-danger { border-color: transparent; color: var(--bad); }
 .k-btn-danger:hover { border-color: var(--bad); }
+.k-btn-danger:hover { border-color: var(--bad); }
+.k-btn-primary { background: var(--accent); color: var(--accent-contrast); }
 .k-btn-primary { background: var(--accent); color: var(--accent-contrast); }
 .k-btn-quiet { border-color: var(--border); color: var(--muted); }
+.k-btn-quiet { border-color: var(--border); color: var(--muted); }
+.k-btn-quiet:hover { color: var(--fg); border-color: var(--border-2); }
 .k-btn-quiet:hover { color: var(--fg); border-color: var(--border-2); }
 .k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
+.k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
+.k-card-action { padding: var(--sp-2) var(--sp-3); }
 .k-card-action { padding: var(--sp-2) var(--sp-3); }
 .k-card-dense { padding: var(--sp-2) var(--sp-3); }
+.k-card-dense { padding: var(--sp-2) var(--sp-3); }
+.k-card-dense.k-card-stack { gap: var(--sp-2); }
 .k-card-dense.k-card-stack { gap: var(--sp-2); }
 .k-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
+.k-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
+.k-card-heading { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
 .k-card-heading { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
 .k-card-interactive:hover { transform: translateY(var(--lift-md)); box-shadow: var(--shadow-card-hover); border-color: var(--border-2); }
+.k-card-interactive:hover { transform: translateY(var(--lift-md)); box-shadow: var(--shadow-card-hover); border-color: var(--border-2); }
+.k-card-meta { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
 .k-card-meta { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
 .k-card-nav { display: flex; flex-direction: column; gap: var(--sp-1); }
+.k-card-nav { display: flex; flex-direction: column; gap: var(--sp-1); }
+.k-card-row-title { margin: 0; font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
 .k-card-row-title { margin: 0; font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
 .k-card-section { display: flex; flex-direction: column; gap: var(--sp-3); }
+.k-card-section { display: flex; flex-direction: column; gap: var(--sp-3); }
+.k-card-stack { display: flex; flex-direction: column; gap: var(--sp-3); }
 .k-card-stack { display: flex; flex-direction: column; gap: var(--sp-3); }
 .k-card-stat { padding: 0; }
+.k-card-stat { padding: 0; }
+.k-card-title { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
 .k-card-title { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
 .k-chip-accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.k-chip-accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.k-chip-bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .k-chip-bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .k-chip-mono { font-family: var(--mono); text-transform: none; letter-spacing: 0.02em; }
+.k-chip-mono { font-family: var(--mono); text-transform: none; letter-spacing: 0.02em; }
+.k-chip-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .k-chip-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .k-chip-tab.is-on { color: var(--accent); border-color: transparent; box-shadow: inset 0 -2px 0 0 var(--accent); }
+.k-chip-tab.is-on { color: var(--accent); border-color: transparent; box-shadow: inset 0 -2px 0 0 var(--accent); }
+.k-chip-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .k-chip-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .k-doc .panel-head { border-bottom: 0; padding-bottom: var(--sp-2); }
 .k-doc .panel:first-child { border-top: 0; padding-top: 0; }
 .k-doc .prose { max-width: var(--reading-measure); }
+.k-doc .prose { max-width: var(--reading-measure); }
+.k-doc-row { display: grid; grid-template-columns: minmax(0, 1fr) var(--note-rail-width); gap: 0 var(--sp-5); align-items: start; }
 .k-doc-row { display: grid; grid-template-columns: minmax(0, 1fr) var(--note-rail-width); gap: 0 var(--sp-5); align-items: start; }
 .k-dot-bad { color: var(--bad); }
+.k-dot-bad { color: var(--bad); }
+.k-dot-muted { color: var(--muted); }
 .k-dot-muted { color: var(--muted); }
 .k-dot-ok { color: var(--ok); }
+.k-dot-ok { color: var(--ok); }
+.k-dot-warn { color: var(--warn); }
 .k-dot-warn { color: var(--warn); }
 .k-empty-chip { margin-left: var(--sp-2); }
+.k-empty-chip { margin-left: var(--sp-2); }
+.k-grid-matrix { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .k-grid-matrix { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .k-grid-split-rail { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-sm); }
+.k-grid-split-rail { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-sm); }
+.k-grid-split-rail-lg { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-lg); }
 .k-grid-split-rail-lg { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-lg); }
 .k-icon { width: var(--icon-size); height: var(--icon-size); flex: none; }
+.k-icon { width: var(--icon-size); height: var(--icon-size); flex: none; }
+.k-icon-btn { width: var(--icon-button-size); height: var(--icon-button-size); padding: 0; align-items: center; justify-content: center; color: var(--muted); }
 .k-icon-btn { width: var(--icon-button-size); height: var(--icon-button-size); padding: 0; align-items: center; justify-content: center; color: var(--muted); }
 .k-icon-btn:hover, .k-icon-btn.active { color: var(--fg); background: var(--paper); }
+.k-icon-btn:hover, .k-icon-btn.active { color: var(--fg); background: var(--paper); }
+.k-label-mark { color: var(--mark); letter-spacing: 0.16em; }
 .k-label-mark { color: var(--mark); letter-spacing: 0.16em; }
 .k-matrix-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-3); }
+.k-matrix-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-3); }
+.k-menu li { padding: 6px 12px; cursor: pointer; font-size: var(--fs-body); }
 .k-menu li { padding: 6px 12px; cursor: pointer; font-size: var(--fs-body); }
 .k-menu li.sel, .k-menu li:hover { background: var(--paper); }
+.k-menu li.sel, .k-menu li:hover { background: var(--paper); }
+.k-nav-item { width: 100%; min-height: var(--nav-item-height); padding: 0 var(--sp-2); justify-content: flex-start; gap: var(--sp-2); border-color: transparent; color: var(--muted); font-weight: 500; }
 .k-nav-item { width: 100%; min-height: var(--nav-item-height); padding: 0 var(--sp-2); justify-content: flex-start; gap: var(--sp-2); border-color: transparent; color: var(--muted); font-weight: 500; }
 .k-nav-item.active .k-icon, .k-nav-item[aria-selected="true"] .k-icon { color: var(--accent); }
+.k-nav-item.active .k-icon, .k-nav-item[aria-selected="true"] .k-icon { color: var(--accent); }
+.k-nav-item.active, .k-nav-item[aria-selected="true"] { color: var(--fg); background: var(--accent-soft); border-color: transparent; }
 .k-nav-item.active, .k-nav-item[aria-selected="true"] { color: var(--fg); background: var(--accent-soft); border-color: transparent; }
 .k-nav-item:hover { color: var(--fg); background: var(--paper); }
+.k-nav-item:hover { color: var(--fg); background: var(--paper); }
+.k-note-title { display: block; color: var(--mark); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em; margin-bottom: var(--sp-1); }
 .k-note-title { display: block; color: var(--mark); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em; margin-bottom: var(--sp-1); }
 .k-num-neg { color: var(--bad); }
+.k-num-neg { color: var(--bad); }
+.k-overlay { position: fixed; z-index: 41; background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); animation: k-overlay-rise var(--transition); }
 .k-overlay { position: fixed; z-index: 41; background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); animation: k-overlay-rise var(--transition); }
 .k-overlay.k-drawer { border-radius: var(--radius-drawer); box-shadow: var(--shadow-drawer); }
+.k-overlay.k-drawer { border-radius: var(--radius-drawer); box-shadow: var(--shadow-drawer); }
+.k-pill-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .k-pill-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .k-pill-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.k-pill-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.k-pill-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .k-pill-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .k-pill-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.k-pill-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.k-prov-actions { flex: none; display: inline-flex; align-items: center; gap: var(--sp-2); }
 .k-prov-actions { flex: none; display: inline-flex; align-items: center; gap: var(--sp-2); }
 .k-prov-case > summary { display: flex; align-items: baseline; gap: var(--sp-2); }
+.k-prov-case > summary { display: flex; align-items: baseline; gap: var(--sp-2); }
+.k-prov-case { margin: var(--sp-1) 0; padding-left: var(--sp-3); border-left: 2px solid var(--border); }
 .k-prov-case { margin: var(--sp-1) 0; padding-left: var(--sp-3); border-left: 2px solid var(--border); }
 .k-prov-drawer > summary, .k-prov-case > summary { cursor: pointer; list-style: none; font-size: var(--fs-caption); color: var(--muted); padding: var(--sp-1) 0; }
+.k-prov-drawer > summary, .k-prov-case > summary { cursor: pointer; list-style: none; font-size: var(--fs-caption); color: var(--muted); padding: var(--sp-1) 0; }
+.k-prov-drawer > summary:hover, .k-prov-case > summary:hover { color: var(--fg); }
 .k-prov-drawer > summary:hover, .k-prov-case > summary:hover { color: var(--fg); }
 .k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0; white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0; white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+.k-prov-evidence { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin: var(--sp-1) 0; }
 .k-prov-evidence { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin: var(--sp-1) 0; }
 .k-prov-evidence-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.k-prov-evidence-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.k-prov-label { flex: 1 1 auto; min-width: 0; font-size: var(--fs-body); color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
 .k-prov-label { flex: 1 1 auto; min-width: 0; font-size: var(--fs-body); color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
 .k-prov-note { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-note { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-rationale { font-size: var(--fs-caption); color: var(--fg-soft); margin: var(--sp-1) 0; }
 .k-prov-rationale { font-size: var(--fs-caption); color: var(--fg-soft); margin: var(--sp-1) 0; }
 .k-prov-row { display: flex; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.k-prov-row { display: flex; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.k-prov-row:last-child { border-bottom: none; }
 .k-prov-row:last-child { border-bottom: none; }
 .k-prov-stamp { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-stamp { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-qa-a { font-family: var(--serif); font-size: var(--fs-body); line-height: 1.6; color: var(--muted); margin-top: var(--sp-1); padding-left: var(--sp-4); border-left: 1px solid var(--hairline); }
 .k-qa-a { font-family: var(--serif); font-size: var(--fs-body); line-height: 1.6; color: var(--muted); margin-top: var(--sp-1); padding-left: var(--sp-4); border-left: 1px solid var(--hairline); }
 .k-qa-q { font-family: var(--serif); font-size: var(--fs-body); line-height: 1.55; color: var(--fg); }
+.k-qa-q { font-family: var(--serif); font-size: var(--fs-body); line-height: 1.55; color: var(--fg); }
+.k-qa-who { font-family: var(--sans); font-size: var(--fs-caption); font-weight: 600; color: var(--fg-soft); }
 .k-qa-who { font-family: var(--sans); font-size: var(--fs-caption); font-weight: 600; color: var(--fg-soft); }
 .k-qa:first-child { border-top: 0; padding-top: 0; }
+.k-qa:first-child { border-top: 0; padding-top: 0; }
+.k-say-do-item { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
 .k-say-do-item { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
 .k-say-do-item:last-child { border-bottom: none; }
+.k-say-do-item:last-child { border-bottom: none; }
+.k-say-do-timeline { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); }
 .k-say-do-timeline { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); }
 .k-scrim[hidden], .k-overlay[hidden] { display: none; }
+.k-scrim[hidden], .k-overlay[hidden] { display: none; }
+.k-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
 .k-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
 .k-section-meta { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.k-section-meta { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
 .k-section-title { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
+.k-section-title { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
+.k-select-empty { padding: var(--sp-3); color: var(--muted); font-size: var(--fs-caption); }
+.k-select-empty { padding: var(--sp-3); color: var(--muted); font-size: var(--fs-caption); }
+.k-select-live { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.k-select-live { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.k-select-menu[hidden] { display: none !important; }
+.k-select-menu[hidden] { display: none !important; }
+.k-select-native { position: absolute !important; inline-size: 1px !important; block-size: 1px !important; margin: -1px !important; padding: 0 !important; border: 0 !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; }
+.k-select-native { position: absolute !important; inline-size: 1px !important; block-size: 1px !important; margin: -1px !important; padding: 0 !important; border: 0 !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; }
+.k-select-option { min-block-size: var(--icon-button-size); display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: 6px 10px; border-radius: var(--radius); color: var(--fg-soft); cursor: pointer; }
+.k-select-option { min-block-size: var(--icon-button-size); display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: 6px 10px; border-radius: var(--radius); color: var(--fg-soft); cursor: pointer; }
+.k-select-option-count { flex: none; color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); }
+.k-select-option-count { flex: none; color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); }
+.k-select-option:hover, .k-select-option[data-active="true"] { color: var(--fg); background: var(--paper); }
+.k-select-option:hover, .k-select-option[data-active="true"] { color: var(--fg); background: var(--paper); }
+.k-select-option[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.k-select-option[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.k-select-option[aria-selected="true"] { color: var(--accent); }
+.k-select-option[aria-selected="true"] { color: var(--accent); }
+.k-select-option[hidden] { display: none !important; }
+.k-select-option[hidden] { display: none !important; }
+.k-select-shell > .k-select-menu { position: absolute; z-index: var(--z-popover); inset-block-start: calc(100% + var(--sp-1)); inset-inline-start: 0; min-inline-size: max(100%, var(--grid-card-sm)); max-inline-size: min(var(--grid-card-lg), calc(100vw - var(--sp-6))); max-block-size: min(320px, 48vh); overflow-y: auto; margin: 0; padding: var(--sp-1); list-style: none; background: var(--surface); border: var(--bw-thin) solid var(--border-2); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
+.k-select-shell > .k-select-menu { position: absolute; z-index: var(--z-popover); inset-block-start: calc(100% + var(--sp-1)); inset-inline-start: 0; min-inline-size: max(100%, var(--grid-card-sm)); max-inline-size: min(var(--grid-card-lg), calc(100vw - var(--sp-6))); max-block-size: min(320px, 48vh); overflow-y: auto; margin: 0; padding: var(--sp-1); list-style: none; background: var(--surface); border: var(--bw-thin) solid var(--border-2); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
+.k-select-shell > .k-select-trigger { inline-size: 100%; min-inline-size: 0; min-block-size: var(--icon-button-size); display: inline-flex; align-items: center; justify-content: space-between; gap: var(--sp-3); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); padding: 6px 28px 6px 10px; color: var(--fg); background-color: transparent; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; font: inherit; font-size: var(--fs-body); text-align: start; cursor: pointer; transition: border-color var(--transition), box-shadow var(--transition); }
+.k-select-shell > .k-select-trigger { inline-size: 100%; min-inline-size: 0; min-block-size: var(--icon-button-size); display: inline-flex; align-items: center; justify-content: space-between; gap: var(--sp-3); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); padding: 6px 28px 6px 10px; color: var(--fg); background-color: transparent; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; font: inherit; font-size: var(--fs-body); text-align: start; cursor: pointer; transition: border-color var(--transition), box-shadow var(--transition); }
+.k-select-trigger-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-select-trigger-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-select-trigger:focus-visible, .k-select-trigger[aria-expanded="true"] { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.k-select-trigger:focus-visible, .k-select-trigger[aria-expanded="true"] { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.k-select-trigger:hover { border-color: var(--border-2); }
+.k-select-trigger:hover { border-color: var(--border-2); }
+.k-select-trigger[aria-expanded="true"] { background-image: none; padding-inline-end: 10px; }
+.k-select-trigger[aria-expanded="true"] { background-image: none; padding-inline-end: 10px; }
+.k-stat-cell { min-width: 0; padding: var(--sp-3); border-inline-start: var(--bw-thin) solid var(--hairline); }
 .k-stat-cell { min-width: 0; padding: var(--sp-3); border-inline-start: var(--bw-thin) solid var(--hairline); }
 .k-stat-cell:first-child { border-inline-start: 0; }
+.k-stat-cell:first-child { border-inline-start: 0; }
+.k-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .k-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .k-table-shell { min-width: 0; overflow: hidden; background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.k-table-shell { min-width: 0; overflow: hidden; background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.k-tick-name { font-family: var(--sans); font-weight: 400; font-size: var(--fs-caption); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: var(--ticker-name-width); }
 .k-tick-name { font-family: var(--sans); font-weight: 400; font-size: var(--fs-caption); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: var(--ticker-name-width); }
 .k-tick-sym { font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em; color: var(--fg); text-decoration: none; }
+.k-tick-sym { font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em; color: var(--fg); text-decoration: none; }
+.k-tick-sym-display { font-size: var(--fs-display); }
 .k-tick-sym-display { font-size: var(--fs-display); }
 .k-tick-wide .k-tick-name { max-width: var(--ticker-name-wide-width); }
+.k-tick-wide .k-tick-name { max-width: var(--ticker-name-wide-width); }
+.k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-left: auto; }
 .k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-left: auto; }
 .k-toolbar-title { font-size: var(--fs-title); font-weight: 600; margin: 0; margin-right: auto; }
+.k-toolbar-title { font-size: var(--fs-title); font-weight: 600; margin: 0; margin-right: auto; }
+.k-well-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .k-well-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .k-well-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.k-well-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.k-well-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .k-well-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .k-well-title, .cc-drawer-head, .cc-peek-head { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
+.k-well-title, .cc-drawer-head, .cc-peek-head { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
+.k-well-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .k-well-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .kpi-axis { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-2); }
 .kpi-delta { font-family: var(--mono); font-size: var(--fs-caption); font-weight: 500; }
@@ -432,6 +574,8 @@
 .overlay-stat strong { font-family: var(--mono); font-size: var(--fs-display); font-weight: 500; color: var(--fg); margin-top: var(--sp-half); }
 .overlay-stat { position: absolute; top: 14px; right: 30px; display: flex; flex-direction: column; align-items: flex-end; }
 .p-table td.num, .p-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.p-table td.num, .p-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.p-table th, .p-table td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 .p-table th, .p-table td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 .panel-asof { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); white-space: nowrap; }
 .panel-budget { border-left: 3px solid var(--warn); }
@@ -456,6 +600,8 @@
 .peer.active { background: var(--fg); color: var(--bg); }
 .peer:hover { background: var(--paper); }
 .perf-bar-fill { height: 100%; border-radius: var(--radius-full); transition: width 400ms cubic-bezier(0.16, 1, 0.3, 1); }
+.perf-bar-fill { height: 100%; border-radius: var(--radius-full); transition: width 400ms cubic-bezier(0.16, 1, 0.3, 1); }
+.picker-btn { padding: var(--sp-1) var(--sp-2); font-size: var(--fs-caption); }
 .picker-btn { padding: var(--sp-1) var(--sp-2); font-size: var(--fs-caption); }
 .pos { color: var(--ok); }
 .position-coaching .coaching-line { margin: 0; }
@@ -468,17 +614,30 @@
 .position-yousaid .k-empty { padding: 0; }
 .position-yousaid .ys-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); }
 .prose > :first-child { margin-top: 0; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
 .prose > :last-child { margin-bottom: 0; }
 .prose code { font-family: var(--mono); font-size: var(--fs-caption); background: var(--paper); border-radius: var(--radius); padding: 0.05em 0.35em; }
+.prose code { font-family: var(--mono); font-size: var(--fs-caption); background: var(--paper); border-radius: var(--radius); padding: 0.05em 0.35em; }
+.prose em { font-style: italic; }
 .prose em { font-style: italic; }
 .prose h3 { font-size: var(--fs-title); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-2); }
+.prose h3 { font-size: var(--fs-title); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-2); }
+.prose h4, .prose h5, .prose h6 { font-size: var(--fs-body); font-weight: 600; color: var(--fg); margin: var(--sp-3) 0 var(--sp-1); }
 .prose h4, .prose h5, .prose h6 { font-size: var(--fs-body); font-weight: 600; color: var(--fg); margin: var(--sp-3) 0 var(--sp-1); }
 .prose hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-4) 0; }
+.prose hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-4) 0; }
+.prose li { margin-bottom: var(--sp-1); }
 .prose li { margin-bottom: var(--sp-1); }
 .prose p { margin: 0 0 var(--sp-3); }
+.prose p { margin: 0 0 var(--sp-3); }
+.prose strong { font-weight: 600; color: var(--fg); }
 .prose strong { font-weight: 600; color: var(--fg); }
 .prose table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); margin: 0 0 var(--sp-3); }
+.prose table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); margin: 0 0 var(--sp-3); }
 .prose th, .prose td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.prose th, .prose td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.prose ul, .prose ol { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
 .prose ul, .prose ol { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
 .prose-pad li { margin-bottom: var(--sp-1); }
 .prose-pad p { margin: 0 0 var(--sp-2); }
@@ -574,6 +733,8 @@
 .signals-fires { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-2); padding: var(--sp-3) var(--panel-pad-x); }
 .src-chip { display: inline-block; font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.04em; line-height: 1.4; padding: 0 var(--sp-1); border: var(--bw-thin) solid var(--border-2); border-radius: var(--radius); color: var(--muted); background: transparent; opacity: 0.65; user-select: none; }
 .src-chip { font-family: var(--mono); font-size: var(--fs-nano); padding: var(--sp-1) var(--sp-1); border-radius: var(--radius-md); background-color: var(--paper); color: var(--muted); border: var(--bw-thin) solid var(--border); text-decoration: none; cursor: pointer; transition: color var(--transition), border-color var(--transition); }
+.src-chip { font-family: var(--mono); font-size: var(--fs-nano); padding: var(--sp-1) var(--sp-1); border-radius: var(--radius-md); background-color: var(--paper); color: var(--muted); border: var(--bw-thin) solid var(--border); text-decoration: none; cursor: pointer; transition: color var(--transition), border-color var(--transition); }
+.src-chip:hover { color: var(--accent); border-color: var(--accent); }
 .src-chip:hover { color: var(--accent); border-color: var(--accent); }
 .src-chip:hover, .src-pop[open] .src-chip { opacity: 1; }
 .src-fmp-normalized { color: var(--accent); border-color: var(--accent); }
@@ -591,6 +752,8 @@
 .src-sec-official { color: var(--ok); border-color: var(--ok); }
 .src-yfinance-fallback, .src-s1-provisional { color: var(--muted); }
 .stat-number { font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; margin-top: var(--sp-1); font-feature-settings: 'tnum', 'zero'; }
+.stat-number { font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; margin-top: var(--sp-1); font-feature-settings: 'tnum', 'zero'; }
+.stat-subtext { font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1); }
 .stat-subtext { font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1); }
 .stub-warning { background: color-mix(in srgb, var(--bad) 16%, transparent); border-left: 3px solid var(--bad); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); font-size: var(--fs-body); color: var(--fg); }
 .subtab { appearance: none; border: var(--bw-thin) solid var(--border-2); background: var(--surface); padding: var(--sp-1) var(--sp-3) var(--sp-2); font-family: var(--sans); font-size: var(--fs-caption); font-weight: 500; color: var(--muted); cursor: pointer; border-radius: var(--radius-full); display: flex; align-items: center; gap: var(--sp-2); letter-spacing: 0.005em; }
@@ -717,37 +880,72 @@
 .ws-verdict-mixed { background: var(--warn); }
 .xlink-flash { outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thick); }
 /* (The bespoke .k-prov-act inline action was folded into the button kit — design-sync 2026-07-19: prov_action() now emits `.k-btn .k-btn-quiet .k-btn-sm` (a small quiet button, or an `<a>` carrying the same classes for the /source deep-link). One button shape, one hover.) */ /* drill-down drawer (generalizes the evals failed-case drawer): a <details> whose summary toggles the body; per-case rows nest inside. */ .k-prov-drawer { margin: var(--sp-1) 0; }
+/* (The bespoke .k-prov-act inline action was folded into the button kit — design-sync 2026-07-19: prov_action() now emits `.k-btn .k-btn-quiet .k-btn-sm` (a small quiet button, or an `<a>` carrying the same classes for the /source deep-link). One button shape, one hover.) */ /* drill-down drawer (generalizes the evals failed-case drawer): a <details> whose summary toggles the body; per-case rows nest inside. */ .k-prov-drawer { margin: var(--sp-1) 0; }
+/* (The neutral .p-pill inline badge was folded into .k-pill — design-sync 2026-07-19: a colorless pill is just .k-pill with no tone modifier.) */ /* ---- status/score pills: ONE filled badge — a soft status fill + token ink (design_language §3). This is the canonical replacement for the per-panel raw-hex pill systems (.ev-score-*, .badge.b-*, the calib/cockpit/memo tone pairs): a status pill never freehands a background/foreground hex pair. ---- */ .k-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; line-height: 1.5; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--paper); color: var(--fg-soft); }
 /* (The neutral .p-pill inline badge was folded into .k-pill — design-sync 2026-07-19: a colorless pill is just .k-pill with no tone modifier.) */ /* ---- status/score pills: ONE filled badge — a soft status fill + token ink (design_language §3). This is the canonical replacement for the per-panel raw-hex pill systems (.ev-score-*, .badge.b-*, the calib/cockpit/memo tone pairs): a status pill never freehands a background/foreground hex pair. ---- */ .k-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; line-height: 1.5; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--paper); color: var(--fg-soft); }
 /* ---- Card Grid Layouts ---- */ .k-grid-shell, .k-grid-single { display: grid; grid-template-columns: minmax(0, 1fr); }
+/* ---- Card Grid Layouts ---- */ .k-grid-shell, .k-grid-single { display: grid; grid-template-columns: minmax(0, 1fr); }
+/* ---- Generation 3 Work OS Primitives ---- */ .k-desk-hero { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
 /* ---- Generation 3 Work OS Primitives ---- */ .k-desk-hero { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
 /* ---- Global application baseline ---- */ :where(body) { font-family: var(--sans); font-size: var(--fs-body); color: var(--fg); background: var(--bg); }
+/* ---- Global application baseline ---- */ :where(body) { font-family: var(--sans); font-size: var(--fs-body); color: var(--fg); background: var(--bg); }
+/* ---- Performance & Stat Numbers ---- */ .stat-heading { font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
 /* ---- Performance & Stat Numbers ---- */ .stat-heading { font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
 /* ---- Provenance & Drill Handles ---- */ .drill-handle { border-bottom: var(--bw-thin) dotted var(--accent); color: var(--fg); cursor: pointer; padding: 0 var(--sp-half); border-radius: var(--radius-sm); transition: color var(--transition), background-color var(--transition); }
+/* ---- Provenance & Drill Handles ---- */ .drill-handle { border-bottom: var(--bw-thin) dotted var(--accent); color: var(--fg); cursor: pointer; padding: 0 var(--sp-half); border-radius: var(--radius-sm); transition: color var(--transition), background-color var(--transition); }
+/* ---- Relative Performance Bar Comparator ---- */ .perf-bar-track { background: var(--paper); height: var(--bar-track-height); border-radius: var(--radius-full); overflow: hidden; display: flex; margin-top: var(--sp-2); }
 /* ---- Relative Performance Bar Comparator ---- */ .perf-bar-track { background: var(--paper); height: var(--bar-track-height); border-radius: var(--radius-full); overflow: hidden; display: flex; margin-top: var(--sp-2); }
 /* ---- Time Horizon Picker ---- */ .picker-container { display: flex; gap: var(--sp-1); background: var(--paper); padding: var(--sp-1); border-radius: var(--radius); border: var(--bw-thin) solid var(--border); }
+/* ---- Time Horizon Picker ---- */ .picker-container { display: flex; gap: var(--sp-1); background: var(--paper); padding: var(--sp-1); border-radius: var(--radius); border: var(--bw-thin) solid var(--border); }
+/* ---- Work OS Card Animations & Zero-Layout-Pop Dismissal ---- */ .k-card-interactive { transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease; }
 /* ---- Work OS Card Animations & Zero-Layout-Pop Dismissal ---- */ .k-card-interactive { transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease; }
 /* ---- Work OS application chrome: one sidebar, nav item, and icon family ---- */ .k-sidebar { width: var(--sidebar-width); background: var(--surface); border-right: var(--bw-thin) solid var(--border); }
+/* ---- Work OS application chrome: one sidebar, nav item, and icon family ---- */ .k-sidebar { width: var(--sidebar-width); background: var(--surface); border-right: var(--bw-thin) solid var(--border); }
+/* ---- button hierarchy: primary (one per view) / quiet / danger ---- */ .k-btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: var(--fs-body); font-weight: 600; line-height: 1.3; border-radius: var(--radius); padding: 6px 14px; cursor: pointer; border: var(--bw-thin) solid transparent; background: transparent; color: var(--fg); white-space: nowrap; transition: color var(--transition), border-color var(--transition), background var(--transition); }
 /* ---- button hierarchy: primary (one per view) / quiet / danger ---- */ .k-btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: var(--fs-body); font-weight: 600; line-height: 1.3; border-radius: var(--radius); padding: 6px 14px; cursor: pointer; border: var(--bw-thin) solid transparent; background: transparent; color: var(--fg); white-space: nowrap; transition: color var(--transition), border-color var(--transition), background var(--transition); }
 /* ---- card surface + compact content roles: one geometry, no fixed height ---- */ .k-card { min-width: 0; padding: var(--sp-3); overflow: hidden; user-select: text; background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+/* ---- card surface + compact content roles: one geometry, no fixed height ---- */ .k-card { min-width: 0; padding: var(--sp-3); overflow: hidden; user-select: text; background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+/* ---- chip-tab: the section-nav / pane-switcher variant of a clickable chip (owner directive 2026-08-02 — sticky nav bands must never change height between active and inactive chips). Same pill shape as any other chip; its ACTIVE state is a 2px accent underline (an inset box-shadow, which never resizes the box) + accent text, NEVER a filled pill or a full-perimeter border recolor. Compose as .k-chip.k-chip-btn.k-chip-tab and toggle .is-on exactly like any other chip — every console's jump-nav and pane-switcher chips share this ONE primitive instead of each reinventing an active-state treatment. ---- */ .k-chip-tab { border-color: transparent; }
 /* ---- chip-tab: the section-nav / pane-switcher variant of a clickable chip (owner directive 2026-08-02 — sticky nav bands must never change height between active and inactive chips). Same pill shape as any other chip; its ACTIVE state is a 2px accent underline (an inset box-shadow, which never resizes the box) + accent text, NEVER a filled pill or a full-perimeter border recolor. Compose as .k-chip.k-chip-btn.k-chip-tab and toggle .is-on exactly like any other chip — every console's jump-nav and pane-switcher chips share this ONE primitive instead of each reinventing an active-state treatment. ---- */ .k-chip-tab { border-color: transparent; }
 /* ---- chips: ONE badge shape (radius-full · caption · uppercase) ---- */ .k-chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-caption); font-weight: 600; line-height: 1.5; text-transform: uppercase; letter-spacing: 0.05em; border-radius: var(--radius-full); padding: 1px 8px; border: var(--bw-thin) solid var(--border); color: var(--muted); background: transparent; white-space: nowrap; }
+/* ---- chips: ONE badge shape (radius-full · caption · uppercase) ---- */ .k-chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-caption); font-weight: 600; line-height: 1.5; text-transform: uppercase; letter-spacing: 0.05em; border-radius: var(--radius-full); padding: 1px 8px; border: var(--bw-thin) solid var(--border); color: var(--muted); background: transparent; white-space: nowrap; }
+/* ---- data table: ONE cell padding (design-sync 2026-07-19 unified .p-table with .prose table — both are var(--sp-2) var(--sp-3) now). .p-table is the command-center layout; .prose table is rendered-prose. Same rhythm. ---- */ .p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 /* ---- data table: ONE cell padding (design-sync 2026-07-19 unified .p-table with .prose table — both are var(--sp-2) var(--sp-3) now). .p-table is the command-center layout; .prose table is rendered-prose. Same rhythm. ---- */ .p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 /* ---- disclosure (details/summary): the native triangle marker is gone; the kit draws the one chevron (--k-chevron), rotating 90deg on [open], and the revealed body gets the same 150ms rise as an overlay. One marker, one motion, everywhere a <details> appears. A surface that wants no marker (e.g. a custom summary row) sets `list-style: none` and its own ::before — but by default, this is the disclosure look. ---- */ summary { cursor: pointer; list-style: none; }
+/* ---- disclosure (details/summary): the native triangle marker is gone; the kit draws the one chevron (--k-chevron), rotating 90deg on [open], and the revealed body gets the same 150ms rise as an overlay. One marker, one motion, everywhere a <details> appears. A surface that wants no marker (e.g. a custom summary row) sets `list-style: none` and its own ::before — but by default, this is the disclosure look. ---- */ summary { cursor: pointer; list-style: none; }
+/* ---- empty / degraded state (design_language D4): ONE narrative line + the chip that fills it. Never an empty shell with explanatory prose, never a raw diagnostic string surfaced verbatim — the caller translates an engineering diagnostic into owner vocabulary before calling k_empty(). Replaces the seven bespoke empty-state classes (.cc-empty / .dj-empty / .diet-empty / .dq-empty / .jr-empty / .ask-dock-empty / ad hoc .muted paragraphs). ---- */ .k-empty { color: var(--muted); font-size: var(--fs-body); padding: var(--sp-4) 0; }
 /* ---- empty / degraded state (design_language D4): ONE narrative line + the chip that fills it. Never an empty shell with explanatory prose, never a raw diagnostic string surfaced verbatim — the caller translates an engineering diagnostic into owner vocabulary before calling k_empty(). Replaces the seven bespoke empty-state classes (.cc-empty / .dj-empty / .diet-empty / .dq-empty / .jr-empty / .ask-dock-empty / ad hoc .muted paragraphs). ---- */ .k-empty { color: var(--muted); font-size: var(--fs-body); padding: var(--sp-4) 0; }
 /* ---- field/section caption. .k-label-mark is the DOCUMENT tone (§6.3): the same caption in the editorial ochre, for a research document's section labels. A tone modifier, not a new class — same shape, same weight. ---- */ .k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+/* ---- field/section caption. .k-label-mark is the DOCUMENT tone (§6.3): the same caption in the editorial ochre, for a research document's section labels. A tone modifier, not a new class — same shape, same weight. ---- */ .k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+/* ---- form-control baseline (kit): kill the native look everywhere ---- */ select, textarea, input[type="text"], input[type="search"], input[type="number"], input[type="date"], input[type="email"], input[type="url"], input[type="password"], input:not([type]) { font: inherit; font-size: var(--fs-body); color: var(--fg); background-color: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; transition: border-color var(--transition), box-shadow var(--transition); }
 /* ---- form-control baseline (kit): kill the native look everywhere ---- */ select, textarea, input[type="text"], input[type="search"], input[type="number"], input[type="date"], input[type="email"], input[type="url"], input[type="password"], input:not([type]) { font: inherit; font-size: var(--fs-body); color: var(--fg); background-color: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; transition: border-color var(--transition), box-shadow var(--transition); }
 /* ---- green/red number text: the one positive/negative numeric tone (P&L cells, deltas, alpha). Status green/red only — the report's .pos accent-wayfinding is a separate, local concern and is NOT this. ---- */ .k-num-pos { color: var(--ok); }
-/* ---- mobile platform floors: prevent iOS focus zoom and preserve touch reach ---- */ @media (max-width: 768px) { input, select, textarea { font-size: var(--mobile-control-font-size); } .k-icon-btn, .k-nav-item { min-width: var(--touch-target-size); min-height: var(--touch-target-size); } }
+/* ---- green/red number text: the one positive/negative numeric tone (P&L cells, deltas, alpha). Status green/red only — the report's .pos accent-wayfinding is a separate, local concern and is NOT this. ---- */ .k-num-pos { color: var(--ok); }
+/* ---- mobile platform floors: prevent iOS focus zoom and preserve touch reach ---- */ @media (max-width: 768px) { input, select, textarea { font-size: var(--mobile-control-font-size); } .k-select-trigger { min-block-size: var(--touch-target-size); font-size: var(--mobile-control-font-size); } [data-k-select-shell="true"] > .k-select-menu { position: fixed; inset-block: auto calc(var(--sp-3) + env(safe-area-inset-bottom)); inset-inline: var(--sp-3); inline-size: auto; min-inline-size: 0; max-inline-size: none; max-block-size: min(52vh, 360px); } .k-select-option { min-block-size: var(--touch-target-size); } .k-icon-btn, .k-nav-item { min-width: var(--touch-target-size); min-height: var(--touch-target-size); } }
+/* ---- mobile platform floors: prevent iOS focus zoom and preserve touch reach ---- */ @media (max-width: 768px) { input, select, textarea { font-size: var(--mobile-control-font-size); } .k-select-trigger { min-block-size: var(--touch-target-size); font-size: var(--mobile-control-font-size); } [data-k-select-shell="true"] > .k-select-menu { position: fixed; inset-block: auto calc(var(--sp-3) + env(safe-area-inset-bottom)); inset-inline: var(--sp-3); inline-size: auto; min-inline-size: 0; max-inline-size: none; max-block-size: min(52vh, 360px); } .k-select-option { min-block-size: var(--touch-target-size); } .k-icon-btn, .k-nav-item { min-width: var(--touch-target-size); min-height: var(--touch-target-size); } }
+/* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus trap/restore); the kit owns their look + open motion. Exit is instant — the [hidden] toggle can't animate display:none. The scrim is a neutral wash, not a palette color. ---- */ .k-scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 40; animation: k-overlay-fade var(--transition); }
 /* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus trap/restore); the kit owns their look + open motion. Exit is instant — the [hidden] toggle can't animate display:none. The scrim is a neutral wash, not a palette color. ---- */ .k-scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 40; animation: k-overlay-fade var(--transition); }
 /* ---- own every pixel: no native chrome anywhere the OS would draw its own. The kit draws the checkbox/radio, hides the search-cancel/number-spinner/ resizer widgets, themes the scrollbars, tames autofill, and owns the text selection + caret — so a surface never inherits an OS accent it can't match the palette to. ---- */ /* themed thin scrollbars (Firefox + WebKit) */ * { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+/* ---- own every pixel: no native chrome anywhere the OS would draw its own. The kit draws the checkbox/radio, hides the search-cancel/number-spinner/ resizer widgets, themes the scrollbars, tames autofill, and owns the text selection + caret — so a surface never inherits an OS accent it can't match the palette to. ---- */ /* themed thin scrollbars (Firefox + WebKit) */ * { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+/* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on the left, filters + actions on the SAME flex row to the right — never a title band stacked over a filter band. Emitted by panel_toolbar(). ---- */ .k-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-3); }
 /* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on the left, filters + actions on the SAME flex row to the right — never a title band stacked over a filter band. Emitted by panel_toolbar(). ---- */ .k-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-3); }
 /* ---- provenance / data-quality rows (design_language §10; Law: provenance is actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary for any data-quality row — the report Sources tab, the System Validation panel, the freshness peek, the evals failed-case drawer. The severity tick is the single home of the halt/warn/grey decision: tone resolves through the live models.validation.Severity enum (prov_severity_tone), so a writer↔reader drift can't mute a halt. ---- */ .k-prov { display: flex; flex-direction: column; gap: var(--sp-1); }
+/* ---- provenance / data-quality rows (design_language §10; Law: provenance is actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary for any data-quality row — the report Sources tab, the System Validation panel, the freshness peek, the evals failed-case drawer. The severity tick is the single home of the halt/warn/grey decision: tone resolves through the live models.validation.Severity enum (prov_severity_tone), so a writer↔reader drift can't mute a halt. ---- */ .k-prov { display: flex; flex-direction: column; gap: var(--sp-1); }
 /* ---- rendered prose: the shared container for render_prose() output (design_language §9; src/ui/prose.py). ONE token-only treatment for every stored analyst/LLM body / note / memo / narrative. render_prose starts headings at <h3> (a panel owns the <h2> above its prose), so h3 is the top content tier and h4-h6 step down. A surface adds ONLY the wrapper's padding/width — it never re-skins the rendered children. ---- */ .prose { font-size: var(--fs-body); line-height: 1.6; color: var(--fg-soft); }
+/* ---- rendered prose: the shared container for render_prose() output (design_language §9; src/ui/prose.py). ONE token-only treatment for every stored analyst/LLM body / note / memo / narrative. render_prose starts headings at <h3> (a panel owns the <h2> above its prose), so h3 is the top content tier and h4-h6 step down. A surface adds ONLY the wrapper's padding/width — it never re-skins the rendered children. ---- */ .prose { font-size: var(--fs-body); line-height: 1.6; color: var(--fg-soft); }
+/* ---- searchable single-select: one app-owned trigger + listbox everywhere ---- */ .k-select-shell { position: relative; display: inline-flex; min-width: 0; max-width: 100%; }
+/* ---- searchable single-select: one app-owned trigger + listbox everywhere ---- */ .k-select-shell { position: relative; display: inline-flex; min-width: 0; max-width: 100%; }
+/* ---- shared popover list (combobox results, palette rows) ---- */ .k-menu { margin: 0; padding: 4px 0; list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
 /* ---- shared popover list (combobox results, palette rows) ---- */ .k-menu { margin: 0; padding: 4px 0; list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
 /* ---- status dot: ONE filled circular tick (design_language §4). THE single home of the ok/warn/bad → --ok/--warn/--bad mapping four surfaces duplicated under .dot-*, .fdot-*, .ch-dot-*, .cc-system-dot-*. Fill is `currentColor`, so a tone modifier only sets `color` (mirrors the .k-prov-tick idiom): the same class colors a bg circle here and — where a surface still needs a neutral or bespoke shade — takes any local `color`. Diameter comes from the one master-owned dot token; surfaces add layout only. ---- */ .k-dot { display: inline-block; width: var(--dot-size); height: var(--dot-size); border-radius: var(--radius-full); background: currentColor; vertical-align: middle; }
+/* ---- status dot: ONE filled circular tick (design_language §4). THE single home of the ok/warn/bad → --ok/--warn/--bad mapping four surfaces duplicated under .dot-*, .fdot-*, .ch-dot-*, .cc-system-dot-*. Fill is `currentColor`, so a tone modifier only sets `color` (mirrors the .k-prov-tick idiom): the same class colors a bg circle here and — where a surface still needs a neutral or bespoke shade — takes any local `color`. Diameter comes from the one master-owned dot token; surfaces add layout only. ---- */ .k-dot { display: inline-block; width: var(--dot-size); height: var(--dot-size); border-radius: var(--radius-full); background: currentColor; vertical-align: middle; }
+/* ---- status wells: the soft-filled BLOCK sibling of .k-pill (KPI cards, callouts, tone rows) — same color-mix family, box radius instead of full. Ink stays --fg; a status word inside can take its own .k-pill. ---- */ .k-well { background: var(--paper); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
 /* ---- status wells: the soft-filled BLOCK sibling of .k-pill (KPI cards, callouts, tone rows) — same color-mix family, box radius instead of full. Ink stays --fg; a status word inside can take its own .k-pill. ---- */ .k-well { background: var(--paper); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
 /* ---- sticky chip-tab / section-nav bands (owner directive 2026-08-02): "sticky, cut the vertical space, accentuate with a line or shade — not height". Pinned just below the master shell header with a background + one hairline so content scrolling underneath stays readable, and its own padding trimmed to the low end of the --sp scale so pinning it never grows the page. .k-toolbar-sticky is the panel_toolbar(sticky=True) modifier (a console's jump-nav band); .k-chip-tabs-sticky is the same treatment for a bare chip row that isn't a full toolbar (the Health console's per-card pane switcher) — ONE offset + one look, two attachment points. ---- */ .k-toolbar-sticky, .k-chip-tabs-sticky { position: sticky; top: var(--header-height); z-index: 20; background: var(--bg); border-bottom: 1px solid var(--border); padding: var(--sp-1) 0; margin-bottom: var(--sp-2); }
+/* ---- sticky chip-tab / section-nav bands (owner directive 2026-08-02): "sticky, cut the vertical space, accentuate with a line or shade — not height". Pinned just below the master shell header with a background + one hairline so content scrolling underneath stays readable, and its own padding trimmed to the low end of the --sp scale so pinning it never grows the page. .k-toolbar-sticky is the panel_toolbar(sticky=True) modifier (a console's jump-nav band); .k-chip-tabs-sticky is the same treatment for a bare chip row that isn't a full toolbar (the Health console's per-card pane switcher) — ONE offset + one look, two attachment points. ---- */ .k-toolbar-sticky, .k-chip-tabs-sticky { position: sticky; top: var(--header-height); z-index: 20; background: var(--bg); border-bottom: 1px solid var(--border); padding: var(--sp-1) 0; margin-bottom: var(--sp-2); }
 /* ---- the canonical ticker label: mono symbol + muted truncated name ---- */ .k-tick { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; max-width: 100%; }
+/* ---- the canonical ticker label: mono symbol + muted truncated name ---- */ .k-tick { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; max-width: 100%; }
+/* ---- the research document (design_language §6.3). A reading surface, not a panel grid: hairline rules and whitespace instead of cards, because a document that grows boxes starts reading as a dashboard — which is where a research surface loses its seriousness. Warmth comes from --mark on the furniture (labels, masthead rule, footnote marks, note keylines), never from a fill. .k-doc-row is the load-bearing idea. A margin note attaches to the ONE section it annotates rather than living in a standing gutter column: a reserved rail is empty everywhere a note isn't, which on a long page is a dead strip down the whole surface. Sections with nothing to annotate are full-bleed and use the entire measure. ---- */ /* The master reading measure defines the document column; the document is that column PLUS the note rail, so prose keeps a real measure whether or not a section carries a note, and full-bleed sections (tables, bands) still get the whole width. Setting .k-doc to a flat 76ch was wrong and browser measurement caught it: the 13.5rem note rail ate the measure from the inside, leaving ~40ch of prose in every annotated section. Prose is capped independently so a full-bleed section does not run to a 100ch line. */ .k-doc { max-width: calc(var(--reading-measure) + var(--note-rail-width) + var(--sp-5)); }
 /* ---- the research document (design_language §6.3). A reading surface, not a panel grid: hairline rules and whitespace instead of cards, because a document that grows boxes starts reading as a dashboard — which is where a research surface loses its seriousness. Warmth comes from --mark on the furniture (labels, masthead rule, footnote marks, note keylines), never from a fill. .k-doc-row is the load-bearing idea. A margin note attaches to the ONE section it annotates rather than living in a standing gutter column: a reserved rail is empty everywhere a note isn't, which on a long page is a dead strip down the whole surface. Sections with nothing to annotate are full-bleed and use the entire measure. ---- */ /* The master reading measure defines the document column; the document is that column PLUS the note rail, so prose keeps a real measure whether or not a section carries a note, and full-bleed sections (tables, bands) still get the whole width. Setting .k-doc to a flat 76ch was wrong and browser measurement caught it: the 13.5rem note rail ate the measure from the inside, leaving ~40ch of prose in every annotated section. Prose is capped independently so a full-bleed section does not run to a 100ch line. */ .k-doc { max-width: calc(var(--reading-measure) + var(--note-rail-width) + var(--sp-5)); }
 /* ---- §6.3 document form. Inside a .k-doc the report's panels stop being boxes and become sections: hairline rules and whitespace instead of cards, because a research page that grows boxes reads as a dashboard, and that is where a research surface loses the seriousness it needs to be trusted. The MARKUP is untouched. Every _panel_head() call site, every cross-link target, comment anchor and panel_id keeps working — only presentation changes. That is why this is a scoped stylesheet block and not a rewrite of twenty renderers: the alternative was hand-editing every call site, which would have churned the goldens structurally for a purely visual change. --panel-pad-x is the one lever. Heads, .val-rows, .tbl cells and the strip lists all take their horizontal padding from it, so zeroing it here flushes the whole section to the document's left edge in one declaration. ---- */ .k-doc .panel { --panel-pad-x: var(--indent-0); border: 0; border-radius: 0; background: none; overflow: visible; border-top: var(--bw-thin) solid var(--border); padding-top: var(--sp-2); }
 /* .lens-warn / .lens-stale migrated to the control kit's .k-pill (+ k-pill-warn for DIRTY; neutral bare for STALE) — see workspace_sections/synthesis.py. */ .lens-five_min_reread .lens-body h2 { color: var(--accent); font-size: var(--fs-title); margin-top: 1em; }
@@ -778,7 +976,9 @@
 /* ============================================================ Valuation tab ============================================================ */ .valuation-headline { padding: var(--sp-3) var(--sp-4); }
 /* ============================================================ Workspace shell ============================================================ */ .report-sidebar { flex: none; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; padding: var(--sp-3); gap: var(--sp-3); }
 /* A document that inherits its host's width. The workspace report owns its own page width (--pad-x) and spans wide financial tables, so it takes the document SEMANTICS — prose capped at the measure, notes, section rhythm — without the outer clamp. Everything else about .k-doc still applies. */ .k-doc-fluid { max-width: none; }
+/* A document that inherits its host's width. The workspace report owns its own page width (--pad-x) and spans wide financial tables, so it takes the document SEMANTICS — prose capped at the measure, notes, section rhythm — without the outer clamp. Everything else about .k-doc still applies. */ .k-doc-fluid { max-width: none; }
 /* A document's own prose keeps the reading measure even though the report itself is fluid — .k-doc-fluid drops the outer clamp, not this one. */ .k-doc .lede { max-width: var(--reading-measure); }
+/* A recorded exchange (management Q&A, an interview). The answer is indented under its question by a hairline, so a dodge reads as a dodge. */ .k-qa { border-top: 1px solid var(--hairline); padding: var(--sp-2) 0 var(--sp-1); }
 /* A recorded exchange (management Q&A, an interview). The answer is indented under its question by a hairline, so a dodge reads as a dodge. */ .k-qa { border-top: 1px solid var(--hairline); padding: var(--sp-2) 0 var(--sp-1); }
 /* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this layout-only rule keeps the row spacing. */ .cmt-actions { margin-top: var(--sp-2); display: flex; gap: 6px; }
 /* BHA-71: sidebar collapse toggle button */ .report-sidebar-toggle { flex: none; display: flex; align-items: center; justify-content: center; width: var(--icon-button-size); height: var(--icon-button-size); cursor: pointer; margin-top: auto; align-self: flex-start; color: var(--muted); transition: color var(--transition), background var(--transition); }
@@ -790,16 +990,19 @@
 /* Dim a stale row's data but keep the flag itself at full strength. */ .ledger-stale-row td { opacity: 0.55; }
 /* Doorway: a KPI name that opens the exact series in Ask (Law 2). Looks like the bold label it replaces; reveals a dashed accent underline on hover/keyboard focus so the affordance reads without crowding the table. */ .fact-doorway { font: inherit; font-weight: 600; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; border-bottom: var(--bw-thin) dashed transparent; }
 /* Drawn as a border, not a background fill: --mark is ink and furniture, and test_mark_never_fills_a_control keeps that absolute rather than "absolute except this one 1px case". */ .k-doc-mast::after { content: ""; position: absolute; left: 0; bottom: -1px; width: 84px; border-top: 1px solid var(--mark); }
+/* Drawn as a border, not a background fill: --mark is ink and furniture, and test_mark_never_fills_a_control keeps that absolute rather than "absolute except this one 1px case". */ .k-doc-mast::after { content: ""; position: absolute; left: 0; bottom: -1px; width: 84px; border-top: 1px solid var(--mark); }
 /* Earnings tab: the per-quarter caption line inside the ONE shared "Analyst Q&A" panel (workspace_sections/earnings.py::_qa_roster_panel — design_language §6.2, the quarter is the per-item label under a constant title stated once, not a restated panel-head per quarter). */ .qa-quarter-sub { padding: var(--row-pad-y) var(--panel-pad-x) 0; }
 /* Enriched §2 KPI ledger rows: a clean name with the qualifier demoted to a muted definition line, a sparkline + YoY/QoQ delta trend cell, a staleness flag, and the "tracked, no data yet" footnote. */ .kpi-ledger-table td:first-child { white-space: normal; max-width: 300px; }
 /* Financials */ .chart-panel { padding-bottom: var(--panel-pad-y); }
 /* Floating "+ Comment" button on text selection (Google-Docs style). The button itself is the kit's small primary (.k-btn.k-btn-primary.k-btn-sm, added in the JS markup); only the floater's drop shadow + pill radius are surface-specific. */ .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
+/* Footnote marker. Sized in em, not px: a reference mark must scale with the prose it sits in rather than pin to a UI step. */ .k-fn { font-size: var(--fs-caption); font-weight: 600; color: var(--mark); vertical-align: super; margin-left: 1px; }
 /* Footnote marker. Sized in em, not px: a reference mark must scale with the prose it sits in rather than pin to a UI step. */ .k-fn { font-size: var(--fs-caption); font-weight: 600; color: var(--mark); vertical-align: super; margin-left: 1px; }
 /* Free-text highlight (the underlined excerpt the user commented on). Open = warn-tinted, addressed = ok-tinted, both routed through the status tokens via color-mix (no raw rgba). */ mark.cmt-highlight { background: color-mix(in srgb, var(--warn) 18%, transparent); border-bottom: var(--bw-thick) solid var(--warn); color: inherit; cursor: pointer; padding: 0 var(--bw-thin); border-radius: var(--radius-sm); transition: background 0.12s; }
 /* Health pill — server reachability indicator in the sidebar header. Rides the kit's .k-pill (+ k-pill-ok online / k-pill-bad offline / neutral bare while the first poll is in flight, tone set in renderHealthPill); layout + mono-micro refine only here. */ .cmt-health-pill { margin: var(--bw-thick) 6px 0 6px; font-size: var(--fs-caption); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
 /* Hero quote (Earnings tab) */ .hero-quote { border: var(--bw-thin) solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: var(--sp-5) var(--sp-6) var(--sp-5); border-radius: var(--radius); display: flex; gap: var(--sp-5); position: relative; }
 /* Keyboard focus ring on sidebar nav items */ .report-sidebar .tab:focus-visible { outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thin); }
 /* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles, Esc / click closes). Token-only so it tracks the active theme. */ .ws-kbd-help { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 72%, transparent); }
+/* Masthead: identity + stamps over one rule, with the mark as a short accent under its left edge (the document's one branded pixel). */ .k-doc-mast { position: relative; padding-bottom: var(--sp-3); margin-bottom: var(--sp-5); border-bottom: 1px solid var(--border); }
 /* Masthead: identity + stamps over one rule, with the mark as a short accent under its left edge (the document's one branded pixel). */ .k-doc-mast { position: relative; padding-bottom: var(--sp-3); margin-bottom: var(--sp-5); border-bottom: 1px solid var(--border); }
 /* Misc tiny helpers used by the higher-density panels. */ .xsmall { font-size: var(--fs-caption); line-height: 1.4; }
 /* Narrow/tablet: KPI strip drops from 4 to 2 columns; multi-column grids collapse; identity cluster wraps. */ @media (max-width: 900px) { .kpi-strip { grid-template-columns: repeat(2, 1fr); } .grid-2col, .grid-fin, .grid-thesis-top, .grid-thesis-bottom { grid-template-columns: 1fr; } .identity-right { flex-wrap: wrap; } }
@@ -825,9 +1028,11 @@
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */ .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 /* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet (added in the boot.py markup) — no freehand button skin here. */ .cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 /* The margin note. --mark-soft is a KEYLINE token (below the text floor by design) so it is legal here on the 1px rule and nowhere on the type. */ .k-note { font-size: var(--fs-caption); line-height: 1.55; color: var(--muted); padding-left: var(--sp-3); border-left: 1px solid var(--mark-soft); }
+/* The margin note. --mark-soft is a KEYLINE token (below the text floor by design) so it is legal here on the 1px rule and nowhere on the type. */ .k-note { font-size: var(--fs-caption); line-height: 1.55; color: var(--muted); padding-left: var(--sp-3); border-left: 1px solid var(--mark-soft); }
 /* The outcome chip now rides the control kit's .k-pill (shape + tone fill); this selector adds only its uppercase-micro typographic refinement. Tone is routed in Python (_OUTCOME_PILL_TONE in workspace_sections/thesis_risk.py): correct -> k-pill-ok, wrong -> k-pill-bad, mixed -> k-pill-warn, pending/unfalsifiable -> neutral bare .k-pill. */ .decision-badge .decision-outcome { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; }
 /* The report's parallel .pill / .pill-ok/-neutral/-warn/-bad/-muted badge system was removed (2026-06-14): an outline mono micro chip that duplicated the kit. Every consumer migrated to .k-chip.k-chip-mono (+ k-chip-ok/-warn/ -bad tones) from src/ui/controls.py. (.pill-warn-cell further below is a separate table-cell text color, not part of that system, and stays.) */ /* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny tier-colored <summary class="src-chip"> badge; the open panel is an absolutely-positioned popover with the document identity + source link. */ .src-pop { display: inline-block; position: relative; vertical-align: baseline; }
 /* The section label: the kit's caption shape in the editorial mark (§2). */ .k-doc .panel-title { font-size: var(--fs-caption); font-weight: 600; color: var(--mark); text-transform: uppercase; letter-spacing: 0.16em; }
+/* The stat band: a full-bleed strip of read-only figures between two rules. Compose .k-label for each cell's caption — no band-local caption class. */ .k-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 var(--sp-5); padding: var(--sp-3) 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 /* The stat band: a full-bleed strip of read-only figures between two rules. Compose .k-label for each cell's caption — no band-local caption class. */ .k-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 var(--sp-5); padding: var(--sp-3) 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
 /* Touch-friendly hit targets on coarse-pointer devices */ @media (pointer: coarse) { .report-sidebar .k-nav-item { min-height: var(--touch-target-size); } }
@@ -835,17 +1040,29 @@
 /* Wave 5: a captured report value injected into a driver flashes; the report's "-> DCF" affordance is a quiet accent micro-button. */ .dcf-edit-field input.dcf-injected { outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thin); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 /* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius); padding: 0 3px; }
 /* autofill: repaint the browser's yellow inset over the kit surface */ input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus, textarea:-webkit-autofill, select:-webkit-autofill { -webkit-text-fill-color: var(--fg); -webkit-box-shadow: 0 0 0 1000px var(--paper) inset; caret-color: var(--fg); }
+/* autofill: repaint the browser's yellow inset over the kit surface */ input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus, textarea:-webkit-autofill, select:-webkit-autofill { -webkit-text-fill-color: var(--fg); -webkit-box-shadow: 0 0 0 1000px var(--paper) inset; caret-color: var(--fg); }
+/* hide the native search-cancel, number spinners, and drag-resize handle */ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 /* hide the native search-cancel, number spinners, and drag-resize handle */ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 /* hover deepens the accent toward the ink (color-mix), not a filter — so the transition stays a plain background tween and never touches the whole box. */ .k-btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); }
+/* hover deepens the accent toward the ink (color-mix), not a filter — so the transition stays a plain background tween and never touches the whole box. */ .k-btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); }
+/* kit-drawn checkbox / radio (the native accent-color box is gone) */ input[type="checkbox"], input[type="radio"] { appearance: none; -webkit-appearance: none; flex: none; width: 15px; height: 15px; margin: 0; vertical-align: -2px; cursor: pointer; border: 1px solid var(--border-2); background: var(--paper); transition: border-color var(--transition), background var(--transition); }
 /* kit-drawn checkbox / radio (the native accent-color box is gone) */ input[type="checkbox"], input[type="radio"] { appearance: none; -webkit-appearance: none; flex: none; width: 15px; height: 15px; margin: 0; vertical-align: -2px; cursor: pointer; border: 1px solid var(--border-2); background: var(--paper); transition: border-color var(--transition), background var(--transition); }
 /* min-height 24px (UX audit 2026-07-18): the WCAG/repo hit-target floor — fs-caption + the old 3px padding measured ~23px, just under it. */ .k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
+/* min-height 24px (UX audit 2026-07-18): the WCAG/repo hit-target floor — fs-caption + the old 3px padding measured ~23px, just under it. */ .k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
+/* pressed/in-flight state — CCAction.busy() sets aria-busy. Slightly less dim than [disabled] so "working" reads apart from "unavailable". */ .k-btn[aria-busy="true"] { opacity: 0.6; pointer-events: none; }
 /* pressed/in-flight state — CCAction.busy() sets aria-busy. Slightly less dim than [disabled] so "working" reads apart from "unavailable". */ .k-btn[aria-busy="true"] { opacity: 0.6; pointer-events: none; }
 /* prose table headers are sentence-case (uppercase+tracking is reserved for the Label / Chip / Pill kit primitives — design-sync 2026-07-19). */ .prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); }
+/* prose table headers are sentence-case (uppercase+tracking is reserved for the Label / Chip / Pill kit primitives — design-sync 2026-07-19). */ .prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); }
 /* severity tick = Dot + Label (design-sync 2026-07-19: was the bespoke .k-prov-tick; now composed from the kit's .k-dot tone + .k-label — prov_ severity_tick() emits `<span class="k-prov-sev"><span class="k-dot k-dot- {tone}
+/* severity tick = Dot + Label (design-sync 2026-07-19: was the bespoke .k-prov-tick; now composed from the kit's .k-dot tone + .k-label — prov_ severity_tick() emits `<span class="k-prov-sev"><span class="k-dot k-dot- {tone}
+/* text selection + caret ride the accent */ ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 /* text selection + caret ride the accent */ ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 /* §3.5 signal cards — severity via token-backed classes (P6.1; these previously carried hardcoded inline rgba colors + a literal font stack). */ .signal-card { border: var(--bw-thin) solid var(--hairline); border-left: 3px solid var(--hairline); border-radius: var(--radius); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-body); }
 ::-webkit-resizer { display: none; }
+::-webkit-resizer { display: none; }
 ::placeholder { color: var(--muted); opacity: 1; }
+::placeholder { color: var(--muted); opacity: 1; }
+:root { color-scheme: dark; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%237c7e87%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; --k-check: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23090a0c%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; }
 :root { color-scheme: light; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%236f6b60%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; --k-check: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23ffffff%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; }
 :root.chat-sidebar-open { --sidebar-open-width: var(--sidebar-width); }
 :root.comments-sidebar-open { --sidebar-open-width: var(--comments-drawer-width); }
@@ -860,24 +1077,32 @@
 :root[data-theme="dark"] { color-scheme: dark; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%237c7e87%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; --k-check: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23090a0c%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; }
 :root[data-theme="white"] { --bg: #ffffff; --paper: #fafaf7; --hairline: #efeeea; }
 @keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 1080px) { .grid-2col, .grid-fin, .grid-thesis-top, .grid-thesis-bottom { grid-template-columns: 1fr; } }
 @media (max-width: 47.5rem) { .chat-sidebar.open { width: 100%; } .chat-sidebar .k-btn { min-block-size: var(--touch-target-size); } }
+@media (max-width: 47.5rem) { .k-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .k-stat-cell:nth-child(odd) { border-inline-start: 0; } .k-stat-cell:nth-child(n + 3) { border-block-start: var(--bw-thin) solid var(--hairline); } .k-card-head, .k-section-head { align-items: stretch; flex-direction: column; } }
 @media (max-width: 47.5rem) { .k-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .k-stat-cell:nth-child(odd) { border-inline-start: 0; } .k-stat-cell:nth-child(n + 3) { border-block-start: var(--bw-thin) solid var(--hairline); } .k-card-head, .k-section-head { align-items: stretch; flex-direction: column; } }
 @media (max-width: 720px) { .dcf-edit-cols { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .cv2-pair { display: block; } }
 @media (prefers-reduced-motion: reduce) { .cc-act-leave, .cc-act-collapse { transition-duration: 0.01ms; } }
 @media (prefers-reduced-motion: reduce) { .chat-sidebar, .chat-drawer { transition: none; animation: none; } }
 @media (prefers-reduced-motion: reduce) { .k-scrim, .k-overlay, details[open] > *:not(summary) { animation-duration: 0.01ms; } summary::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .k-scrim, .k-overlay, details[open] > *:not(summary) { animation-duration: 0.01ms; } summary::before { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .report-sidebar, .report-sidebar-toggle, .report-sidebar-toggle svg { transition: none; } }
 [data-commentable="true"]:hover .cmt-pin { opacity: 1; }
 [data-show-news="0"] .news-strip { display: none; }
+a.k-tick-sym:hover { color: var(--accent); }
 a.k-tick-sym:hover { color: var(--accent); }
 a.peer { color: inherit; text-decoration: none; }
 a.peer:hover { background: var(--paper); }
 body { font-family: var(--sans); font-size: var(--fs-body); line-height: 1.5; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; }
 button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs-caption); font-weight: 600; transition: color var(--transition), border-color var(--transition); }
+button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs-caption); font-weight: 600; transition: color var(--transition), border-color var(--transition); }
 button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
+button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
+button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 details.panel > summary .panel-title::before { content: '\25B8 '; font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
 details.panel > summary::-webkit-details-marker { display: none; }
@@ -885,25 +1110,42 @@ details.panel > summary:hover { background: var(--paper); }
 details.panel:not([open]) > summary.panel-head { border-bottom: 0; }
 details.panel[open] > summary .panel-title::before { content: '\25BE '; }
 details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
+details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
+details[open] > summary::before { transform: rotate(0deg); }
 details[open] > summary::before { transform: rotate(0deg); }
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); height: 100%; }
 input, textarea, select, [contenteditable] { caret-color: var(--accent); }
+input, textarea, select, [contenteditable] { caret-color: var(--accent); }
+input[type="checkbox"] { border-radius: var(--radius); }
 input[type="checkbox"] { border-radius: var(--radius); }
 input[type="checkbox"]:checked { background-image: var(--k-check); background-repeat: no-repeat; background-position: center; background-size: 13px; }
+input[type="checkbox"]:checked { background-image: var(--k-check); background-repeat: no-repeat; background-position: center; background-size: 13px; }
+input[type="checkbox"]:checked, input[type="radio"]:checked { border-color: var(--accent); background-color: var(--accent); }
 input[type="checkbox"]:checked, input[type="radio"]:checked { border-color: var(--accent); background-color: var(--accent); }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
 input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
 input[type="radio"] { border-radius: var(--radius-full); }
+input[type="radio"] { border-radius: var(--radius-full); }
+input[type="radio"]:checked { box-shadow: inset 0 0 0 2px var(--surface); }
 input[type="radio"]:checked { box-shadow: inset 0 0 0 2px var(--surface); }
 mark.cmt-highlight.addressed { background: color-mix(in srgb, var(--ok) 14%, transparent); border-bottom-color: var(--ok); }
 mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
 mark.cmt-highlight:hover { background: color-mix(in srgb, var(--warn) 32%, transparent); }
 select:focus-visible, textarea:focus-visible, input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+select:focus-visible, textarea:focus-visible, input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+select:not([multiple]) { appearance: none; -webkit-appearance: none; cursor: pointer; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; padding-right: 28px; }
 select:not([multiple]) { appearance: none; -webkit-appearance: none; cursor: pointer; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; padding-right: 28px; }
 select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }
+select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }
+select[multiple] { padding: 4px; }
 select[multiple] { padding: 4px; }
 summary::-webkit-details-marker { display: none; }
+summary::-webkit-details-marker { display: none; }
 summary::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: var(--sp-1); vertical-align: -1px; flex: none; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: center; background-size: 12px; transform: rotate(-90deg); transition: transform var(--transition); }
+summary::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: var(--sp-1); vertical-align: -1px; flex: none; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: center; background-size: 12px; transform: rotate(-90deg); transition: transform var(--transition); }
+textarea { resize: vertical; font-family: var(--sans); }
 textarea { resize: vertical; font-family: var(--sans); }
 th.lg-sortable { cursor: pointer; user-select: none; transition: color var(--transition); }
 th.lg-sortable.num { text-align: right; }

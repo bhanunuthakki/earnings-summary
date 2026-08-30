@@ -51,6 +51,7 @@ class RenderedReportBody(BaseModel):
     artifact_id: str
     ticker: str
     report_date: date
+    fiscal_period_label: str | None = None
     body_html: str
     body_sha256: str
     sections: tuple[ReportSectionRef, ...]
@@ -65,6 +66,7 @@ class RenderedReportBody(BaseModel):
         body_html: str,
         sections: tuple[ReportSectionRef, ...],
         interaction_manifest: ReportInteractionManifest,
+        fiscal_period_label: str | None = None,
     ) -> RenderedReportBody:
         normalized_ticker = ticker.strip().upper()
         body_sha256 = hashlib.sha256(body_html.encode("utf-8")).hexdigest()
@@ -74,6 +76,7 @@ class RenderedReportBody(BaseModel):
             ),
             ticker=normalized_ticker,
             report_date=report_date,
+            fiscal_period_label=fiscal_period_label,
             body_html=body_html,
             body_sha256=body_sha256,
             sections=sections,
@@ -100,6 +103,7 @@ class ReportArtifactRef(BaseModel):
     artifact_kind: Literal["full_brief"] = "full_brief"
     coverage_role: CoverageRole
     report_date: date
+    fiscal_period_label: str | None = None
     generated_at: datetime
     reader_mode: ReaderMode
     standalone_path: str
@@ -291,6 +295,7 @@ def persist_report_artifact(
         title=title,
         coverage_role=coverage_role,
         report_date=body.report_date,
+        fiscal_period_label=body.fiscal_period_label,
         generated_at=generated_at,
         reader_mode="shared_body",
         standalone_path=_repo_relative(repo_root, standalone_snapshot_path),

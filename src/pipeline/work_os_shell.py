@@ -31,7 +31,7 @@ from pipeline.work_os_research import (
 )
 from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from pipeline.work_os_styles import WORK_OS_CSS
-from ui.controls import controls_css
+from ui.controls import controls_css, controls_js
 from ui.living_grid import head_assets as living_grid_head_assets
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -988,12 +988,12 @@ def _production_runtime(generated_at: datetime) -> str:
       const focusId = workOsHistoryFocusId();
       workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), workOsBriefUrl(requestedTicker, origin, focusId));
     }}
-    const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
+    const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&artifact_kind=full_brief&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
     const payload = response.ok ? await response.json() : null;
     if (!payload || !payload.items || !payload.items.length) {{
       const title = document.getElementById('workOsBriefReaderTitle');
       const body = document.getElementById('workOsBriefReaderBody');
-      if (title) title.textContent = requestedTicker + ' Full Research Brief';
+      if (title) title.textContent = requestedTicker + ' Brief';
       if (body) body.innerHTML = '<div class="k-well" role="alert">No persisted research brief is indexed for this company.</div>';
       if (briefReaderOverlay) briefReaderOverlay.open();
       return;
@@ -1774,71 +1774,83 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
-  function workOsBriefFilterCompanies() {{
-    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
-      ? workOsPortfolioHydration.companies : [];
-    const seenTickers = new Set();
-    return portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (item) {{
-      const ticker = String(item.ticker || '').toUpperCase();
-      if (!ticker || seenTickers.has(ticker)) return false;
-      seenTickers.add(ticker);
-      return true;
-    }}).map(function (item) {{
-      return {{ ticker: String(item.ticker).toUpperCase(), name: item.name || item.ticker, coverage_role: item.coverage_role || 'unknown' }};
+  function workOsBriefFacetCounts(payload, facetName) {{
+    const facets = payload && payload.facets && Array.isArray(payload.facets[facetName])
+      ? payload.facets[facetName] : [];
+    return facets.map(function (facet) {{
+      return {{
+        value: String(facet.value || ''),
+        label: String(facet.label || facet.value || ''),
+        count: Number.isFinite(Number(facet.count)) ? Number(facet.count) : 0
+      }};
     }});
   }}
 
-  function workOsPopulateBriefTickerOptions(tickerFilter, selectedRole) {{
-    if (!tickerFilter) return;
-    const previouslySelected = tickerFilter.value;
-    tickerFilter.replaceChildren(new Option('All companies', ''));
-    const companies = workOsBriefFilterCompanies();
-    const compatibleCompanies = companies.filter(function (company) {{
-      return !selectedRole || company.coverage_role === selectedRole;
+  function workOsUpdateBriefFacet(select, facets, allLabel) {{
+    if (!select) return false;
+    const selected = select.value;
+    select.replaceChildren(new Option(allLabel, ''));
+    facets.forEach(function (facet) {{
+      const option = new Option(facet.label, facet.value);
+      option.dataset.count = String(facet.count);
+      option.dataset.searchAliases = facet.value + ' ' + facet.label;
+      select.add(option);
     }});
-    compatibleCompanies.forEach(function (company) {{
-      tickerFilter.add(new Option(company.ticker + ' · ' + company.name, company.ticker));
+    const compatible = !selected || Array.from(select.options).some(function (option) {{
+      return option.value === selected;
     }});
-    const selectedTickerIsCompatible = Array.from(tickerFilter.options).some(function (option) {{
-      return option.value === previouslySelected;
-    }});
-    if (selectedTickerIsCompatible) tickerFilter.value = previouslySelected;
-    if (!selectedTickerIsCompatible) tickerFilter.value = '';
+    select.value = compatible ? selected : '';
+    if (window.KSelect) window.KSelect.sync(select);
+    return !compatible;
+  }}
+
+  function workOsArtifactTitle(item) {{
+    const supplied = String(item && item.title || '').trim();
+    if (supplied) return supplied;
+    const labels = {{ full_brief: 'Brief', pre_earnings: 'Pre-Earnings', post_earnings: 'Post-Earnings' }};
+    return [String(item && item.ticker || '').toUpperCase(), labels[item && item.artifact_kind] || 'Research']
+      .filter(Boolean).join(' ');
+  }}
+
+  function workOsBriefChipClass(item, field) {{
+    if (field === 'kind') {{
+      if (item.artifact_kind === 'post_earnings') return 'k-chip k-chip-accent';
+      if (item.artifact_kind === 'pre_earnings') return 'k-chip k-chip-warn';
+      return 'k-chip';
+    }}
+    if (item.coverage_role === 'portfolio') return 'k-chip k-chip-ok';
+    if (item.coverage_role === 'evaluation') return 'k-chip k-chip-warn';
+    return 'k-chip';
   }}
 
   function workOsClearBriefFilters() {{
     const tickerFilter = document.getElementById('briefTickerFilter');
     const roleFilter = document.getElementById('briefRoleFilter');
     const kindFilter = document.getElementById('briefKindFilter');
+    const filters = [tickerFilter, roleFilter, kindFilter].filter(Boolean);
     if (roleFilter) roleFilter.value = '';
     if (kindFilter) kindFilter.value = '';
-    workOsPopulateBriefTickerOptions(tickerFilter, '');
+    if (tickerFilter) tickerFilter.value = '';
+    filters.forEach(function (select) {{ if (window.KSelect) window.KSelect.sync(select); }});
     workOsRenderBriefLibrary();
   }}
 
   async function workOsRenderBriefLibrary() {{
     const target = document.getElementById('workOsBriefLibrary');
     if (!target) return;
-    await workOsEnsurePortfolioHydration();
-    try {{ await workOsEnsureResearchCompanies(); }} catch (error) {{ workOsResearchCompanies = []; }}
     const tickerFilter = document.getElementById('briefTickerFilter');
     const roleFilter = document.getElementById('briefRoleFilter');
     const kindFilter = document.getElementById('briefKindFilter');
-    if (tickerFilter) {{
-      workOsPopulateBriefTickerOptions(tickerFilter, roleFilter ? roleFilter.value : '');
-    }}
     if (tickerFilter && !tickerFilter.dataset.bound) {{
       tickerFilter.addEventListener('change', workOsRenderBriefLibrary);
       tickerFilter.dataset.bound = '1';
     }}
-    if (roleFilter && !roleFilter.dataset.bound) {{ roleFilter.addEventListener('change', function () {{
-      workOsPopulateBriefTickerOptions(tickerFilter, roleFilter.value);
-      workOsRenderBriefLibrary();
-    }}); roleFilter.dataset.bound = '1'; }}
+    if (roleFilter && !roleFilter.dataset.bound) {{ roleFilter.addEventListener('change', workOsRenderBriefLibrary); roleFilter.dataset.bound = '1'; }}
     if (kindFilter && !kindFilter.dataset.bound) {{ kindFilter.addEventListener('change', workOsRenderBriefLibrary); kindFilter.dataset.bound = '1'; }}
     const params = new URLSearchParams({{ limit: '100' }});
     if (tickerFilter && tickerFilter.value) params.set('ticker', tickerFilter.value);
     if (roleFilter && roleFilter.value) params.set('coverage_role', roleFilter.value);
+    if (kindFilter && kindFilter.value) params.set('artifact_kind', kindFilter.value);
     target.setAttribute('aria-busy', 'true');
     target.innerHTML = '<div class="k-well" role="status">Loading persisted research artifacts…</div>';
     try {{
@@ -1846,32 +1858,30 @@ def _production_runtime(generated_at: datetime) -> str:
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
       const items = Array.isArray(payload.items) ? payload.items : [];
-      const selectedTicker = tickerFilter ? tickerFilter.value : '';
-      const selectedRole = roleFilter ? roleFilter.value : '';
-      const selectedKind = kindFilter ? kindFilter.value : '';
-      const hydratedReadouts = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.earnings_readouts)
-        ? workOsPortfolioHydration.earnings_readouts : [];
-      const readoutItems = hydratedReadouts.filter(function (readout) {{
-        return (!selectedTicker || readout.ticker === selectedTicker)
-          && (!selectedRole || readout.coverage_role === selectedRole);
-      }}).sort(function (left, right) {{
-        const periodOrder = String(right.fiscal_period).localeCompare(String(left.fiscal_period));
-        return periodOrder || String(left.ticker).localeCompare(String(right.ticker));
-      }});
-      const showReadouts = !selectedKind || selectedKind === 'earnings_readout';
-      const showBriefs = !selectedKind || selectedKind === 'full_brief';
-      const readoutCards = showReadouts ? readoutItems.map(function (readout) {{
-        const generated = readout.generated_at ? String(readout.generated_at).slice(0, 10) : 'generation time unavailable';
-        return '<article class="k-card k-card-section research-library-card" data-readout-id="' + escapeWorkOsHtml(readout.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(readout.ticker) + '</span><span class="k-pill k-pill-ok">available</span></div><div><div class="k-card-meta">earnings readout</div><h3 class="k-card-title">' + escapeWorkOsHtml(readout.ticker + ' ' + readout.period_label + ' earnings readout') + '</h3><div class="k-card-meta">quarter ended ' + escapeWorkOsHtml(readout.fiscal_period) + ' · ' + escapeWorkOsHtml(readout.coverage_role || 'tracked') + ' · generated ' + escapeWorkOsHtml(generated) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(readout.ticker) + '">Read earnings readout &rarr;</button></article>';
-      }}).join('') : '';
-      const briefCards = showBriefs && items.length ? items.map(function (item) {{
-        const statusClass = item.status === 'available' ? 'k-pill k-pill-ok' : 'k-pill k-pill-warn';
-        return '<article class="k-card k-card-section research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="k-card-meta">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3 class="k-card-title">' + escapeWorkOsHtml(item.title) + '</h3><div class="k-card-meta">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
-      }}).join('') : '';
-      target.innerHTML = readoutCards + briefCards || '<div class="k-well"><p>No persisted research artifacts match these filters.</p><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-clear-brief-filters aria-label="Clear Brief Library filters">Clear filters</button></div>';
-      target.querySelectorAll('[data-open-artifact]').forEach(function (button) {{
-        const artifact = items.find(function (item) {{ return item.artifact_id === button.dataset.openArtifact; }});
-        button.addEventListener('click', function () {{ openWorkOsBriefReader(artifact); }});
+      const kindCleared = workOsUpdateBriefFacet(kindFilter, workOsBriefFacetCounts(payload, 'artifact_kind'), 'All artifacts');
+      const tickerCleared = workOsUpdateBriefFacet(tickerFilter, workOsBriefFacetCounts(payload, 'ticker'), 'All companies');
+      const roleCleared = workOsUpdateBriefFacet(roleFilter, workOsBriefFacetCounts(payload, 'coverage_role'), 'All coverage');
+      if (kindCleared || tickerCleared || roleCleared) {{
+        await workOsRenderBriefLibrary();
+        return;
+      }}
+      const rows = items.map(function (item) {{
+        const kindLabels = {{ full_brief: 'Brief', pre_earnings: 'Pre-Earnings', post_earnings: 'Post-Earnings' }};
+        const generated = String(item.generated_at || item.report_date || '').slice(0, 10) || 'Date unavailable';
+        const actionLabel = item.artifact_kind === 'full_brief' ? 'Read brief →' : 'Open artifact →';
+        return '<article class="research-library-row" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '" data-artifact-kind="' + escapeWorkOsHtml(item.artifact_kind) + '" data-coverage-role="' + escapeWorkOsHtml(item.coverage_role) + '"><div class="research-library-row-copy"><h3 class="k-card-title research-library-row-title">' + escapeWorkOsHtml(workOsArtifactTitle(item)) + '</h3><div class="research-library-row-chips"><span class="' + workOsBriefChipClass(item, 'kind') + '">' + escapeWorkOsHtml(kindLabels[item.artifact_kind] || 'Research') + '</span><span class="' + workOsBriefChipClass(item, 'coverage') + '">' + escapeWorkOsHtml(item.coverage_role || 'unknown') + '</span><span class="k-chip k-chip-mono">' + escapeWorkOsHtml(generated) + '</span>' + (item.status === 'degraded' ? '<span class="k-chip k-chip-warn">degraded</span>' : '') + '</div></div><button class="k-btn k-btn-primary k-btn-sm research-library-row-action" type="button" data-open-library-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">' + actionLabel + '</button></article>';
+      }}).join('');
+      target.innerHTML = rows || '<div class="k-well"><p>No persisted research artifacts match these filters.</p><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-clear-brief-filters aria-label="Clear Brief Library filters">Clear filters</button></div>';
+      target.querySelectorAll('[data-open-library-artifact]').forEach(function (button) {{
+        const artifact = items.find(function (item) {{ return item.artifact_id === button.dataset.openLibraryArtifact; }});
+        button.addEventListener('click', function () {{
+          if (!artifact) return;
+          if (artifact.reader_mode === 'peek') {{
+            workOsOpenPeekRoute(artifact.open_url, workOsArtifactTitle(artifact));
+          }} else {{
+            openWorkOsBriefReader(artifact);
+          }}
+        }});
       }});
       target.querySelectorAll('[data-clear-brief-filters]').forEach(function (button) {{
         button.addEventListener('click', workOsClearBriefFilters);
@@ -3133,6 +3143,7 @@ def _add_production_contract(
     controls = (
         f'<style id="work-os-controls-css">{palette_css("dark")}{controls_css("dark")}</style>'
     )
+    select_runtime = f"<script data-k-select-runtime>{controls_js()}</script>"
     grid_assets = living_grid_head_assets()
     return html.replace(
         "</body>",
@@ -3147,6 +3158,8 @@ def _add_production_contract(
         + runtime
         + "\n"
         + copilot
+        + "\n"
+        + select_runtime
         + "\n</body>",
         1,
     )

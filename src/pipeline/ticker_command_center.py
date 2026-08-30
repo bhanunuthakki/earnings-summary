@@ -41,7 +41,7 @@ from pipeline.you_said import render_you_said_strip_for_path
 from provenance.selection import selected_transcripts_relation
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from ui.controls import controls_css, pill_tone_class, thesis_status_tone, ticker_label
+from ui.controls import controls_css, controls_js, pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
@@ -1592,4 +1592,4 @@ _PAGE_HEAD = (
 """
 )
 
-_PAGE_FOOT = "</body></html>"
+_PAGE_FOOT = f"<script data-k-select-runtime>{controls_js()}</script></body></html>"

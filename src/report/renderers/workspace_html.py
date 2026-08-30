@@ -189,7 +189,7 @@ from report.renderers.workspace_sections.thesis_risk import (
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CHAT_CSS, COMMENTS_CSS, CSS, DCF_CSS
 from report.sections.p3_data import PeerCompRow
-from ui.controls import icon_svg
+from ui.controls import controls_css, controls_js, icon_svg
 from ui.living_grid import head_assets as _living_grid_head_assets
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.tokens import FAVICON_LINK
@@ -401,6 +401,9 @@ def render_report_body(spec: ReportSpec) -> RenderedReportBody:
     return RenderedReportBody.from_html(
         ticker=spec.ticker,
         report_date=spec.generation_date,
+        fiscal_period_label=(
+            spec.financials.quarter_labels[-1] if spec.financials.quarter_labels else None
+        ),
         body_html=body.getvalue(),
         sections=section_refs,
         interaction_manifest=ReportInteractionManifest(),
@@ -429,6 +432,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>{CSS}</style>
+<style>{controls_css("dark")}</style>
 <style>{CHARTS_V2_CSS}</style>
 <style>{COMMENTS_CSS}</style>
 <style>{CHAT_CSS}</style>
@@ -451,6 +455,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <script>{CHAT_JS}</script>
 <script>{DCF_JS}</script>
 <script>{DECISION_CARD_JS}</script>
+<script data-k-select-runtime>{controls_js()}</script>
 </body>
 </html>
 """

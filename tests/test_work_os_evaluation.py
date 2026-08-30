@@ -14,7 +14,7 @@ import pipeline.work_os_evaluation as evaluation
 from dcf.availability import DcfRouteArtifact
 from pipeline.dashboard_status import DashboardRow
 from pipeline.research_cockpit import CockpitRow
-from pipeline.work_os_briefs import BriefLibraryItem, BriefLibraryResponse
+from pipeline.work_os_briefs import BriefLibraryFacets, BriefLibraryItem, BriefLibraryResponse
 
 
 def _row(
@@ -71,6 +71,7 @@ def _brief(ticker: str) -> BriefLibraryItem:
         generated_at="2026-08-20T00:00:00Z",
         reader_mode="legacy_standalone",
         status="available",
+        open_url=f"/reports/{ticker}?artifact_id=report_{ticker}",
         body_url=None,
         standalone_url=f"/reports/{ticker}?artifact_id=report_{ticker}",
         section_count=1,
@@ -81,6 +82,7 @@ def _brief_response(*items: BriefLibraryItem) -> BriefLibraryResponse:
     return BriefLibraryResponse(
         inventory_revision="2026-08-20T00:00:00Z",
         items=items,
+        facets=BriefLibraryFacets(artifact_kind=(), ticker=(), coverage_role=()),
         next_cursor=None,
     )
 

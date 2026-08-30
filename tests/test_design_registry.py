@@ -59,7 +59,8 @@ def _expected_shape_signature(
     border = item.border_signature
     if border is not None:
         border = " ".join(
-            f"var(--{part})" if part in {"bw-thin", "border"} else part for part in border.split()
+            f"var(--{part})" if part in {"bw-thin", "border", "border-2"} else part
+            for part in border.split()
         )
     return (
         f"var(--{item.radius_token})" if item.radius_token else None,
@@ -93,7 +94,7 @@ def _expected_grid_signature(item: registry.GridSignature) -> str:
 
 
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.10.1"
+    assert registry.REGISTRY_VERSION == "1.11.0"
     records = (
         registry.CARD_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0],
