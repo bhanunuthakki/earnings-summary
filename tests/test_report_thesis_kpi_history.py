@@ -265,6 +265,34 @@ def test_ledger_populates_break_condition_from_v2_key(tmp_path: Path) -> None:
     assert by_name["Legacy KPI"].break_condition == "old-style break text"
 
 
+def test_ledger_batches_definition_resolution_for_all_tiers(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path)
+    arpac = _add_def(repo, "NU", "Monthly ARPAC (USD)")
+    customers = _add_def(repo, "NU", "Total customers (millions)")
+    _add_facts(repo, "NU", arpac, _QUARTER_ENDS[:2])
+    _add_facts(repo, "NU", customers, _QUARTER_ENDS[:2])
+    holdings: dict[str, object] = {
+        "tier_1_kpis": [{"name": "Monthly ARPAC"}],
+        "tier_2_kpis": [{"name": "Total customers"}],
+    }
+    conn = sqlite3.connect(repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        rows = _build_ledger("NU", repo, holdings, evaluations=[], conn=conn)
+    finally:
+        conn.close()
+
+    assert [row.name for row in rows] == ["Monthly ARPAC", "Total customers"]
+    fact_population_queries = [
+        statement
+        for statement in statements
+        if "FROM kpi_facts kf" in statement and "GROUP BY kd.name" in statement
+    ]
+    assert len(fact_population_queries) == 1
+
+
 def _build_repo_with_notes(tmp_path: Path) -> Path:
     """Like `_build_repo` but the kpi_definitions table carries a `notes`
     column, mirroring the real (migrated) schema."""
