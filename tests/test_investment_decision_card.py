@@ -145,6 +145,17 @@ def _llm_payload(**overrides: object) -> dict[str, object]:
             "candidate_fit_summary": "fit score 1.1x, mildly accretive",
             "correlated_exposure": "low overlap with existing payments exposure",
         },
+        "investment_profile": {
+            "labels": ["long_term_compounder", "growth_inflection"],
+            "summary": "A durable core engine with a still-improving growth curve.",
+            "moat": {
+                "level": "core_business",
+                "evidence_coverage": "sufficient",
+                "rationale": "Checkout integration and network density defend the core engine.",
+                "supporting_evidence": ["Recurring take-rate on processed GMV"],
+                "counter_evidence": ["Competitor pricing pressure"],
+            },
+        },
         "disconfirming_case": {
             "bear_hypothesis": "A larger competitor undercuts pricing, compressing take rate.",
             "evidence_that_would_confirm_it": "gross take-rate compression over 2 quarters",
@@ -218,13 +229,43 @@ def test_required_sections_present(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert result.selection_mode == "llm"
     card = result.card
     assert card is not None
+    assert card.prompt_version == "v2"
     assert card.company_hypothesis.directional_thesis
     assert card.security_setup.appears_priced_in
     assert card.portfolio_fit.expected_role
+    assert [label.value for label in card.investment_profile.labels] == [
+        "long_term_compounder",
+        "growth_inflection",
+    ]
+    assert card.investment_profile.moat.level is ridc.MoatLevel.CORE_BUSINESS
     assert card.disconfirming_case.bear_hypothesis
     assert card.evidence_readiness is not None
     assert card.uncertainty.justification
     assert card.suggested_disposition in ("pass", "watch", "research_further", "promote")
+
+
+def test_prompt_assigns_qualitative_profile_but_reserves_valuation_labels_for_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _make_db(tmp_path)
+    _patch_inputs(monkeypatch, spec=_spec())
+    captured: list[str] = []
+
+    def fake_call(prompt: str, **kw: object) -> object:
+        captured.append(prompt)
+        return _llm_payload()
+
+    monkeypatch.setattr(ridc, "call_llm_structured", fake_call)
+    result = ridc.generate_card(db_path, tmp_path, TICKER)
+
+    assert result.selection_mode == "llm"
+    assert captured
+    prompt = captured[0]
+    assert "multi_business" in prompt
+    assert "core_business" in prompt
+    assert "narrow_conditional" in prompt
+    assert "none_demonstrated" in prompt
+    assert "Do not assign garp or elite_growth_expensive" in prompt
 
 
 def test_company_security_portfolio_are_distinct(

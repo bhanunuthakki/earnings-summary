@@ -65,6 +65,12 @@ from llm.structured import StructuredParseError, call_llm_structured
 from llm_budget import should_skip_for_budget
 from models.companies import ListType
 from portfolio_weights import read_materialized_weights
+from research.investment_profile import (
+    InvestmentProfileSuggestion,
+    MoatAssessment,
+    MoatEvidenceCoverage,
+    MoatLevel,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
@@ -76,6 +82,10 @@ __all__ = [
     "DisconfirmingCase",
     "EvidenceReadiness",
     "InvestmentDecisionCard",
+    "InvestmentProfileSuggestion",
+    "MoatAssessment",
+    "MoatEvidenceCoverage",
+    "MoatLevel",
     "PortfolioFit",
     "SecuritySetup",
     "Uncertainty",
@@ -84,7 +94,7 @@ __all__ = [
 ]
 
 PURPOSE = "investment_decision_card"
-ENGINE_VERSION = "v1"
+ENGINE_VERSION = "v2"
 
 # A hypothetical add sized as 3% of book value â€” the Â§8.1 "expected
 # Concentration Zone if funded" preview. Not a recommendation of size; purely
@@ -141,6 +151,20 @@ class Uncertainty(BaseModel):
     what_would_change_it: str = ""
 
 
+def _unavailable_profile_suggestion() -> InvestmentProfileSuggestion:
+    """Backward-compatible boundary for artifacts created before profile v2."""
+
+    return InvestmentProfileSuggestion(
+        labels=[],
+        summary="Investment profile has not yet been synthesized from the governed corpus.",
+        moat=MoatAssessment(
+            level=None,
+            evidence_coverage=MoatEvidenceCoverage.INSUFFICIENT,
+            rationale="The current artifact predates the governed moat assessment.",
+        ),
+    )
+
+
 class InvestmentDecisionCard(BaseModel):
     """The full Â§8.1 structured output â€” the Pydantic BOUNDARY model between
     the LLM's raw JSON and everything downstream (persistence, routes,
@@ -160,6 +184,9 @@ class InvestmentDecisionCard(BaseModel):
     company_hypothesis: CompanyHypothesis
     security_setup: SecuritySetup
     portfolio_fit: PortfolioFit
+    investment_profile: InvestmentProfileSuggestion = Field(
+        default_factory=_unavailable_profile_suggestion
+    )
     disconfirming_case: DisconfirmingCase
     evidence_readiness: EvidenceReadiness
     suggested_disposition: Literal["pass", "watch", "research_further", "promote"]
@@ -207,6 +234,7 @@ class _InvestmentDecisionCardDraft(BaseModel):
     company_hypothesis: CompanyHypothesis
     security_setup: SecuritySetup
     portfolio_fit: PortfolioFit
+    investment_profile: InvestmentProfileSuggestion
     disconfirming_case: DisconfirmingCase
     suggested_disposition: Literal["pass", "watch", "research_further", "promote"]
     uncertainty: Uncertainty
@@ -534,6 +562,18 @@ VALIDATION CONSTRAINTS (a violation forces a deterministic fallback):
   trace to a fact in the blocks above â€” never invent a figure or event.
 - company_hypothesis, security_setup, and portfolio_fit must be DISTINCT
   judgments, not the same sentence repeated across sections.
+- investment_profile.labels is a multi-select qualitative classification. Use
+  only long_term_compounder, turnaround, narrative_rerating,
+  growth_inflection, cash_yield_value, and optionality. Do not assign garp or elite_growth_expensive;
+  those valuation-aware labels are derived deterministically from admitted DCF
+  and financial inputs after this call.
+- investment_profile.moat.level is exactly one of multi_business (durable
+  advantages across multiple economically meaningful businesses),
+  core_business (durable advantage in the primary economic engine),
+  narrow_conditional (advantage limited by product, geography, customer set,
+  or cycle), or none_demonstrated (the evidence supports no durable advantage).
+  Missing evidence is not none_demonstrated: set level=null and
+  evidence_coverage=insufficient instead.
 - disconfirming_case.bear_hypothesis must present a REAL case against the
   thesis (use the bear case above if present), never a token caveat.
 - uncertainty.justification and uncertainty.what_would_change_it must never
@@ -565,6 +605,17 @@ Respond with ONE JSON object matching this shape exactly:
     "expected_role": "...",
     "candidate_fit_summary": "...",
     "correlated_exposure": "..."
+  }},
+  "investment_profile": {{
+    "labels": ["long_term_compounder" | "turnaround" | "narrative_rerating" | "growth_inflection" | "cash_yield_value" | "optionality", ...],
+    "summary": "...",
+    "moat": {{
+      "level": "multi_business" | "core_business" | "narrow_conditional" | "none_demonstrated" | null,
+      "evidence_coverage": "sufficient" | "partial" | "insufficient",
+      "rationale": "...",
+      "supporting_evidence": ["..."],
+      "counter_evidence": ["..."]
+    }}
   }},
   "disconfirming_case": {{
     "bear_hypothesis": "...",
@@ -647,6 +698,7 @@ def _deterministic_card(
             "correlated_exposure": inputs.comp_set_summary or "no comparable set on file",
             "expected_zone_if_funded": inputs.expected_zone,
         },
+        "investment_profile": _unavailable_profile_suggestion().model_dump(mode="json"),
         "disconfirming_case": {
             "bear_hypothesis": (
                 (inputs.bear_artifact.content_md or "")[:500]
@@ -689,6 +741,17 @@ def _render_markdown(card: InvestmentDecisionCard) -> str:
         "## Portfolio fit",
         card.portfolio_fit.expected_role,
         "",
+        "## Investment profile",
+        ", ".join(label.display_label for label in card.investment_profile.labels)
+        or "No qualitative profile labels",
+        card.investment_profile.summary,
+        (
+            card.investment_profile.moat.level.display_label
+            if card.investment_profile.moat.level is not None
+            else "Moat evidence insufficient"
+        ),
+        card.investment_profile.moat.rationale,
+        "",
         "## Disconfirming case",
         card.disconfirming_case.bear_hypothesis,
         "",
@@ -720,6 +783,7 @@ def _call_and_validate(
             "company_hypothesis",
             "security_setup",
             "portfolio_fit",
+            "investment_profile",
             "disconfirming_case",
             "suggested_disposition",
             "uncertainty",

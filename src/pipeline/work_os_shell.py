@@ -325,24 +325,30 @@ def _render_evaluation_shell() -> str:
     <header class="k-section-head">
       <div>
         <div class="k-section-title k-card-title" role="heading" aria-level="2">Coverage</div>
-        <div class="k-section-meta">Human-readable thesis, scores, portfolio fit, valuation, and verified research links. No internal identifiers or encoded payloads are shown.</div>
+        <div class="k-section-meta">Decision-useful profile, business durability, book impact, valuation, and verified research links. Open a side peek for rationale and evidence.</div>
       </div>
     </header>
+    <div class="research-actions" role="group" aria-label="Filter evaluation coverage">
+      <button class="k-chip is-active" type="button" data-work-os-evaluation-filter="all" aria-pressed="true">All</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="compounders" aria-pressed="false">Compounders</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="garp" aria-pressed="false">GARP</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="needs_review" aria-pressed="false">Needs review</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="etfs" aria-pressed="false">ETFs</button>
+    </div>
     <div class="table-scroll">
       <table class="matrix-table">
         <thead>
           <tr>
             <th>Company</th>
-            <th>Type</th>
-            <th>Thesis</th>
-            <th>Evaluation</th>
-            <th>Portfolio fit</th>
-            <th class="num">DCF upside</th>
+            <th>Investment profile</th>
+            <th>Business &amp; moat</th>
+            <th>Portfolio role</th>
+            <th>Valuation</th>
             <th>Research</th>
           </tr>
         </thead>
         <tbody id="workOsEvaluationRows">
-          <tr><td colspan="7"><div class="k-well" role="status">Loading complete evaluation coverage…</div></td></tr>
+          <tr><td colspan="6"><div class="k-well" role="status">Loading complete evaluation coverage…</div></td></tr>
         </tbody>
       </table>
     </div>
@@ -408,7 +414,7 @@ def _production_runtime(generated_at: datetime) -> str:
   // comments_server_content_routes.  Full-page detail never upgrades an
   // arbitrary prototype callback or an unregistered endpoint into navigation.
   const WORK_OS_FULL_PAGE_PEEK_PATHS = [
-    new RegExp('^/api/peek/(?:alerts|news-events|documents|score|earnings-prep|earnings-readout|fit|weekly-packet|whatif|etf_workup|discovery-compare)$'),
+    new RegExp('^/api/peek/(?:alerts|news-events|documents|score|earnings-prep|earnings-readout|fit|investment-profile|portfolio-impact|weekly-packet|whatif|etf_workup|discovery-compare)$'),
     new RegExp('^/api/peek/(?:alert/[0-9]+|ticker/[A-Za-z0-9.=-]+|memo/[a-z_]+|review/[A-Za-z0-9.=-]+|provenance(?:/[A-Za-z0-9_:-]+)?)$'),
     new RegExp('^/api/governed-alerts/[1-9][0-9]*/evidence$'),
     new RegExp('^/source/[0-9]+$')
@@ -2213,16 +2219,6 @@ def _production_runtime(generated_at: datetime) -> str:
     return text.replace(/\\b(?:sha256:)?[a-f0-9]{{40,}}\\b/gi, 'source reference');
   }}
 
-  function workOsEvaluationMetric(value, why, partial, suffix) {{
-    const number = workOsFiniteNumber(value);
-    const rendered = number !== null
-      ? new Intl.NumberFormat('en-US', {{ maximumFractionDigits: 2 }}).format(number) + (suffix || '')
-      : 'Unavailable';
-    const partialPill = partial ? '<span class="k-pill k-pill-warn">Partial</span>' : '';
-    return '<div class="research-actions"><strong class="t-mono">' + escapeWorkOsHtml(rendered) + '</strong>' + partialPill + '</div>' +
-      '<div class="k-card-meta">' + escapeWorkOsHtml(workOsHumanCopy(why, 'No explanation available')) + '</div>';
-  }}
-
   function workOsFiniteNumber(value) {{
     if (value == null || String(value).trim() === '') return null;
     const number = Number(value);
@@ -2243,6 +2239,88 @@ def _production_runtime(generated_at: datetime) -> str:
     return actions.length ? '<div class="research-actions">' + actions.join('') + '</div>' : '<span class="k-card-meta">No verified artifact available</span>';
   }}
 
+  function workOsProfileState(profile) {{
+    const state = profile && typeof profile.state === 'string' ? profile.state : 'unavailable';
+    if (state === 'owner_ratified') return ['Owner ratified', 'k-pill k-pill-ok'];
+    if (state === 'review_suggested') return ['Review suggested', 'k-pill k-pill-warn'];
+    if (state === 'system_suggested') return ['System suggested', 'k-pill'];
+    return ['Profile pending', 'k-pill k-pill-warn'];
+  }}
+
+  function workOsLabelChips(labels) {{
+    if (!Array.isArray(labels) || !labels.length) return '<span class="k-card-meta">No current labels</span>';
+    return '<div class="research-actions">' + labels.map(function (label) {{
+      const value = String(label.label || '');
+      return '<button class="k-chip k-chip-btn" type="button" data-work-os-evaluation-filter="label:' + escapeWorkOsHtml(value) + '" aria-pressed="false">' + escapeWorkOsHtml(label.display_label || value || 'Label') + '</button>';
+    }}).join('') + '</div>';
+  }}
+
+  function workOsEvaluationPercent(value) {{
+    const number = workOsFiniteNumber(value);
+    return number === null ? 'Unavailable' : workOsPercent(number);
+  }}
+
+  function workOsInvestmentProfileCell(item) {{
+    const profile = item && item.profile;
+    const state = workOsProfileState(profile);
+    const labels = profile && Array.isArray(profile.labels) ? profile.labels : [];
+    const ticker = workOsNormalizeTicker(item.ticker);
+    return workOsLabelChips(labels) +
+      '<div class="research-actions"><span class="' + state[1] + '">' + state[0] + '</span>' +
+      '<button class="k-chip k-chip-btn" type="button" data-peek-url="/api/peek/investment-profile?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Investment profile — ' + escapeWorkOsHtml(ticker) + '">Rationale &rarr;</button></div>';
+  }}
+
+  function workOsBusinessCell(item) {{
+    const profile = item && item.profile;
+    const moat = profile && profile.moat;
+    const moatNames = {{
+      multi_business: 'Multi-business moat',
+      core_business: 'Core-business moat',
+      narrow_conditional: 'Narrow / conditional moat',
+      none_demonstrated: 'No demonstrated moat'
+    }};
+    const moatLabel = moat && moat.level && moatNames[moat.level] ? moatNames[moat.level] : 'Evidence insufficient';
+    const coverage = moat && moat.evidence_coverage ? String(moat.evidence_coverage).replaceAll('_', ' ') : 'insufficient';
+    const ticker = workOsNormalizeTicker(item.ticker);
+    return '<div><strong>' + escapeWorkOsHtml(moatLabel) + '</strong></div>' +
+      '<div class="k-card-meta">Moat evidence ' + escapeWorkOsHtml(coverage) + '</div>' +
+      '<div class="k-card-meta">Growth ' + escapeWorkOsHtml(workOsEvaluationPercent(item.revenue_growth_yoy_pct)) + ' · FCF margin ' + escapeWorkOsHtml(workOsEvaluationPercent(item.fcf_margin_pct)) + '</div>' +
+      '<button class="k-chip k-chip-btn" type="button" data-peek-url="/api/peek/investment-profile?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Business and moat — ' + escapeWorkOsHtml(ticker) + '">Evidence &rarr;</button>';
+  }}
+
+  function workOsPortfolioRoleCell(item) {{
+    const ticker = workOsNormalizeTicker(item.ticker);
+    const labels = Array.isArray(item.portfolio_role_labels) ? item.portfolio_role_labels : [];
+    const content = labels.length ? '<div class="research-actions">' + labels.map(function (label) {{ return '<span class="k-chip">' + escapeWorkOsHtml(label) + '</span>'; }}).join('') + '</div>' : '<span class="k-card-meta">Book-impact evidence unavailable</span>';
+    return content + '<button class="k-chip k-chip-btn" type="button" data-peek-url="/api/peek/portfolio-impact?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Portfolio impact — ' + escapeWorkOsHtml(ticker) + '">Impact detail &rarr;</button>';
+  }}
+
+  function workOsApplyEvaluationFilter(filter) {{
+    const selected = String(filter || 'all');
+    const rows = Array.from(document.querySelectorAll('[data-work-os-evaluation-row]'));
+    let visible = 0;
+    rows.forEach(function (row) {{
+      const labels = String(row.getAttribute('data-profile-labels') || '').split(',');
+      const state = row.getAttribute('data-profile-state') || '';
+      const instrument = row.getAttribute('data-instrument') || '';
+      const show = selected === 'all' ||
+        (selected === 'compounders' && labels.includes('long_term_compounder')) ||
+        (selected === 'garp' && labels.includes('garp')) ||
+        (selected === 'needs_review' && state === 'review_suggested') ||
+        (selected === 'etfs' && instrument === 'etf') ||
+        (selected.startsWith('label:') && labels.includes(selected.slice(6)));
+      row.hidden = !show;
+      if (show) visible += 1;
+    }});
+    document.querySelectorAll('[data-work-os-evaluation-filter]').forEach(function (button) {{
+      const active = button.getAttribute('data-work-os-evaluation-filter') === selected;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }});
+    const count = document.getElementById('workOsEvaluationSurfaceCount');
+    if (count) count.textContent = String(visible) + ' shown';
+  }}
+
   function workOsRenderEvaluationRows(payload) {{
     const target = document.getElementById('workOsEvaluationRows');
     const count = document.getElementById('workOsEvaluationSurfaceCount');
@@ -2253,22 +2331,23 @@ def _production_runtime(generated_at: datetime) -> str:
       const ticker = workOsNormalizeTicker(item.ticker);
       const type = item.instrument_type === 'etf' ? 'ETF' : 'Company';
       const typeClass = item.instrument_type === 'etf' ? 'k-pill k-pill-warn' : 'k-pill';
-      const thesis = workOsHumanCopy(item.thesis_excerpt, 'No thesis excerpt is available yet.');
-      const thesisSource = item.source === 'micro_thesis' ? 'Holding thesis' : item.source === 'position_entry' ? 'Position entry' : 'Thesis unavailable';
-      const fitDetail = workOsEvaluationMetric(item.fit, item.fit_why, item.fit_partial, '');
-      const heldWeight = workOsFiniteNumber(item.held_weight_pct);
-      const held = heldWeight !== null ? '<div class="k-card-meta">Held weight ' + escapeWorkOsHtml(workOsPortfolioPercent(heldWeight)) + '</div>' : '';
+      const profile = item.profile;
+      const profileLabels = profile && Array.isArray(profile.labels) ? profile.labels.map(function (label) {{ return label.label; }}).join(',') : '';
+      const profileState = profile && profile.state ? profile.state : 'unavailable';
       const dcfUpside = workOsFiniteNumber(item.dcf_upside_pct);
       const dcf = dcfUpside !== null ? workOsPercent(dcfUpside) : 'Unavailable';
-      return '<tr data-work-os-evaluation-row="' + escapeWorkOsHtml(ticker) + '">' +
-        '<td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(workOsHumanCopy(item.name, ticker)) + '</span></div></td>' +
-        '<td><span class="' + typeClass + '">' + type + '</span></td>' +
-        '<td><div>' + escapeWorkOsHtml(thesis) + '</div><div class="k-card-meta">' + escapeWorkOsHtml(thesisSource) + '</div></td>' +
-        '<td>' + workOsEvaluationMetric(item.score, item.score_why, item.score_partial, '') + '</td>' +
-        '<td>' + fitDetail + held + '</td>' +
-        '<td class="num t-mono">' + escapeWorkOsHtml(dcf) + '</td>' +
+      const valuationLink = item.dcf_url ? '<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">Open DCF</a>' : '';
+      const valuationValue = item.instrument_type === 'company' ? dcf : 'Not applicable';
+      const valuationContext = item.instrument_type === 'company' ? 'DCF upside' : 'Company DCF';
+      return '<tr data-work-os-evaluation-row="' + escapeWorkOsHtml(ticker) + '" data-profile-labels="' + escapeWorkOsHtml(profileLabels) + '" data-profile-state="' + escapeWorkOsHtml(profileState) + '" data-instrument="' + escapeWorkOsHtml(item.instrument_type) + '">' +
+        '<td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(workOsHumanCopy(item.name, ticker)) + '</span></div><span class="' + typeClass + '">' + type + '</span></td>' +
+        '<td>' + workOsInvestmentProfileCell(item) + '</td>' +
+        '<td>' + (item.instrument_type === 'company' ? workOsBusinessCell(item) : '<span class="k-card-meta">Not applicable to ETF baskets</span>') + '</td>' +
+        '<td>' + workOsPortfolioRoleCell(item) + '</td>' +
+        '<td><strong class="t-mono">' + escapeWorkOsHtml(valuationValue) + '</strong><div class="k-card-meta">' + valuationContext + '</div>' + valuationLink + '</td>' +
         '<td>' + workOsEvaluationActions(item) + '</td></tr>';
-    }}).join('') : '<tr><td colspan="7"><div class="k-well">No companies or ETFs are currently under evaluation.</div></td></tr>';
+    }}).join('') : '<tr><td colspan="6"><div class="k-well">No companies or ETFs are currently under evaluation.</div></td></tr>';
+    workOsApplyEvaluationFilter('all');
   }}
   window.workOsRenderEvaluationRows = workOsRenderEvaluationRows;
 
@@ -2282,12 +2361,12 @@ def _production_runtime(generated_at: datetime) -> str:
       try {{
         const response = await fetch('/api/work-os/evaluation', {{ headers: {{ Accept: 'application/json' }} }});
         const payload = response.ok ? await response.json() : null;
-        if (!payload || payload.schema_version !== 'evaluation_surface.v1' || !Array.isArray(payload.items)) throw new Error('Invalid evaluation response');
+        if (!payload || payload.schema_version !== 'evaluation_surface.v2' || !Array.isArray(payload.items)) throw new Error('Invalid evaluation response');
         workOsRenderEvaluationRows(payload);
         return true;
       }} catch (_error) {{
         if (count) count.textContent = 'Unavailable';
-        target.innerHTML = '<tr><td colspan="7"><div class="k-well" role="alert">Evaluation coverage is temporarily unavailable. No prototype rows are being shown.</div></td></tr>';
+        target.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Evaluation coverage is temporarily unavailable. No prototype rows are being shown.</div></td></tr>';
         return false;
       }} finally {{
         target.removeAttribute('aria-busy');
@@ -2297,6 +2376,23 @@ def _production_runtime(generated_at: datetime) -> str:
     return workOsEvaluationSurfaceLoading;
   }}
   window.workOsRenderEvaluationSurface = workOsRenderEvaluationSurface;
+
+  window.addEventListener('work-os:investment-evidence-updated', function (event) {{
+    const detail = event && event.detail ? event.detail : {{}};
+    if (detail.kind === 'dcf' || detail.kind === 'research_refresh') {{
+      workOsRenderEvaluationSurface();
+      const state = window.history.state && typeof window.history.state === 'object'
+        ? window.history.state : {{}};
+      const transient = state.workOsTransient;
+      if (transient && typeof transient.route === 'string' && transient.route.startsWith('/api/peek/investment-profile?')) {{
+        workOsOpenPeekRoute(transient.route, transient.title || 'Investment profile', {{ fromHistory: true }});
+      }}
+      const fullPage = state.workOsFullPageDetail;
+      if (fullPage && typeof fullPage.route === 'string' && fullPage.route.startsWith('/api/peek/investment-profile?')) {{
+        workOsOpenPeekFullPage(fullPage.route, fullPage.title || 'Investment profile', {{ fromHistory: true }});
+      }}
+    }}
+  }});
 
   function workOsOpenEvaluationDialogue(button) {{
     const sessionId = String(button.getAttribute('data-work-os-evaluation-session') || '').trim();
@@ -2333,9 +2429,39 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   document.addEventListener('click', async function (event) {{
-    const target = event.target instanceof Element ? event.target.closest('[data-work-os-portfolio-sort], [data-work-os-evaluation-dialogue], [data-work-os-evaluation-workup], [data-work-os-evaluation-compare], [data-work-os-evaluation-company], [data-work-os-refresh-evaluation]') : null;
+    const target = event.target instanceof Element ? event.target.closest('[data-work-os-portfolio-sort], [data-work-os-evaluation-dialogue], [data-work-os-evaluation-workup], [data-work-os-evaluation-compare], [data-work-os-evaluation-company], [data-work-os-refresh-evaluation], [data-work-os-evaluation-filter], [data-profile-review-action]') : null;
     if (!target) return;
     if (target.hasAttribute('data-work-os-refresh-evaluation')) {{ workOsRenderEvaluationSurface(); return; }}
+    if (target.hasAttribute('data-work-os-evaluation-filter')) {{
+      event.preventDefault();
+      workOsApplyEvaluationFilter(target.getAttribute('data-work-os-evaluation-filter'));
+      return;
+    }}
+    if (target.hasAttribute('data-profile-review-action')) {{
+      event.preventDefault();
+      const ticker = workOsNormalizeTicker(target.getAttribute('data-profile-review-ticker'));
+      const label = String(target.getAttribute('data-profile-review-label') || '');
+      const action = String(target.getAttribute('data-profile-review-action') || '');
+      const fingerprint = String(target.getAttribute('data-profile-review-fingerprint') || '');
+      if (!ticker || !label || !action || !fingerprint) return;
+      const originalText = target.textContent;
+      target.disabled = true;
+      target.textContent = 'Recording…';
+      try {{
+        const response = await fetch('/api/research/investment-profile/' + encodeURIComponent(ticker) + '/labels/' + encodeURIComponent(label) + '/' + encodeURIComponent(action), {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', Accept: 'application/json' }},
+          body: JSON.stringify({{ suggestion_fingerprint: fingerprint }})
+        }});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        await workOsRenderEvaluationSurface();
+        workOsOpenPeekRoute('/api/peek/investment-profile?ticker=' + encodeURIComponent(ticker), 'Investment profile — ' + ticker);
+      }} catch (_error) {{
+        target.disabled = false;
+        target.textContent = originalText || 'Retry review';
+      }}
+      return;
+    }}
     if (target.hasAttribute('data-work-os-evaluation-company')) {{
       const ticker = workOsNormalizeTicker(target.getAttribute('data-work-os-evaluation-company'));
       if (ticker && typeof window.switchCompanyWorkspace === 'function') {{

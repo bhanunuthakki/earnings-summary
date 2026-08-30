@@ -1848,6 +1848,112 @@ def create_app(
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.route(
+        "/api/research/investment-profile/<ticker>/labels/<label>/<action>",
+        methods=["POST", "OPTIONS"],
+    )
+    def investment_profile_label_review_api(ticker: str, label: str, action: str):
+        """Append one owner label decision against the current evidence fingerprint.
+
+        Governance-surface disposition: the primary surface is the Evaluation
+        investment-profile peek.  This is deliberately excluded from Operations
+        because it reviews research classification; it does not run or configure
+        a service, pipeline, source, model route, or portfolio action.
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from research.investment_profile import (
+            CompanyProfileLabel,
+            EtfProfileLabel,
+            LabelReviewAction,
+            record_label_review,
+        )
+
+        try:
+            symbol = ticker_validation.safe_ticker(ticker)
+            review_action = LabelReviewAction(action)
+        except ValueError:
+            return _client_error("validation_error: invalid ticker, label, or action", 400)
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return _client_error("validation_error: JSON request body must be an object", 400)
+        review_body = cast("dict[str, object]", body)
+        fingerprint = str(review_body.get("suggestion_fingerprint") or "").strip()
+
+        read_conn = get_read_db()
+        rows = build_cockpit_rows(read_conn, repo_root).get("evaluation", [])
+        payload = build_work_os_evaluation(rows, repo_root, read_conn)
+        item = next((candidate for candidate in payload.items if candidate.ticker == symbol), None)
+        if item is None or item.profile is None:
+            return _client_error("not_found: current investment profile is unavailable", 404)
+        try:
+            profile_label = (
+                EtfProfileLabel(label)
+                if item.instrument_type == "etf"
+                else CompanyProfileLabel(label)
+            )
+        except ValueError:
+            return _client_error("validation_error: label is invalid for this instrument", 400)
+        presentation = next(
+            (candidate for candidate in item.profile.labels if candidate.label is profile_label),
+            None,
+        )
+        if presentation is None:
+            return _client_error("conflict_error: label is not in the current projection", 409)
+        if fingerprint != presentation.suggestion_fingerprint:
+            return _client_error(
+                "conflict_error: suggestion evidence changed; reopen the profile", 409
+            )
+        if (
+            review_action in {LabelReviewAction.RATIFY, LabelReviewAction.REJECT}
+            and not presentation.suggested
+        ):
+            return _client_error("conflict_error: label is no longer system-suggested", 409)
+        if review_action is LabelReviewAction.RETIRE and presentation.state.value not in {
+            "owner_ratified",
+            "review_suggested",
+        }:
+            return _client_error("conflict_error: only an owner-reviewed label can be retired", 409)
+
+        writer = connect_sqlite(
+            resolved_db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
+        try:
+            review_id = record_label_review(
+                writer,
+                ticker=symbol,
+                label=profile_label,
+                action=review_action,
+                suggestion_fingerprint=fingerprint,
+                evidence={
+                    "profile_refresh_fingerprint": item.profile.refresh_fingerprint,
+                    "source_artifact_id": item.profile.source_artifact_id,
+                    "source_kind": presentation.source_kind,
+                    "prior_state": presentation.state.value,
+                    "suggested": presentation.suggested,
+                },
+            )
+            writer.commit()
+        except sqlite3.Error:
+            writer.rollback()
+            return _client_error("unavailable_error: label review could not be persisted", 503)
+        finally:
+            writer.close()
+        response = app.json.response(
+            {
+                "ok": True,
+                "review_id": review_id,
+                "ticker": symbol,
+                "label": profile_label.value,
+                "action": review_action.value,
+            }
+        )
+        response.status_code = 201
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/api/portfolio/risk-matrix", methods=["GET"])
     def portfolio_risk_matrix_api():
         """Generation 3 Performance & Risk cross-asset correlation and factor exposure."""

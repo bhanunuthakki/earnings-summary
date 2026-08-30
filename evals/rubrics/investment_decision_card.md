@@ -1,11 +1,12 @@
-# Rubric: investment_decision_card (v1)
+# Rubric: investment_decision_card (v2)
 
 Pass threshold: 0.70
 
 Scope: one Investment Decision Card artifact (`llm_artifacts` row,
 purpose='investment_decision_card', scope='ticker') produced by
 `research.investment_decision_card.generate_card`. The graded text is the
-artifact's `content_md` — the seven §8.1 sections rendered as markdown
+artifact's `content_md` — the §8.1 sections plus the investment-profile
+classification rendered as markdown
 (personal_investment_partner_prd.md §2.3/§8.1/§10.5).
 
 The hard structural invariants (required sections present, company/security/
@@ -54,6 +55,16 @@ the analysis themselves. `expected_role` and `candidate_fit_summary` connect
 the security to a specific role in the book (not a generic "would add
 diversification" with no specifics), and the suggested disposition follows
 sensibly from the rest of the card rather than reading as an afterthought.
+
+## Facet: profile_specificity — labels and moat describe this business, not a template
+
+The qualitative investment-profile labels must follow from the stated company
+hypothesis and evidence. The moat conclusion must distinguish advantage across
+multiple businesses, in the core business, in a narrow/conditional domain, or no
+demonstrated advantage. Missing evidence must be reported as insufficient coverage,
+not converted into an adverse moat conclusion. Supporting and counter-evidence
+should be company-specific, and the prose must not assign the valuation-owned GARP
+or elite-growth/expensive labels.
 
 ## Facet: uncertainty_honesty — genuine, specific uncertainty, no invented confidence
 
