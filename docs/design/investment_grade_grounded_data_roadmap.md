@@ -28,6 +28,13 @@ transcript-extraction operation remains the owner: source or persistence failure
 its structured run result and leaves the transcript retryable. The expected Alembic head remains a
 dynamic Operations-registry projection, so no new card, health claim, or mutating control is added.
 
+The targeted `backfill_financial_fact_resolutions.py --fact-table --fact-row-id --apply`
+path is an internal, receipt-bound repair primitive, not a supported cockpit workflow. It preserves
+the canonical `OperationsRegistry`, `OperationsSnapshot`, and `build_operations_panel_view`
+contracts unchanged; therefore it deliberately adds no Operations card, health claim, or operator
+action. Production use remains subject to the same exact-database write lock, backup, review, and
+single-writer release procedure as the governed KPI repair that invokes it.
+
 The local linear 0032 repair/reader contract is now frozen. Its source-exact correction path,
 three-way issuer and unit/scale identity, semantic-series identity, current-head resolution,
 trusted Windows identity pins, whole-code repair seal, and evidence-lineage checks pass the related

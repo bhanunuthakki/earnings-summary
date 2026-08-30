@@ -692,6 +692,11 @@ def test_missing_marker_recovers_exact_committed_postcondition(
 ) -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
+    conn.executescript(
+        "CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY);"
+        "INSERT INTO kpi_facts VALUES (10);"
+        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts;"
+    )
     entry = _entry(
         action="bind_existing",
         source_doc_id=1,
@@ -718,6 +723,49 @@ def test_missing_marker_recovers_exact_committed_postcondition(
         _current_context,
     )
     assert refresh._detect_applied_postcondition(conn, manifest=manifest) == (10,)
+    conn.close()
+
+
+def test_bind_existing_fails_when_exact_fact_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    row = conn.execute("SELECT 1").fetchone()
+    assert row is not None
+    entry = _entry(
+        action="bind_existing",
+        source_doc_id=1,
+        source_content_sha256="a" * 64,
+        expected_inserted_fact_rows=0,
+    )
+    manifest = _manifest().model_copy(update={"entries": (entry,)})
+    monkeypatch.setattr(refresh, "persist_kpi_semantic_context", lambda *_args, **_kwargs: 1)
+
+    def reject_resolution(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("wrong selected observation")
+
+    monkeypatch.setattr(refresh, "require_canonical_kpi_resolution", reject_resolution)
+    with pytest.raises(refresh.RepairBlockedError, match="canonical_fact_resolution_failed"):
+        refresh._apply_entry(
+            conn,
+            manifest=manifest,
+            entry=entry,
+            row=row,
+            source_type=refresh.SourceType.IR_DOC,
+        )
+    conn.close()
+
+
+def test_result_heads_must_all_exist_in_canonical_relation() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        "CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY);"
+        "INSERT INTO kpi_facts VALUES (10);"
+        "CREATE VIEW v_kpi_facts_resolved_current AS "
+        "SELECT * FROM kpi_facts WHERE 0;"
+    )
+    with pytest.raises(refresh.RepairBlockedError, match="result_fact_not_canonically_resolved"):
+        refresh._require_canonical_result_heads(conn, result_heads=(10,))
     conn.close()
 
 
@@ -858,6 +906,11 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         return 1, 1, 11
 
     monkeypatch.setattr(refresh, "_apply_entry", simulated_apply)
+    monkeypatch.setattr(
+        refresh,
+        "_require_canonical_result_heads",
+        lambda *_args, **_kwargs: None,
+    )
     receipt_root = tmp_path / "receipts"
     result = refresh.main(
         [
@@ -943,7 +996,7 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
             "INSERT INTO documents "
             "(id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
             "fetch_status,raw_bytes_size,source_quality_tier) "
-            "VALUES (1,'NU','ir_doc','earnings_release','2024-12-31','source.html',?,?,'ok',1,'issuer_reported')",
+            "VALUES (1,'NU','ir_doc','earnings_release','2024-12-31','source.html',?,?,'ok',1,'fmp_normalized')",
             ("a" * 64, NOW.isoformat()),
         )
         evidence_text = (
@@ -1098,6 +1151,11 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
             (new_id,),
         ).fetchone()
         assert tuple(revision) == (f"kpi_facts:{new_id}:r1", 1)
+        resolved = conn.execute(
+            "SELECT id,reported_observation_id FROM v_kpi_facts_resolved_current "
+            "WHERE kpi_definition_id=641 AND period_end='2024-12-31'"
+        ).fetchone()
+        assert tuple(resolved) == (new_id, f"kpi_facts:{new_id}:r1")
     finally:
         conn.close()
 

@@ -9,6 +9,23 @@ from decimal import Decimal
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.facts import Currency, FactLocator, Unit
 from pipeline.kpi_semantics import KpiSemanticContext, persist_kpi_semantic_context
+from provenance.financial_fact_resolution import require_exact_canonical_fact_row
+
+
+def require_canonical_kpi_resolution(
+    conn: sqlite3.Connection,
+    *,
+    fact_row_id: int,
+    knowledge_cutoff: datetime,
+) -> None:
+    """Resolve one KPI row and prove that exact observation is canonical."""
+
+    _ = require_exact_canonical_fact_row(
+        conn,
+        fact_table=KPI_FACTS,
+        fact_row_id=fact_row_id,
+        knowledge_cutoff=knowledge_cutoff,
+    )
 
 
 def insert_source_reviewed_kpi_supersession(
@@ -88,5 +105,10 @@ def insert_source_reviewed_kpi_supersession(
         fact_table=KPI_FACTS,
         superseded_id=predecessor_id,
         new_value=value,
+    )
+    require_canonical_kpi_resolution(
+        conn,
+        fact_row_id=new_id,
+        knowledge_cutoff=knowledge_at,
     )
     return new_id
