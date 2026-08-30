@@ -225,13 +225,22 @@ def verify_snapshot_matches_source(
             raise SnapshotConflictError(
                 f"snapshot destination does not exist: {request.destination_path}"
             )
-        if wal_before != _optional_file_state(_wal_path(request.source_path)):
-            raise RuntimeError("source WAL changed during snapshot verification; retry")
-        return result
     finally:
         if source_conn.in_transaction:
             source_conn.rollback()
         source_conn.close()
+    # A read-only SQLite connection may create its own transient, zero-byte WAL
+    # sidecar when it opens a WAL-mode database whose sidecars were absent.  Do
+    # not classify that verifier-owned file as a concurrent writer.  Observe the
+    # WAL only after the verifier connection has closed, then re-observe the main
+    # file.  The WAL observation is the proof's linearization point: a committed
+    # WAL change before it remains visible, while a checkpoint completed before
+    # it advances the subsequent main-file observation.
+    wal_after = _optional_file_state(_wal_path(request.source_path))
+    source_after = _file_observation(request.source_path)
+    if wal_before != wal_after or not _same_file_state(source_observation, source_after):
+        raise RuntimeError("source WAL changed during snapshot verification; retry")
+    return result
 
 
 def _existing_replay(
