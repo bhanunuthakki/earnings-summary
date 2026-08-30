@@ -512,6 +512,9 @@ fulltext capture, missing current binding, missing source identity, issuer misma
 source, incomplete bounded evidence search, no exact numeric evidence match, or source review
 required. Evidence nodes and text are loaded once per document under explicit node, text, and match
 budgets; exhausting any budget remains visible and never masquerades as a complete negative search.
+Single-period artifacts require a document period. Multi-period source packages such as historical
+IR spreadsheets instead retain a null document period and bind each fact's own fiscal period plus
+its exact source locator; operators must never invent one document period for a multi-period file.
 An exact numeric node match is only a review candidate. It never supplies accounting basis,
 consolidation scope, dimensions, publication lane, scale, or comparability without verbatim source
 evidence.

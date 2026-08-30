@@ -50,6 +50,7 @@ _REVIEWABLE_SOURCE_TYPES = frozenset(
         SourceType.MANUAL_ENTRY.value,
     }
 )
+_MULTI_PERIOD_DOC_TYPES = frozenset({"ir_historical_spreadsheet"})
 
 
 class KpiSemanticReviewState(StrEnum):
@@ -352,11 +353,12 @@ def _evidence_state_and_candidates(
     source_observation_version = _optional_text(source["fetched_at"])
     source_period_end = _optional_text(source["period_end"])
     source_ref = _optional_text(source["file_path"])
+    source_doc_type = _optional_text(source["doc_type"])
     if (
         source_sha is None
         or re.fullmatch(r"[0-9a-f]{64}", source_sha) is None
         or not source_observation_version
-        or not source_period_end
+        or (source_doc_type not in _MULTI_PERIOD_DOC_TYPES and not source_period_end)
         or not source_ref
     ):
         return _review_result(

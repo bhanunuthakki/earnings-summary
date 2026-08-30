@@ -170,7 +170,7 @@ def _entry(**changes: object) -> refresh.RefreshEntry:
 
 def _manifest() -> refresh.RefreshManifest:
     return refresh.RefreshManifest(
-        schema_version="kpi_semantic_refresh.v4",
+        schema_version="kpi_semantic_refresh.v5",
         user_id="bhanu",
         logical_idempotency_key="nu:2024q4:total-customers:source-review:v1",
         reviewer="owner",
@@ -185,8 +185,8 @@ def _manifest() -> refresh.RefreshManifest:
 def test_manifest_binds_locator_excerpt_and_expected_row_effects() -> None:
     entry = _entry()
     stale_schema = _manifest().model_dump(mode="json")
-    stale_schema["schema_version"] = "kpi_semantic_refresh.v3"
-    with pytest.raises(ValidationError, match=r"kpi_semantic_refresh\.v4"):
+    stale_schema["schema_version"] = "kpi_semantic_refresh.v4"
+    with pytest.raises(ValidationError, match=r"kpi_semantic_refresh\.v5"):
         refresh.RefreshManifest.model_validate(stale_schema)
     with pytest.raises(ValidationError, match="fact locator hash mismatch"):
         _entry(fact_locator_sha256="f" * 64)
@@ -393,7 +393,7 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
     conn.executescript(
         """
         CREATE TABLE documents (
-          id INTEGER PRIMARY KEY,ticker TEXT,source_type TEXT,period_end TEXT,
+          id INTEGER PRIMARY KEY,ticker TEXT,source_type TEXT,doc_type TEXT,period_end TEXT,
           sha256 TEXT,fetched_at TEXT,file_path TEXT
         );
         CREATE TABLE evidence_document_versions (
@@ -415,11 +415,12 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
         """
     )
     conn.execute(
-        "INSERT INTO documents VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO documents VALUES (?,?,?,?,?,?,?,?)",
         (
             2,
             "NU",
             "ir_doc",
+            "ir_presentation",
             "2024-12-31",
             "b" * 64,
             "2025-01-30T12:00:00+00:00",
@@ -463,6 +464,20 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
     source_type, source_ticker = refresh._validate_source_binding(conn, _entry())
     assert source_type.value == "ir_doc"
     assert source_ticker == "NU"
+    conn.execute("UPDATE documents SET doc_type='ir_historical_spreadsheet',period_end=NULL")
+    refresh._validate_source_binding(conn, _entry(source_period_end=None))
+    conn.execute("UPDATE documents SET doc_type='ir_presentation'")
+    with pytest.raises(refresh.RepairBlockedError, match="source_period_mismatch"):
+        refresh._validate_source_binding(conn, _entry(source_period_end=None))
+    conn.execute("UPDATE documents SET doc_type='ir_supplement'")
+    with pytest.raises(refresh.RepairBlockedError, match="source_period_mismatch"):
+        refresh._validate_source_binding(conn, _entry(source_period_end=None))
+    conn.execute(
+        "UPDATE documents SET doc_type='ir_historical_spreadsheet',period_end='2024-12-31'"
+    )
+    with pytest.raises(refresh.RepairBlockedError, match="source_period_mismatch"):
+        refresh._validate_source_binding(conn, _entry(source_period_end=None))
+    conn.execute("UPDATE documents SET doc_type='ir_presentation'")
     count_entry = _entry(unit=Unit.COUNT, value="114000000")
     refresh._validate_source_binding(conn, count_entry)
     with pytest.raises(refresh.RepairBlockedError, match="source_value_mismatch"):
