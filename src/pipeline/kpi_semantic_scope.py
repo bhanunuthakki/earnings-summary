@@ -10,6 +10,7 @@ from typing import cast
 from pydantic import BaseModel, ConfigDict
 
 from compute.kpi_resolver import normalize_kpi_name
+from provenance.financial_fact_resolution import canonical_fact_relation
 
 
 class ScopedKpiDefinition(BaseModel):
@@ -112,6 +113,7 @@ def scoped_kpi_definitions(
         return ()
     report_names = _report_names(repo_root, tickers)
     marks = ",".join("?" for _ in tickers)
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     has_context = _table_exists(conn, "kpi_fact_semantic_contexts")
     context_columns: set[str] = set()
     if has_context:
@@ -161,7 +163,7 @@ def scoped_kpi_definitions(
         f"SELECT definition.id,UPPER(definition.ticker),definition.name,COUNT(fact.id),"  # nosec B608
         f"{admitted},{quarantined},{legacy_unknown},{missing},{','.join(lane_counts)} "
         "FROM kpi_definitions definition "
-        "LEFT JOIN kpi_facts fact ON fact.kpi_definition_id=definition.id "
+        f"LEFT JOIN {fact_relation} fact ON fact.kpi_definition_id=definition.id "
         f"{context_join} WHERE UPPER(definition.ticker) IN ({marks}) "
         "GROUP BY definition.id,UPPER(definition.ticker),definition.name ORDER BY 2,3,1",
         tickers,

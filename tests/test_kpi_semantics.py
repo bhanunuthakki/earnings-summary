@@ -253,6 +253,36 @@ def test_scope_is_report_union_facts_metrics_for_portfolio_only(tmp_path: Path) 
     assert rows[1].missing_context_count == 0
 
 
+def test_scope_counts_only_current_fact_heads(tmp_path: Path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        "CREATE TABLE tracked_companies(ticker TEXT,list_type TEXT,user_id TEXT,archived_at TEXT);"
+        "CREATE TABLE kpi_definitions(id INTEGER PRIMARY KEY,ticker TEXT,name TEXT);"
+        "CREATE TABLE kpi_facts(id INTEGER PRIMARY KEY,kpi_definition_id INTEGER,"
+        "source_doc_id INTEGER,unit TEXT NOT NULL,supersedes_id INTEGER);"
+        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id=2;"
+    )
+    _semantic_table(conn)
+    conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio','default',NULL)")
+    conn.execute("INSERT INTO kpi_definitions VALUES (1,'NU','Total customers')")
+    conn.executemany(
+        "INSERT INTO kpi_facts VALUES (?,?,?,?,?)",
+        [
+            (1, 1, 7, "millions", None),
+            (2, 1, 8, "millions", 1),
+        ],
+    )
+    persist_kpi_semantic_context(conn, kpi_fact_id=2, context=_context())
+
+    rows = scoped_kpi_definitions(conn, repo_root=tmp_path)
+
+    assert len(rows) == 1
+    assert rows[0].fact_count == 1
+    assert rows[0].admitted_context_count == 1
+    assert rows[0].missing_context_count == 0
+
+
 def test_semantic_audit_requires_explicit_database_path() -> None:
     from execution.audit_kpi_semantics import build_parser
 
