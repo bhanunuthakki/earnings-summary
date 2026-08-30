@@ -205,8 +205,15 @@ def verify_snapshot_matches_source(
 
     if not request.source_path.is_file():
         raise FileNotFoundError(f"source database does not exist: {request.source_path}")
-    source_observation = _file_observation(request.source_path)
     wal_before = _optional_file_state(_wal_path(request.source_path))
+    source_before_hash = _file_observation(request.source_path)
+    source_sha256_before = _sha256(request.source_path)
+    source_observation = _file_observation(request.source_path)
+    wal_after_initial_hash = _optional_file_state(_wal_path(request.source_path))
+    if wal_before != wal_after_initial_hash or not _same_file_state(
+        source_before_hash, source_observation
+    ):
+        raise RuntimeError("source changed while establishing verification identity; retry")
     source_conn = connect_sqlite(request.source_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         source_conn.execute("BEGIN")
@@ -220,6 +227,7 @@ def verify_snapshot_matches_source(
             source_conn,
             None,
             manifest_path=manifest_path,
+            allow_source_mtime_drift=True,
         )
         if result is None:
             raise SnapshotConflictError(
@@ -238,8 +246,17 @@ def verify_snapshot_matches_source(
     # it advances the subsequent main-file observation.
     wal_after = _optional_file_state(_wal_path(request.source_path))
     source_after = _file_observation(request.source_path)
-    if wal_before != wal_after or not _same_file_state(source_observation, source_after):
-        raise RuntimeError("source WAL changed during snapshot verification; retry")
+    source_sha256_after = _sha256(request.source_path)
+    source_final = _file_observation(request.source_path)
+    wal_final = _optional_file_state(_wal_path(request.source_path))
+    if (
+        wal_after_initial_hash != wal_after
+        or wal_after != wal_final
+        or not _same_file_state(source_after, source_final)
+        or not _same_file_content_identity(source_observation, source_after)
+        or source_sha256_before != source_sha256_after
+    ):
+        raise RuntimeError("source content or WAL changed during snapshot verification; retry")
     return result
 
 
@@ -250,6 +267,7 @@ def _existing_replay(
     logger: SnapshotLogger | None,
     *,
     manifest_path: Path | None = None,
+    allow_source_mtime_drift: bool = False,
 ) -> SnapshotResult | None:
     destination_path = request.destination_path
     manifest_path = (
@@ -296,15 +314,21 @@ def _existing_replay(
     candidate_path = _temporary_path(destination_path)
     try:
         _backup(source_conn, candidate_path, logger)
-        if not _same_file_state(_file_observation(request.source_path), source):
+        source_after_backup = _file_observation(request.source_path)
+        if not _same_file_state(source_after_backup, source) and not (
+            allow_source_mtime_drift and _same_file_content_identity(source_after_backup, source)
+        ):
             raise RuntimeError(
                 "source database changed during replay validation; retry from a new observation"
             )
         _require_clean_verification(_verify(candidate_path))
+        source_matches = _same_source(manifest.source, source) or (
+            allow_source_mtime_drift and _same_source_content_identity(manifest.source, source)
+        )
         if (
             manifest.snapshot.byte_size != candidate_path.stat().st_size
             or manifest.snapshot.sha256 != _sha256(candidate_path)
-            or not _same_source(manifest.source, source)
+            or not source_matches
         ):
             raise SnapshotConflictError(
                 f"snapshot destination already exists for different source content: {destination_path}"
@@ -413,9 +437,24 @@ def _same_file_state(first: FileObservation, second: FileObservation) -> bool:
     )
 
 
+def _same_file_content_identity(first: FileObservation, second: FileObservation) -> bool:
+    """Compare the stable path and size while a separate digest proves bytes."""
+    return first.path == second.path and first.byte_size == second.byte_size
+
+
 def _same_source(first: SourceSnapshotObservation, second: SourceSnapshotObservation) -> bool:
     """Match a replay to the same source state, not a later wall-clock read."""
     return _same_file_state(first, second) and first.alembic_revision == second.alembic_revision
+
+
+def _same_source_content_identity(
+    first: SourceSnapshotObservation, second: SourceSnapshotObservation
+) -> bool:
+    """Match source identity while allowing verifier-owned mtime-only drift."""
+    return (
+        _same_file_content_identity(first, second)
+        and first.alembic_revision == second.alembic_revision
+    )
 
 
 def _sha256(path: Path) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -179,6 +180,93 @@ def test_replay_ignores_verifier_owned_transient_empty_wal(
     assert shm_path.stat().st_size == 0
 
 
+def test_verify_accepts_verifier_owned_main_file_mtime_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.db"
+    destination = tmp_path / "snapshot.db"
+    _source_database(source)
+    request = SnapshotRequest(source_path=source, destination_path=destination)
+    expected = create_snapshot(request)
+    real_connect = sqlite_snapshot.connect_sqlite
+
+    class SourceConnectionProxy:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._connection, name)
+
+        def close(self) -> None:
+            self._connection.close()
+            stat = source.stat()
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    def connect_with_mtime_touch(
+        path: str | Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection | SourceConnectionProxy:
+        connection = real_connect(path, role=role, schema_preflight=schema_preflight)
+        if Path(path) == source and role is SQLiteConnectionRole.READ_ONLY:
+            return SourceConnectionProxy(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite_snapshot, "connect_sqlite", connect_with_mtime_touch)
+
+    first_replay = verify_snapshot_matches_source(request)
+    second_replay = verify_snapshot_matches_source(request)
+
+    assert first_replay.replayed is True
+    assert second_replay.replayed is True
+    assert second_replay.snapshot_sha256 == expected.snapshot_sha256
+
+
+def test_verify_rejects_same_size_same_mtime_main_file_content_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.db"
+    destination = tmp_path / "snapshot.db"
+    _source_database(source)
+    request = SnapshotRequest(source_path=source, destination_path=destination)
+    create_snapshot(request)
+    original_stat = source.stat()
+    real_connect = sqlite_snapshot.connect_sqlite
+
+    class SourceConnectionProxy:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._connection, name)
+
+        def close(self) -> None:
+            self._connection.close()
+            with source.open("r+b") as handle:
+                handle.seek(-1, os.SEEK_END)
+                original = handle.read(1)
+                handle.seek(-1, os.SEEK_END)
+                handle.write(bytes([original[0] ^ 0x01]))
+            os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    def connect_with_content_mutation(
+        path: str | Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection | SourceConnectionProxy:
+        connection = real_connect(path, role=role, schema_preflight=schema_preflight)
+        if Path(path) == source and role is SQLiteConnectionRole.READ_ONLY:
+            return SourceConnectionProxy(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite_snapshot, "connect_sqlite", connect_with_content_mutation)
+
+    with pytest.raises(RuntimeError, match="source content or WAL changed"):
+        verify_snapshot_matches_source(request)
+
+
 def test_file_token_normalizes_empty_wal_but_detects_committed_frames(tmp_path: Path) -> None:
     source = tmp_path / "source.db"
     _source_database(source)
@@ -206,7 +294,7 @@ def test_replay_rejects_post_close_commit_checkpointed_into_main_file(
         nonlocal wal_observation_count
         if path == Path(f"{source}-wal"):
             wal_observation_count += 1
-            if wal_observation_count == 2:
+            if wal_observation_count == 3:
                 writer = sqlite3.connect(source)
                 try:
                     assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
@@ -225,7 +313,7 @@ def test_replay_rejects_post_close_commit_checkpointed_into_main_file(
         sqlite_snapshot, "_optional_file_state", commit_before_final_wal_observation
     )
 
-    with pytest.raises(RuntimeError, match="source WAL changed"):
+    with pytest.raises(RuntimeError, match="source content or WAL changed"):
         verify_snapshot_matches_source(request)
 
     live = sqlite3.connect(source)
