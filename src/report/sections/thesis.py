@@ -22,6 +22,7 @@ from compute.kpi_resolver import (
     normalize_kpi_name,
     reporting_cadence_for,
     resolve_kpi_definition_name,
+    resolve_kpi_definition_names,
     semantic_series_identity_sql,
 )
 from compute.thesis_evaluation_episodes import episode_history_source
@@ -218,12 +219,28 @@ def _build_ledger(
     # from the holdings JSON with empty history and a name-derived definition.
     db_conn = open_repo_db(repo_root, conn)
     try:
-        rows: list[KpiLedgerRow] = []
-        for tier_key, tier_label in (
+        tier_specs: tuple[tuple[str, str], ...] = (
             ("tier_1_kpis", "tier_1"),
             ("tier_2_kpis", "tier_2"),
             ("tier_3_kpis", "tier_3"),
-        ):
+        )
+        requested_names = [
+            str(cast("dict[str, object]", item).get("name", ""))
+            for tier_key, _tier_label in tier_specs
+            for item in (
+                cast("list[object]", holdings.get(tier_key))
+                if isinstance(holdings.get(tier_key), list)
+                else []
+            )
+            if isinstance(item, dict)
+        ]
+        resolved_names = (
+            resolve_kpi_definition_names(db_conn, ticker, requested_names)
+            if db_conn is not None
+            else {}
+        )
+        rows: list[KpiLedgerRow] = []
+        for tier_key, tier_label in tier_specs:
             raw_kpis = holdings.get(tier_key)
             if not isinstance(raw_kpis, list):
                 continue
@@ -234,8 +251,18 @@ def _build_ledger(
                 kd = cast("dict[str, object]", k)
                 name = str(kd.get("name", ""))
                 if db_conn is not None:
-                    history, latest_excerpt = _kpi_history_conn(db_conn, ticker, name)
-                    def_id, notes, db_unit = _kpi_definition_meta(db_conn, ticker, name)
+                    resolved_name = resolved_names.get(name)
+                    history, latest_excerpt = _kpi_history_for_resolved(
+                        db_conn,
+                        ticker,
+                        resolved_name,
+                    )
+                    def_id, notes, db_unit = _kpi_definition_meta_for_resolved(
+                        db_conn,
+                        ticker,
+                        name,
+                        resolved_name,
+                    )
                 else:
                     history, latest_excerpt, def_id, notes, db_unit = [], None, None, None, None
                 holdings_unit = str(kd.get("unit")) if kd.get("unit") else None
@@ -360,6 +387,19 @@ def _kpi_definition_meta(
     """
     if not kpi_name or not has_table(conn, "kpi_definitions"):
         return None, None, None
+    resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
+    return _kpi_definition_meta_for_resolved(conn, ticker, kpi_name, resolved_name)
+
+
+def _kpi_definition_meta_for_resolved(
+    conn: sqlite3.Connection,
+    ticker: str,
+    kpi_name: str,
+    resolved_name: str | None,
+) -> tuple[int | None, str | None, str | None]:
+    """Read definition metadata without repeating canonical name resolution."""
+    if not kpi_name or not has_table(conn, "kpi_definitions"):
+        return None, None, None
     # Defensive: `notes` (and, on minimal fixtures, `unit`) may not exist on
     # older / test DBs. Detect columns and alias missing ones to NULL so the
     # query never references a phantom column — same pattern as `_kpi_history_conn`
@@ -368,8 +408,7 @@ def _kpi_definition_meta(
     notes_sel = "notes" if "notes" in cols else "NULL AS notes"
     unit_sel = "unit" if "unit" in cols else "NULL AS unit"
     meta_cols = f"id, {notes_sel}, {unit_sel}"
-    resolved = resolve_kpi_definition_name(conn, ticker, kpi_name)
-    for candidate in (resolved, kpi_name):
+    for candidate in (resolved_name, kpi_name):
         if candidate is None:
             continue
         row = conn.execute(
@@ -575,15 +614,26 @@ def _kpi_history_conn(
         return [], None
     if not (has_table(conn, "kpi_facts") and has_table(conn, "kpi_definitions")):
         return [], None
-    cursor = conn.cursor()
     # Resolve the holdings/break-rule label to the canonical definition name so a
     # short label ("Monthly ARPAC") reaches the richest definition ("Monthly
     # ARPAC (USD)") instead of an exact-name miss or a sparse fragmented
     # duplicate — same resolver the §3 chart loader uses. No match → empty ledger
     # history (status falls back to "unknown"), exactly as an exact-name miss did.
     resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
+    return _kpi_history_for_resolved(conn, ticker, resolved_name)
+
+
+def _kpi_history_for_resolved(
+    conn: sqlite3.Connection,
+    ticker: str,
+    resolved_name: str | None,
+) -> tuple[list[tuple[str, float | None]], str | None]:
+    """Read one already-resolved KPI series without rescanning definition counts."""
     if resolved_name is None:
         return [], None
+    if not (has_table(conn, "kpi_facts") and has_table(conn, "kpi_definitions")):
+        return [], None
+    cursor = conn.cursor()
     if active_scalar_override_map(
         conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
     ):

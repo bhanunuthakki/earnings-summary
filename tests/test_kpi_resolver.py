@@ -30,6 +30,7 @@ from compute.kpi_resolver import (  # noqa: E402
     matching_kpi_definition_ids,
     normalize_kpi_name,
     resolve_kpi_definition_name,
+    resolve_kpi_definition_names,
     semantic_series_identity_sql,
 )
 from models.facts import Unit  # noqa: E402
@@ -71,6 +72,7 @@ def test_series_identity_excludes_same_label_basis_and_scope_drift() -> None:
         "ON ksc.kpi_fact_id=kf.id WHERE " + predicate + " ORDER BY kf.id"
     ).fetchall()
     assert [int(row[0]) for row in rows] == [2, 5]
+    assert predicate.count("FROM kpi_facts kf_identity_fact") == 2
     conn.close()
 
 
@@ -289,6 +291,33 @@ def test_short_label_resolves_to_richest_canonical_definition() -> None:
     assert resolve_kpi_definition_name(conn, "NU", "Monthly ARPAC") == "Monthly ARPAC (USD)"
     # The canonical label resolves to itself.
     assert resolve_kpi_definition_name(conn, "NU", "Monthly ARPAC (USD)") == "Monthly ARPAC (USD)"
+
+
+def test_batch_resolution_scans_the_canonical_fact_population_once() -> None:
+    conn = _make_db()
+    canonical = _add_def(conn, "NU", "Monthly ARPAC (USD)")
+    duplicate = _add_def(conn, "NU", "Monthly ARPAC")
+    customers = _add_def(conn, "NU", "Total customers (millions)")
+    _add_facts(conn, "NU", canonical, _QUARTER_ENDS)
+    _add_facts(conn, "NU", duplicate, _QUARTER_ENDS[:2])
+    _add_facts(conn, "NU", customers, _QUARTER_ENDS[:4])
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    assert resolve_kpi_definition_names(
+        conn,
+        "NU",
+        ("Monthly ARPAC", "Total customers"),
+    ) == {
+        "Monthly ARPAC": "Monthly ARPAC (USD)",
+        "Total customers": "Total customers (millions)",
+    }
+    fact_population_queries = [
+        statement
+        for statement in statements
+        if "FROM kpi_facts kf" in statement and "GROUP BY kd.name" in statement
+    ]
+    assert len(fact_population_queries) == 1
 
 
 def test_richest_wins_even_when_exact_duplicate_present() -> None:

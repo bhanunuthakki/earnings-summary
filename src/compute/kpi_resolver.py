@@ -111,6 +111,30 @@ def resolve_kpi_definition_name(
     Requires ``conn.row_factory = sqlite3.Row`` (every consumer's connection
     already sets it).
     """
+    return resolve_kpi_definition_names(
+        conn,
+        ticker,
+        (requested,),
+        period_types=period_types,
+    )[requested]
+
+
+def resolve_kpi_definition_names(
+    conn: sqlite3.Connection,
+    ticker: str,
+    requested: Sequence[str],
+    *,
+    period_types: Sequence[str] | None = None,
+) -> dict[str, str | None]:
+    """Resolve several labels from one canonical observation-count scan.
+
+    A report commonly resolves every KPI in one issuer ledger. Re-running the
+    canonical fact relation once per label multiplies the provenance resolver's
+    cost without changing the candidate population. This batch seam preserves
+    the single-label ranking contract while evaluating that population once.
+    """
+    if not requested:
+        return {}
     cur = conn.cursor()
     fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     if period_types:
@@ -137,22 +161,25 @@ def resolve_kpi_definition_name(
             """,
             (ticker.upper(),),
         )
-    want = normalize_kpi_name(requested)
-    best_name: str | None = None
-    best_rank: tuple[int, int] = (-1, -1)  # (obs_count, exactness)
-    for r in cur.fetchall():
-        stored = str(r["name"])
-        if stored == requested:
-            exactness = 1
-        elif normalize_kpi_name(stored) == want:
-            exactness = 0
-        else:
-            continue
-        rank = (int(r["n"]), exactness)
-        if rank > best_rank:
-            best_rank = rank
-            best_name = stored
-    return best_name
+    candidates = [(str(row["name"]), int(row["n"])) for row in cur.fetchall()]
+    resolved: dict[str, str | None] = {}
+    for label in requested:
+        want = normalize_kpi_name(label)
+        best_name: str | None = None
+        best_rank: tuple[int, int] = (-1, -1)  # (obs_count, exactness)
+        for stored, observation_count in candidates:
+            if stored == label:
+                exactness = 1
+            elif normalize_kpi_name(stored) == want:
+                exactness = 0
+            else:
+                continue
+            rank = (observation_count, exactness)
+            if rank > best_rank:
+                best_rank = rank
+                best_name = stored
+        resolved[label] = best_name
+    return resolved
 
 
 def matching_kpi_definition_ids(
@@ -292,36 +319,34 @@ def semantic_series_identity_sql(
     anchor_fact = f"{fact_alias}_identity_fact"
     anchor_context = f"{context_alias}_identity_context"
     successor = f"{anchor_context}_successor"
-    predicates: list[str] = []
-    for field in (
+    signature_fields = (
         "metric_name_as_reported",
         "accounting_basis",
         "consolidation_scope",
         "dimensions_json",
         "unit_scale",
-    ):
-        predicates.append(
-            f"{context_alias}.{field}=(SELECT {anchor_context}.{field} "  # nosec B608
-            f"FROM {resolved_fact_relation} {anchor_fact} JOIN kpi_fact_semantic_contexts {anchor_context} "
-            f"ON {anchor_context}.kpi_fact_id={anchor_fact}.id AND NOT EXISTS ("
-            f"SELECT 1 FROM kpi_fact_semantic_contexts {successor} WHERE "
-            f"{successor}.supersedes_context_id={anchor_context}.id) "
-            f"WHERE {anchor_fact}.kpi_definition_id={fact_alias}.kpi_definition_id "
-            f"AND {anchor_context}.status='admitted' "
-            f"AND {anchor_context}.publication_lane='current_actual' "
-            f"ORDER BY {anchor_fact}.period_end DESC,{anchor_fact}.id DESC LIMIT 1)"
-        )
-    qualified = " AND ".join(predicates)
-    admitted_anchor_exists = (
-        f"EXISTS (SELECT 1 FROM {resolved_fact_relation} {anchor_fact} "  # nosec B608
+    )
+    anchor_relation = (
+        f"FROM {resolved_fact_relation} {anchor_fact} "  # nosec B608
         f"JOIN kpi_fact_semantic_contexts {anchor_context} "
         f"ON {anchor_context}.kpi_fact_id={anchor_fact}.id AND NOT EXISTS ("
         f"SELECT 1 FROM kpi_fact_semantic_contexts {successor} WHERE "
         f"{successor}.supersedes_context_id={anchor_context}.id) "
         f"WHERE {anchor_fact}.kpi_definition_id={fact_alias}.kpi_definition_id "
         f"AND {anchor_context}.status='admitted' "
-        f"AND {anchor_context}.publication_lane='current_actual')"
+        f"AND {anchor_context}.publication_lane='current_actual'"
     )
+    current_signature = (
+        "(" + ",".join(f"{context_alias}.{field}" for field in signature_fields) + ")"
+    )
+    anchor_signature = (
+        "(SELECT "
+        + ",".join(f"{anchor_context}.{field}" for field in signature_fields)
+        + f" {anchor_relation} ORDER BY {anchor_fact}.period_end DESC,"
+        + f"{anchor_fact}.id DESC LIMIT 1)"
+    )
+    qualified = f"{current_signature}={anchor_signature}"
+    admitted_anchor_exists = f"EXISTS (SELECT 1 {anchor_relation})"  # nosec B608
     admitted_identity = (
         f"((({context_alias}.id IS NULL OR {context_alias}.status='legacy_unknown') "
         f"AND NOT {admitted_anchor_exists}) OR ({qualified}))"
