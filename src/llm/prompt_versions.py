@@ -131,7 +131,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Investment Decision Card (P1.1, mode-B rubric,
     # personal_investment_partner_prd.md §8.1/§10). Bump when
     # research.investment_decision_card._build_prompt is materially rewritten.
-    "investment_decision_card": "v1",
+    # v2 (2026-08-29): adds the typed qualitative investment-profile and
+    # four-level moat assessment. Valuation labels remain deterministic.
+    "investment_decision_card": "v2",
     # Senior Partner Brief (P2.2, mode-B rubric,
     # personal_investment_partner_prd.md §9.1/§10). Bump when
     # advisor.senior_partner_brief._build_prompt is materially rewritten, then

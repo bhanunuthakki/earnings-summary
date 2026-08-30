@@ -610,6 +610,21 @@ document.querySelectorAll('.tcc-refresh').forEach(function (b) {
       msg.innerHTML = j.job_id
         ? 'started \\u2014 <a href="' + j.stream_url + '">view log</a>'
         : ('error: ' + (j.error || 'failed'));
+      if (j.job_id && j.stream_url) {
+        var es = new EventSource(j.stream_url);
+        es.onmessage = function (ev) {
+          var frame = {}; try { frame = JSON.parse(ev.data); } catch (e) { return; }
+          if (frame.event === 'done') {
+            if (frame.exit_code === 0) {
+              window.dispatchEvent(new CustomEvent('work-os:investment-evidence-updated', {
+                detail: {kind: 'research_refresh', ticker: b.getAttribute('data-ticker')}
+              }));
+            }
+            es.close();
+          }
+        };
+        es.onerror = function () { es.close(); };
+      }
     }).catch(function () { CCAction.release(b); msg.textContent = 'network error'; });
   });
 });
@@ -683,6 +698,21 @@ _DCF_SHEETS_SCRIPT = """<script>
         ? 'started \\u2014 <a href="' + j.stream_url + '">view log</a>'
         : ('error: ' + (j.error || 'failed'));
       if (j.job_id) { setTimeout(refreshLink, 2000); }
+      if (j.job_id && j.stream_url && url === '/actions/dcf-import') {
+        var es = new EventSource(j.stream_url);
+        es.onmessage = function (ev) {
+          var frame = {}; try { frame = JSON.parse(ev.data); } catch (e) { return; }
+          if (frame.event === 'done') {
+            if (frame.exit_code === 0) {
+              window.dispatchEvent(new CustomEvent('work-os:investment-evidence-updated', {
+                detail: {kind: 'dcf', ticker: tk}
+              }));
+            }
+            es.close();
+          }
+        };
+        es.onerror = function () { es.close(); };
+      }
     }).catch(function () { CCAction.release(btn); msg.textContent = 'network error'; });
   }
   root.querySelector('.tcc-dcf-export').addEventListener('click', function (ev) {

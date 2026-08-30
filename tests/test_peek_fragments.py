@@ -765,6 +765,20 @@ def test_peek_fit_no_cache_or_missing_ticker_404(client: FlaskClient, repo: Path
     assert client.get("/api/peek/fit").status_code == 404  # no ticker
 
 
+def test_evaluation_profile_and_portfolio_peeks_fail_closed_on_incompatible_legacy_schema(
+    client: FlaskClient,
+    db_path: Path,
+) -> None:
+    _seed_eval_company(db_path)
+
+    # This file intentionally exercises a pre-current hand-rolled tracked-company
+    # schema. New profile peeks must fail closed rather than turn schema drift into
+    # a 500 or fabricate a current projection.
+    assert client.get("/api/peek/investment-profile?ticker=dlo").status_code == 404
+    assert client.get("/api/peek/portfolio-impact?ticker=dlo").status_code == 404
+    assert client.get("/api/peek/investment-profile?ticker=ZZZQ").status_code == 404
+
+
 # ----------------------------------------------------------------------------
 # What-if peek (cockpit ΔSR chip / fit-peek doorway)
 # ----------------------------------------------------------------------------
@@ -1535,15 +1549,20 @@ def test_evaluation_readout_is_explicit_on_request_and_persists(
     assert 'data-generate-readout="NU"' in body
 
     calls: list[str] = []
+
+    def fake_call_llm(_prompt: str, **kwargs: object) -> str:
+        calls.append(str(kwargs["ticker"]))
+        return "## Quarter in one line\nPersisted evaluation readout."
+
+    def fake_budget(*_args: object, **_kwargs: object) -> None:
+        return None
+
     monkeypatch.setattr(
         earnings_readout,
         "call_llm",
-        lambda prompt, **kwargs: (
-            calls.append(str(kwargs["ticker"]))
-            or "## Quarter in one line\nPersisted evaluation readout."
-        ),
+        fake_call_llm,
     )
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: None)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", fake_budget)
     response = client.post("/api/earnings-readout/generate", json={"ticker": "NU"})
 
     assert response.status_code == 200

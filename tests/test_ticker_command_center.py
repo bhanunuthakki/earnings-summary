@@ -13,8 +13,10 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
+from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -249,6 +251,9 @@ def test_render_has_all_panels(repo: Path) -> None:
     assert "Open in Portfolio Tracker" not in html  # no guessed tracker endpoint
     assert "localhost:5173" not in html
     assert "/trade-analysis?" not in html
+    assert "work-os:investment-evidence-updated" in html
+    assert "detail: {kind: 'research_refresh'" in html
+    assert "detail: {kind: 'dcf', ticker: tk}" in html
 
 
 # ----- Holding tab (PR 8): report_date + head/foot-less fragments + embed -----
@@ -554,7 +559,7 @@ def test_holding_band_combobox_prefills_current_ticker(repo: Path) -> None:
     assert "NU · Nu Holdings" not in frag
 
 
-def test_holding_panel_endpoint(client) -> None:
+def test_holding_panel_endpoint(client: FlaskClient) -> None:
     # No ticker → the search combobox band (UX9c), not a 404 or a dropdown stub.
     empty = client.get("/api/panel/holding")
     assert empty.status_code == 200
@@ -575,7 +580,7 @@ def test_holding_panel_endpoint(client) -> None:
     assert 'data-tcc-panel="ops"' in body
 
 
-def test_notes_drawer_panel_endpoint(client) -> None:
+def test_notes_drawer_panel_endpoint(client: FlaskClient) -> None:
     plain = client.get("/api/panel/notes_drawer")
     assert plain.status_code == 200
     body = plain.get_data(as_text=True)
@@ -592,22 +597,24 @@ def test_notes_drawer_panel_endpoint(client) -> None:
 
 
 @pytest.fixture
-def client(repo: Path):
+def client(repo: Path) -> FlaskClient:
     import comments_server
 
     return comments_server.create_app(repo).test_client()
 
 
-def test_ticker_api_returns_json(client) -> None:
+def test_ticker_api_returns_json(client: FlaskClient) -> None:
     resp = client.get("/api/ticker/NU")
     assert resp.status_code == 200
-    payload = resp.get_json()
-    assert payload["identity"]["ticker"] == "NU"
-    assert payload["thesis"]["present"] is True
+    payload = cast(dict[str, object], resp.get_json())
+    identity = cast(dict[str, object], payload["identity"])
+    thesis = cast(dict[str, object], payload["thesis"])
+    assert identity["ticker"] == "NU"
+    assert thesis["present"] is True
     assert payload["tracker_url"] is None
 
 
-def test_ticker_page_redirects_to_shell(client) -> None:
+def test_ticker_page_redirects_to_shell(client: FlaskClient) -> None:
     """/ticker/<t> is folded into the shell — it now 302-redirects to the
     Holding drill-down deep link (ticker uppercased)."""
     resp = client.get("/ticker/nu")  # lowercase in → uppercased in the deep link

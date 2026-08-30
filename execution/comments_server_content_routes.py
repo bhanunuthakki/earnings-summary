@@ -65,6 +65,23 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     repo_root = context.repo_root
     db_path = context.db_path
 
+    def _evaluation_item(raw_ticker: str):
+        """Resolve one item through the same no-cache projection as Evaluation."""
+        from pipeline.research_cockpit import build_cockpit_rows
+        from pipeline.work_os_evaluation import build_work_os_evaluation
+
+        try:
+            ticker = context.safe_ticker(raw_ticker)
+        except ValueError:
+            return None
+        conn = context.get_read_db()
+        try:
+            rows = build_cockpit_rows(conn, repo_root).get("evaluation", [])
+            payload = build_work_os_evaluation(rows, repo_root, conn)
+        except (OSError, ValueError, sqlite3.Error):
+            return None
+        return next((item for item in payload.items if item.ticker == ticker), None)
+
     @app.route("/source/<int:doc_id>", methods=["GET"])
     def source_viewer(doc_id: int):
         """Dispatch one document to its in-app source viewer."""
@@ -288,6 +305,30 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
+
+    @app.route("/api/peek/investment-profile", methods=["GET"])
+    def peek_investment_profile():
+        from pipeline.peeks import render_investment_profile_peek
+
+        item = _evaluation_item(request.args.get("ticker") or "")
+        html = render_investment_profile_peek(item)
+        if html is None:
+            abort(404)
+        response = Response(html, mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/peek/portfolio-impact", methods=["GET"])
+    def peek_portfolio_impact():
+        from pipeline.peeks import render_portfolio_impact_peek
+
+        item = _evaluation_item(request.args.get("ticker") or "")
+        html = render_portfolio_impact_peek(item)
+        if html is None:
+            abort(404)
+        response = Response(html, mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/peek/weekly-packet", methods=["GET"])
     def peek_weekly_packet():

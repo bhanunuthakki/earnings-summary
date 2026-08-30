@@ -29,7 +29,7 @@ from operations.attention import (
 from operations.models import OperationsRegistry, OperationsSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0033_add_report_kpi_reference_resolutions"
+HEAD = "0034_add_investment_profile_label_reviews"
 NOW = datetime(2026, 8, 24, 18, 0, tzinfo=UTC)
 
 

@@ -115,14 +115,31 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert 'data-live-endpoint="/api/work-os/evaluation" id="screen-evaluation"' in html
     for label in (
         "Company",
-        "Type",
-        "Thesis",
-        "Evaluation",
-        "Portfolio fit",
-        "DCF upside",
+        "Investment profile",
+        "Business &amp; moat",
+        "Portfolio role",
+        "Valuation",
         "Research",
     ):
         assert f">{label}<" in evaluation
+    assert ">Portfolio fit<" not in evaluation
+    assert ">DCF upside<" not in evaluation
+    assert 'data-work-os-evaluation-filter="compounders"' in evaluation
+    assert 'data-work-os-evaluation-filter="needs_review"' in evaluation
+    assert "/api/peek/investment-profile?ticker=" in html
+    assert "/api/peek/portfolio-impact?ticker=" in html
+    assert "investment-profile|portfolio-impact" in html
+    assert "data-profile-review-action" in html
+    assert 'data-work-os-evaluation-filter="label:' in html
+    assert "selected.startsWith('label:')" in html
+    assert "ETF profile pending deterministic classification" not in html
+    assert "'<td>' + workOsInvestmentProfileCell(item) + '</td>'" in html
+    assert "item.instrument_type === 'company' ? 'DCF upside' : 'Company DCF'" in html
+    assert "work-os:investment-evidence-updated" in html
+    assert "detail.kind === 'dcf' || detail.kind === 'research_refresh'" in html
+    assert "transient.route.startsWith('/api/peek/investment-profile?')" in html
+    assert "fullPage.route.startsWith('/api/peek/investment-profile?')" in html
+    assert "evaluation_surface.v2" in html
     assert "workOsRenderEvaluationSurface" in html
     assert "function workOsFiniteNumber(value)" in html
     assert "if (value == null || String(value).trim() === '') return null;" in html
@@ -130,7 +147,7 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "Company Desk" in html
     assert "ETF workup" in html
     assert "if (!opened) window.location.assign(target.getAttribute('href'));" in html
-    assert "No internal identifiers or encoded payloads are shown" in evaluation
+    assert "Open a side peek for rationale and evidence" in evaluation
 
 
 def test_work_os_shell_preserves_the_prototype_navigation_and_layers() -> None:

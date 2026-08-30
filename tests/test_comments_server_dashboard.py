@@ -11,6 +11,7 @@ import sys
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from bs4 import BeautifulSoup
@@ -109,13 +110,24 @@ def create_dashboard_test_schema(conn: sqlite3.Connection) -> None:
             error_msg TEXT,
             last_pulled TIMESTAMP
         );
+        CREATE TABLE investment_profile_label_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            label TEXT NOT NULL,
+            action TEXT NOT NULL,
+            suggestion_fingerprint TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE
+        );
         """
     )
     conn.commit()
 
 
 @pytest.fixture
-def app_repo(tmp_path: Path):
+def app_repo(tmp_path: Path) -> Path:
     """A repo_root with `data/portfolio.db` seeded with a minimal schema + rows."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -148,14 +160,14 @@ def app_repo(tmp_path: Path):
 
 
 @pytest.fixture
-def client(app_repo: Path):
+def client(app_repo: Path) -> FlaskClient:
     app = comments_server.create_app(app_repo)
     return app.test_client()
 
 
-def test_extracted_routes_preserve_endpoint_contract(client):
+def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> None:
     """Extracted registrars keep the monolith's public Flask names."""
-    rules = {
+    rules: dict[str, str] = {
         rule.endpoint: rule.rule
         for rule in client.application.url_map.iter_rules()
         if rule.endpoint != "static"
@@ -181,7 +193,9 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +2 Evaluation routes: bounded Cockpit dialogues and the complete L2 surface.
     # +1 governed Operations attention lifecycle action route.
     # +1 bounded read-only DCF grade-evidence projection.
-    assert len(rules) == 176
+    # +3 investment-profile routes: two read-only side peeks plus the
+    # fingerprint-bound owner label review action.
+    assert len(rules) == 179
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "company_say_do_api" not in rules
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()
@@ -440,10 +454,159 @@ def test_work_os_evaluation_api_returns_complete_versioned_projection(
     assert response.mimetype == "application/json"
     assert response.headers["Cache-Control"] == "no-store"
     payload = response.get_json()
-    assert payload["schema_version"] == "evaluation_surface.v1"
+    assert payload["schema_version"] == "evaluation_surface.v2"
     assert payload["count"] == len(payload["items"])
     assert {item["instrument_type"] for item in payload["items"]} <= {"company", "etf"}
     assert "stock" not in response.get_data(as_text=True).lower()
+
+
+def test_investment_profile_review_is_fingerprint_bound_and_append_only(
+    app_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline.work_os_evaluation import WorkOsEvaluationHydration, WorkOsEvaluationItem
+    from research.investment_profile import (
+        CompanyProfileLabel,
+        CompanyProfileProjection,
+        MoatAssessment,
+        MoatEvidenceCoverage,
+        ProfileLabelPresentation,
+        ProfileLabelState,
+        ProfileProjectionState,
+    )
+
+    fingerprint = "a" * 64
+    profile = CompanyProfileProjection(
+        labels=[
+            ProfileLabelPresentation(
+                label=CompanyProfileLabel.GARP,
+                display_label="GARP",
+                state=ProfileLabelState.SYSTEM_SUGGESTED,
+                suggested=True,
+                suggestion_fingerprint=fingerprint,
+                source_kind="dcf_rule",
+            )
+        ],
+        summary="Growth at a reasonable price.",
+        state=ProfileProjectionState.SYSTEM_SUGGESTED,
+        moat=MoatAssessment(
+            level=None,
+            evidence_coverage=MoatEvidenceCoverage.INSUFFICIENT,
+            rationale="Moat evidence is not yet sufficient.",
+        ),
+        refresh_fingerprint="b" * 64,
+    )
+    hydration = WorkOsEvaluationHydration(
+        generated_at="2026-08-29T12:00:00Z",
+        count=1,
+        items=[
+            WorkOsEvaluationItem(
+                ticker="DLO",
+                name="DLocal",
+                instrument_type="company",
+                profile=profile,
+            )
+        ],
+    )
+
+    def fake_cockpit_rows(*_args: object, **_kwargs: object) -> dict[str, list[object]]:
+        return {"evaluation": []}
+
+    def fake_evaluation(*_args: object, **_kwargs: object) -> WorkOsEvaluationHydration:
+        return hydration
+
+    monkeypatch.setattr(comments_server, "build_cockpit_rows", fake_cockpit_rows)
+    monkeypatch.setattr(comments_server, "build_work_os_evaluation", fake_evaluation)
+    client = comments_server.create_app(app_repo).test_client()
+
+    stale = client.post(
+        "/api/research/investment-profile/DLO/labels/garp/ratify",
+        json={"suggestion_fingerprint": "c" * 64},
+    )
+    assert stale.status_code == 409
+
+    recorded = client.post(
+        "/api/research/investment-profile/DLO/labels/garp/ratify",
+        json={"suggestion_fingerprint": fingerprint},
+    )
+    assert recorded.status_code == 201
+    assert cast(dict[str, object], recorded.get_json())["action"] == "ratify"
+    conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
+    row = conn.execute(
+        "SELECT ticker,label,action,suggestion_fingerprint FROM investment_profile_label_reviews"
+    ).fetchone()
+    conn.close()
+    assert row == ("DLO", "garp", "ratify", fingerprint)
+
+
+def test_etf_profile_review_uses_the_same_append_only_contract(
+    app_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline.work_os_evaluation import WorkOsEvaluationHydration, WorkOsEvaluationItem
+    from research.investment_profile import (
+        EtfEvidenceCoverage,
+        EtfProfileLabel,
+        EtfProfileLabelPresentation,
+        EtfProfileProjection,
+        ProfileLabelState,
+        ProfileProjectionState,
+    )
+
+    fingerprint = "d" * 64
+    hydration = WorkOsEvaluationHydration(
+        generated_at="2026-08-29T12:00:00Z",
+        count=1,
+        items=[
+            WorkOsEvaluationItem(
+                ticker="XLE",
+                name="Energy Select Sector SPDR Fund",
+                instrument_type="etf",
+                profile=EtfProfileProjection(
+                    labels=[
+                        EtfProfileLabelPresentation(
+                            label=EtfProfileLabel.TACTICAL_CYCLICAL,
+                            display_label="Tactical / cyclical",
+                            state=ProfileLabelState.SYSTEM_SUGGESTED,
+                            suggested=True,
+                            suggestion_fingerprint=fingerprint,
+                            source_kind="etf_rule",
+                            evidence_summary="Energy sector exposure is cyclical.",
+                        )
+                    ],
+                    summary="Sector ETF profile derived from current structured evidence.",
+                    state=ProfileProjectionState.SYSTEM_SUGGESTED,
+                    evidence_coverage=EtfEvidenceCoverage.PARTIAL,
+                    evidence_gaps=["Portfolio what-if evidence is unavailable."],
+                    refresh_fingerprint="e" * 64,
+                ),
+            )
+        ],
+    )
+
+    def fake_cockpit_rows(*_args: object, **_kwargs: object) -> dict[str, list[object]]:
+        return {"evaluation": []}
+
+    def fake_evaluation(*_args: object, **_kwargs: object) -> WorkOsEvaluationHydration:
+        return hydration
+
+    monkeypatch.setattr(comments_server, "build_cockpit_rows", fake_cockpit_rows)
+    monkeypatch.setattr(comments_server, "build_work_os_evaluation", fake_evaluation)
+    client = comments_server.create_app(app_repo).test_client()
+
+    recorded = client.post(
+        "/api/research/investment-profile/XLE/labels/tactical_cyclical/ratify",
+        json={"suggestion_fingerprint": fingerprint},
+    )
+
+    assert recorded.status_code == 201
+    assert cast(dict[str, object], recorded.get_json())["label"] == "tactical_cyclical"
+    conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
+    row = conn.execute(
+        "SELECT ticker,label,action,suggestion_fingerprint FROM investment_profile_label_reviews"
+    ).fetchone()
+    conn.close()
+    assert row == ("XLE", "tactical_cyclical", "ratify", fingerprint)
 
 
 def test_work_os_portfolio_api_uses_governed_snapshot_only_after_tracker_failure(
@@ -586,7 +749,7 @@ def test_work_os_portfolio_api_keeps_research_rows_when_allocation_is_unavailabl
     assert [row["ticker"] for row in payload["companies"]] == ["NU"]
 
 
-def test_dashboard_overview_excludes_action_blocks(client):
+def test_dashboard_overview_excludes_action_blocks(client: FlaskClient) -> None:
     """Maintenance is absent from Cockpit chrome and remains endpoint-only."""
     body = client.get("/").get_data(as_text=True)
     assert 'id="refresh-ir-form"' not in body
@@ -599,7 +762,7 @@ def test_mobile_inbox_redirects_to_the_responsive_cockpit(client: FlaskClient) -
     assert resp.headers["Location"].endswith("/#screen-cockpit")
 
 
-def test_actions_panel_fragment_serves_ir_form(client):
+def test_actions_panel_fragment_serves_ir_form(client: FlaskClient) -> None:
     resp = client.get("/api/panel/actions")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
@@ -608,23 +771,24 @@ def test_actions_panel_fragment_serves_ir_form(client):
     assert "/actions/maintenance" in body
 
 
-def test_dashboard_api_returns_grouped_json(client):
+def test_dashboard_api_returns_grouped_json(client: FlaskClient) -> None:
     resp = client.get("/api/dashboard")
     assert resp.status_code == 200
-    payload = resp.get_json()
+    payload = cast(dict[str, list[dict[str, object]]], resp.get_json())
     assert set(payload.keys()) == {"portfolio", "evaluation"}
     assert [r["ticker"] for r in payload["portfolio"]] == ["NU"]
     assert [r["ticker"] for r in payload["evaluation"]] == ["MELI"]
 
     nu_row = payload["portfolio"][0]
+    last_transcript = cast(dict[str, object], nu_row["last_transcript"])
     assert nu_row["fmp_last_pulled"] == "2026-05-11T01:02:14"
-    assert nu_row["last_transcript"]["period_end"] == "2026-03-31"
-    assert nu_row["last_transcript"]["has_qa_section"] is True
+    assert last_transcript["period_end"] == "2026-03-31"
+    assert last_transcript["has_qa_section"] is True
     assert nu_row["breach_status"] == "intact"
     assert nu_row["open_comments_count"] == 0
 
 
-def test_dashboard_api_excludes_watchlist(app_repo, client):
+def test_dashboard_api_excludes_watchlist(app_repo: Path, client: FlaskClient) -> None:
     """Add a watchlist ticker post-fixture and verify it doesn't appear."""
     conn = sqlite3.connect(str(app_repo / "data" / "portfolio.db"))
     conn.execute(
@@ -635,12 +799,12 @@ def test_dashboard_api_excludes_watchlist(app_repo, client):
     conn.close()
 
     resp = client.get("/api/dashboard")
-    payload = resp.get_json()
+    payload = cast(dict[str, list[dict[str, object]]], resp.get_json())
     all_tickers = {r["ticker"] for rows in payload.values() for r in rows}
     assert "SOFI" not in all_tickers
 
 
-def test_reports_route_serves_latest_workspace_html(client, app_repo):
+def test_reports_route_serves_latest_workspace_html(client: FlaskClient, app_repo: Path) -> None:
     research_dir = app_repo / "output" / "research" / "NU"
     research_dir.mkdir(parents=True)
     (research_dir / "2026-05-12_workspace.html").write_text("<html>old</html>")
@@ -654,12 +818,12 @@ def test_reports_route_serves_latest_workspace_html(client, app_repo):
     assert "newer build" in body
 
 
-def test_reports_route_404_when_no_build(client):
+def test_reports_route_404_when_no_build(client: FlaskClient) -> None:
     resp = client.get("/reports/NOTHING")
     assert resp.status_code == 404
 
 
-def test_reports_route_uppercases_ticker(client, app_repo):
+def test_reports_route_uppercases_ticker(client: FlaskClient, app_repo: Path) -> None:
     research_dir = app_repo / "output" / "research" / "NU"
     research_dir.mkdir(parents=True)
     (research_dir / "2026-05-18_workspace.html").write_text("<html>nu</html>")
@@ -675,7 +839,7 @@ def test_ticker_page_redirects_to_ticker_aware_company_desk(client: FlaskClient)
     assert response.headers["Location"] == "/?screen=company-desk&ticker=NU"
 
 
-def test_healthz_still_works(client):
+def test_healthz_still_works(client: FlaskClient) -> None:
     """Pre-existing endpoint must not regress."""
     resp = client.get("/healthz")
     assert resp.status_code == 200

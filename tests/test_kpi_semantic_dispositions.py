@@ -141,7 +141,7 @@ def test_sol_disposition_judgment_is_bound_to_exact_dry_run_and_code(
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="judge-binding",
-        expected_schema_revision="0033_add_report_kpi_reference_resolutions",
+        expected_schema_revision="0034_add_investment_profile_label_reviews",
         review_bundle_sha256="d" * 64,
         backup_restore_evidence_id="e" * 64,
         knowledge_at=NOW,
@@ -225,7 +225,7 @@ def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mut
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="crash-safe-replay",
-        expected_schema_revision="0033_add_report_kpi_reference_resolutions",
+        expected_schema_revision="0034_add_investment_profile_label_reviews",
         review_bundle_sha256="d" * 64,
         backup_restore_evidence_id="e" * 64,
         knowledge_at=NOW,
@@ -324,7 +324,7 @@ def _db() -> sqlite3.Connection:
     conn.executescript(
         """
         CREATE TABLE alembic_version(version_num TEXT PRIMARY KEY);
-        INSERT INTO alembic_version VALUES ('0033_add_report_kpi_reference_resolutions');
+        INSERT INTO alembic_version VALUES ('0034_add_investment_profile_label_reviews');
         CREATE TABLE database_runtime_identity(singleton INTEGER PRIMARY KEY,database_instance_id TEXT);
         INSERT INTO database_runtime_identity VALUES (1,'database-instance:0123456789abcdef0123456789abcdef');
         CREATE TABLE tracked_companies(
@@ -404,7 +404,7 @@ def test_disposition_rollout_is_append_only_idempotent_and_fail_closed(tmp_path:
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="portfolio-kpi-dispositions-2026-08-30",
-        expected_schema_revision="0033_add_report_kpi_reference_resolutions",
+        expected_schema_revision="0034_add_investment_profile_label_reviews",
         review_bundle_sha256="b" * 64,
         backup_restore_evidence_id="c" * 64,
         knowledge_at=NOW,
@@ -543,7 +543,7 @@ def test_duplicate_exact_labels_are_ambiguous_and_never_auto_bind(tmp_path: Path
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="ambiguous-label",
-        expected_schema_revision="0033_add_report_kpi_reference_resolutions",
+        expected_schema_revision="0034_add_investment_profile_label_reviews",
         review_bundle_sha256="b" * 64,
         backup_restore_evidence_id="c" * 64,
         knowledge_at=NOW,
@@ -595,7 +595,7 @@ def test_missing_report_configuration_blocks_manifest_preparation(tmp_path: Path
             user_id="owner",
             reviewer="source-review:owner",
             logical_idempotency_key="missing-report-config",
-            expected_schema_revision="0033_add_report_kpi_reference_resolutions",
+            expected_schema_revision="0034_add_investment_profile_label_reviews",
             review_bundle_sha256="b" * 64,
             backup_restore_evidence_id="c" * 64,
             knowledge_at=NOW,

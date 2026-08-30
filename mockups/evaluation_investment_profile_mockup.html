@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Evaluation investment profiles · prototype</title>
+  <style>
+    /* Prototype only — Visual-only kit simulation. Production must recompose this
+       direction through src/ui tokens, controls, registry, and CCOverlay. */
+    :root {
+      color-scheme: dark;
+      --bg: #090a0c;
+      --surface: #0e1013;
+      --paper: #13161b;
+      --paper-2: #181c22;
+      --fg: #f0f1f3;
+      --fg-soft: #c8cbd1;
+      --muted: #858b96;
+      --border: #242932;
+      --border-2: #353c48;
+      --accent: #8eb2ff;
+      --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+      --ok: #66d39a;
+      --warn: #e8b963;
+      --bad: #ee7d86;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --fs-display: 22px;
+      --fs-title: 15px;
+      --fs-body: 13px;
+      --fs-caption: 11px;
+      --sp-0: 0;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 24px;
+      --sp-6: 32px;
+      --radius: 7px;
+      --radius-card: 11px;
+      --radius-drawer: 14px;
+      --radius-full: 999px;
+      --header-height: 56px;
+      --sidebar-width: 224px;
+      --drawer-width: 560px;
+      --touch-target: 32px;
+      --shadow-card: 0 10px 30px rgba(0, 0, 0, .18);
+      --shadow-drawer: -16px 0 48px rgba(0, 0, 0, .7);
+      --transition: 150ms ease;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-block-size: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      color: var(--fg);
+      background: var(--bg);
+    }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    a { color: inherit; }
+    [hidden] { display: none !important; }
+
+    .app-shell { min-block-size: 100dvh; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+    .k-sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      inline-size: var(--sidebar-width);
+      background: var(--surface);
+      border-inline-end: 1px solid var(--border);
+      padding: var(--sp-3);
+      z-index: 10;
+    }
+    .brand {
+      block-size: 42px;
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: 0 var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--mono);
+      font-weight: 650;
+      letter-spacing: .02em;
+    }
+    .brand-mark { color: var(--accent); }
+    .nav-group { margin-block-start: var(--sp-5); }
+    .nav-label {
+      margin: 0 var(--sp-2) var(--sp-2);
+      color: var(--muted);
+      font-size: var(--fs-caption);
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      min-block-size: 34px;
+      inline-size: 100%;
+      margin-block-end: var(--sp-1);
+      padding: 0 var(--sp-2);
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      color: var(--muted);
+      text-decoration: none;
+    }
+    .nav-item:hover { color: var(--fg); background: var(--paper); }
+    .nav-item.is-active { color: var(--fg); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+    .nav-glyph { inline-size: 18px; text-align: center; color: var(--muted); }
+    .nav-item.is-active .nav-glyph { color: var(--accent); }
+
+    .app-main { grid-column: 2; min-inline-size: 0; }
+    .app-header {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 20;
+      block-size: var(--header-height);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+      padding-inline: var(--sp-5);
+      border-block-end: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg) 94%, transparent);
+      backdrop-filter: blur(14px);
+    }
+    .breadcrumb { color: var(--muted); }
+    .breadcrumb strong { color: var(--fg); font-weight: 600; }
+    .header-meta { display: flex; align-items: center; gap: var(--sp-2); }
+
+    .content { max-inline-size: 1420px; margin-inline: auto; padding: var(--sp-5); }
+    .k-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+      box-shadow: var(--shadow-card);
+    }
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--sp-5);
+      padding: var(--sp-4);
+    }
+    .eyebrow { margin: 0 0 var(--sp-1); color: var(--muted); font-size: var(--fs-caption); }
+    h1 { margin: 0; font-size: var(--fs-display); line-height: 1.2; }
+    .hero-copy { max-inline-size: 760px; margin: var(--sp-2) 0 0; color: var(--muted); line-height: 1.5; }
+    .hero-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; justify-content: flex-end; }
+
+    .k-btn {
+      min-block-size: var(--touch-target);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--sp-1);
+      padding: 5px 10px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: transparent;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background var(--transition), border-color var(--transition), color var(--transition);
+    }
+    .k-btn:hover { background: var(--paper-2); }
+    .k-btn:focus-visible, .k-chip:focus-visible, .profile-doorway:focus-visible, .role-doorway:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .k-btn-primary { background: var(--accent); color: #081020; font-weight: 700; }
+    .k-btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, white); }
+    .k-btn-quiet { border-color: var(--border); color: var(--fg-soft); }
+    .k-btn-danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+    .k-btn-sm { min-block-size: 26px; padding: 3px 8px; font-size: var(--fs-caption); }
+
+    .k-pill, .k-chip {
+      display: inline-flex;
+      align-items: center;
+      min-block-size: 22px;
+      padding: 2px 8px;
+      border-radius: var(--radius-full);
+      font-size: var(--fs-caption);
+      font-weight: 650;
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+    .k-pill { background: var(--paper-2); color: var(--fg-soft); }
+    .k-pill-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+    .k-pill-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+    .k-pill-accent { background: var(--accent-soft); color: var(--accent); }
+    .k-chip { border: 1px solid var(--border-2); background: transparent; color: var(--fg-soft); }
+    button.k-chip { cursor: pointer; }
+    button.k-chip:hover { color: var(--fg); border-color: var(--accent); }
+    button.k-chip.is-on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+    .k-chip-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+    .k-chip-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+    .k-chip-bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+    .k-chip-mono { font-family: var(--mono); text-transform: none; }
+
+    .prototype-note {
+      margin-block-start: var(--sp-3);
+      padding: var(--sp-3) var(--sp-4);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+      color: var(--muted);
+    }
+    .prototype-note strong { color: var(--warn); }
+
+    .coverage-card { margin-block-start: var(--sp-4); overflow: hidden; }
+    .table-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+      padding: var(--sp-3) var(--sp-4);
+      border-block-end: 1px solid var(--border);
+    }
+    .toolbar-title { margin: 0; font-size: var(--fs-title); }
+    .toolbar-meta { margin: var(--sp-1) 0 0; color: var(--muted); font-size: var(--fs-caption); }
+    .filter-strip { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; justify-content: flex-end; }
+    .filter-label { color: var(--muted); font-size: var(--fs-caption); }
+
+    .table-wrap { overflow-x: auto; }
+    table { inline-size: 100%; min-inline-size: 1110px; border-collapse: collapse; table-layout: fixed; }
+    th {
+      padding: 10px var(--sp-3);
+      text-align: start;
+      color: var(--muted);
+      background: var(--paper);
+      font-size: var(--fs-caption);
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      border-block-end: 1px solid var(--border);
+    }
+    td { padding: var(--sp-4) var(--sp-3); vertical-align: top; border-block-end: 1px solid var(--border); }
+    tbody tr:last-child td { border-block-end: 0; }
+    tbody tr:hover { background: color-mix(in srgb, var(--paper) 55%, transparent); }
+    th:nth-child(1) { inline-size: 150px; }
+    th:nth-child(2) { inline-size: 250px; }
+    th:nth-child(3) { inline-size: 205px; }
+    th:nth-child(4) { inline-size: 225px; }
+    th:nth-child(5) { inline-size: 135px; }
+    th:nth-child(6) { inline-size: 145px; }
+    .ticker { display: block; font-family: var(--mono); font-weight: 700; }
+    .company-name { display: block; margin-block-start: var(--sp-1); color: var(--muted); font-size: var(--fs-caption); line-height: 1.35; }
+    .instrument { margin-block-start: var(--sp-2); }
+    .profile-doorway, .role-doorway {
+      inline-size: 100%;
+      padding: 0;
+      border: 0;
+      background: none;
+      text-align: start;
+      cursor: pointer;
+    }
+    .tag-row { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+    .cell-copy { margin-block-start: var(--sp-2); color: var(--fg-soft); line-height: 1.45; }
+    .cell-meta { margin-block-start: var(--sp-1); color: var(--muted); font-size: var(--fs-caption); line-height: 1.4; }
+    .profile-doorway .cell-copy,
+    .profile-doorway .cell-meta,
+    .role-doorway .cell-copy,
+    .role-doorway .cell-meta { display: block; }
+    .signal-list { display: grid; gap: var(--sp-1); }
+    .signal-line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
+    .signal-line span:first-child { color: var(--muted); }
+    .signal-line strong { font-family: var(--mono); font-size: var(--fs-caption); }
+    .positive { color: var(--ok); }
+    .negative { color: var(--bad); }
+    .neutral { color: var(--fg-soft); }
+    .ratification { margin-block-start: var(--sp-2); }
+    .research-links { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+
+    .footer-note { padding: var(--sp-3) var(--sp-4); color: var(--muted); border-block-start: 1px solid var(--border); line-height: 1.5; }
+    .footer-note strong { color: var(--fg-soft); }
+
+    .k-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      background: rgba(0, 0, 0, .62);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--transition);
+    }
+    .k-scrim.is-open { opacity: 1; pointer-events: auto; }
+    .k-overlay.k-drawer {
+      position: fixed;
+      inset: 0 0 0 auto;
+      z-index: 90;
+      inline-size: min(var(--drawer-width), 94vw);
+      block-size: 100dvh;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-drawer) 0 0 var(--radius-drawer);
+      box-shadow: var(--shadow-drawer);
+      transform: translateX(102%);
+      transition: transform 180ms ease;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+    }
+    .k-overlay.k-drawer.is-open { transform: translateX(0); }
+    .drawer-head {
+      min-block-size: var(--header-height);
+      padding: 0 var(--sp-4);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-3);
+      border-block-end: 1px solid var(--border);
+    }
+    .drawer-kicker { color: var(--muted); font-size: var(--fs-caption); }
+    .drawer-title { margin-block-start: 2px; font-size: var(--fs-title); font-weight: 700; }
+    .drawer-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-block-end: 1px solid var(--border); }
+    .drawer-tab {
+      min-block-size: 42px;
+      border: 0;
+      border-block-end: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .drawer-tab[aria-selected="true"] { color: var(--accent); border-block-end-color: var(--accent); }
+    .drawer-body { min-block-size: 0; overflow-y: auto; padding: var(--sp-4); }
+    .drawer-section { padding-block: var(--sp-3); border-block-end: 1px solid var(--border); }
+    .drawer-section:first-child { padding-block-start: 0; }
+    .drawer-section:last-child { border-block-end: 0; }
+    .section-label { color: var(--muted); font-size: var(--fs-caption); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .section-title { margin: var(--sp-2) 0 0; font-size: var(--fs-title); line-height: 1.45; }
+    .section-copy { margin: var(--sp-2) 0 0; color: var(--fg-soft); line-height: 1.55; }
+    .k-well { margin-block-start: var(--sp-3); padding: var(--sp-3); border-radius: var(--radius); background: var(--paper); }
+    .evidence-grid { margin-block-start: var(--sp-3); display: grid; gap: var(--sp-2); }
+    .evidence-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); align-items: start; }
+    .evidence-name { font-weight: 650; }
+    .evidence-detail { margin-block-start: 2px; color: var(--muted); font-size: var(--fs-caption); line-height: 1.4; }
+    .evidence-value { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft); text-align: end; }
+    .impact-meter { margin-block-start: var(--sp-2); display: grid; grid-template-columns: 116px minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; }
+    .impact-label { color: var(--muted); font-size: var(--fs-caption); }
+    .impact-progress { inline-size: 100%; block-size: 7px; border: 0; border-radius: var(--radius-full); overflow: hidden; background: var(--paper-2); }
+    .impact-progress::-webkit-progress-bar { background: var(--paper-2); border-radius: var(--radius-full); }
+    .impact-progress::-webkit-progress-value { background: var(--accent); border-radius: var(--radius-full); }
+    .impact-progress::-moz-progress-bar { background: var(--accent); border-radius: var(--radius-full); }
+    .impact-progress[data-tone="ok"]::-webkit-progress-value { background: var(--ok); }
+    .impact-progress[data-tone="ok"]::-moz-progress-bar { background: var(--ok); }
+    .impact-progress[data-tone="warn"]::-webkit-progress-value { background: var(--warn); }
+    .impact-progress[data-tone="warn"]::-moz-progress-bar { background: var(--warn); }
+    .impact-progress[data-tone="bad"]::-webkit-progress-value { background: var(--bad); }
+    .impact-progress[data-tone="bad"]::-moz-progress-bar { background: var(--bad); }
+    .impact-value { font-family: var(--mono); font-size: var(--fs-caption); }
+    .source-list { margin: var(--sp-2) 0 0; padding: 0; list-style: none; display: grid; gap: var(--sp-2); }
+    .source-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); color: var(--fg-soft); }
+    .source-list span:last-child { color: var(--muted); font-size: var(--fs-caption); }
+    .drawer-foot { padding: var(--sp-3) var(--sp-4); border-block-start: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+    .shortcut-note { color: var(--muted); font-size: var(--fs-caption); line-height: 1.45; }
+
+    .empty-filter { padding: var(--sp-6); text-align: center; color: var(--muted); }
+    .sr-only { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+    @media (max-width: 72rem) {
+      :root { --sidebar-width: 72px; }
+      .brand span:last-child, .nav-label, .nav-copy { display: none; }
+      .brand { justify-content: center; }
+      .nav-item { justify-content: center; }
+      .content { padding: var(--sp-4); }
+      .hero { align-items: stretch; }
+    }
+    @media (max-width: 48rem) {
+      :root { --sidebar-width: 0px; --header-height: 56px; }
+      .k-sidebar { display: none; }
+      .app-shell { grid-template-columns: minmax(0, 1fr); }
+      .app-main { grid-column: 1; }
+      .app-header { padding-inline: var(--sp-3); }
+      .header-meta .k-pill { display: none; }
+      .content { padding: var(--sp-3); }
+      .hero, .prototype-note, .table-toolbar { flex-direction: column; }
+      .hero-actions, .filter-strip { justify-content: flex-start; }
+      .k-overlay.k-drawer { inline-size: 100vw; border-radius: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .001ms !important; animation-duration: .001ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="k-sidebar" aria-label="Primary navigation">
+      <div class="brand"><span class="brand-mark">◈</span><span>Counterread</span></div>
+      <nav>
+        <div class="nav-group">
+          <div class="nav-label">L1 · Portfolio intelligence</div>
+          <a class="nav-item" href="#"><span class="nav-glyph">▦</span><span class="nav-copy">Portfolio Cockpit</span></a>
+          <a class="nav-item" href="#"><span class="nav-glyph">⌁</span><span class="nav-copy">Performance</span></a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">L2 · Research engine</div>
+          <a class="nav-item" href="#"><span class="nav-glyph">ϟ</span><span class="nav-copy">Company Desk</span></a>
+          <a class="nav-item is-active" href="#" aria-current="page"><span class="nav-glyph">☷</span><span class="nav-copy">Evaluation</span></a>
+          <a class="nav-item" href="#"><span class="nav-glyph">□</span><span class="nav-copy">Brief Library</span></a>
+          <a class="nav-item" href="#"><span class="nav-glyph">⌁</span><span class="nav-copy">Fact &amp; Metric Playground</span></a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">L3 · Operations</div>
+          <a class="nav-item" href="#"><span class="nav-glyph">▤</span><span class="nav-copy">Decision Audit Log</span></a>
+          <a class="nav-item" href="#"><span class="nav-glyph">ϟ</span><span class="nav-copy">Operations</span></a>
+        </div>
+      </nav>
+    </aside>
+
+    <main class="app-main">
+      <header class="app-header">
+        <div class="breadcrumb">Workspaces / <strong>Evaluation</strong></div>
+        <div class="header-meta">
+          <span class="k-pill k-pill-warn">Prototype only</span>
+          <button class="k-btn k-btn-quiet k-btn-sm" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="hero k-card" aria-labelledby="evaluationTitle">
+          <div>
+            <p class="eyebrow">Research Engine · Investment shape before composite scores</p>
+            <h1 id="evaluationTitle">Evaluation</h1>
+            <p class="hero-copy">Scan the flavor of each investment, the durability of the business case, and what it would do to the book. Open a side drawer for the evidence and ratification trail.</p>
+          </div>
+          <div class="hero-actions">
+            <span class="k-pill" id="visibleCount">5 shown</span>
+            <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-filter-label="review">Needs review</button>
+          </div>
+        </section>
+
+        <aside class="prototype-note k-card" aria-label="Mockup truth boundary">
+          <div><strong>Illustrative suggestions.</strong> No live portfolio or research state is read or written. Values reuse the supplied markup and representative corpus capabilities.</div>
+          <div class="shortcut-note"><strong>30-day decision window:</strong> scalar Evaluation and Portfolio fit scores are hidden. If they do not earn a front-end role by 2026-09-28, delete the presentation and compatibility seams rather than preserving dead UI.</div>
+        </aside>
+
+        <section class="coverage-card k-card" aria-label="Evaluation coverage list">
+          <header class="table-toolbar">
+            <div>
+              <h2 class="toolbar-title">Coverage</h2>
+              <p class="toolbar-meta">Filterable multi-label profiles · owner ratification is distinct from system suggestion</p>
+            </div>
+            <div class="filter-strip" role="group" aria-label="Filter investment profiles">
+              <span class="filter-label">Show</span>
+              <button class="k-chip is-on" type="button" data-filter-label="all" aria-pressed="true">All</button>
+              <button class="k-chip" type="button" data-filter-label="long-term-compounder" aria-pressed="false">Compounders</button>
+              <button class="k-chip" type="button" data-filter-label="garp" aria-pressed="false">GARP</button>
+              <button class="k-chip" type="button" data-filter-label="review" aria-pressed="false">Needs review</button>
+              <button class="k-chip" type="button" data-filter-label="etf" aria-pressed="false">ETFs</button>
+            </div>
+          </header>
+
+          <div class="table-wrap">
+            <table data-testid="evaluation-table">
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>Investment profile</th>
+                  <th>Business &amp; moat</th>
+                  <th>Portfolio role</th>
+                  <th>Valuation</th>
+                  <th>Research</th>
+                </tr>
+              </thead>
+              <tbody id="evaluationRows">
+                <tr data-company-row data-ticker="DLO" data-labels="garp growth-inflection owner-ratified company">
+                  <td><span class="ticker">DLO</span><span class="company-name">DLocal</span><span class="k-pill instrument">Company</span></td>
+                  <td>
+                    <button class="profile-doorway" type="button" data-open-drawer data-ticker="DLO" data-tab="profile">
+                      <span class="tag-row"><span class="k-chip k-chip-ok">GARP</span><span class="k-chip">Growth inflection</span></span>
+                      <span class="cell-copy">High growth with cash conversion; valuation still leaves modeled room.</span>
+                      <span class="cell-meta">Open why this profile →</span>
+                    </button>
+                    <div class="ratification"><span class="k-pill k-pill-ok">Owner ratified</span></div>
+                  </td>
+                  <td><div class="signal-list"><div class="signal-line"><span>Moat case</span><strong class="neutral">Narrow / conditional moat</strong></div><div class="signal-line"><span>Growth</span><strong class="positive">+65% YoY</strong></div><div class="signal-line"><span>FCF margin</span><strong>37%</strong></div></div><div class="cell-meta">Cross-border network breadth vs corridor concentration</div></td>
+                  <td><button class="role-doorway" type="button" data-open-drawer data-ticker="DLO" data-tab="portfolio"><span class="tag-row"><span class="k-chip k-chip-ok">Diversifier</span><span class="k-chip">Balances tilt</span></span><span class="cell-copy">Adds LatAm payments exposure without deepening the book’s growth lean.</span><span class="cell-meta">Open book impact →</span></button></td>
+                  <td><div class="signal-list"><div class="signal-line"><span>DCF upside</span><strong class="positive">+32.5%</strong></div><div class="signal-line"><span>Scenario reward</span><strong class="positive">Positive</strong></div><div class="signal-line"><span>Model state</span><strong>Current</strong></div></div></td>
+                  <td><div class="research-links"><button class="k-btn k-btn-primary k-btn-sm" type="button">Company Desk</button><button class="k-chip" type="button">DCF</button><button class="k-chip" type="button">Brief</button></div></td>
+                </tr>
+
+                <tr data-company-row data-ticker="TSM" data-labels="long-term-compounder elite-growth-expensive owner-ratified company">
+                  <td><span class="ticker">TSM</span><span class="company-name">Taiwan Semiconductor</span><span class="k-pill instrument">Company</span></td>
+                  <td>
+                    <button class="profile-doorway" type="button" data-open-drawer data-ticker="TSM" data-tab="profile">
+                      <span class="tag-row"><span class="k-chip k-chip-ok">Long-term compounder</span><span class="k-chip k-chip-warn">Elite growth / expensive</span></span>
+                      <span class="cell-copy">Process leadership and reinvestment runway remain elite; price discounts a demanding path.</span>
+                      <span class="cell-meta">Open why this profile →</span>
+                    </button>
+                    <div class="ratification"><span class="k-pill k-pill-ok">Owner ratified</span></div>
+                  </td>
+                  <td><div class="signal-list"><div class="signal-line"><span>Moat case</span><strong class="positive">Core-business moat</strong></div><div class="signal-line"><span>Growth</span><strong class="positive">+35% YoY</strong></div><div class="signal-line"><span>Thesis</span><strong>Intact</strong></div></div><div class="cell-meta">Leading-edge scale, yield learning, and customer trust</div></td>
+                  <td><button class="role-doorway" type="button" data-open-drawer data-ticker="TSM" data-tab="portfolio"><span class="tag-row"><span class="k-chip k-chip-warn">Crowding risk</span><span class="k-chip">Quality anchor</span></span><span class="cell-copy">Raises semiconductor and AI-capex concentration despite high standalone quality.</span><span class="cell-meta">Open book impact →</span></button></td>
+                  <td><div class="signal-list"><div class="signal-line"><span>DCF upside</span><strong class="negative">−14.2%</strong></div><div class="signal-line"><span>Priced in</span><strong class="negative">Demanding</strong></div><div class="signal-line"><span>Model state</span><strong>Current</strong></div></div></td>
+                  <td><div class="research-links"><button class="k-btn k-btn-primary k-btn-sm" type="button">Company Desk</button><button class="k-chip" type="button">DCF</button><button class="k-chip" type="button">Brief</button></div></td>
+                </tr>
+
+                <tr data-company-row data-ticker="NTDOY" data-labels="narrative-re-rating optionality review company">
+                  <td><span class="ticker">NTDOY</span><span class="company-name">Nintendo Co.</span><span class="k-pill instrument">Company</span></td>
+                  <td>
+                    <button class="profile-doorway" type="button" data-open-drawer data-ticker="NTDOY" data-tab="profile">
+                      <span class="tag-row"><span class="k-chip">Narrative re-rating</span><span class="k-chip">Optionality</span></span>
+                      <span class="cell-copy">The system sees a platform-cycle rerating case, but the governed thesis is incomplete.</span>
+                      <span class="cell-meta">Open evidence gap →</span>
+                    </button>
+                    <div class="ratification"><span class="k-pill k-pill-warn">Review suggested</span></div>
+                  </td>
+                  <td><div class="signal-list"><div class="signal-line"><span>Moat case</span><strong class="neutral">Evidence insufficient</strong></div><div class="signal-line"><span>Growth story</span><strong>Cycle reset</strong></div><div class="signal-line"><span>Thesis</span><strong class="negative">Incomplete</strong></div></div><div class="cell-meta">IP strength is plausible; evidence package needs owner review</div></td>
+                  <td><button class="role-doorway" type="button" data-open-drawer data-ticker="NTDOY" data-tab="portfolio"><span class="tag-row"><span class="k-chip">Consumer diversifier</span><span class="k-chip">Event risk</span></span><span class="cell-copy">Adds non-US consumer/IP exposure; return path depends on a product cycle.</span><span class="cell-meta">Open book impact →</span></button></td>
+                  <td><div class="signal-list"><div class="signal-line"><span>DCF upside</span><strong class="positive">+23.3%</strong></div><div class="signal-line"><span>Scenario reward</span><strong class="neutral">Unverified</strong></div><div class="signal-line"><span>Model state</span><strong class="negative">Partial</strong></div></div></td>
+                  <td><div class="research-links"><button class="k-btn k-btn-primary k-btn-sm" type="button">Company Desk</button><button class="k-chip" type="button">DCF</button><button class="k-chip" type="button">Brief</button></div></td>
+                </tr>
+
+                <tr data-company-row data-ticker="LLY" data-labels="elite-growth-expensive long-term-compounder review company">
+                  <td><span class="ticker">LLY</span><span class="company-name">Eli Lilly</span><span class="k-pill instrument">Company</span></td>
+                  <td>
+                    <button class="profile-doorway" type="button" data-open-drawer data-ticker="LLY" data-tab="profile">
+                      <span class="tag-row"><span class="k-chip k-chip-ok">Long-term compounder</span><span class="k-chip k-chip-warn">Elite growth / expensive</span></span>
+                      <span class="cell-copy">Exceptional demand and pipeline duration; valuation absorbs a large share of the quality.</span>
+                      <span class="cell-meta">Open why this profile →</span>
+                    </button>
+                    <div class="ratification"><span class="k-pill k-pill-accent">System suggested</span></div>
+                  </td>
+                  <td><div class="signal-list"><div class="signal-line"><span>Moat case</span><strong class="positive">Multi-business moat</strong></div><div class="signal-line"><span>Growth</span><strong class="positive">+56% YoY</strong></div><div class="signal-line"><span>Thesis</span><strong>Intact</strong></div></div><div class="cell-meta">Scale, clinical evidence, and manufacturing capacity</div></td>
+                  <td><button class="role-doorway" type="button" data-open-drawer data-ticker="LLY" data-tab="portfolio"><span class="tag-row"><span class="k-chip k-chip-warn">Growth crowding</span><span class="k-chip">Healthcare exposure</span></span><span class="cell-copy">Improves sector breadth but compounds duration and premium-growth risk.</span><span class="cell-meta">Open book impact →</span></button></td>
+                  <td><div class="signal-list"><div class="signal-line"><span>DCF upside</span><strong class="negative">−26.9%</strong></div><div class="signal-line"><span>Priced in</span><strong class="negative">Very demanding</strong></div><div class="signal-line"><span>Tail skew</span><strong class="negative">Downside</strong></div></div></td>
+                  <td><div class="research-links"><button class="k-btn k-btn-primary k-btn-sm" type="button">Company Desk</button><button class="k-chip" type="button">DCF</button><button class="k-chip" type="button">Brief</button></div></td>
+                </tr>
+
+                <tr data-company-row data-ticker="SOXX" data-labels="etf thematic-exposure factor-sleeve diversifier owner-ratified">
+                  <td><span class="ticker">SOXX</span><span class="company-name">iShares Semiconductor ETF</span><span class="k-pill k-pill-warn instrument">ETF</span></td>
+                  <td>
+                    <button class="profile-doorway" type="button" data-open-drawer data-ticker="SOXX" data-tab="profile">
+                      <span class="tag-row"><span class="k-chip">Thematic exposure</span><span class="k-chip">Factor sleeve</span></span>
+                      <span class="cell-copy">A concentrated semiconductor growth sleeve, not a company-style compounder classification.</span>
+                      <span class="cell-meta">Open fund profile →</span>
+                    </button>
+                    <div class="ratification"><span class="k-pill k-pill-ok">Owner ratified</span></div>
+                  </td>
+                  <td><div class="signal-list"><div class="signal-line"><span>Fund role</span><strong>Growth beta</strong></div><div class="signal-line"><span>Look-through</span><strong class="negative">High overlap</strong></div><div class="signal-line"><span>Cost</span><strong>Known</strong></div></div><div class="cell-meta">ETF vocabulary: Core beta · Factor sleeve · Thematic exposure · Diversifier · Defensive / hedge · Income</div></td>
+                  <td><button class="role-doorway" type="button" data-open-drawer data-ticker="SOXX" data-tab="portfolio"><span class="tag-row"><span class="k-chip k-chip-warn">Crowding risk</span><span class="k-chip">Tactical sleeve</span></span><span class="cell-copy">Efficient exposure, but look-through overlap repeats existing semiconductor holdings.</span><span class="cell-meta">Open look-through impact →</span></button></td>
+                  <td><div class="signal-list"><div class="signal-line"><span>Basket value</span><strong class="neutral">Premium</strong></div><div class="signal-line"><span>Risk-adjusted</span><strong class="positive">Positive</strong></div><div class="signal-line"><span>Fund data</span><strong>Current</strong></div></div></td>
+                  <td><div class="research-links"><button class="k-btn k-btn-primary k-btn-sm" type="button">ETF workup</button><button class="k-chip" type="button">Holdings</button><button class="k-chip" type="button">Compare</button></div></td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="empty-filter" id="emptyFilter" hidden>No names match this filter.</div>
+          </div>
+          <footer class="footer-note"><strong>Seed vocabulary shown in this prototype:</strong> company shapes include Long-term compounder, GARP, Elite growth / expensive, Turnaround, Narrative re-rating, Growth inflection, Cash-yield value, and Optionality. Moat conclusions use four levels: Multi-business moat, Core-business moat, Narrow / conditional moat, and No demonstrated moat; Evidence insufficient remains a separate coverage state. ETF shapes remain separate: Core beta, Factor sleeve, Thematic exposure, Diversifier, Defensive / hedge, Income, and Tactical / cyclical.</footer>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="k-scrim" id="drawerScrim" hidden></div>
+  <aside class="k-overlay k-drawer" id="profileDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="drawerTitle" hidden>
+    <header class="drawer-head">
+      <div><div class="drawer-kicker" id="drawerKicker">Illustrative company profile</div><div class="drawer-title" id="drawerTitle">DLO · Investment profile</div></div>
+      <button class="k-btn k-btn-quiet k-btn-sm" id="drawerClose" type="button" aria-label="Close investment profile">Close</button>
+    </header>
+    <div class="drawer-tabs" role="tablist" aria-label="Investment detail views">
+      <button class="drawer-tab" id="profileTab" type="button" role="tab" aria-selected="true" aria-controls="profilePanel" tabindex="0" data-drawer-tab="profile">Profile evidence</button>
+      <button class="drawer-tab" id="portfolioTab" type="button" role="tab" aria-selected="false" aria-controls="portfolioPanel" tabindex="-1" data-drawer-tab="portfolio">Portfolio impact</button>
+    </div>
+    <div class="drawer-body">
+      <section id="profilePanel" role="tabpanel" aria-labelledby="profileTab"></section>
+      <section id="portfolioPanel" role="tabpanel" aria-labelledby="portfolioTab" hidden></section>
+    </div>
+    <footer class="drawer-foot">
+      <button class="k-btn k-btn-primary" type="button" data-action="ratify">Ratify suggestion</button>
+      <button class="k-btn k-btn-quiet" type="button" data-action="edit-labels">Edit labels</button>
+      <button class="k-btn k-btn-danger" type="button" data-action="reject-suggestion">Reject suggestion</button>
+      <button class="k-btn k-btn-quiet" type="button" data-action="ask-copilot">Ask Copilot</button>
+    </footer>
+  </aside>
+
+  <script>
+    const profiles = {
+      DLO: {
+        name: 'DLocal', instrument: 'Company', status: 'Owner ratified', moat: 'Narrow / conditional moat',
+        labels: ['GARP', 'Growth inflection'],
+        summary: 'High growth with cash conversion; valuation still leaves modeled room.',
+        moatCase: 'The brief supports a cross-border network and local rails advantage, while concentration by corridor and merchant cohort keeps durability from reading as fully proven.',
+        businessEvidence: [
+          ['Revenue growth', '+65% YoY', 'Full brief · current financial series'],
+          ['FCF margin', '37%', 'Full brief · current financial series'],
+          ['Thesis state', 'Intact', 'Investment Decision Card · owner thesis'],
+          ['Latest quarter', 'Confirmed', 'Post-earnings readout · thesis update']
+        ],
+        valuation: 'DCF +32.5% with positive scenario-weighted reward; reverse-DCF expectations remain below the brief’s current operating trajectory.',
+        portfolioSummary: 'Adds LatAm payments exposure and balances the current growth tilt.',
+        impact: [['Sector exposure', 'Financial technology · light current book weight', 34, 'ok'], ['Factor tilt', 'Balances book growth tilt', 72, 'ok'], ['Correlation', 'Moderate to held book', 49, 'accent'], ['Risk-adjusted reward', 'Positive at modeled 3% add', 78, 'ok']],
+        fitEvidence: [['Modeled ΔSharpe', '+6 bp', 'Candidate fit · 3% pro-rata funding'], ['Sector effect', 'Adds to a light sleeve', 'Candidate fit · book snapshot'], ['Factor effect', 'Balances growth tilt', 'Candidate fit · QQQ−SPY beta'], ['DCF reward', '+32.5% base', 'DCF run · current price basis']]
+      },
+      TSM: {
+        name: 'Taiwan Semiconductor', instrument: 'Company', status: 'Owner ratified', moat: 'Core-business moat',
+        labels: ['Long-term compounder', 'Elite growth / expensive'],
+        summary: 'Process leadership and reinvestment runway remain elite; price discounts a demanding path.',
+        moatCase: 'The company description, segment economics, thesis, and earnings corpus point to leading-edge scale, yield learning, and customer trust. Geopolitical concentration remains the load-bearing disconfirming case.',
+        businessEvidence: [['Revenue growth', '+35% YoY', 'Full brief · current financial series'], ['Operating mechanism', 'Leading-edge scale', 'Investment Decision Card · directional thesis'], ['Thesis state', 'Intact', 'Thesis evaluator · current episode'], ['Management delivery', 'Met / exceeded', 'Earnings Say·Do · recent sequence']],
+        valuation: 'DCF −14.2%; reverse DCF says the market requires a strong multiyear volume and margin path.',
+        portfolioSummary: 'High-quality anchor, but increases semiconductor and AI-capex crowding.',
+        impact: [['Sector exposure', 'Adds to a heavy semiconductor sleeve', 84, 'warn'], ['Factor tilt', 'Deepens growth leadership', 78, 'warn'], ['Correlation', 'High to existing AI exposure', 82, 'warn'], ['Risk-adjusted reward', 'Unfavorable at current price', 43, 'warn']],
+        fitEvidence: [['Modeled ΔSharpe', '−2 bp', 'Candidate fit · 3% pro-rata funding'], ['Sector effect', 'Adds to heavy sleeve', 'Candidate fit · book snapshot'], ['Factor effect', 'Adds to crowding', 'Candidate fit · QQQ−SPY beta'], ['DCF reward', '−14.2% base', 'DCF run · current price basis']]
+      },
+      NTDOY: {
+        name: 'Nintendo Co.', instrument: 'Company', status: 'Review suggested', moat: 'Evidence insufficient',
+        labels: ['Narrative re-rating', 'Optionality'],
+        summary: 'The system sees a platform-cycle rerating case, but the governed thesis is incomplete.',
+        moatCase: 'The current corpus hints at durable IP and ecosystem value but lacks an owner-ratified thesis and complete decision-grade evidence package. The system suggestion must stay provisional.',
+        businessEvidence: [['Revenue trajectory', 'Cycle-dependent', 'Full brief · partial evaluation snapshot'], ['Operating mechanism', 'IP + platform cycle', 'Company description · system draft'], ['Thesis state', 'Incomplete', 'Investment Decision Card · blocker'], ['Latest quarter', 'No governed readout', 'Post-earnings readout · unavailable']],
+        valuation: 'DCF +23.3%, but scenario reward and downside case are incomplete; valuation cannot ratify the label by itself.',
+        portfolioSummary: 'Adds non-US consumer/IP exposure with event-cycle risk.',
+        impact: [['Sector exposure', 'New consumer/IP exposure', 28, 'ok'], ['Factor tilt', 'Near neutral', 48, 'accent'], ['Correlation', 'Potential diversifier; partial history', 38, 'ok'], ['Risk-adjusted reward', 'Unverified', 20, 'warn']],
+        fitEvidence: [['Modeled ΔSharpe', 'Unavailable', 'Candidate fit · partial'], ['Sector effect', 'Adds new exposure', 'Candidate fit · book snapshot'], ['Factor effect', 'Near neutral', 'Candidate fit · price history'], ['DCF reward', '+23.3% base', 'DCF run · partial scenario set']]
+      },
+      LLY: {
+        name: 'Eli Lilly', instrument: 'Company', status: 'System suggested', moat: 'Multi-business moat',
+        labels: ['Long-term compounder', 'Elite growth / expensive'],
+        summary: 'Exceptional demand and pipeline duration; valuation absorbs a large share of the quality.',
+        moatCase: 'Clinical evidence, scale, and constrained manufacturing capacity support durability across multiple therapeutic franchises. Reimbursement, competition, and a demanding terminal path are the main counters.',
+        businessEvidence: [['Revenue growth', '+56% YoY', 'Full brief · current financial series'], ['Growth story', 'Capacity + pipeline', 'Investment Decision Card · operating mechanism'], ['Thesis state', 'Intact', 'Thesis evaluator · current episode'], ['Latest quarter', 'Demand confirmed', 'Post-earnings readout · thesis update']],
+        valuation: 'DCF −26.9% and downside-skewed scenario reward; reverse DCF requires sustained elite growth.',
+        portfolioSummary: 'Improves sector breadth but compounds duration and premium-growth risk.',
+        impact: [['Sector exposure', 'Adds healthcare breadth', 35, 'ok'], ['Factor tilt', 'Deepens premium growth', 83, 'warn'], ['Correlation', 'Moderate to growth sleeve', 58, 'accent'], ['Risk-adjusted reward', 'Negative at current price', 26, 'bad']],
+        fitEvidence: [['Modeled ΔSharpe', '−4 bp', 'Candidate fit · 3% pro-rata funding'], ['Sector effect', 'Adds breadth', 'Candidate fit · book snapshot'], ['Factor effect', 'Adds growth crowding', 'Candidate fit · QQQ−SPY beta'], ['DCF reward', '−26.9% base', 'DCF run · current price basis']]
+      },
+      SOXX: {
+        name: 'iShares Semiconductor ETF', instrument: 'ETF', status: 'Owner ratified', moat: 'Not applicable',
+        labels: ['Thematic exposure', 'Factor sleeve'],
+        summary: 'A concentrated semiconductor growth sleeve, not a company-style compounder classification.',
+        moatCase: 'ETF labels describe portfolio role, factor exposure, implementation cost, and look-through concentration. Company moat vocabulary is intentionally not applied.',
+        businessEvidence: [['Fund role', 'Thematic growth sleeve', 'ETF workup · holdings and mandate'], ['Look-through overlap', 'High', 'Candidate fit · fund holdings'], ['Expense ratio', 'Known', 'ETF workup · issuer data'], ['Basket valuation', 'Premium', 'ETF score cache · current basket']],
+        valuation: 'Basket valuation is premium; the fund read uses risk-adjusted return, cost, factor premium, and basket value rather than a company DCF.',
+        portfolioSummary: 'Efficient exposure, but repeats existing semiconductor holdings.',
+        impact: [['Sector exposure', 'Concentrated semiconductor sleeve', 92, 'warn'], ['Factor tilt', 'Deep growth beta', 86, 'warn'], ['Look-through overlap', 'High', 88, 'warn'], ['Risk-adjusted reward', 'Positive but crowded', 61, 'accent']],
+        fitEvidence: [['Modeled ΔSharpe', '+1 bp', 'ETF fit · 3% pro-rata funding'], ['Look-through overlap', 'High', 'ETF holdings · current basket'], ['Factor effect', 'Deepens growth tilt', 'ETF score cache · factor premium'], ['Cost effect', 'Known', 'ETF workup · issuer data']]
+      }
+    };
+
+    const allSeedLabels = ['Long-term compounder', 'GARP', 'Elite growth / expensive', 'Turnaround', 'Narrative re-rating', 'Growth inflection', 'Cash-yield value', 'Optionality', 'Core beta', 'Factor sleeve', 'Thematic exposure', 'Diversifier', 'Defensive / hedge', 'Income', 'Tactical / cyclical'];
+    const drawer = document.getElementById('profileDrawer');
+    const scrim = document.getElementById('drawerScrim');
+    const closeButton = document.getElementById('drawerClose');
+    const profilePanel = document.getElementById('profilePanel');
+    const portfolioPanel = document.getElementById('portfolioPanel');
+    const profileTab = document.getElementById('profileTab');
+    const portfolioTab = document.getElementById('portfolioTab');
+    let currentTicker = 'DLO';
+    let restoreFocus = null;
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+    }
+
+    function sourceRows(items) {
+      return items.map(([name, value, source]) => '<div class="evidence-row"><div><div class="evidence-name">' + escapeHtml(name) + '</div><div class="evidence-detail">' + escapeHtml(source) + '</div></div><div class="evidence-value">' + escapeHtml(value) + '</div></div>').join('');
+    }
+
+    function profileMarkup(p) {
+      const tags = p.labels.map(label => '<span class="k-chip">' + escapeHtml(label) + '</span>').join('');
+      return '<div class="drawer-section"><div class="section-label">' + escapeHtml(p.status) + '</div><div class="tag-row">' + tags + '</div><h2 class="section-title">' + escapeHtml(p.summary) + '</h2><p class="section-copy">Suggested from governed research inputs; the system does not silently convert this into an owner belief.</p></div>' +
+        '<div class="drawer-section"><div class="section-label">Qualitative moat case · ' + escapeHtml(p.moat) + '</div><p class="section-copy">' + escapeHtml(p.moatCase) + '</p></div>' +
+        '<div class="drawer-section"><div class="section-label">Direct evidence</div><div class="evidence-grid">' + sourceRows(p.businessEvidence) + '</div></div>' +
+        '<div class="drawer-section"><div class="section-label">Valuation context</div><p class="section-copy">' + escapeHtml(p.valuation) + '</p></div>' +
+        '<div class="drawer-section"><div class="section-label">Evidence sources already produced</div><ul class="source-list"><li><span>Full brief</span><span>company · financials · thesis</span></li><li><span>DCF run</span><span>reward · skew · priced-in</span></li><li><span>Post-earnings readout</span><span>quarter · management · thesis</span></li><li><span>Candidate fit</span><span>sector · factor · correlation</span></li><li><span>Investment Decision Card</span><span>hypothesis · role · uncertainty</span></li></ul></div>' +
+        '<div class="drawer-section"><div class="section-label">Future update behavior</div><div class="k-well"><strong>New evidence creates a proposed revision.</strong><p class="section-copy">A new brief content identity, DCF observation version, earnings readout, thesis episode, or candidate-fit snapshot can suggest added or removed labels. Owner ratification remains unchanged until you accept the revision.</p><p class="section-copy">System updates never overwrite an owner-ratified profile.</p></div></div>' +
+        '<span class="sr-only">Available controlled labels: ' + escapeHtml(allSeedLabels.join(', ')) + '</span>';
+    }
+
+    function portfolioMarkup(p) {
+      const meters = p.impact.map(([label, detail, pct, tone]) => '<div class="impact-meter"><span class="impact-label">' + escapeHtml(label) + '</span><progress class="impact-progress" data-tone="' + escapeHtml(tone) + '" max="100" value="' + Number(pct) + '"><span>' + Number(pct) + '%</span></progress><span class="impact-value">' + escapeHtml(detail) + '</span></div>').join('');
+      return '<div class="drawer-section"><div class="section-label">Portfolio role</div><h2 class="section-title">' + escapeHtml(p.portfolioSummary) + '</h2><p class="section-copy">The row uses direct book effects instead of a scalar fit score.</p></div>' +
+        '<div class="drawer-section"><div class="section-label">Exposure and diversity</div>' + meters + '</div>' +
+        '<div class="drawer-section"><div class="section-label">Risk-adjusted evidence</div><div class="evidence-grid">' + sourceRows(p.fitEvidence) + '</div></div>' +
+        '<div class="drawer-section"><div class="section-label">Interpretation boundary</div><p class="section-copy">Correlation, diversification, and modeled ΔSharpe are decision aids, not forecasts. Missing price history or stale book context must remain visible and score neutral rather than being guessed.</p></div>';
+    }
+
+    function renderDrawer(ticker) {
+      const p = profiles[ticker];
+      if (!p) return;
+      currentTicker = ticker;
+      document.getElementById('drawerKicker').textContent = p.instrument + ' · ' + p.status;
+      document.getElementById('drawerTitle').textContent = ticker + ' · ' + p.name;
+      profilePanel.innerHTML = profileMarkup(p);
+      portfolioPanel.innerHTML = portfolioMarkup(p);
+      const ratify = drawer.querySelector('[data-action="ratify"]');
+      ratify.textContent = p.status === 'Owner ratified' ? 'Ratified' : 'Ratify suggestion';
+      ratify.disabled = p.status === 'Owner ratified';
+    }
+
+    function selectDrawerTab(name, focusTab) {
+      const profileOn = name === 'profile';
+      profileTab.setAttribute('aria-selected', String(profileOn));
+      portfolioTab.setAttribute('aria-selected', String(!profileOn));
+      profileTab.tabIndex = profileOn ? 0 : -1;
+      portfolioTab.tabIndex = profileOn ? -1 : 0;
+      profilePanel.hidden = !profileOn;
+      portfolioPanel.hidden = profileOn;
+      if (focusTab) (profileOn ? profileTab : portfolioTab).focus();
+    }
+
+    function openDrawer(ticker, tab, trigger) {
+      restoreFocus = trigger || document.activeElement;
+      renderDrawer(ticker);
+      selectDrawerTab(tab || 'profile', false);
+      drawer.hidden = false;
+      scrim.hidden = false;
+      requestAnimationFrame(() => {
+        drawer.classList.add('is-open');
+        scrim.classList.add('is-open');
+        drawer.setAttribute('aria-hidden', 'false');
+        closeButton.focus({ preventScroll: true });
+      });
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove('is-open');
+      scrim.classList.remove('is-open');
+      drawer.setAttribute('aria-hidden', 'true');
+      window.setTimeout(() => { drawer.hidden = true; scrim.hidden = true; }, 180);
+      if (restoreFocus && typeof restoreFocus.focus === 'function') restoreFocus.focus({ preventScroll: true });
+    }
+
+    function trapDrawerFocus(event) {
+      const focusable = [...drawer.querySelectorAll('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')].filter(node => !node.hidden && node.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+
+    function applyLabelFilter(filter) {
+      const rows = [...document.querySelectorAll('[data-company-row]')];
+      let visible = 0;
+      rows.forEach(row => {
+        const labels = (row.dataset.labels || '').split(/\s+/);
+        const show = filter === 'all' || labels.includes(filter);
+        row.hidden = !show;
+        if (show) visible += 1;
+      });
+      document.getElementById('visibleCount').textContent = visible + ' shown';
+      document.getElementById('emptyFilter').hidden = visible !== 0;
+      document.querySelectorAll('[data-filter-label]').forEach(button => {
+        const on = button.dataset.filterLabel === filter;
+        button.classList.toggle('is-on', on);
+        button.setAttribute('aria-pressed', String(on));
+      });
+    }
+
+    document.addEventListener('click', event => {
+      const doorway = event.target.closest('[data-open-drawer]');
+      if (doorway) { openDrawer(doorway.dataset.ticker, doorway.dataset.tab, doorway); return; }
+      const filter = event.target.closest('[data-filter-label]');
+      if (filter) { applyLabelFilter(filter.dataset.filterLabel); return; }
+      const tab = event.target.closest('[data-drawer-tab]');
+      if (tab) { selectDrawerTab(tab.dataset.drawerTab, true); return; }
+      const action = event.target.closest('[data-action]');
+      if (!action) return;
+      const p = profiles[currentTicker];
+      if (action.dataset.action === 'ratify') {
+        p.status = 'Owner ratified';
+        renderDrawer(currentTicker);
+        const row = document.querySelector('[data-company-row][data-ticker="' + currentTicker + '"]');
+        if (row) {
+          row.dataset.labels = (row.dataset.labels + ' owner-ratified').replace(/\breview\b/g, '').trim();
+          const pill = row.querySelector('.ratification .k-pill');
+          pill.className = 'k-pill k-pill-ok';
+          pill.textContent = 'Owner ratified';
+        }
+      }
+      if (action.dataset.action === 'edit-labels') window.alert('Prototype: opens the controlled multi-label editor. No live state is written.');
+      if (action.dataset.action === 'reject-suggestion') window.alert('Prototype: records a rejected suggestion while preserving the evidence episode.');
+      if (action.dataset.action === 'ask-copilot') window.alert('Prototype: asks Copilot with the profile evidence and portfolio-impact view attached.');
+    });
+
+    closeButton.addEventListener('click', closeDrawer);
+    scrim.addEventListener('click', closeDrawer);
+    profileTab.addEventListener('keydown', event => { if (event.key === 'ArrowRight') selectDrawerTab('portfolio', true); });
+    portfolioTab.addEventListener('keydown', event => { if (event.key === 'ArrowLeft') selectDrawerTab('profile', true); });
+    drawer.addEventListener('keydown', event => { if (event.key === 'Tab') trapDrawerFocus(event); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && !drawer.hidden) closeDrawer(); });
+  </script>
+</body>
+</html>

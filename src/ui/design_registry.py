@@ -38,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.10.1"
+REGISTRY_VERSION = "1.10.2"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -584,6 +584,7 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/triage_panel.py",
         "pipeline/validation_issues_panel.py",
         "pipeline/work_os_copilot.py",
+        "pipeline/work_os_evaluation.py",
         "pipeline/work_os_shell.py",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
@@ -611,6 +612,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "dashboard/_card.py",
     "dashboard/evidence_drawer.py",
     "dashboard/feed.py",
+    "execution/comments_server.py",
     "pipeline/annual_letter_panel.py",
     "pipeline/analysis_styles.py",
     "pipeline/calibration_receipt.py",
@@ -782,6 +784,7 @@ _NON_HTML_PYTHON_SURFACES = frozenset(
         "execution/verify_design_conformance.py",
         "pipeline/cc_overlay.py",
         "pipeline/cc_state.py",
+        "pipeline/work_os_evaluation.py",
         "redteam/telegram_cmd.py",
         "report/renderers/workspace_chat.py",
         "report/renderers/workspace_decision_card.py",
@@ -823,6 +826,7 @@ _RUNTIME_JS_SURFACES = frozenset(
         "pipeline/ticker_settings_panel.py",
         "pipeline/triage_panel.py",
         "pipeline/work_os_copilot.py",
+        "pipeline/work_os_evaluation.py",
         "pipeline/work_os_shell.py",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
@@ -1058,7 +1062,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "b2a3e1c86719393e9d602316ba1854931309df3709f4f1d39a05cc0335b68b49",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "ba286e873103e61d71c5293118bf1e909a26222b6226f9128ba5fecd9971e20f",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret
