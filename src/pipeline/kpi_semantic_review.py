@@ -470,7 +470,7 @@ def _evidence_state_and_candidates(
         run_marks = ",".join("?" for _ in valid_run_ids)
         kind_marks = ",".join("?" for _ in _SUBSTANTIVE_NODE_KINDS)
         rows = conn.execute(
-            "SELECT node.node_id,node.node_kind,node.locator_sha256,"
+            "SELECT node.node_id,node.node_kind,node.locator_sha256,"  # nosec B608 -- SQL shape and placeholder counts come only from closed internal sets; all values remain bound
             "substr(node.text,1,?) AS bounded_text,length(node.text) AS text_length,"
             "node.extraction_run_id,run.document_version_id FROM evidence_nodes node "
             "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
@@ -633,7 +633,7 @@ def build_kpi_semantic_review_batch(
         context_join, context_status = _current_context_join(conn)
         marks = ",".join("?" for _ in reasons_by_definition)
         rows = conn.execute(
-            "SELECT fact.id,fact.ticker,fact.period_end,fact.fiscal_period_type,"
+            "SELECT fact.id,fact.ticker,fact.period_end,fact.fiscal_period_type,"  # nosec B608 -- relation/context fragments are resolver-owned; ids and limits remain bound
             "fact.kpi_definition_id,fact.value,fact.unit,fact.source_doc_id,"
             f"definition.name,definition.ticker AS definition_ticker,"
             f"{context_status} AS context_status FROM {fact_relation.sql} fact "
