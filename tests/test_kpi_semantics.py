@@ -240,7 +240,7 @@ def test_scope_is_report_union_facts_metrics_for_portfolio_only(tmp_path: Path) 
     persist_kpi_semantic_context(conn, kpi_fact_id=1, context=_context())
     holdings = tmp_path / "micro_thesis" / "holdings"
     holdings.mkdir(parents=True)
-    (holdings / "NU.json").write_text(json.dumps({"chart_priorities": ["NIM"]}))
+    (holdings / "NU.json").write_text(json.dumps({"ticker": "NU", "chart_priorities": ["NIM"]}))
 
     rows = scoped_kpi_definitions(conn, repo_root=tmp_path)
     assert [(row.ticker, row.name, row.reasons) for row in rows] == [
@@ -274,6 +274,9 @@ def test_scope_counts_only_current_fact_heads(tmp_path: Path) -> None:
         ],
     )
     persist_kpi_semantic_context(conn, kpi_fact_id=2, context=_context())
+    holdings = tmp_path / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True)
+    (holdings / "NU.json").write_text('{"ticker":"NU"}', encoding="utf-8")
 
     rows = scoped_kpi_definitions(conn, repo_root=tmp_path)
 
@@ -381,5 +384,74 @@ def test_active_migration_head_installs_append_only_semantic_context(
             == 1
         )
         assert first is not None
+    finally:
+        conn.close()
+
+
+def test_active_migration_head_installs_append_only_report_reference_dispositions(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "portfolio-reference-dispositions.db")
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='report_kpi_reference_resolution_revisions'"
+        ).fetchone()
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='kpi_semantic_disposition_commits'"
+        ).fetchone()
+        triggers = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'trg_report_kpi_reference_resolution_%'"
+            )
+        }
+        assert triggers == {
+            "trg_report_kpi_reference_resolution_predecessor",
+            "trg_report_kpi_reference_resolution_no_update",
+            "trg_report_kpi_reference_resolution_no_delete",
+        }
+        insert_sql = (
+            "INSERT INTO report_kpi_reference_resolution_revisions "
+            "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
+            "reference_content_sha256,status,kpi_definition_id,reason_code,revision,"
+            "supersedes_resolution_id,reviewed_by,knowledge_at) "
+            "VALUES ('owner','NU','micro_thesis/holdings/NU.json','/tier_1_kpis/0/name',"
+            "'tier_1_kpi','Unmapped',?, ?, ?, 'no_matching_reported_definition',1,NULL,"
+            "'source-review:owner','2026-08-30T12:00:00Z')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert_sql, ("a" * 64, "resolved", 1))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert_sql, ("a" * 64, "retired", None))
+        conn.execute(insert_sql, ("a" * 64, "unresolved", None))
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                "UPDATE report_kpi_reference_resolution_revisions SET reason_code='changed'"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM report_kpi_reference_resolution_revisions")
+        conn.execute(
+            "INSERT INTO kpi_semantic_disposition_commits VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "a" * 64,
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                "e" * 64,
+                1,
+                1,
+                1,
+                1,
+                "2026-08-30T12:00:00Z",
+            ),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("UPDATE kpi_semantic_disposition_commits SET fact_disposition_count=2")
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM kpi_semantic_disposition_commits")
     finally:
         conn.close()

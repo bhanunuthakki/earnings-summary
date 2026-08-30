@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0032_allow_source_reviewed_kpi_supersessions"
+_ACTIVE_HEAD = "0033_add_report_kpi_reference_resolutions"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

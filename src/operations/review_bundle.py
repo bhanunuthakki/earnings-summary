@@ -20,6 +20,10 @@ from operations.models import (
     OperationsSnapshot,
     SchedulerExpectation,
 )
+from pipeline.kpi_report_reference_dispositions import (
+    ReportKpiReferenceSourceStatus,
+    ReportKpiReferenceStatus,
+)
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -122,6 +126,11 @@ class ReviewKpiCensus(_FrozenModel):
     legacy_unknown: int = Field(ge=0)
     missing: int = Field(ge=0)
     unresolved_report_metrics: int = Field(ge=0)
+    undisposed_report_references: int = Field(ge=0)
+    disposed_unresolved_report_references: int = Field(ge=0)
+    invalid_or_missing_report_configurations: int = Field(ge=0)
+    disposition_gate_blocked: bool
+    decision_grade_admission_blocked: bool
     current_actual: int = Field(ge=0)
     comparator: int = Field(ge=0)
     guidance_target: int = Field(ge=0)
@@ -151,7 +160,7 @@ class ReviewKpiRepair(_FrozenModel):
 
 
 class OperationsReviewBundle(_FrozenModel):
-    schema_version: Literal["operations_review_bundle.v3"] = "operations_review_bundle.v3"
+    schema_version: Literal["operations_review_bundle.v4"] = "operations_review_bundle.v4"
     observed_at: datetime
     identity: ReviewIdentity
     database: ReviewObservation
@@ -189,6 +198,9 @@ def review_code_identity(repo_root: Path) -> str:
         "execution/comments_server.py",
         "execution/collect_operations_runtime_observations.py",
         "execution/apply_kpi_semantic_refresh.py",
+        "execution/apply_kpi_semantic_dispositions.py",
+        "execution/prepare_kpi_semantic_dispositions.py",
+        "execution/record_kpi_disposition_judgment.py",
         "execution/record_kpi_repair_judgment.py",
         "src/operations/models.py",
         "src/operations/registry.py",
@@ -196,6 +208,9 @@ def review_code_identity(repo_root: Path) -> str:
         "src/operations/kpi_repair_receipts.py",
         "src/operations/snapshot.py",
         "src/pipeline/kpi_source_review.py",
+        "src/pipeline/kpi_report_reference_dispositions.py",
+        "src/pipeline/kpi_semantic_dispositions.py",
+        "src/pipeline/kpi_semantic_scope.py",
     )
     digest = hashlib.sha256()
     for relative in relative_paths:
@@ -247,14 +262,46 @@ def _observation(value: ObservationEnvelope) -> ReviewObservation:
 
 
 def _kpi_census(rows: tuple[ScopedKpiDefinition, ...]) -> ReviewKpiCensus:
+    missing = sum(row.missing_context_count for row in rows)
+    quarantined = sum(row.quarantined_context_count for row in rows)
+    legacy_unknown = sum(row.legacy_unknown_context_count for row in rows)
+    undisposed = sum(
+        row.kpi_definition_id is None
+        and row.report_reference_source_status is ReportKpiReferenceSourceStatus.VALID
+        and row.report_reference_status is None
+        for row in rows
+    )
+    disposed_unresolved = sum(
+        row.report_reference_status is ReportKpiReferenceStatus.UNRESOLVED for row in rows
+    )
+    invalid_sources = sum(
+        row.report_reference_source_status is not None
+        and row.report_reference_source_status.value != "valid"
+        for row in rows
+    )
     return ReviewKpiCensus(
         definitions=len(rows),
         facts=sum(row.fact_count for row in rows),
         admitted=sum(row.admitted_context_count for row in rows),
-        quarantined=sum(row.quarantined_context_count for row in rows),
-        legacy_unknown=sum(row.legacy_unknown_context_count for row in rows),
-        missing=sum(row.missing_context_count for row in rows),
-        unresolved_report_metrics=sum(row.kpi_definition_id is None for row in rows),
+        quarantined=quarantined,
+        legacy_unknown=legacy_unknown,
+        missing=missing,
+        unresolved_report_metrics=undisposed + disposed_unresolved,
+        undisposed_report_references=undisposed,
+        disposed_unresolved_report_references=disposed_unresolved,
+        invalid_or_missing_report_configurations=invalid_sources,
+        disposition_gate_blocked=bool(
+            not rows or missing or legacy_unknown or undisposed or invalid_sources
+        ),
+        decision_grade_admission_blocked=bool(
+            not rows
+            or missing
+            or quarantined
+            or legacy_unknown
+            or undisposed
+            or disposed_unresolved
+            or invalid_sources
+        ),
         current_actual=sum(row.current_actual_count for row in rows),
         comparator=sum(row.comparator_count for row in rows),
         guidance_target=sum(row.guidance_target_count for row in rows),
@@ -323,7 +370,7 @@ def build_operations_review_bundle(
     )
     schema_value = snapshot.schema_revision.value
     payload: dict[str, object] = {
-        "schema_version": "operations_review_bundle.v3",
+        "schema_version": "operations_review_bundle.v4",
         "observed_at": snapshot.observed_at,
         "identity": ReviewIdentity(
             serving_origin_sha256=_sha256_text(serving_origin.rstrip("/")),
