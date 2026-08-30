@@ -36,6 +36,7 @@ from backup_restore_readiness_receipt import (  # noqa: E402
 )
 from fetch_windows_review_bundle import (  # noqa: E402
     WindowsReviewPins,
+    identity_sha256,
     validate_pinned_identity,
 )
 
@@ -337,7 +338,10 @@ def _validate_apply_authority(
         raise RepairBlockedError("apply_database_is_not_canonical_windows_authority")
     if receipt_root.resolve() != canonical_receipt_root.resolve():
         raise RepairBlockedError("apply_receipt_root_is_not_canonical_operations_surface")
-    if review_code_identity(PROJECT_ROOT) != review_bundle.identity.code_instance_sha256:
+    if (
+        identity_sha256(review_code_identity(PROJECT_ROOT))
+        != review_bundle.identity.code_instance_sha256
+    ):
         raise RepairBlockedError("apply_code_identity_mismatch")
 
 
