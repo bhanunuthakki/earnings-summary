@@ -14,8 +14,11 @@ def sqlite_file_token(db_path: Path) -> SQLiteFileToken | None:
     changing the main database file. Keying caches on the main-file mtime
     alone can therefore preserve stale query results until a later checkpoint.
     Including nanosecond mtime and size for both files invalidates on ordinary
-    appends, WAL resets, checkpoints, and sidecar deletion. ``None`` means the
-    database itself is unavailable and callers must bypass their cache.
+    appends, WAL resets, checkpoints, and sidecar deletion. A zero-byte WAL is
+    normalized to absence because it contains no committed frames and can be
+    left behind by a read-only Windows connection; checkpointed content is
+    still represented by the main-file identity. ``None`` means the database
+    itself is unavailable and callers must bypass their cache.
     """
     try:
         main = db_path.stat()
@@ -25,6 +28,8 @@ def sqlite_file_token(db_path: Path) -> SQLiteFileToken | None:
     try:
         wal = wal_path.stat()
     except OSError:
+        return (main.st_mtime_ns, main.st_size, 0, 0)
+    if wal.st_size == 0:
         return (main.st_mtime_ns, main.st_size, 0, 0)
     return (main.st_mtime_ns, main.st_size, wal.st_mtime_ns, wal.st_size)
 
