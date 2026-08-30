@@ -161,7 +161,7 @@ class RefreshEntry(BaseModel):
     source_doc_id: int = Field(gt=0)
     source_content_sha256: str = Field(pattern=_SHA256)
     source_observation_version: str = Field(min_length=1, max_length=80)
-    source_period_end: str = Field(min_length=10, max_length=40)
+    source_period_end: str | None = Field(default=None, min_length=10, max_length=40)
     evidence_node_id: str = Field(min_length=1, max_length=128)
     evidence_locator_sha256: str = Field(pattern=_SHA256)
     fact_locator_sha256: str = Field(pattern=_SHA256)
@@ -220,7 +220,7 @@ class RefreshEntry(BaseModel):
 class RefreshManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_refresh.v4"]
+    schema_version: Literal["kpi_semantic_refresh.v5"]
     user_id: str = Field(min_length=1, max_length=128)
     logical_idempotency_key: str = Field(min_length=1, max_length=256)
     reviewer: str = Field(min_length=1, max_length=128)
@@ -356,7 +356,7 @@ def _validate_source_binding(
     conn: sqlite3.Connection, entry: RefreshEntry
 ) -> tuple[SourceType, str]:
     document = conn.execute(
-        "SELECT ticker,source_type,period_end,sha256,fetched_at,file_path "
+        "SELECT ticker,source_type,doc_type,period_end,sha256,fetched_at,file_path "
         "FROM documents WHERE id=?",
         (entry.source_doc_id,),
     ).fetchone()
@@ -366,7 +366,14 @@ def _validate_source_binding(
         raise RepairBlockedError("source_content_identity_mismatch")
     if str(document["fetched_at"]) != entry.source_observation_version:
         raise RepairBlockedError("source_observation_version_mismatch")
-    if str(document["period_end"]) != entry.source_period_end:
+    document_period_end = None if document["period_end"] is None else str(document["period_end"])
+    if entry.source_period_end is None:
+        if (
+            str(document["doc_type"]) != "ir_historical_spreadsheet"
+            or document_period_end is not None
+        ):
+            raise RepairBlockedError("source_period_mismatch")
+    elif document_period_end != entry.source_period_end:
         raise RepairBlockedError("source_period_mismatch")
     source_type = SourceType(str(document["source_type"]))
     if source_type not in _REVIEWABLE_SOURCE_TYPES:

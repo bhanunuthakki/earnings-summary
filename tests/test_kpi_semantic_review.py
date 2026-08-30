@@ -92,6 +92,7 @@ def _document(
     source_type: str,
     doc_type: str,
     parent_document_id: int | None = None,
+    period_end: str | None = "2024-12-31",
 ) -> None:
     conn.execute(
         "INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?)",
@@ -100,13 +101,42 @@ def _document(
             "NU",
             source_type,
             doc_type,
-            "2024-12-31",
+            period_end,
             SHA,
             "2026-05-03T20:55:53Z",
             parent_document_id,
             "C:/sources/document.pdf",
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("doc_type", "expected_state"),
+    [
+        ("ir_historical_spreadsheet", KpiSemanticReviewState.NEEDS_LEDGER_CAPTURE),
+        ("ir_presentation", KpiSemanticReviewState.SOURCE_IDENTITY_MISSING),
+    ],
+)
+def test_source_period_is_optional_only_for_multi_period_documents(
+    tmp_path: Path,
+    doc_type: str,
+    expected_state: KpiSemanticReviewState,
+) -> None:
+    conn = _database()
+    _document(
+        conn,
+        document_id=10,
+        source_type="ir_doc",
+        doc_type=doc_type,
+        period_end=None,
+    )
+    _fact(conn, fact_id=1, definition_id=1, document_id=10)
+
+    batch = build_kpi_semantic_review_batch(
+        conn, repo_root=tmp_path, user_id="owner", observed_at=NOW
+    )
+
+    assert batch.items[0].state is expected_state
 
 
 def _fact(conn: sqlite3.Connection, *, fact_id: int, definition_id: int, document_id: int) -> None:
