@@ -41,7 +41,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, TextIO
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -51,6 +51,15 @@ from runtime.python_process import managed_python_argv  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 Mode = Literal["full", "stale"]
+
+
+class _RunResult(Protocol):
+    returncode: int | None
+
+
+class _Runner(Protocol):
+    def __call__(self, argv: list[str], *, out: TextIO) -> _RunResult: ...
+
 
 # Every step the dispatcher knows how to run, in canonical execution order.
 # `build_report` stays last so it picks up whatever the earlier steps produced.
@@ -203,8 +212,9 @@ def execute(
     plan: Plan,
     *,
     project_root: Path = PROJECT_ROOT,
-    out=sys.stdout,
-    runner=None,
+    state_root: Path | None = None,
+    out: TextIO = sys.stdout,
+    runner: _Runner | None = None,
 ) -> int:
     """Run the chain per `plan`. Returns aggregate exit code (0 if all steps OK).
 
@@ -212,21 +222,25 @@ def execute(
     matches `subprocess.run`: receives argv list, returns object with `.returncode`.
     """
     runner = runner or _default_runner
+    resolved_state_root = state_root or project_root
     steps = plan.steps or DEFAULT_STEPS
     _emit(out, f"[dispatch] ticker={plan.ticker} mode={plan.mode} steps={','.join(steps)}")
 
     # argv per step name — built once; only the selected ones run.
     builders = {
-        "fmp": _argv_fmp(project_root, plan.ticker),
-        "transcripts": _argv_transcripts(project_root, plan.ticker),
-        "process_ir_docs": _argv_process_ir(project_root, plan.ticker),
-        "news": _argv_news(project_root, plan.ticker),
-        "extract_kpis": _argv_extract_kpis(project_root, plan.ticker),
-        "saydo": _argv_saydo(project_root, plan.ticker),
-        "dcf": _argv_dcf(project_root, plan.ticker),
-        "thesis_eval": _argv_thesis_eval(project_root, plan.ticker),
+        "fmp": _argv_fmp(project_root, resolved_state_root, plan.ticker),
+        "transcripts": _argv_transcripts(project_root, resolved_state_root, plan.ticker),
+        "process_ir_docs": _argv_process_ir(project_root, resolved_state_root, plan.ticker),
+        "news": _argv_news(project_root, resolved_state_root, plan.ticker),
+        "extract_kpis": _argv_extract_kpis(project_root, resolved_state_root, plan.ticker),
+        "saydo": _argv_saydo(project_root, resolved_state_root, plan.ticker),
+        "dcf": _argv_dcf(project_root, resolved_state_root, plan.ticker),
+        "thesis_eval": _argv_thesis_eval(project_root, resolved_state_root, plan.ticker),
         "build_report": _argv_build(
-            project_root, plan.ticker, force_budget_bypass=plan.force_budget_bypass
+            project_root,
+            resolved_state_root,
+            plan.ticker,
+            force_budget_bypass=plan.force_budget_bypass,
         ),
     }
 
@@ -237,7 +251,7 @@ def execute(
             continue
         _emit(out, f"[dispatch] step={name} action=start")
         result = runner(builders[name], out=out)
-        rc = getattr(result, "returncode", 1)
+        rc = result.returncode if result.returncode is not None else 1
         _emit(out, f"[dispatch] step={name} action=end rc={rc}")
         if rc != 0:
             rc_total = rc  # remember last failure; independent later steps still run
@@ -246,7 +260,7 @@ def execute(
     return rc_total
 
 
-def _default_runner(argv: list[str], *, out):
+def _default_runner(argv: list[str], *, out: TextIO) -> subprocess.Popen[str]:
     """Run subprocess and forward stdout/stderr to `out`, line-buffered."""
     proc = subprocess.Popen(
         argv,
@@ -265,7 +279,7 @@ def _default_runner(argv: list[str], *, out):
     return proc
 
 
-def _argv_fmp(project_root: Path, ticker: str) -> list[str]:
+def _argv_fmp(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
         project_root / "execution" / "fetch_fmp_historical_data.py",
@@ -273,28 +287,34 @@ def _argv_fmp(project_root: Path, ticker: str) -> list[str]:
         ticker,
         "--limit",
         "12",
+        "--repo-root",
+        str(state_root),
     )
 
 
-def _argv_transcripts(project_root: Path, ticker: str) -> list[str]:
+def _argv_transcripts(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
         project_root / "execution" / "backfill_transcripts.py",
         "--ticker",
         ticker,
+        "--repo-root",
+        str(state_root),
     )
 
 
-def _argv_process_ir(project_root: Path, ticker: str) -> list[str]:
+def _argv_process_ir(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
-        project_root / "execution" / "process_ir_documents.py",
+        project_root / "execution" / "process_ir_documents_state.py",
         "--ticker",
         ticker,
+        "--repo-root",
+        str(state_root),
     )
 
 
-def _argv_extract_kpis(project_root: Path, ticker: str) -> list[str]:
+def _argv_extract_kpis(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
         project_root / "execution" / "extract_kpis_from_summaries.py",
@@ -303,22 +323,28 @@ def _argv_extract_kpis(project_root: Path, ticker: str) -> list[str]:
         "--source",
         "earnings",
         "--repo-root",
-        str(project_root),
+        str(state_root),
     )
 
 
-def _argv_saydo(project_root: Path, ticker: str) -> list[str]:
+def _argv_saydo(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
         project_root / "execution" / "build_saydo_pairs.py",
         "--ticker",
         ticker,
         "--repo-root",
-        str(project_root),
+        str(state_root),
     )
 
 
-def _argv_build(project_root: Path, ticker: str, *, force_budget_bypass: bool = False) -> list[str]:
+def _argv_build(
+    project_root: Path,
+    state_root: Path,
+    ticker: str,
+    *,
+    force_budget_bypass: bool = False,
+) -> list[str]:
     argv = managed_python_argv(
         project_root,
         project_root / "execution" / "build_artifacts.py",
@@ -328,42 +354,50 @@ def _argv_build(project_root: Path, ticker: str, *, force_budget_bypass: bool = 
         "workspace",
         "--enable-llm",
         "--repo-root",
-        str(project_root),
+        str(state_root),
     )
     if force_budget_bypass:
         argv.append("--force-budget-bypass")
     return argv
 
 
-def _argv_news(project_root: Path, ticker: str) -> list[str]:
+def _argv_news(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     # Default source=auto (FMP, WebSearch+Opus fallback per ticker on refusal).
     return managed_python_argv(
         project_root,
         project_root / "execution" / "fetch_news.py",
         "--tickers",
         ticker,
+        "--db-path",
+        str(state_root / "data" / "portfolio.db"),
     )
 
 
-def _argv_dcf(project_root: Path, ticker: str) -> list[str]:
+def _argv_dcf(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
         project_root / "execution" / "refresh_dcf.py",
         "--ticker",
         ticker,
+        "--repo-root",
+        str(state_root),
     )
 
 
-def _argv_thesis_eval(project_root: Path, ticker: str) -> list[str]:
+def _argv_thesis_eval(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
         project_root / "execution" / "run_thesis_evaluator.py",
         "--ticker",
         ticker,
+        "--db",
+        str(state_root / "data" / "portfolio.db"),
+        "--holdings-dir",
+        str(state_root / "micro_thesis" / "holdings"),
     )
 
 
-def _emit(out, line: str) -> None:
+def _emit(out: TextIO, line: str) -> None:
     out.write(line + "\n")
     out.flush()
 
@@ -409,6 +443,12 @@ def main() -> int:
         default=PROJECT_ROOT / "data" / "portfolio.db",
         help="Path to portfolio.db (default: %(default)s)",
     )
+    parser.add_argument(
+        "--state-root",
+        type=Path,
+        default=PROJECT_ROOT,
+        help="checkout that owns mutable data and generated artifacts (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     steps = [s for s in args.steps.split(",")] if args.steps else None
@@ -427,7 +467,7 @@ def main() -> int:
         print(json.dumps(asdict(plan), indent=2))
         return 0
 
-    return execute(plan, project_root=PROJECT_ROOT)
+    return execute(plan, project_root=PROJECT_ROOT, state_root=args.state_root.resolve())
 
 
 if __name__ == "__main__":

@@ -51,6 +51,19 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY")
 ACTIVE_LIST_TYPES = ANALYZED_LIST_TYPE_VALUES
 
 
+def _retarget_paths(repo_root: Path) -> None:
+    """Bind mutable FMP artifacts and database paths to the state checkout."""
+
+    global DATA_DIR, FMP_API_KEY
+    db.PROJECT_ROOT = str(repo_root)
+    db.DATA_DIR = str(repo_root / "data")
+    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
+    db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
+    DATA_DIR = db.FMP_DIR
+    load_project_env(repo_root)
+    FMP_API_KEY = os.environ.get("FMP_API_KEY")
+
+
 def fetch_from_fmp(
     path: str,
     params: Mapping[str, QueryValue],
@@ -177,7 +190,15 @@ def main() -> None:
             "save_fmp_data.PEER_ENDPOINT_ALLOWLIST"
         ),
     )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(PROJECT_ROOT),
+        help="Repo root containing mutable data and portfolio.db (default: this repo).",
+    )
     args = parser.parse_args()
+
+    _retarget_paths(args.repo_root.resolve())
 
     if not FMP_API_KEY:
         print("Error: FMP_API_KEY not set in .env", file=sys.stderr)

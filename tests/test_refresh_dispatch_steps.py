@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """PR C — refresh dispatcher step selection (--steps/--skip-step) + --force.
 
 The budget track already owns --force-budget-bypass; this covers the per-step
@@ -12,6 +13,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -20,7 +22,7 @@ import refresh_dispatch as rd  # noqa: E402
 
 
 class _Result:
-    returncode = 0
+    returncode: int | None = 0
 
 
 def _managed_target(argv: list[str]) -> Path:
@@ -93,7 +95,8 @@ def test_build_plan_carries_resolved_steps() -> None:
 def test_execute_runs_only_selected_steps_in_order() -> None:
     ran: list[str] = []
 
-    def runner(argv: list[str], *, out: object) -> _Result:
+    def runner(argv: list[str], *, out: TextIO) -> _Result:
+        del out
         ran.append(_managed_target(argv).name)
         return _Result()
 
@@ -109,7 +112,8 @@ def test_execute_skips_fmp_when_fresh(tmp_path: Path) -> None:
     db = _fresh_db(tmp_path)
     ran: list[str] = []
 
-    def runner(argv: list[str], *, out: object) -> _Result:
+    def runner(argv: list[str], *, out: TextIO) -> _Result:
+        del out
         ran.append(_managed_target(argv).name)
         return _Result()
 
@@ -129,10 +133,12 @@ def test_execute_skips_fmp_when_fresh(tmp_path: Path) -> None:
 
 
 def test_new_step_builders_point_at_the_right_clis() -> None:
-    news = rd._argv_news(PROJECT_ROOT, "NU")
+    state_root = PROJECT_ROOT / "state"
+    news = rd._argv_news(PROJECT_ROOT, state_root, "NU")
     assert _managed_target(news).name == "fetch_news.py"
     assert "--tickers" in news and "NU" in news
-    assert _managed_target(rd._argv_dcf(PROJECT_ROOT, "NU")).name == "refresh_dcf.py"
+    assert _managed_target(rd._argv_dcf(PROJECT_ROOT, state_root, "NU")).name == "refresh_dcf.py"
     assert (
-        _managed_target(rd._argv_thesis_eval(PROJECT_ROOT, "NU")).name == "run_thesis_evaluator.py"
+        _managed_target(rd._argv_thesis_eval(PROJECT_ROOT, state_root, "NU")).name
+        == "run_thesis_evaluator.py"
     )

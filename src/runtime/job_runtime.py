@@ -874,7 +874,12 @@ SCHEMA_DRIFT_TOLERANT_JOBS: frozenset[str] = frozenset(
 )
 
 
-def _schema_preflight(repo_root: Path, job_name: str) -> str | None:
+def _schema_preflight(
+    repo_root: Path,
+    job_name: str,
+    *,
+    code_root: Path | None = None,
+) -> str | None:
     """Return a blocking reason when this checkout must not run *job_name*.
 
     ``schema_compat.require_current_for_write`` already refuses drift on every
@@ -888,7 +893,10 @@ def _schema_preflight(repo_root: Path, job_name: str) -> str | None:
         return None
     from schema_compat import describe_drift
 
-    drift = describe_drift(portfolio_db_path(repo_root), project_root=repo_root)
+    drift = describe_drift(
+        portfolio_db_path(repo_root),
+        project_root=(code_root or repo_root),
+    )
     return None if drift is None else drift.message
 
 
@@ -1079,6 +1087,7 @@ def _finish_operation_journal(
 def run_job(
     *,
     repo_root: Path,
+    code_root: Path | None = None,
     job_name: str,
     write_sets: list[str],
     command: list[str],
@@ -1102,12 +1111,17 @@ def run_job(
     trigger = TriggerKind(trigger_kind)
     from runtime.secrets import load_project_env
 
+    effective_code_root = (code_root or repo_root).resolve()
     load_project_env(repo_root)
     started = datetime.now(UTC)
     planned_journal = _planned_journal_handle(idempotency_key=idempotency_key, trace_id=trace_id)
     # Preflight AFTER load_project_env: EARNINGS_SUMMARY_DB_PATH may come from
     # the project env file, and checking the wrong database proves nothing.
-    blocked = None if allow_schema_drift else _schema_preflight(repo_root, job_name)
+    blocked = (
+        None
+        if allow_schema_drift
+        else _schema_preflight(repo_root, job_name, code_root=effective_code_root)
+    )
     if blocked is not None:
         # ASCII only: not every cron wrapper sets PYTHONUTF8, and a detector
         # that dies of UnicodeEncodeError while announcing a problem is worse
@@ -1194,7 +1208,7 @@ def run_job(
                 child_env = base_child_env
                 child_env["ES_TRACE_ID"] = journal.trace_id
                 child_env["ES_STAGE"] = job_name
-            managed_command = ensure_managed_python_argv(repo_root, command)
+            managed_command = ensure_managed_python_argv(effective_code_root, command)
             exit_code = _run_managed_child(
                 managed_command,
                 cwd=repo_root,
@@ -1262,6 +1276,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--job")
     parser.add_argument("--write-set", action="append", default=[])
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument(
+        "--code-root",
+        type=Path,
+        help="checkout that owns executable code and Alembic migrations (default: --repo-root)",
+    )
     parser.add_argument("--scheduler-wrapper", action="store_true")
     parser.add_argument("--trigger-kind", choices=("scheduled", "service"))
     parser.add_argument(
@@ -1322,6 +1341,7 @@ def main(argv: list[str] | None = None) -> int:
         invocation_id = uuid4().hex
         return run_job(
             repo_root=args.repo_root.resolve(),
+            code_root=args.code_root.resolve() if args.code_root is not None else None,
             job_name=job_name,
             write_sets=write_sets,
             command=command,

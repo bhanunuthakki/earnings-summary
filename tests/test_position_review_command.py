@@ -265,10 +265,20 @@ def test_review_command_background_job_uses_resolved_ticker(
             argv: list[str],
             spawn: bool = True,
             cwd: str | None = None,
+            write_sets: list[str] | None = None,
+            code_root: str | Path | None = None,
         ) -> Job:
             started["ticker"] = ticker
             started["argv"] = argv
-            return super().start(ticker=ticker, kind=kind, argv=argv, spawn=spawn, cwd=cwd)
+            return super().start(
+                ticker=ticker,
+                kind=kind,
+                argv=argv,
+                spawn=spawn,
+                cwd=cwd,
+                write_sets=write_sets,
+                code_root=code_root,
+            )
 
     monkeypatch.setattr(pr, "build_pre_analysis", _fake)
     monkeypatch.setattr(
@@ -434,8 +444,18 @@ class _NonSpawningRegistry(Registry):
         argv: list[str],
         spawn: bool = True,
         cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
     ) -> Job:
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False, cwd=cwd)
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
 
 
 def test_review_command_starts_background_verdict_job_by_default(
@@ -477,10 +497,20 @@ def test_review_command_background_job_argv_carries_verdict_and_at_price(
             argv: list[str],
             spawn: bool = True,
             cwd: str | None = None,
+            write_sets: list[str] | None = None,
+            code_root: str | Path | None = None,
         ) -> Job:
             started["ticker"] = ticker
             started["argv"] = argv
-            return super().start(ticker=ticker, kind=kind, argv=argv, spawn=spawn, cwd=cwd)
+            return super().start(
+                ticker=ticker,
+                kind=kind,
+                argv=argv,
+                spawn=spawn,
+                cwd=cwd,
+                write_sets=write_sets,
+                code_root=code_root,
+            )
 
     monkeypatch.setattr(pr, "build_pre_analysis", _fake)
     run_chat_command(Path("/repo"), "/review FLKR at $70", _Capturing())
@@ -543,7 +573,10 @@ def test_review_command_conflict_degrades_to_one_line_note(
             argv: list[str],
             spawn: bool = True,
             cwd: str | None = None,
+            write_sets: list[str] | None = None,
+            code_root: str | Path | None = None,
         ) -> Job:
+            del write_sets, code_root
             raise RegistryConflict("busy")
 
     monkeypatch.setattr(pr, "build_pre_analysis", _fake)

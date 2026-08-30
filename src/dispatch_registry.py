@@ -49,6 +49,7 @@ class Job:
     # inherit this server's cwd, the historical behavior for every other job.
     cwd: str | None = None
     lock_repo_root: str | None = None
+    code_repo_root: str | None = None
     write_sets: tuple[str, ...] = ()
     _process: subprocess.Popen[str] | None = field(default=None, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -62,17 +63,27 @@ class Job:
         argv = self.argv
         child_env: dict[str, str] | None = None
         if self.lock_repo_root is not None and self.write_sets:
-            root = Path(self.lock_repo_root).resolve()
-            runtime = root / "src" / "runtime" / "job_runtime.py"
+            state_root = Path(self.lock_repo_root).resolve()
+            code_root = Path(self.code_repo_root or self.lock_repo_root).resolve()
+            runtime = code_root / "src" / "runtime" / "job_runtime.py"
             argv = [
-                *managed_python_argv(root, runtime),
+                *managed_python_argv(code_root, runtime),
                 "--job",
                 f"interactive-{self.kind}",
             ]
             for write_set in self.write_sets:
                 argv.extend(["--write-set", write_set])
-            argv.extend(["--repo-root", str(root), "--", *self.argv])
-            python_path = [str(root), str(root / "src")]
+            argv.extend(
+                [
+                    "--repo-root",
+                    str(state_root),
+                    "--code-root",
+                    str(code_root),
+                    "--",
+                    *self.argv,
+                ]
+            )
+            python_path = [str(code_root), str(code_root / "src")]
             inherited_python_path = os.environ.get("PYTHONPATH")
             if inherited_python_path:
                 python_path.append(inherited_python_path)
@@ -166,9 +177,13 @@ class Registry:
         *,
         max_concurrent: int = MAX_CONCURRENT_DEFAULT,
         repo_root: str | Path | None = None,
+        code_root: str | Path | None = None,
     ) -> None:
         self._max_concurrent = max_concurrent
         self._repo_root = str(Path(repo_root).resolve()) if repo_root is not None else None
+        self._code_root = (
+            str(Path(code_root).resolve()) if code_root is not None else self._repo_root
+        )
         self._jobs: dict[str, Job] = {}  # job_id -> Job
         self._slots: dict[tuple[str, str], str] = {}  # (ticker, kind) -> job_id
         self._lock = threading.Lock()
@@ -182,6 +197,7 @@ class Registry:
         spawn: bool = True,
         cwd: str | None = None,
         write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
     ) -> Job:
         """Reserve a slot and start the job. Raises RegistryConflict on collision.
 
@@ -219,6 +235,9 @@ class Registry:
                 started_at=datetime.now(UTC),
                 cwd=cwd,
                 lock_repo_root=self._repo_root,
+                code_repo_root=(
+                    str(Path(code_root).resolve()) if code_root is not None else self._code_root
+                ),
                 write_sets=tuple(
                     sorted(set(["portfolio-db"] if write_sets is None else write_sets))
                 ),

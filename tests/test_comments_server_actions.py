@@ -24,15 +24,48 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 
 
 class _NonSpawningRegistry(Registry):
     """Registry that records starts but never spawns a real subprocess."""
 
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
         # Force spawn=False so the test never hits real disk / Python interpreter.
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
+
+
+def _require_registry(value: object) -> Registry:
+    assert isinstance(value, Registry)
+    return value
+
+
+def _require_mapping(value: object) -> dict[str, object]:
+    assert isinstance(value, dict)
+    return cast("dict[str, object]", value)
+
+
+def _require_pathlike(value: object) -> str | Path:
+    assert isinstance(value, (str, Path))
+    return value
 
 
 def _create_min_schema(conn):
@@ -88,6 +121,27 @@ def test_post_refresh_returns_job_metadata(client):
     assert body["kind"] == "refresh-stale"
     assert body["job_id"].startswith("job_")
     assert body["stream_url"] == f"/actions/stream/{body['job_id']}"
+
+
+def test_post_refresh_routes_code_and_state_through_separate_roots(client: FlaskClient) -> None:
+    resp = client.post(
+        "/actions/refresh",
+        json={"ticker": "NU", "mode": "stale", "steps": ["build_report"]},
+    )
+    assert resp.status_code == 201
+    registry = _require_registry(cast(object, client.application.config["DISPATCH_REGISTRY"]))
+    payload = _require_mapping(cast(object, resp.get_json()))
+    job_id = payload.get("job_id")
+    assert isinstance(job_id, str)
+    job = registry.get(job_id)
+    assert job is not None
+    code_root = Path(_require_pathlike(cast(object, client.application.config["CODE_ROOT"])))
+    db_path = Path(job.argv[job.argv.index("--db") + 1])
+    state_root = db_path.parents[1]
+    assert Path(job.argv[2]) == code_root / "execution" / "refresh_dispatch.py"
+    assert Path(job.code_repo_root or "") == code_root
+    assert job.argv[job.argv.index("--state-root") + 1] == str(state_root)
+    assert db_path == state_root / "data" / "portfolio.db"
 
 
 def test_post_refresh_defaults_to_stale_mode(client):

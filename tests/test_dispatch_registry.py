@@ -176,6 +176,54 @@ def test_repo_registry_wraps_interactive_writer_with_shared_lock(tmp_path: Path)
     ]
 
 
+def test_repo_registry_separates_code_identity_from_mutable_state(tmp_path: Path):
+    state_root = tmp_path / "state"
+    code_root = tmp_path / "runtime"
+    r = Registry(repo_root=state_root, code_root=code_root)
+
+    with patch("dispatch_registry.subprocess.Popen") as popen:
+        process = popen.return_value
+        process.stdout = iter(())
+        process.wait.return_value = 0
+        process.returncode = 0
+        r.start(ticker="NU", kind="refresh-stale", argv=["python", "writer.py"])
+
+    command = popen.call_args.args[0]
+    assert command[1] == str(code_root / "execution/sqlite_bootstrap.py")
+    assert command[2] == str(code_root / "src/runtime/job_runtime.py")
+    assert command[command.index("--repo-root") + 1] == str(state_root.resolve())
+    assert command[command.index("--code-root") + 1] == str(code_root.resolve())
+    environment = popen.call_args.kwargs["env"]
+    assert environment is not None
+    assert environment["PYTHONPATH"].split(os.pathsep)[:2] == [
+        str(code_root.resolve()),
+        str(code_root.resolve() / "src"),
+    ]
+
+
+def test_per_job_code_override_does_not_change_other_registry_jobs(tmp_path: Path):
+    state_root = tmp_path / "state"
+    code_root = tmp_path / "runtime"
+    registry = Registry(repo_root=state_root)
+
+    refresh = registry.start(
+        ticker="NU",
+        kind="refresh-stale",
+        argv=["refresh"],
+        code_root=code_root,
+        spawn=False,
+    )
+    maintenance = registry.start(
+        ticker="_REPO",
+        kind="maintenance",
+        argv=["maintenance"],
+        spawn=False,
+    )
+
+    assert refresh.code_repo_root == str(code_root.resolve())
+    assert maintenance.code_repo_root == str(state_root.resolve())
+
+
 def test_explicit_read_only_job_is_not_wrapped(tmp_path: Path):
     r = Registry(repo_root=tmp_path)
     job = r.start(

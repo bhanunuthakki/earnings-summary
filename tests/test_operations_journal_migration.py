@@ -136,8 +136,13 @@ def test_0011_adds_append_only_journal_correlations_and_trace_index(
 
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
 
-    def no_drift(_repo_root: Path, _job_name: str) -> None:
-        return None
+    def no_drift(
+        _repo_root: Path,
+        _job_name: str,
+        *,
+        code_root: Path | None = None,
+    ) -> None:
+        del code_root
 
     def child_ok(
         _command: list[str],

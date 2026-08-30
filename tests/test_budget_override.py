@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Per-ticker "run anyway" budget override (PR4). The `force_budget_bypass` flag
 threads dashboard → POST /actions/refresh → refresh_dispatch → build_artifacts →
 build_report → the section budget gates, so a skip-mode cap is ignored for the run.
@@ -12,8 +13,12 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -21,7 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 import comments_server  # noqa: E402
 import refresh_dispatch  # noqa: E402
 
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 from report.models import (  # noqa: E402
     EarningsSection,
     FinancialsSection,
@@ -49,12 +54,21 @@ def _valid_bear(*args: object, **kwargs: object) -> str:
 
 
 def test_argv_build_appends_flag_when_bypass() -> None:
-    argv = refresh_dispatch._argv_build(PROJECT_ROOT, "NU", force_budget_bypass=True)
+    argv = refresh_dispatch._argv_build(
+        PROJECT_ROOT,
+        PROJECT_ROOT,
+        "NU",
+        force_budget_bypass=True,
+    )
     assert "--force-budget-bypass" in argv
 
 
 def test_argv_build_omits_flag_by_default() -> None:
-    assert "--force-budget-bypass" not in refresh_dispatch._argv_build(PROJECT_ROOT, "NU")
+    assert "--force-budget-bypass" not in refresh_dispatch._argv_build(
+        PROJECT_ROOT,
+        PROJECT_ROOT,
+        "NU",
+    )
 
 
 def test_build_plan_carries_bypass(tmp_path: Path) -> None:
@@ -76,12 +90,30 @@ class _CapturingRegistry(Registry):
         super().__init__()
         self.last_argv: list[str] = []
 
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
         self.last_argv = argv
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
 
 
-def _server(tmp_path: Path):
+def _server(tmp_path: Path) -> tuple[FlaskClient, _CapturingRegistry]:
     (tmp_path / "data").mkdir()
     sqlite3.connect(str(tmp_path / "data" / "portfolio.db")).close()
     reg = _CapturingRegistry()

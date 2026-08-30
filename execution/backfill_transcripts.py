@@ -382,17 +382,17 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
 def _run_ingest(repo_root: Path, dry_run: bool) -> int:
     """Run execution/ingest_transcripts.py to pick up newly-fetched files.
 
-    Invokes `repo_root`'s copy of the script (not this script's own dir) so the
-    subprocess's `Path(__file__).resolve().parents[1]` lands at the resolved
-    repo root — otherwise a worktree-based run would target the worktree's
-    stub data dir instead of the main repo's real DB and transcripts.
+    Runs the current code checkout's state adapter while keeping mutable
+    transcript files and the database under ``repo_root``.
     """
     if dry_run:
         print("  [dry-run] would invoke ingest_transcripts.py", file=sys.stderr)
         return 0
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
-        str(repo_root / "execution" / "ingest_transcripts.py"),
+        str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py"),
+        "--repo-root",
+        str(repo_root),
         "--no-promote",
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
@@ -402,7 +402,7 @@ def _run_ingest(repo_root: Path, dry_run: bool) -> int:
 def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
     """Run extract_commitments_from_transcript.py --auto --ticker X for one ticker.
 
-    Same repo_root rationale as `_run_ingest`.
+    Runs current code with an explicit state-root database.
     """
     if dry_run:
         print(
@@ -412,10 +412,12 @@ def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
         return 0
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
-        str(repo_root / "execution" / "extract_commitments_from_transcript.py"),
+        str(PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"),
         "--auto",
         "--ticker",
         ticker,
+        "--db",
+        str(repo_root / "data" / "portfolio.db"),
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode

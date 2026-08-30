@@ -86,7 +86,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 # via _ticker_specific_md. Idempotent: each extractor is responsible for
 # skipping when its own freshness check passes.
 _TICKER_SPECIFIC_EXTRACTORS: dict[str, list[tuple[str, list[str]]]] = {
-    "NVO": [("extract_nvo_patent_timeline.py", [])],
+    "NVO": [("extract_nvo_patent_timeline_state.py", [])],
     # Add per-ticker entries here. Keep the script idempotent — the dispatcher
     # will fire on every build for the ticker; cost discipline lives in the
     # script's own freshness check, not here.
@@ -108,6 +108,8 @@ def _run_ticker_specific_extractors(ticker: str, repo_root: Path) -> None:
         cmd = [
             *managed_python_prefix(PROJECT_ROOT),
             str(PROJECT_ROOT / "execution" / script_name),
+            "--repo-root",
+            str(repo_root),
             *extra_args,
         ]
         try:
