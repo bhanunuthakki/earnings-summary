@@ -36,3 +36,23 @@ def test_fetch_from_fmp_uses_shared_client_without_mutating_params(
     assert captured["path"] == "income-statement"
     assert captured["params"] == {"symbol": "AAA"}
     assert params == {"symbol": "AAA"}
+
+
+def test_retarget_paths_binds_raw_cache_and_database_to_state_root(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = (mod.DATA_DIR, mod.db.PROJECT_ROOT, mod.db.DATA_DIR, mod.db.DB_PATH, mod.db.FMP_DIR)
+    monkeypatch.setenv("FMP_API_KEY", "unit-key")
+    try:
+        mod._retarget_paths(tmp_path)
+        assert pathlib.Path(mod.DATA_DIR) == tmp_path / "data/historical/fmp"
+        assert pathlib.Path(mod.db.DB_PATH) == tmp_path / "data/portfolio.db"
+        assert mod.FMP_API_KEY == "unit-key"
+    finally:
+        (
+            mod.DATA_DIR,
+            mod.db.PROJECT_ROOT,
+            mod.db.DATA_DIR,
+            mod.db.DB_PATH,
+            mod.db.FMP_DIR,
+        ) = original

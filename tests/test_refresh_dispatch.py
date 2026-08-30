@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 
-from refresh_dispatch import Plan, build_plan, execute
+from refresh_dispatch import STEP_NAMES, Plan, build_plan, execute
 
 
 def _seed_fmp(db_path: Path, ticker: str, last_pulled: str) -> None:
@@ -167,7 +167,7 @@ def test_execute_full_runs_all_six_steps(tmp_path):
     assert script_names == [
         "fetch_fmp_historical_data",
         "backfill_transcripts",
-        "process_ir_documents",
+        "process_ir_documents_state",
         "extract_kpis_from_summaries",
         "build_saydo_pairs",
         "build_artifacts",
@@ -189,7 +189,7 @@ def test_execute_stale_skips_fmp_when_planned(tmp_path):
     assert "fetch_fmp_historical_data" not in script_names
     assert script_names == [
         "backfill_transcripts",
-        "process_ir_documents",
+        "process_ir_documents_state",
         "extract_kpis_from_summaries",
         "build_saydo_pairs",
         "build_artifacts",
@@ -243,6 +243,46 @@ def test_execute_includes_repo_root_where_needed(tmp_path):
         if script in needs_repo_root:
             assert "--repo-root" in call
             assert str(tmp_path) in call
+
+
+def test_execute_uses_code_root_for_scripts_and_state_root_for_outputs(tmp_path):
+    code_root = tmp_path / "runtime"
+    state_root = tmp_path / "state"
+    runner = _MockRunner()
+    plan = Plan(
+        ticker="NU",
+        mode="full",
+        skip_fmp=False,
+        skip_fmp_reason=None,
+        steps=STEP_NAMES,
+    )
+
+    execute(
+        plan,
+        project_root=code_root,
+        state_root=state_root,
+        out=io.StringIO(),
+        runner=runner,
+    )
+
+    for call in runner.calls:
+        assert Path(call[2]).is_relative_to(code_root)
+    for script_name in (
+        "fetch_fmp_historical_data",
+        "backfill_transcripts",
+        "process_ir_documents_state",
+        "extract_kpis_from_summaries",
+        "build_saydo_pairs",
+        "refresh_dcf",
+        "build_artifacts",
+    ):
+        call = next(item for item in runner.calls if script_name in item[2])
+        assert call[call.index("--repo-root") + 1] == str(state_root)
+    news = next(item for item in runner.calls if "fetch_news" in item[2])
+    assert news[news.index("--db-path") + 1] == str(state_root / "data/portfolio.db")
+    thesis = next(item for item in runner.calls if "run_thesis_evaluator" in item[2])
+    assert thesis[thesis.index("--db") + 1] == str(state_root / "data/portfolio.db")
+    assert thesis[thesis.index("--holdings-dir") + 1] == str(state_root / "micro_thesis/holdings")
 
 
 def test_build_step_uses_workspace_renderer_with_enable_llm(tmp_path):

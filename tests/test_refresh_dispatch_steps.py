@@ -129,10 +129,12 @@ def test_execute_skips_fmp_when_fresh(tmp_path: Path) -> None:
 
 
 def test_new_step_builders_point_at_the_right_clis() -> None:
-    news = rd._argv_news(PROJECT_ROOT, "NU")
+    state_root = PROJECT_ROOT / "state"
+    news = rd._argv_news(PROJECT_ROOT, state_root, "NU")
     assert _managed_target(news).name == "fetch_news.py"
     assert "--tickers" in news and "NU" in news
-    assert _managed_target(rd._argv_dcf(PROJECT_ROOT, "NU")).name == "refresh_dcf.py"
+    assert _managed_target(rd._argv_dcf(PROJECT_ROOT, state_root, "NU")).name == "refresh_dcf.py"
     assert (
-        _managed_target(rd._argv_thesis_eval(PROJECT_ROOT, "NU")).name == "run_thesis_evaluator.py"
+        _managed_target(rd._argv_thesis_eval(PROJECT_ROOT, state_root, "NU")).name
+        == "run_thesis_evaluator.py"
     )

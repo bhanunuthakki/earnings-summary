@@ -2,9 +2,8 @@
 
 Focuses on the worktree-vs-main-repo path bug: when the script is run from a
 worktree with `--repo-root <main>`, the `_run_ingest` and `_run_extract`
-subprocesses must invoke the main repo's copy of the helper scripts AND set
-`cwd=<main>`. Otherwise the helpers' own `Path(__file__).resolve().parents[1]`
-lands in the worktree and `db.py` resolves to the worktree's stub DB.
+subprocesses must invoke current code while binding mutable state and cwd to
+the state checkout.
 """
 
 from __future__ import annotations
@@ -58,7 +57,8 @@ def test_run_ingest_uses_repo_root_for_cwd_and_script_path(
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
     assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
-    assert captured["cmd"][2] == str(repo_root / "execution" / "ingest_transcripts.py")
+    assert captured["cmd"][2] == str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py")
+    assert captured["cmd"][captured["cmd"].index("--repo-root") + 1] == str(repo_root)
     assert captured["cmd"][-1] == "--no-promote"
 
 
@@ -84,10 +84,13 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
     assert captured["kwargs"]["cwd"] == str(repo_root)
     assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
     assert captured["cmd"][2] == str(
-        repo_root / "execution" / "extract_commitments_from_transcript.py"
+        PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"
     )
     assert "--auto" in captured["cmd"]
     assert "AAPL" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--db") + 1] == str(
+        repo_root / "data" / "portfolio.db"
+    )
 
 
 def test_run_ingest_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:

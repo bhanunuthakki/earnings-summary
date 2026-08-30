@@ -573,6 +573,7 @@ def create_app(
     app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
     resolved_db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
     db_path = resolved_db_path
+    resolved_code_root = (code_root or PROJECT_ROOT).resolve()
     job_registry = registry or Registry(repo_root=repo_root)
     report_capability = ReportCapabilityStore(repo_root)
     report_capability.load_or_create()
@@ -582,7 +583,6 @@ def create_app(
     # that same window so HTTP revalidation can stop *before* the route builder,
     # rather than paying the full build merely to discover the ETag is unchanged.
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
-    resolved_code_root = (code_root or PROJECT_ROOT).resolve()
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
@@ -4553,8 +4553,19 @@ def create_app(
             if bad:
                 return ({"error": f"unknown step(s): {bad}; valid: {list(STEP_NAMES)}"}, 400)
 
-        dispatcher = repo_root / "execution" / "refresh_dispatch.py"
-        argv = managed_python_argv(repo_root, dispatcher, "--ticker", ticker, "--mode", mode)
+        dispatcher = resolved_code_root / "execution" / "refresh_dispatch.py"
+        argv = managed_python_argv(
+            resolved_code_root,
+            dispatcher,
+            "--ticker",
+            ticker,
+            "--mode",
+            mode,
+            "--state-root",
+            str(repo_root),
+            "--db",
+            str(db_path),
+        )
         if force:
             argv.append("--force")
         if steps:
@@ -4566,6 +4577,7 @@ def create_app(
                 ticker=ticker,
                 kind=f"refresh-{mode}",
                 argv=argv,
+                code_root=resolved_code_root,
             )
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)

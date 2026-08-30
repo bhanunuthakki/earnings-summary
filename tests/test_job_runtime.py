@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypedDict
 
 import pytest
@@ -50,8 +51,34 @@ def _request_fields(job_name: str, *, trace_id: str = "a" * 32) -> _RequestField
     }
 
 
-def _no_schema_drift(_repo_root: Path, _job_name: str) -> None:
-    return None
+def _no_schema_drift(
+    _repo_root: Path,
+    _job_name: str,
+    *,
+    code_root: Path | None = None,
+) -> None:
+    del code_root
+
+
+def test_schema_preflight_uses_state_database_and_code_migrations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "state"
+    code_root = tmp_path / "runtime"
+    expected_db = state_root / "data" / "portfolio.db"
+    captured: dict[str, Path] = {}
+
+    def describe_drift(db_path: Path, *, project_root: Path) -> SimpleNamespace:
+        captured.update(db_path=db_path, project_root=project_root)
+        return SimpleNamespace(message="blocked")
+
+    import schema_compat
+
+    monkeypatch.setattr(job_runtime, "portfolio_db_path", lambda root: root / "data/portfolio.db")
+    monkeypatch.setattr(schema_compat, "describe_drift", describe_drift)
+
+    assert job_runtime._schema_preflight(state_root, "unit-job", code_root=code_root) == "blocked"
+    assert captured == {"db_path": expected_db, "project_root": code_root}
 
 
 _PORTFOLIO_DB_POLICY = {
@@ -527,6 +554,7 @@ def test_scheduler_wrapper_preserves_script_arguments(
     def fake_run_job(
         *,
         repo_root: Path,
+        code_root: Path | None,
         job_name: str,
         write_sets: list[str],
         command: list[str],
@@ -539,6 +567,7 @@ def test_scheduler_wrapper_preserves_script_arguments(
     ) -> int:
         captured.update(
             repo_root=repo_root,
+            code_root=code_root,
             job_name=job_name,
             write_sets=write_sets,
             command=command,
@@ -557,6 +586,8 @@ def test_scheduler_wrapper_preserves_script_arguments(
             [
                 "--repo-root",
                 str(tmp_path),
+                "--code-root",
+                str(tmp_path / "runtime"),
                 "--scheduler-wrapper",
                 "--python-executable",
                 "py",
@@ -577,6 +608,7 @@ def test_scheduler_wrapper_preserves_script_arguments(
         key: captured[key]
         for key in (
             "repo_root",
+            "code_root",
             "job_name",
             "write_sets",
             "command",
@@ -585,6 +617,7 @@ def test_scheduler_wrapper_preserves_script_arguments(
         )
     } == {
         "repo_root": tmp_path.resolve(),
+        "code_root": (tmp_path / "runtime").resolve(),
         "job_name": "morning_pipeline",
         "write_sets": ["morning-orchestration"],
         "command": [
@@ -662,6 +695,7 @@ def test_interactive_cli_applies_policy_only_to_implicit_defaults(
     def fake_run_job(
         *,
         repo_root: Path,
+        code_root: Path | None,
         job_name: str,
         write_sets: list[str],
         command: list[str],
@@ -674,6 +708,7 @@ def test_interactive_cli_applies_policy_only_to_implicit_defaults(
     ) -> int:
         captured.update(
             repo_root=repo_root,
+            code_root=code_root,
             job_name=job_name,
             write_sets=write_sets,
             command=command,
@@ -1029,7 +1064,13 @@ def test_refresh_cache_contained_exits_do_not_mask_failures_or_unrelated_jobs(
     expected_status: str,
     expected_severity: str,
 ) -> None:
-    def no_drift(_repo_root: Path, _job_name: str) -> str | None:
+    def no_drift(
+        _repo_root: Path,
+        _job_name: str,
+        *,
+        code_root: Path | None = None,
+    ) -> str | None:
+        del code_root
         return None
 
     def selected_exit(
