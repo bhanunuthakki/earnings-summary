@@ -739,7 +739,19 @@ def test_bind_existing_fails_when_exact_fact_cannot_resolve(
         expected_inserted_fact_rows=0,
     )
     manifest = _manifest().model_copy(update={"entries": (entry,)})
-    monkeypatch.setattr(refresh, "persist_kpi_semantic_context", lambda *_args, **_kwargs: 1)
+
+    def persist_context(
+        _conn: sqlite3.Connection,
+        *,
+        kpi_fact_id: int,
+        context: KpiSemanticContext,
+        reviewed_by: str = "pipeline",
+        knowledge_at: datetime | None = None,
+    ) -> int:
+        del kpi_fact_id, context, reviewed_by, knowledge_at
+        return 1
+
+    monkeypatch.setattr(refresh, "persist_kpi_semantic_context", persist_context)
 
     def reject_resolution(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("wrong selected observation")
@@ -906,10 +918,14 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         return 1, 1, 11
 
     monkeypatch.setattr(refresh, "_apply_entry", simulated_apply)
+
+    def accept_canonical_heads(_conn: sqlite3.Connection, *, result_heads: tuple[int, ...]) -> None:
+        del result_heads
+
     monkeypatch.setattr(
         refresh,
         "_require_canonical_result_heads",
-        lambda *_args, **_kwargs: None,
+        accept_canonical_heads,
     )
     receipt_root = tmp_path / "receipts"
     result = refresh.main(
