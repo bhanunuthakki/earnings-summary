@@ -53,6 +53,21 @@ class _NonSpawningRegistry(Registry):
         )
 
 
+def _require_registry(value: object) -> Registry:
+    assert isinstance(value, Registry)
+    return value
+
+
+def _require_mapping(value: object) -> dict[str, object]:
+    assert isinstance(value, dict)
+    return cast("dict[str, object]", value)
+
+
+def _require_pathlike(value: object) -> str | Path:
+    assert isinstance(value, (str, Path))
+    return value
+
+
 def _create_min_schema(conn):
     conn.executescript(
         """
@@ -114,10 +129,13 @@ def test_post_refresh_routes_code_and_state_through_separate_roots(client: Flask
         json={"ticker": "NU", "mode": "stale", "steps": ["build_report"]},
     )
     assert resp.status_code == 201
-    registry: Registry = client.application.config["DISPATCH_REGISTRY"]
-    job = registry.get(resp.get_json()["job_id"])
+    registry = _require_registry(cast(object, client.application.config["DISPATCH_REGISTRY"]))
+    payload = _require_mapping(cast(object, resp.get_json()))
+    job_id = payload.get("job_id")
+    assert isinstance(job_id, str)
+    job = registry.get(job_id)
     assert job is not None
-    code_root = Path(client.application.config["CODE_ROOT"])
+    code_root = Path(_require_pathlike(cast(object, client.application.config["CODE_ROOT"])))
     db_path = Path(job.argv[job.argv.index("--db") + 1])
     state_root = db_path.parents[1]
     assert Path(job.argv[2]) == code_root / "execution" / "refresh_dispatch.py"

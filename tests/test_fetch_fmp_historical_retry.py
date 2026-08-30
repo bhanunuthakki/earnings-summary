@@ -48,7 +48,7 @@ def test_retarget_paths_binds_raw_cache_and_database_to_state_root(
         mod._retarget_paths(tmp_path)
         assert pathlib.Path(mod.DATA_DIR) == tmp_path / "data/historical/fmp"
         assert pathlib.Path(mod.db.DB_PATH) == tmp_path / "data/portfolio.db"
-        assert mod.FMP_API_KEY == "unit-key"
+        assert mod.FMP_API_KEY == "unit-key"  # pragma: allowlist secret
     finally:
         (
             mod.DATA_DIR,
