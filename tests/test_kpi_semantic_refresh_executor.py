@@ -904,7 +904,7 @@ def test_dry_run_rejects_corrupted_snapshot_clone_before_open(
     def _corrupting_copy(source: Path, destination: Path) -> Path:
         copied = original_copy(source, destination)
         destination.write_bytes(destination.read_bytes() + b"corrupt")
-        return copied
+        return Path(copied)
 
     monkeypatch.setattr(refresh.shutil, "copy2", _corrupting_copy)
     with (
