@@ -1122,16 +1122,18 @@ def test_apply_authority_accepts_pinned_runtime_code_with_separate_state_root(
 ) -> None:
     state_root = tmp_path / "canonical-state"
     code_root = tmp_path / "runtime-code"
-    expected_code_identity = "a" * 64
+    runtime_code_identity = "a" * 64
     bundle = OperationsReviewBundle.model_construct(
-        identity=ReviewIdentity.model_construct(code_instance_sha256=expected_code_identity)
+        identity=ReviewIdentity.model_construct(
+            code_instance_sha256=refresh.identity_sha256(runtime_code_identity)
+        )
     )
     monkeypatch.setattr(refresh.sys, "platform", "win32")
     monkeypatch.setattr(refresh, "PROJECT_ROOT", code_root)
     monkeypatch.setattr(refresh, "CANONICAL_WINDOWS_STATE_ROOT", state_root)
 
     def code_identity(_root: Path) -> str:
-        return expected_code_identity
+        return runtime_code_identity
 
     monkeypatch.setattr(refresh, "review_code_identity", code_identity)
 
@@ -1147,7 +1149,9 @@ def test_apply_authority_rejects_unpinned_runtime_code(
 ) -> None:
     state_root = tmp_path / "canonical-state"
     bundle = OperationsReviewBundle.model_construct(
-        identity=ReviewIdentity.model_construct(code_instance_sha256="a" * 64)
+        identity=ReviewIdentity.model_construct(
+            code_instance_sha256=refresh.identity_sha256("a" * 64)
+        )
     )
     monkeypatch.setattr(refresh.sys, "platform", "win32")
     monkeypatch.setattr(refresh, "PROJECT_ROOT", tmp_path / "runtime-code")
