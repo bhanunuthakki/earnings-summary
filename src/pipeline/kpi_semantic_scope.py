@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict
 
-from compute.kpi_resolver import normalize_kpi_name
+from pipeline.kpi_report_reference_dispositions import (
+    ReportKpiReference,
+    ReportKpiReferenceSourceStatus,
+    ReportKpiReferenceStatus,
+    current_report_kpi_reference_disposition,
+    load_report_kpi_reference_inventory,
+)
 from provenance.financial_fact_resolution import canonical_fact_relation
 
 
@@ -30,6 +35,11 @@ class ScopedKpiDefinition(BaseModel):
     guidance_target_count: int
     management_explanation_count: int
     analyst_question_count: int
+    report_reference_status: ReportKpiReferenceStatus | None = None
+    report_reference_reason_code: str | None = None
+    report_reference_pointer: str | None = None
+    report_reference_source_status: ReportKpiReferenceSourceStatus | None = None
+    report_reference_source_reason_code: str | None = None
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -62,45 +72,6 @@ def portfolio_tickers(conn: sqlite3.Connection, *, user_id: str = "default") -> 
     return tuple(str(row[0]) for row in rows)
 
 
-def _report_names(repo_root: Path, tickers: tuple[str, ...]) -> dict[str, set[str]]:
-    out: dict[str, set[str]] = {ticker: set() for ticker in tickers}
-    for ticker in tickers:
-        path = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
-        if not path.exists():
-            continue
-        try:
-            payload = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        payload_object = cast("dict[str, object]", payload)
-        priorities = payload_object.get("chart_priorities")
-        if isinstance(priorities, list):
-            out[ticker].update(
-                str(value).strip()
-                for value in cast("list[object]", priorities)
-                if str(value).strip()
-            )
-        for field in ("tier_1_kpis", "tier_2_kpis", "tier_3_kpis"):
-            rows = payload_object.get(field)
-            if not isinstance(rows, list):
-                continue
-            for row in cast("list[object]", rows):
-                if isinstance(row, dict):
-                    row_object = cast("dict[str, object]", row)
-                    if str(row_object.get("name") or "").strip():
-                        out[ticker].add(str(row_object["name"]).strip())
-        rules = payload_object.get("break_rules")
-        if isinstance(rules, list):
-            for row in cast("list[object]", rules):
-                if isinstance(row, dict):
-                    row_object = cast("dict[str, object]", row)
-                    if str(row_object.get("kpi_name") or "").strip():
-                        out[ticker].add(str(row_object["kpi_name"]).strip())
-    return out
-
-
 def scoped_kpi_definitions(
     conn: sqlite3.Connection,
     *,
@@ -111,7 +82,8 @@ def scoped_kpi_definitions(
     tickers = portfolio_tickers(conn, user_id=user_id)
     if not tickers or not _table_exists(conn, "kpi_definitions"):
         return ()
-    report_names = _report_names(repo_root, tickers)
+    inventory = load_report_kpi_reference_inventory(repo_root, tickers)
+    references = inventory.references
     marks = ",".join("?" for _ in tickers)
     fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     has_context = _table_exists(conn, "kpi_fact_semantic_contexts")
@@ -169,16 +141,45 @@ def scoped_kpi_definitions(
         tickers,
     ).fetchall()
     out: list[ScopedKpiDefinition] = []
-    matched_report_keys: dict[str, set[str]] = {ticker: set() for ticker in tickers}
+    resolved_definition_references: dict[int, list[ReportKpiReference]] = {}
+    unresolved_references: list[
+        tuple[ReportKpiReference, ReportKpiReferenceStatus | None, str | None]
+    ] = []
+    definition_keys: dict[tuple[str, str], list[int]] = {}
+    for row in rows:
+        definition_keys.setdefault((str(row[1]), str(row[2]).strip().casefold()), []).append(
+            int(row[0])
+        )
+    for reference in references:
+        direct_ids = definition_keys.get(
+            (reference.ticker, reference.requested_label.strip().casefold())
+        )
+        if direct_ids is not None and len(direct_ids) == 1:
+            resolved_definition_references.setdefault(direct_ids[0], []).append(reference)
+            continue
+        ambiguous_exact_match = direct_ids is not None and len(direct_ids) > 1
+        revision = current_report_kpi_reference_disposition(
+            conn, user_id=user_id, reference=reference
+        )
+        if revision is not None and revision.reference != reference:
+            revision = None
+        unresolved_references.append(
+            (
+                reference,
+                None if revision is None else revision.disposition.status,
+                (
+                    "ambiguous_exact_reported_definition"
+                    if revision is None and ambiguous_exact_match
+                    else (None if revision is None else revision.disposition.reason_code)
+                ),
+            )
+        )
     for row in rows:
         definition_id, ticker, name = int(row[0]), str(row[1]), str(row[2])
         fact_count = int(row[3])
         reasons: list[str] = []
-        requested_keys = {normalize_kpi_name(value) for value in report_names[ticker]}
-        key = normalize_kpi_name(name)
-        if key in requested_keys:
+        if definition_id in resolved_definition_references:
             reasons.append("report")
-            matched_report_keys[ticker].add(key)
         if fact_count > 0:
             reasons.append("facts_metrics")
         if reasons:
@@ -200,28 +201,52 @@ def scoped_kpi_definitions(
                     analyst_question_count=int(row[12]),
                 )
             )
-    for ticker, names in report_names.items():
-        for name in sorted(names, key=str.casefold):
-            if normalize_kpi_name(name) in matched_report_keys[ticker]:
-                continue
-            out.append(
-                ScopedKpiDefinition(
-                    ticker=ticker,
-                    kpi_definition_id=None,
-                    name=name,
-                    reasons=("report",),
-                    fact_count=0,
-                    admitted_context_count=0,
-                    quarantined_context_count=0,
-                    legacy_unknown_context_count=0,
-                    missing_context_count=0,
-                    current_actual_count=0,
-                    comparator_count=0,
-                    guidance_target_count=0,
-                    management_explanation_count=0,
-                    analyst_question_count=0,
-                )
+    for reference, status, reason_code in unresolved_references:
+        out.append(
+            ScopedKpiDefinition(
+                ticker=reference.ticker,
+                kpi_definition_id=None,
+                name=reference.requested_label,
+                reasons=("report",),
+                fact_count=0,
+                admitted_context_count=0,
+                quarantined_context_count=0,
+                legacy_unknown_context_count=0,
+                missing_context_count=0,
+                current_actual_count=0,
+                comparator_count=0,
+                guidance_target_count=0,
+                management_explanation_count=0,
+                analyst_question_count=0,
+                report_reference_status=status,
+                report_reference_reason_code=reason_code,
+                report_reference_pointer=reference.json_pointer,
+                report_reference_source_status=ReportKpiReferenceSourceStatus.VALID,
             )
+        )
+    for source in inventory.source_states:
+        if source.status is ReportKpiReferenceSourceStatus.VALID:
+            continue
+        out.append(
+            ScopedKpiDefinition(
+                ticker=source.ticker,
+                kpi_definition_id=None,
+                name="<report_configuration>",
+                reasons=("report_configuration",),
+                fact_count=0,
+                admitted_context_count=0,
+                quarantined_context_count=0,
+                legacy_unknown_context_count=0,
+                missing_context_count=0,
+                current_actual_count=0,
+                comparator_count=0,
+                guidance_target_count=0,
+                management_explanation_count=0,
+                analyst_question_count=0,
+                report_reference_source_status=source.status,
+                report_reference_source_reason_code=source.reason_code,
+            )
+        )
     return tuple(
         sorted(
             out, key=lambda item: (item.ticker, item.name.casefold(), item.kpi_definition_id or 0)

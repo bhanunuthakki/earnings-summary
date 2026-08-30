@@ -123,6 +123,76 @@ class KpiRepairJudgeReceipt(_Receipt):
         return self
 
 
+class KpiDispositionAttemptReceipt(_Receipt):
+    schema_version: Literal["kpi_disposition_attempt.v1"] = "kpi_disposition_attempt.v1"
+    attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    logical_idempotency_key_sha256: str = Field(pattern=_SHA256)
+    manifest_sha256: str = Field(pattern=_SHA256)
+    review_bundle_sha256: str = Field(pattern=_SHA256)
+    backup_restore_evidence_id: str = Field(pattern=_SHA256)
+    executor_code_sha256: str = Field(pattern=_SHA256)
+    mode: Literal["dry_run", "apply"]
+    state: Literal["passed", "applied", "replayed", "blocked", "failed"]
+    started_at: datetime
+    completed_at: datetime
+    validated_fact_dispositions: int = Field(ge=0)
+    validated_reference_dispositions: int = Field(ge=0)
+    inserted_context_rows: int = Field(ge=0)
+    replayed_context_rows: int = Field(ge=0)
+    inserted_reference_rows: int = Field(ge=0)
+    replayed_reference_rows: int = Field(ge=0)
+    blocker_codes: tuple[str, ...] = ()
+    content_sha256: str = Field(pattern=_SHA256)
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def _aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("disposition receipt timestamps must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _hash_matches(self) -> KpiDispositionAttemptReceipt:
+        payload = self.model_dump(mode="json", exclude={"content_sha256"})
+        if self.content_sha256 != canonical_sha256(payload):
+            raise ValueError("KPI disposition attempt receipt hash mismatch")
+        return self
+
+
+class KpiDispositionJudgeReceipt(_Receipt):
+    schema_version: Literal["kpi_disposition_judge.v1"] = "kpi_disposition_judge.v1"
+    manifest_sha256: str = Field(pattern=_SHA256)
+    dry_run_receipt_sha256: str = Field(pattern=_SHA256)
+    review_bundle_sha256: str = Field(pattern=_SHA256)
+    executor_code_sha256: str = Field(pattern=_SHA256)
+    purpose: Literal["kpi_semantic_disposition"] = "kpi_semantic_disposition"
+    rubric_version: str = Field(min_length=1, max_length=80)
+    evidence_tier: Literal["J2", "J3"]
+    judge_model: Literal["gpt-5.6-sol"] = "gpt-5.6-sol"
+    judge_run_id: str = Field(min_length=1, max_length=160)
+    prompt_sha256: str = Field(pattern=_SHA256)
+    response_sha256: str = Field(pattern=_SHA256)
+    verdict: Literal["PASS", "BLOCK", "HOLD", "ABSTAIN"]
+    findings: tuple[str, ...] = ()
+    observed_at: datetime
+    issuance_identity_sha256: str = Field(pattern=_SHA256)
+    content_sha256: str = Field(pattern=_SHA256)
+
+    @field_validator("observed_at")
+    @classmethod
+    def _aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("judge timestamp must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _hash_matches(self) -> KpiDispositionJudgeReceipt:
+        payload = self.model_dump(mode="json", exclude={"content_sha256"})
+        if self.content_sha256 != canonical_sha256(payload):
+            raise ValueError("KPI disposition judge receipt hash mismatch")
+        return self
+
+
 def seal_attempt(**values: object) -> KpiRepairAttemptReceipt:
     payload = {"schema_version": "kpi_repair_attempt.v2", **values}
     return KpiRepairAttemptReceipt.model_validate(
@@ -133,5 +203,19 @@ def seal_attempt(**values: object) -> KpiRepairAttemptReceipt:
 def seal_judgment(**values: object) -> KpiRepairJudgeReceipt:
     payload = {"schema_version": "kpi_repair_judge.v2", **values}
     return KpiRepairJudgeReceipt.model_validate(
+        {**payload, "content_sha256": canonical_sha256(payload)}
+    )
+
+
+def seal_disposition_attempt(**values: object) -> KpiDispositionAttemptReceipt:
+    payload = {"schema_version": "kpi_disposition_attempt.v1", **values}
+    return KpiDispositionAttemptReceipt.model_validate(
+        {**payload, "content_sha256": canonical_sha256(payload)}
+    )
+
+
+def seal_disposition_judgment(**values: object) -> KpiDispositionJudgeReceipt:
+    payload = {"schema_version": "kpi_disposition_judge.v1", **values}
+    return KpiDispositionJudgeReceipt.model_validate(
         {**payload, "content_sha256": canonical_sha256(payload)}
     )

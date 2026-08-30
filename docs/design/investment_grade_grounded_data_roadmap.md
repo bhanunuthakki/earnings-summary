@@ -142,8 +142,36 @@ chain keeps the reported fact unchanged while each new revision points to its pr
 qualification, publication lane, reason, evidence identity, and knowledge time, and exposes exactly
 one current head. A later source review appends `legacy_unknown → qualified` or
 `legacy_unknown → quarantined`; it never updates history. Fact supersession remains reserved for an
-incorrect value, period, source, or other reported observation—not metadata enrichment alone. This
-local implementation remains undeployed until the integration and production gates above pass.
+incorrect value, period, source, or other reported observation—not metadata enrichment alone.
+Migrations 0030–0032 are deployed; the 0033 report-reference disposition layer follows the same
+guarded backup, migration, review, and live-verification path before its production cutover.
+
+The portfolio rollout uses two deliberately separate gates. The **disposition gate** is green only
+when every current in-scope fact has an append-only semantic head and every unmatched report KPI
+reference has an exact, owner-scoped resolution revision. A reasoned quarantine or explicit
+`unresolved:no_matching_reported_definition` closes that bookkeeping gap without making the value
+usable. The **decision-grade admission gate** remains red while any current fact is quarantined,
+legacy-unknown, missing, wrong-lane, or while a current report reference is unresolved. This split
+prevents migration completion from being misreported as data quality.
+
+Report references are governed independently from facts. Migration 0033 records the exact holdings
+file JSON pointer, requested label and content hash, owner, issuer, reviewer, knowledge time, status,
+and predecessor revision. Version 1 permits only `unresolved`; it categorically rejects resolved or
+retired states and cannot bind a definition. A later resolved state requires a source-reviewed
+mapping shared by every reader before it can exist. Missing or malformed per-ticker holdings
+configuration is a typed blocking state, never an omitted input, and the payload ticker must match
+the portfolio ticker and file identity before any reference can be synthesized. Duplicate exact
+labels remain explicitly ambiguous rather than being silently bound. The rollout never creates an
+empty definition or ontology alias merely to remove an audit count. Cross-company aliases remain a
+later, evidence-led ontology decision.
+
+Disposition execution uses the same independent Windows authority chain as source-reviewed repair:
+trusted host/code/database/Scheduler pins, a fresh Operations review bundle, a preverified backup
+and restore receipt, a deterministic dry-run receipt, a content-bound Sol PASS, and the owner's
+exact manifest hash. The executor does not create its own authority evidence or accept caller-supplied
+lineage claims. The fact/reference writes and an immutable manifest-bound commit marker share one
+database transaction. If receipt publication fails after commit, the next exact retry proves that
+marker and publishes a replay receipt without mutating data or requiring a now-stale backup claim.
 
 Deterministic derived metrics follow the same admission boundary. Every arithmetic input retains
 its own tier-winning source-document identity. Arithmetic over normalized FMP inputs remains

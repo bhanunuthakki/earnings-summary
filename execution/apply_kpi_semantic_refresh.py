@@ -20,7 +20,7 @@ from contextlib import ExitStack, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
@@ -93,6 +93,12 @@ class RepairBlockedError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+class KpiAuthorityManifest(Protocol):
+    review_bundle_sha256: str
+    expected_schema_revision: str
+    backup_restore_evidence_id: str
 
 
 @contextmanager
@@ -287,7 +293,7 @@ def _schema_revision(conn: sqlite3.Connection) -> str:
 
 def _validate_external_evidence(
     *,
-    manifest: RefreshManifest,
+    manifest: KpiAuthorityManifest,
     db_path: Path,
     review_bundle: OperationsReviewBundle,
     trusted_pins: WindowsReviewPins,
@@ -354,6 +360,13 @@ def _repair_lock_root(db_path: Path) -> Path:
     if sys.platform == "win32" and db_path.resolve() == canonical_db.resolve():
         return CANONICAL_WINDOWS_STATE_ROOT
     return PROJECT_ROOT
+
+
+# Shared public authority seam for append-only KPI mutation executors.
+repair_database_authority = _repair_database
+repair_lock_root = _repair_lock_root
+schema_revision = _schema_revision
+validate_external_repair_evidence = _validate_external_evidence
 
 
 def _validate_source_binding(

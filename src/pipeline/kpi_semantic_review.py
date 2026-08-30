@@ -26,7 +26,7 @@ from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definition
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
 
-MAX_KPI_SEMANTIC_REVIEW_ITEMS = 250
+MAX_KPI_SEMANTIC_REVIEW_ITEMS = 5_000
 MAX_EVIDENCE_CANDIDATES_PER_FACT = 8
 MAX_EVIDENCE_NODES_PER_DOCUMENT = 2_048
 MAX_EVIDENCE_TEXT_CHARS_PER_NODE = 250_000
@@ -115,6 +115,7 @@ class KpiSemanticReviewItem(BaseModel):
     source_period_end: str | None
     state: KpiSemanticReviewState
     state_reason_code: str = Field(min_length=1, max_length=128)
+    quarantine_reason_code: str = Field(min_length=1, max_length=128)
     evidence_candidate_total: int = Field(ge=0)
     evidence_candidates_truncated: bool
     evidence_search_incomplete: bool
@@ -123,6 +124,8 @@ class KpiSemanticReviewItem(BaseModel):
 
     @model_validator(mode="after")
     def _validate_candidate_summary(self) -> Self:
+        if self.quarantine_reason_code != self.state_reason_code:
+            raise ValueError("quarantine reason must preserve the deterministic review reason")
         if self.evidence_candidate_total < len(self.evidence_candidates):
             raise ValueError("evidence candidate total is smaller than the emitted candidates")
         if self.evidence_candidates_truncated != (
@@ -354,17 +357,23 @@ def _evidence_state_and_candidates(
     source_period_end = _optional_text(source["period_end"])
     source_ref = _optional_text(source["file_path"])
     source_doc_type = _optional_text(source["doc_type"])
-    if (
-        source_sha is None
-        or re.fullmatch(r"[0-9a-f]{64}", source_sha) is None
-        or not source_observation_version
-        or (source_doc_type not in _MULTI_PERIOD_DOC_TYPES and not source_period_end)
-        or not source_ref
-    ):
+    identity_reason = None
+    if source_sha is None:
+        identity_reason = "source_content_hash_missing"
+    elif re.fullmatch(r"[0-9a-f]{64}", source_sha) is None:
+        identity_reason = "source_content_hash_invalid"
+    elif not source_observation_version:
+        identity_reason = "source_observation_version_missing"
+    elif source_doc_type not in _MULTI_PERIOD_DOC_TYPES and not source_period_end:
+        identity_reason = "source_period_identity_missing"
+    elif not source_ref:
+        identity_reason = "source_locator_missing"
+    if identity_reason is not None:
         return _review_result(
             KpiSemanticReviewState.SOURCE_IDENTITY_MISSING,
-            "source_document_identity_incomplete",
+            identity_reason,
         )
+    assert source_ref is not None
     source_type = str(source["source_type"])
     if source_type not in _REVIEWABLE_SOURCE_TYPES:
         return _review_result(
@@ -702,6 +711,7 @@ def build_kpi_semantic_review_batch(
                     ),
                     state=state,
                     state_reason_code=state_reason,
+                    quarantine_reason_code=state_reason,
                     evidence_candidate_total=candidate_total,
                     evidence_candidates_truncated=candidates_truncated,
                     evidence_search_incomplete=search_incomplete,
