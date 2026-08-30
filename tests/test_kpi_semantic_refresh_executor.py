@@ -47,6 +47,7 @@ from pipeline.kpi_semantics import (
 )
 from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession
 from provenance.fulltext_extractor_identity import BASE_FULLTEXT_EXTRACTOR
+from sqlite_freshness import sqlite_file_token
 
 NOW = datetime(2026, 8, 27, 20, tzinfo=UTC)
 
@@ -731,6 +732,9 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
     conn.execute("CREATE TABLE dry_run_probe(value TEXT)")
     conn.commit()
     conn.close()
+    snapshot_path = tmp_path / "verified-snapshot.db"
+    snapshot_path.write_bytes(db_path.read_bytes())
+    live_token_before = sqlite_file_token(db_path)
 
     fake_bundle = _review_bundle(manifest, db_path).model_copy(
         update={
@@ -739,7 +743,13 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
             )
         }
     )
-    fake_backup = _backup(manifest)
+    fake_backup = _backup(manifest).model_copy(
+        update={
+            "snapshot_resolved_path": str(snapshot_path),
+            "snapshot_byte_size": snapshot_path.stat().st_size,
+            "snapshot_sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
+        }
+    )
 
     def _parse_bundle(_payload: str | bytes | bytearray) -> OperationsReviewBundle:
         return fake_bundle
@@ -766,8 +776,10 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         staticmethod(_parse_pins),
     )
 
-    def _accept_external_evidence(**_kwargs: object) -> None:
-        return None
+    evidence_db_paths: list[Path] = []
+
+    def _accept_external_evidence(**kwargs: object) -> None:
+        evidence_db_paths.append(Path(str(kwargs["db_path"])).resolve())
 
     def _test_lineage(_conn: sqlite3.Connection) -> str:
         return "test-lineage"
@@ -775,7 +787,10 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
     monkeypatch.setattr(refresh, "_validate_external_evidence", _accept_external_evidence)
     monkeypatch.setattr(refresh, "database_lineage_identity", _test_lineage)
 
+    opened_paths: list[Path] = []
+
     def open_test_db(path: Path) -> sqlite3.Connection:
+        opened_paths.append(path.resolve())
         connection = sqlite3.connect(path)
         connection.row_factory = sqlite3.Row
         return connection
@@ -848,20 +863,58 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         ]
     )
     assert result == expected_result
+    assert sqlite_file_token(db_path) == live_token_before
     with sqlite3.connect(db_path) as check:
         assert check.execute("SELECT COUNT(*) FROM dry_run_probe").fetchone()[0] == 0
     receipt_files = tuple((receipt_root / "attempts").glob("*.json"))
     assert len(receipt_files) == 1
     receipt = KpiRepairAttemptReceipt.model_validate_json(receipt_files[0].read_text())
     if cli_user_id == "bhanu":
+        assert evidence_db_paths == [db_path.resolve(), db_path.resolve()]
+        assert len(opened_paths) == 1
+        assert opened_paths[0] != db_path.resolve()
+        assert not opened_paths[0].exists()
         assert receipt.state == "passed"
         assert receipt.inserted_fact_rows == 1
         assert receipt.inserted_context_rows == 1
     else:
+        assert evidence_db_paths == []
         assert receipt.state == "blocked"
         assert receipt.blocker_codes == ("manifest_user_identity_mismatch",)
         assert receipt.inserted_fact_rows == 0
         assert receipt.inserted_context_rows == 0
+
+
+def test_dry_run_rejects_corrupted_snapshot_clone_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live_db = tmp_path / "live.db"
+    snapshot = tmp_path / "snapshot.db"
+    live_db.write_bytes(b"live")
+    snapshot.write_bytes(b"verified snapshot")
+    backup = _backup(_manifest()).model_copy(
+        update={
+            "snapshot_resolved_path": str(snapshot),
+            "snapshot_byte_size": snapshot.stat().st_size,
+            "snapshot_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+        }
+    )
+    original_copy = refresh.shutil.copy2
+
+    def _corrupting_copy(source: Path, destination: Path) -> Path:
+        copied = original_copy(source, destination)
+        destination.write_bytes(destination.read_bytes() + b"corrupt")
+        return copied
+
+    monkeypatch.setattr(refresh.shutil, "copy2", _corrupting_copy)
+    with (
+        pytest.raises(
+            refresh.RepairBlockedError,
+            match="backup_restore_snapshot_clone_identity_mismatch",
+        ),
+        refresh._repair_database(live_db=live_db, backup=backup, apply=False),
+    ):
+        pytest.fail("corrupted clone must not be yielded for opening")
 
 
 def test_migrated_db_allows_same_source_count_supersession_with_review_attribution(

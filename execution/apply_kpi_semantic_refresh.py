@@ -11,8 +11,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sqlite3
 import sys
+import tempfile
+from collections.abc import Generator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -84,6 +88,44 @@ class RepairBlockedError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+@contextmanager
+def _repair_database(
+    *,
+    live_db: Path,
+    backup: BackupRestoreReadinessReceipt,
+    apply: bool,
+) -> Generator[Path]:
+    """Yield the live DB for apply or an isolated snapshot clone for dry-run.
+
+    Opening the live SQLite database with a writer-capable connection can
+    change its WAL freshness token even when the transaction is rolled back.
+    A dry-run therefore exercises the exact write shape against a disposable
+    clone of the already verified backup snapshot while all authority and
+    freshness checks remain bound to the live canonical database.
+    """
+
+    if apply:
+        yield live_db
+        return
+
+    snapshot = Path(backup.snapshot_resolved_path)
+    with tempfile.TemporaryDirectory(prefix="kpi-repair-dry-run-") as temp_root:
+        clone = Path(temp_root) / "portfolio-dry-run.db"
+        try:
+            shutil.copy2(snapshot, clone)
+        except OSError as exc:
+            raise RepairBlockedError("backup_restore_snapshot_clone_failed") from exc
+        try:
+            clone_size = clone.stat().st_size
+            with clone.open("rb") as clone_file:
+                clone_sha256 = hashlib.file_digest(clone_file, "sha256").hexdigest()
+        except OSError as exc:
+            raise RepairBlockedError("backup_restore_snapshot_clone_failed") from exc
+        if backup.snapshot_byte_size != clone_size or backup.snapshot_sha256 != clone_sha256:
+            raise RepairBlockedError("backup_restore_snapshot_clone_identity_mismatch")
+        yield clone
 
 
 class SemanticEvidenceQuotes(BaseModel):
@@ -704,7 +746,15 @@ def main(argv: list[str] | None = None) -> int:
             ["portfolio-db"],
             wait_s=0,
         ):
-            conn = open_db(args.db)
+            resources = ExitStack()
+            try:
+                repair_db = resources.enter_context(
+                    _repair_database(live_db=args.db, backup=backup, apply=args.apply)
+                )
+                conn = open_db(repair_db)
+            except Exception:
+                resources.close()
+                raise
             try:
                 actual_revision = _schema_revision(conn)
                 if actual_revision != manifest.expected_schema_revision:
@@ -798,6 +848,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise
             finally:
                 conn.close()
+                resources.close()
     except JobAlreadyRunningError:
         blocker_codes = ("portfolio_db_lock_contended",)
         state = "blocked"
