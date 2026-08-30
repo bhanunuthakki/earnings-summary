@@ -503,6 +503,19 @@ For each series: inspect every source document in scope, bind facts already corr
 reviewable sources, supersede incorrect facts from a later reviewable source document, quarantine
 unresolved observations, and rerun reports plus ViewSpec.
 
+The operational queue is deterministic and read-only until a reviewed manifest reaches the existing
+guarded executor. It counts only current fact heads (superseded observations remain queryable history
+but cannot block cutover), resolves LLM summaries and synthesized documents to their preserved parent
+document, requires the portfolio owner, KPI definition, fact, synthetic child, attributable parent,
+and evidence-document version to agree on issuer, and emits one of: missing ledger capture, missing
+fulltext capture, missing current binding, missing source identity, issuer mismatch, non-reviewable
+source, incomplete bounded evidence search, no exact numeric evidence match, or source review
+required. Evidence nodes and text are loaded once per document under explicit node, text, and match
+budgets; exhausting any budget remains visible and never masquerades as a complete negative search.
+An exact numeric node match is only a review candidate. It never supplies accounting basis,
+consolidation scope, dimensions, publication lane, scale, or comparability without verbatim source
+evidence.
+
 After that repair—and not before—explicitly cut report, thesis, open-question, and current-series
 readers over to qualification-plus-lane predicates. First run them in shadow comparison, then require
 zero `legacy_unknown`, missing, quarantined, guidance, comparator, or analyst-question observations
@@ -531,6 +544,12 @@ Partition the 5,468-entry catalog by source path:
 
 Use one writer and checkpoint by ticker, source document, extraction schema version, and source
 Content Identity. Retries resume; they do not restart the portfolio or duplicate facts.
+
+Run the same bounded queue first for report-driving definitions and then for the Facts & Metrics
+remainder. Capture ledger identity before fulltext; capture fulltext before semantic review; and
+require a content-addressed review batch before constructing a repair manifest. FMP and other
+non-reviewable rows must be re-sourced to issuer or SEC evidence or remain explicitly excluded—an
+upstream normalized feed cannot become primary authority merely because its value matches.
 
 Run the long-tail refresh behind unchanged readers and compare the shadow output. Then explicitly
 cut the Facts & Metrics readers over and fail closed only after every in-scope observation is
