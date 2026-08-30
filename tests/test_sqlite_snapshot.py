@@ -10,6 +10,7 @@ import pytest
 
 import sqlite_snapshot
 from execution.create_sqlite_snapshot import main
+from sqlite_freshness import sqlite_file_token
 from sqlite_runtime import SQLiteConnectionRole
 from sqlite_snapshot import (
     SnapshotConflictError,
@@ -142,7 +143,8 @@ def test_replay_ignores_verifier_owned_transient_empty_wal(
     request = SnapshotRequest(source_path=source, destination_path=destination)
     expected = create_snapshot(request)
     real_connect = sqlite_snapshot.connect_sqlite
-    source_connection_open = False
+    wal_path = Path(f"{source}-wal")
+    shm_path = Path(f"{source}-shm")
 
     class SourceConnectionProxy:
         def __init__(self, connection: sqlite3.Connection) -> None:
@@ -152,9 +154,9 @@ def test_replay_ignores_verifier_owned_transient_empty_wal(
             return getattr(self._connection, name)
 
         def close(self) -> None:
-            nonlocal source_connection_open
             self._connection.close()
-            source_connection_open = False
+            wal_path.touch()
+            shm_path.touch()
 
     def connect_with_transient_wal(
         path: str | Path,
@@ -162,25 +164,32 @@ def test_replay_ignores_verifier_owned_transient_empty_wal(
         role: SQLiteConnectionRole,
         schema_preflight: bool | None = None,
     ) -> sqlite3.Connection | SourceConnectionProxy:
-        nonlocal source_connection_open
         connection = real_connect(path, role=role, schema_preflight=schema_preflight)
         if Path(path) == source and role is SQLiteConnectionRole.READ_ONLY:
-            source_connection_open = True
             return SourceConnectionProxy(connection)
         return connection
 
-    def transient_wal_state(path: Path) -> tuple[int, int] | None:
-        if path == Path(f"{source}-wal") and source_connection_open:
-            return (1, 0)
-        return _optional_file_state(path)
-
     monkeypatch.setattr(sqlite_snapshot, "connect_sqlite", connect_with_transient_wal)
-    monkeypatch.setattr(sqlite_snapshot, "_optional_file_state", transient_wal_state)
 
     replay = verify_snapshot_matches_source(request)
 
     assert replay.replayed is True
     assert replay.snapshot_sha256 == expected.snapshot_sha256
+    assert wal_path.stat().st_size == 0
+    assert shm_path.stat().st_size == 0
+
+
+def test_file_token_normalizes_empty_wal_but_detects_committed_frames(tmp_path: Path) -> None:
+    source = tmp_path / "source.db"
+    _source_database(source)
+    wal_path = Path(f"{source}-wal")
+    without_wal = sqlite_file_token(source)
+
+    wal_path.touch()
+    assert sqlite_file_token(source) == without_wal
+
+    wal_path.write_bytes(b"committed-frame-placeholder")
+    assert sqlite_file_token(source) != without_wal
 
 
 def test_replay_rejects_post_close_commit_checkpointed_into_main_file(

@@ -147,6 +147,39 @@ def test_backup_restore_receipt_rejects_a_later_wal_only_commit(tmp_path: Path) 
         writer.close()
 
 
+def test_migration_readiness_accepts_reader_owned_empty_wal_after_receipt(
+    tmp_path: Path,
+) -> None:
+    prior_revision = "0000_prior"
+    checkout = _revision_repo(
+        tmp_path / "checkout",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    runtime = _revision_repo(
+        tmp_path / "runtime",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=prior_revision)
+    restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
+
+    Path(f"{db_path}-wal").touch()
+    receipt = readiness.collect_readiness(
+        checkout_root=checkout,
+        runtime_root=runtime,
+        db_path=db_path,
+        backup_restore_receipt_path=restore_receipt,
+        mode="migration",
+        **_aligned_kwargs(checkout, runtime),
+    )
+
+    assert receipt.db_revision == prior_revision
+    assert receipt.drift_state == "db_behind_code"
+    assert receipt.ready is True
+    assert receipt.blocking_reasons == ()
+
+
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     (

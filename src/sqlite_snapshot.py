@@ -393,6 +393,14 @@ def _optional_file_state(path: Path) -> tuple[int, int] | None:
         stat = path.stat()
     except OSError:
         return None
+    # A zero-byte WAL contains no committed frames.  The managed Windows
+    # SQLite reader may leave that empty sidecar behind after a read-only
+    # connection closes, so its creation timestamp is not source-content
+    # identity.  Non-empty WALs remain exact: an append before this observation
+    # is visible here, while a checkpoint/truncate before it must advance the
+    # main-file observation taken immediately afterwards.
+    if stat.st_size == 0:
+        return None
     return stat.st_size, stat.st_mtime_ns
 
 
