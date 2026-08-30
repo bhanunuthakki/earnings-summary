@@ -34,6 +34,14 @@ def _source_database(path: Path) -> None:
     conn.close()
 
 
+def _optional_file_state(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 def test_creates_verified_consistent_snapshot_and_strict_manifest(tmp_path: Path) -> None:
     source = tmp_path / "source.db"
     destination = tmp_path / "snapshots" / "source.snapshot.db"
@@ -134,7 +142,6 @@ def test_replay_ignores_verifier_owned_transient_empty_wal(
     request = SnapshotRequest(source_path=source, destination_path=destination)
     expected = create_snapshot(request)
     real_connect = sqlite_snapshot.connect_sqlite
-    real_optional_file_state = sqlite_snapshot._optional_file_state
     source_connection_open = False
 
     class SourceConnectionProxy:
@@ -165,7 +172,7 @@ def test_replay_ignores_verifier_owned_transient_empty_wal(
     def transient_wal_state(path: Path) -> tuple[int, int] | None:
         if path == Path(f"{source}-wal") and source_connection_open:
             return (1, 0)
-        return real_optional_file_state(path)
+        return _optional_file_state(path)
 
     monkeypatch.setattr(sqlite_snapshot, "connect_sqlite", connect_with_transient_wal)
     monkeypatch.setattr(sqlite_snapshot, "_optional_file_state", transient_wal_state)
@@ -184,7 +191,6 @@ def test_replay_rejects_post_close_commit_checkpointed_into_main_file(
     _source_database(source)
     request = SnapshotRequest(source_path=source, destination_path=destination)
     create_snapshot(request)
-    real_optional_file_state = sqlite_snapshot._optional_file_state
     wal_observation_count = 0
 
     def commit_before_final_wal_observation(path: Path) -> tuple[int, int] | None:
@@ -204,7 +210,7 @@ def test_replay_rejects_post_close_commit_checkpointed_into_main_file(
                     writer.close()
                 Path(f"{source}-wal").unlink(missing_ok=True)
                 Path(f"{source}-shm").unlink(missing_ok=True)
-        return real_optional_file_state(path)
+        return _optional_file_state(path)
 
     monkeypatch.setattr(
         sqlite_snapshot, "_optional_file_state", commit_before_final_wal_observation
