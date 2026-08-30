@@ -1,9 +1,11 @@
+# pyright: reportPrivateUsage=false
 """Split-root regressions for legacy transcript and NVO adapters."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -94,7 +96,10 @@ def test_transcript_adapter_retargets_real_legacy_candidate_scan(
     stale_file.write_text("stale code evidence", encoding="utf-8")
     monkeypatch.setattr(legacy_ingest, "_TRANSCRIPT_DIRS", (stale_raw,))
 
-    transcript_adapter._bind_state(legacy_ingest, state_root)
+    transcript_adapter._bind_state(
+        cast("transcript_adapter._IngestTranscripts", legacy_ingest),
+        state_root,
+    )
 
     candidates = legacy_ingest._candidate_files(None)
     assert [path for path, _parsed in candidates] == [state_file]

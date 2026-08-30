@@ -1,9 +1,11 @@
+# pyright: reportPrivateUsage=false
 """Tests for the split-root IR-document processing adapter."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -40,7 +42,7 @@ class _FakeProcessor:
 def test_bind_state_routes_every_mutable_ir_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    processor = _FakeProcessor()
+    processor = cast("adapter._ProcessIrDocuments", _FakeProcessor())
     original_db_path = db.DB_PATH
     monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
 
@@ -62,7 +64,8 @@ def test_bind_state_routes_every_mutable_ir_path(
 def test_main_binds_state_and_forwards_only_legacy_ticker_args(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    processor = _FakeProcessor()
+    fake_processor = _FakeProcessor()
+    processor = cast("adapter._ProcessIrDocuments", fake_processor)
     original_argv = list(sys.argv)
     original_db_path = db.DB_PATH
     monkeypatch.setattr(adapter, "_load_processor", lambda: processor)
@@ -71,7 +74,7 @@ def test_main_binds_state_and_forwards_only_legacy_ticker_args(
         assert adapter.main(["--ticker", "NU", "--repo-root", str(tmp_path)]) == 0
 
         assert tmp_path == processor.PROJECT_ROOT
-        assert processor.seen_argv == ["process_ir_documents.py", "--ticker", "NU"]
+        assert fake_processor.seen_argv == ["process_ir_documents.py", "--ticker", "NU"]
         assert sys.argv == original_argv
     finally:
         db.set_db_path(original_db_path)

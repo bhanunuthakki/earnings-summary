@@ -72,9 +72,12 @@ def test_schema_preflight_uses_state_database_and_code_migrations(
         captured.update(db_path=db_path, project_root=project_root)
         return SimpleNamespace(message="blocked")
 
+    def portfolio_db_path(root: Path) -> Path:
+        return root / "data/portfolio.db"
+
     import schema_compat
 
-    monkeypatch.setattr(job_runtime, "portfolio_db_path", lambda root: root / "data/portfolio.db")
+    monkeypatch.setattr(job_runtime, "portfolio_db_path", portfolio_db_path)
     monkeypatch.setattr(schema_compat, "describe_drift", describe_drift)
 
     assert job_runtime._schema_preflight(state_root, "unit-job", code_root=code_root) == "blocked"

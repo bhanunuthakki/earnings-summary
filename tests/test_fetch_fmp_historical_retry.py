@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """The historical fetcher routes through the shared retrying FMP client."""
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ def test_retarget_paths_binds_raw_cache_and_database_to_state_root(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = (mod.DATA_DIR, mod.db.PROJECT_ROOT, mod.db.DATA_DIR, mod.db.DB_PATH, mod.db.FMP_DIR)
-    monkeypatch.setenv("FMP_API_KEY", "unit-key")
+    monkeypatch.setenv("FMP_API_KEY", "unit-key")  # pragma: allowlist secret
     try:
         mod._retarget_paths(tmp_path)
         assert pathlib.Path(mod.DATA_DIR) == tmp_path / "data/historical/fmp"

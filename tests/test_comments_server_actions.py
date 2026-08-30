@@ -24,19 +24,31 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 
 
 class _NonSpawningRegistry(Registry):
     """Registry that records starts but never spawns a real subprocess."""
 
-    def start(self, *, ticker, kind, argv, spawn=True, code_root=None):  # type: ignore[override]
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
         # Force spawn=False so the test never hits real disk / Python interpreter.
         return super().start(
             ticker=ticker,
             kind=kind,
             argv=argv,
             spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
             code_root=code_root,
         )
 
@@ -96,7 +108,7 @@ def test_post_refresh_returns_job_metadata(client):
     assert body["stream_url"] == f"/actions/stream/{body['job_id']}"
 
 
-def test_post_refresh_routes_code_and_state_through_separate_roots(client):
+def test_post_refresh_routes_code_and_state_through_separate_roots(client: FlaskClient) -> None:
     resp = client.post(
         "/actions/refresh",
         json={"ticker": "NU", "mode": "stale", "steps": ["build_report"]},

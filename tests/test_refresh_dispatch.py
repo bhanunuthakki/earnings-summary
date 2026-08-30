@@ -13,6 +13,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 
@@ -51,7 +52,7 @@ def _seed_fmp(db_path: Path, ticker: str, last_pulled: str) -> None:
 # ---- build_plan tests ----------------------------------------------------
 
 
-def test_plan_full_mode_never_skips(tmp_path):
+def test_plan_full_mode_never_skips(tmp_path: Path) -> None:
     db = tmp_path / "p.db"
     _seed_fmp(db, "NU", "2026-05-11T01:02:14")
     plan = build_plan(ticker="NU", mode="full", db_path=db, now=datetime(2026, 5, 18, tzinfo=UTC))
@@ -60,7 +61,7 @@ def test_plan_full_mode_never_skips(tmp_path):
     assert plan.skip_fmp_reason is None
 
 
-def test_plan_stale_skips_fmp_when_pulled_within_window(tmp_path):
+def test_plan_stale_skips_fmp_when_pulled_within_window(tmp_path: Path) -> None:
     db = tmp_path / "p.db"
     _seed_fmp(db, "NU", "2026-05-15T01:00:00")  # 3 days before now
     plan = build_plan(
@@ -75,7 +76,7 @@ def test_plan_stale_skips_fmp_when_pulled_within_window(tmp_path):
     assert "fresh last_pulled=2026-05-15T01:00:00" in plan.skip_fmp_reason
 
 
-def test_plan_stale_runs_fmp_when_outside_window(tmp_path):
+def test_plan_stale_runs_fmp_when_outside_window(tmp_path: Path) -> None:
     db = tmp_path / "p.db"
     _seed_fmp(db, "NU", "2026-05-01T01:00:00")  # 17 days before now
     plan = build_plan(
@@ -89,7 +90,7 @@ def test_plan_stale_runs_fmp_when_outside_window(tmp_path):
     assert plan.skip_fmp_reason is None
 
 
-def test_plan_stale_runs_fmp_when_no_history(tmp_path):
+def test_plan_stale_runs_fmp_when_no_history(tmp_path: Path) -> None:
     """No fmp_endpoint_status rows at all → run the FMP step."""
     db = tmp_path / "p.db"
     sqlite3.connect(str(db)).executescript(
@@ -112,7 +113,7 @@ def test_plan_stale_runs_fmp_when_no_history(tmp_path):
     assert plan.skip_fmp is False
 
 
-def test_plan_stale_runs_fmp_when_db_missing(tmp_path):
+def test_plan_stale_runs_fmp_when_db_missing(tmp_path: Path) -> None:
     plan = build_plan(
         ticker="NU",
         mode="stale",
@@ -122,7 +123,7 @@ def test_plan_stale_runs_fmp_when_db_missing(tmp_path):
     assert plan.skip_fmp is False
 
 
-def test_plan_stale_respects_custom_window(tmp_path):
+def test_plan_stale_respects_custom_window(tmp_path: Path) -> None:
     db = tmp_path / "p.db"
     _seed_fmp(db, "NU", "2026-05-15T01:00:00")  # 3 days before now
     # Window = 2 days → 3-day-old data is OUTSIDE → run FMP
@@ -139,6 +140,11 @@ def test_plan_stale_respects_custom_window(tmp_path):
 # ---- execute tests -------------------------------------------------------
 
 
+class _Result:
+    def __init__(self, returncode: int) -> None:
+        self.returncode: int | None = returncode
+
+
 class _MockRunner:
     """Replacement for subprocess.run that records argv lists + scripted exit codes."""
 
@@ -146,18 +152,14 @@ class _MockRunner:
         self.calls: list[list[str]] = []
         self._exit_codes = list(exit_codes or [])
 
-    def __call__(self, argv: list[str], *, out):
+    def __call__(self, argv: list[str], *, out: TextIO) -> _Result:
         self.calls.append(argv)
         rc = self._exit_codes.pop(0) if self._exit_codes else 0
         out.write(f"<mock step output for {Path(argv[2]).stem}>\n")
-
-        class _Result:
-            returncode = rc
-
-        return _Result()
+        return _Result(rc)
 
 
-def test_execute_full_runs_all_six_steps(tmp_path):
+def test_execute_full_runs_all_six_steps(tmp_path: Path) -> None:
     runner = _MockRunner()
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     out = io.StringIO()
@@ -174,7 +176,7 @@ def test_execute_full_runs_all_six_steps(tmp_path):
     ]
 
 
-def test_execute_stale_skips_fmp_when_planned(tmp_path):
+def test_execute_stale_skips_fmp_when_planned(tmp_path: Path) -> None:
     runner = _MockRunner()
     plan = Plan(
         ticker="NU",
@@ -197,7 +199,7 @@ def test_execute_stale_skips_fmp_when_planned(tmp_path):
     assert "step=fmp action=skip reason=fresh" in out.getvalue()
 
 
-def test_execute_emits_dispatch_markers(tmp_path):
+def test_execute_emits_dispatch_markers(tmp_path: Path) -> None:
     runner = _MockRunner()
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     out = io.StringIO()
@@ -209,7 +211,7 @@ def test_execute_emits_dispatch_markers(tmp_path):
     assert "[dispatch] all_done rc=0" in log
 
 
-def test_execute_keeps_going_after_step_failure(tmp_path):
+def test_execute_keeps_going_after_step_failure(tmp_path: Path) -> None:
     """A failed FMP step must not block independent subsequent steps."""
     runner = _MockRunner(exit_codes=[1, 0, 0, 0, 0, 0])  # FMP fails, rest succeed
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
@@ -220,7 +222,7 @@ def test_execute_keeps_going_after_step_failure(tmp_path):
     assert "step=fmp action=end rc=1" in out.getvalue()
 
 
-def test_execute_includes_ticker_in_argv(tmp_path):
+def test_execute_includes_ticker_in_argv(tmp_path: Path) -> None:
     runner = _MockRunner()
     plan = Plan(ticker="GOOG", mode="full", skip_fmp=False, skip_fmp_reason=None)
     execute(plan, project_root=tmp_path, out=io.StringIO(), runner=runner)
@@ -228,7 +230,7 @@ def test_execute_includes_ticker_in_argv(tmp_path):
         assert "GOOG" in call
 
 
-def test_execute_includes_repo_root_where_needed(tmp_path):
+def test_execute_includes_repo_root_where_needed(tmp_path: Path) -> None:
     """extract_kpis, build_saydo, and build_artifacts need --repo-root."""
     runner = _MockRunner()
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
@@ -245,7 +247,7 @@ def test_execute_includes_repo_root_where_needed(tmp_path):
             assert str(tmp_path) in call
 
 
-def test_execute_uses_code_root_for_scripts_and_state_root_for_outputs(tmp_path):
+def test_execute_uses_code_root_for_scripts_and_state_root_for_outputs(tmp_path: Path) -> None:
     code_root = tmp_path / "runtime"
     state_root = tmp_path / "state"
     runner = _MockRunner()
@@ -285,7 +287,7 @@ def test_execute_uses_code_root_for_scripts_and_state_root_for_outputs(tmp_path)
     assert thesis[thesis.index("--holdings-dir") + 1] == str(state_root / "micro_thesis/holdings")
 
 
-def test_build_step_uses_workspace_renderer_with_enable_llm(tmp_path):
+def test_build_step_uses_workspace_renderer_with_enable_llm(tmp_path: Path) -> None:
     runner = _MockRunner()
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     execute(plan, project_root=tmp_path, out=io.StringIO(), runner=runner)

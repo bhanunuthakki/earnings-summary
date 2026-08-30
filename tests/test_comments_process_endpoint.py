@@ -34,6 +34,7 @@ class _NonSpawningRegistry(Registry):
         spawn: bool = True,
         cwd: str | None = None,
         write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
     ) -> Job:
         return super().start(
             ticker=ticker,
@@ -42,6 +43,7 @@ class _NonSpawningRegistry(Registry):
             spawn=False,
             cwd=cwd,
             write_sets=write_sets,
+            code_root=code_root,
         )
 
 
