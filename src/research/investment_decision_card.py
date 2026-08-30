@@ -629,7 +629,7 @@ Respond with ONE JSON object matching this shape exactly:
     "what_would_change_it": "..."
   }},
   "source_refs": ["<source_freshness key or verbatim fact>", ...]
-}}"""
+}}"""  # nosec B608 -- LLM prompt; not an executable SQL statement
 
 
 # --------------------------------------------------------------------------- #

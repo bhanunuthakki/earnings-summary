@@ -761,14 +761,21 @@ def _load_current_suggestion(
         return None
     if not {"id", "ticker", "purpose", "content_json", "input_sha256"} <= columns:
         return None
-    current = "AND superseded_by_id IS NULL" if "superseded_by_id" in columns else ""
     try:
-        row = conn.execute(
-            "SELECT id,input_sha256,content_json FROM llm_artifacts "
-            "WHERE UPPER(ticker)=? AND purpose='investment_decision_card' "
-            f"{current} ORDER BY id DESC LIMIT 1",
-            (ticker.upper(),),
-        ).fetchone()
+        if "superseded_by_id" in columns:
+            row = conn.execute(
+                "SELECT id,input_sha256,content_json FROM llm_artifacts "
+                "WHERE UPPER(ticker)=? AND purpose='investment_decision_card' "
+                "AND superseded_by_id IS NULL ORDER BY id DESC LIMIT 1",
+                (ticker.upper(),),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id,input_sha256,content_json FROM llm_artifacts "
+                "WHERE UPPER(ticker)=? AND purpose='investment_decision_card' "
+                "ORDER BY id DESC LIMIT 1",
+                (ticker.upper(),),
+            ).fetchone()
     except sqlite3.Error:
         return None
     if row is None:
