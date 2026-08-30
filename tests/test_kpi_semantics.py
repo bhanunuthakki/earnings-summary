@@ -292,9 +292,12 @@ def test_semantic_audit_requires_explicit_database_path() -> None:
 
 
 def test_semantic_audit_gate_fails_closed_on_empty_owner_scope(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from execution.audit_kpi_semantics import main
+    from execution import audit_kpi_semantics as audit
+    from sqlite_runtime import SQLiteConnectionRole
 
     db_path = tmp_path / "empty-owner.db"
     conn = sqlite3.connect(db_path)
@@ -304,7 +307,16 @@ def test_semantic_audit_gate_fails_closed_on_empty_owner_scope(
     )
     conn.close()
 
-    assert main(["--db", str(db_path), "--user-id", "bhanu", "--gate"]) == 2
+    roles: list[SQLiteConnectionRole] = []
+    actual_connect = audit.connect_sqlite
+
+    def checked_connect(path: Path, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        roles.append(role)
+        return actual_connect(path, role=role)
+
+    monkeypatch.setattr(audit, "connect_sqlite", checked_connect)
+    assert audit.main(["--db", str(db_path), "--user-id", "bhanu", "--gate"]) == 2
+    assert roles == [SQLiteConnectionRole.READ_ONLY]
     captured = capsys.readouterr()
     event = json.loads(captured.err)
     summary = json.loads(captured.out)
