@@ -80,10 +80,23 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert 'parser.add_argument("--user-id", default=DEFAULT_USER_ID)' in prepare_source
     assert 'default="default"' not in prepare_source
     shared_wrapper = (CRON_DIR / "run_python.bat").read_text(encoding="utf-8")
-    assert '--repo-root "%ES_JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
-    assert '--code-root "%ES_JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
+    scope_gate = 'if /I not "%~1"=="prepare-kpi-semantic-review" goto clear_runtime_root_env'
+    assert scope_gate in shared_wrapper
+    assert 'set "JOB_RUNTIME_REPO_ROOT=%ES_JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
+    assert 'set "JOB_RUNTIME_CODE_ROOT=%ES_JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
+    assert '--repo-root "%JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
+    assert '--code-root "%JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
     assert "ES_JOB_RUNTIME_CODE_ROOT is required with ES_JOB_RUNTIME_REPO_ROOT" in shared_wrapper
     assert "ES_JOB_RUNTIME_REPO_ROOT is required with ES_JOB_RUNTIME_CODE_ROOT" in shared_wrapper
+    clear_label = shared_wrapper.index(":clear_runtime_root_env")
+    first_launch = shared_wrapper.index('"%PYTHON_EXE%" -u', clear_label)
+    assert shared_wrapper.index('set "ES_JOB_RUNTIME_REPO_ROOT="', clear_label) < first_launch
+    assert shared_wrapper.index('set "ES_JOB_RUNTIME_CODE_ROOT="', clear_label) < first_launch
+    assert shared_wrapper.index(scope_gate) < shared_wrapper.index(
+        "if defined ES_JOB_RUNTIME_REPO_ROOT if not defined ES_JOB_RUNTIME_CODE_ROOT"
+    )
+    assert "%ES_JOB_RUNTIME_REPO_ROOT%" not in shared_wrapper[first_launch:]
+    assert "%ES_JOB_RUNTIME_CODE_ROOT%" not in shared_wrapper[first_launch:]
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")

@@ -223,6 +223,22 @@ def test_review_code_identity_binds_semantic_review_producer_route_model_and_cli
             assert after != before, f"{dependency_class}:{relative}"
 
 
+def test_review_code_identity_binds_fulltext_extractor_direct_ooxml_dependency(
+    tmp_path: Path,
+) -> None:
+    producer_dependencies = dict(REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES)["review_producer"]
+    ooxml_dependency = "src/provenance/ooxml_extraction.py"
+    assert ooxml_dependency in producer_dependencies
+
+    for relative in REVIEW_CODE_IDENTITY_DEPENDENCIES:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(relative, encoding="utf-8")
+    before = review_code_identity(tmp_path)
+    (tmp_path / ooxml_dependency).write_text("mutated-classifier", encoding="utf-8")
+    assert review_code_identity(tmp_path) != before
+
+
 def test_mac_validator_rejects_origin_identity_change_and_staleness() -> None:
     from execution.fetch_windows_review_bundle import (
         ReviewFetchError,

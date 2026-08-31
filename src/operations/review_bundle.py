@@ -76,6 +76,7 @@ REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
             "src/provenance/evidence_ledger.py",
             "src/provenance/financial_fact_resolution.py",
             "src/provenance/fulltext_extractor_identity.py",
+            "src/provenance/ooxml_extraction.py",
         ),
     ),
     (
