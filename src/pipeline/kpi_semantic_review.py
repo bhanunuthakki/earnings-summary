@@ -39,6 +39,7 @@ OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT = (
     "src/operations/registry.py:OperationsRegistry",
     "src/pipeline/operations_panel.py:visible_surface_dispositions",
 )
+QUARANTINED_PREDECESSOR_SCOPE_REASON = "owner_authorized_quarantined_predecessor"
 
 _SUBSTANTIVE_NODE_KINDS = frozenset(
     {"section", "passage", "table", "table_row", "table_cell", "pdf_page"}
@@ -924,3 +925,130 @@ def build_kpi_semantic_review_batch(
     }
     digest = _payload_sha256(payload)
     return KpiSemanticReviewBatch.model_validate({**payload, "content_sha256": digest})
+
+
+def build_quarantined_kpi_correction_review(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    user_id: str,
+    fact_id: int,
+    source_value_text: str,
+    observed_at: datetime | None = None,
+) -> KpiSemanticReviewBatch:
+    """Review one noncanonical legacy predecessor against an independent source token."""
+
+    if fact_id <= 0:
+        raise ValueError("fact_id must be positive")
+    correction_token = source_value_text.strip()
+    if not correction_token:
+        raise ValueError("source_value_text must be nonempty")
+    conn.row_factory = sqlite3.Row
+    owner_tickers = portfolio_tickers(conn, user_id=user_id)
+    if not owner_tickers:
+        raise ValueError("owner portfolio scope is absent")
+    relation = canonical_fact_relation(conn, "kpi_facts")
+    if relation.selection_mode != "resolved_view":
+        raise ValueError("quarantined correction review requires the resolved current-fact view")
+    context_join, context_status = _current_context_join(conn)
+    row = conn.execute(
+        "SELECT fact.id,fact.ticker,fact.period_end,fact.fiscal_period_type,"
+        "fact.kpi_definition_id,fact.value,fact.unit,fact.source_doc_id,"
+        f"definition.name,definition.ticker AS definition_ticker,{context_status} "
+        "AS context_status FROM kpi_facts fact JOIN kpi_definitions definition "
+        "ON definition.id=fact.kpi_definition_id "
+        f"{context_join} WHERE fact.id=?",
+        (fact_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("quarantined predecessor fact is unavailable")
+    ticker = str(row["ticker"]).upper()
+    if ticker not in owner_tickers:
+        raise ValueError("quarantined predecessor is outside the owner portfolio")
+    if row["context_status"] is not None:
+        raise ValueError("quarantined predecessor already has a semantic context")
+    successor = conn.execute(
+        "SELECT id FROM kpi_facts WHERE supersedes_id=? ORDER BY id DESC LIMIT 1",
+        (fact_id,),
+    ).fetchone()
+    if successor is not None:
+        raise ValueError("quarantined predecessor is no longer the fact-chain head")
+    if (
+        conn.execute(
+            f"SELECT 1 FROM {relation.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+            (fact_id,),
+        ).fetchone()
+        is not None
+    ):
+        raise ValueError("quarantined predecessor is already canonical")
+    legacy, source = _source_document(
+        conn, None if row["source_doc_id"] is None else int(row["source_doc_id"])
+    )
+    (
+        state,
+        candidates,
+        candidate_total,
+        candidates_truncated,
+        state_reason,
+        search_incomplete,
+        search_reason_codes,
+    ) = _evidence_state_and_candidates(
+        conn,
+        legacy=legacy,
+        source=source,
+        ticker=ticker,
+        definition_ticker=str(row["definition_ticker"]),
+        owner_tickers=frozenset(owner_tickers),
+        value=correction_token,
+        unit=str(row["unit"]),
+        snapshot_cache={},
+    )
+    if state is KpiSemanticReviewState.SOURCE_REVIEW_REQUIRED:
+        state_reason = "quarantined_predecessor_exact_numeric_evidence_candidates"
+    item = KpiSemanticReviewItem(
+        ticker=ticker,
+        kpi_definition_id=int(row["kpi_definition_id"]),
+        kpi_name=str(row["name"]),
+        scope_reasons=(QUARANTINED_PREDECESSOR_SCOPE_REASON,),
+        fact_id=fact_id,
+        period_end=str(row["period_end"]),
+        fiscal_period_type=str(row["fiscal_period_type"]),
+        value=str(row["value"]),
+        unit=str(row["unit"]),
+        context_status=None,
+        legacy_source_doc_id=None if legacy is None else int(legacy["id"]),
+        source_doc_id=None if source is None else int(source["id"]),
+        source_type=None if source is None else _optional_text(source["source_type"]),
+        doc_type=None if source is None else _optional_text(source["doc_type"]),
+        source_content_sha256=None if source is None else _optional_text(source["sha256"]),
+        source_observation_version=(
+            None if source is None else _optional_text(source["fetched_at"])
+        ),
+        source_period_end=None if source is None else _optional_text(source["period_end"]),
+        state=state,
+        state_reason_code=state_reason,
+        quarantine_reason_code=state_reason,
+        evidence_candidate_total=candidate_total,
+        evidence_candidates_truncated=candidates_truncated,
+        evidence_search_incomplete=search_incomplete,
+        evidence_search_reason_codes=search_reason_codes,
+        evidence_candidates=candidates,
+    )
+    at = observed_at or datetime.now(UTC)
+    if at.tzinfo is None:
+        raise ValueError("observed_at must be timezone-aware")
+    at = at.astimezone(UTC)
+    payload = {
+        "schema_version": "kpi_semantic_review.v3",
+        "user_id": user_id,
+        "ticker": ticker,
+        "observed_at": at.isoformat().replace("+00:00", "Z"),
+        "limit": 1,
+        "total_items": 1,
+        "truncated": False,
+        "state_counts": {state.value: 1},
+        "items": [item.model_dump(mode="json")],
+    }
+    return KpiSemanticReviewBatch.model_validate(
+        {**payload, "content_sha256": _payload_sha256(payload)}
+    )

@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import execution.prepare_kpi_semantic_review as prepare_module
+import execution.prepare_quarantined_kpi_correction as correction_module
 import operations.kpi_semantic_review_export as export_module
 import pipeline.kpi_semantic_review as review_module
 from execution.prepare_kpi_semantic_review import (
@@ -34,10 +35,12 @@ from pipeline.kpi_semantic_review import (
     MAX_KPI_SEMANTIC_REVIEW_ITEMS,
     OPERATIONS_GOVERNANCE_DISPOSITION,
     OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT,
+    QUARANTINED_PREDECESSOR_SCOPE_REASON,
     KpiEvidenceLocatorCoordinates,
     KpiSemanticReviewBatch,
     KpiSemanticReviewState,
     build_kpi_semantic_review_batch,
+    build_quarantined_kpi_correction_review,
 )
 from provenance.evidence_ledger import EvidenceLocator
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
@@ -241,6 +244,89 @@ def test_exact_evidence_value_is_a_review_candidate_not_auto_admission(tmp_path:
     assert "C:/sources" not in serialized_candidate
     assert "https://" not in serialized_candidate
     assert item.context_status is None
+
+
+def test_quarantined_predecessor_review_searches_independent_correction_token(
+    tmp_path: Path,
+) -> None:
+    conn = _database()
+    conn.execute("DROP VIEW v_kpi_facts_resolved_current")
+    conn.execute(
+        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id<>42175"
+    )
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_transcript")
+    _document(
+        conn,
+        document_id=20,
+        source_type="llm_extracted",
+        doc_type="llm_summary",
+        parent_document_id=10,
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts VALUES (42175,'NU','2024-12-31','Q4',1,'95','count',20,NULL)"
+    )
+    _evidence(
+        conn,
+        document_id=10,
+        text=(
+            "Guilherme Lago: Beginning with customer acquisition, we added 4.5 million new "
+            "customers to our platform and ended the year with 114.2 million customers. "
+            "Our active customer base reached nearly 95 million."
+        ),
+    )
+
+    batch = build_quarantined_kpi_correction_review(
+        conn,
+        repo_root=tmp_path,
+        user_id="owner",
+        fact_id=42175,
+        source_value_text="114.2",
+        observed_at=NOW,
+    )
+
+    item = batch.items[0]
+    assert item.value == "95"
+    assert item.scope_reasons == (QUARANTINED_PREDECESSOR_SCOPE_REASON,)
+    assert item.legacy_source_doc_id == 20
+    assert item.source_doc_id == 10
+    assert item.state is KpiSemanticReviewState.SOURCE_REVIEW_REQUIRED
+    assert {candidate.source_value_text for candidate in item.evidence_candidates} == {"114.2"}
+    assert "nearly 95 million" in item.evidence_candidates[0].excerpt
+
+
+def test_quarantined_predecessor_review_rejects_a_canonical_fact(tmp_path: Path) -> None:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_transcript")
+    _fact(conn, fact_id=42175, definition_id=1, document_id=10)
+
+    with pytest.raises(ValueError, match="already canonical"):
+        build_quarantined_kpi_correction_review(
+            conn,
+            repo_root=tmp_path,
+            user_id="owner",
+            fact_id=42175,
+            source_value_text="114.2",
+            observed_at=NOW,
+        )
+
+
+def test_quarantined_correction_cli_is_explicitly_read_only_and_bounded() -> None:
+    parser = correction_module.build_parser()
+    actions = {action.dest: action for action in parser._actions}
+
+    assert actions["db"].required is True
+    assert actions["fact_id"].required is True
+    assert actions["source_value_text"].required is True
+    assert actions["output"].required is True
+    assert "apply" not in actions
+    assert (
+        correction_module.OPERATIONS_GOVERNANCE_DISPOSITION
+        == "no_surface_change_bounded_read_only_kpi_correction_review"
+    )
+    assert correction_module.OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT == (
+        "src/operations/registry.py:OperationsRegistry",
+        "src/pipeline/operations_panel.py:visible_surface_dispositions",
+    )
 
 
 def test_evidence_locator_payload_and_hash_must_match(tmp_path: Path) -> None:

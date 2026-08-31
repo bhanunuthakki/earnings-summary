@@ -83,10 +83,10 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/backfill_fiscal_period_stamps.py": 1,
     "execution/backfill_ir_deck_locators.py": 2,
     # The source-reviewed repair executor deliberately checks the old row,
-    # supersession head, exact inserted successor, replay head, and crash-
-    # recovery postcondition at the legacy boundary. These are repair guards,
+    # supersession head, exact inserted successor, replay head, crash-recovery
+    # postcondition, and quarantined-old invariant at the legacy boundary. These are repair guards,
     # not an analytical/product reader, and remain frozen here until cutover.
-    "execution/apply_kpi_semantic_refresh.py": 6,
+    "execution/apply_kpi_semantic_refresh.py": 7,
     "execution/daily_fetch_and_brief.py": 2,
     # The eighth literal is an EXPLAIN QUERY PLAN safety probe that proves the
     # supersedes self-FK lookup uses the migration-owned index before deletion;
@@ -168,6 +168,17 @@ class _TransitionalReadExemption:
 # immutable observations can be captured atomically. Keep it outside the
 # frozen reader-debt count, but make both its scope and deletion gate executable.
 _TRANSITIONAL_READ_EXEMPTIONS = {
+    "src/pipeline/kpi_semantic_review.py": (
+        _TransitionalReadExemption(
+            function_name="build_quarantined_kpi_correction_review",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after observation-less legacy KPI predecessors are either "
+                "source-reviewed into the canonical source-fact plane or dispositioned "
+                "without a raw kpi_facts repair seam."
+            ),
+        ),
+    ),
     "src/pipeline/issuer_fact_manifest.py": (
         _TransitionalReadExemption(
             function_name="_assert_kpi_replays_compatible",
