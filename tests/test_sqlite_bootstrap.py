@@ -102,16 +102,18 @@ def test_managed_launchers_enable_preimport_bootstrap() -> None:
     assert "sqlite_bootstrap.py" in comments_launcher
 
 
-def test_long_running_service_directive_uses_managed_runtime() -> None:
-    directive = (PROJECT_ROOT / "directives" / "self_host_phase1_laptop.md").read_text(
-        encoding="utf-8"
+def test_private_self_host_directives_stay_out_of_the_public_tree() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files", "directives/self_host*.md"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
     )
+    ignores = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
 
-    assert "Get-Command python" not in directive
-    assert "runtime\\earnings-summary" in directive
-    assert directive.count("execution\\sqlite_bootstrap.py") == 1
-    assert directive.count('AppParameters "-u `"$bootstrap`"') == 2
-    assert directive.count("--repo-root") >= 2
+    assert tracked.stdout.strip() == ""
+    assert "/directives/self_host*.md" in ignores
 
 
 def test_root_convenience_wrappers_supply_job_and_write_set() -> None:
