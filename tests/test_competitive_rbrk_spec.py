@@ -9,10 +9,13 @@ fails loudly.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 from typing import cast
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -27,11 +30,22 @@ from competitive.holdings_sync import resolve_synced_current, sync_holdings  # n
 
 from ._competitive_fixtures import kpi_conn  # noqa: E402
 
-_RBRK = PROJECT_ROOT / "micro_thesis" / "holdings" / "RBRK.json"
+
+def _private_holdings_dir(required: tuple[str, ...] = ()) -> Path:
+    configured = os.environ.get("EARNINGS_SUMMARY_PRIVATE_HOLDINGS_DIR")
+    if not configured:
+        pytest.skip("private holdings fixtures are not configured")
+    path = Path(configured)
+    if not path.is_dir():
+        pytest.skip("private holdings fixtures are unavailable")
+    if any(not (path / f"{ticker}.json").is_file() for ticker in required):
+        pytest.skip("required private holdings fixtures are unavailable")
+    return path
 
 
 def _load_rbrk() -> dict[str, object]:
-    return cast("dict[str, object]", json.loads(_RBRK.read_text(encoding="utf-8")))
+    path = _private_holdings_dir(("RBRK",)) / "RBRK.json"
+    return cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
 
 
 def _dicts(value: object) -> list[dict[str, object]]:
@@ -85,11 +99,12 @@ def test_additive_only_existing_rules_untouched() -> None:
 
 def test_holdings_sync_resolves_real_values_and_applies(tmp_path: Path) -> None:
     # Build a temp repo with the real RBRK.json + the real category-share seed.
+    private_holdings_dir = _private_holdings_dir(("RBRK",))
     holdings_dir = tmp_path / "micro_thesis" / "holdings"
     comp_dir = tmp_path / "micro_thesis" / "competitive"
     holdings_dir.mkdir(parents=True)
     comp_dir.mkdir(parents=True)
-    shutil.copy(_RBRK, holdings_dir / "RBRK.json")
+    shutil.copy(private_holdings_dir / "RBRK.json", holdings_dir / "RBRK.json")
     shutil.copy(
         PROJECT_ROOT / "micro_thesis" / "competitive" / "RBRK_category_share.json",
         comp_dir / "RBRK_category_share.json",
