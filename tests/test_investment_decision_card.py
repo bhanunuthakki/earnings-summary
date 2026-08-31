@@ -244,6 +244,33 @@ def test_required_sections_present(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert card.suggested_disposition in ("pass", "watch", "research_further", "promote")
 
 
+def test_persisted_markdown_keeps_actionable_decision_card_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _make_db(tmp_path)
+    _patch_inputs(monkeypatch, spec=_spec())
+    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+
+    result = ridc.generate_card(db_path, tmp_path, TICKER)
+
+    assert result.artifact_id is not None
+    artifact = llm_artifact_store.read_current(
+        ticker=TICKER, purpose=ridc.PURPOSE, scope="ticker", db_path=db_path
+    )
+    assert artifact is not None
+    markdown = artifact.content_md or ""
+    for expected in (
+        "Recurring take-rate on GMV processed through the network.",
+        "ARR, take rate",
+        "fit score 1.1x, mildly accretive",
+        "low overlap with existing payments exposure",
+        "gross take-rate compression over 2 quarters",
+        "next quarterly earnings call",
+        "a full quarter of churn data",
+    ):
+        assert expected in markdown
+
+
 def test_prompt_assigns_qualitative_profile_but_reserves_valuation_labels_for_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -456,6 +483,25 @@ def test_unchanged_inputs_reuse_the_artifact(
     )
     assert artifact is not None
     assert artifact.id == first.artifact_id
+
+
+def test_renderer_engine_version_invalidates_the_artifact_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _make_db(tmp_path)
+    _patch_inputs(monkeypatch, spec=_spec())
+    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+
+    first = ridc.generate_card(db_path, tmp_path, TICKER)
+    monkeypatch.setattr(ridc, "ENGINE_VERSION", "v4-test")
+    second = ridc.generate_card(db_path, tmp_path, TICKER)
+
+    assert first.artifact_id is not None
+    assert second.artifact_id is not None
+    assert second.artifact_id != first.artifact_id
+    assert second.cache_hit is False
+    assert second.card is not None
+    assert second.card.engine_version == "v4-test"
 
 
 def test_input_change_creates_a_new_artifact(
