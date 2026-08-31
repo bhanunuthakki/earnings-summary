@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from report.legacy_body import (
@@ -21,6 +23,10 @@ from report.render_clock import render_now
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
 ReaderMode = Literal["shared_body", "legacy_standalone"]
+_FISCAL_PERIOD_LABEL = re.compile(r"Q[1-4] 20\d{2}")
+_EARNINGS_PERIOD_SELECTOR = (
+    '.quarter-select[data-quarter-group="earnings"] .qbtn.active[data-quarter]'
+)
 
 
 class ReportSectionRef(BaseModel):
@@ -91,6 +97,23 @@ def _relative_artifact_path(value: str) -> str:
     return path.as_posix()
 
 
+class ReportFiscalPeriodEvidence(BaseModel):
+    """Exact immutable-report locator supporting one fiscal-period label."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["report_fiscal_period_evidence.v1"] = "report_fiscal_period_evidence.v1"
+    extractor_version: Literal["earnings_quarter_selector.v1"] = "earnings_quarter_selector.v1"
+    source_path: str
+    source_sha256: str
+    source_locator: Literal[
+        '.quarter-select[data-quarter-group="earnings"] .qbtn.active[data-quarter]'
+    ] = _EARNINGS_PERIOD_SELECTOR
+    observed_values: tuple[str, ...]
+
+    _source_relative = field_validator("source_path")(_relative_artifact_path)
+
+
 class ReportArtifactRef(BaseModel):
     """Stable identity and locations for one persisted research brief."""
 
@@ -113,6 +136,7 @@ class ReportArtifactRef(BaseModel):
     body_sha256: str | None = None
     section_ids: tuple[str, ...] = ()
     provenance_ref: int | None = None
+    fiscal_period_evidence: ReportFiscalPeriodEvidence | None = None
 
     _standalone_relative = field_validator("standalone_path")(_relative_artifact_path)
     _manifest_relative = field_validator("manifest_path")(_relative_artifact_path)
@@ -136,6 +160,31 @@ class ReconcileResult(BaseModel):
 
     added: int
     skipped: int
+
+
+class ReportFiscalPeriodBackfillItem(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    artifact_id: str
+    ticker: str
+    status: Literal["eligible", "applied", "skipped_existing", "unresolved", "failed"]
+    fiscal_period_label: str | None = None
+    evidence: ReportFiscalPeriodEvidence | None = None
+    error: str | None = None
+
+
+class ReportFiscalPeriodBackfillResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["report_fiscal_period_backfill.v1"] = "report_fiscal_period_backfill.v1"
+    apply: bool
+    candidates: int
+    eligible: int
+    applied: int
+    skipped_existing: int
+    unresolved: int
+    failed: int
+    items: tuple[ReportFiscalPeriodBackfillItem, ...]
 
 
 class LegacyBodyMigrationItem(BaseModel):
@@ -666,6 +715,126 @@ def rollback_legacy_report_bodies(
     )
 
 
+def backfill_report_fiscal_periods(
+    repo_root: Path,
+    *,
+    tickers: set[str] | None = None,
+    apply: bool = False,
+) -> ReportFiscalPeriodBackfillResult:
+    """Project exact report periods from checksum-verified immutable wrappers.
+
+    The compact index is a rebuildable projection, while report wrappers and
+    manifests are immutable evidence. Only one valid active quarter on the
+    governed earnings selector is admissible; absent or conflicting values
+    remain unresolved rather than being inferred from a date.
+    """
+
+    normalized_tickers = None if tickers is None else {value.strip().upper() for value in tickers}
+    prior = _read_index(repo_root)
+    selected = [
+        artifact
+        for artifact in prior.items
+        if normalized_tickers is None or artifact.ticker in normalized_tickers
+    ]
+    replacements: dict[str, ReportArtifactRef] = {}
+    results: list[ReportFiscalPeriodBackfillItem] = []
+    failed = 0
+    unresolved = 0
+    skipped_existing = 0
+    for artifact in selected:
+        if artifact.fiscal_period_label is not None:
+            skipped_existing += 1
+            results.append(
+                ReportFiscalPeriodBackfillItem(
+                    artifact_id=artifact.artifact_id,
+                    ticker=artifact.ticker,
+                    status="skipped_existing",
+                    fiscal_period_label=artifact.fiscal_period_label,
+                    evidence=artifact.fiscal_period_evidence,
+                )
+            )
+            continue
+        try:
+            source_path = repo_root / artifact.standalone_path
+            source_bytes = source_path.read_bytes()
+            source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+            if source_sha256 != artifact.workspace_sha256:
+                raise ValueError("standalone report checksum mismatch")
+            soup = BeautifulSoup(source_bytes, "html.parser")
+            observed_values = tuple(
+                sorted(
+                    {
+                        value
+                        for node in soup.select(_EARNINGS_PERIOD_SELECTOR)
+                        if (value := str(node.get("data-quarter") or "").strip())
+                        and _FISCAL_PERIOD_LABEL.fullmatch(value)
+                    }
+                )
+            )
+            evidence = ReportFiscalPeriodEvidence(
+                source_path=artifact.standalone_path,
+                source_sha256=source_sha256,
+                observed_values=observed_values,
+            )
+            if len(observed_values) != 1:
+                unresolved += 1
+                results.append(
+                    ReportFiscalPeriodBackfillItem(
+                        artifact_id=artifact.artifact_id,
+                        ticker=artifact.ticker,
+                        status="unresolved",
+                        evidence=evidence,
+                    )
+                )
+                continue
+            fiscal_period_label = observed_values[0]
+            replacements[artifact.artifact_id] = artifact.model_copy(
+                update={
+                    "fiscal_period_label": fiscal_period_label,
+                    "fiscal_period_evidence": evidence,
+                }
+            )
+            results.append(
+                ReportFiscalPeriodBackfillItem(
+                    artifact_id=artifact.artifact_id,
+                    ticker=artifact.ticker,
+                    status="eligible",
+                    fiscal_period_label=fiscal_period_label,
+                    evidence=evidence,
+                )
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            failed += 1
+            results.append(
+                ReportFiscalPeriodBackfillItem(
+                    artifact_id=artifact.artifact_id,
+                    ticker=artifact.ticker,
+                    status="failed",
+                    error=str(exc),
+                )
+            )
+
+    applied = 0
+    if apply and replacements and not failed:
+        updated = tuple(replacements.get(item.artifact_id, item) for item in prior.items)
+        _write_index(repo_root, updated)
+        applied = len(replacements)
+        results = [
+            item.model_copy(update={"status": "applied"}) if item.status == "eligible" else item
+            for item in results
+        ]
+    return ReportFiscalPeriodBackfillResult(
+        apply=apply,
+        candidates=len(selected) - skipped_existing,
+        eligible=len(replacements),
+        applied=applied,
+        skipped_existing=skipped_existing,
+        unresolved=unresolved,
+        failed=failed,
+        items=tuple(results),
+    )
+
+
 __all__ = [
     "CoverageRole",
     "LegacyBodyMigrationItem",
@@ -675,8 +844,12 @@ __all__ = [
     "RenderedReportBody",
     "ReportArtifactIndex",
     "ReportArtifactRef",
+    "ReportFiscalPeriodBackfillItem",
+    "ReportFiscalPeriodBackfillResult",
+    "ReportFiscalPeriodEvidence",
     "ReportInteractionManifest",
     "ReportSectionRef",
+    "backfill_report_fiscal_periods",
     "load_report_artifact_index",
     "migrate_legacy_report_bodies",
     "persist_report_artifact",
