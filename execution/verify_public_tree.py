@@ -6,7 +6,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 FORBIDDEN_PATHS = (
     re.compile(r"^(?:scratch|outputs?)/"),
     re.compile(r"^(?:docs/(?:design|hardening)|mockups)/"),
@@ -14,7 +13,9 @@ FORBIDDEN_PATHS = (
     re.compile(r"^directives/self_host.*\.md$"),
     re.compile(r"^micro_thesis/holdings/"),
     re.compile(r"^dcf/(?:.*/)?[^/]+\.xlsx$", re.IGNORECASE),
-    re.compile(r"(?:^|/)(?:portfolio|runtime|local_state|state)\.(?:db|sqlite|sqlite3)$", re.IGNORECASE),
+    re.compile(
+        r"(?:^|/)(?:portfolio|runtime|local_state|state)\.(?:db|sqlite|sqlite3)$", re.IGNORECASE
+    ),
     re.compile(r"(?:^|/)(?:\.env|credentials\.json|token\.json)$", re.IGNORECASE),
 )
 HOME_PATH = re.compile(r"(?:/Users/[^/\s]+|/home/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+)")
@@ -31,10 +32,15 @@ PRIVATE_DETAIL = re.compile(
 
 def is_exempt_document(relative: str) -> bool:
     """Keep conceptual operator prose and test fixtures out of data scanning."""
-    return (
-        relative.startswith(("tests/", "instruction_tests/", "docs/", "directives/", "evals/"))
-        or relative in {"HOW_TO_USE_REPORTS.md", "AGENTS.md", "GEMINI.md", "CLAUDE.md", "cron/SETUP_WINDOWS_SCHEDULER.md"}
-    )
+    return relative.startswith(
+        ("tests/", "instruction_tests/", "docs/", "directives/", "evals/")
+    ) or relative in {
+        "HOW_TO_USE_REPORTS.md",
+        "AGENTS.md",
+        "GEMINI.md",
+        "CLAUDE.md",
+        "cron/SETUP_WINDOWS_SCHEDULER.md",
+    }
 
 
 def tracked_files(repo_root: Path) -> list[str]:
@@ -63,7 +69,11 @@ def verify(repo_root: Path) -> list[str]:
             violations.append(f"personal home path in: {relative}")
         if PERSONAL_EMAIL.search(text):
             violations.append(f"personal email in: {relative}")
-        if path.suffix.lower() in {".json", ".yaml", ".yml", ".html", ".ndjson"} and not is_exempt_document(relative) and PRIVATE_DETAIL.search(text):
+        if (
+            path.suffix.lower() in {".json", ".yaml", ".yml", ".html", ".ndjson"}
+            and not is_exempt_document(relative)
+            and PRIVATE_DETAIL.search(text)
+        ):
             violations.append(f"portfolio detail phrase in: {relative}")
     return violations
 
