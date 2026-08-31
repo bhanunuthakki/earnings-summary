@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="mockup-scope" content="Isolated visual prototype; no production route, API, persistence, DCF, or report wiring.">
+  <meta name="mockup-data" content="Governed NU snapshots plus explicitly labeled illustrative Say/Do layout; Q2 post-earnings readout is pending.">
+  <title>Company Desk mockup · NU</title>
+  <style>
+    :root {
+      --bg: #090a0c;
+      --rail: #0d0f12;
+      --surface: #111318;
+      --surface-raised: #151820;
+      --paper: #0f1116;
+      --border: #252a34;
+      --border-strong: #353c4a;
+      --fg: #f1f3f6;
+      --muted: #9098a8;
+      --subtle: #697181;
+      --accent: #8ea8ff;
+      --accent-strong: #b7c5ff;
+      --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+      --ok: #74d7a2;
+      --ok-soft: color-mix(in srgb, var(--ok) 11%, transparent);
+      --warn: #e3bd6b;
+      --warn-soft: color-mix(in srgb, var(--warn) 11%, transparent);
+      --bad: #ef8888;
+      --bad-soft: color-mix(in srgb, var(--bad) 11%, transparent);
+      --sp-0: 0;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 20px;
+      --sp-6: 24px;
+      --sp-8: 32px;
+      --sp-10: 40px;
+      --fs-caption: 11px;
+      --fs-body: 13px;
+      --fs-input: 16px;
+      --fs-title: 15px;
+      --fs-heading: 20px;
+      --fs-display: 24px;
+      --lh-tight: 1.2;
+      --lh-body: 1.55;
+      --tracking-label: .08em;
+      --radius-sm: 6px;
+      --radius: 9px;
+      --radius-card: 12px;
+      --radius-full: 999px;
+      --bw-thin: 1px;
+      --bw-active: 2px;
+      --rail-width: 176px;
+      --header-height: 48px;
+      --content-max: 1240px;
+      --touch-target: 36px;
+      --touch-target-mobile: 44px;
+      --icon-size: 28px;
+      --overlay-width: 980px;
+      --overlay-max-height: 88dvh;
+      --table-min: 660px;
+      --transition-fast: 140ms ease;
+      --shadow-overlay: 0 24px 80px rgba(0, 0, 0, .5);
+      --z-header: 10;
+      --z-overlay: 30;
+    }
+
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; background: var(--bg); }
+    body { margin: var(--sp-0); min-height: 100dvh; background: var(--bg); color: var(--fg); font: var(--fs-body)/var(--lh-body) Inter, ui-sans-serif, system-ui, sans-serif; }
+    button, input, a { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    a { color: inherit; text-decoration: none; }
+    button { color: inherit; }
+    [hidden] { display: none !important; }
+    :focus-visible { outline: var(--bw-thin) solid var(--accent); outline-offset: var(--sp-1); }
+
+    .app-shell { min-height: 100dvh; display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); }
+    .sidebar { position: fixed; inset: var(--sp-0) auto var(--sp-0) var(--sp-0); z-index: var(--z-header); width: var(--rail-width); padding: var(--sp-3) var(--sp-2); border-right: var(--bw-thin) solid var(--border); background: var(--rail); }
+    .brand { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--touch-target); padding: var(--sp-2); color: var(--fg); font-weight: 650; letter-spacing: var(--tracking-label); }
+    .brand-mark { display: inline-grid; place-items: center; inline-size: var(--icon-size); block-size: var(--icon-size); border: var(--bw-thin) solid var(--border-strong); border-radius: var(--radius); color: var(--accent-strong); }
+    .search-trigger { inline-size: 100%; justify-content: flex-start; margin-block: var(--sp-3) var(--sp-5); color: var(--muted); }
+    .nav-group + .nav-group { margin-block-start: var(--sp-5); }
+    .nav-label { margin: var(--sp-0) var(--sp-2) var(--sp-2); color: var(--subtle); font-size: var(--fs-caption); font-weight: 650; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+    .nav-item { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--touch-target); margin-block: var(--sp-1); padding: var(--sp-2); border: var(--bw-thin) solid transparent; border-radius: var(--radius); color: var(--muted); }
+    .nav-item:hover { color: var(--fg); background: var(--surface); }
+    .nav-item.is-active { border-color: var(--border-strong); background: var(--surface-raised); color: var(--fg); }
+    .nav-glyph { inline-size: var(--icon-size); text-align: center; color: var(--subtle); }
+
+    .workspace { grid-column: 2; min-width: var(--sp-0); }
+    .app-header { position: sticky; inset-block-start: var(--sp-0); z-index: var(--z-header); min-height: var(--header-height); display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding-inline: var(--sp-5); border-bottom: var(--bw-thin) solid var(--border); background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(var(--sp-3)); }
+    .breadcrumbs { color: var(--muted); font-size: var(--fs-caption); }
+    .breadcrumbs strong { color: var(--fg); font-weight: 650; }
+    .header-meta { display: flex; align-items: center; gap: var(--sp-2); color: var(--muted); font-size: var(--fs-caption); }
+    .main { width: min(100%, var(--content-max)); margin-inline: auto; padding: var(--sp-5); }
+
+    .k-card { min-width: var(--sp-0); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); }
+    .k-well { min-width: var(--sp-0); padding: var(--sp-3); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); background: var(--paper); }
+    .k-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2); min-height: var(--touch-target); padding: var(--sp-2) var(--sp-3); border: var(--bw-thin) solid var(--border-strong); border-radius: var(--radius); background: transparent; color: var(--fg); cursor: pointer; transition: opacity var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast); }
+    .k-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .k-btn-primary { border-color: var(--accent); background: var(--accent); color: var(--bg); font-weight: 700; }
+    .k-btn-primary:hover { background: var(--accent-strong); }
+    .k-btn-quiet { color: var(--muted); }
+    .k-btn-sm { min-height: var(--touch-target); padding: var(--sp-1) var(--sp-3); font-size: var(--fs-caption); }
+    .k-chip, .k-pill { display: inline-flex; align-items: center; justify-content: center; min-height: var(--icon-size); padding: var(--sp-1) var(--sp-2); border: var(--bw-thin) solid var(--border-strong); border-radius: var(--radius-full); color: var(--muted); font-size: var(--fs-caption); font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
+    .k-pill-ok, .k-chip-ok { border-color: color-mix(in srgb, var(--ok) 42%, var(--border)); background: var(--ok-soft); color: var(--ok); }
+    .k-pill-warn, .k-chip-warn { border-color: color-mix(in srgb, var(--warn) 42%, var(--border)); background: var(--warn-soft); color: var(--warn); }
+    .k-pill-bad, .k-chip-bad { border-color: color-mix(in srgb, var(--bad) 42%, var(--border)); background: var(--bad-soft); color: var(--bad); }
+    .k-chip-btn { cursor: pointer; }
+    .k-chip-btn[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+
+    .company-topline { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, .85fr); gap: var(--sp-3); }
+    .identity-card, .decision-card { padding: var(--sp-4); }
+    .identity-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-4); }
+    .identity-card h1 { margin: var(--sp-0); font-size: var(--fs-heading); line-height: var(--lh-tight); }
+    .company-name { margin-inline-start: var(--sp-2); color: var(--muted); font-weight: 520; }
+    .identity-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-block-start: var(--sp-2); color: var(--muted); font-size: var(--fs-caption); }
+    .identity-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); }
+    .company-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); margin-block-start: var(--sp-5); padding-block-start: var(--sp-4); border-top: var(--bw-thin) solid var(--border); }
+    .fact-label, .section-kicker { color: var(--muted); font-size: var(--fs-caption); font-weight: 650; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+    .fact-value { margin-block-start: var(--sp-1); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--fs-title); font-weight: 700; }
+    .fact-note { margin-block-start: var(--sp-1); color: var(--subtle); font-size: var(--fs-caption); }
+
+    .decision-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
+    .decision-head h2, .card-head h2 { margin: var(--sp-1) var(--sp-0) var(--sp-0); font-size: var(--fs-title); }
+    .decision-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); margin-block: var(--sp-4); }
+    .decision-value { margin-block-start: var(--sp-1); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--fs-display); font-weight: 750; }
+    .tracking-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-1); }
+    .tracking-band { min-width: var(--sp-0); padding: var(--sp-2); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-sm); background: var(--paper); }
+    .tracking-band-buy { border-color: color-mix(in srgb, var(--ok) 42%, var(--border)); background: var(--ok-soft); }
+    .tracking-band-buy strong { color: var(--ok); }
+    .tracking-band-add { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: var(--accent-soft); }
+    .tracking-band-add strong { color: var(--accent); }
+    .tracking-band-hold { border-color: color-mix(in srgb, var(--muted) 42%, var(--border)); background: color-mix(in srgb, var(--muted) 8%, transparent); }
+    .tracking-band-hold strong { color: var(--muted); }
+    .tracking-band-trim { border-color: color-mix(in srgb, var(--warn) 42%, var(--border)); background: var(--warn-soft); }
+    .tracking-band-trim strong { color: var(--warn); }
+    .tracking-band.is-current { box-shadow: inset var(--sp-0) var(--sp-0) var(--sp-0) var(--bw-thin) var(--accent); }
+    .tracking-band strong { display: block; font-size: var(--fs-caption); }
+    .tracking-band span { display: block; margin-block-start: var(--sp-1); color: var(--muted); font: var(--fs-caption)/var(--lh-tight) ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    .summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); margin-block-start: var(--sp-3); }
+    .summary-card { padding: var(--sp-4); }
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); margin-block-end: var(--sp-3); }
+    .card-subtitle { margin: var(--sp-1) var(--sp-0) var(--sp-0); color: var(--muted); font-size: var(--fs-caption); }
+    .thesis-lede { margin: var(--sp-0); font-size: var(--fs-title); line-height: var(--lh-body); }
+    .thesis-points, .update-list, .question-list { margin: var(--sp-3) var(--sp-0) var(--sp-0); padding-inline-start: var(--sp-5); }
+    .thesis-points li, .update-list li, .question-list li { margin-block: var(--sp-2); }
+    .truth-note { margin-block-start: var(--sp-3); padding-block-start: var(--sp-3); border-top: var(--bw-thin) solid var(--border); color: var(--subtle); font-size: var(--fs-caption); }
+    .pending-well { margin-block-end: var(--sp-3); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); background: var(--warn-soft); color: var(--warn); }
+
+    .exploration-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, .75fr); gap: var(--sp-3); margin-block-start: var(--sp-3); align-items: start; }
+    .contracts-card, .questions-card { padding: var(--sp-4); }
+    .research-tabs { display: grid; grid-template-columns: repeat(2, minmax(var(--sp-0), 1fr)); margin-block-end: var(--sp-4); border-bottom: var(--bw-thin) solid var(--border); }
+    .research-tab { width: 100%; min-width: var(--sp-0); border: var(--sp-0); border-bottom: var(--bw-active) solid transparent; border-radius: var(--sp-0); background: transparent; color: var(--muted); font-weight: 650; }
+    .research-tab:hover { border-color: transparent; border-bottom-color: var(--border-strong); background: var(--paper); color: var(--fg); }
+    .research-tab[aria-selected="true"] { border-bottom-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+    .contract-list { display: grid; gap: var(--sp-2); }
+    .contract-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); align-items: center; }
+    .contract-row strong { display: block; }
+    .contract-row p { margin: var(--sp-1) var(--sp-0) var(--sp-0); color: var(--muted); font-size: var(--fs-caption); }
+    .table-scroll { overflow: auto; border: var(--bw-thin) solid var(--border); border-radius: var(--radius); }
+    .saydo-table { width: 100%; min-width: var(--table-min); border-collapse: collapse; }
+    .saydo-table th, .saydo-table td { padding: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); text-align: left; vertical-align: top; }
+    .saydo-table th { color: var(--muted); font-size: var(--fs-caption); font-weight: 650; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+    .saydo-table tr:last-child td { border-bottom: var(--sp-0); }
+    .saydo-table td:first-child { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
+    .saydo-table td:nth-child(3) { color: var(--muted); }
+    .panel-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-block-start: var(--sp-3); }
+    .panel-actions p { margin: var(--sp-0); color: var(--subtle); font-size: var(--fs-caption); }
+
+    .question-form { display: grid; gap: var(--sp-2); margin-block: var(--sp-3); }
+    .question-form label { color: var(--muted); font-size: var(--fs-caption); }
+    .question-form input { min-height: var(--touch-target); width: 100%; padding: var(--sp-2) var(--sp-3); border: var(--bw-thin) solid var(--border-strong); border-radius: var(--radius); background: var(--paper); color: var(--fg); }
+    .question-list { padding-inline-start: var(--sp-4); }
+    .question-list li { padding-inline-start: var(--sp-1); }
+    .question-list span { display: block; margin-block-start: var(--sp-1); color: var(--subtle); font-size: var(--fs-caption); }
+
+    .overlay { position: fixed; inset: var(--sp-0); z-index: var(--z-overlay); display: grid; place-items: center; padding: var(--sp-5); background: color-mix(in srgb, var(--bg) 76%, transparent); }
+    .overlay-dialog { width: min(100%, var(--overlay-width)); max-height: var(--overlay-max-height); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: var(--bw-thin) solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); }
+    .overlay-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-4); padding: var(--sp-4); border-bottom: var(--bw-thin) solid var(--border); }
+    .overlay-head h2 { margin: var(--sp-1) var(--sp-0) var(--sp-0); font-size: var(--fs-heading); }
+    .overlay-body { overflow: auto; padding: var(--sp-4); }
+    .brief-section-lede { margin: var(--sp-0) var(--sp-0) var(--sp-4); color: var(--muted); }
+
+    .toast { position: fixed; inset: auto var(--sp-4) var(--sp-4) auto; z-index: var(--z-overlay); max-width: 360px; padding: var(--sp-3) var(--sp-4); border: var(--bw-thin) solid var(--border-strong); border-radius: var(--radius); background: var(--surface-raised); color: var(--fg); box-shadow: var(--shadow-overlay); }
+    .mockup-footnote { margin-block-start: var(--sp-3); color: var(--subtle); font-size: var(--fs-caption); text-align: right; }
+
+    @media (max-width: 70rem) {
+      .company-topline, .summary-grid, .exploration-grid { grid-template-columns: minmax(0, 1fr); }
+      .company-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 48rem) {
+      .app-shell { grid-template-columns: minmax(0, 1fr); }
+      .sidebar { position: static; width: auto; padding: var(--sp-2); border-right: var(--sp-0); border-bottom: var(--bw-thin) solid var(--border); }
+      .brand, .search-trigger, .nav-label, .nav-group:not(:nth-of-type(3)) { display: none; }
+      .nav-group { margin: var(--sp-0); }
+      .nav-group:nth-of-type(3) { display: flex; }
+      .nav-item { min-height: var(--touch-target-mobile); margin: var(--sp-0); }
+      .nav-item:not(.is-active) { display: none; }
+      .workspace { grid-column: 1; }
+      .app-header { padding-inline: var(--sp-3); }
+      .header-meta { display: none; }
+      .main { padding: var(--sp-3); }
+      .identity-head { display: grid; }
+      .identity-actions { justify-content: flex-start; }
+      .company-facts, .decision-summary, .tracking-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .k-btn, .k-btn-sm, .k-chip-btn, .question-form input { min-height: var(--touch-target-mobile); }
+      .question-form input { font-size: var(--fs-input); }
+      .panel-actions { align-items: flex-start; flex-direction: column; }
+      .overlay { padding: var(--sp-2); }
+      .overlay-dialog { max-height: calc(100dvh - var(--sp-4)); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Work OS navigation">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">C</span><span>Counterread</span></div>
+      <button class="search-trigger k-btn k-btn-quiet" type="button" onclick="showPrototypeToast('Search stays in the shared Work OS shell.')">⌘K Search</button>
+      <nav>
+        <div class="nav-group">
+          <div class="nav-label">L1 · Portfolio Intelligence</div>
+          <a class="nav-item" href="#portfolio"><span class="nav-glyph">⌁</span><span>Portfolio Cockpit</span></a>
+          <a class="nav-item" href="#performance"><span class="nav-glyph">↗</span><span>Performance</span></a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">L2 · Research Engine</div>
+          <a class="nav-item is-active" href="#company"><span class="nav-glyph">◫</span><span data-label-surface="sidebar">Company Desk</span></a>
+          <a class="nav-item" href="#briefs"><span class="nav-glyph">▤</span><span>Brief Library</span></a>
+          <a class="nav-item" href="#metrics"><span class="nav-glyph">⌗</span><span>Fact &amp; Metric Playground</span></a>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">L3 · Operations &amp; Governance</div>
+          <a class="nav-item" href="#decisions"><span class="nav-glyph">✓</span><span>Decision Audit Log</span></a>
+        </div>
+      </nav>
+    </aside>
+
+    <div class="workspace">
+      <header class="app-header">
+        <div class="breadcrumbs">Workspaces / <strong data-label-surface="fixed-header">Company Desk</strong></div>
+        <div class="header-meta"><span>NU</span><span>·</span><span>Governed snapshot 2026-08-21</span></div>
+      </header>
+
+      <main class="main" id="company">
+        <section class="company-topline" data-testid="company-topline" aria-label="NU identity and decision summary">
+          <article class="k-card identity-card">
+            <div class="identity-head">
+              <div>
+                <h1><span class="mono">NU</span> <span class="company-name">Nu Holdings</span></h1>
+                <div class="identity-meta"><span class="k-pill">PORTFOLIO HOLDING</span><span>11.0% of portfolio</span><span>·</span><span>USD</span></div>
+              </div>
+              <div class="identity-actions">
+                <button class="k-btn k-btn-quiet k-btn-sm" type="button" onclick="showPrototypeToast('Company switcher would preserve the prior desk on load failure.')">Switch</button>
+                <a class="k-btn k-btn-quiet k-btn-sm" href="#dcf" data-testid="dcf-link" onclick="openDcfLink(event)">DCF model ↗</a>
+                <button class="k-btn k-btn-primary k-btn-sm" type="button" onclick="openFullSaydo(this, 'overview')">Read full brief →</button>
+              </div>
+            </div>
+            <div class="company-facts" aria-label="Governed company snapshot">
+              <div><div class="fact-label">Last price</div><div class="fact-value">$14.39</div><div class="fact-note">DCF input price</div></div>
+              <div><div class="fact-label">Fair value</div><div class="fact-value">$22.10</div><div class="fact-note">Governed DCF · Aug 21</div></div>
+              <div><div class="fact-label">Upside</div><div class="fact-value">+54%</div><div class="fact-note">Price to fair value</div></div>
+              <div><div class="fact-label">Next catalyst</div><div class="fact-value">Q2</div><div class="fact-note">Post-earnings readout pending</div></div>
+            </div>
+          </article>
+
+          <article class="k-card decision-card" data-testid="decision-card">
+            <div class="decision-head">
+              <div><div class="section-kicker">Decision &amp; tracking</div><h2>One owner view</h2></div>
+              <span class="k-pill k-pill-ok">HIGH CONVICTION</span>
+            </div>
+            <div class="decision-summary">
+              <div><div class="fact-label">Current action</div><div class="decision-value">ADD</div><div class="fact-note">Owner · current</div></div>
+              <div><div class="fact-label">Thesis status</div><div class="decision-value">INTACT</div><div class="fact-note">1 live watch item</div></div>
+            </div>
+            <div class="tracking-grid" aria-label="Buy add hold and trim tracking bands">
+              <div class="tracking-band tracking-band-buy" data-testid="tracking-band"><strong>Buy</strong><span>≤ $13</span></div>
+              <div class="tracking-band tracking-band-add is-current" data-testid="tracking-band" aria-current="true"><strong>Add</strong><span>$13–17</span></div>
+              <div class="tracking-band tracking-band-hold" data-testid="tracking-band"><strong>Hold</strong><span>$17–22</span></div>
+              <div class="tracking-band tracking-band-trim" data-testid="tracking-band"><strong>Trim</strong><span>≥ $22</span></div>
+            </div>
+          </article>
+        </section>
+
+        <div class="summary-grid">
+          <section class="k-card summary-card" data-testid="summary-thesis" aria-labelledby="summaryThesisTitle">
+            <div class="card-head">
+              <div><div class="section-kicker">Summary thesis</div><h2 id="summaryThesisTitle">Why I own NU</h2></div>
+              <span class="k-pill k-pill-ok">INTACT</span>
+            </div>
+            <p class="thesis-lede">Latin America’s leading digital bank pairs incumbent-like monetization with a near-zero cost-to-serve model.</p>
+            <ul class="thesis-points">
+              <li><strong>Brazil funds the engine:</strong> deeper product penetration and ARPAC growth can sustain 25%+ ROE even as customer acquisition matures.</li>
+              <li><strong>Mexico and Colombia extend the runway:</strong> deposits, customer growth, and early profitability suggest the Brazil playbook can travel.</li>
+              <li><strong>Valuation leaves room:</strong> the governed DCF implies 54% upside without requiring the U.S. charter option to work.</li>
+              <li><strong>The risk is concentrated:</strong> credit quality, BRL exposure, and simultaneous investment spending can compress returns.</li>
+            </ul>
+            <div class="truth-note">Source: latest governed full brief · 2026-08-21 · summary copy condensed for this mockup.</div>
+          </section>
+
+          <section class="k-card summary-card" data-testid="q2-update" aria-labelledby="q2UpdateTitle">
+            <div class="card-head">
+              <div><div class="section-kicker">Earnings update</div><h2 id="q2UpdateTitle">Q2 update</h2></div>
+              <span class="k-pill k-pill-warn">PENDING</span>
+            </div>
+            <div class="k-well pending-well"><strong>The governed Q2 readout is pending.</strong> This shows the target placement and carries forward only verified monitoring context from the latest brief.</div>
+            <h3 class="fact-label">Recent relevant updates</h3>
+            <ul class="update-list">
+              <li>Q1 consolidated ROE held at 29%, above the 25% thesis floor but below the prior 30%+ run rate.</li>
+              <li>Risk-adjusted NIM stepped down to 9.5%; Q2 needs to show whether that pressure was seasonal.</li>
+              <li>Mexico reached break-even while Colombia customer growth remained strong, supporting the international scaling leg.</li>
+              <li>The U.S. charter is approved, but remains unmodeled optionality until product-market fit is visible.</li>
+            </ul>
+            <div class="panel-actions">
+              <p>Latest usable readout: Q1 · Mar 2026</p>
+              <button class="k-btn k-btn-quiet k-btn-sm" type="button" onclick="showPrototypeToast('Q2 opens only after the governed readout artifact exists.')">Read Q2 update →</button>
+            </div>
+          </section>
+        </div>
+
+        <section class="exploration-grid" data-testid="next-step-exploration" aria-label="Next-step thesis exploration">
+          <section class="k-card contracts-card" data-testid="contracts-card" aria-labelledby="contractsTitle">
+            <div class="card-head">
+              <div><div class="section-kicker">Next-step exploration</div><h2 id="contractsTitle">Thesis contracts</h2><p class="card-subtitle">Falsifiers first; management delivery second.</p></div>
+            </div>
+            <div class="research-tabs" role="tablist" aria-label="Thesis contract views">
+              <button class="research-tab k-btn k-btn-quiet" id="contractsTab" role="tab" tabindex="0" aria-selected="true" aria-controls="contractsPanel" type="button" onclick="setResearchTab('contracts')">Thesis contracts</button>
+              <button class="research-tab k-btn k-btn-quiet" id="saydoTab" role="tab" tabindex="-1" aria-selected="false" aria-controls="saydoPanel" type="button" onclick="setResearchTab('saydo')">Say / Do · 4 quarters</button>
+            </div>
+
+            <div id="contractsPanel" role="tabpanel" aria-labelledby="contractsTab" data-testid="contracts-panel">
+              <div class="contract-list">
+                <div class="k-well contract-row"><div><strong>ROE stays above 25%</strong><p>Breaks after two consecutive quarters below the floor.</p></div><span class="k-pill k-pill-ok">PASS · 29%</span></div>
+                <div class="k-well contract-row"><div><strong>Risk-adjusted NIM does not contract YoY for 2Q</strong><p>Q1 sequential compression raises the monitoring burden.</p></div><span class="k-pill k-pill-warn">WATCH · 9.5%</span></div>
+                <div class="k-well contract-row"><div><strong>90d+ NPL remains below 7%</strong><p>Q1 printed 6.5%; early-stage delinquencies were seasonal.</p></div><span class="k-pill k-pill-ok">PASS · 6.5%</span></div>
+                <div class="k-well contract-row"><div><strong>CET1 remains above 13%</strong><p>Capital must fund international growth without impairing resilience.</p></div><span class="k-pill k-pill-ok">PASS · 17%</span></div>
+              </div>
+            </div>
+
+            <div id="saydoPanel" role="tabpanel" aria-labelledby="saydoTab" data-testid="saydo-panel" hidden>
+              <div class="table-scroll">
+                <table class="saydo-table" data-testid="saydo-table">
+                  <thead><tr><th>Quarter</th><th>Rating</th><th>What management said / what printed</th><th>Thesis read-through</th></tr></thead>
+                  <tbody>
+                    <tr><td>Q2 ’26</td><td><span class="k-chip">AWAITING</span></td><td>Governed post-earnings artifact has not landed.</td><td>No rating until the source-backed readout exists.</td></tr>
+                    <tr><td>Q1 ’26</td><td><span class="k-chip k-chip-warn">MIXED</span></td><td>ARPAC and ROE held, while risk-adjusted NIM compressed sequentially.</td><td>Thesis intact; Q2 proof burden rose.</td></tr>
+                    <tr><td>Q4 ’25</td><td><span class="k-chip">MET</span></td><td>Cost-to-serve and efficiency remained near the promised structural range.</td><td>Operating leverage held.</td></tr>
+                    <tr><td>Q3 ’25</td><td><span class="k-chip k-chip-ok">EXCEEDED</span></td><td>Purchase-volume share gains arrived ahead of the credit-limit monetization curve.</td><td>Brazil monetization accelerated.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="panel-actions">
+                <p><span class="k-chip">Illustrative layout</span> Production needs quarter-indexed Say/Do rows; current ledger has no reported outcomes.</p>
+                <button class="k-btn k-btn-primary k-btn-sm" data-testid="open-full-saydo" type="button" onclick="openFullSaydo(this, 'saydo')">Open full Say / Do section →</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="k-card questions-card" aria-labelledby="openQuestionsTitle">
+            <div class="card-head">
+              <div><div class="section-kicker">Next-step exploration</div><h2 id="openQuestionsTitle">Open questions</h2><p class="card-subtitle">Owner-authored questions remain separate from model output.</p></div>
+              <span class="k-pill">1 OPEN</span>
+            </div>
+            <ul class="question-list">
+              <li><strong>Resolve the customer-count data conflict.</strong><span>Q4 ’24 prints 95M versus 109.7M in Q3 ’24. Verify the source before a revision-safe supersede.</span></li>
+            </ul>
+            <form class="question-form" onsubmit="addMockQuestion(event)">
+              <label for="newQuestion">Add an owner question</label>
+              <input id="newQuestion" name="question" type="text" placeholder="What should we track?" autocomplete="off">
+              <button class="k-btn k-btn-quiet" type="submit">Track question</button>
+            </form>
+            <div class="truth-note">Mockup interaction only. Production remains revisioned, owner-authored, and auditable.</div>
+          </aside>
+        </section>
+
+        <p class="mockup-footnote">Visual-only kit simulation · isolated from production routes and persistence.</p>
+      </main>
+    </div>
+  </div>
+
+  <div class="overlay" id="briefSaydoOverlay" role="dialog" aria-modal="true" aria-labelledby="briefSaydoTitle" hidden onclick="handleOverlayScrim(event)">
+    <div class="overlay-dialog">
+      <header class="overlay-head">
+        <div><div class="section-kicker">Full Research Brief · NU</div><h2 id="briefSaydoTitle">Brief section · Say / Do</h2><p class="card-subtitle">Quarter-by-quarter management delivery with source-backed ratings.</p></div>
+        <button class="k-btn k-btn-quiet" id="closeBriefButton" type="button" onclick="closeFullSaydo()">Close</button>
+      </header>
+      <div class="overlay-body">
+        <p class="brief-section-lede" id="briefOverlayLede">Jumped directly from Company Desk. In production, this resolves the full brief’s stable <span class="mono">saydo</span> section identifier.</p>
+        <div class="table-scroll">
+          <table class="saydo-table">
+            <thead><tr><th>Quarter</th><th>Rating</th><th>Management commitment</th><th>Observed result</th><th>Attribution / thesis impact</th></tr></thead>
+            <tbody>
+              <tr><td>Q2 ’26</td><td><span class="k-chip">AWAITING</span></td><td>Show the Q1 risk-adjusted NIM pressure was seasonal.</td><td>Governed readout pending.</td><td>No rating or thesis update until the artifact lands.</td></tr>
+              <tr><td>Q1 ’26</td><td><span class="k-chip k-chip-warn">MIXED</span></td><td>Sustain high ROE while rotating toward lower-risk credit.</td><td>ROE reached 29%, but risk-adjusted NIM fell to 9.5%.</td><td>Credit mix and seasonality explain part—not all—of the compression.</td></tr>
+              <tr><td>Q4 ’25</td><td><span class="k-chip">MET</span></td><td>Keep cost-to-serve near $1 as the customer base scales.</td><td>Cost-to-serve remained near the promised structural range.</td><td>Scale advantage held; thesis unchanged.</td></tr>
+              <tr><td>Q3 ’25</td><td><span class="k-chip k-chip-ok">EXCEEDED</span></td><td>Deepen Brazil card engagement while keeping credit disciplined.</td><td>Largest purchase-volume share gain in roughly ten quarters.</td><td>Execution-led; supports the monetization flywheel.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="truth-note">Illustrative layout. Existing rating vocabulary is EXCEEDED / MET / MIXED / MISSED / REVISED UP; current production Say/Do ledger for NU has six open commitments and zero reported outcomes.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="prototypeToast" role="status" aria-live="polite" hidden></div>
+
+  <script>
+    let lastBriefTrigger = null;
+    let toastTimer = null;
+
+    function setResearchTab(tabName) {
+      const isContracts = tabName === 'contracts';
+      const contractsTab = document.getElementById('contractsTab');
+      const saydoTab = document.getElementById('saydoTab');
+      contractsTab.setAttribute('aria-selected', String(isContracts));
+      saydoTab.setAttribute('aria-selected', String(!isContracts));
+      contractsTab.tabIndex = isContracts ? 0 : -1;
+      saydoTab.tabIndex = isContracts ? -1 : 0;
+      document.getElementById('contractsPanel').hidden = !isContracts;
+      document.getElementById('saydoPanel').hidden = isContracts;
+      (isContracts ? contractsTab : saydoTab).focus({ preventScroll: true });
+    }
+
+    function openDcfLink(event) {
+      event.preventDefault();
+      showPrototypeToast('DCF doorway added. Production must resolve the governed model URL and access state.');
+    }
+
+    function openFullSaydo(trigger, mode) {
+      lastBriefTrigger = trigger;
+      const overlay = document.getElementById('briefSaydoOverlay');
+      const title = document.getElementById('briefSaydoTitle');
+      const lede = document.getElementById('briefOverlayLede');
+      if (mode === 'overview') {
+        title.textContent = 'Full Research Brief · NU';
+        lede.textContent = 'Mockup reader doorway. Use the Say / Do tab on Company Desk to jump directly to that governed section.';
+      } else {
+        title.textContent = 'Brief section · Say / Do';
+        lede.textContent = 'Jumped directly from Company Desk using the full brief’s stable saydo section identifier.';
+      }
+      overlay.hidden = false;
+      document.body.dataset.overlayOpen = 'true';
+      document.getElementById('closeBriefButton').focus({ preventScroll: true });
+    }
+
+    function closeFullSaydo() {
+      const overlay = document.getElementById('briefSaydoOverlay');
+      overlay.hidden = true;
+      delete document.body.dataset.overlayOpen;
+      if (lastBriefTrigger) lastBriefTrigger.focus({ preventScroll: true });
+    }
+
+    function handleOverlayScrim(event) {
+      if (event.target === document.getElementById('briefSaydoOverlay')) closeFullSaydo();
+    }
+
+    function trapBriefFocus(event) {
+      const dialog = document.querySelector('#briefSaydoOverlay .overlay-dialog');
+      const focusable = Array.from(dialog.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (focusable.length === 1) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    }
+
+    function showPrototypeToast(message) {
+      const toast = document.getElementById('prototypeToast');
+      toast.textContent = message;
+      toast.hidden = false;
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2600);
+    }
+
+    function addMockQuestion(event) {
+      event.preventDefault();
+      const input = document.getElementById('newQuestion');
+      if (!input.value.trim()) {
+        input.focus({ preventScroll: true });
+        showPrototypeToast('Enter a question before tracking it.');
+        return;
+      }
+      showPrototypeToast('Mockup only: production would create a revisioned owner-authored note.');
+      input.value = '';
+    }
+
+    document.querySelector('.research-tabs').addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      const selected = document.querySelector('.research-tabs [aria-selected="true"]');
+      setResearchTab(selected.id === 'contractsTab' ? 'saydo' : 'contracts');
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Tab' && !document.getElementById('briefSaydoOverlay').hidden) trapBriefFocus(event);
+      if (event.key === 'Escape' && !document.getElementById('briefSaydoOverlay').hidden) closeFullSaydo();
+    });
+  </script>
+</body>
+</html>

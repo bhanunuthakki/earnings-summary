@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 FORBIDDEN_PATHS = (
+    re.compile(r"^\.harden/state\.json$"),
     re.compile(r"^(?:scratch|outputs?)/"),
     re.compile(r"^(?:docs/(?:design|hardening)|mockups)/"),
     re.compile(r"^HOW_TO_USE_REPORTS\.(?:md|html)$"),
@@ -18,6 +19,18 @@ FORBIDDEN_PATHS = (
     ),
     re.compile(r"(?:^|/)(?:\.env|credentials\.json|token\.json)$", re.IGNORECASE),
 )
+PUBLIC_SOURCE_EXCEPTIONS = {
+    "HOW_TO_USE_REPORTS.md",
+    "cron/TASKS.generated.md",
+    "mockups/company_desk_mockup.html",
+    "mockups/company_research_experience.html",
+    "mockups/copilot_conversation_prototype.html",
+    "mockups/evaluation_investment_profile_mockup.html",
+    "mockups/harvey_sidebar_flow.html",
+    "mockups/performance_risk_mockup.html",
+    "mockups/portfolio_copilot_mockup.html",
+    "scratch/seed_kpi_registry.py",
+}
 HOME_PATH = re.compile(r"(?:/Users/[^/\s]+|/home/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+)")
 PERSONAL_EMAIL = re.compile(
     r"\b(?:bhanu|nuthakki)[^@\s]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
@@ -56,7 +69,9 @@ def verify(repo_root: Path) -> list[str]:
     violations: list[str] = []
     for relative in tracked_files(repo_root):
         path = Path(relative)
-        if any(pattern.search(relative) for pattern in FORBIDDEN_PATHS):
+        if relative not in PUBLIC_SOURCE_EXCEPTIONS and any(
+            pattern.search(relative) for pattern in FORBIDDEN_PATHS
+        ):
             violations.append(f"forbidden tracked path: {relative}")
             continue
         if relative == "execution/verify_public_tree.py":

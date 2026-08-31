@@ -21,17 +21,25 @@ logs/
 
 # Private/generated runtime material. These directories may exist in a local
 # checkout, but they are never part of the public source tree.
-/scratch/
+/scratch/*
+!/scratch/seed_kpi_registry.py
 /outputs/
 /output/
 /.harden/state.json
 /cron/*.generated.md
+!/cron/TASKS.generated.md
 /docs/hardening/**/evidence/
 /docs/design/
 /docs/hardening/
-/mockups/
+/mockups/*
+!/mockups/company_desk_mockup.html
+!/mockups/company_research_experience.html
+!/mockups/copilot_conversation_prototype.html
+!/mockups/evaluation_investment_profile_mockup.html
+!/mockups/harvey_sidebar_flow.html
+!/mockups/performance_risk_mockup.html
+!/mockups/portfolio_copilot_mockup.html
 /HOW_TO_USE_REPORTS.html
-/HOW_TO_USE_REPORTS.md
 /directives/self_host*.md
 
 # Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible

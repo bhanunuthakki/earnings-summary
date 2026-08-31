@@ -26,6 +26,8 @@ export EARNINGS_SUMMARY_DB_PATH="$(mktemp -d /tmp/earnings-summary-db.XXXXXX)/po
 python execution/sqlite_bootstrap.py execution/upgrade_database.py \
   --db-path "$EARNINGS_SUMMARY_DB_PATH" --repo-root . --runtime-root . \
   --allow-isolated-db
+python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply \
+  --db "$EARNINGS_SUMMARY_DB_PATH"
 ```
 
 Run the checks with `make check-fast`. See [AGENTS.md](AGENTS.md) for the
@@ -38,7 +40,8 @@ anonymized research fixtures. It does not contain a portfolio database,
 account records, position or cost-basis details, generated reports, scheduler
 state, or private runtime snapshots. Those stay in a local checkout and are
 ignored by Git. Public research fixtures are not a source of personal
-account truth.
+account truth. Tracked UI mockups use synthetic demo figures, not portfolio
+records.
 
 Do not commit credentials, OAuth tokens, local databases, downloaded documents,
 generated reports, or files containing private holdings or account detail.
