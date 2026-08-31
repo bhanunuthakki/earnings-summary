@@ -229,7 +229,7 @@ def test_required_sections_present(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert result.selection_mode == "llm"
     card = result.card
     assert card is not None
-    assert card.prompt_version == "v2"
+    assert card.prompt_version == "v3"
     assert card.company_hypothesis.directional_thesis
     assert card.security_setup.appears_priced_in
     assert card.portfolio_fit.expected_role
@@ -266,6 +266,9 @@ def test_prompt_assigns_qualitative_profile_but_reserves_valuation_labels_for_co
     assert "narrow_conditional" in prompt
     assert "none_demonstrated" in prompt
     assert "Do not assign garp or elite_growth_expensive" in prompt
+    assert "operating expectations the market" in prompt
+    assert "must identify the next report, event, or measurement" in prompt
+    assert "must state a concrete, company-specific observation" in prompt
 
 
 def test_company_security_portfolio_are_distinct(
