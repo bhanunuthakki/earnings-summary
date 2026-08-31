@@ -94,7 +94,10 @@ __all__ = [
 ]
 
 PURPOSE = "investment_decision_card"
-ENGINE_VERSION = "v2"
+# v3 makes the persisted markdown a lossless decision-useful projection of the
+# validated card schema. Keep this version in the artifact cache inputs so a
+# renderer change cannot silently reuse prose produced by an older projection.
+ENGINE_VERSION = "v3"
 
 # A hypothetical add sized as 3% of book value â€” the Â§8.1 "expected
 # Concentration Zone if funded" preview. Not a recommendation of size; purely
@@ -407,7 +410,14 @@ def _gather_inputs(db_path: Path, repo_root: Path, ticker: str, *, list_type: st
     thesis_hash = hashlib.sha256((spec.thesis if spec else "").encode("utf-8")).hexdigest()
     dcf_ref = f"{dcf_row['id']}:{dcf_row['valuation_date']}" if dcf_row is not None else ""
     bear_ref = str(bear_artifact.id) if bear_artifact is not None else ""
-    cache_inputs = [assessment.input_sha, thesis_hash, dcf_ref, bear_ref, fit_asof or ""]
+    cache_inputs = [
+        ENGINE_VERSION,
+        assessment.input_sha,
+        thesis_hash,
+        dcf_ref,
+        bear_ref,
+        fit_asof or "",
+    ]
 
     payload = {
         "assessment_sha": assessment.input_sha,
@@ -739,6 +749,9 @@ def _deterministic_card(
 
 
 def _render_markdown(card: InvestmentDecisionCard) -> str:
+    def _joined(values: list[str]) -> str:
+        return ", ".join(value for value in values if value.strip()) or "(none)"
+
     lines = [
         f"# Investment Decision Card â€” {card.ticker} ({card.as_of})",
         "",
@@ -748,12 +761,19 @@ def _render_markdown(card: InvestmentDecisionCard) -> str:
         "",
         "## Company hypothesis",
         card.company_hypothesis.directional_thesis,
+        f"**Operating mechanism:** {card.company_hypothesis.operating_mechanism}",
+        f"**Key KPIs:** {_joined(card.company_hypothesis.key_kpis)}",
+        f"**Confirming evidence:** {_joined(card.company_hypothesis.confirming_evidence)}",
+        f"**Disconfirming evidence:** {_joined(card.company_hypothesis.disconfirming_evidence)}",
         "",
         "## Security setup",
         f"{card.security_setup.valuation_range} â€” {card.security_setup.appears_priced_in}",
+        f"**Caveats:** {_joined(card.security_setup.caveats)}",
         "",
         "## Portfolio fit",
         card.portfolio_fit.expected_role,
+        f"**Candidate fit:** {card.portfolio_fit.candidate_fit_summary}",
+        f"**Correlated exposure:** {card.portfolio_fit.correlated_exposure}",
         "",
         "## Investment profile",
         ", ".join(label.display_label for label in card.investment_profile.labels)
@@ -765,15 +785,30 @@ def _render_markdown(card: InvestmentDecisionCard) -> str:
             else "Moat evidence insufficient"
         ),
         card.investment_profile.moat.rationale,
+        (
+            "**Moat supporting evidence:** "
+            f"{_joined(card.investment_profile.moat.supporting_evidence)}"
+        ),
+        f"**Moat counter-evidence:** {_joined(card.investment_profile.moat.counter_evidence)}",
         "",
         "## Disconfirming case",
         card.disconfirming_case.bear_hypothesis,
+        (
+            "**Evidence that would confirm it:** "
+            f"{card.disconfirming_case.evidence_that_would_confirm_it}"
+        ),
+        f"**Next proof point:** {card.disconfirming_case.next_proof_point}",
         "",
         "## Evidence readiness",
         f"blockers: {', '.join(card.evidence_readiness.blockers) or '(none)'}",
+        (f"stale or missing: {', '.join(card.evidence_readiness.stale_or_missing) or '(none)'}"),
         "",
         "## Uncertainty",
         f"{card.uncertainty.justification}",
+        f"**What would change it:** {card.uncertainty.what_would_change_it}",
+        "",
+        "## Sources",
+        _joined(card.source_refs),
     ]
     return "\n".join(lines)
 
