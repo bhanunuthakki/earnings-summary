@@ -14,6 +14,7 @@ definition/unit enrichment `_build_ledger` layers on top.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -93,6 +94,15 @@ def _build_repo(tmp_path: Path) -> Path:
             status TEXT NOT NULL DEFAULT 'admitted',
             revision INTEGER NOT NULL DEFAULT 1,
             supersedes_context_id INTEGER
+        );
+        CREATE TABLE fact_overrides (
+            id INTEGER, user_id TEXT, ticker TEXT, period_end TEXT,
+            fiscal_period_type TEXT, fact_kind TEXT, fact_key TEXT, action TEXT,
+            value REAL, unit TEXT, value_json TEXT, source_doc_type TEXT,
+            source_accession TEXT, source_exhibit TEXT, source_url TEXT,
+            source_excerpt TEXT, source_doc_id INTEGER, status TEXT,
+            confidence REAL, rationale TEXT, created_by TEXT, created_at TEXT,
+            locator TEXT
         );
         """
     )
@@ -184,14 +194,6 @@ def test_ledger_history_uses_canonical_relation_and_fails_closed_on_kpi_override
     conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
     conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id = 1")
     conn.execute(
-        "CREATE TABLE fact_overrides (id INTEGER, user_id TEXT, ticker TEXT, "
-        "period_end TEXT, fiscal_period_type TEXT, fact_kind TEXT, fact_key TEXT, "
-        "action TEXT, value REAL, unit TEXT, value_json TEXT, source_doc_type TEXT, "
-        "source_accession TEXT, source_exhibit TEXT, source_url TEXT, source_excerpt TEXT, "
-        "source_doc_id INTEGER, status TEXT, confidence REAL, rationale TEXT, "
-        "created_by TEXT, created_at TEXT, locator TEXT)"
-    )
-    conn.execute(
         "INSERT INTO fact_overrides VALUES "
         "(1, 'bhanu', 'NU', '2025-12-31', 'Q4', 'kpi', 'Monthly ARPAC (USD)', "
         "'replace', 777.0, 'usd', NULL, 'earnings_release', NULL, NULL, NULL, NULL, "
@@ -265,7 +267,7 @@ def test_ledger_populates_break_condition_from_v2_key(tmp_path: Path) -> None:
     assert by_name["Legacy KPI"].break_condition == "old-style break text"
 
 
-def test_ledger_batches_definition_resolution_for_all_tiers(tmp_path: Path) -> None:
+def test_ledger_rejects_unreviewed_normalized_aliases_across_tiers(tmp_path: Path) -> None:
     repo = _build_repo(tmp_path)
     arpac = _add_def(repo, "NU", "Monthly ARPAC (USD)")
     customers = _add_def(repo, "NU", "Total customers (millions)")
@@ -285,12 +287,9 @@ def test_ledger_batches_definition_resolution_for_all_tiers(tmp_path: Path) -> N
         conn.close()
 
     assert [row.name for row in rows] == ["Monthly ARPAC", "Total customers"]
-    fact_population_queries = [
-        statement
-        for statement in statements
-        if "FROM kpi_facts kf" in statement and "GROUP BY kd.name" in statement
-    ]
-    assert len(fact_population_queries) == 1
+    assert all(row.kpi_definition_id is None for row in rows)
+    assert all(row.history == [] for row in rows)
+    assert not any("GROUP BY kd.name" in statement for statement in statements)
 
 
 def _build_repo_with_notes(tmp_path: Path) -> Path:
@@ -333,11 +332,23 @@ def _build_repo_with_notes(tmp_path: Path) -> Path:
             revision INTEGER NOT NULL DEFAULT 1,
             supersedes_context_id INTEGER
         );
+        CREATE TABLE fact_overrides (
+            ticker TEXT, fact_kind TEXT, fact_key TEXT, action TEXT, status TEXT
+        );
         """
     )
     conn.commit()
     conn.close()
     return tmp_path
+
+
+def _write_report_config(repo: Path, holdings: dict[str, object]) -> None:
+    path = repo / "micro_thesis" / "holdings"
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "NU.json").write_text(
+        json.dumps({"ticker": "NU", **holdings}),
+        encoding="utf-8",
+    )
 
 
 def _add_def_full(
@@ -362,6 +373,7 @@ def test_ledger_definition_falls_back_to_name_qualifier(tmp_path: Path) -> None:
     def_id = _add_def_full(repo, "NU", "ROE (annualized, consolidated)", unit="percent")
     _add_facts(repo, "NU", def_id, _QUARTER_ENDS, value=25.0)
     holdings: dict[str, object] = {"tier_1_kpis": [{"name": "ROE (annualized, consolidated)"}]}
+    _write_report_config(repo, holdings)
     row = _build_ledger("NU", repo, holdings, evaluations=[])[0]
     assert row.definition == "annualized, consolidated"
     assert row.unit == "%"  # backfilled from the definition's 'percent'
@@ -379,6 +391,7 @@ def test_ledger_definition_prefers_curator_notes(tmp_path: Path) -> None:
     )
     _add_facts(repo, "NU", def_id, _QUARTER_ENDS, value=25.0)
     holdings: dict[str, object] = {"tier_1_kpis": [{"name": "ROE (annualized, consolidated)"}]}
+    _write_report_config(repo, holdings)
     row = _build_ledger("NU", repo, holdings, evaluations=[])[0]
     assert row.definition == "Net income / average equity, annualized"
 
@@ -398,6 +411,7 @@ def test_ledger_zero_fact_row_still_gets_definition(tmp_path: Path) -> None:
     repo = _build_repo_with_notes(tmp_path)
     _add_def_full(repo, "NU", "Cost of risk (NPL formation)", unit="percent")  # no facts
     holdings: dict[str, object] = {"tier_2_kpis": [{"name": "Cost of risk (NPL formation)"}]}
+    _write_report_config(repo, holdings)
     row = _build_ledger("NU", repo, holdings, evaluations=[])[0]
     assert row.history == []
     assert row.definition == "NPL formation"

@@ -19,6 +19,10 @@ from pipeline.kpi_report_reference_dispositions import (
     load_report_kpi_reference_inventory,
     persist_report_kpi_reference_disposition,
 )
+from pipeline.kpi_report_reference_resolver import (
+    ReportKpiReferenceProposalOutcome,
+    propose_report_kpi_reference_resolution,
+)
 from pipeline.kpi_semantic_review import (
     MAX_KPI_SEMANTIC_REVIEW_ITEMS,
     build_kpi_semantic_review_batch,
@@ -335,6 +339,19 @@ def apply_kpi_semantic_disposition_manifest(
         )
         current_identity = None if current is None else current.id
         current_revision = 0 if current is None else current.revision
+        if entry.disposition.status is ReportKpiReferenceStatus.RESOLVED:
+            proposal = propose_report_kpi_reference_resolution(
+                conn,
+                repo_root=repo_root,
+                reference=reference,
+            )
+            if (
+                proposal.outcome is not ReportKpiReferenceProposalOutcome.CANDIDATE
+                or proposal.proposed_disposition != entry.disposition
+            ):
+                raise ValueError(
+                    "resolved report KPI reference no longer matches its current proposal"
+                )
         if (
             current is not None
             and current.reference == reference

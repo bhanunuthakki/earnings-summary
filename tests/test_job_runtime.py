@@ -772,6 +772,32 @@ def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
     assert record["write_sets"] == ["portfolio-db"]
 
 
+def test_semantic_review_scheduler_runtime_keeps_lock_and_health_in_state_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "product-state"
+    code_root = tmp_path / "deployed-code"
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    code = run_job(
+        repo_root=state_root,
+        code_root=code_root,
+        job_name="prepare-kpi-semantic-review",
+        write_sets=["kpi-semantic-review-export"],
+        command=[sys.executable, "-c", "print('ok')"],
+        **_request_fields("prepare-kpi-semantic-review"),
+        trigger_kind="scheduled",
+    )
+
+    assert code == 0
+    health = state_root / ".tmp" / "job_health" / "prepare-kpi-semantic-review" / "latest.json"
+    receipt = json.loads(health.read_text(encoding="utf-8"))
+    assert receipt["write_sets"] == ["kpi-semantic-review-export"]
+    assert receipt["trigger_kind"] == "scheduled"
+    assert not (code_root / ".tmp" / "job_health").exists()
+    assert not (state_root / ".tmp" / "job_locks" / "kpi-semantic-review-export.lock").exists()
+
+
 def test_run_job_propagates_complete_journal_context_and_service_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

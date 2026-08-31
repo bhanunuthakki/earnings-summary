@@ -75,6 +75,25 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
         "--emit-receipts",
         "--json-out",
     )
+    semantic_review_task = next(
+        task
+        for task in registry.scheduled_tasks
+        if task.task_name == r"\earnings-summary\prepare_kpi_semantic_review"
+    )
+    assert semantic_review_task.schedule.repetition_interval == "PT10M"
+    semantic_review_step = next(
+        step for step in registry.job_steps if step.job == "prepare-kpi-semantic-review"
+    )
+    assert semantic_review_step.raw_lane == "kpi-semantic-review-export"
+    assert semantic_review_step.effective_lane == ("kpi-semantic-review-export",)
+    assert semantic_review_step.command == (
+        r"execution\prepare_kpi_semantic_review.py",
+        "--db",
+        "%EARNINGS_SUMMARY_DB_PATH%",
+        "--code-root",
+        "%PROJECT_ROOT%",
+        "--publish",
+    )
     collector_xml = (
         PROJECT_ROOT / "cron" / "collect_operations_runtime_observations.task.xml"
     ).read_text(encoding="utf-8")

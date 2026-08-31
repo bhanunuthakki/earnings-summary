@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0034_add_investment_profile_label_reviews"
+_ACTIVE_HEAD = "0035_add_report_kpi_reference_resolution_states"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

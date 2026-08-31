@@ -8,7 +8,7 @@ import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Self, cast
+from typing import NamedTuple, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -19,10 +19,19 @@ class ReportKpiReferenceKind(StrEnum):
     TIER_2_KPI = "tier_2_kpi"
     TIER_3_KPI = "tier_3_kpi"
     BREAK_RULE = "break_rule"
+    BUSINESS_MODEL_RULE = "business_model_rule"
+    SOFT_RULE_KPI = "soft_rule_kpi"
 
 
 class ReportKpiReferenceStatus(StrEnum):
+    RESOLVED = "resolved"
     UNRESOLVED = "unresolved"
+    RETIRED = "retired"
+
+
+class ReportKpiReferenceResolutionMethod(StrEnum):
+    EXACT_DEFINITION_IDENTITY = "exact_definition_identity"
+    UNIT_SURFACE_ALIAS = "unit_surface_alias"
 
 
 class ReportKpiReferenceSourceStatus(StrEnum):
@@ -54,12 +63,34 @@ class ReportKpiReferenceDisposition(BaseModel):
 
     status: ReportKpiReferenceStatus
     kpi_definition_id: int | None = Field(default=None, gt=0)
+    definition_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    evidence_fact_id: int | None = Field(default=None, gt=0)
+    evidence_context_id: int | None = Field(default=None, gt=0)
+    evidence_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    resolution_method: ReportKpiReferenceResolutionMethod | None = None
+    policy_name: str | None = Field(default=None, min_length=1, max_length=128)
+    policy_version: str | None = Field(default=None, min_length=1, max_length=64)
+    policy_config_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     reason_code: str = Field(min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def _status_shape(self) -> Self:
-        if self.kpi_definition_id is not None:
-            raise ValueError("v1 report KPI dispositions cannot bind a definition")
+        binding = (
+            self.kpi_definition_id,
+            self.definition_identity_sha256,
+            self.evidence_fact_id,
+            self.evidence_context_id,
+            self.evidence_sha256,
+            self.resolution_method,
+            self.policy_name,
+            self.policy_version,
+            self.policy_config_sha256,
+        )
+        if self.status is ReportKpiReferenceStatus.RESOLVED:
+            if any(value is None for value in binding):
+                raise ValueError("resolved report KPI references require complete evidence binding")
+        elif any(value is not None for value in binding):
+            raise ValueError("unresolved or retired report KPI references cannot carry a binding")
         return self
 
 
@@ -114,6 +145,10 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     )
 
 
+def _table_columns(conn: sqlite3.Connection, name: str) -> frozenset[str]:
+    return frozenset(str(row[1]) for row in conn.execute(f"PRAGMA table_info({name})"))
+
+
 def _reference(
     *, ticker: str, source_path: str, pointer: str, kind: ReportKpiReferenceKind, label: str
 ) -> ReportKpiReference:
@@ -126,6 +161,121 @@ def _reference(
         requested_label=stripped,
         reference_content_sha256=hashlib.sha256(stripped.encode("utf-8")).hexdigest(),
     )
+
+
+class CanonicalFinancialChartPriority(NamedTuple):
+    display_name: str
+    line_item: str
+
+
+_CANONICAL_FINANCIAL_CHART_PRIORITIES = {
+    "revenue": CanonicalFinancialChartPriority("Revenue", "revenue"),
+    "gross profit": CanonicalFinancialChartPriority("Gross profit", "gross_profit"),
+    "operating income": CanonicalFinancialChartPriority("Operating income", "operating_income"),
+    "net income": CanonicalFinancialChartPriority("Net income", "net_income"),
+    "eps (diluted)": CanonicalFinancialChartPriority("EPS (diluted)", "eps_diluted"),
+    "operating cash flow": CanonicalFinancialChartPriority(
+        "Operating cash flow", "operating_cash_flow"
+    ),
+    "free cash flow": CanonicalFinancialChartPriority("Free cash flow", "free_cash_flow"),
+    "fcf": CanonicalFinancialChartPriority("Free cash flow", "free_cash_flow"),
+    "capex": CanonicalFinancialChartPriority("Capex", "capital_expenditure"),
+    "capital expenditure": CanonicalFinancialChartPriority("Capex", "capital_expenditure"),
+}
+
+
+def canonical_financial_chart_priority(label: str) -> CanonicalFinancialChartPriority | None:
+    """Return the exact governed financial identity for a report chart label."""
+    return _CANONICAL_FINANCIAL_CHART_PRIORITIES.get(label.strip().casefold())
+
+
+def is_canonical_financial_chart_priority(label: str) -> bool:
+    """Whether a chart label is owned by the canonical financial-fact reader.
+
+    Only exact report display identities are admitted here. Broad aliases such
+    as ``operating margin`` are intentionally excluded because treating them as
+    a financial line item would silently change their semantics.
+    """
+    return canonical_financial_chart_priority(label) is not None
+
+
+def _soft_rule_kpi_references(
+    *,
+    ticker: str,
+    source_path: str,
+    predicate: object,
+    pointer: str,
+) -> tuple[list[ReportKpiReference], str | None]:
+    """Collect supported KPI-backed soft-rule leaves with exact JSON pointers."""
+    if not isinstance(predicate, dict):
+        return [], None
+    pred = cast("dict[str, object]", predicate)
+    predicate_type = pred.get("type")
+    params_value = pred.get("params")
+    if not isinstance(predicate_type, str) or not isinstance(params_value, dict):
+        return [], None
+    params = cast("dict[str, object]", params_value)
+    params_pointer = f"{pointer}/params"
+    out: list[ReportKpiReference] = []
+
+    def add_label(key: str, label: object) -> str | None:
+        if not isinstance(label, str) or not label.strip():
+            return "report_soft_rule_kpi_name_invalid"
+        out.append(
+            _reference(
+                ticker=ticker,
+                source_path=source_path,
+                pointer=f"{params_pointer}/{key}",
+                kind=ReportKpiReferenceKind.SOFT_RULE_KPI,
+                label=label,
+            )
+        )
+        return None
+
+    if predicate_type in {"series_decel", "series_below", "series_above"}:
+        if params.get("source") == "kpi":
+            return out, add_label("metric", params.get("metric"))
+        return out, None
+    if predicate_type == "trajectory":
+        if params.get("source", "kpi") == "kpi":
+            return out, add_label("kpi_name", params.get("kpi_name"))
+        return out, None
+    if predicate_type == "ratio_breach":
+        for side in ("numerator", "denominator"):
+            raw_spec = params.get(side)
+            if not isinstance(raw_spec, dict):
+                continue
+            spec = cast("dict[str, object]", raw_spec)
+            if spec.get("source", "financial") != "kpi":
+                continue
+            label = spec.get("name")
+            if not isinstance(label, str) or not label.strip():
+                return out, "report_soft_rule_kpi_name_invalid"
+            out.append(
+                _reference(
+                    ticker=ticker,
+                    source_path=source_path,
+                    pointer=f"{params_pointer}/{side}/name",
+                    kind=ReportKpiReferenceKind.SOFT_RULE_KPI,
+                    label=label,
+                )
+            )
+        return out, None
+    if predicate_type == "compound":
+        children = params.get("predicates")
+        if not isinstance(children, list):
+            return out, None
+        for index, child in enumerate(cast("list[object]", children)):
+            child_references, reason = _soft_rule_kpi_references(
+                ticker=ticker,
+                source_path=source_path,
+                predicate=child,
+                pointer=f"{params_pointer}/predicates/{index}",
+            )
+            out.extend(child_references)
+            if reason is not None:
+                return out, reason
+    return out, None
 
 
 def load_report_kpi_reference_inventory(
@@ -221,6 +371,8 @@ def load_report_kpi_reference_inventory(
                 if not isinstance(value, str) or not value.strip():
                     invalid_reason = "report_chart_priority_entry_invalid"
                     break
+                if is_canonical_financial_chart_priority(value):
+                    continue
                 ticker_references.append(
                     _reference(
                         ticker=ticker,
@@ -284,6 +436,51 @@ def load_report_kpi_reference_inventory(
                         label=label,
                     )
                 )
+        business_rules = root.get("business_model_rules")
+        if (
+            invalid_reason is None
+            and business_rules is not None
+            and not isinstance(business_rules, list)
+        ):
+            invalid_reason = "report_business_model_rules_invalid"
+        elif invalid_reason is None and isinstance(business_rules, list):
+            for index, value in enumerate(cast("list[object]", business_rules)):
+                if not isinstance(value, dict):
+                    invalid_reason = "report_business_model_rule_entry_invalid"
+                    break
+                row = cast("dict[str, object]", value)
+                label = row.get("kpi_name")
+                if not isinstance(label, str) or not label.strip():
+                    invalid_reason = "report_business_model_rule_name_invalid"
+                    break
+                ticker_references.append(
+                    _reference(
+                        ticker=ticker,
+                        source_path=relative,
+                        pointer=f"/business_model_rules/{index}/kpi_name",
+                        kind=ReportKpiReferenceKind.BUSINESS_MODEL_RULE,
+                        label=label,
+                    )
+                )
+        soft_rules = root.get("break_rules_soft")
+        if invalid_reason is None and soft_rules is not None and not isinstance(soft_rules, list):
+            invalid_reason = "report_soft_rules_invalid"
+        elif invalid_reason is None and isinstance(soft_rules, list):
+            for index, value in enumerate(cast("list[object]", soft_rules)):
+                if not isinstance(value, dict):
+                    # Legacy prose-only soft rules are not executable metric references.
+                    continue
+                row = cast("dict[str, object]", value)
+                references, reason = _soft_rule_kpi_references(
+                    ticker=ticker,
+                    source_path=relative,
+                    predicate=row.get("predicate"),
+                    pointer=f"/break_rules_soft/{index}/predicate",
+                )
+                ticker_references.extend(references)
+                if reason is not None:
+                    invalid_reason = reason
+                    break
         if invalid_reason is not None:
             states.append(
                 ReportKpiReferenceSourceState(
@@ -358,6 +555,36 @@ def current_report_kpi_reference_disposition(
             kpi_definition_id=(
                 None if values["kpi_definition_id"] is None else int(values["kpi_definition_id"])
             ),
+            definition_identity_sha256=(
+                None
+                if values.get("definition_identity_sha256") is None
+                else str(values["definition_identity_sha256"])
+            ),
+            evidence_fact_id=(
+                None if values.get("evidence_fact_id") is None else int(values["evidence_fact_id"])
+            ),
+            evidence_context_id=(
+                None
+                if values.get("evidence_context_id") is None
+                else int(values["evidence_context_id"])
+            ),
+            evidence_sha256=(
+                None if values.get("evidence_sha256") is None else str(values["evidence_sha256"])
+            ),
+            resolution_method=(
+                None
+                if values.get("resolution_method") is None
+                else ReportKpiReferenceResolutionMethod(str(values["resolution_method"]))
+            ),
+            policy_name=(None if values.get("policy_name") is None else str(values["policy_name"])),
+            policy_version=(
+                None if values.get("policy_version") is None else str(values["policy_version"])
+            ),
+            policy_config_sha256=(
+                None
+                if values.get("policy_config_sha256") is None
+                else str(values["policy_config_sha256"])
+            ),
             reason_code=str(values["reason_code"]),
         ),
         revision=int(values["revision"]),
@@ -383,6 +610,10 @@ def persist_report_kpi_reference_disposition(
     """Append one reference disposition or return its idempotent current identity."""
     if not _table_exists(conn, "report_kpi_reference_resolution_revisions"):
         raise ValueError("report KPI reference disposition schema is unavailable")
+    columns = _table_columns(conn, "report_kpi_reference_resolution_revisions")
+    has_v2 = "definition_identity_sha256" in columns
+    if disposition.status is not ReportKpiReferenceStatus.UNRESOLVED and not has_v2:
+        raise ValueError("report KPI reference resolution v2 schema is unavailable")
     current = current_report_kpi_reference_disposition(conn, user_id=user_id, reference=reference)
     if (
         current is not None
@@ -393,44 +624,79 @@ def persist_report_kpi_reference_disposition(
     observed = knowledge_at or datetime.now(UTC)
     if observed.tzinfo is None:
         raise ValueError("report KPI reference knowledge_at must be timezone-aware")
-    cursor = conn.execute(
-        "INSERT INTO report_kpi_reference_resolution_revisions "
-        "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
-        "reference_content_sha256,status,kpi_definition_id,reason_code,revision,"
-        "supersedes_resolution_id,reviewed_by,knowledge_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            user_id,
-            reference.ticker,
-            reference.source_path,
-            reference.json_pointer,
-            reference.reference_kind.value,
-            reference.requested_label,
-            reference.reference_content_sha256,
-            disposition.status.value,
-            disposition.kpi_definition_id,
+    payload: list[object] = [
+        user_id,
+        reference.ticker,
+        reference.source_path,
+        reference.json_pointer,
+        reference.reference_kind.value,
+        reference.requested_label,
+        reference.reference_content_sha256,
+        disposition.status.value,
+        disposition.kpi_definition_id,
+    ]
+    if has_v2:
+        payload.extend(
+            [
+                disposition.definition_identity_sha256,
+                disposition.evidence_fact_id,
+                disposition.evidence_context_id,
+                disposition.evidence_sha256,
+                (
+                    None
+                    if disposition.resolution_method is None
+                    else disposition.resolution_method.value
+                ),
+                disposition.policy_name,
+                disposition.policy_version,
+                disposition.policy_config_sha256,
+            ]
+        )
+    payload.extend(
+        [
             disposition.reason_code,
             1 if current is None else current.revision + 1,
             None if current is None else current.id,
             reviewed_by,
             observed.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        ),
+        ]
     )
+    if has_v2:
+        insert_sql = (
+            "INSERT INTO report_kpi_reference_resolution_revisions "
+            "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
+            "reference_content_sha256,status,kpi_definition_id,definition_identity_sha256,"
+            "evidence_fact_id,evidence_context_id,evidence_sha256,resolution_method,policy_name,"
+            "policy_version,policy_config_sha256,reason_code,revision,supersedes_resolution_id,"
+            "reviewed_by,knowledge_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        )
+    else:
+        insert_sql = (
+            "INSERT INTO report_kpi_reference_resolution_revisions "
+            "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
+            "reference_content_sha256,status,kpi_definition_id,reason_code,revision,"
+            "supersedes_resolution_id,reviewed_by,knowledge_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        )
+    cursor = conn.execute(insert_sql, tuple(payload))
     if cursor.lastrowid is None:
         raise RuntimeError("report KPI reference disposition insert returned no identity")
     return int(cursor.lastrowid)
 
 
 __all__ = [
+    "CanonicalFinancialChartPriority",
     "ReportKpiReference",
     "ReportKpiReferenceDisposition",
     "ReportKpiReferenceDispositionRevision",
     "ReportKpiReferenceInventory",
     "ReportKpiReferenceKind",
+    "ReportKpiReferenceResolutionMethod",
     "ReportKpiReferenceSourceState",
     "ReportKpiReferenceSourceStatus",
     "ReportKpiReferenceStatus",
+    "canonical_financial_chart_priority",
     "current_report_kpi_reference_disposition",
+    "is_canonical_financial_chart_priority",
     "load_report_kpi_reference_inventory",
     "persist_report_kpi_reference_disposition",
     "report_kpi_references",

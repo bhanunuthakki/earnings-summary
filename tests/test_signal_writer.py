@@ -98,6 +98,9 @@ def _build_db(path: Path) -> None:
                                       'yoy_acceleration', 'seasonal', 'correlation')),
                 CHECK (severity IN ('green', 'yellow', 'red'))
             );
+            CREATE TABLE fact_overrides (
+                ticker TEXT, fact_kind TEXT, fact_key TEXT, action TEXT, status TEXT
+            );
             """
         )
         conn.commit()

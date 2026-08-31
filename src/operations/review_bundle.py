@@ -27,6 +27,93 @@ from pipeline.kpi_report_reference_dispositions import (
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
+    (
+        "operations_projection",
+        (
+            "execution/collect_operations_runtime_observations.py",
+            "execution/comments_server.py",
+            "src/operations/models.py",
+            "src/operations/registry.py",
+            "src/operations/review_bundle.py",
+            "src/operations/snapshot.py",
+            "src/pipeline/kpi_report_reference_dispositions.py",
+            "src/pipeline/kpi_report_reference_resolver.py",
+            "src/scheduler_manifest.py",
+        ),
+    ),
+    (
+        "review_decision_contract",
+        (
+            "execution/apply_kpi_semantic_dispositions.py",
+            "execution/apply_kpi_semantic_refresh.py",
+            "execution/backup_restore_readiness_receipt.py",
+            "execution/build_kpi_semantic_refresh_manifest.py",
+            "execution/prepare_kpi_semantic_dispositions.py",
+            "execution/record_kpi_disposition_judgment.py",
+            "execution/record_kpi_repair_judgment.py",
+            "src/compute/kpi_resolver.py",
+            "src/operations/kpi_repair_receipts.py",
+            "src/pipeline/kpi_semantic_dispositions.py",
+            "src/pipeline/kpi_semantics.py",
+            "src/pipeline/kpi_source_review.py",
+        ),
+    ),
+    (
+        "review_producer",
+        (
+            "cron/prepare_kpi_semantic_review.task.xml",
+            "cron/run_prepare_kpi_semantic_review.bat",
+            "cron/task_manifest.json",
+            "execution/prepare_kpi_semantic_review.py",
+            "src/identity.py",
+            "src/models/documents.py",
+            "src/models/facts.py",
+            "src/operations/kpi_semantic_review_export.py",
+            "src/operations/paths.py",
+            "src/pipeline/kpi_semantic_review.py",
+            "src/pipeline/kpi_semantic_scope.py",
+            "src/provenance/evidence_ledger.py",
+            "src/provenance/financial_fact_resolution.py",
+            "src/provenance/fulltext_extractor_identity.py",
+            "src/provenance/ooxml_extraction.py",
+        ),
+    ),
+    (
+        "runtime_authority",
+        (
+            "cron/job_runtime.py",
+            "cron/run_python.bat",
+            "execution/sqlite_bootstrap.py",
+            "src/db_paths.py",
+            "src/log_redact.py",
+            "src/operations/context.py",
+            "src/run_lock.py",
+            "src/runtime/job_runtime.py",
+            "src/runtime/python_process.py",
+            "src/runtime/secrets.py",
+            "src/schema_compat.py",
+            "src/scope_identity.py",
+            "src/sqlite_runtime.py",
+            "vendor/sqlite/windows-x64/sqlite3.dll",
+        ),
+    ),
+    (
+        "transport_validator",
+        (
+            "execution/approve_windows_review_pins.py",
+            "execution/fetch_windows_kpi_semantic_review.py",
+            "execution/fetch_windows_review_bundle.py",
+        ),
+    ),
+)
+REVIEW_CODE_IDENTITY_DEPENDENCIES = tuple(
+    sorted(
+        dependency
+        for _dependency_class, dependencies in REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES
+        for dependency in dependencies
+    )
+)
 
 
 class _FrozenModel(BaseModel):
@@ -194,26 +281,8 @@ def _sha256_text(value: str) -> str:
 
 def review_code_identity(repo_root: Path) -> str:
     """Digest the bounded code/config surface that produces this projection."""
-    relative_paths = (
-        "execution/comments_server.py",
-        "execution/collect_operations_runtime_observations.py",
-        "execution/apply_kpi_semantic_refresh.py",
-        "execution/apply_kpi_semantic_dispositions.py",
-        "execution/prepare_kpi_semantic_dispositions.py",
-        "execution/record_kpi_disposition_judgment.py",
-        "execution/record_kpi_repair_judgment.py",
-        "src/operations/models.py",
-        "src/operations/registry.py",
-        "src/operations/review_bundle.py",
-        "src/operations/kpi_repair_receipts.py",
-        "src/operations/snapshot.py",
-        "src/pipeline/kpi_source_review.py",
-        "src/pipeline/kpi_report_reference_dispositions.py",
-        "src/pipeline/kpi_semantic_dispositions.py",
-        "src/pipeline/kpi_semantic_scope.py",
-    )
     digest = hashlib.sha256()
-    for relative in relative_paths:
+    for relative in REVIEW_CODE_IDENTITY_DEPENDENCIES:
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         try:
@@ -441,6 +510,8 @@ def build_operations_review_bundle(
 
 
 __all__ = [
+    "REVIEW_CODE_IDENTITY_DEPENDENCIES",
+    "REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES",
     "OperationsReviewBundle",
     "ReviewKpiRepair",
     "build_operations_review_bundle",

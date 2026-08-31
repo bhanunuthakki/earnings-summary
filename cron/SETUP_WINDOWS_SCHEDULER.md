@@ -8,7 +8,7 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-45 operational declarations total — 44 Task Scheduler registrations and one
+46 operational declarations total — 45 Task Scheduler registrations and one
 separately managed Windows service. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. Run
@@ -66,6 +66,17 @@ Operations surface disposition: the supervisor receipt remains the primary live-
 separate dashboard activation receipt is deliberately excluded from current-health projection because
 it records one operator action attempt, not listener health; the action response reports that attempt's
 typed result, while the supervisor receipt remains the only authority for successful listener ownership.
+
+### KPI semantic-review export
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\prepare_kpi_semantic_review` | Every 10 minutes | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Opens the canonical `EARNINGS_SUMMARY_DB_PATH` read-only and publishes bounded, source-safe, content-addressed per-ticker review artifacts plus one atomic current index under the product-state root. The wrapper passes that database-derived state root to the shared job runtime for its lock and health receipt while passing the deployed runtime checkout separately as code root. Missing identity, truncation, incomplete evidence, paired root authority, or split-root mismatch fails the task closed. |
+
+Operations surface disposition: `primary surface`. The canonical manifest owns this task, so the
+existing dynamic Jobs projection shows its declaration, ten-minute cadence, registered identity,
+latest attempt, and failure state. This adds no dashboard control or request-time producer; the
+read-only review endpoint serves only the producer's precomputed current artifact.
 
 ### Pre-chain backup
 

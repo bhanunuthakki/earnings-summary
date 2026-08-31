@@ -26,7 +26,13 @@ from compute.kpi_resolver import (
     resolve_kpi_definition_name,
     semantic_series_identity_sql,
 )
+from identity import DEFAULT_USER_ID
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
+from pipeline.kpi_report_reference_dispositions import canonical_financial_chart_priority
+from pipeline.kpi_report_reference_resolver import (
+    report_kpi_reference_at,
+    verified_report_kpi_reference_definition,
+)
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
@@ -323,7 +329,7 @@ def _resolve_priorities(
     a mostly-empty annual metric. Returns
     ``(resolved_names, quarterly_series, annual_series, annual_years)``.
     """
-    li_map = {li.line_item.lower(): li.line_item for li in line_items}
+    li_map = {li.line_item.casefold(): li.line_item for li in line_items}
     resolved: list[str] = []
     kpi_series: list[KpiSeries] = []
     annual_raw: list[tuple[str, str, dict[int, float], dict[int, CellSource]]] = []
@@ -331,20 +337,46 @@ def _resolve_priorities(
     db_conn = open_repo_db(repo_root, conn)
 
     try:
-        for name in requested:
-            lower = name.lower()
-            if lower in li_map:
-                resolved.append(li_map[lower])
+        for index, name in enumerate(requested):
+            financial_priority = canonical_financial_chart_priority(name)
+            if financial_priority is not None:
+                resolved_name = li_map.get(financial_priority.display_name.casefold())
+                if resolved_name is not None:
+                    resolved.append(resolved_name)
                 continue
             if db_conn is None:
                 continue
-            if reporting_cadence_for(db_conn, ticker, name) == "annual":
-                annual = _annual_kpi_raw_for(db_conn, ticker, name)
+            reference = report_kpi_reference_at(
+                repo_root,
+                ticker=ticker,
+                json_pointer=f"/chart_priorities/{index}",
+            )
+            verified = (
+                None
+                if reference is None
+                else verified_report_kpi_reference_definition(
+                    db_conn,
+                    repo_root=repo_root,
+                    user_id=DEFAULT_USER_ID,
+                    reference=reference,
+                )
+            )
+            if verified is None:
+                continue
+            verified_name = verified.definition_name
+            if reporting_cadence_for(db_conn, ticker, verified_name) == "annual":
+                annual = _annual_kpi_raw_for(db_conn, ticker, verified_name)
                 if annual is not None:
                     annual_raw.append(annual)
                     resolved.append(annual[0])
                 continue
-            series = _kpi_series_for(db_conn, ticker, name, quarter_labels, quarter_labels_full)
+            series = _kpi_series_for(
+                db_conn,
+                ticker,
+                verified_name,
+                quarter_labels,
+                quarter_labels_full,
+            )
             if series is not None:
                 kpi_series.append(series)
                 resolved.append(series.name)

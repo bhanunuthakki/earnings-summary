@@ -93,6 +93,9 @@ def _schema(conn: sqlite3.Connection, *, with_cadence: bool = True) -> None:
             status TEXT NOT NULL,
             reason_code TEXT
         );
+        CREATE TABLE fact_overrides (
+            ticker TEXT, fact_kind TEXT, fact_key TEXT, action TEXT, status TEXT
+        );
         """
     )
     conn.commit()
@@ -327,6 +330,12 @@ def test_resolve_priorities_routes_annual_off_quarterly_axis(tmp_path: Path) -> 
     _seed(c, "NU", _CAR, "annual", _CAR_FY + _CAR_INTERIM)
     _seed(c, "NU", "NIM", "quarterly", [("2025-03-31", "Q1", 18.0), ("2024-12-31", "Q4", 17.5)])
     c.close()
+    holdings = tmp_path / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True)
+    (holdings / "NU.json").write_text(
+        f'{{"ticker":"NU","chart_priorities":["{_CAR}","NIM"]}}',
+        encoding="utf-8",
+    )
 
     resolved, kpi_series, annual_series, annual_years = _resolve_priorities(
         [_CAR, "NIM"],
@@ -366,7 +375,13 @@ def test_yoy_heatmap_annual_stride_renders_year_axis() -> None:
 def test_yoy_heatmap_quarterly_defaults_unchanged() -> None:
     """A flow series with the default (quarterly) stride still computes YoY at
     4 periods back — the defaults preserve the pre-existing behaviour."""
-    levels = [100.0, 110.0, 120.0, 130.0, 200.0]  # Q5 vs Q1 => +100% YoY
+    levels: list[float | None] = [
+        100.0,
+        110.0,
+        120.0,
+        130.0,
+        200.0,
+    ]  # Q5 vs Q1 => +100% YoY
     html = yoy_heatmap_table(
         [MatrixRow(name="Revenue", levels=levels, unit="USD millions")],
         ["2024 Q1", "2024 Q2", "2024 Q3", "2024 Q4", "2025 Q1"],

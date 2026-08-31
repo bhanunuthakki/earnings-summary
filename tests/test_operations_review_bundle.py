@@ -30,10 +30,13 @@ from operations.models import (
     SourcePolicyDefinition,
 )
 from operations.review_bundle import (
+    REVIEW_CODE_IDENTITY_DEPENDENCIES,
+    REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES,
     OperationsReviewBundle,
     ReviewSchedulerTask,
     build_operations_review_bundle,
     load_kpi_repair_review,
+    review_code_identity,
 )
 
 NOW = datetime(2026, 8, 27, 19, tzinfo=UTC)
@@ -189,6 +192,51 @@ def test_review_bundle_is_closed_sanitized_and_hash_validated() -> None:
     payload["schema_revision"]["matches"] = False
     with pytest.raises(ValueError, match="content_sha256"):
         OperationsReviewBundle.model_validate(payload)
+
+
+def test_review_code_identity_binds_semantic_review_producer_route_model_and_client(
+    tmp_path: Path,
+) -> None:
+    assert tuple(name for name, _ in REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES) == (
+        "operations_projection",
+        "review_decision_contract",
+        "review_producer",
+        "runtime_authority",
+        "transport_validator",
+    )
+    flattened = tuple(
+        dependency
+        for _name, dependencies in REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES
+        for dependency in dependencies
+    )
+    assert len(flattened) == len(set(flattened))
+    assert tuple(sorted(REVIEW_CODE_IDENTITY_DEPENDENCIES)) == REVIEW_CODE_IDENTITY_DEPENDENCIES
+    assert tuple(sorted(flattened)) == REVIEW_CODE_IDENTITY_DEPENDENCIES
+    for dependency_class, dependencies in REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES:
+        class_root = tmp_path / dependency_class
+        for relative in dependencies:
+            before = review_code_identity(class_root)
+            target = class_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(relative, encoding="utf-8")
+            after = review_code_identity(class_root)
+            assert after != before, f"{dependency_class}:{relative}"
+
+
+def test_review_code_identity_binds_fulltext_extractor_direct_ooxml_dependency(
+    tmp_path: Path,
+) -> None:
+    producer_dependencies = dict(REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES)["review_producer"]
+    ooxml_dependency = "src/provenance/ooxml_extraction.py"
+    assert ooxml_dependency in producer_dependencies
+
+    for relative in REVIEW_CODE_IDENTITY_DEPENDENCIES:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(relative, encoding="utf-8")
+    before = review_code_identity(tmp_path)
+    (tmp_path / ooxml_dependency).write_text("mutated-classifier", encoding="utf-8")
+    assert review_code_identity(tmp_path) != before
 
 
 def test_mac_validator_rejects_origin_identity_change_and_staleness() -> None:

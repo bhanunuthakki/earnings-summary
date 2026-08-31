@@ -22,10 +22,14 @@ from compute.kpi_resolver import (
     normalize_kpi_name,
     reporting_cadence_for,
     resolve_kpi_definition_name,
-    resolve_kpi_definition_names,
     semantic_series_identity_sql,
 )
 from compute.thesis_evaluation_episodes import episode_history_source
+from identity import DEFAULT_USER_ID
+from pipeline.kpi_report_reference_resolver import (
+    report_kpi_reference_at,
+    verified_report_kpi_reference_definition,
+)
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
@@ -224,45 +228,56 @@ def _build_ledger(
             ("tier_2_kpis", "tier_2"),
             ("tier_3_kpis", "tier_3"),
         )
-        requested_names = [
-            str(cast("dict[str, object]", item).get("name", ""))
-            for tier_key, _tier_label in tier_specs
-            for item in (
-                cast("list[object]", holdings.get(tier_key))
-                if isinstance(holdings.get(tier_key), list)
-                else []
-            )
-            if isinstance(item, dict)
-        ]
-        resolved_names = (
-            resolve_kpi_definition_names(db_conn, ticker, requested_names)
-            if db_conn is not None
-            else {}
-        )
         rows: list[KpiLedgerRow] = []
         for tier_key, tier_label in tier_specs:
             raw_kpis = holdings.get(tier_key)
             if not isinstance(raw_kpis, list):
                 continue
             tier_rows: list[KpiLedgerRow] = []
-            for k in cast("list[object]", raw_kpis):
+            for index, k in enumerate(cast("list[object]", raw_kpis)):
                 if not isinstance(k, dict):
                     continue
                 kd = cast("dict[str, object]", k)
                 name = str(kd.get("name", ""))
                 if db_conn is not None:
-                    resolved_name = resolved_names.get(name)
-                    history, latest_excerpt = _kpi_history_for_resolved(
-                        db_conn,
-                        ticker,
-                        resolved_name,
+                    reference = report_kpi_reference_at(
+                        repo_root,
+                        ticker=ticker,
+                        json_pointer=f"/{tier_key}/{index}/name",
                     )
-                    def_id, notes, db_unit = _kpi_definition_meta_for_resolved(
-                        db_conn,
-                        ticker,
-                        name,
-                        resolved_name,
+                    if reference is not None and reference.requested_label != name.strip():
+                        reference = None
+                    verified = (
+                        None
+                        if reference is None
+                        else verified_report_kpi_reference_definition(
+                            db_conn,
+                            repo_root=repo_root,
+                            user_id=DEFAULT_USER_ID,
+                            reference=reference,
+                        )
                     )
+                    resolved_name = None if verified is None else verified.definition_name
+                    if resolved_name is None:
+                        history, latest_excerpt, def_id, notes, db_unit = (
+                            [],
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    else:
+                        history, latest_excerpt = _kpi_history_for_resolved(
+                            db_conn,
+                            ticker,
+                            resolved_name,
+                        )
+                        def_id, notes, db_unit = _kpi_definition_meta_for_resolved(
+                            db_conn,
+                            ticker,
+                            name,
+                            resolved_name,
+                        )
                 else:
                     history, latest_excerpt, def_id, notes, db_unit = [], None, None, None, None
                 holdings_unit = str(kd.get("unit")) if kd.get("unit") else None

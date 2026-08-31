@@ -54,6 +54,10 @@ from operations.review_bundle import (  # noqa: E402
     database_lineage_identity,
     review_code_identity,
 )
+from pipeline.kpi_semantic_review import (  # noqa: E402
+    KpiEvidenceLocatorCoordinates,
+    fact_locator_from_evidence_coordinates,
+)
 from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
 from pipeline.kpi_semantics import (  # noqa: E402
     KpiAccountingBasis,
@@ -71,6 +75,7 @@ from pipeline.kpi_source_review import (  # noqa: E402
     require_canonical_kpi_resolution,
 )
 from pipeline.queries import open_db  # noqa: E402
+from provenance.evidence_ledger import EvidenceLocator  # noqa: E402
 from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
 from provenance.fulltext_extractor_identity import (  # noqa: E402
     resolve_fulltext_extractor_identity,
@@ -78,6 +83,9 @@ from provenance.fulltext_extractor_identity import (  # noqa: E402
 from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
 
 _SHA256 = r"^[0-9a-f]{64}$"
+# Five minutes matches the repository's trusted-evidence clock-skew allowance while
+# remaining far too small to move a decision across a reporting or thesis horizon.
+MAX_KNOWLEDGE_AT_FUTURE_SKEW = timedelta(minutes=5)
 _REVIEWABLE_SOURCE_TYPES = frozenset(
     {
         SourceType.SEC_XBRL,
@@ -251,6 +259,18 @@ class RefreshManifest(BaseModel):
         return canonical_sha256(self.model_dump(mode="json"))
 
 
+def validate_manifest_knowledge_time(
+    manifest: RefreshManifest,
+    *,
+    now: datetime,
+) -> None:
+    """Reject future decision authority before its timestamp becomes a cutoff."""
+    if now.tzinfo is None:
+        raise RepairBlockedError("validation_clock_not_timezone_aware")
+    if manifest.knowledge_at > now.astimezone(UTC) + MAX_KNOWLEDGE_AT_FUTURE_SKEW:
+        raise RepairBlockedError("manifest_knowledge_at_from_future")
+
+
 class KpiRepairSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -396,7 +416,8 @@ def _validate_source_binding(
     if source_type not in _REVIEWABLE_SOURCE_TYPES:
         raise RepairBlockedError("source_type_not_reviewable")
     evidence = conn.execute(
-        "SELECT node.text,node.locator_sha256,node.node_kind,run.document_version_id,"
+        "SELECT node.text,node.locator_json,node.locator_sha256,node.node_kind,"
+        "run.document_version_id,"
         "run.extractor_name,run.extractor_config_sha256,run.extractor_code_version,"
         "run.outcome,version.blob_sha256,version.ticker FROM evidence_nodes node "
         "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
@@ -450,6 +471,21 @@ def _validate_source_binding(
         raise RepairBlockedError("source_evidence_binding_content_mismatch")
     if str(evidence["locator_sha256"] or "") != entry.evidence_locator_sha256:
         raise RepairBlockedError("evidence_locator_mismatch")
+    try:
+        evidence_locator = EvidenceLocator.model_validate_json(str(evidence["locator_json"] or ""))
+        if (
+            str(evidence["locator_json"]) != evidence_locator.canonical_json
+            or evidence_locator.canonical_sha256 != entry.evidence_locator_sha256
+        ):
+            raise ValueError("evidence locator is not canonical")
+        expected_locator = fact_locator_from_evidence_coordinates(
+            KpiEvidenceLocatorCoordinates.from_evidence_locator(evidence_locator),
+            verbatim_snippet=entry.source_excerpt,
+        )
+    except ValueError as exc:
+        raise RepairBlockedError("evidence_locator_payload_invalid") from exc
+    if entry.locator != expected_locator:
+        raise RepairBlockedError("fact_locator_evidence_mismatch")
     evidence_text = str(evidence["text"])
     if entry.source_excerpt not in evidence_text:
         raise RepairBlockedError("source_excerpt_mismatch")
@@ -531,6 +567,10 @@ def _validate_entry(
         if Decimal(str(row["value"])) != entry.value or Unit(str(row["unit"])) != entry.unit:
             raise RepairBlockedError("bind_value_or_unit_mismatch")
     return row, source_type
+
+
+# Public read-only validation seam for deterministic manifest builders.
+validate_refresh_entry = _validate_entry
 
 
 def _apply_entry(
@@ -768,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
             raise RepairBlockedError("manifest_user_identity_mismatch")
         if args.max_review_age_seconds <= 0:
             raise RepairBlockedError("invalid_review_age")
+        validate_manifest_knowledge_time(manifest, now=started)
         _validate_external_evidence(
             manifest=manifest,
             db_path=args.db,

@@ -74,6 +74,7 @@ class LocatorKind(StrEnum):
     PDF_SLIDE = "pdf_slide"
     TRANSCRIPT_SPAN = "transcript_span"
     HTML_SPAN = "html_span"
+    SPREADSHEET_CELL = "spreadsheet_cell"
     DERIVED = "derived"
     VENDOR_FIELD = "vendor_field"
 
@@ -103,6 +104,27 @@ class HtmlSpanRef(BaseModel):
     char_start: int | None = None
     char_end: int | None = None
     quote: str | None = None
+
+
+class SpreadsheetCellRef(BaseModel):
+    """Exact worksheet coordinate without carrying a workbook path or URL."""
+
+    sheet_name: str = Field(min_length=1, max_length=255)
+    cell_address: str | None = Field(default=None, pattern=r"^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$")
+    cell_range: str | None = Field(
+        default=None,
+        pattern=(
+            r"^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}:"
+            r"\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$"
+        ),
+    )
+    table_name: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def _exactly_one_coordinate(self) -> SpreadsheetCellRef:
+        if (self.cell_address is None) == (self.cell_range is None):
+            raise ValueError("spreadsheet locator requires exactly one cell address or range")
+        return self
 
 
 class VendorFieldRef(BaseModel):
@@ -168,6 +190,7 @@ class FactLocator(BaseModel):
     pdf_bbox: tuple[float, float, float, float] | None = None
     transcript_span: TranscriptSpanRef | None = None
     html_span: HtmlSpanRef | None = None
+    spreadsheet_cell: SpreadsheetCellRef | None = None
     vendor_field: VendorFieldRef | None = None
     derived: DerivedRef | None = None
     verbatim_snippet: str | None = Field(default=None, max_length=2000)
@@ -182,6 +205,7 @@ class FactLocator(BaseModel):
             LocatorKind.PDF_SLIDE: self.pdf_page,
             LocatorKind.TRANSCRIPT_SPAN: self.transcript_span,
             LocatorKind.HTML_SPAN: self.html_span,
+            LocatorKind.SPREADSHEET_CELL: self.spreadsheet_cell,
             LocatorKind.DERIVED: self.derived,
             LocatorKind.VENDOR_FIELD: self.vendor_field,
         }
@@ -202,6 +226,8 @@ class FactLocator(BaseModel):
             return LocatorKind.TRANSCRIPT_SPAN
         if self.section is not None or self.json_path is not None:
             return LocatorKind.FMP_JSON_TABLE
+        if self.spreadsheet_cell is not None:
+            return LocatorKind.SPREADSHEET_CELL
         return None
 
     def to_json(self) -> str | None:
