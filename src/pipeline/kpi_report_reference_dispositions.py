@@ -624,17 +624,6 @@ def persist_report_kpi_reference_disposition(
     observed = knowledge_at or datetime.now(UTC)
     if observed.tzinfo is None:
         raise ValueError("report KPI reference knowledge_at must be timezone-aware")
-    field_names = [
-        "user_id",
-        "ticker",
-        "source_path",
-        "json_pointer",
-        "reference_kind",
-        "requested_label",
-        "reference_content_sha256",
-        "status",
-        "kpi_definition_id",
-    ]
     payload: list[object] = [
         user_id,
         reference.ticker,
@@ -647,18 +636,6 @@ def persist_report_kpi_reference_disposition(
         disposition.kpi_definition_id,
     ]
     if has_v2:
-        field_names.extend(
-            [
-                "definition_identity_sha256",
-                "evidence_fact_id",
-                "evidence_context_id",
-                "evidence_sha256",
-                "resolution_method",
-                "policy_name",
-                "policy_version",
-                "policy_config_sha256",
-            ]
-        )
         payload.extend(
             [
                 disposition.definition_identity_sha256,
@@ -675,15 +652,6 @@ def persist_report_kpi_reference_disposition(
                 disposition.policy_config_sha256,
             ]
         )
-    field_names.extend(
-        [
-            "reason_code",
-            "revision",
-            "supersedes_resolution_id",
-            "reviewed_by",
-            "knowledge_at",
-        ]
-    )
     payload.extend(
         [
             disposition.reason_code,
@@ -693,12 +661,23 @@ def persist_report_kpi_reference_disposition(
             observed.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         ]
     )
-    placeholders = ",".join("?" for _ in field_names)
-    cursor = conn.execute(
-        "INSERT INTO report_kpi_reference_resolution_revisions "
-        f"({','.join(field_names)}) VALUES ({placeholders})",
-        tuple(payload),
-    )
+    if has_v2:
+        insert_sql = (
+            "INSERT INTO report_kpi_reference_resolution_revisions "
+            "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
+            "reference_content_sha256,status,kpi_definition_id,definition_identity_sha256,"
+            "evidence_fact_id,evidence_context_id,evidence_sha256,resolution_method,policy_name,"
+            "policy_version,policy_config_sha256,reason_code,revision,supersedes_resolution_id,"
+            "reviewed_by,knowledge_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        )
+    else:
+        insert_sql = (
+            "INSERT INTO report_kpi_reference_resolution_revisions "
+            "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
+            "reference_content_sha256,status,kpi_definition_id,reason_code,revision,"
+            "supersedes_resolution_id,reviewed_by,knowledge_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        )
+    cursor = conn.execute(insert_sql, tuple(payload))
     if cursor.lastrowid is None:
         raise RuntimeError("report KPI reference disposition insert returned no identity")
     return int(cursor.lastrowid)

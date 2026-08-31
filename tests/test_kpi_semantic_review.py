@@ -264,7 +264,7 @@ def test_evidence_locator_payload_and_hash_must_match(tmp_path: Path) -> None:
 
 def test_export_safe_locator_coordinates_omit_source_paths_and_urls() -> None:
     source = EvidenceLocator(
-        source_ref="https://user:secret@example.test/private/report.xlsx",
+        source_ref="https://example.test/private/report.xlsx",
         sheet_name="KPIs",
         cell_range="B7:C7",
         office_object_kind="xlsx_named_table",
