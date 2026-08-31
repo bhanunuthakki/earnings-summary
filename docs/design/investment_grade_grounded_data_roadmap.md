@@ -1,9 +1,10 @@
 # Investment-grade grounded data roadmap
 
-**Status:** local architecture and safety controls implemented; clean integration, Windows
-deployment, live portfolio refresh, and every production database repair remain on HOLD. This
-document does not itself authorize a production migration, Scheduler change, remote write control,
-or database repair.
+**Status:** the grounded KPI architecture, guarded review path, and NU source-reviewed
+supersession are merged and activated on the canonical Windows runtime. Production is healthy at
+Alembic `0035_add_report_kpi_reference_resolution_states`; remaining work is follow-on portfolio
+qualification and effective-dated KPI-definition lineage. This document does not itself authorize
+a production migration, Scheduler change, remote write control, or database repair.
 
 **Decision owner:** owner of `earnings-summary`.
 
@@ -11,16 +12,18 @@ or database repair.
 capture and extraction, KPI admission and correction, Facts & Analytics, cross-portfolio metric
 grouping, synthesis, open questions, and thesis tracking.
 
-## Current implementation and Operations disposition (2026-08-27)
+## Current implementation and Operations disposition (2026-08-31)
 
-The local worktree now contains the first coherent grounding and repair-control slice described by
-this roadmap: a fail-closed Mac database boundary; terminal document-coverage receipts;
+The canonical merged runtime now contains the first coherent grounding and repair-control slice
+described by this roadmap: a fail-closed Mac database boundary; terminal document-coverage receipts;
 append-only KPI semantic revisions; qualification/publication lanes; report/Facts & Metrics scope;
 canonical-admitted report, time-series, thesis, and readout reads; source-bound management-indicator
 staging; writer-bypass retirement; a source-exact dry-run/apply executor with durable receipts; and
 a read-only Operations review bundle whose Mac client requires independently enrolled host, code,
 immutable database-lineage, registry, Scheduler-definition, and per-task action/checkout/wrapper
-pins. These changes have not been deployed to Windows and have not changed production facts.
+pins. The corresponding code landed through PRs #1396, #1401, #1411, and #1434–#1437. Hosted CI,
+independent reviews, Windows backup/restore checks, migration checks, and live consumer acceptance
+passed before release.
 
 The management-indicator table is deliberately excluded from the Operations & Governance surface.
 It is business research evidence, not operational telemetry or an operator action. The existing
@@ -35,29 +38,20 @@ contracts unchanged; therefore it deliberately adds no Operations card, health c
 action. Production use remains subject to the same exact-database write lock, backup, review, and
 single-writer release procedure as the governed KPI repair that invokes it.
 
-The local linear 0032 repair/reader contract is now frozen. Its source-exact correction path,
-three-way issuer and unit/scale identity, semantic-series identity, current-head resolution,
-trusted Windows identity pins, whole-code repair seal, and evidence-lineage checks pass the related
-361-test suite, strict Pyright, Ruff, diff, and sole-Alembic-head gates. Deployment of this
-roadmap's local 0030–0032 changes nevertheless remains
-on hold until this dirty, behind checkout is reconciled with `origin/main`, a fresh independently
-pinned Windows review bundle is obtained, backup readiness is proven, the exact production repair
-manifest passes dry-run and a new Sol judgment, and the owner approves that manifest. Migrations
-0028 and 0029 are paired upstream with
-application and Scheduler removals that are not present in the current local runtime. Applying the
-migration files alone would drop `processing_tier` while local SQL still references it and remove
-the podcast LLM budget while the local scheduled podcast route still exists. A separate Windows
-task has completed the owner-authorized bounded 0028→0029 deployment of the paired upstream change
-and validated it against a fresh 1.64 GB restore snapshot. Its database writer and Remote Desktop
-hold are released. The separately authorized canonical SYSTEM
-`\earnings-summary\portfolio_tracker_api` task is now registered, Running, and healthy under the
-`portfolio-tracker-service` owner; the dashboard's real start action returns HTTP 200
-`already_running`. Tailscale still exposes only the loopback dashboard through tailnet-only Serve.
-That authorization does not extend to local 0030–0032. Integrate current `origin/main` in a clean
-local landing task, preserve the sole linear 0030→0031→0032 chain above it, rerun the release gate,
-and seek separate authority before preparing any further Windows migration.
+The append-only repair/reader contract is deployed through migration 0035. Its source-exact
+correction path, issuer and unit/scale identity, semantic-series identity, current-head resolution,
+trusted Windows identity pins, whole-code repair seal, and evidence-lineage checks passed the
+release gates. The canonical SYSTEM `\earnings-summary\portfolio_tracker_api` task is registered,
+Running, and healthy under the `portfolio-tracker-service` owner. `capture_poller` remains
+intentionally absent from Task Scheduler and service-owned through the running `es-poller`
+service. Tailscale exposes only the loopback dashboard through tailnet-only Serve.
 
-Alembic downgrade is not a production recovery mechanism for migrations 0028–0032. Their
+The known NU Q4'24 predecessor remains immutable history while the source-reviewed successor is
+the canonical fact: fact 259979 records 114,200,000 customers (114.2 million), cites source
+document 7613, supersedes fact 42175, and is semantically admitted. The live report renders 114.2M
+and no longer surfaces 95M. No duplicate repair was written during final validation.
+
+Alembic downgrade is not a production recovery mechanism for migrations 0028–0035. Their
 downgrades reconstruct retired or superseded structures and can discard post-migration evidence.
 Production rollback means stopping writers, restoring a verified pre-migration database backup,
 restoring schema-compatible application and Scheduler code, and re-running integrity and service
@@ -137,14 +131,15 @@ must also expect two companies to use the same label for different economics. Th
 This is the minimal architecture needed to survive changing reporting patterns without treating
 names as definitions.
 
-Semantic context itself has revision history in the local 0030 design. Its append-only context
+Semantic context itself has revision history beginning with migration 0030. Its append-only context
 chain keeps the reported fact unchanged while each new revision points to its predecessor, records
 qualification, publication lane, reason, evidence identity, and knowledge time, and exposes exactly
 one current head. A later source review appends `legacy_unknown → qualified` or
 `legacy_unknown → quarantined`; it never updates history. Fact supersession remains reserved for an
 incorrect value, period, source, or other reported observation—not metadata enrichment alone.
-Migrations 0030–0032 are deployed; the 0033 report-reference disposition layer follows the same
-guarded backup, migration, review, and live-verification path before its production cutover.
+Migrations 0030–0035 are deployed. Fact semantic contexts and report-reference dispositions are
+versioned and append-only. KPI definition records themselves are not yet effective-dated; that is
+the remaining P1 architecture seam for renamed, split, combined, or redefined issuer metrics.
 
 The portfolio rollout uses two deliberately separate gates. The **disposition gate** is green only
 when every current in-scope fact has an append-only semantic head and every unmatched report KPI
@@ -198,19 +193,18 @@ fails closed.
   Mac-to-Windows network identity. Flask stays on Windows loopback; Funnel, LAN binding, raw
   Tailnet-IP binding, and a second database writer are out of scope.
 
-### 3.2 Read path: build first
+### 3.2 Read path
 
-Add one typed, read-only review bundle to the existing Operations path. Do not add a second service
-or a generic SQL endpoint.
+The typed, read-only review bundle is part of the existing Operations path. It does not add a second
+service or a generic SQL endpoint.
 
-First restore the existing Operations surface. The initial live audit observed HTTP 500 from both
-`/api/work-os/portfolio` and `/api/panel/operations` while `/api/overview` and the ViewSpec catalog
-remained readable. Local recovery and review-bundle tests now pass, but that code is not deployed on
-Windows 0029 and the two live paths have not yet been revalidated through the pinned review path.
-The failure path must remain outside the review bundle's trust chain: schema preflight or an
-unavailable product table may not prevent the bounded operational snapshot from rendering.
-Operations must use a schema-drift-tolerant bounded read or precomputed database-health receipt and
-must report partial/degraded state explicitly.
+The initial live audit observed HTTP 500 from both `/api/work-os/portfolio` and
+`/api/panel/operations`. The recovery and review-bundle path is now deployed and live acceptance
+proved HTTP 200 dashboard/tracker health plus portfolio hydration through the exact private origin.
+The failure path remains outside the review bundle's trust chain: schema preflight or an unavailable
+product table may not prevent the bounded operational snapshot from rendering. Operations uses a
+schema-drift-tolerant bounded read or precomputed database-health receipt and reports partial or
+degraded state explicitly.
 
 The Windows bundle should project sanitized read models derived from existing authorities:
 
@@ -336,7 +330,7 @@ Research Level or data-quality exemption. Per-item depth/budget lives in
 `research_tasks.budget_tier` and `research_proposals.budget_tier`; time-bounded promotion lives in
 `research_hot_flags`. Neither is a persisted evaluation-company sub-tier.
 
-The canonical Windows database was queried read-only at schema 0029 on 2026-08-27. Its active
+The canonical Windows database was verified at schema 0035 on 2026-08-31. Its active
 analyzed roster is 69 names: 11 portfolio, 38 evaluation, and 20 watchlist. The exact evaluation
 roster is: ABNB, AMZN, ASML, AVDV, AVGO, AVUV, BHP, CDNS, DHR, DLO, DUOL, FANG, FCX, FNV, GOOG,
 IFNNY, LITE, LLY, MDB, MDWD, MRNA, MONOL, MODY, NTRA, NVDA, ON, ORCL, PCOR, QCOM, SNOW, SNPS,
@@ -364,10 +358,9 @@ gap from missing persisted semantics.
 
 | Company | Failure | Required disposition |
 |---|---|---|
-| NU | `Total customers` merged wrong-period/wrong-value observations: Q4'24 displays 95 instead of the source-backed 114.2; Q2'25 displays 114 instead of 122.7. Later 2025 points also require source review. | Supersede each wrong fact from its primary document; bind current-period, management KPI, consolidated scope, and source scale. Never repair from monotonicity alone. |
+| NU | The Q4'24 95M predecessor was confirmed wrong and superseded by the source-backed 114.2M observation. The old row remains immutable/noncanonical. | Complete for Q4'24. Continue source review for any separately flagged later-period observation; never repair from monotonicity alone. |
 
-NU is the only row currently supported by an evidence-complete source tie-out in this roadmap. The
-following are **observed suspects requiring source tie-out**, not confirmed corruptions:
+The following are **observed suspects requiring source tie-out**, not confirmed corruptions:
 
 | Company | Preliminary signal | Evidence required before disposition |
 |---|---|---|
@@ -383,19 +376,17 @@ outlier is not enough to call a series corrupt.
 One-off non-monotonic or unusual values may be legitimate. NVO's 61.6% operating margin is an
 example of why anomaly rules must trigger review rather than overwrite facts.
 
-### 4.3 Operational blockers
+### 4.3 Remaining operational follow-ups
 
-- The production semantic-context migration and refresh are not deployed.
-- The initial live audit found HTTP 500 on `/api/work-os/portfolio` and `/api/panel/operations`.
-  Local recovery tests are green, but live Windows 0029 has not yet received or revalidated that
-  compatible read-only slice. Proven HTTP 200 normal/degraded behavior remains a Phase 0 prerequisite.
-- Mac has no enrolled owner-approved Windows identity-pin manifest or accepted live review bundle,
-  so production repair cannot be applied from the current session.
-- The focused local grounding and migration suite is green, but the full release gate has not been
-  run on a clean checkout reconciled with current `origin/main`.
-- The current governed Judge episode reviews local code only. No production write may reuse it as
-  approval for a later Windows manifest or database state.
-- Live Scheduler health must be established from the Windows receipt, not repository declarations.
+- No release blocker remains from the NU repair. Runtime, database, services, Scheduler, tracker,
+  and private-origin checks passed and no writer or Remote Desktop session remains.
+- Eleven Brief Library fiscal-period artifacts remain deliberately unapplied because deterministic
+  evidence was unavailable: MPWR, TOST, NTDOY, IFNNY, FRVO, CGEH, BRK-B, BIPC, VWO, AVUV, and
+  AVDV. They are an evidence-gathering backlog, not permission to infer dates.
+- The BHA-99 six-field scalar compatibility seam remains behind its 2026-09-28 usage-review and
+  deletion gate.
+- Every future production repair still requires a fresh independently pinned Windows review
+  bundle, verified backup/restore evidence, exact manifest review, and one-writer authorization.
 
 ### 4.4 Systemic control defects to remediate
 
@@ -408,7 +399,7 @@ example of why anomaly rules must trigger review rather than overwrite facts.
 | Some production/repair paths bypass guarded persistence or mutate a fact in place. | In Phase 0 inventory every active KPI writer and close or disable each bypass before dual-write exits. At minimum, route or retire `fix_kpi_series.py`, `backfill_fiscal_period_stamps.py`, and `mark_kpi_cadence.py`; fail a static SQL mutation guard on direct update/insert outside approved migration/fixture code. Historical repairs use only the hardened append-context/supersession executor. | 0 writer closure; 1 reviewed backfill only |
 | Automatic division by one million treats a magnitude anomaly as proof of the correct value. | Remove the guess-fix. A scale anomaly quarantines the observation and requires source value, source scale, normalized value, and supersede evidence. | 0 executor, 1 NU regression |
 | Existing semantic scope/audit logic can omit `legacy_unknown`, allowing it to evade a gate while readers hide it. | Count every status and lane in the shadow census; cut over a consumer only after its explicit unknown/missing set reaches zero. | 0–2 |
-| The original one-row immutable semantic context could not append a qualification decision after eager `legacy_unknown`. | The local design now uses an append-only context revision chain and one current head per fact. Preserve its unknown→qualified and unknown→quarantined lifecycle proof through clean integration and deployment. | 0 integration/release proof |
+| The original one-row immutable semantic context could not append a qualification decision after eager `legacy_unknown`. | The deployed design uses an append-only context revision chain and one current head per fact. Preserve its unknown→qualified and unknown→quarantined lifecycle proof in every later migration and writer. | ongoing regression proof |
 | The malformed literal `%` in `fetch_news.py` help text previously blocked the configured release gate. | The literal is fixed locally and `fetch_news.py --help` succeeds. Run `make check` in the clean integration state, triage every remaining failure under the repository ratchet, and prohibit deployment until the configured gate is green or a genuinely unrelated pre-existing failure is evidenced under that policy. | 0 release gate |
 
 ## 5. Source-specific extraction contract
@@ -705,16 +696,12 @@ only the source archive, validated fact repository, and any analytics that are i
 
 | Priority | Deliverable | Depends on | Blocks |
 |---|---|---|---|
-| P0 | restore Operations and add vNext Scheduler receipts | existing Tailscale Serve and bounded collectors | every trustworthy remote review |
-| P0 | Windows review bundle and Mac fetch path | healthy Operations and vNext receipts | every trustworthy remote review |
-| P0 | backup/restore, governed Judge receipts, hardened executor | Windows review path | any consensus production repair |
-| P0 | append-only semantic revision schema and lifecycle tests | backup and migration proof | dual-write and metadata qualification |
-| P0 | active-writer closure, dual-write, exact-key tests, all-status shadow census | guarded persistence/executor | source repair and reader cutover |
-| P0 | repair known release-gate failure and run full `make check` | Phase 0 code complete | any deployment |
-| P0 | NU correction and evidence-complete suspect tie-outs | source documents and hardened supersede path | trustworthy current reports |
-| P1 | report/thesis KPI refresh and bounded reader cutover | semantic shadow census | grounded narrative and thesis rules |
-| P1 | complete Facts & Metrics refresh and reader cutover | source-specific adapters | honest metric exploration |
-| P1 | source/unit/catalog reconciliation | fact-level census | operator backlog truth |
+| Done | Operations recovery, Windows review bundle, backup/restore, guarded executor, semantic migrations, reader parity, and NU Q4'24 supersession | — | trustworthy current NU reports |
+| P1 | effective-dated KPI-definition revisions and comparability lineage | deployed fact semantic contexts | safe renamed/split/redefined metric history |
+| P1 | complete report-driving portfolio qualification and Facts & Metrics cutover | source-specific adapters and fact-level census | honest metric exploration and grounded synthesis |
+| P1 | source/unit/catalog reconciliation and confirmed suspect tie-outs | fact-level census and primary documents | operator backlog truth |
+| P2 | resolve the 11 evidence-blocked Brief Library fiscal periods | deterministic issuer/report evidence | complete current-library period labels |
+| P2 | BHA-99 usage review and scalar compatibility deletion gate by 2026-09-28 | append-only owner-action evidence | removal of the temporary compatibility seam |
 | P2 | initial Canonical Metric categories | source-qualified facts | cross-portfolio analytics |
 | P2 | evidence-first Facts & Analytics UX | canonical bindings and source locators | differentiated exploration |
 | P2 | synthesis/thesis evidence gate | source-qualified facts and grounded retrieval | investment-grade narratives |
@@ -772,31 +759,20 @@ only the source archive, validated fact repository, and any analytics that are i
 
 ## 12. Immediate next implementation slices
 
-1. **Operations recovery slice:** fix both HTTP 500 paths, make the bounded snapshot tolerant of
-   optional schema drift, add vNext Scheduler receipts, and prove normal/degraded HTTP 200 behavior.
-2. **Mac/Windows read slice:** typed review-bundle model, read-only endpoint, Mac fetch CLI, tests,
-   no-leakage golden tests, stable identity-drift rejection, Operations link, and exact-live-origin
-   Windows/Mac acceptance proof.
-3. **Safety-control slice:** backup/restore evidence, governed Judge receipt restoration, hardened
-   stable repair manifest/executor, per-attempt receipt identities, lock/idempotency/failure tests,
-   and durable no-op/failure receipts.
-4. **Semantic/writer test slice:** on a restored test database, replace the one-row context with
-   append-only revisions; inventory and guard or disable every active writer; add mutation-guard,
-   lifecycle, exact-semantic-key, dual-write, and shadow-census tests. Do not deploy this slice.
-5. **Release-gate slice:** fix the malformed argparse `%`, run the full configured `make check`, and
-   resolve or ratchet-evidence every remaining failure before deployment.
-6. **Semantic deployment slice:** deploy schema plus writer dual-write on Windows, preserve old reader
-   behavior, and collect the live all-status/all-lane shadow census. No fact repair occurs here.
-7. **NU repair slice:** register the primary Q4'24 and Q2'25 documents, verify exact chain heads,
-   supersede the wrong facts, review later 2025 observations, rerun reports/ViewSpec, and retain the
-   consensus repair receipt.
-8. **Suspect tie-out slice:** create evidence-complete NOW, NVO, VEEV, and RBRK manifests; repair only
-   findings that primary-source review confirms.
-9. **Report-driving portfolio slice:** complete source-backed qualification and lane assignment for
+1. **Effective-dated definition slice:** version issuer KPI definitions by knowledge/effective time,
+   retain verbatim labels, and require explicit comparability decisions for renamed, split,
+   combined, redefined, or discontinued metrics.
+2. **Report-driving portfolio slice:** complete source-backed qualification and lane assignment for
    every report/thesis/open-question metric, shadow-compare, then cut over those readers.
-10. **Facts & Metrics source cohorts:** SEC-XBRL deterministic cohort, IR cohort, transcript cohort,
+3. **Facts & Metrics source cohorts:** SEC-XBRL deterministic cohort, IR cohort, transcript cohort,
    FMP cohort, LLM-parent recovery cohort, and missing-provenance quarantine cohort; cut over the
    catalog only after zero `legacy_unknown` and missing-context observations remain in scope.
+4. **Suspect tie-out slice:** create evidence-complete NOW, NVO, VEEV, and RBRK manifests; repair only
+   findings that primary-source review confirms.
+5. **Evidence-blocked fiscal-period slice:** collect deterministic evidence for the 11 deferred
+   Brief Library artifacts and apply only entries that pass the governed dry-run gate.
+6. **BHA-99 pruning slice:** review append-only owner actions at the 2026-09-28 gate and remove the
+   six scalar compatibility fields unless an evidence-backed owner decision retains them.
 
 Every production-affecting slice is independently reversible and ends with a truthful before/after
 review bundle; build/test and release-gate slices explicitly precede deployment. None requires a new
