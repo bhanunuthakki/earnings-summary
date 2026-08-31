@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -31,6 +32,7 @@ from pipeline.kpi_semantic_review import (
     KpiEvidenceLocatorCoordinates,
     KpiSemanticReviewBatch,
     build_kpi_semantic_review_batch,
+    build_quarantined_kpi_correction_review,
 )
 from provenance.evidence_ledger import EvidenceLocator
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
@@ -306,6 +308,59 @@ def test_builds_deterministic_source_bound_refresh_manifest(tmp_path: Path) -> N
     before = output.read_bytes()
     write_refresh_manifest(output, second)
     assert output.read_bytes() == before
+
+
+def test_builds_quarantined_predecessor_supersession_without_admitting_old_fact(
+    tmp_path: Path,
+) -> None:
+    conn = _database()
+    conn.execute("DELETE FROM kpi_fact_semantic_contexts WHERE kpi_fact_id=10")
+    conn.execute(
+        "INSERT INTO documents VALUES ("
+        "3,'NU','llm_extracted','llm_summary','2024-12-31',?,"
+        "'2025-01-30T12:05:00+00:00',2,'C:/sources/nu-q4-summary.txt')",
+        ("f" * 64,),
+    )
+    conn.execute(
+        "UPDATE kpi_facts SET value='95',unit='count',source_doc_id=3,source_excerpt=NULL "
+        "WHERE id=10"
+    )
+    conn.execute("DROP VIEW v_kpi_facts_resolved_current")
+    conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id<>10")
+    review = build_quarantined_kpi_correction_review(
+        conn,
+        repo_root=tmp_path,
+        user_id="owner",
+        fact_id=10,
+        source_value_text="114.2",
+        observed_at=NOW,
+    )
+    review_export = _export(review)
+    decisions = _decisions(
+        review_export,
+        action="supersede",
+        expected_context_head_id=None,
+        expected_context_revision=0,
+        expected_old_source_sha256="f" * 64,
+    )
+
+    manifest = build_kpi_semantic_refresh_manifest(
+        conn,
+        repo_root=tmp_path,
+        review_export=review_export,
+        decisions=decisions,
+        now=NOW,
+    )
+
+    entry = manifest.entries[0]
+    assert manifest.schema_version == "kpi_semantic_refresh.v6"
+    assert entry.predecessor_resolution_state == "quarantined_legacy"
+    assert entry.old_fact_id == 10
+    assert entry.source_doc_id == 2
+    assert entry.source_value_text == "114.2"
+    assert entry.value == Decimal("114200000.0")
+    assert entry.unit.value == "count"
+    assert conn.execute("SELECT COUNT(*) FROM v_kpi_facts_resolved_current").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize(

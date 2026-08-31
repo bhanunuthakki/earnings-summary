@@ -44,8 +44,8 @@ from pipeline.kpi_semantics import (
     KpiUnitScale,
     current_kpi_semantic_context,
     normalize_source_numeric,
+    persist_kpi_semantic_context,
 )
-from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession
 from provenance.evidence_ledger import EvidenceLocator
 from provenance.fulltext_extractor_identity import BASE_FULLTEXT_EXTRACTOR
 from sqlite_freshness import sqlite_file_token
@@ -208,7 +208,85 @@ def test_manifest_binds_locator_excerpt_and_expected_row_effects() -> None:
     ):
         _entry(semantic_evidence=wrong_basis)
     assert entry.locator.verbatim_snippet == entry.source_excerpt
-    assert _manifest().content_sha256() == _manifest().content_sha256()
+    manifest = _manifest()
+    serialized_v5 = json.loads(manifest.model_dump_json())
+    assert "predecessor_resolution_state" not in serialized_v5["entries"][0]
+    assert manifest.content_sha256() == _manifest().content_sha256()
+    legacy_v5 = _manifest().model_dump(mode="json")
+    assert (
+        refresh.RefreshManifest.model_validate(legacy_v5).entries[0].predecessor_resolution_state
+        == "canonical_current"
+    )
+    with pytest.raises(
+        ValidationError, match="quarantined legacy predecessors may only be superseded"
+    ):
+        _entry(
+            action="bind_existing",
+            predecessor_resolution_state="quarantined_legacy",
+            source_doc_id=1,
+            source_content_sha256="a" * 64,
+            expected_inserted_fact_rows=0,
+        )
+    with pytest.raises(
+        ValidationError,
+        match="v5 supports canonical-current predecessors only",
+    ):
+        refresh.RefreshManifest.model_validate(
+            {
+                **_manifest().model_dump(mode="json"),
+                "entries": [
+                    _entry(predecessor_resolution_state="quarantined_legacy").model_dump(
+                        mode="json"
+                    )
+                ],
+            }
+        )
+    quarantined = refresh.RefreshManifest.model_validate(
+        {
+            **_manifest().model_dump(mode="json"),
+            "schema_version": "kpi_semantic_refresh.v6",
+            "entries": [
+                _entry(predecessor_resolution_state="quarantined_legacy").model_dump(mode="json")
+            ],
+        }
+    )
+    assert quarantined.schema_version == "kpi_semantic_refresh.v6"
+    assert (
+        json.loads(quarantined.model_dump_json())["entries"][0]["predecessor_resolution_state"]
+        == "quarantined_legacy"
+    )
+    missing_v6_state = json.loads(quarantined.model_dump_json())
+    missing_v6_state["entries"][0].pop("predecessor_resolution_state")
+    with pytest.raises(ValidationError, match="v6 requires predecessor_resolution_state"):
+        refresh.RefreshManifest.model_validate(missing_v6_state)
+
+
+def test_v5_manifest_serialization_and_hash_match_predecessor_contract(tmp_path: Path) -> None:
+    manifest = _manifest()
+    legacy_entry = _entry().model_dump(mode="json")
+    legacy_entry.pop("predecessor_resolution_state")
+    expected_payload = {
+        "schema_version": "kpi_semantic_refresh.v5",
+        "user_id": "bhanu",
+        "logical_idempotency_key": "nu:2024q4:total-customers:source-review:v1",
+        "reviewer": "owner",
+        "knowledge_at": NOW.isoformat().replace("+00:00", "Z"),
+        "review_bundle_sha256": "d" * 64,
+        "expected_schema_revision": "0032_allow_source_reviewed_kpi_supersessions",
+        "backup_restore_evidence_id": "e" * 64,
+        "entries": [legacy_entry],
+    }
+    assert manifest.model_dump(mode="json") == expected_payload
+    assert json.loads(manifest.model_dump_json()) == expected_payload
+    assert manifest.content_sha256() == refresh.canonical_sha256(expected_payload)
+    assert (
+        manifest.content_sha256()
+        == "5c093b45192615fd8236e161a4cd9436e349d6bcd638d2489372da83cfa8a061"  # pragma: allowlist secret -- fixed legacy contract digest
+    )
+
+    output = tmp_path / "legacy-v5.json"
+    refresh._write_content_addressed(output, manifest.model_dump_json(indent=2))
+    assert json.loads(output.read_text(encoding="utf-8")) == expected_payload
 
 
 def test_manifest_knowledge_time_rejects_future_decision_authority() -> None:
@@ -707,6 +785,40 @@ def _entry_validation_db(*, definition_ticker: str, definition_unit: str) -> sql
     return conn
 
 
+def test_quarantined_predecessor_requires_exact_owner_scope_and_noncanonical_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _entry_validation_db(definition_ticker="NU", definition_unit="millions")
+    conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id<>10")
+    monkeypatch.setattr(refresh, "_validate_source_binding", _source_nu)
+    entry = _entry(predecessor_resolution_state="quarantined_legacy")
+
+    row, source_type = refresh._validate_entry(
+        conn,
+        entry,
+        set(),
+        owner_tickers=frozenset({"NU"}),
+    )
+
+    assert int(row["id"]) == 10
+    assert source_type is refresh.SourceType.IR_DOC
+    with pytest.raises(
+        refresh.RepairBlockedError,
+        match="quarantined_predecessor_outside_owner_portfolio",
+    ):
+        refresh._validate_entry(conn, entry, set(), owner_tickers=frozenset())
+    conn.execute("DROP VIEW v_kpi_facts_resolved_current")
+    conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts")
+    with pytest.raises(refresh.RepairBlockedError, match="quarantined_predecessor_is_canonical"):
+        refresh._validate_entry(
+            conn,
+            entry,
+            set(),
+            owner_tickers=frozenset({"NU"}),
+        )
+    conn.close()
+
+
 @pytest.mark.parametrize("action", ["bind_existing", "supersede"])
 def test_entry_rejects_cross_issuer_source_for_every_action(
     action: str, monkeypatch: pytest.MonkeyPatch
@@ -799,6 +911,72 @@ def test_missing_marker_recovers_exact_committed_postcondition(
     )
     manifest = _manifest().model_copy(update={"entries": (entry,)})
 
+    checked: list[int] = []
+
+    def _exact_postcondition(
+        _conn: sqlite3.Connection,
+        *,
+        manifest: refresh.RefreshManifest,
+        entry: refresh.RefreshEntry,
+        head_id: int,
+    ) -> None:
+        del manifest, entry
+        checked.append(head_id)
+
+    monkeypatch.setattr(refresh, "_validate_applied_entry_postcondition", _exact_postcondition)
+    assert refresh._detect_applied_postcondition(conn, manifest=manifest) == (10,)
+    assert checked == [10]
+    conn.close()
+
+
+def test_marker_replay_rejects_unrelated_canonical_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    locator_json = _entry().locator.to_json()
+    assert locator_json is not None
+    conn.executescript(
+        "CREATE TABLE documents (id INTEGER PRIMARY KEY,sha256 TEXT);"
+        "CREATE TABLE kpi_facts ("
+        "id INTEGER PRIMARY KEY,source_doc_id INTEGER,value TEXT,unit TEXT,currency TEXT,"
+        "supersedes_id INTEGER,source_excerpt TEXT,locator TEXT,extracted_by TEXT);"
+        "INSERT INTO documents VALUES (2,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');"
+        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts;"
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts VALUES (?,?,?,?,?,?,?,?,?)",
+        (10, 2, "95", "millions", None, None, None, None, "legacy"),
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            11,
+            2,
+            "114",
+            "millions",
+            None,
+            10,
+            _entry().source_excerpt,
+            locator_json,
+            "source_review:owner",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            12,
+            2,
+            "114",
+            "millions",
+            None,
+            None,
+            _entry().source_excerpt,
+            locator_json,
+            "source_review:owner",
+        ),
+    )
+
     def _current_context(
         _conn: sqlite3.Connection, *, kpi_fact_id: int
     ) -> KpiSemanticContextRevision:
@@ -806,17 +984,16 @@ def test_missing_marker_recovers_exact_committed_postcondition(
             id=1,
             kpi_fact_id=kpi_fact_id,
             revision=1,
-            context=refresh._context_for_entry(entry),
+            context=refresh._context_for_entry(_entry()),
             reviewed_by="owner",
             knowledge_at=NOW,
         )
 
-    monkeypatch.setattr(
-        refresh,
-        "current_kpi_semantic_context",
-        _current_context,
-    )
-    assert refresh._detect_applied_postcondition(conn, manifest=manifest) == (10,)
+    monkeypatch.setattr(refresh, "current_kpi_semantic_context", _current_context)
+    monkeypatch.setattr(refresh, "_validate_source_binding", _source_nu)
+    with pytest.raises(refresh.RepairBlockedError, match="replay_fact_postcondition_mismatch"):
+        refresh._verify_replay(conn, manifest=_manifest(), result_heads=(12,))
+    refresh._verify_replay(conn, manifest=_manifest(), result_heads=(11,))
     conn.close()
 
 
@@ -992,8 +1169,11 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         connection: sqlite3.Connection,
         _entry_value: refresh.RefreshEntry,
         _allowed: set[int],
+        *,
+        owner_tickers: frozenset[str],
     ) -> tuple[sqlite3.Row, refresh.SourceType]:
         assert _allowed == {641}
+        assert owner_tickers == frozenset()
         row = connection.execute(
             "SELECT 'NU' AS ticker, '2024-12-31' AS period_end, "
             "'Q4' AS fiscal_period_type, 'Total customers' AS name"
@@ -1095,7 +1275,7 @@ def test_dry_run_rejects_corrupted_snapshot_clone_before_open(
         pytest.fail("corrupted clone must not be yielded for opening")
 
 
-def test_migrated_db_allows_same_source_count_supersession_with_review_attribution(
+def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run(
     migrated_db: Callable[..., Path], tmp_path: Path
 ) -> None:
     db_path = migrated_db(tmp_path / "same-source-kpi-repair.db")
@@ -1106,16 +1286,24 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
             "INSERT INTO documents "
             "(id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
             "fetch_status,raw_bytes_size,source_quality_tier) "
-            "VALUES (1,'NU','ir_doc','earnings_release','2024-12-31','source.html',?,?,'ok',1,'fmp_normalized')",
+            "VALUES (1,'NU','ir_doc','ir_transcript','2024-12-31',"
+            "'ir_documents/NU/q4.pdf',?,?,'ok',1,'fmp_normalized')",
             ("a" * 64, NOW.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO documents "
+            "(id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
+            "fetch_status,raw_bytes_size,parent_document_id,source_quality_tier) "
+            "VALUES (2,'NU','llm_extracted','llm_summary','2024-12-31',"
+            "'.tmp/NU_Q4_2024_summary.txt',?,?,'ok',1,1,'fmp_normalized')",
+            ("c" * 64, NOW.isoformat()),
         )
         evidence_text = (
             "Q4 2024 | Total customers | Management KPI | Consolidated | "
             "figures in millions | Total customers reached 114.2 million."
         )
-        locator_json = json.dumps({"kind": "document", "page": 7}, sort_keys=True)
-        locator_sha = hashlib.sha256(locator_json.encode()).hexdigest()
-        content_sha = hashlib.sha256(evidence_text.encode()).hexdigest()
+        locator_json = SOURCE_EVIDENCE_LOCATOR.canonical_json
+        locator_sha = SOURCE_EVIDENCE_LOCATOR.canonical_sha256
         conn.execute(
             "INSERT INTO issuer_entities VALUES (?,?,?,?)",
             ("issuer-nu", "issuer:nu", "operating_company", NOW.isoformat()),
@@ -1169,9 +1357,9 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
                 "run:nu:q4",
                 "document-nu-q4",
                 "a" * 64,
-                "test-extractor",
-                "c" * 64,
-                "test-v1",
+                BASE_FULLTEXT_EXTRACTOR.name,
+                BASE_FULLTEXT_EXTRACTOR.config_sha256,
+                BASE_FULLTEXT_EXTRACTOR.code_version,
                 "d" * 64,
                 NOW.isoformat(),
                 NOW.isoformat(),
@@ -1179,15 +1367,26 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
             ),
         )
         conn.execute(
-            "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?,?,?,?,?,?),(?,?,?,?,?,?,?,?,?,?,?)",
             (
+                "root-nu-q4",
+                "root:nu:q4",
+                1,
+                "run-nu-q4",
+                None,
+                None,
+                "document",
+                "NU Q4 2024 earnings transcript.",
+                locator_json,
+                locator_sha,
+                NOW.isoformat(),
                 "node-nu-q4",
                 "node:nu:q4",
                 1,
                 "run-nu-q4",
                 None,
                 None,
-                "document",
+                "pdf_page",
                 evidence_text,
                 locator_json,
                 locator_sha,
@@ -1203,10 +1402,10 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
                 1,
                 1,
                 "document-nu-q4",
-                "node-nu-q4",
+                "root-nu-q4",
                 locator_json,
                 locator_sha,
-                content_sha,
+                "a" * 64,
                 NOW.isoformat(),
                 NOW.isoformat(),
                 NOW.isoformat(),
@@ -1215,33 +1414,160 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
         )
         conn.execute(
             "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
-            "VALUES (641,'NU','Total customers (millions)','millions','ir_doc')"
+            "VALUES (641,'NU','Total customers (millions)','count','ir_doc')"
         )
+        trigger_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='trg_kpi_facts_observation_insert'"
+        ).fetchone()[0]
+        assert isinstance(trigger_sql, str)
+        conn.execute("DROP TRIGGER trg_kpi_facts_observation_insert")
         conn.execute(
             "INSERT INTO kpi_facts "
             "(id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,currency,"
             "source_doc_id,confidence,extracted_by) "
-            "VALUES (42175,'NU','2024-12-31','Q4',641,'95','millions',NULL,1,0.9,'legacy')"
+            "VALUES (42175,'NU','2024-12-31','Q4',641,'95','count',NULL,2,0.9,'legacy')"
         )
-        new_id = insert_source_reviewed_kpi_supersession(
-            conn,
-            predecessor_id=42175,
-            expected_head_id=42175,
-            value=Decimal("114.2"),
-            unit=Unit.MILLIONS,
-            currency=None,
+        conn.execute(trigger_sql)
+        source_excerpt = "Total customers reached 114.2 million."
+        locator = FactLocator(
+            kind=LocatorKind.PDF_SLIDE,
+            pdf_page=7,
+            verbatim_snippet=source_excerpt,
+        )
+        locator_payload = locator.to_json()
+        assert locator_payload is not None
+        entry = _entry(
+            predecessor_resolution_state="quarantined_legacy",
+            old_fact_id=42175,
+            expected_fact_head_id=42175,
+            expected_old_source_doc_id=2,
+            expected_old_source_sha256="c" * 64,
             source_doc_id=1,
-            locator=_entry().locator,
-            source_excerpt="Total customers reached 114.2 million.",
-            reviewer="owner",
-            knowledge_at=NOW,
-            context=_context(),
+            source_content_sha256="a" * 64,
+            source_observation_version=NOW.isoformat(),
+            evidence_node_id="node-nu-q4",
+            evidence_locator_sha256=locator_sha,
+            fact_locator_sha256=hashlib.sha256(locator_payload.encode()).hexdigest(),
+            source_excerpt=source_excerpt,
+            source_value_text="114.2",
+            value="114200000",
+            unit=Unit.COUNT,
+            locator=locator,
         )
+        manifest = _manifest().model_copy(
+            update={"schema_version": "kpi_semantic_refresh.v6", "entries": (entry,)}
+        )
+        conn.commit()
+        old_before = tuple(
+            conn.execute(
+                "SELECT value,unit,source_doc_id,locator,source_excerpt "
+                "FROM kpi_facts WHERE id=42175"
+            ).fetchone()
+        )
+        assert old_before == (95.0, "count", 2, None, None)
+        assert current_kpi_semantic_context(conn, kpi_fact_id=42175) is None
+        assert (
+            conn.execute("SELECT 1 FROM v_kpi_facts_resolved_current WHERE id=42175").fetchone()
+            is None
+        )
+
+        conn.execute("BEGIN")
+        row, source_type = refresh._validate_entry(
+            conn,
+            entry,
+            set(),
+            owner_tickers=frozenset({"NU"}),
+        )
+        _, _, dry_run_id = refresh._apply_entry(
+            conn,
+            manifest=manifest,
+            entry=entry,
+            row=row,
+            source_type=source_type,
+        )
+        refresh._validate_applied_entry_postcondition(
+            conn,
+            manifest=manifest,
+            entry=entry,
+            head_id=dry_run_id,
+        )
+        conn.rollback()
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+        assert (
+            tuple(
+                conn.execute(
+                    "SELECT value,unit,source_doc_id,locator,source_excerpt "
+                    "FROM kpi_facts WHERE id=42175"
+                ).fetchone()
+            )
+            == old_before
+        )
+
+        conn.execute("BEGIN")
+        conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,source_doc_id,"
+            "confidence,extracted_by,supersedes_id) VALUES "
+            "('NU','2024-12-31','Q4',641,'113000000','count',1,1.0,'test',42175)"
+        )
+        with pytest.raises(refresh.RepairBlockedError, match="fact_chain_head_changed"):
+            refresh._validate_entry(
+                conn,
+                entry,
+                set(),
+                owner_tickers=frozenset({"NU"}),
+            )
+        conn.rollback()
+
+        conn.execute("BEGIN")
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=42175,
+            context=_context().model_copy(
+                update={
+                    "status": KpiSemanticStatus.QUARANTINED,
+                    "reason_code": "stale_test_context",
+                }
+            ),
+            reviewed_by="stale-review",
+            knowledge_at=NOW,
+        )
+        with pytest.raises(refresh.RepairBlockedError, match="semantic_context_head_changed"):
+            refresh._validate_entry(
+                conn,
+                entry,
+                set(),
+                owner_tickers=frozenset({"NU"}),
+            )
+        conn.rollback()
+
+        conn.execute("BEGIN")
+        row, source_type = refresh._validate_entry(
+            conn,
+            entry,
+            set(),
+            owner_tickers=frozenset({"NU"}),
+        )
+        _, _, new_id = refresh._apply_entry(
+            conn,
+            manifest=manifest,
+            entry=entry,
+            row=row,
+            source_type=source_type,
+        )
+        refresh._validate_applied_entry_postcondition(
+            conn,
+            manifest=manifest,
+            entry=entry,
+            head_id=new_id,
+        )
+        conn.commit()
         successor = conn.execute(
             "SELECT value,currency,supersedes_id,extracted_by FROM kpi_facts WHERE id=?",
             (new_id,),
         ).fetchone()
-        assert tuple(successor) == (114.2, None, 42175, "source_review:owner")
+        assert tuple(successor) == (114200000.0, None, 42175, "source_review:owner")
         semantic = current_kpi_semantic_context(conn, kpi_fact_id=new_id)
         assert semantic is not None
         assert semantic.reviewed_by == "owner"
@@ -1254,7 +1580,7 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
             "WHERE revision.fact_table='kpi_facts' AND revision.fact_row_id=?",
             (new_id,),
         ).fetchone()
-        assert tuple(observation) == ("114.2", "node-nu-q4", "kpi_facts", new_id)
+        assert tuple(observation) == ("114200000", "root-nu-q4", "kpi_facts", new_id)
         revision = conn.execute(
             "SELECT observation_id,source_document_id FROM fact_observation_revisions "
             "WHERE fact_table='kpi_facts' AND fact_row_id=?",
@@ -1266,6 +1592,20 @@ def test_migrated_db_allows_same_source_count_supersession_with_review_attributi
             "WHERE kpi_definition_id=641 AND period_end='2024-12-31'"
         ).fetchone()
         assert tuple(resolved) == (new_id, f"kpi_facts:{new_id}:r1")
+        assert (
+            tuple(
+                conn.execute(
+                    "SELECT value,unit,source_doc_id,locator,source_excerpt "
+                    "FROM kpi_facts WHERE id=42175"
+                ).fetchone()
+            )
+            == old_before
+        )
+        assert current_kpi_semantic_context(conn, kpi_fact_id=42175) is None
+        assert (
+            conn.execute("SELECT 1 FROM v_kpi_facts_resolved_current WHERE id=42175").fetchone()
+            is None
+        )
     finally:
         conn.close()
 

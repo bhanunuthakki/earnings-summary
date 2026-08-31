@@ -1,9 +1,10 @@
 """Build one bounded KPI refresh manifest from reviewed, verbatim evidence.
 
 This builder is read-only. It converts owner-reviewed decisions into the
-existing guarded ``kpi_semantic_refresh.v5`` contract only after binding every
-decision to the exact content-addressed review partition and current database
-heads. The downstream executor remains the sole writer.
+guarded refresh contract only after binding every decision to the exact
+content-addressed review partition and current database heads. Canonical-current
+repairs retain v5 compatibility; quarantined legacy predecessors require v6.
+The downstream executor remains the sole writer.
 """
 
 from __future__ import annotations
@@ -37,13 +38,14 @@ from execution.apply_kpi_semantic_refresh import (  # noqa: E402
 from models.facts import Currency, Unit  # noqa: E402
 from operations.kpi_semantic_review_export import KpiSemanticReviewExport  # noqa: E402
 from pipeline.kpi_semantic_review import (  # noqa: E402
+    QUARANTINED_PREDECESSOR_SCOPE_REASON,
     KpiEvidenceCandidate,
     KpiEvidenceLocatorCoordinates,
     KpiSemanticReviewItem,
     KpiSemanticReviewState,
     fact_locator_from_evidence_coordinates,
 )
-from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
+from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions  # noqa: E402
 from pipeline.kpi_semantics import (  # noqa: E402
     KpiSemanticContext,
     KpiSemanticStatus,
@@ -162,14 +164,17 @@ def _validated_candidate_coordinates(
     return coordinates
 
 
-def _fact_row(conn: sqlite3.Connection, *, fact_id: int) -> tuple[sqlite3.Row, str]:
+def _fact_row(
+    conn: sqlite3.Connection, *, fact_id: int, allow_quarantined: bool
+) -> tuple[sqlite3.Row, str]:
     relation = canonical_fact_relation(conn, "kpi_facts")
     if relation.selection_mode != "resolved_view":
         raise ValueError("refresh manifest requires the resolved current-fact view")
+    fact_source = "kpi_facts" if allow_quarantined else relation.sql
     cursor = conn.execute(
         f"SELECT fact.*,definition.name AS definition_name,"  # nosec B608 -- resolver-owned relation
         f"definition.ticker AS definition_ticker,document.sha256 AS old_source_sha256 "
-        f"FROM {relation.sql} fact JOIN kpi_definitions definition "
+        f"FROM {fact_source} fact JOIN kpi_definitions definition "  # nosec B608 -- closed internal relation choice
         "ON definition.id=fact.kpi_definition_id JOIN documents document "
         "ON document.id=fact.source_doc_id WHERE fact.id=?",
         (fact_id,),
@@ -177,6 +182,14 @@ def _fact_row(conn: sqlite3.Connection, *, fact_id: int) -> tuple[sqlite3.Row, s
     row = cursor.fetchone()
     if row is None:
         raise ValueError("reviewed fact head changed after review batch preparation")
+    if allow_quarantined and (
+        conn.execute(
+            f"SELECT 1 FROM {relation.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+            (fact_id,),
+        ).fetchone()
+        is not None
+    ):
+        raise ValueError("quarantined predecessor became canonical after review")
     if not isinstance(row, sqlite3.Row):
         columns = [str(column[0]) for column in cursor.description]
         values = dict(zip(columns, row, strict=True))
@@ -235,7 +248,14 @@ def _entry_for_decision(
     if any(quote not in source_excerpt for quote in _semantic_quotes(decision)):
         raise ValueError("semantic evidence quote is not verbatim in the selected review excerpt")
 
-    row, old_source_sha = _fact_row(conn, fact_id=decision.fact_id)
+    quarantined_predecessor = item.scope_reasons == (QUARANTINED_PREDECESSOR_SCOPE_REASON,)
+    if quarantined_predecessor and decision.action != "supersede":
+        raise ValueError("quarantined predecessor decisions must supersede")
+    row, old_source_sha = _fact_row(
+        conn,
+        fact_id=decision.fact_id,
+        allow_quarantined=quarantined_predecessor,
+    )
     _validate_batch_item_against_row(item, row)
     if item.legacy_source_doc_id is None:
         raise ValueError("review-ready decision lacks the legacy source identity")
@@ -274,6 +294,9 @@ def _entry_for_decision(
     )
     return RefreshEntry(
         action=decision.action,
+        predecessor_resolution_state=(
+            "quarantined_legacy" if quarantined_predecessor else "canonical_current"
+        ),
         old_fact_id=decision.fact_id,
         expected_fact_head_id=decision.fact_id,
         expected_context_head_id=decision.expected_context_head_id,
@@ -353,16 +376,27 @@ def build_kpi_semantic_refresh_manifest(
         )
         if row.kpi_definition_id is not None
     }
+    owner_ticker_set = frozenset(portfolio_tickers(conn, user_id=review_export.user_id))
     entries: list[RefreshEntry] = []
     for item, decision in selected:
         entry = _entry_for_decision(conn, item=item, decision=decision)
         try:
-            validate_refresh_entry(conn, entry, allowed)
+            validate_refresh_entry(
+                conn,
+                entry,
+                allowed,
+                owner_tickers=owner_ticker_set,
+            )
         except RepairBlockedError as exc:
             raise ValueError(f"reviewed decision failed guarded validation: {exc.code}") from None
         entries.append(entry)
+    manifest_schema = (
+        "kpi_semantic_refresh.v6"
+        if any(entry.predecessor_resolution_state == "quarantined_legacy" for entry in entries)
+        else "kpi_semantic_refresh.v5"
+    )
     return RefreshManifest(
-        schema_version="kpi_semantic_refresh.v5",
+        schema_version=manifest_schema,
         user_id=review_export.user_id,
         logical_idempotency_key=decisions.logical_idempotency_key,
         reviewer=decisions.reviewer,
