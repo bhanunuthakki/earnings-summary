@@ -24,6 +24,8 @@ from operations.kpi_semantic_review_export import (
     KpiSemanticReviewExport,
     KpiSemanticReviewExportError,
     load_current_kpi_semantic_review_export,
+    load_current_kpi_semantic_review_partition,
+    load_current_kpi_semantic_review_ticker_manifest,
     publish_kpi_semantic_review_exports,
     seal_kpi_semantic_review_export,
 )
@@ -451,13 +453,25 @@ def test_repeated_numeric_matches_report_overflow_and_preserve_verbatim_offsets(
     _evidence(conn, document_id=10, text=source_text)
 
     batch = build_kpi_semantic_review_batch(
-        conn, repo_root=tmp_path, user_id="owner", observed_at=NOW
+        conn,
+        repo_root=tmp_path,
+        user_id="owner",
+        ticker="NU",
+        observed_at=NOW,
+        after_fact_id=0,
     )
 
     item = batch.items[0]
     assert item.evidence_candidate_total == 10
     assert len(item.evidence_candidates) == MAX_EVIDENCE_CANDIDATES_PER_FACT
     assert item.evidence_candidates_truncated is True
+    exported = seal_kpi_semantic_review_export(
+        review=batch,
+        code_instance_sha256="b" * 64,
+        database_instance_sha256="c" * 64,
+        schema_revision="0035",
+    )
+    assert exported.review.items[0].evidence_candidates_truncated is True
     for candidate in item.evidence_candidates:
         assert (
             candidate.source_value_text == source_text[candidate.match_start : candidate.match_end]
@@ -889,13 +903,97 @@ def _review_export(tmp_path: Path) -> KpiSemanticReviewExport:
     )
 
 
+def _review_partitions(tmp_path: Path) -> tuple[KpiSemanticReviewExport, ...]:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
+    for fact_id in (1, 2, 3):
+        _fact(conn, fact_id=fact_id, definition_id=1, document_id=10)
+    exports: list[KpiSemanticReviewExport] = []
+    after_fact_id = 0
+    partition_ordinal = 0
+    while True:
+        batch = build_kpi_semantic_review_batch(
+            conn,
+            repo_root=tmp_path,
+            user_id="owner",
+            ticker="NU",
+            limit=2,
+            observed_at=NOW,
+            after_fact_id=after_fact_id,
+        )
+        next_after_fact_id = batch.items[-1].fact_id if batch.truncated else None
+        exports.append(
+            seal_kpi_semantic_review_export(
+                review=batch,
+                code_instance_sha256="b" * 64,
+                database_instance_sha256="c" * 64,
+                schema_revision="0035",
+                partition_ordinal=partition_ordinal,
+                after_fact_id=after_fact_id,
+                next_after_fact_id=next_after_fact_id,
+            )
+        )
+        if next_after_fact_id is None:
+            return tuple(exports)
+        after_fact_id = next_after_fact_id
+        partition_ordinal += 1
+
+
+def test_producer_adapts_partition_size_without_skipping_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
+    for fact_id in (1, 2, 3):
+        _fact(conn, fact_id=fact_id, definition_id=1, document_id=10)
+    with pytest.raises(ValueError, match="partition limit"):
+        prepare_module.build_ticker_review_exports(
+            conn,
+            code_root=tmp_path,
+            user_id="owner",
+            ticker="NU",
+            requested_limit=export_module.MAX_KPI_SEMANTIC_EXPORT_ITEMS + 1,
+            observed_at=NOW,
+            code_instance_sha256="b" * 64,
+            database_instance_sha256="c" * 64,
+            schema_revision="0035",
+        )
+    real_encoder = export_module.encoded_kpi_semantic_review_export
+
+    def one_item_byte_budget(export: KpiSemanticReviewExport) -> bytes:
+        if export.review.total_items > 1:
+            raise KpiSemanticReviewExportError("semantic review export exceeds the byte bound")
+        return real_encoder(export)
+
+    monkeypatch.setattr(prepare_module, "encoded_kpi_semantic_review_export", one_item_byte_budget)
+
+    exports = prepare_module.build_ticker_review_exports(
+        conn,
+        code_root=tmp_path,
+        user_id="owner",
+        ticker="NU",
+        requested_limit=3,
+        observed_at=NOW,
+        code_instance_sha256="b" * 64,
+        database_instance_sha256="c" * 64,
+        schema_revision="0035",
+    )
+
+    assert [export.review.total_items for export in exports] == [1, 1, 1]
+    assert [item.fact_id for export in exports for item in export.review.items] == [1, 2, 3]
+    assert [export.after_fact_id for export in exports] == [0, 1, 2]
+    assert [export.next_after_fact_id for export in exports] == [1, 2, None]
+
+
 def test_semantic_review_export_is_content_addressed_and_current_portfolio_scoped(
     tmp_path: Path,
 ) -> None:
     export = _review_export(tmp_path)
     root = tmp_path / "exports"
 
-    index = publish_kpi_semantic_review_exports(root=root, exports=(export,))
+    index = publish_kpi_semantic_review_exports(
+        root=root, exports=(export,), expected_tickers=("NU",)
+    )
     loaded, payload = load_current_kpi_semantic_review_export(
         root=root,
         ticker="nu",
@@ -904,7 +1002,7 @@ def test_semantic_review_export_is_content_addressed_and_current_portfolio_scope
     )
 
     assert loaded == export
-    assert index.artifacts[0].content_sha256 == export.content_sha256
+    assert index.ticker_manifests[0].partitions[0].content_sha256 == export.content_sha256
     assert payload == (root / "artifacts" / f"{export.content_sha256}.json").read_bytes()
     with pytest.raises(KpiSemanticReviewExportError, match="outside the current portfolio"):
         load_current_kpi_semantic_review_export(
@@ -946,10 +1044,15 @@ def test_semantic_review_transport_omits_unsafe_locator_source_material(tmp_path
     assert "xbrl_package_member" not in encoded
 
 
-def test_semantic_review_export_fails_closed_for_v1_truncation_and_oversize(
+def test_semantic_review_export_versions_pagination_and_byte_bounds_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     export = _review_export(tmp_path)
+    legacy = export.model_dump(mode="json")
+    legacy["schema_version"] = "windows_kpi_semantic_review_export.v1"
+    with pytest.raises(ValidationError, match=r"windows_kpi_semantic_review_export\.v2"):
+        KpiSemanticReviewExport.model_validate(legacy)
+
     legacy = export.model_dump(mode="json")
     legacy["review"]["schema_version"] = "kpi_semantic_review.v1"
     with pytest.raises(ValidationError, match=r"kpi_semantic_review\.v3"):
@@ -960,7 +1063,7 @@ def test_semantic_review_export_fails_closed_for_v1_truncation_and_oversize(
     truncated_review = KpiSemanticReviewBatch.model_validate(
         {**truncated_payload, "content_sha256": export_module.payload_sha256(truncated_payload)}
     )
-    with pytest.raises(ValidationError, match="truncated"):
+    with pytest.raises(ValidationError, match="next cursor"):
         seal_kpi_semantic_review_export(
             review=truncated_review,
             code_instance_sha256="b" * 64,
@@ -976,7 +1079,7 @@ def test_semantic_review_export_fails_closed_for_v1_truncation_and_oversize(
 def test_semantic_review_artifact_publication_rejects_stale_index(tmp_path: Path) -> None:
     export = _review_export(tmp_path)
     root = tmp_path / "exports"
-    publish_kpi_semantic_review_exports(root=root, exports=(export,))
+    publish_kpi_semantic_review_exports(root=root, exports=(export,), expected_tickers=("NU",))
 
     with pytest.raises(KpiSemanticReviewExportError, match="stale"):
         load_current_kpi_semantic_review_export(
@@ -985,3 +1088,139 @@ def test_semantic_review_artifact_publication_rejects_stale_index(tmp_path: Path
             now=NOW + timedelta(hours=1),
             max_age=timedelta(minutes=20),
         )
+
+
+def test_partitioned_export_has_complete_cursor_chain_and_exact_current_loaders(
+    tmp_path: Path,
+) -> None:
+    exports = _review_partitions(tmp_path)
+    root = tmp_path / "exports"
+
+    index = publish_kpi_semantic_review_exports(
+        root=root, exports=exports, expected_tickers=("NU",)
+    )
+    manifest, manifest_payload = load_current_kpi_semantic_review_ticker_manifest(
+        root=root,
+        ticker="nu",
+        now=NOW + timedelta(minutes=1),
+        max_age=timedelta(minutes=20),
+    )
+
+    assert index.schema_version == "windows_kpi_semantic_review_index.v2"
+    assert index.total_items == 3
+    assert manifest.total_items == 3
+    assert [pointer.ordinal for pointer in manifest.partitions] == [0, 1]
+    assert [pointer.item_count for pointer in manifest.partitions] == [2, 1]
+    assert [pointer.after_fact_id for pointer in manifest.partitions] == [0, 2]
+    assert [pointer.next_after_fact_id for pointer in manifest.partitions] == [2, None]
+    assert (
+        export_module.payload_sha256(manifest.model_dump(mode="json", exclude={"content_sha256"}))
+        == manifest.content_sha256
+    )
+    assert len(manifest_payload) < 1_000_000
+    malformed = manifest.model_dump(mode="json")
+    malformed["partitions"][-1]["item_count"] = 0
+    malformed["content_sha256"] = export_module.payload_sha256(
+        {key: value for key, value in malformed.items() if key != "content_sha256"}
+    )
+    with pytest.raises(ValidationError, match="cannot contain an empty partition"):
+        type(manifest).model_validate(malformed)
+    loaded_fact_ids: list[int] = []
+    for pointer in manifest.partitions:
+        loaded, payload = load_current_kpi_semantic_review_partition(
+            root=root,
+            ticker="NU",
+            content_sha256=pointer.content_sha256,
+            now=NOW + timedelta(minutes=1),
+            max_age=timedelta(minutes=20),
+        )
+        assert len(payload) == pointer.byte_size
+        loaded_fact_ids.extend(item.fact_id for item in loaded.review.items)
+    assert loaded_fact_ids == [1, 2, 3]
+    with pytest.raises(KpiSemanticReviewExportError, match="multiple"):
+        load_current_kpi_semantic_review_export(
+            root=root,
+            ticker="NU",
+            now=NOW + timedelta(minutes=1),
+            max_age=timedelta(minutes=20),
+        )
+    with pytest.raises(KpiSemanticReviewExportError, match="not referenced"):
+        load_current_kpi_semantic_review_partition(
+            root=root,
+            ticker="NU",
+            content_sha256="d" * 64,
+            now=NOW + timedelta(minutes=1),
+            max_age=timedelta(minutes=20),
+        )
+
+
+def test_partition_publication_requires_complete_portfolio_and_preserves_prior_index(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "exports"
+    original = _review_export(tmp_path)
+    publish_kpi_semantic_review_exports(root=root, exports=(original,), expected_tickers=("NU",))
+    prior_index = (root / "latest.json").read_bytes()
+    partitions = _review_partitions(tmp_path)
+
+    with pytest.raises(KpiSemanticReviewExportError, match="complete expected portfolio"):
+        publish_kpi_semantic_review_exports(
+            root=root,
+            exports=partitions,
+            expected_tickers=("NU", "NOW"),
+        )
+    assert (root / "latest.json").read_bytes() == prior_index
+
+    conflict_path = root / "artifacts" / f"{partitions[-1].content_sha256}.json"
+    conflict_path.write_bytes(b"conflict")
+    with pytest.raises(KpiSemanticReviewExportError, match="conflicts"):
+        publish_kpi_semantic_review_exports(
+            root=root,
+            exports=partitions,
+            expected_tickers=("NU",),
+        )
+    assert (root / "latest.json").read_bytes() == prior_index
+
+    conflict_path.write_bytes(b"x" * (export_module.MAX_KPI_SEMANTIC_EXPORT_BYTES + 1))
+    with pytest.raises(KpiSemanticReviewExportError, match="exceeds its byte bound"):
+        publish_kpi_semantic_review_exports(
+            root=root,
+            exports=partitions,
+            expected_tickers=("NU",),
+        )
+    assert (root / "latest.json").read_bytes() == prior_index
+
+
+def test_incomplete_evidence_is_exported_but_remains_explicitly_non_actionable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
+    _fact(conn, fact_id=1, definition_id=1, document_id=10)
+    _evidence(conn, document_id=10, text="Long prefix before customers 114.2.")
+    monkeypatch.setattr(review_module, "MAX_EVIDENCE_TEXT_CHARS_PER_NODE", 10)
+    monkeypatch.setattr(review_module, "MAX_EVIDENCE_TEXT_CHARS_PER_DOCUMENT", 10)
+    batch = build_kpi_semantic_review_batch(
+        conn,
+        repo_root=tmp_path,
+        user_id="owner",
+        ticker="NU",
+        observed_at=NOW,
+        after_fact_id=0,
+    )
+
+    export = seal_kpi_semantic_review_export(
+        review=batch,
+        code_instance_sha256="b" * 64,
+        database_instance_sha256="c" * 64,
+        schema_revision="0035",
+    )
+    index = publish_kpi_semantic_review_exports(
+        root=tmp_path / "exports",
+        exports=(export,),
+        expected_tickers=("NU",),
+    )
+
+    assert export.review.items[0].evidence_search_incomplete is True
+    assert export.review.items[0].state is KpiSemanticReviewState.EVIDENCE_SEARCH_INCOMPLETE
+    assert index.state_counts == {"evidence_search_incomplete": 1}

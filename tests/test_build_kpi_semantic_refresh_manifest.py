@@ -200,6 +200,7 @@ def _review(
         ticker="NU",
         limit=limit,
         observed_at=NOW,
+        after_fact_id=0,
     )
 
 
@@ -209,6 +210,7 @@ def _export(review: KpiSemanticReviewBatch) -> KpiSemanticReviewExport:
         code_instance_sha256="d" * 64,
         database_instance_sha256="e" * 64,
         schema_revision="0033_add_report_kpi_reference_resolutions",
+        next_after_fact_id=review.items[-1].fact_id if review.truncated else None,
     )
 
 
@@ -464,7 +466,7 @@ def test_rejects_review_hash_mismatch(tmp_path: Path) -> None:
         )
 
 
-def test_rejects_truncated_review_batch(tmp_path: Path) -> None:
+def test_nonterminal_review_partition_can_authorize_its_complete_item(tmp_path: Path) -> None:
     conn = _database()
     conn.execute(
         "INSERT INTO kpi_facts VALUES (11,'NU','2024-09-30','Q3',1,'100000000','count',"
@@ -472,9 +474,18 @@ def test_rejects_truncated_review_batch(tmp_path: Path) -> None:
     )
     review_batch = _review(conn, tmp_path, limit=1)
     assert review_batch.truncated is True
+    review_export = _export(review_batch)
 
-    with pytest.raises(ValidationError, match="truncated"):
-        _export(review_batch)
+    manifest = build_kpi_semantic_refresh_manifest(
+        conn,
+        repo_root=tmp_path,
+        review_export=review_export,
+        decisions=_decisions(review_export),
+        now=NOW,
+    )
+
+    assert review_export.next_after_fact_id == review_batch.items[-1].fact_id
+    assert [entry.old_fact_id for entry in manifest.entries] == [10]
 
 
 def test_rejects_missing_verbatim_semantic_evidence(tmp_path: Path) -> None:
@@ -506,8 +517,15 @@ def test_rejects_incomplete_or_truncated_candidate_search(
     monkeypatch.setattr(review_module, "MAX_EVIDENCE_MATCHES_SCANNED_PER_FACT", 1)
     incomplete_review = _review(incomplete_conn, tmp_path)
     assert incomplete_review.items[0].evidence_search_incomplete is True
-    with pytest.raises(ValidationError, match="incomplete"):
-        _export(incomplete_review)
+    incomplete_export = _export(incomplete_review)
+    with pytest.raises(ValueError, match=r"incomplete|review state"):
+        build_kpi_semantic_refresh_manifest(
+            incomplete_conn,
+            repo_root=tmp_path,
+            review_export=incomplete_export,
+            decisions=_decisions(incomplete_export),
+            now=NOW,
+        )
 
     monkeypatch.setattr(review_module, "MAX_EVIDENCE_MATCHES_SCANNED_PER_FACT", 4_096)
     truncated_conn = _database()
@@ -517,8 +535,15 @@ def test_rejects_incomplete_or_truncated_candidate_search(
     )
     truncated_review = _review(truncated_conn, tmp_path)
     assert truncated_review.items[0].evidence_candidates_truncated is True
-    with pytest.raises(ValidationError, match="incomplete"):
-        _export(truncated_review)
+    truncated_export = _export(truncated_review)
+    with pytest.raises(ValueError, match="truncated"):
+        build_kpi_semantic_refresh_manifest(
+            truncated_conn,
+            repo_root=tmp_path,
+            review_export=truncated_export,
+            decisions=_decisions(truncated_export),
+            now=NOW,
+        )
 
 
 def test_rejects_fact_head_and_issuer_drift(tmp_path: Path) -> None:

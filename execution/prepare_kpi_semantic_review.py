@@ -23,7 +23,9 @@ from operations.kpi_semantic_review_export import (  # noqa: E402
     KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
     MAX_KPI_SEMANTIC_EXPORT_ITEMS,
     KpiSemanticReviewExport,
+    KpiSemanticReviewExportError,
     KpiSemanticReviewExportIndex,
+    encoded_kpi_semantic_review_export,
     publish_kpi_semantic_review_exports,
     seal_kpi_semantic_review_export,
 )
@@ -82,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     destination.add_argument(
         "--artifact-root",
         type=Path,
-        help="Publish one immutable artifact per portfolio ticker plus an atomic latest index",
+        help="Publish bounded immutable ticker partitions plus one atomic complete index",
     )
     destination.add_argument(
         "--publish",
@@ -101,6 +103,93 @@ def _schema_revision(conn: sqlite3.Connection) -> str:
 
 def _identity_sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def build_bounded_review_partition(
+    conn: sqlite3.Connection,
+    *,
+    code_root: Path,
+    user_id: str,
+    ticker: str,
+    requested_limit: int,
+    observed_at: datetime,
+    code_instance_sha256: str,
+    database_instance_sha256: str,
+    schema_revision: str,
+    partition_ordinal: int,
+    after_fact_id: int,
+) -> KpiSemanticReviewExport:
+    """Build the largest bounded partition that fits the immutable byte contract."""
+
+    if not 0 < requested_limit <= MAX_KPI_SEMANTIC_EXPORT_ITEMS:
+        raise ValueError(f"partition limit must be between 1 and {MAX_KPI_SEMANTIC_EXPORT_ITEMS}")
+    limit = requested_limit
+    while True:
+        review = build_kpi_semantic_review_batch(
+            conn,
+            repo_root=code_root,
+            user_id=user_id,
+            ticker=ticker,
+            limit=limit,
+            observed_at=observed_at,
+            after_fact_id=after_fact_id,
+        )
+        next_after_fact_id = review.items[-1].fact_id if review.truncated else None
+        export = seal_kpi_semantic_review_export(
+            review=review,
+            code_instance_sha256=code_instance_sha256,
+            database_instance_sha256=database_instance_sha256,
+            schema_revision=schema_revision,
+            partition_ordinal=partition_ordinal,
+            after_fact_id=after_fact_id,
+            next_after_fact_id=next_after_fact_id,
+        )
+        try:
+            encoded_kpi_semantic_review_export(export)
+        except KpiSemanticReviewExportError:
+            if limit == 1:
+                raise
+            limit = max(1, limit // 2)
+            continue
+        return export
+
+
+def build_ticker_review_exports(
+    conn: sqlite3.Connection,
+    *,
+    code_root: Path,
+    user_id: str,
+    ticker: str,
+    requested_limit: int,
+    observed_at: datetime,
+    code_instance_sha256: str,
+    database_instance_sha256: str,
+    schema_revision: str,
+) -> tuple[KpiSemanticReviewExport, ...]:
+    """Traverse one ticker's complete keyset queue into bounded partitions."""
+
+    exports: list[KpiSemanticReviewExport] = []
+    after_fact_id = 0
+    partition_ordinal = 0
+    while True:
+        export = build_bounded_review_partition(
+            conn,
+            code_root=code_root,
+            user_id=user_id,
+            ticker=ticker,
+            requested_limit=requested_limit,
+            observed_at=observed_at,
+            code_instance_sha256=code_instance_sha256,
+            database_instance_sha256=database_instance_sha256,
+            schema_revision=schema_revision,
+            partition_ordinal=partition_ordinal,
+            after_fact_id=after_fact_id,
+        )
+        exports.append(export)
+        if export.next_after_fact_id is None:
+            return tuple(exports)
+        after_fact_id = export.next_after_fact_id
+        partition_ordinal += 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,23 +253,28 @@ def main(argv: list[str] | None = None) -> int:
             code_instance = _identity_sha256(review_code_identity(code_root))
             database_instance = _identity_sha256(database_lineage_identity(conn))
             schema_revision = _schema_revision(conn)
-            exports = tuple(
-                seal_kpi_semantic_review_export(
-                    review=build_kpi_semantic_review_batch(
+            tickers = portfolio_tickers(conn, user_id=args.user_id)
+            built_exports: list[KpiSemanticReviewExport] = []
+            for ticker in tickers:
+                built_exports.extend(
+                    build_ticker_review_exports(
                         conn,
-                        repo_root=code_root,
+                        code_root=code_root,
                         user_id=args.user_id,
                         ticker=ticker,
-                        limit=args.limit,
+                        requested_limit=args.limit,
                         observed_at=observed_at,
-                    ),
-                    code_instance_sha256=code_instance,
-                    database_instance_sha256=database_instance,
-                    schema_revision=schema_revision,
+                        code_instance_sha256=code_instance,
+                        database_instance_sha256=database_instance,
+                        schema_revision=schema_revision,
+                    )
                 )
-                for ticker in portfolio_tickers(conn, user_id=args.user_id)
+            exports = tuple(built_exports)
+            index = publish_kpi_semantic_review_exports(
+                root=artifact_root,
+                exports=exports,
+                expected_tickers=tickers,
             )
-            index = publish_kpi_semantic_review_exports(root=artifact_root, exports=exports)
     finally:
         conn.close()
         resources.close()
@@ -188,14 +282,9 @@ def main(argv: list[str] | None = None) -> int:
         assert index is not None
         summary = KpiSemanticReviewSummary(
             content_sha256=index.content_sha256,
-            items=sum(export.review.total_items for export in exports),
+            items=index.total_items,
             output=str(artifact_root / "latest.json"),
-            state_counts={
-                state: sum(export.review.state_counts.get(state, 0) for export in exports)
-                for state in sorted(
-                    {state for export in exports for state in export.review.state_counts}
-                )
-            },
+            state_counts=index.state_counts,
             truncated=False,
         )
         print(summary.model_dump_json())

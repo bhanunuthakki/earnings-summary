@@ -2,7 +2,7 @@
 
 This builder is read-only. It converts owner-reviewed decisions into the
 existing guarded ``kpi_semantic_refresh.v5`` contract only after binding every
-decision to the exact content-addressed review batch and current database
+decision to the exact content-addressed review partition and current database
 heads. The downstream executor remains the sole writer.
 """
 
@@ -316,8 +316,10 @@ def build_kpi_semantic_refresh_manifest(
     if now.tzinfo is None:
         raise ValueError("manifest build time must be timezone-aware")
     current_time = now.astimezone(UTC)
-    if review_batch.truncated:
-        raise ValueError("truncated review batch cannot authorize refresh decisions")
+    # A v2 export is one cursor-bound partition; nonterminal partitions are
+    # expected and carry their continuation in the sealed export envelope.
+    # Item-level evidence incompleteness still fails closed in
+    # ``_entry_for_decision`` below.
     if decisions.review_export_sha256 != review_export.content_sha256:
         raise ValueError("decision review export hash does not match the sealed export")
     if decisions.review_batch_sha256 != review_batch.content_sha256:
@@ -335,7 +337,7 @@ def build_kpi_semantic_refresh_manifest(
     for decision in sorted(decisions.decisions, key=lambda value: value.fact_id):
         item = items_by_fact.get(decision.fact_id)
         if item is None:
-            raise ValueError("decision fact is absent from the content-addressed review batch")
+            raise ValueError("decision fact is absent from the content-addressed review partition")
         selected.append((item, decision))
     group_keys = {(item.ticker, item.source_doc_id, decision.action) for item, decision in selected}
     if len(group_keys) != 1:

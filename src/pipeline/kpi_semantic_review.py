@@ -781,10 +781,18 @@ def build_kpi_semantic_review_batch(
     ticker: str | None = None,
     limit: int = 250,
     observed_at: datetime | None = None,
+    after_fact_id: int | None = None,
 ) -> KpiSemanticReviewBatch:
-    """Return one bounded queue of active, owner-visible facts needing review."""
+    """Return one bounded queue, optionally keyset-paged by current fact ID.
+
+    Omitting ``after_fact_id`` preserves the legacy display ordering. Producers
+    traversing multiple pages start at cursor ``0`` and then pass the final
+    emitted fact ID while ``truncated`` remains true.
+    """
     if not 0 < limit <= MAX_KPI_SEMANTIC_REVIEW_ITEMS:
         raise ValueError(f"limit must be between 1 and {MAX_KPI_SEMANTIC_REVIEW_ITEMS}")
+    if after_fact_id is not None and after_fact_id < 0:
+        raise ValueError("after_fact_id must be non-negative")
     conn.row_factory = sqlite3.Row
     fact_relation = canonical_fact_relation(conn, "kpi_facts")
     if fact_relation.selection_mode != "resolved_view":
@@ -809,6 +817,16 @@ def build_kpi_semantic_review_batch(
     else:
         context_join, context_status = _current_context_join(conn)
         marks = ",".join("?" for _ in reasons_by_definition)
+        cursor_predicate = "" if after_fact_id is None else "AND fact.id>? "
+        order_clause = (
+            "UPPER(fact.ticker),definition.name,fact.period_end,fact.id"
+            if after_fact_id is None
+            else "fact.id"
+        )
+        parameters: list[object] = list(sorted(reasons_by_definition))
+        if after_fact_id is not None:
+            parameters.append(after_fact_id)
+        parameters.append(limit + 1)
         rows = conn.execute(
             "SELECT fact.id,fact.ticker,fact.period_end,fact.fiscal_period_type,"  # nosec B608 -- relation/context fragments are resolver-owned; ids and limits remain bound
             "fact.kpi_definition_id,fact.value,fact.unit,fact.source_doc_id,"
@@ -817,8 +835,8 @@ def build_kpi_semantic_review_batch(
             "JOIN kpi_definitions definition ON definition.id=fact.kpi_definition_id "
             f"{context_join} WHERE fact.kpi_definition_id IN ({marks}) "
             f"AND ({context_status} IS NULL OR {context_status}<>'admitted') "
-            "ORDER BY UPPER(fact.ticker),definition.name,fact.period_end,fact.id LIMIT ?",
-            (*sorted(reasons_by_definition), limit + 1),
+            f"{cursor_predicate}ORDER BY {order_clause} LIMIT ?",
+            tuple(parameters),
         ).fetchall()
         truncated = len(rows) > limit
         built: list[KpiSemanticReviewItem] = []
