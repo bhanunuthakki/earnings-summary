@@ -13,7 +13,12 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from pipeline.work_os_decisions import DecisionProjection
 from provenance.selection import selected_transcripts_relation
-from report.artifacts import CoverageRole, ReportArtifactRef, load_report_artifact_index
+from report.artifacts import (
+    CoverageRole,
+    ReportArtifactRef,
+    latest_report_artifacts,
+    load_report_artifact_index,
+)
 
 BriefStatus = Literal["available", "degraded"]
 ArtifactKind = Literal["full_brief", "pre_earnings", "post_earnings"]
@@ -435,19 +440,7 @@ def build_brief_library(
     """Return one bounded page of all persisted research artifacts."""
 
     index = load_report_artifact_index(repo_root)
-    latest_by_ticker: dict[str, ReportArtifactRef] = {}
-    for artifact in index.items:
-        prior = latest_by_ticker.get(artifact.ticker)
-        if prior is None or (artifact.generated_at, artifact.artifact_id) > (
-            prior.generated_at,
-            prior.artifact_id,
-        ):
-            latest_by_ticker[artifact.ticker] = artifact
-    current = sorted(
-        latest_by_ticker.values(),
-        key=lambda artifact: (artifact.generated_at, artifact.artifact_id),
-        reverse=True,
-    )
+    current = latest_report_artifacts(index)
     earnings_rows = _earnings_artifacts(conn)
     all_tickers = {artifact.ticker.upper() for artifact in current} | {
         row.ticker.strip().upper() for row in earnings_rows

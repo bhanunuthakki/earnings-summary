@@ -193,6 +193,31 @@ def test_fiscal_period_backfill_checksum_failure_blocks_the_entire_batch(tmp_pat
     assert load_report_artifact_index(tmp_path).items == original_items
 
 
+def test_fiscal_period_backfill_matches_latest_visible_brief_per_ticker(tmp_path: Path) -> None:
+    research = tmp_path / "output" / "research" / "NU"
+    research.mkdir(parents=True)
+    older = research / "2026-07-01_workspace.html"
+    latest = research / "2026-08-30_workspace.html"
+    older.write_text(_workspace_with_active_earnings_period("Q1 2026"), encoding="utf-8")
+    latest.write_text(_workspace_with_active_earnings_period("Q2 2026"), encoding="utf-8")
+    reconcile_legacy_workspace_reports(tmp_path)
+    original_items = load_report_artifact_index(tmp_path).items
+    assert len(original_items) == 2
+
+    result = backfill_report_fiscal_periods(tmp_path, apply=True)
+
+    assert result.candidates == 1
+    assert result.eligible == 1
+    assert result.applied == 1
+    assert result.failed == 0
+    assert result.unresolved == 0
+    updated = load_report_artifact_index(tmp_path).items
+    latest_ref = max(updated, key=lambda item: (item.generated_at, item.artifact_id))
+    older_ref = min(updated, key=lambda item: (item.generated_at, item.artifact_id))
+    assert latest_ref.fiscal_period_label == "Q2 2026"
+    assert older_ref.fiscal_period_label is None
+
+
 def test_index_excludes_entries_whose_standalone_artifact_was_removed(tmp_path: Path) -> None:
     workspace = tmp_path / "output" / "research" / "NU" / "2026-08-10_workspace.html"
     workspace.parent.mkdir(parents=True)
