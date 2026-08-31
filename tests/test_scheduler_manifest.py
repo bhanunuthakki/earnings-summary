@@ -60,7 +60,7 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert semantic_review.xml == "prepare_kpi_semantic_review.task.xml"
     assert semantic_review.wrapper == "run_prepare_kpi_semantic_review.bat"
     semantic_xml = (CRON_DIR / semantic_review.xml).read_text(encoding="utf-8")
-    assert "<ExecutionTimeLimit>PT5M</ExecutionTimeLimit>" in semantic_xml
+    assert "<ExecutionTimeLimit>PT30M</ExecutionTimeLimit>" in semantic_xml
     assert semantic_xml.index("<Repetition>") < semantic_xml.index("<StartBoundary>")
     assert r"runtime\earnings-summary\cron\run_prepare_kpi_semantic_review.bat" in semantic_xml
     semantic_wrapper = (CRON_DIR / semantic_review.wrapper).read_text(encoding="utf-8")
