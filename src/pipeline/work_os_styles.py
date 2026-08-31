@@ -103,9 +103,7 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
 .research-library-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 .research-library-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
-  gap: var(--sp-3); min-block-size: 66px; padding: var(--sp-3) var(--sp-4);
-  background: var(--surface); border: var(--bw-thin) solid var(--border);
-  border-radius: var(--radius);
+  gap: var(--sp-3);
 }
 .research-library-row-copy { min-inline-size: 0; }
 .research-library-row-title { margin: 0 0 var(--sp-2); max-inline-size: 58ch; line-height: 1.18; white-space: normal; overflow-wrap: anywhere; }

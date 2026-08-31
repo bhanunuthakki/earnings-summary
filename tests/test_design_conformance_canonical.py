@@ -1524,7 +1524,7 @@ def test_nested_static_brace_specs_reconstruct_before_scanning(tmp_path: Path) -
 
 
 def test_registry_contract_is_versioned_for_importable_scanner() -> None:
-    assert registry.REGISTRY_VERSION == "1.11.1"
+    assert registry.REGISTRY_VERSION == "1.11.2"
     exemptions = {entry.surface: entry for entry in registry.PERMANENT_EXEMPTIONS}
     scanner = exemptions["ui/conformance_scan.py"]
     assert scanner.owner == "design-system"

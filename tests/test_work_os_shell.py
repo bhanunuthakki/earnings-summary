@@ -663,7 +663,7 @@ def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hyd
     # their separate stat label/number semantics.
     assert '<h2 class="k-card-title" id="workOsBriefReaderTitle">' in html
     assert '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>' in html
-    assert '<h3 class="k-card-title research-library-row-title">' in html
+    assert '<h3 class="k-card-row-title research-library-row-title">' in html
     assert 'class="k-stat-cell"><div class="stat-heading">Owner posture</div>' in html
     assert 'class="stat-number" id="deskLivePrice"' in html
 
