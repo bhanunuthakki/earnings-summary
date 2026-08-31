@@ -952,7 +952,7 @@ def build_quarantined_kpi_correction_review(
         raise ValueError("quarantined correction review requires the resolved current-fact view")
     context_join, context_status = _current_context_join(conn)
     row = conn.execute(
-        "SELECT fact.id,fact.ticker,fact.period_end,fact.fiscal_period_type,"
+        "SELECT fact.id,fact.ticker,fact.period_end,fact.fiscal_period_type,"  # nosec B608 -- relation/context fragments are resolver-owned; the fact id remains bound
         "fact.kpi_definition_id,fact.value,fact.unit,fact.source_doc_id,"
         f"definition.name,definition.ticker AS definition_ticker,{context_status} "
         "AS context_status FROM kpi_facts fact JOIN kpi_definitions definition "

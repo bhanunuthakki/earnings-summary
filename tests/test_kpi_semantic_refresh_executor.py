@@ -281,7 +281,7 @@ def test_v5_manifest_serialization_and_hash_match_predecessor_contract(tmp_path:
     assert manifest.content_sha256() == refresh.canonical_sha256(expected_payload)
     assert (
         manifest.content_sha256()
-        == "5c093b45192615fd8236e161a4cd9436e349d6bcd638d2489372da83cfa8a061"
+        == "5c093b45192615fd8236e161a4cd9436e349d6bcd638d2489372da83cfa8a061"  # pragma: allowlist secret -- fixed legacy contract digest
     )
 
     output = tmp_path / "legacy-v5.json"
