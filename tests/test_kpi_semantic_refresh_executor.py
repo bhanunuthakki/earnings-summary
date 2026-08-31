@@ -17,7 +17,7 @@ from execution import apply_kpi_semantic_refresh as refresh
 from execution import record_kpi_repair_judgment as record_judgment
 from execution.backup_restore_readiness_receipt import BackupRestoreReadinessReceipt
 from execution.fetch_windows_review_bundle import WindowsReviewPins
-from models.facts import FactLocator, Unit
+from models.facts import FactLocator, LocatorKind, Unit
 from operations.kpi_repair_receipts import (
     KpiRepairAttemptReceipt,
     KpiRepairJudgeReceipt,
@@ -46,10 +46,15 @@ from pipeline.kpi_semantics import (
     normalize_source_numeric,
 )
 from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession
+from provenance.evidence_ledger import EvidenceLocator
 from provenance.fulltext_extractor_identity import BASE_FULLTEXT_EXTRACTOR
 from sqlite_freshness import sqlite_file_token
 
 NOW = datetime(2026, 8, 27, 20, tzinfo=UTC)
+SOURCE_EVIDENCE_LOCATOR = EvidenceLocator(
+    source_ref="ir_documents/NU/q4.pdf",
+    page_number=7,
+)
 
 
 def _accept_pinned_identity(**_kwargs: object) -> None:
@@ -123,7 +128,11 @@ def _context() -> KpiSemanticContext:
 
 def _entry(**changes: object) -> refresh.RefreshEntry:
     excerpt = "Total customers reached 114 million."
-    locator = FactLocator(pdf_page=7, verbatim_snippet=excerpt)
+    locator = FactLocator(
+        kind=LocatorKind.PDF_SLIDE,
+        pdf_page=7,
+        verbatim_snippet=excerpt,
+    )
     locator_json = locator.to_json()
     assert locator_json is not None
     values: dict[str, object] = {
@@ -139,7 +148,7 @@ def _entry(**changes: object) -> refresh.RefreshEntry:
         "source_observation_version": "2025-01-30T12:00:00+00:00",
         "source_period_end": "2024-12-31",
         "evidence_node_id": "node-2",
-        "evidence_locator_sha256": "c" * 64,
+        "evidence_locator_sha256": SOURCE_EVIDENCE_LOCATOR.canonical_sha256,
         "fact_locator_sha256": hashlib.sha256(locator_json.encode()).hexdigest(),
         "source_excerpt": excerpt,
         "source_value_text": "114",
@@ -405,8 +414,8 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
           extractor_config_sha256 TEXT,extractor_code_version TEXT,outcome TEXT
         );
         CREATE TABLE evidence_nodes (
-          node_id TEXT PRIMARY KEY,extraction_run_id TEXT,text TEXT,locator_sha256 TEXT,
-          node_kind TEXT
+          node_id TEXT PRIMARY KEY,extraction_run_id TEXT,text TEXT,locator_json TEXT,
+          locator_sha256 TEXT,node_kind TEXT
         );
         CREATE TABLE v_legacy_document_evidence_bindings_current (
           legacy_document_id INTEGER,document_version_id TEXT,evidence_node_id TEXT,
@@ -442,18 +451,20 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
         ),
     )
     conn.execute(
-        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?),(?,?,?,?,?)",
+        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?),(?,?,?,?,?,?)",
         (
             "root-2",
             "run-2",
             "NU Q4 2024 investor presentation.",
-            "e" * 64,
+            SOURCE_EVIDENCE_LOCATOR.canonical_json,
+            SOURCE_EVIDENCE_LOCATOR.canonical_sha256,
             "document",
             "node-2",
             "run-2",
             "Q4 2024 | Total customers | Management KPI | Consolidated | "
             "figures in millions | Total customers reached 114 million.",
-            "c" * 64,
+            SOURCE_EVIDENCE_LOCATOR.canonical_json,
+            SOURCE_EVIDENCE_LOCATOR.canonical_sha256,
             "pdf_page",
         ),
     )
@@ -540,7 +551,9 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
         ("b" * 64,),
     )
     changed_locator = FactLocator(
-        pdf_page=7, verbatim_snippet="Total customers reached 115 million."
+        kind=LocatorKind.PDF_SLIDE,
+        pdf_page=7,
+        verbatim_snippet="Total customers reached 115 million.",
     )
     changed_locator_json = changed_locator.to_json()
     assert changed_locator_json is not None

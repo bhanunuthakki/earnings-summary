@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from alembic.config import Config
 
 from alembic import command
 from compute.thesis_evaluator import evaluate_ticker_thesis
+from identity import DEFAULT_USER_ID
 from models.kpis import BreachStatus
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +185,16 @@ def _accepted_binding(
     conn: sqlite3.Connection, repo: Path, *, user_id: str = "owner"
 ) -> tuple[ReportKpiReference, ReportKpiReferenceDisposition]:
     reference = report_kpi_references(repo, ("NU",))[0]
+    return _accepted_binding_for_reference(conn, repo, reference=reference, user_id=user_id)
+
+
+def _accepted_binding_for_reference(
+    conn: sqlite3.Connection,
+    repo: Path,
+    *,
+    reference: ReportKpiReference,
+    user_id: str,
+) -> tuple[ReportKpiReference, ReportKpiReferenceDisposition]:
     proposal = propose_report_kpi_reference_resolution(conn, repo_root=repo, reference=reference)
     assert proposal.outcome is ReportKpiReferenceProposalOutcome.CANDIDATE
     assert proposal.proposed_disposition is not None
@@ -198,7 +210,7 @@ def _accepted_binding(
     return reference, proposal.proposed_disposition
 
 
-def _apply_ready(conn: sqlite3.Connection) -> None:
+def _apply_ready(conn: sqlite3.Connection, *, user_id: str = "owner") -> None:
     conn.executescript(
         """
         CREATE TABLE alembic_version(version_num TEXT);
@@ -208,8 +220,11 @@ def _apply_ready(conn: sqlite3.Connection) -> None:
         CREATE TABLE tracked_companies(
           ticker TEXT,list_type TEXT,user_id TEXT,archived_at TEXT
         );
-        INSERT INTO tracked_companies VALUES ('NU','portfolio','owner',NULL);
         """
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES ('NU','portfolio',?,NULL)",
+        (user_id,),
     )
     conn.commit()
 
@@ -257,6 +272,62 @@ def test_v2_disposition_shape_requires_complete_binding() -> None:
         reason_code="not_recurring_reported_kpi",
     )
     assert retired.kpi_definition_id is None
+
+
+def test_inventory_excludes_financial_chart_items_and_tracks_rule_kpi_leaves(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_payload(
+        tmp_path,
+        """{
+          "ticker":"NU",
+          "chart_priorities":["Revenue","Total customers"],
+          "business_model_rules":[{"kpi_name":"Total customers"}],
+          "break_rules_soft":[{
+            "name":"customer_warning",
+            "predicate":{"type":"compound","params":{"op":"and","predicates":[
+              {"type":"series_below","params":{"metric":"Total customers","source":"kpi"}},
+              {"type":"series_below","params":{"metric":"revenue","source":"financial"}}
+            ]}}
+          }]
+        }""",
+    )
+
+    references = report_kpi_references(repo, ("NU",))
+
+    assert [
+        (reference.reference_kind.value, reference.json_pointer) for reference in references
+    ] == [
+        ("chart_priority", "/chart_priorities/1"),
+        ("business_model_rule", "/business_model_rules/0/kpi_name"),
+        (
+            "soft_rule_kpi",
+            "/break_rules_soft/0/predicate/params/predicates/0/params/metric",
+        ),
+    ]
+    assert all(reference.requested_label == "Total customers" for reference in references)
+
+
+def test_financial_chart_priority_is_consumed_without_kpi_backlog(tmp_path: Path) -> None:
+    conn = _db()
+    repo = _repo_payload(tmp_path, '{"ticker":"NU","chart_priorities":["Revenue"]}')
+    line_item = financials_module.QuarterlyLineItem(
+        line_item="Revenue",
+        unit="USD millions",
+        quarters=[],
+        values=[],
+        levels_full=[],
+    )
+
+    resolved, quarterly, annual, years = financials_module._resolve_priorities(  # pyright: ignore[reportPrivateUsage]
+        ["Revenue"], [line_item], "NU", repo, [], [], conn=conn
+    )
+
+    assert report_kpi_references(repo, ("NU",)) == ()
+    assert resolved == ["Revenue"]
+    assert quarterly == []
+    assert annual == []
+    assert years == []
 
 
 def test_candidate_proposal_is_deterministic_and_never_persists(tmp_path: Path) -> None:
@@ -328,6 +399,18 @@ def test_scope_reconstructs_resolved_and_blocks_stale_binding(tmp_path: Path) ->
     assert blocker.report_reference_reason_code == "stale_report_reference_binding"
     facts_only = next(row for row in stale if row.kpi_definition_id == 1)
     assert facts_only.reasons == ("facts_metrics",)
+
+
+def test_scope_defaults_to_canonical_owner_identity(tmp_path: Path) -> None:
+    conn = _db()
+    _apply_ready(conn, user_id=DEFAULT_USER_ID)
+    repo = _repo(tmp_path)
+    _accepted_binding(conn, repo, user_id=DEFAULT_USER_ID)
+
+    rows = scoped_kpi_definitions(conn, repo_root=repo)
+
+    definition = next(row for row in rows if row.kpi_definition_id == 1)
+    assert definition.reasons == ("report", "facts_metrics")
 
 
 def test_scope_honors_retired_before_exact_direct_matching(tmp_path: Path) -> None:
@@ -425,7 +508,7 @@ def test_chart_priority_uses_verified_binding_and_blocks_override(
         tmp_path,
         '{"ticker":"NU","chart_priorities":["Total customers"]}',
     )
-    _accepted_binding(conn, repo, user_id="default")
+    _accepted_binding(conn, repo, user_id=DEFAULT_USER_ID)
     calls: list[str] = []
 
     def fake_series(
@@ -466,7 +549,7 @@ def test_chart_priority_uses_verified_binding_and_blocks_override(
 def test_tier_ledger_and_signal_writer_share_verified_binding(tmp_path: Path) -> None:
     conn = _db()
     repo = _repo(tmp_path)
-    reference, _ = _accepted_binding(conn, repo, user_id="default")
+    reference, _ = _accepted_binding(conn, repo, user_id=DEFAULT_USER_ID)
     holdings: dict[str, object] = {"tier_1_kpis": [{"name": "Total customers"}]}
 
     ledger = thesis_module._build_ledger(  # pyright: ignore[reportPrivateUsage]
@@ -501,7 +584,7 @@ def test_tier_ledger_and_signal_writer_share_verified_binding(tmp_path: Path) ->
     conn.execute("DELETE FROM fact_overrides")
     persist_report_kpi_reference_disposition(
         conn,
-        user_id="default",
+        user_id=DEFAULT_USER_ID,
         reference=reference,
         disposition=ReportKpiReferenceDisposition(
             status=ReportKpiReferenceStatus.RETIRED,
@@ -537,7 +620,7 @@ def test_hard_break_rule_uses_binding_and_fails_closed_on_override(tmp_path: Pat
           }]
         }""",
     )
-    _accepted_binding(conn, repo, user_id="default")
+    _accepted_binding(conn, repo, user_id=DEFAULT_USER_ID)
 
     verdict = evaluate_ticker_thesis(
         conn,
@@ -556,6 +639,93 @@ def test_hard_break_rule_uses_binding_and_fails_closed_on_override(tmp_path: Pat
         holdings_dir=repo / "micro_thesis" / "holdings",
     )
     assert blocked.rule_evaluations[0].status is BreachStatus.UNRESOLVED
+
+
+def test_nu_business_and_soft_rules_share_verified_bindings_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    conn = _db()
+    repo = _repo_payload(
+        tmp_path,
+        """{
+          "ticker":"NU",
+          "thesis":"customer compounder",
+          "business_model_rules":[{
+            "rule_id":"customers_above_floor",
+            "kpi_name":"Total customers",
+            "comparator":"lt",
+            "threshold":100000000,
+            "unit":"count",
+            "consecutive_periods":1,
+            "narrative":"Customers remain above floor"
+          }],
+          "break_rules_soft":[{
+            "name":"customers_below_watch",
+            "predicate":{"type":"series_below","params":{
+              "metric":"Total customers",
+              "source":"kpi",
+              "threshold":120000000,
+              "periods":1
+            }}
+          }]
+        }""",
+    )
+    references = {
+        reference.json_pointer: reference for reference in report_kpi_references(repo, ("NU",))
+    }
+    for reference in references.values():
+        _accepted_binding_for_reference(
+            conn,
+            repo,
+            reference=reference,
+            user_id=DEFAULT_USER_ID,
+        )
+
+    verdict = evaluate_ticker_thesis(
+        conn,
+        ticker="NU",
+        holdings_dir=repo / "micro_thesis" / "holdings",
+    )
+
+    assert verdict.rule_evaluations[0].status is BreachStatus.OK
+    assert verdict.soft_rule_results[0].status.value == "yellow"
+    conn.execute(
+        "INSERT INTO fact_overrides VALUES ('NU','kpi','Total customers','replace','active')"
+    )
+    conn.commit()
+
+    blocked = evaluate_ticker_thesis(
+        conn,
+        ticker="NU",
+        holdings_dir=repo / "micro_thesis" / "holdings",
+    )
+
+    assert blocked.rule_evaluations[0].status is BreachStatus.UNRESOLVED
+    assert blocked.soft_rule_results[0].status.value == "unresolved"
+    assert blocked.soft_rule_results[0].details == {"reason": "unverified_report_kpi_reference"}
+    conn.execute("DELETE FROM fact_overrides")
+    for reference in references.values():
+        persist_report_kpi_reference_disposition(
+            conn,
+            user_id=DEFAULT_USER_ID,
+            reference=reference,
+            disposition=ReportKpiReferenceDisposition(
+                status=ReportKpiReferenceStatus.RETIRED,
+                reason_code="rule_no_longer_active",
+            ),
+            reviewed_by="source-review:owner",
+            knowledge_at=NOW,
+        )
+    conn.commit()
+
+    retired = evaluate_ticker_thesis(
+        conn,
+        ticker="NU",
+        holdings_dir=repo / "micro_thesis" / "holdings",
+    )
+
+    assert retired.rule_evaluations[0].status is BreachStatus.UNRESOLVED
+    assert retired.soft_rule_results[0].status.value == "unresolved"
 
 
 @pytest.mark.parametrize(
@@ -608,25 +778,32 @@ def _config(path: Path) -> Config:
 
 def test_migration_preserves_v1_ids_and_installs_immutable_v2_contract(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     path = tmp_path / "reference-v2.db"
-    config = _config(path)
-    command.upgrade(config, "0034_add_investment_profile_label_reviews")
     label_hash = hashlib.sha256(b"Unmapped").hexdigest()
-    with sqlite3.connect(path) as conn:
-        conn.execute(
-            "INSERT INTO report_kpi_reference_resolution_revisions "
-            "(id,user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
-            "reference_content_sha256,status,kpi_definition_id,reason_code,revision,"
-            "supersedes_resolution_id,reviewed_by,knowledge_at) "
-            "VALUES (42,'owner','NU','micro_thesis/holdings/NU.json',"
-            "'/tier_1_kpis/0/name','tier_1_kpi','Unmapped',?,'unresolved',NULL,"
-            "'no_matching_reported_definition',1,NULL,'owner','2026-08-30T00:00:00Z')",
-            (label_hash,),
-        )
-        conn.commit()
 
-    command.upgrade(config, "0035_add_report_kpi_reference_resolution_states")
+    def seed_v1(db_path: Path) -> None:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO report_kpi_reference_resolution_revisions "
+                "(id,user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
+                "reference_content_sha256,status,kpi_definition_id,reason_code,revision,"
+                "supersedes_resolution_id,reviewed_by,knowledge_at) "
+                "VALUES (42,'owner','NU','micro_thesis/holdings/NU.json',"
+                "'/tier_1_kpis/0/name','tier_1_kpi','Unmapped',?,'unresolved',NULL,"
+                "'no_matching_reported_definition',1,NULL,'owner','2026-08-30T00:00:00Z')",
+                (label_hash,),
+            )
+            conn.commit()
+
+    migrated_db(
+        path,
+        upgrade_from="0034_add_investment_profile_label_reviews",
+        before_upgrade=seed_v1,
+        target="0035_add_report_kpi_reference_resolution_states",
+    )
+    config = _config(path)
 
     with sqlite3.connect(path) as conn:
         preserved = conn.execute(
@@ -662,10 +839,14 @@ def test_migration_preserves_v1_ids_and_installs_immutable_v2_contract(
 
 
 @pytest.mark.parametrize("status", ["resolved", "retired"])
-def test_downgrade_refuses_any_v2_history(tmp_path: Path, status: str) -> None:
+def test_downgrade_refuses_any_v2_history(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    status: str,
+) -> None:
     path = tmp_path / f"reference-v2-{status}.db"
     config = _config(path)
-    command.upgrade(config, "0035_add_report_kpi_reference_resolution_states")
+    migrated_db(path, target="0035_add_report_kpi_reference_resolution_states")
     label_hash = hashlib.sha256(b"Metric").hexdigest()
     with sqlite3.connect(path) as conn:
         binding_columns = ""
@@ -703,3 +884,26 @@ def test_downgrade_refuses_any_v2_history(tmp_path: Path, status: str) -> None:
 
     with pytest.raises(RuntimeError, match="cannot downgrade"):
         command.downgrade(config, "0034_add_investment_profile_label_reviews")
+
+
+def test_downgrade_refuses_new_reference_kind_even_when_unresolved(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    path = migrated_db(
+        tmp_path / "reference-v2-soft-kind.db",
+        target="0035_add_report_kpi_reference_resolution_states",
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO report_kpi_reference_resolution_revisions "
+            "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
+            "reference_content_sha256,status,reason_code,revision,reviewed_by,knowledge_at) "
+            "VALUES ('owner','NU','x','/x','soft_rule_kpi','Metric',?,'unresolved',"
+            "'unresolved',1,'owner','now')",
+            (hashlib.sha256(b"Metric").hexdigest(),),
+        )
+        conn.commit()
+
+    with pytest.raises(RuntimeError, match="cannot downgrade"):
+        command.downgrade(_config(path), "0034_add_investment_profile_label_reviews")

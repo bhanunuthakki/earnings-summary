@@ -74,6 +74,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-su
 & schtasks.exe /Create /TN '\earnings-summary\portfolio_tracker_api' /XML (Join-Path $renderDir 'portfolio_tracker_api.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\portfolio_tracker_api' }
 & $taskSecurityScript -TaskPath '\earnings-summary\portfolio_tracker_api' -RenderedXmlPath (Join-Path $renderDir 'portfolio_tracker_api.task.xml')
+& schtasks.exe /Create /TN '\earnings-summary\prepare_kpi_semantic_review' /XML (Join-Path $renderDir 'prepare_kpi_semantic_review.task.xml') /F
+if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\prepare_kpi_semantic_review' }
+& $taskSecurityScript -TaskPath '\earnings-summary\prepare_kpi_semantic_review' -RenderedXmlPath (Join-Path $renderDir 'prepare_kpi_semantic_review.task.xml')
 & schtasks.exe /Create /TN '\earnings-summary\red_team' /XML (Join-Path $renderDir 'red_team.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\red_team' }
 & $taskSecurityScript -TaskPath '\earnings-summary\red_team' -RenderedXmlPath (Join-Path $renderDir 'red_team.task.xml')

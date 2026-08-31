@@ -395,6 +395,21 @@
    }
   },
   {
+   "task_name": "\\earnings-summary\\prepare_kpi_semantic_review",
+   "xml": "prepare_kpi_semantic_review.task.xml",
+   "wrapper": "run_prepare_kpi_semantic_review.bat",
+   "schedule": {
+    "trigger": "CalendarTrigger",
+    "start_boundary": "2026-08-30T00:05:00",
+    "repetition_interval": "PT10M",
+    "days_interval": 1,
+    "weeks_interval": null,
+    "days_of_week": [],
+    "days_of_month": [],
+    "months": []
+   }
+  },
+  {
    "task_name": "\\earnings-summary\\red_team",
    "xml": "red_team.task.xml",
    "wrapper": "run_red_team.bat",

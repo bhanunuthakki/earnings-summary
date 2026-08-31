@@ -19,6 +19,7 @@ the `derived: "delta"` metric-spec opt-in — see
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import json
 import logging
@@ -56,9 +57,15 @@ from compute.thesis_evaluation_episodes import (
     forward_episode_id,
     record_forward_episode,
 )
+from identity import DEFAULT_USER_ID
 from models.facts import Unit
 from models.kpis import BreachStatus
 from models.unit_convert import convert_unit
+from pipeline.kpi_report_reference_dispositions import (
+    ReportKpiReferenceKind,
+    ReportKpiReferenceSourceStatus,
+    load_report_kpi_reference_inventory,
+)
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
     verified_report_kpi_reference_definition,
@@ -693,6 +700,124 @@ def _rollup_with_soft(
     return hard_status
 
 
+def _verified_report_rule_name(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    ticker: str,
+    json_pointer: str,
+) -> str | None:
+    reference = report_kpi_reference_at(
+        repo_root,
+        ticker=ticker,
+        json_pointer=json_pointer,
+    )
+    if reference is None:
+        return None
+    verified = verified_report_kpi_reference_definition(
+        conn,
+        repo_root=repo_root,
+        user_id=DEFAULT_USER_ID,
+        reference=reference,
+    )
+    return None if verified is None else verified.definition_name
+
+
+def _replace_json_pointer_value(
+    payload: dict[str, JsonValue], *, json_pointer: str, value: str
+) -> bool:
+    """Replace one already-inventoried scalar without guessing through drift."""
+    parts = [part.replace("~1", "/").replace("~0", "~") for part in json_pointer.split("/")[1:]]
+    if not parts:
+        return False
+    current: object = payload
+    for part in parts[:-1]:
+        if isinstance(current, dict):
+            current = cast("dict[str, object]", current).get(part)
+        elif isinstance(current, list) and part.isdigit():
+            items = cast("list[object]", current)
+            index = int(part)
+            if index >= len(items):
+                return False
+            current = items[index]
+        else:
+            return False
+    final = parts[-1]
+    if isinstance(current, dict) and final in current:
+        cast("dict[str, object]", current)[final] = value
+        return True
+    if isinstance(current, list) and final.isdigit():
+        items = cast("list[object]", current)
+        index = int(final)
+        if index < len(items):
+            items[index] = value
+            return True
+    return False
+
+
+def _verified_soft_rules(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    ticker: str,
+    holdings_path: Path,
+    payload: dict[str, JsonValue],
+    original_rules: list[SoftRule],
+) -> tuple[list[SoftRule], frozenset[int]]:
+    """Bind every supported KPI soft-rule leaf to its reviewed definition."""
+    inventory = load_report_kpi_reference_inventory(repo_root, (ticker.upper(),))
+    source = inventory.source_states[0]
+    if source.status is not ReportKpiReferenceSourceStatus.VALID:
+        return original_rules, frozenset(range(len(original_rules)))
+    rebound = copy.deepcopy(payload)
+    blocked: set[int] = set()
+    for reference in inventory.references:
+        if reference.reference_kind is not ReportKpiReferenceKind.SOFT_RULE_KPI:
+            continue
+        pointer_parts = reference.json_pointer.split("/")
+        if len(pointer_parts) < 3 or not pointer_parts[2].isdigit():
+            continue
+        rule_index = int(pointer_parts[2])
+        verified_name = _verified_report_rule_name(
+            conn,
+            repo_root=repo_root,
+            ticker=ticker,
+            json_pointer=reference.json_pointer,
+        )
+        if verified_name is None or not _replace_json_pointer_value(
+            rebound,
+            json_pointer=reference.json_pointer,
+            value=verified_name or "",
+        ):
+            blocked.add(rule_index)
+    rebound_spec = _holdings_spec_from_payload(rebound, path=holdings_path)
+    return rebound_spec.soft_rules, frozenset(blocked)
+
+
+def _evaluate_verified_soft_rules(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    rules: list[SoftRule],
+    blocked_indexes: frozenset[int],
+) -> list[SoftRuleResult]:
+    out: list[SoftRuleResult] = []
+    for index, rule in enumerate(rules):
+        if index not in blocked_indexes:
+            out.extend(evaluate_soft_rules(ticker, [rule], conn))
+            continue
+        out.append(
+            SoftRuleResult(
+                rule_name=rule.name,
+                status=SoftRuleStatus.UNRESOLVED,
+                evidence="unresolved: report KPI reference is not currently verified",
+                details={"reason": "unverified_report_kpi_reference"},
+                evaluated_at=datetime.now(),
+            )
+        )
+    return out
+
+
 def evaluate_ticker_thesis(
     conn: sqlite3.Connection,
     *,
@@ -715,24 +840,16 @@ def evaluate_ticker_thesis(
         else None
     )
     for index, rule in enumerate(spec.break_rules):
-        verified_name: str | None = None
-        if repo_root is not None:
-            reference = report_kpi_reference_at(
-                repo_root,
+        verified_name = (
+            None
+            if repo_root is None
+            else _verified_report_rule_name(
+                conn,
+                repo_root=repo_root,
                 ticker=ticker,
                 json_pointer=f"/break_rules/{index}/kpi_name",
             )
-            verified = (
-                None
-                if reference is None
-                else verified_report_kpi_reference_definition(
-                    conn,
-                    repo_root=repo_root,
-                    user_id="default",
-                    reference=reference,
-                )
-            )
-            verified_name = None if verified is None else verified.definition_name
+        )
         if repo_root is not None and verified_name is None:
             history = None
         elif verified_name is not None:
@@ -750,10 +867,46 @@ def evaluate_ticker_thesis(
                 rule.consecutive_periods,
             )
         evaluations.append(evaluate_rule(rule, history))
-    for rule in spec.business_model_rules:
-        history = _fetch_kpi_history(conn, ticker, rule.kpi_name, rule.consecutive_periods)
+    for index, rule in enumerate(spec.business_model_rules):
+        verified_name = (
+            None
+            if repo_root is None
+            else _verified_report_rule_name(
+                conn,
+                repo_root=repo_root,
+                ticker=ticker,
+                json_pointer=f"/business_model_rules/{index}/kpi_name",
+            )
+        )
+        if repo_root is not None and verified_name is None:
+            history = None
+        elif verified_name is not None:
+            history = _fetch_kpi_history_for_resolved_definition(
+                conn,
+                ticker,
+                verified_name,
+                rule.consecutive_periods,
+            )
+        else:
+            history = _fetch_kpi_history(conn, ticker, rule.kpi_name, rule.consecutive_periods)
         evaluations.append(evaluate_rule(rule, history))
-    soft_results = evaluate_soft_rules(spec.ticker.upper(), spec.soft_rules, conn)
+    if repo_root is None:
+        soft_results = evaluate_soft_rules(spec.ticker.upper(), spec.soft_rules, conn)
+    else:
+        verified_soft_rules, blocked_soft_indexes = _verified_soft_rules(
+            conn,
+            repo_root=repo_root,
+            ticker=ticker,
+            holdings_path=holdings_path,
+            payload=payload,
+            original_rules=spec.soft_rules,
+        )
+        soft_results = _evaluate_verified_soft_rules(
+            conn,
+            ticker=spec.ticker.upper(),
+            rules=verified_soft_rules,
+            blocked_indexes=blocked_soft_indexes,
+        )
     overall = _rollup_with_soft(evaluations, soft_results)
     return ThesisVerdict(
         ticker=spec.ticker.upper(),

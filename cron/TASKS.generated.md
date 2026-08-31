@@ -27,6 +27,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\monthly_calibration_scorecard` | monthly day 2 at 07:30:00 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Task Scheduler |
 | `\earnings-summary\onboard_pending` | daily from 00:17:00, repeats PT1H | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Task Scheduler |
 | `\earnings-summary\portfolio_tracker_api` | BootTrigger | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | Task Scheduler |
+| `\earnings-summary\prepare_kpi_semantic_review` | daily from 00:05:00, repeats PT10M | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Task Scheduler |
 | `\earnings-summary\red_team` | weekly Saturday at 10:00:00 | `red_team.task.xml` | `run_red_team.bat` | Task Scheduler |
 | `\earnings-summary\refresh_business_factors` | weekly Sunday at 11:30:00 | `refresh_business_factors.task.xml` | `run_refresh_business_factors.bat` | Task Scheduler |
 | `\earnings-summary\refresh_cache` | daily at 03:00:00 | `refresh_cache.task.xml` | `run_refresh_cache.bat` | Task Scheduler |

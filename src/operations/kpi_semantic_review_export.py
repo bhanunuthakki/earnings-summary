@@ -74,8 +74,8 @@ class KpiSemanticReviewExport(_FrozenModel):
 
     @model_validator(mode="after")
     def _validate_contract(self) -> Self:
-        if self.review.schema_version != "kpi_semantic_review.v2":
-            raise ValueError("semantic review export requires kpi_semantic_review.v2")
+        if self.review.schema_version != "kpi_semantic_review.v3":
+            raise ValueError("semantic review export requires kpi_semantic_review.v3")
         if self.review.ticker != self.ticker:
             raise ValueError("semantic review export ticker does not match its review batch")
         if self.review.user_id != self.user_id:

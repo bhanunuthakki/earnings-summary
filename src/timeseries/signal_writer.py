@@ -41,6 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from identity import DEFAULT_USER_ID
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
     verified_report_kpi_reference_definition,
@@ -230,7 +231,7 @@ def _collect_metric_specs(
                 else verified_report_kpi_reference_definition(
                     conn,
                     repo_root=repo_root,
-                    user_id="default",
+                    user_id=DEFAULT_USER_ID,
                     reference=reference,
                 )
             )

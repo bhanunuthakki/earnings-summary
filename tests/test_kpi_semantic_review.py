@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import execution.prepare_kpi_semantic_review as prepare_module
 import operations.kpi_semantic_review_export as export_module
 import pipeline.kpi_semantic_review as review_module
 from execution.prepare_kpi_semantic_review import (
@@ -31,6 +32,7 @@ from pipeline.kpi_semantic_review import (
     MAX_KPI_SEMANTIC_REVIEW_ITEMS,
     OPERATIONS_GOVERNANCE_DISPOSITION,
     OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT,
+    KpiEvidenceLocatorCoordinates,
     KpiSemanticReviewBatch,
     KpiSemanticReviewState,
     build_kpi_semantic_review_batch,
@@ -230,8 +232,12 @@ def test_exact_evidence_value_is_a_review_candidate_not_auto_admission(tmp_path:
     assert "Active customers" in item.evidence_candidates[0].excerpt
     candidate = item.evidence_candidates[0]
     assert candidate.excerpt == source_text[candidate.excerpt_start : candidate.excerpt_end]
-    assert candidate.evidence_locator == EVIDENCE_LOCATOR
-    assert candidate.locator_sha256 == candidate.evidence_locator.canonical_sha256
+    assert candidate.locator_coordinates.page_number == 9
+    assert candidate.locator_sha256 == EVIDENCE_LOCATOR.canonical_sha256
+    serialized_candidate = candidate.model_dump_json()
+    assert "source_ref" not in serialized_candidate
+    assert "C:/sources" not in serialized_candidate
+    assert "https://" not in serialized_candidate
     assert item.context_status is None
 
 
@@ -254,6 +260,31 @@ def test_evidence_locator_payload_and_hash_must_match(tmp_path: Path) -> None:
     assert item.state is KpiSemanticReviewState.EVIDENCE_SEARCH_INCOMPLETE
     assert item.evidence_search_reason_codes == ("evidence_node_locator_invalid",)
     assert item.evidence_candidates == ()
+
+
+def test_export_safe_locator_coordinates_omit_source_paths_and_urls() -> None:
+    source = EvidenceLocator(
+        source_ref="https://user:secret@example.test/private/report.xlsx",
+        sheet_name="KPIs",
+        cell_range="B7:C7",
+        office_object_kind="xlsx_named_table",
+        office_package_part="xl/tables/table1.xml",
+        office_relationship_id="rId1",
+        office_object_ordinal=1,
+        office_part_sha256="b" * 64,
+        table_name="Customer KPIs",
+    )
+
+    coordinates = KpiEvidenceLocatorCoordinates.from_evidence_locator(source)
+    encoded = coordinates.model_dump_json()
+
+    assert coordinates.sheet_name == "KPIs"
+    assert coordinates.cell_range == "B7:C7"
+    assert "source_ref" not in encoded
+    assert "example.test" not in encoded
+    assert "user:secret" not in encoded
+    assert "office_package_part" not in encoded
+    assert "xl/tables" not in encoded
 
 
 def test_integer_ending_in_zero_is_not_shortened_for_evidence_matching(tmp_path: Path) -> None:
@@ -744,8 +775,82 @@ def test_cli_publishes_one_atomic_current_index_without_mutating_database(
         now=datetime.now(UTC),
         max_age=timedelta(minutes=20),
     )
-    assert loaded.review.schema_version == "kpi_semantic_review.v2"
+    assert loaded.review.schema_version == "kpi_semantic_review.v3"
     assert hashlib.sha256(database.read_bytes()).hexdigest() == before
+
+
+def test_regular_producer_keeps_code_identity_and_product_state_roots_separate(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code_root = tmp_path / "deployed-code"
+    state_root = tmp_path / "product-state"
+    database = migrated_db(state_root / "data" / "portfolio.db")
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (user_id,ticker,name,list_type) "
+            "VALUES ('owner','NU','Nu Holdings','portfolio')"
+        )
+    captured: dict[str, Path] = {}
+
+    def configured_state_root(observed_code_root: Path) -> Path:
+        captured["configured_code_root"] = observed_code_root
+        return state_root.resolve()
+
+    def code_identity(observed_code_root: Path) -> str:
+        captured["identity_code_root"] = observed_code_root
+        return "code-identity"
+
+    def portfolio_tickers(conn: sqlite3.Connection, *, user_id: str) -> tuple[str, ...]:
+        assert conn.in_transaction
+        assert user_id == "owner"
+        return ("NU",)
+
+    def inherited_lock_is_valid(observed_state_root: Path, write_set: str) -> bool:
+        captured["lock_state_root"] = observed_state_root
+        captured["lock_write_set"] = Path(write_set)
+        return True
+
+    def unexpected_nested_lock(*_: object, **__: object) -> object:
+        raise AssertionError("the scheduled child must reuse its inherited outer lock")
+
+    monkeypatch.setattr(prepare_module, "configured_product_state_root", configured_state_root)
+    monkeypatch.setattr(prepare_module, "review_code_identity", code_identity)
+    monkeypatch.setattr(prepare_module, "portfolio_tickers", portfolio_tickers)
+    monkeypatch.setattr(prepare_module, "inherited_lock_is_valid", inherited_lock_is_valid)
+    monkeypatch.setattr(prepare_module, "JobLock", unexpected_nested_lock)
+
+    assert (
+        prepare_review_main(
+            [
+                "--db",
+                str(database),
+                "--code-root",
+                str(code_root),
+                "--user-id",
+                "owner",
+                "--publish",
+            ]
+        )
+        == 0
+    )
+
+    capsys.readouterr()
+    assert captured == {
+        "configured_code_root": code_root.resolve(),
+        "identity_code_root": code_root.resolve(),
+        "lock_state_root": state_root.resolve(),
+        "lock_write_set": Path("kpi-semantic-review-export"),
+    }
+    export, _ = load_current_kpi_semantic_review_export(
+        root=state_root / "data" / "operations" / "kpi_semantic_reviews",
+        ticker="NU",
+        now=datetime.now(UTC),
+        max_age=timedelta(minutes=20),
+    )
+    assert export.code_instance_sha256 == hashlib.sha256(b"code-identity").hexdigest()
 
 
 def test_cli_limit_is_bounded() -> None:
@@ -810,13 +915,44 @@ def test_semantic_review_export_is_content_addressed_and_current_portfolio_scope
         )
 
 
+def test_semantic_review_transport_omits_unsafe_locator_source_material(tmp_path: Path) -> None:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
+    _fact(conn, fact_id=1, definition_id=1, document_id=10)
+    _evidence(conn, document_id=10, text="Customers (MM) 114.2.")
+    batch = build_kpi_semantic_review_batch(
+        conn,
+        repo_root=tmp_path,
+        user_id="owner",
+        ticker="NU",
+        limit=1_000,
+        observed_at=NOW,
+    )
+    export = seal_kpi_semantic_review_export(
+        review=batch,
+        code_instance_sha256="b" * 64,
+        database_instance_sha256="c" * 64,
+        schema_revision="0035",
+    )
+
+    encoded = export_module.encoded_kpi_semantic_review_export(export).decode("utf-8")
+
+    assert '"page_number": 9' in encoded
+    assert "source_ref" not in encoded
+    assert "C:/sources" not in encoded
+    assert "http://" not in encoded.casefold()
+    assert "https://" not in encoded.casefold()
+    assert "office_package_part" not in encoded
+    assert "xbrl_package_member" not in encoded
+
+
 def test_semantic_review_export_fails_closed_for_v1_truncation_and_oversize(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     export = _review_export(tmp_path)
     legacy = export.model_dump(mode="json")
     legacy["review"]["schema_version"] = "kpi_semantic_review.v1"
-    with pytest.raises(ValidationError, match=r"kpi_semantic_review\.v2"):
+    with pytest.raises(ValidationError, match=r"kpi_semantic_review\.v3"):
         KpiSemanticReviewExport.model_validate(legacy)
 
     truncated_payload = export.review.model_dump(mode="json", exclude={"content_sha256"})

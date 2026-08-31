@@ -1,21 +1,34 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
 
 import pipeline.kpi_semantic_review as review_module
-from execution.apply_kpi_semantic_refresh import RefreshManifest
+from execution.apply_kpi_semantic_refresh import (
+    RefreshManifest,
+    RepairBlockedError,
+    validate_refresh_entry,
+)
 from execution.build_kpi_semantic_refresh_manifest import (
     KpiSemanticRefreshDecisionBatch,
     ReviewedKpiSemanticDecision,
     build_kpi_semantic_refresh_manifest,
     write_refresh_manifest,
 )
+from models.facts import FactLocator, LocatorKind
+from operations.kpi_semantic_review_export import (
+    KpiSemanticReviewExport,
+    payload_sha256,
+    seal_kpi_semantic_review_export,
+)
 from pipeline.kpi_semantic_review import (
+    KpiEvidenceLocatorCoordinates,
     KpiSemanticReviewBatch,
     build_kpi_semantic_review_batch,
 )
@@ -139,6 +152,44 @@ def _database() -> sqlite3.Connection:
     return conn
 
 
+def _use_spreadsheet_evidence(
+    conn: sqlite3.Connection,
+    *,
+    coordinate_field: Literal["cell_address", "cell_range"],
+    coordinate_value: str,
+) -> EvidenceLocator:
+    locator = (
+        EvidenceLocator(
+            source_ref="C:/sources/nu-q4.xlsx",
+            sheet_name="Customer KPIs",
+            cell_address=coordinate_value,
+        )
+        if coordinate_field == "cell_address"
+        else EvidenceLocator(
+            source_ref="C:/sources/nu-q4.xlsx",
+            sheet_name="Customer KPIs",
+            cell_range=coordinate_value,
+        )
+    )
+    extractor = resolve_fulltext_extractor_identity("C:/sources/nu-q4.xlsx", None)
+    conn.execute(
+        "UPDATE documents SET doc_type='ir_historical_spreadsheet',period_end=NULL,file_path=? "
+        "WHERE id=2",
+        ("C:/sources/nu-q4.xlsx",),
+    )
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET extractor_name=?,extractor_config_sha256=?,"
+        "extractor_code_version=? WHERE extraction_run_id='run-1'",
+        (extractor.name, extractor.config_sha256, extractor.code_version),
+    )
+    conn.execute(
+        "UPDATE evidence_nodes SET node_kind='table_cell',locator_json=?,locator_sha256=? "
+        "WHERE node_id='page-7'",
+        (locator.canonical_json, locator.canonical_sha256),
+    )
+    return locator
+
+
 def _review(
     conn: sqlite3.Connection, tmp_path: Path, *, limit: int = 5_000
 ) -> KpiSemanticReviewBatch:
@@ -146,8 +197,18 @@ def _review(
         conn,
         repo_root=tmp_path,
         user_id="owner",
+        ticker="NU",
         limit=limit,
         observed_at=NOW,
+    )
+
+
+def _export(review: KpiSemanticReviewBatch) -> KpiSemanticReviewExport:
+    return seal_kpi_semantic_review_export(
+        review=review,
+        code_instance_sha256="d" * 64,
+        database_instance_sha256="e" * 64,
+        schema_revision="0033_add_report_kpi_reference_resolutions",
     )
 
 
@@ -194,12 +255,13 @@ def _decision(
 
 
 def _decisions(
-    review_batch: KpiSemanticReviewBatch, **decision_changes: object
+    review_export: KpiSemanticReviewExport, **decision_changes: object
 ) -> KpiSemanticRefreshDecisionBatch:
+    review_batch = review_export.review
     return KpiSemanticRefreshDecisionBatch(
-        schema_version="kpi_semantic_refresh_decisions.v1",
+        schema_version="kpi_semantic_refresh_decisions.v2",
+        review_export_sha256=review_export.content_sha256,
         review_batch_sha256=review_batch.content_sha256,
-        user_id="owner",
         reviewer="owner",
         logical_idempotency_key="nu:doc-v1:semantic-review:v1",
         knowledge_at=NOW,
@@ -213,14 +275,15 @@ def _decisions(
 def test_builds_deterministic_source_bound_refresh_manifest(tmp_path: Path) -> None:
     conn = _database()
     review_batch = _review(conn, tmp_path)
-    decisions = _decisions(review_batch)
+    review_export = _export(review_batch)
+    decisions = _decisions(review_export)
     changes_before = conn.total_changes
 
     first = build_kpi_semantic_refresh_manifest(
-        conn, repo_root=tmp_path, review_batch=review_batch, decisions=decisions
+        conn, repo_root=tmp_path, review_export=review_export, decisions=decisions
     )
     second = build_kpi_semantic_refresh_manifest(
-        conn, repo_root=tmp_path, review_batch=review_batch, decisions=decisions
+        conn, repo_root=tmp_path, review_export=review_export, decisions=decisions
     )
 
     assert first == second
@@ -243,6 +306,70 @@ def test_builds_deterministic_source_bound_refresh_manifest(tmp_path: Path) -> N
     assert output.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    ("coordinate_field", "coordinate_value"),
+    (("cell_address", "B7"), ("cell_range", "B7:C7")),
+)
+def test_spreadsheet_coordinates_survive_export_v5_and_executor_validation(
+    tmp_path: Path,
+    coordinate_field: Literal["cell_address", "cell_range"],
+    coordinate_value: str,
+) -> None:
+    conn = _database()
+    source_locator = _use_spreadsheet_evidence(
+        conn,
+        coordinate_field=coordinate_field,
+        coordinate_value=coordinate_value,
+    )
+    review_export = _export(_review(conn, tmp_path))
+
+    manifest = build_kpi_semantic_refresh_manifest(
+        conn,
+        repo_root=tmp_path,
+        review_export=review_export,
+        decisions=_decisions(review_export),
+    )
+
+    entry = RefreshManifest.model_validate_json(manifest.model_dump_json()).entries[0]
+    assert entry.locator.kind is LocatorKind.SPREADSHEET_CELL
+    assert entry.locator.spreadsheet_cell is not None
+    assert entry.locator.spreadsheet_cell.sheet_name == source_locator.sheet_name
+    assert entry.locator.spreadsheet_cell.cell_address == source_locator.cell_address
+    assert entry.locator.spreadsheet_cell.cell_range == source_locator.cell_range
+
+
+def test_rejects_decision_before_review_and_tampered_export_coordinates(tmp_path: Path) -> None:
+    conn = _database()
+    review_export = _export(_review(conn, tmp_path))
+    stale_decisions = _decisions(review_export).model_copy(
+        update={"knowledge_at": NOW.replace(hour=11)}
+    )
+    with pytest.raises(ValueError, match="predates"):
+        build_kpi_semantic_refresh_manifest(
+            conn,
+            repo_root=tmp_path,
+            review_export=review_export,
+            decisions=stale_decisions,
+        )
+
+    review_payload = review_export.review.model_dump(mode="json", exclude={"content_sha256"})
+    candidate_payload = review_payload["items"][0]["evidence_candidates"][0]
+    candidate_payload["locator_coordinates"] = KpiEvidenceLocatorCoordinates(
+        page_number=999
+    ).model_dump(mode="json")
+    tampered_review = KpiSemanticReviewBatch.model_validate(
+        {**review_payload, "content_sha256": payload_sha256(review_payload)}
+    )
+    tampered_export = _export(tampered_review)
+    with pytest.raises(ValueError, match="coordinates changed"):
+        build_kpi_semantic_refresh_manifest(
+            conn,
+            repo_root=tmp_path,
+            review_export=tampered_export,
+            decisions=_decisions(tampered_export),
+        )
+
+
 def test_rejects_caller_supplied_locator_that_disagrees_with_evidence(tmp_path: Path) -> None:
     conn = _database()
     review_batch = _review(conn, tmp_path)
@@ -253,41 +380,70 @@ def test_rejects_caller_supplied_locator_that_disagrees_with_evidence(tmp_path: 
         ReviewedKpiSemanticDecision.model_validate(raw)
 
 
+def test_executor_rejects_manifest_locator_that_disagrees_with_evidence(tmp_path: Path) -> None:
+    conn = _database()
+    review_export = _export(_review(conn, tmp_path))
+    entry = build_kpi_semantic_refresh_manifest(
+        conn,
+        repo_root=tmp_path,
+        review_export=review_export,
+        decisions=_decisions(review_export),
+    ).entries[0]
+    bad_locator = FactLocator(
+        kind=LocatorKind.PDF_SLIDE,
+        pdf_page=999,
+        verbatim_snippet=SOURCE_TEXT,
+    )
+    bad_locator_json = bad_locator.to_json()
+    assert bad_locator_json is not None
+    bad_entry = entry.model_copy(
+        update={
+            "locator": bad_locator,
+            "fact_locator_sha256": hashlib.sha256(bad_locator_json.encode("utf-8")).hexdigest(),
+        }
+    )
+
+    with pytest.raises(RepairBlockedError, match="fact_locator_evidence_mismatch"):
+        validate_refresh_entry(conn, bad_entry, {1})
+
+
 def test_rejects_review_hash_mismatch(tmp_path: Path) -> None:
     conn = _database()
     review_batch = _review(conn, tmp_path)
-    decisions = _decisions(review_batch).model_copy(update={"review_batch_sha256": "f" * 64})
+    review_export = _export(review_batch)
+    nested_mismatch = _decisions(review_export).model_copy(update={"review_batch_sha256": "f" * 64})
 
-    with pytest.raises(ValueError, match="review batch hash"):
+    with pytest.raises(ValueError, match="nested review hash"):
         build_kpi_semantic_refresh_manifest(
-            conn, repo_root=tmp_path, review_batch=review_batch, decisions=decisions
+            conn, repo_root=tmp_path, review_export=review_export, decisions=nested_mismatch
+        )
+
+    export_mismatch = _decisions(review_export).model_copy(
+        update={"review_export_sha256": "f" * 64}
+    )
+    with pytest.raises(ValueError, match="review export hash"):
+        build_kpi_semantic_refresh_manifest(
+            conn, repo_root=tmp_path, review_export=review_export, decisions=export_mismatch
         )
 
 
 def test_rejects_truncated_review_batch(tmp_path: Path) -> None:
     conn = _database()
-    complete_review = _review(conn, tmp_path)
-    decisions = _decisions(complete_review)
     conn.execute(
         "INSERT INTO kpi_facts VALUES (11,'NU','2024-09-30','Q3',1,'100000000','count',"
         "NULL,2,NULL,'Total customers reached 100 million.',NULL)"
     )
     review_batch = _review(conn, tmp_path, limit=1)
     assert review_batch.truncated is True
-    decisions = decisions.model_copy(update={"review_batch_sha256": review_batch.content_sha256})
 
-    with pytest.raises(ValueError, match="truncated"):
-        build_kpi_semantic_refresh_manifest(
-            conn,
-            repo_root=tmp_path,
-            review_batch=review_batch,
-            decisions=decisions,
-        )
+    with pytest.raises(ValidationError, match="truncated"):
+        _export(review_batch)
 
 
 def test_rejects_missing_verbatim_semantic_evidence(tmp_path: Path) -> None:
     conn = _database()
     review_batch = _review(conn, tmp_path)
+    review_export = _export(review_batch)
     semantic_evidence = _decision(review_batch).semantic_evidence.model_copy(
         update={"accounting_basis_quote": "not present in source"}
     )
@@ -296,8 +452,8 @@ def test_rejects_missing_verbatim_semantic_evidence(tmp_path: Path) -> None:
         build_kpi_semantic_refresh_manifest(
             conn,
             repo_root=tmp_path,
-            review_batch=review_batch,
-            decisions=_decisions(review_batch, semantic_evidence=semantic_evidence),
+            review_export=review_export,
+            decisions=_decisions(review_export, semantic_evidence=semantic_evidence),
         )
 
 
@@ -312,13 +468,8 @@ def test_rejects_incomplete_or_truncated_candidate_search(
     monkeypatch.setattr(review_module, "MAX_EVIDENCE_MATCHES_SCANNED_PER_FACT", 1)
     incomplete_review = _review(incomplete_conn, tmp_path)
     assert incomplete_review.items[0].evidence_search_incomplete is True
-    with pytest.raises(ValueError, match="search is incomplete"):
-        build_kpi_semantic_refresh_manifest(
-            incomplete_conn,
-            repo_root=tmp_path,
-            review_batch=incomplete_review,
-            decisions=_decisions(incomplete_review),
-        )
+    with pytest.raises(ValidationError, match="incomplete"):
+        _export(incomplete_review)
 
     monkeypatch.setattr(review_module, "MAX_EVIDENCE_MATCHES_SCANNED_PER_FACT", 4_096)
     truncated_conn = _database()
@@ -328,18 +479,14 @@ def test_rejects_incomplete_or_truncated_candidate_search(
     )
     truncated_review = _review(truncated_conn, tmp_path)
     assert truncated_review.items[0].evidence_candidates_truncated is True
-    with pytest.raises(ValueError, match="candidates are truncated"):
-        build_kpi_semantic_refresh_manifest(
-            truncated_conn,
-            repo_root=tmp_path,
-            review_batch=truncated_review,
-            decisions=_decisions(truncated_review),
-        )
+    with pytest.raises(ValidationError, match="incomplete"):
+        _export(truncated_review)
 
 
 def test_rejects_fact_head_and_issuer_drift(tmp_path: Path) -> None:
     head_conn = _database()
     head_review = _review(head_conn, tmp_path)
+    head_export = _export(head_review)
     head_conn.execute(
         "INSERT INTO kpi_facts VALUES (12,'NU','2024-12-31','Q4',1,'114200000','count',"
         "NULL,2,10,'Total customers reached 114.2 million.',NULL)"
@@ -348,12 +495,13 @@ def test_rejects_fact_head_and_issuer_drift(tmp_path: Path) -> None:
         build_kpi_semantic_refresh_manifest(
             head_conn,
             repo_root=tmp_path,
-            review_batch=head_review,
-            decisions=_decisions(head_review),
+            review_export=head_export,
+            decisions=_decisions(head_export),
         )
 
     context_conn = _database()
     context_review = _review(context_conn, tmp_path)
+    context_export = _export(context_review)
     context_conn.execute(
         "INSERT INTO kpi_fact_semantic_contexts SELECT 6,kpi_fact_id,2,5,"
         "metric_name_as_reported,reported_period_end,period_role,publication_lane,"
@@ -365,19 +513,20 @@ def test_rejects_fact_head_and_issuer_drift(tmp_path: Path) -> None:
         build_kpi_semantic_refresh_manifest(
             context_conn,
             repo_root=tmp_path,
-            review_batch=context_review,
-            decisions=_decisions(context_review),
+            review_export=context_export,
+            decisions=_decisions(context_export),
         )
 
     issuer_conn = _database()
     issuer_review = _review(issuer_conn, tmp_path)
+    issuer_export = _export(issuer_review)
     issuer_conn.execute("UPDATE documents SET ticker='NOW' WHERE id=2")
     with pytest.raises(ValueError, match="issuer"):
         build_kpi_semantic_refresh_manifest(
             issuer_conn,
             repo_root=tmp_path,
-            review_batch=issuer_review,
-            decisions=_decisions(issuer_review),
+            review_export=issuer_export,
+            decisions=_decisions(issuer_export),
         )
 
 
@@ -393,10 +542,10 @@ def test_rejects_unsupported_decision_action_and_review_state(tmp_path: Path) ->
     unsupported_conn.execute("DELETE FROM evidence_nodes")
     unsupported_review = _review(unsupported_conn, tmp_path)
     assert unsupported_review.items[0].state.value != "source_review_required"
+    unsupported_export = _export(unsupported_review)
     unsupported_decision = _decision(review_batch)
-    unsupported_decisions = _decisions(review_batch).model_copy(
+    unsupported_decisions = _decisions(unsupported_export).model_copy(
         update={
-            "review_batch_sha256": unsupported_review.content_sha256,
             "decisions": (unsupported_decision,),
         }
     )
@@ -404,6 +553,6 @@ def test_rejects_unsupported_decision_action_and_review_state(tmp_path: Path) ->
         build_kpi_semantic_refresh_manifest(
             unsupported_conn,
             repo_root=tmp_path,
-            review_batch=unsupported_review,
+            review_export=unsupported_export,
             decisions=unsupported_decisions,
         )

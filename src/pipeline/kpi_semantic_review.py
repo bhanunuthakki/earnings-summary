@@ -22,8 +22,9 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.documents import SourceType
+from models.facts import FactLocator, LocatorKind, SpreadsheetCellRef
 from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
-from provenance.evidence_ledger import EvidenceLocator
+from provenance.evidence_ledger import EvidenceLocator, OfficeObjectKind
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
 
@@ -68,6 +69,143 @@ class KpiSemanticReviewState(StrEnum):
     SOURCE_REVIEW_REQUIRED = "source_review_required"
 
 
+class KpiEvidenceLocatorCoordinates(BaseModel):
+    """Safe sub-document coordinates; source paths and URLs never cross the export seam."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    filing_section_key_raw: str | None = Field(default=None, min_length=1, max_length=512)
+    filing_ordinal: int | None = Field(default=None, ge=0)
+    page_number: int | None = Field(default=None, gt=0)
+    bbox: tuple[float, float, float, float] | None = None
+    char_start: int | None = Field(default=None, ge=0)
+    char_end: int | None = Field(default=None, ge=0)
+    table_name: str | None = Field(default=None, min_length=1, max_length=255)
+    table_row_index: int | None = Field(default=None, ge=0)
+    table_column_index: int | None = Field(default=None, ge=0)
+    slide_number: int | None = Field(default=None, gt=0)
+    shape_index: int | None = Field(default=None, ge=0)
+    sheet_name: str | None = Field(default=None, min_length=1, max_length=255)
+    cell_address: str | None = Field(default=None, pattern=r"^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$")
+    cell_range: str | None = Field(
+        default=None,
+        pattern=(
+            r"^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}:"
+            r"\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$"
+        ),
+    )
+    office_object_kind: OfficeObjectKind | None = None
+    office_relationship_id: str | None = Field(default=None, min_length=1, max_length=255)
+    office_object_ordinal: int | None = Field(default=None, gt=0)
+    office_series_ordinal: int | None = Field(default=None, gt=0)
+    office_part_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    transcript_turn_sequence: int | None = Field(default=None, ge=0)
+    transcript_speaker: str | None = Field(default=None, min_length=1, max_length=512)
+    transcript_time_code_start: str | None = Field(default=None, min_length=1, max_length=64)
+    transcript_time_code_end: str | None = Field(default=None, min_length=1, max_length=64)
+    transcript_start_seconds: float | None = Field(default=None, ge=0)
+    transcript_end_seconds: float | None = Field(default=None, ge=0)
+    xbrl_fact_id: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_element_path: str | None = Field(default=None, min_length=1, max_length=4096)
+    xbrl_concept_name: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_context_id: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_unit_id: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_target: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_continuation_ids: tuple[str, ...] | None = None
+    legacy_table: str | None = Field(default=None, min_length=1, max_length=128)
+    legacy_row_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _coordinates_are_concrete(self) -> Self:
+        if not self.model_dump(mode="json", exclude_none=True):
+            raise ValueError("evidence locator has no safe sub-document coordinates")
+        if (
+            self.cell_address is not None or self.cell_range is not None
+        ) and self.sheet_name is None:
+            raise ValueError("worksheet cell or range requires a sheet")
+        if self.cell_address is not None and self.cell_range is not None:
+            raise ValueError("worksheet cell address and range are mutually exclusive")
+        if self.shape_index is not None and self.slide_number is None:
+            raise ValueError("shape index requires slide number")
+        if self.bbox is not None:
+            left, top, right, bottom = self.bbox
+            if right < left or bottom < top:
+                raise ValueError("bbox right/bottom must not precede left/top")
+        if (
+            self.char_start is not None
+            and self.char_end is not None
+            and self.char_end < self.char_start
+        ):
+            raise ValueError("char end must not precede char start")
+        if (
+            self.transcript_start_seconds is not None
+            and self.transcript_end_seconds is not None
+            and self.transcript_end_seconds < self.transcript_start_seconds
+        ):
+            raise ValueError("transcript end must not precede transcript start")
+        return self
+
+    @classmethod
+    def from_evidence_locator(cls, locator: EvidenceLocator) -> KpiEvidenceLocatorCoordinates:
+        payload = locator.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude={
+                "source_ref",
+                "office_package_part",
+                "xbrl_package_member",
+                "xbrl_concept_namespace",
+            },
+        )
+        return cls.model_validate(payload)
+
+
+def fact_locator_from_evidence_coordinates(
+    coordinates: KpiEvidenceLocatorCoordinates,
+    *,
+    verbatim_snippet: str,
+) -> FactLocator:
+    """Project verified evidence coordinates into the persisted locator contract."""
+    if coordinates.sheet_name is not None and (
+        coordinates.cell_address is not None or coordinates.cell_range is not None
+    ):
+        return FactLocator(
+            kind=LocatorKind.SPREADSHEET_CELL,
+            spreadsheet_cell=SpreadsheetCellRef(
+                sheet_name=coordinates.sheet_name,
+                cell_address=coordinates.cell_address,
+                cell_range=coordinates.cell_range,
+                table_name=coordinates.table_name,
+            ),
+            verbatim_snippet=verbatim_snippet,
+        )
+    page_numbers = {
+        value for value in (coordinates.page_number, coordinates.slide_number) if value is not None
+    }
+    if len(page_numbers) > 1:
+        raise ValueError("evidence locator has conflicting page and slide coordinates")
+    page_number = next(iter(page_numbers), None)
+    if page_number is not None:
+        return FactLocator(
+            kind=LocatorKind.PDF_SLIDE,
+            section=coordinates.filing_section_key_raw,
+            pdf_page=page_number,
+            pdf_bbox=coordinates.bbox,
+            verbatim_snippet=verbatim_snippet,
+        )
+    if coordinates.filing_section_key_raw is not None:
+        return FactLocator(
+            section=coordinates.filing_section_key_raw,
+            verbatim_snippet=verbatim_snippet,
+        )
+    if coordinates.xbrl_element_path is not None:
+        return FactLocator(
+            json_path=coordinates.xbrl_element_path,
+            verbatim_snippet=verbatim_snippet,
+        )
+    raise ValueError("evidence locator cannot be represented by FactLocator without guessing")
+
+
 class KpiEvidenceCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -75,7 +213,7 @@ class KpiEvidenceCandidate(BaseModel):
     document_version_id: str = Field(min_length=1, max_length=128)
     extraction_run_id: str = Field(min_length=1, max_length=128)
     node_kind: str = Field(min_length=1, max_length=64)
-    evidence_locator: EvidenceLocator
+    locator_coordinates: KpiEvidenceLocatorCoordinates
     locator_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_value_text: str = Field(min_length=1, max_length=80)
     excerpt: str = Field(min_length=1, max_length=640)
@@ -86,8 +224,6 @@ class KpiEvidenceCandidate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_verbatim_offsets(self) -> Self:
-        if self.locator_sha256 != self.evidence_locator.canonical_sha256:
-            raise ValueError("candidate locator hash does not match its canonical payload")
         if not self.excerpt_start <= self.match_start < self.match_end <= self.excerpt_end:
             raise ValueError("evidence candidate offsets are inconsistent")
         relative_start = self.match_start - self.excerpt_start
@@ -152,6 +288,7 @@ class _EvidenceNodeSnapshot:
     extraction_run_id: str
     node_kind: str
     locator: EvidenceLocator
+    locator_coordinates: KpiEvidenceLocatorCoordinates
     locator_sha256: str
     text: str
 
@@ -166,7 +303,7 @@ class _EvidenceDocumentSnapshot:
 class KpiSemanticReviewBatch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_review.v2"] = "kpi_semantic_review.v2"
+    schema_version: Literal["kpi_semantic_review.v3"] = "kpi_semantic_review.v3"
     user_id: str
     ticker: str | None
     observed_at: datetime
@@ -523,6 +660,11 @@ def _evidence_state_and_candidates(
             ):
                 search_reasons.add("evidence_node_locator_invalid")
                 continue
+            try:
+                locator_coordinates = KpiEvidenceLocatorCoordinates.from_evidence_locator(locator)
+            except ValueError:
+                search_reasons.add("evidence_node_locator_not_export_safe")
+                continue
             bounded_text = str(row["bounded_text"] or "")
             allowed_chars = min(
                 len(bounded_text),
@@ -543,6 +685,7 @@ def _evidence_state_and_candidates(
                     extraction_run_id=str(row["extraction_run_id"]),
                     node_kind=str(row["node_kind"]),
                     locator=locator,
+                    locator_coordinates=locator_coordinates,
                     locator_sha256=locator_sha256,
                     text=text,
                 )
@@ -593,7 +736,7 @@ def _evidence_state_and_candidates(
                         document_version_id=node.document_version_id,
                         extraction_run_id=node.extraction_run_id,
                         node_kind=node.node_kind,
-                        evidence_locator=node.locator,
+                        locator_coordinates=node.locator_coordinates,
                         locator_sha256=locator_sha256,
                         source_value_text=match.group(0),
                         excerpt=excerpt,
@@ -751,7 +894,7 @@ def build_kpi_semantic_review_batch(
         raise ValueError("observed_at must be timezone-aware")
     at = at.astimezone(UTC)
     payload = {
-        "schema_version": "kpi_semantic_review.v2",
+        "schema_version": "kpi_semantic_review.v3",
         "user_id": user_id,
         "ticker": normalized_ticker,
         "observed_at": at.isoformat().replace("+00:00", "Z"),

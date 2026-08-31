@@ -30,6 +30,7 @@ from operations.models import (
     SourcePolicyDefinition,
 )
 from operations.review_bundle import (
+    REVIEW_CODE_IDENTITY_DEPENDENCIES,
     OperationsReviewBundle,
     ReviewSchedulerTask,
     build_operations_review_bundle,
@@ -195,16 +196,9 @@ def test_review_bundle_is_closed_sanitized_and_hash_validated() -> None:
 def test_review_code_identity_binds_semantic_review_producer_route_model_and_client(
     tmp_path: Path,
 ) -> None:
-    dependencies = (
-        "execution/comments_server.py",
-        "execution/fetch_windows_kpi_semantic_review.py",
-        "execution/fetch_windows_review_bundle.py",
-        "execution/prepare_kpi_semantic_review.py",
-        "src/operations/kpi_semantic_review_export.py",
-        "src/pipeline/kpi_semantic_review.py",
-    )
+    assert tuple(sorted(REVIEW_CODE_IDENTITY_DEPENDENCIES)) == REVIEW_CODE_IDENTITY_DEPENDENCIES
     before = review_code_identity(tmp_path)
-    for relative in dependencies:
+    for relative in REVIEW_CODE_IDENTITY_DEPENDENCIES:
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(relative, encoding="utf-8")

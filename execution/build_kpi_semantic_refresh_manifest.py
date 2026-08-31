@@ -33,12 +33,14 @@ from execution.apply_kpi_semantic_refresh import (  # noqa: E402
     schema_revision,
     validate_refresh_entry,
 )
-from models.facts import Currency, FactLocator, LocatorKind, Unit  # noqa: E402
+from models.facts import Currency, Unit  # noqa: E402
+from operations.kpi_semantic_review_export import KpiSemanticReviewExport  # noqa: E402
 from pipeline.kpi_semantic_review import (  # noqa: E402
     KpiEvidenceCandidate,
-    KpiSemanticReviewBatch,
+    KpiEvidenceLocatorCoordinates,
     KpiSemanticReviewItem,
     KpiSemanticReviewState,
+    fact_locator_from_evidence_coordinates,
 )
 from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
 from pipeline.kpi_semantics import (  # noqa: E402
@@ -48,6 +50,7 @@ from pipeline.kpi_semantics import (  # noqa: E402
     normalize_source_numeric,
     parse_source_numeric,
 )
+from provenance.evidence_ledger import EvidenceLocator  # noqa: E402
 from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -86,9 +89,9 @@ class KpiSemanticRefreshDecisionBatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_refresh_decisions.v1"]
+    schema_version: Literal["kpi_semantic_refresh_decisions.v2"]
+    review_export_sha256: str = Field(pattern=_SHA256)
     review_batch_sha256: str = Field(pattern=_SHA256)
-    user_id: str = Field(min_length=1, max_length=128)
     reviewer: str = Field(min_length=1, max_length=128)
     logical_idempotency_key: str = Field(min_length=1, max_length=256)
     knowledge_at: datetime
@@ -126,34 +129,36 @@ def _semantic_quotes(decision: ReviewedKpiSemanticDecision) -> tuple[str, ...]:
     )
 
 
-def _fact_locator_for_candidate(candidate: KpiEvidenceCandidate) -> FactLocator:
-    """Derive the persisted locator only from the hash-bound evidence locator."""
-    evidence = candidate.evidence_locator
-    page_numbers = {
-        value for value in (evidence.page_number, evidence.slide_number) if value is not None
-    }
-    if len(page_numbers) > 1:
-        raise ValueError("evidence locator has conflicting page and slide coordinates")
-    page_number = next(iter(page_numbers), None)
-    if page_number is not None:
-        return FactLocator(
-            kind=LocatorKind.PDF_SLIDE,
-            section=evidence.filing_section_key_raw,
-            pdf_page=page_number,
-            pdf_bbox=evidence.bbox,
-            verbatim_snippet=candidate.excerpt,
-        )
-    if evidence.filing_section_key_raw is not None:
-        return FactLocator(
-            section=evidence.filing_section_key_raw,
-            verbatim_snippet=candidate.excerpt,
-        )
-    if evidence.xbrl_element_path is not None:
-        return FactLocator(
-            json_path=evidence.xbrl_element_path,
-            verbatim_snippet=candidate.excerpt,
-        )
-    raise ValueError("evidence locator cannot be represented by FactLocator without guessing")
+def _validated_candidate_coordinates(
+    conn: sqlite3.Connection,
+    *,
+    source_doc_id: int,
+    candidate: KpiEvidenceCandidate,
+) -> KpiEvidenceLocatorCoordinates:
+    row = conn.execute(
+        "SELECT node.locator_json,node.locator_sha256 FROM evidence_nodes node "
+        "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+        "JOIN evidence_document_versions version "
+        "ON version.document_version_id=run.document_version_id "
+        "WHERE node.node_id=? AND version.legacy_document_id=?",
+        (candidate.evidence_node_id, source_doc_id),
+    ).fetchone()
+    if row is None or row["locator_json"] is None:
+        raise ValueError("selected evidence candidate locator is unavailable")
+    try:
+        locator = EvidenceLocator.model_validate_json(str(row["locator_json"]))
+    except ValueError as exc:
+        raise ValueError("selected evidence candidate locator is invalid") from exc
+    if (
+        str(row["locator_json"]) != locator.canonical_json
+        or str(row["locator_sha256"] or "") != locator.canonical_sha256
+        or candidate.locator_sha256 != locator.canonical_sha256
+    ):
+        raise ValueError("selected evidence candidate locator hash changed after review")
+    coordinates = KpiEvidenceLocatorCoordinates.from_evidence_locator(locator)
+    if coordinates != candidate.locator_coordinates:
+        raise ValueError("selected evidence candidate coordinates changed after review")
+    return coordinates
 
 
 def _fact_row(conn: sqlite3.Connection, *, fact_id: int) -> tuple[sqlite3.Row, str]:
@@ -228,10 +233,6 @@ def _entry_for_decision(
     source_excerpt = str(candidate.excerpt)
     if any(quote not in source_excerpt for quote in _semantic_quotes(decision)):
         raise ValueError("semantic evidence quote is not verbatim in the selected review excerpt")
-    locator = _fact_locator_for_candidate(candidate)
-    locator_json = locator.to_json()
-    if locator_json is None:
-        raise ValueError("reviewed decision requires a concrete fact locator")
 
     row, old_source_sha = _fact_row(conn, fact_id=decision.fact_id)
     _validate_batch_item_against_row(item, row)
@@ -252,6 +253,18 @@ def _entry_for_decision(
     source_observation_version = item.source_observation_version
     if source_doc_id is None or source_content_sha256 is None or source_observation_version is None:
         raise ValueError("review-ready decision lacks exact source identity")
+    coordinates = _validated_candidate_coordinates(
+        conn,
+        source_doc_id=source_doc_id,
+        candidate=candidate,
+    )
+    locator = fact_locator_from_evidence_coordinates(
+        coordinates,
+        verbatim_snippet=candidate.excerpt,
+    )
+    locator_json = locator.to_json()
+    if locator_json is None:
+        raise ValueError("reviewed decision requires a concrete fact locator")
     unit = Unit(item.unit)
     value = normalize_source_numeric(
         parse_source_numeric(str(candidate.source_value_text)),
@@ -290,19 +303,24 @@ def build_kpi_semantic_refresh_manifest(
     conn: sqlite3.Connection,
     *,
     repo_root: Path,
-    review_batch: KpiSemanticReviewBatch,
+    review_export: KpiSemanticReviewExport,
     decisions: KpiSemanticRefreshDecisionBatch,
 ) -> RefreshManifest:
     """Build and fully read-validate one safely grouped refresh manifest."""
     conn.row_factory = sqlite3.Row
-    review_batch = KpiSemanticReviewBatch.model_validate(review_batch.model_dump(mode="json"))
+    review_export = KpiSemanticReviewExport.model_validate(review_export.model_dump(mode="json"))
+    review_batch = review_export.review
     decisions = KpiSemanticRefreshDecisionBatch.model_validate(decisions.model_dump(mode="json"))
     if review_batch.truncated:
         raise ValueError("truncated review batch cannot authorize refresh decisions")
+    if decisions.review_export_sha256 != review_export.content_sha256:
+        raise ValueError("decision review export hash does not match the sealed export")
     if decisions.review_batch_sha256 != review_batch.content_sha256:
-        raise ValueError("decision review batch hash does not match the review payload")
-    if decisions.user_id != review_batch.user_id:
-        raise ValueError("decision owner does not match the review batch")
+        raise ValueError("decision nested review hash does not match the review payload")
+    if decisions.knowledge_at < review_batch.observed_at:
+        raise ValueError("decision knowledge_at predates the observed review evidence")
+    if decisions.expected_schema_revision != review_export.schema_revision:
+        raise ValueError("decision schema revision does not match the sealed export")
     if schema_revision(conn) != decisions.expected_schema_revision:
         raise ValueError("database schema changed after decision preparation")
     items_by_fact = {item.fact_id: item for item in review_batch.items}
@@ -322,7 +340,7 @@ def build_kpi_semantic_refresh_manifest(
         for row in scoped_kpi_definitions(
             conn,
             repo_root=repo_root,
-            user_id=decisions.user_id,
+            user_id=review_export.user_id,
         )
         if row.kpi_definition_id is not None
     }
@@ -336,7 +354,7 @@ def build_kpi_semantic_refresh_manifest(
         entries.append(entry)
     return RefreshManifest(
         schema_version="kpi_semantic_refresh.v5",
-        user_id=decisions.user_id,
+        user_id=review_export.user_id,
         logical_idempotency_key=decisions.logical_idempotency_key,
         reviewer=decisions.reviewer,
         knowledge_at=decisions.knowledge_at,
@@ -362,7 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    parser.add_argument("--review-batch", type=Path, required=True)
+    parser.add_argument("--review-export", type=Path, required=True)
     parser.add_argument("--decisions", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
@@ -372,11 +390,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     database = args.db.resolve()
     output = args.output.resolve()
-    inputs = {database, args.review_batch.resolve(), args.decisions.resolve()}
+    inputs = {database, args.review_export.resolve(), args.decisions.resolve()}
     if output in inputs:
         raise ValueError("refresh manifest output must not overwrite an input")
-    review_batch = KpiSemanticReviewBatch.model_validate_json(
-        args.review_batch.read_text(encoding="utf-8")
+    review_export = KpiSemanticReviewExport.model_validate_json(
+        args.review_export.read_text(encoding="utf-8")
     )
     decisions = KpiSemanticRefreshDecisionBatch.model_validate_json(
         args.decisions.read_text(encoding="utf-8")
@@ -386,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_kpi_semantic_refresh_manifest(
             conn,
             repo_root=args.repo_root,
-            review_batch=review_batch,
+            review_export=review_export,
             decisions=decisions,
         )
     finally:

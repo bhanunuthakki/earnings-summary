@@ -19,6 +19,8 @@ class ReportKpiReferenceKind(StrEnum):
     TIER_2_KPI = "tier_2_kpi"
     TIER_3_KPI = "tier_3_kpi"
     BREAK_RULE = "break_rule"
+    BUSINESS_MODEL_RULE = "business_model_rule"
+    SOFT_RULE_KPI = "soft_rule_kpi"
 
 
 class ReportKpiReferenceStatus(StrEnum):
@@ -161,6 +163,109 @@ def _reference(
     )
 
 
+_CANONICAL_FINANCIAL_CHART_PRIORITIES = frozenset(
+    {
+        "revenue",
+        "gross profit",
+        "operating income",
+        "net income",
+        "eps (diluted)",
+        "operating cash flow",
+        "free cash flow",
+        "capex",
+    }
+)
+
+
+def is_canonical_financial_chart_priority(label: str) -> bool:
+    """Whether a chart label is owned by the canonical financial-fact reader.
+
+    Only exact report display identities are admitted here. Broad aliases such
+    as ``operating margin`` are intentionally excluded because treating them as
+    a financial line item would silently change their semantics.
+    """
+    return label.strip().casefold() in _CANONICAL_FINANCIAL_CHART_PRIORITIES
+
+
+def _soft_rule_kpi_references(
+    *,
+    ticker: str,
+    source_path: str,
+    predicate: object,
+    pointer: str,
+) -> tuple[list[ReportKpiReference], str | None]:
+    """Collect supported KPI-backed soft-rule leaves with exact JSON pointers."""
+    if not isinstance(predicate, dict):
+        return [], None
+    pred = cast("dict[str, object]", predicate)
+    predicate_type = pred.get("type")
+    params_value = pred.get("params")
+    if not isinstance(predicate_type, str) or not isinstance(params_value, dict):
+        return [], None
+    params = cast("dict[str, object]", params_value)
+    params_pointer = f"{pointer}/params"
+    out: list[ReportKpiReference] = []
+
+    def add_label(key: str, label: object) -> str | None:
+        if not isinstance(label, str) or not label.strip():
+            return "report_soft_rule_kpi_name_invalid"
+        out.append(
+            _reference(
+                ticker=ticker,
+                source_path=source_path,
+                pointer=f"{params_pointer}/{key}",
+                kind=ReportKpiReferenceKind.SOFT_RULE_KPI,
+                label=label,
+            )
+        )
+        return None
+
+    if predicate_type in {"series_decel", "series_below", "series_above"}:
+        if params.get("source") == "kpi":
+            return out, add_label("metric", params.get("metric"))
+        return out, None
+    if predicate_type == "trajectory":
+        if params.get("source", "kpi") == "kpi":
+            return out, add_label("kpi_name", params.get("kpi_name"))
+        return out, None
+    if predicate_type == "ratio_breach":
+        for side in ("numerator", "denominator"):
+            raw_spec = params.get(side)
+            if not isinstance(raw_spec, dict):
+                continue
+            spec = cast("dict[str, object]", raw_spec)
+            if spec.get("source", "financial") != "kpi":
+                continue
+            label = spec.get("name")
+            if not isinstance(label, str) or not label.strip():
+                return out, "report_soft_rule_kpi_name_invalid"
+            out.append(
+                _reference(
+                    ticker=ticker,
+                    source_path=source_path,
+                    pointer=f"{params_pointer}/{side}/name",
+                    kind=ReportKpiReferenceKind.SOFT_RULE_KPI,
+                    label=label,
+                )
+            )
+        return out, None
+    if predicate_type == "compound":
+        children = params.get("predicates")
+        if not isinstance(children, list):
+            return out, None
+        for index, child in enumerate(cast("list[object]", children)):
+            child_references, reason = _soft_rule_kpi_references(
+                ticker=ticker,
+                source_path=source_path,
+                predicate=child,
+                pointer=f"{params_pointer}/predicates/{index}",
+            )
+            out.extend(child_references)
+            if reason is not None:
+                return out, reason
+    return out, None
+
+
 def load_report_kpi_reference_inventory(
     repo_root: Path, tickers: tuple[str, ...]
 ) -> ReportKpiReferenceInventory:
@@ -254,6 +359,8 @@ def load_report_kpi_reference_inventory(
                 if not isinstance(value, str) or not value.strip():
                     invalid_reason = "report_chart_priority_entry_invalid"
                     break
+                if is_canonical_financial_chart_priority(value):
+                    continue
                 ticker_references.append(
                     _reference(
                         ticker=ticker,
@@ -317,6 +424,51 @@ def load_report_kpi_reference_inventory(
                         label=label,
                     )
                 )
+        business_rules = root.get("business_model_rules")
+        if (
+            invalid_reason is None
+            and business_rules is not None
+            and not isinstance(business_rules, list)
+        ):
+            invalid_reason = "report_business_model_rules_invalid"
+        elif invalid_reason is None and isinstance(business_rules, list):
+            for index, value in enumerate(cast("list[object]", business_rules)):
+                if not isinstance(value, dict):
+                    invalid_reason = "report_business_model_rule_entry_invalid"
+                    break
+                row = cast("dict[str, object]", value)
+                label = row.get("kpi_name")
+                if not isinstance(label, str) or not label.strip():
+                    invalid_reason = "report_business_model_rule_name_invalid"
+                    break
+                ticker_references.append(
+                    _reference(
+                        ticker=ticker,
+                        source_path=relative,
+                        pointer=f"/business_model_rules/{index}/kpi_name",
+                        kind=ReportKpiReferenceKind.BUSINESS_MODEL_RULE,
+                        label=label,
+                    )
+                )
+        soft_rules = root.get("break_rules_soft")
+        if invalid_reason is None and soft_rules is not None and not isinstance(soft_rules, list):
+            invalid_reason = "report_soft_rules_invalid"
+        elif invalid_reason is None and isinstance(soft_rules, list):
+            for index, value in enumerate(cast("list[object]", soft_rules)):
+                if not isinstance(value, dict):
+                    # Legacy prose-only soft rules are not executable metric references.
+                    continue
+                row = cast("dict[str, object]", value)
+                references, reason = _soft_rule_kpi_references(
+                    ticker=ticker,
+                    source_path=relative,
+                    predicate=row.get("predicate"),
+                    pointer=f"/break_rules_soft/{index}/predicate",
+                )
+                ticker_references.extend(references)
+                if reason is not None:
+                    invalid_reason = reason
+                    break
         if invalid_reason is not None:
             states.append(
                 ReportKpiReferenceSourceState(
@@ -551,6 +703,7 @@ __all__ = [
     "ReportKpiReferenceSourceStatus",
     "ReportKpiReferenceStatus",
     "current_report_kpi_reference_disposition",
+    "is_canonical_financial_chart_priority",
     "load_report_kpi_reference_inventory",
     "persist_report_kpi_reference_disposition",
     "report_kpi_references",

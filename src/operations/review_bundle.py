@@ -27,6 +27,39 @@ from pipeline.kpi_report_reference_dispositions import (
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+REVIEW_CODE_IDENTITY_DEPENDENCIES = (
+    "cron/prepare_kpi_semantic_review.task.xml",
+    "cron/run_prepare_kpi_semantic_review.bat",
+    "cron/task_manifest.json",
+    "execution/apply_kpi_semantic_dispositions.py",
+    "execution/apply_kpi_semantic_refresh.py",
+    "execution/backup_restore_readiness_receipt.py",
+    "execution/build_kpi_semantic_refresh_manifest.py",
+    "execution/collect_operations_runtime_observations.py",
+    "execution/comments_server.py",
+    "execution/fetch_windows_kpi_semantic_review.py",
+    "execution/fetch_windows_review_bundle.py",
+    "execution/prepare_kpi_semantic_dispositions.py",
+    "execution/prepare_kpi_semantic_review.py",
+    "execution/record_kpi_disposition_judgment.py",
+    "execution/record_kpi_repair_judgment.py",
+    "src/compute/kpi_resolver.py",
+    "src/operations/kpi_repair_receipts.py",
+    "src/operations/kpi_semantic_review_export.py",
+    "src/operations/models.py",
+    "src/operations/registry.py",
+    "src/operations/review_bundle.py",
+    "src/operations/snapshot.py",
+    "src/pipeline/kpi_report_reference_dispositions.py",
+    "src/pipeline/kpi_report_reference_resolver.py",
+    "src/pipeline/kpi_semantic_dispositions.py",
+    "src/pipeline/kpi_semantic_review.py",
+    "src/pipeline/kpi_semantic_scope.py",
+    "src/pipeline/kpi_source_review.py",
+    "src/provenance/evidence_ledger.py",
+    "src/provenance/financial_fact_resolution.py",
+    "src/provenance/fulltext_extractor_identity.py",
+)
 
 
 class _FrozenModel(BaseModel):
@@ -194,31 +227,8 @@ def _sha256_text(value: str) -> str:
 
 def review_code_identity(repo_root: Path) -> str:
     """Digest the bounded code/config surface that produces this projection."""
-    relative_paths = (
-        "execution/comments_server.py",
-        "execution/collect_operations_runtime_observations.py",
-        "execution/fetch_windows_kpi_semantic_review.py",
-        "execution/fetch_windows_review_bundle.py",
-        "execution/apply_kpi_semantic_refresh.py",
-        "execution/apply_kpi_semantic_dispositions.py",
-        "execution/prepare_kpi_semantic_dispositions.py",
-        "execution/prepare_kpi_semantic_review.py",
-        "execution/record_kpi_disposition_judgment.py",
-        "execution/record_kpi_repair_judgment.py",
-        "src/operations/models.py",
-        "src/operations/kpi_semantic_review_export.py",
-        "src/operations/registry.py",
-        "src/operations/review_bundle.py",
-        "src/operations/kpi_repair_receipts.py",
-        "src/operations/snapshot.py",
-        "src/pipeline/kpi_source_review.py",
-        "src/pipeline/kpi_report_reference_dispositions.py",
-        "src/pipeline/kpi_semantic_dispositions.py",
-        "src/pipeline/kpi_semantic_review.py",
-        "src/pipeline/kpi_semantic_scope.py",
-    )
     digest = hashlib.sha256()
-    for relative in relative_paths:
+    for relative in REVIEW_CODE_IDENTITY_DEPENDENCIES:
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         try:
@@ -446,6 +456,7 @@ def build_operations_review_bundle(
 
 
 __all__ = [
+    "REVIEW_CODE_IDENTITY_DEPENDENCIES",
     "OperationsReviewBundle",
     "ReviewKpiRepair",
     "build_operations_review_bundle",

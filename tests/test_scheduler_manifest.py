@@ -33,7 +33,7 @@ EXPECTED_DISABLED_TASKS = {
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 45
+    assert len(manifest.tasks) == 46
     collector = next(
         task
         for task in manifest.tasks
@@ -51,6 +51,29 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert collector_xml.index("<Repetition>") < collector_xml.index("<StartBoundary>")
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert all(task.task_name != r"\earnings-summary\monthly_p3_refresh" for task in manifest.tasks)
+    semantic_review = next(
+        task
+        for task in manifest.tasks
+        if task.task_name == r"\earnings-summary\prepare_kpi_semantic_review"
+    )
+    assert semantic_review.schedule.repetition_interval == "PT10M"
+    assert semantic_review.xml == "prepare_kpi_semantic_review.task.xml"
+    assert semantic_review.wrapper == "run_prepare_kpi_semantic_review.bat"
+    semantic_xml = (CRON_DIR / semantic_review.xml).read_text(encoding="utf-8")
+    assert "<ExecutionTimeLimit>PT5M</ExecutionTimeLimit>" in semantic_xml
+    assert semantic_xml.index("<Repetition>") < semantic_xml.index("<StartBoundary>")
+    assert r"runtime\earnings-summary\cron\run_prepare_kpi_semantic_review.bat" in semantic_xml
+    semantic_wrapper = (CRON_DIR / semantic_review.wrapper).read_text(encoding="utf-8")
+    assert "if not defined EARNINGS_SUMMARY_DB_PATH" in semantic_wrapper
+    assert '--code-root "%PROJECT_ROOT%"' in semantic_wrapper
+    assert "--user-id" not in semantic_wrapper
+    assert '--code-root "%PROJECT_ROOT%" --publish' in semantic_wrapper
+    assert "http" not in semantic_wrapper.casefold()
+    prepare_source = (PROJECT_ROOT / "execution" / "prepare_kpi_semantic_review.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'parser.add_argument("--user-id", default=DEFAULT_USER_ID)' in prepare_source
+    assert 'default="default"' not in prepare_source
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")

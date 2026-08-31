@@ -195,7 +195,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 bounded read-only DCF grade-evidence projection.
     # +3 investment-profile routes: two read-only side peeks plus the
     # fingerprint-bound owner label review action.
-    assert len(rules) == 179
+    # +1 fixed, read-only per-ticker KPI semantic-review export route.
+    assert len(rules) == 180
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "company_say_do_api" not in rules
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from identity import DEFAULT_USER_ID
 from models.facts import Unit
 from pipeline.kpi_semantic_scope import scoped_kpi_definitions
 from pipeline.kpi_semantics import (
@@ -229,8 +230,8 @@ def test_scope_is_report_union_facts_metrics_for_portfolio_only(tmp_path: Path) 
     )
     _semantic_table(conn)
     conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?,?,'default',NULL)",
-        [("NU", "portfolio"), ("NOW", "watchlist")],
+        "INSERT INTO tracked_companies VALUES (?,?,?,NULL)",
+        [("NU", "portfolio", DEFAULT_USER_ID), ("NOW", "watchlist", DEFAULT_USER_ID)],
     )
     conn.executemany(
         "INSERT INTO kpi_definitions VALUES (?,?,?)",
@@ -264,7 +265,10 @@ def test_scope_counts_only_current_fact_heads(tmp_path: Path) -> None:
         "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE id=2;"
     )
     _semantic_table(conn)
-    conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio','default',NULL)")
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES ('NU','portfolio',?,NULL)",
+        (DEFAULT_USER_ID,),
+    )
     conn.execute("INSERT INTO kpi_definitions VALUES (1,'NU','Total customers')")
     conn.executemany(
         "INSERT INTO kpi_facts VALUES (?,?,?,?,?)",

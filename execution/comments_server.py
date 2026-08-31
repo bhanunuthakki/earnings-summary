@@ -2232,7 +2232,7 @@ def create_app(
         """Serve one precomputed, authority-bound portfolio review artifact."""
         try:
             export, payload = load_current_kpi_semantic_review_export(
-                root=repo_root / KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
+                root=db_path.parent.parent / KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
                 ticker=ticker,
                 now=datetime.now(UTC),
                 max_age=timedelta(minutes=20),

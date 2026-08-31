@@ -22,7 +22,8 @@ CREATE TABLE report_kpi_reference_resolution_revisions_v2 (
     source_path TEXT NOT NULL CHECK(length(trim(source_path)) > 0),
     json_pointer TEXT NOT NULL CHECK(length(trim(json_pointer)) > 0),
     reference_kind TEXT NOT NULL CHECK(reference_kind IN
-        ('chart_priority','tier_1_kpi','tier_2_kpi','tier_3_kpi','break_rule')),
+        ('chart_priority','tier_1_kpi','tier_2_kpi','tier_3_kpi','break_rule',
+         'business_model_rule','soft_rule_kpi')),
     requested_label TEXT NOT NULL CHECK(length(trim(requested_label)) > 0),
     reference_content_sha256 TEXT NOT NULL
         CHECK(length(reference_content_sha256)=64
@@ -175,7 +176,9 @@ def downgrade() -> None:
     bind = op.get_bind()
     incompatible = bind.exec_driver_sql(
         "SELECT COUNT(*) FROM report_kpi_reference_resolution_revisions "
-        "WHERE status<>'unresolved' OR kpi_definition_id IS NOT NULL"
+        "WHERE status<>'unresolved' OR kpi_definition_id IS NOT NULL "
+        "OR reference_kind NOT IN "
+        "('chart_priority','tier_1_kpi','tier_2_kpi','tier_3_kpi','break_rule')"
     ).scalar_one()
     if int(incompatible) != 0:
         raise RuntimeError("cannot downgrade report KPI reference v2 rows without losing history")

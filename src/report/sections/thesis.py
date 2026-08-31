@@ -25,6 +25,7 @@ from compute.kpi_resolver import (
     semantic_series_identity_sql,
 )
 from compute.thesis_evaluation_episodes import episode_history_source
+from identity import DEFAULT_USER_ID
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
     verified_report_kpi_reference_definition,
@@ -252,7 +253,7 @@ def _build_ledger(
                         else verified_report_kpi_reference_definition(
                             db_conn,
                             repo_root=repo_root,
-                            user_id="default",
+                            user_id=DEFAULT_USER_ID,
                             reference=reference,
                         )
                     )

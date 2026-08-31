@@ -26,6 +26,7 @@ from compute.kpi_resolver import (
     resolve_kpi_definition_name,
     semantic_series_identity_sql,
 )
+from identity import DEFAULT_USER_ID
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
@@ -353,7 +354,7 @@ def _resolve_priorities(
                 else verified_report_kpi_reference_definition(
                     db_conn,
                     repo_root=repo_root,
-                    user_id="default",
+                    user_id=DEFAULT_USER_ID,
                     reference=reference,
                 )
             )

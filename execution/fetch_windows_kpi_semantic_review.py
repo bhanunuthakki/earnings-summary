@@ -103,6 +103,7 @@ def validate_semantic_review_export(
     payload: bytes,
     *,
     ticker: str,
+    expected_user_id: str,
     now: datetime,
     max_age: timedelta,
     review_bundle_payload: bytes,
@@ -111,6 +112,8 @@ def validate_semantic_review_export(
 ) -> KpiSemanticReviewExport:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
+    if not expected_user_id or len(expected_user_id) > 128:
+        raise KpiSemanticReviewFetchError("expected owner identity is invalid")
     normalized_ticker = normalize_export_ticker(ticker)
     try:
         bundle = validate_bundle(
@@ -130,6 +133,8 @@ def validate_semantic_review_export(
         ) from None
     if export.ticker != normalized_ticker:
         raise KpiSemanticReviewFetchError("semantic review ticker does not match the request")
+    if export.user_id != expected_user_id:
+        raise KpiSemanticReviewFetchError("semantic review owner does not match expected owner")
     if export.observed_at > now + timedelta(minutes=5) or now - export.observed_at > max_age:
         raise KpiSemanticReviewFetchError("semantic review artifact is stale or future-dated")
     if export.code_instance_sha256 != bundle.identity.code_instance_sha256:
@@ -155,7 +160,12 @@ def _persist(export: KpiSemanticReviewExport, *, output_root: Path) -> Path:
     destination = output_root / f"{export.content_sha256}.json"
     encoded = encoded_kpi_semantic_review_export(export)
     if destination.exists():
-        if destination.read_bytes() != encoded:
+        existing = read_bounded_input(
+            destination,
+            maximum_bytes=MAX_KPI_SEMANTIC_EXPORT_BYTES,
+            label="existing semantic review artifact",
+        )
+        if existing != encoded:
             raise KpiSemanticReviewFetchError(
                 "content-addressed semantic review artifact conflicts with existing bytes"
             )
@@ -173,6 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", required=True)
     parser.add_argument("--ticker", required=True)
+    parser.add_argument("--expected-user-id", required=True)
     parser.add_argument("--review-bundle", type=Path, required=True)
     parser.add_argument("--pins", type=Path, required=True)
     parser.add_argument("--max-age-seconds", type=int, default=1200)
@@ -211,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     export = validate_semantic_review_export(
         payload,
         ticker=ticker,
+        expected_user_id=args.expected_user_id,
         now=now,
         max_age=timedelta(seconds=args.max_age_seconds),
         review_bundle_payload=review_bundle_payload,

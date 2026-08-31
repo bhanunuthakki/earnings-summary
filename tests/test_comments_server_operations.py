@@ -931,10 +931,12 @@ def test_operations_review_bundle_fails_closed_for_loopback_http_origin(
 def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    state_root = tmp_path / "product-state"
+    database = state_root / "data" / "portfolio.db"
     observed_at = datetime.now(UTC)
     batch_payload: dict[str, object] = {
-        "schema_version": "kpi_semantic_review.v2",
-        "user_id": "default",
+        "schema_version": "kpi_semantic_review.v3",
+        "user_id": comments_server.DEFAULT_USER_ID,
         "ticker": "NU",
         "observed_at": observed_at,
         "limit": 1_000,
@@ -964,7 +966,7 @@ def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
 
     monkeypatch.setattr(comments_server, "review_code_identity", bounded_code_identity)
     monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_export", load_export)
-    app = comments_server.create_app(tmp_path)
+    app = comments_server.create_app(tmp_path, db_path=database, code_root=PROJECT_ROOT)
     response = app.test_client().get(
         "/api/operations/kpi-semantic-review/NU",
         base_url="https://review.example.ts.net",
@@ -975,7 +977,7 @@ def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["ETag"] == f'"{export.content_sha256}"'
     assert captured["ticker"] == "NU"
-    assert captured["root"] == (tmp_path / "data" / "operations" / "kpi_semantic_reviews")
+    assert captured["root"] == (state_root / "data" / "operations" / "kpi_semantic_reviews")
     assert (
         app.test_client()
         .post(

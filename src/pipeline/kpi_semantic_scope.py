@@ -8,6 +8,7 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict
 
+from identity import DEFAULT_USER_ID
 from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReference,
     ReportKpiReferenceSourceStatus,
@@ -52,7 +53,9 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     )
 
 
-def portfolio_tickers(conn: sqlite3.Connection, *, user_id: str = "default") -> tuple[str, ...]:
+def portfolio_tickers(
+    conn: sqlite3.Connection, *, user_id: str = DEFAULT_USER_ID
+) -> tuple[str, ...]:
     """Current portfolio companies only; watchlist/evaluation names stay out."""
     if not _table_exists(conn, "tracked_companies"):
         return ()
@@ -77,7 +80,7 @@ def scoped_kpi_definitions(
     conn: sqlite3.Connection,
     *,
     repo_root: Path,
-    user_id: str = "default",
+    user_id: str = DEFAULT_USER_ID,
 ) -> tuple[ScopedKpiDefinition, ...]:
     """Union report-used KPIs with every KPI exposed in Facts & Metrics."""
     tickers = portfolio_tickers(conn, user_id=user_id)
