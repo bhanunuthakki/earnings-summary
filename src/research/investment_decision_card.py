@@ -576,8 +576,22 @@ VALIDATION CONSTRAINTS (a violation forces a deterministic fallback):
   evidence_coverage=insufficient instead.
 - disconfirming_case.bear_hypothesis must present a REAL case against the
   thesis (use the bear case above if present), never a token caveat.
-- uncertainty.justification and uncertainty.what_would_change_it must never
-  be empty or boilerplate.
+- security_setup.appears_priced_in must translate the gap between the current
+  price and stated valuation range into the operating expectations the market
+  appears to embed. Name the specific growth, margin, cash-flow, or execution
+  assumption that looks demanding or undemanding; do not merely say cheap,
+  expensive, upside, or downside. If the blocks cannot support that inference,
+  say which priced-in assumption remains unresolved instead of inventing one.
+- disconfirming_case.evidence_that_would_confirm_it must name an observable
+  company-specific KPI, break rule, or operating development. next_proof_point
+  must identify the next report, event, or measurement that could test it.
+  Keep both concrete and distinct; do not use generic competition or macro risk.
+- uncertainty.justification must name the specific unresolved variable or
+  evidence gap behind the confidence level. uncertainty.what_would_change_it
+  must state a concrete, company-specific observation and direction that would
+  change the view. Use an on-file threshold when one exists; otherwise name the
+  metric and direction without inventing a number. Neither field may be empty,
+  boilerplate, or a restatement of the bear hypothesis.
 - NEVER state a numeric probability ("62% chance") â€” use qualitative
   confidence language instead (house style: "This is my read because...",
   "The main reason I could be wrong is...").
