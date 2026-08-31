@@ -22,6 +22,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set "LOG_FILE=%LOG_DIR%\prepare_kpi_semantic_review_%TS%.log"
 
 cd /d "%PROJECT_ROOT%"
-call "%PROJECT_ROOT%\cron\run_python.bat" "prepare-kpi-semantic-review" "kpi-semantic-review-export" execution\prepare_kpi_semantic_review.py --db "%EARNINGS_SUMMARY_DB_PATH%" --code-root "%PROJECT_ROOT%" --publish > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "prepare-kpi-semantic-review" "kpi-semantic-review-export" "%PROJECT_ROOT%\execution\prepare_kpi_semantic_review.py" --db "%EARNINGS_SUMMARY_DB_PATH%" --code-root "%PROJECT_ROOT%" --publish > "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%

@@ -70,6 +70,7 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert 'set "ES_JOB_RUNTIME_REPO_ROOT=%PRODUCT_STATE_ROOT%"' in semantic_wrapper
     assert 'set "ES_JOB_RUNTIME_CODE_ROOT=%PROJECT_ROOT%"' in semantic_wrapper
     assert r'set "LOG_DIR=%PRODUCT_STATE_ROOT%\.tmp\cron_logs"' in semantic_wrapper
+    assert r'"%PROJECT_ROOT%\execution\prepare_kpi_semantic_review.py"' in semantic_wrapper
     assert '--code-root "%PROJECT_ROOT%"' in semantic_wrapper
     assert "--user-id" not in semantic_wrapper
     assert '--code-root "%PROJECT_ROOT%" --publish' in semantic_wrapper
