@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from alembic import command
-from execution.evaluate_deletion_catalog import _migration_schema_targets
+from execution.evaluate_deletion_catalog import migration_schema_targets
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0035_add_report_kpi_reference_resolution_states"
@@ -43,7 +43,7 @@ RETAINED_TABLES = {
 
 
 def _deleted_tables() -> set[str]:
-    targets, error = _migration_schema_targets(ROOT)
+    targets, error = migration_schema_targets(ROOT)
     assert error is None
     return targets
 
