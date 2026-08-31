@@ -14,18 +14,16 @@ def test_repo_instructions_route_operational_changes_to_the_surface_directive() 
 
 
 def test_targeted_fact_resolution_is_deliberately_internal_only() -> None:
-    roadmap = (
-        PROJECT_ROOT / "docs" / "design" / "investment_grade_grounded_data_roadmap.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(roadmap.split())
-
-    assert "backfill_financial_fact_resolutions.py --fact-table --fact-row-id --apply" in normalized
-    assert "internal, receipt-bound repair primitive" in normalized
-    assert (
-        "canonical `OperationsRegistry`, `OperationsSnapshot`, and "
-        "`build_operations_panel_view`" in normalized
+    cli = (PROJECT_ROOT / "execution" / "backfill_financial_fact_resolutions.py").read_text(
+        encoding="utf-8"
     )
-    assert "adds no Operations card, health claim, or operator action" in normalized
+    registry = (PROJECT_ROOT / "src" / "operations" / "registry.py").read_text(encoding="utf-8")
+
+    assert '"--fact-table"' in cli
+    assert '"--fact-row-id"' in cli
+    assert '"--apply"' in cli
+    assert 'owner="targeted-fact-resolution"' in cli
+    assert "backfill_financial_fact_resolutions" not in registry
 
 
 def test_surface_directive_states_the_complete_decision_contract() -> None:

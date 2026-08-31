@@ -82,8 +82,6 @@
     "roadmap_2026_08_consolidated.md": {"class": "history", "summary": "Dated roadmap superseded by Linear."},
     "scenario_prior_cadence.md": {"class": "runbook", "summary": "Scenario-prior refresh cadence procedure.", "governed_by": ["next_dollar_model.md", "llm_calls.md", "operations_governance_surface.md"]},
     "sec_issuer_identity_reconciliation.md": {"class": "runbook", "summary": "SEC historical and former-ticker identity reconciliation procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md", "operations_governance_surface.md"]},
-    "self_host_phase1_laptop.md": {"class": "runbook", "summary": "Windows laptop hosting procedure.", "governed_by": ["self_host_scoping.md", "operations_governance_surface.md"]},
-    "self_host_scoping.md": {"class": "canonical", "summary": "Private-hosting architecture and transition seam.", "authority_domains": ["private_hosting"]},
     "the_ledger_build_plan_2026_06.md": {"class": "history", "summary": "Ledger build-plan record."},
     "the_ledger_phase1_plan_2026_06.md": {"class": "history", "summary": "Ledger phase-one build record."},
     "thought_partner_build_plan.md": {"class": "history", "summary": "Thought-partner build-plan record."},

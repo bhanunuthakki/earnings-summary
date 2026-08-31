@@ -58,6 +58,18 @@ THESIS_HOLDINGS: dict[str, object] = {
 RED_TEAM_TICKERS = ("NU", "MELI", "NVO", "BKNG", "UBER", "WIX")
 
 
+def _private_holdings_dir(required: tuple[str, ...] = ()) -> Path:
+    configured = os.environ.get("EARNINGS_SUMMARY_PRIVATE_HOLDINGS_DIR")
+    if not configured:
+        pytest.skip("private holdings fixtures are not configured")
+    path = Path(configured)
+    if not path.is_dir():
+        pytest.skip("private holdings fixtures are unavailable")
+    if any(not (path / f"{ticker}.json").is_file() for ticker in required):
+        pytest.skip("required private holdings fixtures are unavailable")
+    return path
+
+
 def _snapshot_json(block: dict[str, object]) -> str:
     return json.dumps({"model": "x", "scenarios": block})
 
@@ -376,8 +388,9 @@ def test_sheet_lever_columns_show_post_delta_values() -> None:
 
 
 def test_red_team_holdings_carry_valid_bear_deltas() -> None:
+    holdings_dir = _private_holdings_dir(RED_TEAM_TICKERS)
     for ticker in RED_TEAM_TICKERS:
-        path = PROJECT_ROOT / "micro_thesis" / "holdings" / f"{ticker}.json"
+        path = holdings_dir / f"{ticker}.json"
         loaded: object = json.loads(path.read_text(encoding="utf-8"))
         assert isinstance(loaded, dict), f"{ticker}: holdings JSON is not an object"
         holdings = cast("dict[str, object]", loaded)

@@ -170,7 +170,7 @@ def _git_head_issues(repo_root: Path, audited_head: str) -> list[str]:
     return [] if ancestor.returncode == 0 else ["audited_head_not_ancestor"]
 
 
-def _migration_schema_targets(repo_root: Path) -> tuple[set[str], str | None]:
+def migration_schema_targets(repo_root: Path) -> tuple[set[str], str | None]:
     path = repo_root / "alembic" / "versions" / "0002_drop_dead_tables.py"
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -218,7 +218,7 @@ def _missing_git_blobs(repo_root: Path, commit: str, targets: Sequence[str]) -> 
 def evaluate(repo_root: Path, catalog: Catalog) -> Evaluation:
     results: list[CandidateResult] = []
     global_issues = _git_head_issues(repo_root, catalog.audited_head)
-    deleted_schema, schema_error = _migration_schema_targets(repo_root)
+    deleted_schema, schema_error = migration_schema_targets(repo_root)
     cataloged_schema = {
         target for candidate in catalog.candidates for target in candidate.schema_targets
     }

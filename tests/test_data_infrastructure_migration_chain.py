@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from alembic import command
-from execution.evaluate_deletion_catalog import Catalog
+from execution.evaluate_deletion_catalog import migration_schema_targets
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0035_add_report_kpi_reference_resolution_states"
@@ -42,11 +42,10 @@ RETAINED_TABLES = {
 }
 
 
-def _cataloged_deleted_tables() -> set[str]:
-    catalog = Catalog.model_validate_json(
-        (ROOT / "docs" / "design" / "deletion_catalog_2026_08.json").read_text(encoding="utf-8")
-    )
-    return {target for candidate in catalog.candidates for target in candidate.schema_targets}
+def _deleted_tables() -> set[str]:
+    targets, error = migration_schema_targets(ROOT)
+    assert error is None
+    return targets
 
 
 def _config(path: Path) -> Config:
@@ -76,7 +75,7 @@ def test_squashed_chain_has_one_head_and_preserves_active_schema(tmp_path: Path)
 
     assert revision == (HEAD,)
     assert tables >= RETAINED_TABLES
-    assert tables.isdisjoint(_cataloged_deleted_tables())
+    assert tables.isdisjoint(_deleted_tables())
     assert identity is not None and str(identity[0]).startswith("database-instance:")
     assert integrity == ("ok",)
     assert foreign_keys == []

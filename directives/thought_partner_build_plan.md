@@ -70,5 +70,5 @@ One PR per phase; each independently shippable; P1–P2 need no migration and re
 
 1. **Belief-unit store — RESOLVED: own store (`kind='tenet'`).** A Tenet (a belief about *how you invest*) is modeled distinctly from a `theme` (a topic you track), a `stance` (a call on one holding), and the entrenched `conviction` *rating* (1–5 confidence on a name).
 2. **Injection scope — RESOLVED: decision-point prompts first** (chat / Socratic / workspace), expand later.
-3. **Telegram "discuss" hand-off on mobile — ESCALATED to the self-hosting track.** See [`self_host_scoping.md`](self_host_scoping.md) + [`self_host_phase1_laptop.md`](self_host_phase1_laptop.md). Access = Tailscale (private mesh); immediate host = the laptop kept on (closed-lid, never-sleep) via Phase-1; a dedicated N100/VPS is a deferred upgrade. Until Phase-1 lands, the discuss reply degrades to "continue in the web thread" (desktop).
+3. **Telegram "discuss" hand-off on mobile — deferred.** For now, discuss replies continue in the web thread.
 4. **Naming — RESOLVED: `Conviction` → `Tenet`** to avoid collision with the existing `conviction` rating (surfaced during the 2026-07-01 reconciliation).

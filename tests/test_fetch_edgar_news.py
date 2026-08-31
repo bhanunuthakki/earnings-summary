@@ -244,7 +244,7 @@ def test_stale_cache_refetches_and_rewrites(
 
     def _fake(url: str, *, user_agent: str) -> object:
         calls.append(url)
-        assert "@" in user_agent  # SEC fair access: a contact must be present
+        assert user_agent == edgarnews.DEFAULT_USER_AGENT
         return _REGISTRY if "company_tickers" in url else fresh_payload
 
     monkeypatch.setattr(edgarnews, "_get_json", _fake)

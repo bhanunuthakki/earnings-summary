@@ -27,6 +27,7 @@ deliberate update rather than letting a dead rule slip in unnoticed.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import cast
 
@@ -49,7 +50,19 @@ from compute.fmp_derived_kpis import (
 from compute.kpi_resolver import normalize_kpi_name
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
+
+
+def _private_holdings_dir(required: tuple[str, ...] = ()) -> Path:
+    configured = os.environ.get("EARNINGS_SUMMARY_PRIVATE_HOLDINGS_DIR")
+    if not configured:
+        pytest.skip("private holdings fixtures are not configured")
+    path = Path(configured)
+    if not path.is_dir():
+        pytest.skip("private holdings fixtures are unavailable")
+    if any(not (path / f"{ticker}.json").is_file() for ticker in required):
+        pytest.skip("required private holdings fixtures are unavailable")
+    return path
+
 
 # The seven holdings re-encoded from the user's thesis blurbs (2026-06-01).
 REENCODED_TICKERS = ("RBRK", "NOW", "WIX", "VEEV", "MELI", "NVO", "BN")
@@ -91,7 +104,9 @@ NARRATIVE_ALLOWLIST: dict[str, set[str]] = {
 
 
 def _load(ticker: str) -> dict[str, object]:
-    raw = json.loads((HOLDINGS_DIR / f"{ticker}.json").read_text(encoding="utf-8"))
+    raw = json.loads(
+        (_private_holdings_dir((ticker,)) / f"{ticker}.json").read_text(encoding="utf-8")
+    )
     return cast("dict[str, object]", raw)
 
 
