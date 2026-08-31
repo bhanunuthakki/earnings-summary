@@ -18,10 +18,23 @@ from report.artifacts import (
     ReportArtifactRef,
     ReportInteractionManifest,
     ReportSectionRef,
+    backfill_report_fiscal_periods,
     load_report_artifact_index,
     persist_report_artifact,
     reconcile_legacy_workspace_reports,
 )
+
+
+def _workspace_with_active_earnings_period(period: str | None) -> str:
+    button = (
+        f'<button class="qbtn active" data-quarter="{period}">{period}</button>'
+        if period is not None
+        else '<button class="qbtn">No period</button>'
+    )
+    return (
+        '<html><body><div class="quarter-select" data-quarter-group="earnings">'
+        f'<div class="quarter-select-btns">{button}</div></div></body></html>'
+    )
 
 
 def _body() -> RenderedReportBody:
@@ -84,6 +97,100 @@ def test_reconcile_legacy_reports_indexes_without_rebuilding_historical_facts(
     )
     manifest = json.loads((research / "2026-07-01_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_id"] == ref.artifact_id
+
+
+def test_fiscal_period_backfill_is_read_only_then_updates_only_the_compact_index(
+    tmp_path: Path,
+) -> None:
+    research = tmp_path / "output" / "research" / "NU"
+    research.mkdir(parents=True)
+    workspace = research / "2026-08-30_workspace.html"
+    workspace.write_text(_workspace_with_active_earnings_period("Q2 2026"), encoding="utf-8")
+    reconcile_legacy_workspace_reports(tmp_path)
+    original = load_report_artifact_index(tmp_path).items[0]
+    manifest_path = tmp_path / original.manifest_path
+    manifest_bytes = manifest_path.read_bytes()
+    workspace_bytes = workspace.read_bytes()
+    index_path = tmp_path / "output" / "research" / "report_artifacts.v1.json"
+    index_bytes = index_path.read_bytes()
+
+    dry_run = backfill_report_fiscal_periods(tmp_path, apply=False)
+
+    assert dry_run.candidates == 1
+    assert dry_run.eligible == 1
+    assert dry_run.applied == 0
+    assert dry_run.items[0].status == "eligible"
+    assert dry_run.items[0].fiscal_period_label == "Q2 2026"
+    assert index_path.read_bytes() == index_bytes
+
+    applied = backfill_report_fiscal_periods(tmp_path, apply=True)
+
+    assert applied.applied == 1
+    assert applied.failed == 0
+    updated = load_report_artifact_index(tmp_path).items[0]
+    assert updated.fiscal_period_label == "Q2 2026"
+    assert updated.fiscal_period_evidence is not None
+    assert updated.fiscal_period_evidence.source_path == original.standalone_path
+    assert updated.fiscal_period_evidence.source_sha256 == original.workspace_sha256
+    assert updated.fiscal_period_evidence.observed_values == ("Q2 2026",)
+    assert workspace.read_bytes() == workspace_bytes
+    assert manifest_path.read_bytes() == manifest_bytes
+
+    repeated = backfill_report_fiscal_periods(tmp_path, apply=True)
+    assert repeated.candidates == 0
+    assert repeated.applied == 0
+    assert repeated.skipped_existing == 1
+
+
+def test_fiscal_period_backfill_leaves_missing_or_conflicting_evidence_unresolved(
+    tmp_path: Path,
+) -> None:
+    for ticker, html in {
+        "AVUV": _workspace_with_active_earnings_period(None),
+        "NU": (
+            _workspace_with_active_earnings_period("Q1 2026").replace(
+                "</div></div>",
+                '<button class="qbtn active" data-quarter="Q2 2026">Q2 2026</button></div></div>',
+            )
+        ),
+    }.items():
+        research = tmp_path / "output" / "research" / ticker
+        research.mkdir(parents=True)
+        (research / "2026-08-30_workspace.html").write_text(html, encoding="utf-8")
+    reconcile_legacy_workspace_reports(tmp_path)
+    original_items = load_report_artifact_index(tmp_path).items
+
+    result = backfill_report_fiscal_periods(tmp_path, apply=True)
+
+    assert result.candidates == 2
+    assert result.eligible == 0
+    assert result.applied == 0
+    assert result.unresolved == 2
+    assert {item.evidence.observed_values for item in result.items if item.evidence} == {
+        (),
+        ("Q1 2026", "Q2 2026"),
+    }
+    assert load_report_artifact_index(tmp_path).items == original_items
+
+
+def test_fiscal_period_backfill_checksum_failure_blocks_the_entire_batch(tmp_path: Path) -> None:
+    for ticker in ("NU", "WIX"):
+        research = tmp_path / "output" / "research" / ticker
+        research.mkdir(parents=True)
+        (research / "2026-08-30_workspace.html").write_text(
+            _workspace_with_active_earnings_period("Q2 2026"), encoding="utf-8"
+        )
+    reconcile_legacy_workspace_reports(tmp_path)
+    original_items = load_report_artifact_index(tmp_path).items
+    wix = next(item for item in original_items if item.ticker == "WIX")
+    (tmp_path / wix.standalone_path).write_text("tampered", encoding="utf-8")
+
+    result = backfill_report_fiscal_periods(tmp_path, apply=True)
+
+    assert result.eligible == 1
+    assert result.applied == 0
+    assert result.failed == 1
+    assert load_report_artifact_index(tmp_path).items == original_items
 
 
 def test_index_excludes_entries_whose_standalone_artifact_was_removed(tmp_path: Path) -> None:
