@@ -1,13 +1,15 @@
-"""Fetch one precomputed KPI semantic-review artifact from the private Windows origin."""
+"""Fetch one complete, partitioned KPI semantic review from private Windows."""
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,12 +27,22 @@ from execution.fetch_windows_review_bundle import (  # noqa: E402
 from log_redact import redact  # noqa: E402
 from operations.kpi_semantic_review_export import (  # noqa: E402
     MAX_KPI_SEMANTIC_EXPORT_BYTES,
+    KpiSemanticReviewArtifactPointer,
     KpiSemanticReviewExport,
+    KpiSemanticReviewTickerManifest,
     encoded_kpi_semantic_review_export,
+    encoded_kpi_semantic_review_ticker_manifest,
     normalize_export_ticker,
 )
+from operations.review_bundle import OperationsReviewBundle  # noqa: E402
 
 _ENDPOINT_PREFIX = "/api/operations/kpi-semantic-review/"
+_ENDPOINT_PATH = re.compile(
+    r"^/api/operations/kpi-semantic-review/"
+    r"[A-Z][A-Z0-9.-]{0,14}"
+    r"(?:/partitions/[0-9a-f]{64})?$"
+)
+_MAX_MANIFEST_BYTES = 1_000_000
 _MAX_REVIEW_BUNDLE_BYTES = 2_000_000
 _MAX_PINS_BYTES = 256_000
 
@@ -42,13 +54,15 @@ class KpiSemanticReviewFetchError(RuntimeError):
 class FetchKpiSemanticReviewSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["windows_kpi_semantic_review_fetch.v1"] = (
-        "windows_kpi_semantic_review_fetch.v1"
+    schema_version: Literal["windows_kpi_semantic_review_fetch.v2"] = (
+        "windows_kpi_semantic_review_fetch.v2"
     )
     ticker: str
     observed_at: datetime
-    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    output_path: str
+    manifest_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    total_items: int = Field(ge=0)
+    manifest_output_path: str
+    partition_output_paths: tuple[str, ...]
 
 
 class _RejectRedirects(HTTPRedirectHandler):
@@ -64,7 +78,20 @@ class _RejectRedirects(HTTPRedirectHandler):
         return None
 
 
-def _fetch(url: str, *, timeout_seconds: float) -> tuple[bytes, str | None]:
+def _fetch(url: str, *, timeout_seconds: float, maximum_bytes: int) -> tuple[bytes, str | None]:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or _ENDPOINT_PATH.fullmatch(parsed.path) is None
+    ):
+        raise KpiSemanticReviewFetchError(
+            "semantic review URL must be an exact credential-free HTTPS endpoint"
+        )
     request = Request(url, headers={"Accept": "application/json"}, method="GET")
     opener = build_opener(_RejectRedirects())
     try:
@@ -72,13 +99,15 @@ def _fetch(url: str, *, timeout_seconds: float) -> tuple[bytes, str | None]:
             if response.geturl() != url:
                 raise KpiSemanticReviewFetchError("semantic review endpoint redirected")
             declared = response.headers.get("Content-Length")
-            if declared is not None and int(declared) > MAX_KPI_SEMANTIC_EXPORT_BYTES:
+            if declared is not None and int(declared) > maximum_bytes:
                 raise KpiSemanticReviewFetchError("semantic review artifact exceeds its byte bound")
-            payload = response.read(MAX_KPI_SEMANTIC_EXPORT_BYTES + 1)
+            payload = response.read(maximum_bytes + 1)
             response_etag = response.headers.get("ETag")
+    except KpiSemanticReviewFetchError:
+        raise
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         raise KpiSemanticReviewFetchError(f"semantic review fetch failed: {redact(exc)}") from None
-    if len(payload) > MAX_KPI_SEMANTIC_EXPORT_BYTES:
+    if len(payload) > maximum_bytes:
         raise KpiSemanticReviewFetchError("semantic review artifact exceeds its byte bound")
     return payload, response_etag
 
@@ -94,14 +123,61 @@ def _read_bounded(path: Path, *, maximum_bytes: int, label: str) -> bytes:
     return payload
 
 
-# Public seams for deterministic transport tests and other bounded local callers.
 fetch_kpi_semantic_review_bytes = _fetch
 read_bounded_input = _read_bounded
 
 
-def validate_semantic_review_export(
+def _validated_bundle(
+    *,
+    payload: bytes,
+    origin: str,
+    now: datetime,
+    max_age: timedelta,
+    pins: WindowsReviewPins,
+) -> OperationsReviewBundle:
+    try:
+        return validate_bundle(payload, origin=origin, now=now, max_age=max_age, pins=pins)
+    except ReviewFetchError as exc:
+        raise KpiSemanticReviewFetchError(str(exc)) from None
+
+
+def _validate_authority(
+    *,
+    user_id: str,
+    observed_at: datetime,
+    code_instance_sha256: str,
+    database_instance_sha256: str,
+    schema_revision: str,
+    expected_user_id: str,
+    now: datetime,
+    max_age: timedelta,
+    bundle: OperationsReviewBundle,
+) -> None:
+    if user_id != expected_user_id:
+        raise KpiSemanticReviewFetchError("semantic review owner does not match expected owner")
+    if observed_at > now + timedelta(minutes=5) or now - observed_at > max_age:
+        raise KpiSemanticReviewFetchError("semantic review artifact is stale or future-dated")
+    if code_instance_sha256 != bundle.identity.code_instance_sha256:
+        raise KpiSemanticReviewFetchError(
+            "semantic review code authority does not match the bundle"
+        )
+    if database_instance_sha256 != bundle.identity.database_instance_sha256:
+        raise KpiSemanticReviewFetchError(
+            "semantic review database authority does not match the bundle"
+        )
+    if (
+        len(bundle.schema_revision.actual_heads) != 1
+        or schema_revision != bundle.schema_revision.actual_heads[0]
+    ):
+        raise KpiSemanticReviewFetchError(
+            "semantic review schema authority does not match the bundle"
+        )
+
+
+def validate_semantic_review_manifest(
     payload: bytes,
     *,
+    response_etag: str | None,
     ticker: str,
     expected_user_id: str,
     now: datetime,
@@ -109,74 +185,158 @@ def validate_semantic_review_export(
     review_bundle_payload: bytes,
     origin: str,
     pins: WindowsReviewPins,
-) -> KpiSemanticReviewExport:
+) -> KpiSemanticReviewTickerManifest:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     if not expected_user_id or len(expected_user_id) > 128:
         raise KpiSemanticReviewFetchError("expected owner identity is invalid")
     normalized_ticker = normalize_export_ticker(ticker)
+    bundle = _validated_bundle(
+        payload=review_bundle_payload,
+        origin=origin,
+        now=now,
+        max_age=max_age,
+        pins=pins,
+    )
     try:
-        bundle = validate_bundle(
-            review_bundle_payload,
-            origin=origin,
-            now=now,
-            max_age=max_age,
-            pins=pins,
+        manifest = KpiSemanticReviewTickerManifest.model_validate_json(payload)
+    except Exception as exc:
+        raise KpiSemanticReviewFetchError(
+            f"semantic review manifest schema validation failed: {redact(exc)}"
+        ) from None
+    if response_etag != f'"{manifest.content_sha256}"':
+        raise KpiSemanticReviewFetchError(
+            "semantic review manifest ETag does not match its content hash"
         )
-    except ReviewFetchError as exc:
-        raise KpiSemanticReviewFetchError(str(exc)) from None
+    if manifest.ticker != normalized_ticker:
+        raise KpiSemanticReviewFetchError("semantic review ticker does not match the request")
+    hashes = [pointer.content_sha256 for pointer in manifest.partitions]
+    if len(hashes) != len(set(hashes)):
+        raise KpiSemanticReviewFetchError("semantic review manifest repeats a partition hash")
+    _validate_authority(
+        user_id=manifest.user_id,
+        observed_at=manifest.observed_at,
+        code_instance_sha256=manifest.code_instance_sha256,
+        database_instance_sha256=manifest.database_instance_sha256,
+        schema_revision=manifest.schema_revision,
+        expected_user_id=expected_user_id,
+        now=now,
+        max_age=max_age,
+        bundle=bundle,
+    )
+    return manifest
+
+
+def validate_semantic_review_partition(
+    payload: bytes,
+    *,
+    response_etag: str | None,
+    manifest: KpiSemanticReviewTickerManifest,
+    pointer: KpiSemanticReviewArtifactPointer,
+) -> KpiSemanticReviewExport:
+    if len(payload) != pointer.byte_size:
+        raise KpiSemanticReviewFetchError(
+            "semantic review partition byte size does not match its manifest"
+        )
     try:
         export = KpiSemanticReviewExport.model_validate_json(payload)
     except Exception as exc:
         raise KpiSemanticReviewFetchError(
-            f"semantic review schema validation failed: {redact(exc)}"
+            f"semantic review partition schema validation failed: {redact(exc)}"
         ) from None
-    if export.ticker != normalized_ticker:
-        raise KpiSemanticReviewFetchError("semantic review ticker does not match the request")
-    if export.user_id != expected_user_id:
-        raise KpiSemanticReviewFetchError("semantic review owner does not match expected owner")
-    if export.observed_at > now + timedelta(minutes=5) or now - export.observed_at > max_age:
-        raise KpiSemanticReviewFetchError("semantic review artifact is stale or future-dated")
-    if export.code_instance_sha256 != bundle.identity.code_instance_sha256:
+    if response_etag != f'"{pointer.content_sha256}"':
         raise KpiSemanticReviewFetchError(
-            "semantic review code authority does not match the bundle"
-        )
-    if export.database_instance_sha256 != bundle.identity.database_instance_sha256:
-        raise KpiSemanticReviewFetchError(
-            "semantic review database authority does not match the bundle"
+            "semantic review partition ETag does not match its manifest"
         )
     if (
-        len(bundle.schema_revision.actual_heads) != 1
-        or export.schema_revision != bundle.schema_revision.actual_heads[0]
+        export.content_sha256 != pointer.content_sha256
+        or export.ticker != manifest.ticker
+        or export.partition_ordinal != pointer.ordinal
+        or export.review.total_items != pointer.item_count
+        or export.after_fact_id != pointer.after_fact_id
+        or export.next_after_fact_id != pointer.next_after_fact_id
+        or export.observed_at != manifest.observed_at
+        or export.user_id != manifest.user_id
+        or export.code_instance_sha256 != manifest.code_instance_sha256
+        or export.database_instance_sha256 != manifest.database_instance_sha256
+        or export.schema_revision != manifest.schema_revision
     ):
         raise KpiSemanticReviewFetchError(
-            "semantic review schema authority does not match the bundle"
+            "semantic review partition does not match its current manifest"
         )
     return export
 
 
-def _persist(export: KpiSemanticReviewExport, *, output_root: Path) -> Path:
-    output_root.mkdir(parents=True, exist_ok=True)
-    destination = output_root / f"{export.content_sha256}.json"
-    encoded = encoded_kpi_semantic_review_export(export)
+def validate_semantic_review_partition_set(
+    manifest: KpiSemanticReviewTickerManifest,
+    partitions: tuple[KpiSemanticReviewExport, ...],
+) -> None:
+    if len(partitions) != len(manifest.partitions):
+        raise KpiSemanticReviewFetchError("semantic review partition set is incomplete")
+    state_counts: dict[str, int] = {}
+    total_items = 0
+    for pointer, export in zip(manifest.partitions, partitions, strict=True):
+        if export.content_sha256 != pointer.content_sha256:
+            raise KpiSemanticReviewFetchError("semantic review partition set is out of order")
+        total_items += export.review.total_items
+        for state, count in export.review.state_counts.items():
+            state_counts[state] = state_counts.get(state, 0) + count
+    if total_items != manifest.total_items or state_counts != manifest.state_counts:
+        raise KpiSemanticReviewFetchError(
+            "semantic review partition contents do not match manifest totals"
+        )
+
+
+def _persist_bytes(
+    payload: bytes,
+    *,
+    content_sha256: str,
+    output_root: Path,
+    category: Literal["manifests", "partitions"],
+    maximum_bytes: int,
+) -> Path:
+    destination_root = output_root / category
+    destination_root.mkdir(parents=True, exist_ok=True)
+    destination = destination_root / f"{content_sha256}.json"
     if destination.exists():
         existing = read_bounded_input(
             destination,
-            maximum_bytes=MAX_KPI_SEMANTIC_EXPORT_BYTES,
-            label="existing semantic review artifact",
+            maximum_bytes=maximum_bytes,
+            label=f"existing semantic review {category[:-1]}",
         )
-        if existing != encoded:
+        if existing != payload:
             raise KpiSemanticReviewFetchError(
-                "content-addressed semantic review artifact conflicts with existing bytes"
+                f"content-addressed semantic review {category[:-1]} conflicts with existing bytes"
             )
         return destination
     temporary = destination.with_suffix(".tmp")
-    temporary.write_bytes(encoded)
+    temporary.write_bytes(payload)
     temporary.replace(destination)
     return destination
 
 
-persist_kpi_semantic_review_export = _persist
+def persist_kpi_semantic_review_manifest(
+    manifest: KpiSemanticReviewTickerManifest, *, output_root: Path
+) -> Path:
+    return _persist_bytes(
+        encoded_kpi_semantic_review_ticker_manifest(manifest),
+        content_sha256=manifest.content_sha256,
+        output_root=output_root,
+        category="manifests",
+        maximum_bytes=_MAX_MANIFEST_BYTES,
+    )
+
+
+def persist_kpi_semantic_review_export(
+    export: KpiSemanticReviewExport, *, output_root: Path
+) -> Path:
+    return _persist_bytes(
+        encoded_kpi_semantic_review_export(export),
+        content_sha256=export.content_sha256,
+        output_root=output_root,
+        category="partitions",
+        maximum_bytes=MAX_KPI_SEMANTIC_EXPORT_BYTES,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -215,12 +375,15 @@ def main(argv: list[str] | None = None) -> int:
         label="Operations review bundle",
     )
     now = datetime.now(UTC)
-    url = origin + _ENDPOINT_PREFIX + ticker
-    payload, response_etag = fetch_kpi_semantic_review_bytes(
-        url, timeout_seconds=args.timeout_seconds
+    manifest_url = origin + _ENDPOINT_PREFIX + ticker
+    manifest_payload, manifest_etag = fetch_kpi_semantic_review_bytes(
+        manifest_url,
+        timeout_seconds=args.timeout_seconds,
+        maximum_bytes=_MAX_MANIFEST_BYTES,
     )
-    export = validate_semantic_review_export(
-        payload,
+    manifest = validate_semantic_review_manifest(
+        manifest_payload,
+        response_etag=manifest_etag,
         ticker=ticker,
         expected_user_id=args.expected_user_id,
         now=now,
@@ -229,16 +392,38 @@ def main(argv: list[str] | None = None) -> int:
         origin=origin,
         pins=pins,
     )
-    if response_etag != f'"{export.content_sha256}"':
-        raise KpiSemanticReviewFetchError(
-            "semantic review endpoint ETag does not match its artifact"
+
+    partitions: list[KpiSemanticReviewExport] = []
+    for pointer in manifest.partitions:
+        partition_url = origin + _ENDPOINT_PREFIX + ticker + "/partitions/" + pointer.content_sha256
+        payload, etag = fetch_kpi_semantic_review_bytes(
+            partition_url,
+            timeout_seconds=args.timeout_seconds,
+            maximum_bytes=MAX_KPI_SEMANTIC_EXPORT_BYTES,
         )
-    destination = persist_kpi_semantic_review_export(export, output_root=output_root)
+        partitions.append(
+            validate_semantic_review_partition(
+                payload,
+                response_etag=etag,
+                manifest=manifest,
+                pointer=pointer,
+            )
+        )
+    partition_tuple = tuple(partitions)
+    validate_semantic_review_partition_set(manifest, partition_tuple)
+
+    manifest_destination = persist_kpi_semantic_review_manifest(manifest, output_root=output_root)
+    partition_destinations = tuple(
+        str(persist_kpi_semantic_review_export(export, output_root=output_root))
+        for export in partition_tuple
+    )
     summary = FetchKpiSemanticReviewSummary(
-        ticker=export.ticker,
-        observed_at=export.observed_at,
-        content_sha256=export.content_sha256,
-        output_path=str(destination),
+        ticker=manifest.ticker,
+        observed_at=manifest.observed_at,
+        manifest_content_sha256=manifest.content_sha256,
+        total_items=manifest.total_items,
+        manifest_output_path=str(manifest_destination),
+        partition_output_paths=partition_destinations,
     )
     print(summary.model_dump_json())
     return 0

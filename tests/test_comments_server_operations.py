@@ -33,9 +33,8 @@ from operations.attention import (  # noqa: E402
     derive_finding_id,
 )
 from operations.kpi_semantic_review_export import (  # noqa: E402
-    encoded_kpi_semantic_review_export,
-    payload_sha256,
-    seal_kpi_semantic_review_export,
+    KpiSemanticReviewExport,
+    KpiSemanticReviewTickerManifest,
 )
 from operations.models import OperationsRegistry, OperationsSnapshot  # noqa: E402
 from operations.paths import (  # noqa: E402
@@ -46,7 +45,6 @@ from operations.paths import (  # noqa: E402
 )
 from operations.registry import build_operations_registry  # noqa: E402
 from operations.snapshot import collect_operations_snapshot  # noqa: E402
-from pipeline.kpi_semantic_review import KpiSemanticReviewBatch  # noqa: E402
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel  # noqa: E402
 from runtime.portfolio_tracker import (  # noqa: E402
     ListenerObservation,
@@ -933,39 +931,25 @@ def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
 ) -> None:
     state_root = tmp_path / "product-state"
     database = state_root / "data" / "portfolio.db"
-    observed_at = datetime.now(UTC)
-    batch_payload: dict[str, object] = {
-        "schema_version": "kpi_semantic_review.v3",
-        "user_id": comments_server.DEFAULT_USER_ID,
-        "ticker": "NU",
-        "observed_at": observed_at,
-        "limit": 1_000,
-        "total_items": 0,
-        "truncated": False,
-        "state_counts": {},
-        "items": (),
-    }
-    batch = KpiSemanticReviewBatch.model_validate(
-        {**batch_payload, "content_sha256": payload_sha256(batch_payload)}
-    )
-    export = seal_kpi_semantic_review_export(
-        review=batch,
+    manifest = KpiSemanticReviewTickerManifest.model_construct(
+        ticker="NU",
         code_instance_sha256=hashlib.sha256(b"bounded-code-authority").hexdigest(),
-        database_instance_sha256="b" * 64,
-        schema_revision="0035",
+        content_sha256="c" * 64,
     )
-    payload = encoded_kpi_semantic_review_export(export)
+    payload = b'{"manifest":"bounded"}\n'
     captured: dict[str, object] = {}
 
-    def load_export(**kwargs: object):
+    def load_manifest(**kwargs: object):
         captured.update(kwargs)
-        return export, payload
+        return manifest, payload
 
     def bounded_code_identity(_: Path) -> str:
         return "bounded-code-authority"
 
     monkeypatch.setattr(comments_server, "review_code_identity", bounded_code_identity)
-    monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_export", load_export)
+    monkeypatch.setattr(
+        comments_server, "load_current_kpi_semantic_review_ticker_manifest", load_manifest
+    )
     app = comments_server.create_app(tmp_path, db_path=database, code_root=PROJECT_ROOT)
     response = app.test_client().get(
         "/api/operations/kpi-semantic-review/NU",
@@ -975,7 +959,7 @@ def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
     assert response.status_code == 200
     assert response.data == payload
     assert response.headers["Cache-Control"] == "no-store"
-    assert response.headers["ETag"] == f'"{export.content_sha256}"'
+    assert response.headers["ETag"] == f'"{manifest.content_sha256}"'
     assert captured["ticker"] == "NU"
     assert captured["root"] == (state_root / "data" / "operations" / "kpi_semantic_reviews")
     assert (
@@ -997,7 +981,9 @@ def test_kpi_semantic_review_route_fails_closed_without_current_portfolio_artifa
     def unavailable(**_: object):
         raise KpiSemanticReviewExportError("ticker is outside the current portfolio export")
 
-    monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_export", unavailable)
+    monkeypatch.setattr(
+        comments_server, "load_current_kpi_semantic_review_ticker_manifest", unavailable
+    )
     response = (
         comments_server.create_app(tmp_path)
         .test_client()
@@ -1009,6 +995,63 @@ def test_kpi_semantic_review_route_fails_closed_without_current_portfolio_artifa
 
     assert response.status_code == 404
     assert response.get_json()["error"] == "semantic review artifact not found"
+
+
+def test_kpi_semantic_review_partition_route_serves_only_current_index_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root = tmp_path / "product-state"
+    database = state_root / "data" / "portfolio.db"
+    content_sha256 = "d" * 64
+    export = KpiSemanticReviewExport.model_construct(
+        ticker="NU",
+        code_instance_sha256=hashlib.sha256(b"bounded-code-authority").hexdigest(),
+        content_sha256=content_sha256,
+    )
+    payload = b'{"partition":"bounded"}\n'
+    captured: dict[str, object] = {}
+
+    def load_partition(**kwargs: object) -> tuple[KpiSemanticReviewExport, bytes]:
+        captured.update(kwargs)
+        return export, payload
+
+    def code_identity(_: Path) -> str:
+        return "bounded-code-authority"
+
+    monkeypatch.setattr(
+        comments_server,
+        "review_code_identity",
+        code_identity,
+    )
+    monkeypatch.setattr(
+        comments_server, "load_current_kpi_semantic_review_partition", load_partition
+    )
+    app = comments_server.create_app(tmp_path, db_path=database, code_root=PROJECT_ROOT)
+    response = app.test_client().get(
+        f"/api/operations/kpi-semantic-review/NU/partitions/{content_sha256}",
+        base_url="https://review.example.ts.net",
+    )
+
+    assert response.status_code == 200
+    assert response.data == payload
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["ETag"] == f'"{content_sha256}"'
+    assert captured["ticker"] == "NU"
+    assert captured["content_sha256"] == content_sha256
+    assert captured["root"] == (state_root / "data" / "operations" / "kpi_semantic_reviews")
+
+    def not_current(**_: object):
+        raise comments_server.KpiSemanticReviewExportError(
+            "semantic review partition is not referenced by the current ticker manifest"
+        )
+
+    monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_partition", not_current)
+    rejected = app.test_client().get(
+        f"/api/operations/kpi-semantic-review/NU/partitions/{content_sha256}",
+        base_url="https://review.example.ts.net",
+    )
+    assert rejected.status_code == 404
+    assert rejected.get_json()["error"] == "semantic review partition not found"
 
 
 @pytest.mark.parametrize(

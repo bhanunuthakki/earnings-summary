@@ -179,7 +179,8 @@ from operations.attention_projection import build_attention_panel_view  # noqa: 
 from operations.kpi_semantic_review_export import (  # noqa: E402
     KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
     KpiSemanticReviewExportError,
-    load_current_kpi_semantic_review_export,
+    load_current_kpi_semantic_review_partition,
+    load_current_kpi_semantic_review_ticker_manifest,
 )
 from operations.models import OperationsRegistry  # noqa: E402
 from operations.paths import (  # noqa: E402
@@ -2229,9 +2230,9 @@ def create_app(
 
     @app.route("/api/operations/kpi-semantic-review/<ticker>", methods=["GET"])
     def operations_kpi_semantic_review_api(ticker: str):
-        """Serve one precomputed, authority-bound portfolio review artifact."""
+        """Serve the bounded current partition manifest for one portfolio ticker."""
         try:
-            export, payload = load_current_kpi_semantic_review_export(
+            manifest, payload = load_current_kpi_semantic_review_ticker_manifest(
                 root=db_path.parent.parent / KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
                 ticker=ticker,
                 now=datetime.now(UTC),
@@ -2241,6 +2242,39 @@ def create_app(
             if str(exc) in {"ticker is invalid", "ticker is outside the current portfolio export"}:
                 return _client_error("semantic review artifact not found", 404)
             return _client_error("semantic review artifact is unavailable", 503)
+        expected_code_instance = hashlib.sha256(
+            operations_review_code_identity.encode("utf-8")
+        ).hexdigest()
+        if manifest.code_instance_sha256 != expected_code_instance:
+            return _client_error("semantic review artifact authority is stale", 503)
+        response = Response(payload, mimetype="application/json")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["ETag"] = f'"{manifest.content_sha256}"'
+        return response
+
+    @app.route(
+        "/api/operations/kpi-semantic-review/<ticker>/partitions/<content_sha256>",
+        methods=["GET"],
+    )
+    def operations_kpi_semantic_review_partition_api(ticker: str, content_sha256: str):
+        """Serve only an exact partition referenced by the current ticker manifest."""
+        try:
+            export, payload = load_current_kpi_semantic_review_partition(
+                root=db_path.parent.parent / KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
+                ticker=ticker,
+                content_sha256=content_sha256,
+                now=datetime.now(UTC),
+                max_age=timedelta(minutes=20),
+            )
+        except KpiSemanticReviewExportError as exc:
+            if str(exc) in {
+                "ticker is invalid",
+                "ticker is outside the current portfolio export",
+                "semantic review partition hash is invalid",
+                "semantic review partition is not referenced by the current ticker manifest",
+            }:
+                return _client_error("semantic review partition not found", 404)
+            return _client_error("semantic review partition is unavailable", 503)
         expected_code_instance = hashlib.sha256(
             operations_review_code_identity.encode("utf-8")
         ).hexdigest()

@@ -71,12 +71,13 @@ typed result, while the supervisor receipt remains the only authority for succes
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\prepare_kpi_semantic_review` | Every 10 minutes | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Opens the canonical `EARNINGS_SUMMARY_DB_PATH` read-only and publishes bounded, source-safe, content-addressed per-ticker review artifacts plus one atomic current index under the product-state root. The wrapper passes that database-derived state root to the shared job runtime for its lock and health receipt while passing the deployed runtime checkout separately as code root. Missing identity, truncation, incomplete evidence, paired root authority, or split-root mismatch fails the task closed. |
+| `earnings-summary\prepare_kpi_semantic_review` | Every 10 minutes | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Opens the canonical `EARNINGS_SUMMARY_DB_PATH` read-only and publishes source-safe, content-addressed review partitions (at most 1,000 items and 8 MiB each), bounded per-ticker manifests, and one atomic current index under the product-state root. The wrapper passes that database-derived state root to the shared job runtime for its lock and health receipt while passing the deployed runtime checkout separately as code root. Missing authority identity, a broken cursor chain, an oversized or tampered partition, incomplete portfolio coverage, paired-root disagreement, or split-root mismatch fails the task closed. Evidence-search gaps remain visible in the export but are non-actionable in the governed refresh-manifest builder. |
 
 Operations surface disposition: `primary surface`. The canonical manifest owns this task, so the
 existing dynamic Jobs projection shows its declaration, ten-minute cadence, registered identity,
 latest attempt, and failure state. This adds no dashboard control or request-time producer; the
-read-only review endpoint serves only the producer's precomputed current artifact.
+read-only review endpoints serve only the producer's precomputed current ticker manifest and its
+current-index-bound content-addressed partitions.
 
 ### Pre-chain backup
 
