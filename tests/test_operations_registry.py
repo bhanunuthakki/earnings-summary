@@ -87,7 +87,7 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
     assert semantic_review_step.raw_lane == "kpi-semantic-review-export"
     assert semantic_review_step.effective_lane == ("kpi-semantic-review-export",)
     assert semantic_review_step.command == (
-        r"execution\prepare_kpi_semantic_review.py",
+        r"%PROJECT_ROOT%\execution\prepare_kpi_semantic_review.py",
         "--db",
         "%EARNINGS_SUMMARY_DB_PATH%",
         "--code-root",
