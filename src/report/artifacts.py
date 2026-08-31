@@ -282,6 +282,26 @@ def load_report_artifact_index(repo_root: Path) -> ReportArtifactIndex:
     return ReportArtifactIndex(generated_at=index.generated_at, items=existing)
 
 
+def latest_report_artifacts(index: ReportArtifactIndex) -> tuple[ReportArtifactRef, ...]:
+    """Return the exact Full Brief population surfaced by the Brief Library."""
+
+    latest_by_ticker: dict[str, ReportArtifactRef] = {}
+    for artifact in index.items:
+        prior = latest_by_ticker.get(artifact.ticker)
+        if prior is None or (artifact.generated_at, artifact.artifact_id) > (
+            prior.generated_at,
+            prior.artifact_id,
+        ):
+            latest_by_ticker[artifact.ticker] = artifact
+    return tuple(
+        sorted(
+            latest_by_ticker.values(),
+            key=lambda artifact: (artifact.generated_at, artifact.artifact_id),
+            reverse=True,
+        )
+    )
+
+
 def _write_index(repo_root: Path, items: tuple[ReportArtifactRef, ...]) -> None:
     ordered = tuple(
         sorted(items, key=lambda item: (item.generated_at, item.artifact_id), reverse=True)
@@ -731,9 +751,10 @@ def backfill_report_fiscal_periods(
 
     normalized_tickers = None if tickers is None else {value.strip().upper() for value in tickers}
     prior = _read_index(repo_root)
+    library_artifacts = latest_report_artifacts(load_report_artifact_index(repo_root))
     selected = [
         artifact
-        for artifact in prior.items
+        for artifact in library_artifacts
         if normalized_tickers is None or artifact.ticker in normalized_tickers
     ]
     replacements: dict[str, ReportArtifactRef] = {}
@@ -850,6 +871,7 @@ __all__ = [
     "ReportInteractionManifest",
     "ReportSectionRef",
     "backfill_report_fiscal_periods",
+    "latest_report_artifacts",
     "load_report_artifact_index",
     "migrate_legacy_report_bodies",
     "persist_report_artifact",
