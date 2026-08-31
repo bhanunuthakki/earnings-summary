@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
-from pipeline.work_os_briefs import build_brief_library
+from pipeline.work_os_briefs import build_brief_library, format_artifact_title
 from report.artifacts import (
     RenderedReportBody,
     ReportInteractionManifest,
@@ -57,6 +57,7 @@ def _persist_shared_brief(
         ),
         sections=(ReportSectionRef(section_id="company", label="Company", group_id="overview"),),
         interaction_manifest=ReportInteractionManifest(),
+        fiscal_period_label="Q2 2026",
     )
     workspace = (
         repo_root / "output" / "research" / ticker / f"{report_date.isoformat()}_workspace.html"
@@ -72,6 +73,101 @@ def _persist_shared_brief(
         title=f"{ticker} Full Research Brief",
     )
     return body
+
+
+def test_compact_artifact_title_uses_exact_period_and_closed_kind_labels() -> None:
+    assert format_artifact_title("bkng", "Q2 2026", "full_brief") == "BKNG Q2 26 Brief"
+    assert format_artifact_title("NU", "Q1 2026", "pre_earnings") == "NU Q1 26 Pre-Earnings"
+    assert format_artifact_title("WIX", "Q4 2025", "post_earnings") == "WIX Q4 25 Post-Earnings"
+    assert format_artifact_title("NU", None, "full_brief") == "NU Brief"
+
+
+def test_brief_library_unifies_persisted_artifact_kinds_and_exact_facets(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    _persist_shared_brief(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT,
+            scope TEXT NOT NULL DEFAULT 'ticker',
+            purpose TEXT NOT NULL,
+            fiscal_period TEXT,
+            content_md TEXT,
+            content_json TEXT,
+            input_sha256 TEXT NOT NULL DEFAULT 'fixture',
+            output_sha256 TEXT,
+            model TEXT,
+            prompt_version TEXT NOT NULL DEFAULT 'v1',
+            generated_at TEXT,
+            expires_at TEXT,
+            superseded_by_id INTEGER,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            dirty_reason TEXT,
+            source_doc_ids TEXT NOT NULL DEFAULT '[]',
+            parent_artifact_ids TEXT NOT NULL DEFAULT '[]',
+            llm_call_id INTEGER
+        );
+        CREATE TABLE expected_earnings (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT,
+            expected_date TEXT,
+            fiscal_period_label TEXT
+        );
+        INSERT INTO expected_earnings VALUES (1, 'NU', '2026-11-05', 'Q3 2026');
+        INSERT INTO llm_artifacts
+          (id, ticker, scope, purpose, fiscal_period, content_md, generated_at, superseded_by_id)
+        VALUES
+          (41, 'NU', 'ticker', 'pre_earnings_brief', '2026-11-05',
+           'NU preparation', '2026-10-31T12:00:00Z', NULL),
+          (42, 'NU', 'ticker', 'post_earnings_readout', '2026-06-30',
+           'readout', '2026-08-11T12:00:00Z', NULL);
+        """
+    )
+    conn.execute(
+        "INSERT INTO transcripts (ticker, fiscal_period_type, period_end) "
+        "VALUES ('NU', 'Q2', '2026-06-30')"
+    )
+    conn.commit()
+    conn.close()
+
+    payload = work_os_client.get("/api/work-os/briefs").get_json()
+
+    assert payload["schema_version"] == "brief_library.v2"
+    assert [item["artifact_kind"] for item in payload["items"]] == [
+        "pre_earnings",
+        "post_earnings",
+        "full_brief",
+    ]
+    assert [item["title"] for item in payload["items"]] == [
+        "NU Q3 26 Pre-Earnings",
+        "NU Q2 26 Post-Earnings",
+        "NU Q2 26 Brief",
+    ]
+    assert payload["facets"]["artifact_kind"] == [
+        {"value": "full_brief", "label": "Brief", "count": 1},
+        {"value": "pre_earnings", "label": "Pre-Earnings", "count": 1},
+        {"value": "post_earnings", "label": "Post-Earnings", "count": 1},
+    ]
+    assert payload["facets"]["coverage_role"] == [
+        {"value": "portfolio", "label": "Portfolio", "count": 3}
+    ]
+    assert payload["facets"]["ticker"] == [{"value": "NU", "label": "NU · Nu Holdings", "count": 3}]
+
+    filtered = work_os_client.get(
+        "/api/work-os/briefs", query_string={"artifact_kind": "post_earnings"}
+    ).get_json()
+    assert [item["artifact_id"] for item in filtered["items"]] == ["llm:42"]
+    assert filtered["facets"]["artifact_kind"] == payload["facets"]["artifact_kind"]
+
+    exact_pre = work_os_client.get("/api/peek/earnings-prep?ticker=NU&artifact_id=41")
+    assert exact_pre.status_code == 200
+    assert "NU preparation" in exact_pre.get_data(as_text=True)
+    assert (
+        work_os_client.get("/api/peek/earnings-prep?ticker=WIX&artifact_id=41").status_code == 404
+    )
 
 
 def test_brief_library_projects_only_latest_artifact_per_ticker_before_pagination(
@@ -123,18 +219,20 @@ def test_brief_library_returns_stable_indexed_artifacts(
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["schema_version"] == "brief_library.v1"
+    assert payload["schema_version"] == "brief_library.v2"
     assert payload["items"] == [
         {
             "artifact_id": body.artifact_id,
             "ticker": "NU",
-            "title": "NU Full Research Brief",
+            "title": "NU Q2 26 Brief",
             "artifact_kind": "full_brief",
             "coverage_role": "portfolio",
+            "fiscal_period_label": "Q2 2026",
             "report_date": "2026-08-10",
             "generated_at": "2026-08-10T12:00:00Z",
             "reader_mode": "shared_body",
             "status": "available",
+            "open_url": "/reports/NU?artifact_id=" + body.artifact_id,
             "body_url": f"/api/work-os/briefs/{body.artifact_id}/body",
             "standalone_url": "/reports/NU?artifact_id=" + body.artifact_id,
             "section_count": 1,
@@ -142,6 +240,7 @@ def test_brief_library_returns_stable_indexed_artifacts(
             "comment_count": None,
         }
     ]
+    assert payload["facets"]["ticker"] == [{"value": "NU", "label": "NU · Nu Holdings", "count": 1}]
     assert payload["next_cursor"] is None
 
 

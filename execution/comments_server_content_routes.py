@@ -265,10 +265,20 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     def peek_earnings_prep():
         from pipeline.peeks import render_earnings_prep_peek
 
+        raw_artifact_id = request.args.get("artifact_id")
+        artifact_id: int | None = None
+        if raw_artifact_id is not None:
+            try:
+                artifact_id = int(raw_artifact_id)
+            except ValueError:
+                abort(400)
+            if artifact_id <= 0:
+                abort(400)
         html = render_earnings_prep_peek(
             db_path,
             repo_root,
             request.args.get("ticker") or "",
+            artifact_id=artifact_id,
         )
         if html is None:
             abort(404)
@@ -453,6 +463,9 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         coverage_role = request.args.get("coverage_role")
         if coverage_role not in (None, "portfolio", "evaluation", "unknown"):
             return ({"error": "invalid coverage_role"}, 400)
+        artifact_kind = request.args.get("artifact_kind")
+        if artifact_kind not in (None, "full_brief", "pre_earnings", "post_earnings"):
+            return ({"error": "invalid artifact_kind"}, 400)
         status = request.args.get("status")
         if status not in (None, "available", "degraded"):
             return ({"error": "invalid status"}, 400)
@@ -467,6 +480,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
                 repo_root,
                 conn=context.get_read_db(),
                 ticker=ticker,
+                artifact_kind=artifact_kind,
                 coverage_role=coverage_role,
                 status=status,
                 cursor=request.args.get("cursor"),

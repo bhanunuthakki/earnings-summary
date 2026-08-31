@@ -428,6 +428,7 @@ def _report_urls(
         response = build_brief_library(
             repo_root,
             conn=conn,
+            artifact_kind="full_brief",
             coverage_role="evaluation",
             limit=10_000,
         )

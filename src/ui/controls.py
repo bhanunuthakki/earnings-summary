@@ -11,14 +11,11 @@ headers, and palette rows. This module is the component layer over
 Composition contract — ``controls_css(default)`` rides immediately after
 :func:`ui.tokens.palette_css` in every page-level ``<style>``:
 
-* element BASELINE for form controls (select/input/textarea): dark-menu
-  ``color-scheme``, ``appearance: none`` + a custom chevron on single
-  ``<select>`` (the native arrow is gone everywhere), one focus ring.
-  Low-specificity on purpose: any surface rule still wins — but surfaces
-  should only add layout (widths, flex), never re-skin.
-  CAUTION: a surface that sets ``background: <anything>`` on a ``<select>``
-  wipes the chevron (shorthand resets ``background-image``) and gets an
-  arrowless box — set ``background-color`` instead, or nothing at all.
+* element BASELINE for form controls (select/input/textarea), plus the
+  program-wide Searchable Single-Select. ``controls_js()`` retains each
+  single ``<select>`` as the hidden typed/form-value carrier and draws one
+  app-owned trigger + listbox over it. Surfaces add layout only and never
+  skin a dropdown or expose an OS-native popup.
 * ``.k-btn`` + ``.k-btn-primary`` / ``.k-btn-quiet`` / ``.k-btn-danger`` —
   the WHOLE button hierarchy. One solid-accent primary per view, quiet for
   everything else, danger only for destructive actions.
@@ -384,6 +381,52 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-menu li { padding: 6px 12px; cursor: pointer; font-size: var(--fs-body); }
 .k-menu li.sel, .k-menu li:hover { background: var(--paper); }
 
+/* ---- searchable single-select: one app-owned trigger + listbox everywhere ---- */
+.k-select-shell { position: relative; display: inline-flex; min-width: 0; max-width: 100%; }
+.k-select-native {
+  position: absolute !important; inline-size: 1px !important; block-size: 1px !important;
+  margin: -1px !important; padding: 0 !important; border: 0 !important;
+  overflow: hidden !important; clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important; white-space: nowrap !important;
+}
+.k-select-shell > .k-select-trigger {
+  inline-size: 100%; min-inline-size: 0; min-block-size: var(--icon-button-size);
+  display: inline-flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  border: var(--bw-thin) solid var(--border); border-radius: var(--radius);
+  padding: 6px 28px 6px 10px; color: var(--fg); background-color: transparent;
+  background-image: var(--k-chevron); background-repeat: no-repeat;
+  background-position: right 9px center; background-size: 14px;
+  font: inherit; font-size: var(--fs-body); text-align: start; cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.k-select-trigger:hover { border-color: var(--border-2); }
+.k-select-trigger:focus-visible, .k-select-trigger[aria-expanded="true"] {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.k-select-trigger[aria-expanded="true"] { background-image: none; padding-inline-end: 10px; }
+.k-select-trigger-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-select-shell > .k-select-menu {
+  position: absolute; z-index: var(--z-popover); inset-block-start: calc(100% + var(--sp-1));
+  inset-inline-start: 0; min-inline-size: max(100%, var(--grid-card-sm));
+  max-inline-size: min(var(--grid-card-lg), calc(100vw - var(--sp-6)));
+  max-block-size: min(320px, 48vh); overflow-y: auto; margin: 0; padding: var(--sp-1);
+  list-style: none; background: var(--surface); border: var(--bw-thin) solid var(--border-2);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop);
+}
+.k-select-menu[hidden] { display: none !important; }
+.k-select-option {
+  min-block-size: var(--icon-button-size); display: flex; align-items: center;
+  justify-content: space-between; gap: var(--sp-3); padding: 6px 10px;
+  border-radius: var(--radius); color: var(--fg-soft); cursor: pointer;
+}
+.k-select-option[hidden] { display: none !important; }
+.k-select-option:hover, .k-select-option[data-active="true"] { color: var(--fg); background: var(--paper); }
+.k-select-option[aria-selected="true"] { color: var(--accent); }
+.k-select-option[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.k-select-option-count { flex: none; color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); }
+.k-select-empty { padding: var(--sp-3); color: var(--muted); font-size: var(--fs-caption); }
+.k-select-live { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
 /* ---- field/section caption. .k-label-mark is the DOCUMENT tone (§6.3): the
    same caption in the editorial ochre, for a research document's section
    labels. A tone modifier, not a new class — same shape, same weight. ---- */
@@ -394,6 +437,13 @@ a.k-tick-sym:hover { color: var(--accent); }
 /* ---- mobile platform floors: prevent iOS focus zoom and preserve touch reach ---- */
 @media (max-width: 768px) {
   input, select, textarea { font-size: var(--mobile-control-font-size); }
+  .k-select-trigger { min-block-size: var(--touch-target-size); font-size: var(--mobile-control-font-size); }
+  [data-k-select-shell="true"] > .k-select-menu {
+    position: fixed; inset-block: auto calc(var(--sp-3) + env(safe-area-inset-bottom));
+    inset-inline: var(--sp-3); inline-size: auto; min-inline-size: 0;
+    max-inline-size: none; max-block-size: min(52vh, 360px);
+  }
+  .k-select-option { min-block-size: var(--touch-target-size); }
   .k-icon-btn, .k-nav-item { min-width: var(--touch-target-size);
     min-height: var(--touch-target-size); }
 }
@@ -817,6 +867,326 @@ def controls_css(default: str = "paper") -> str:
     else:
         raise ValueError(f"default must be 'paper' or 'dark', got {default!r}")
     return head + _CONTROLS_BODY
+
+
+_CONTROLS_JS = r"""
+(function () {
+  'use strict';
+  if (window.KSelect && window.KSelect.version === '1') return;
+
+  const states = new WeakMap();
+  let openState = null;
+  let optionSequence = 0;
+
+  function isEditable(target) {
+    return target instanceof Element && Boolean(target.closest(
+      'input, textarea, [contenteditable="true"], [contenteditable=""]'
+    ));
+  }
+
+  function optionLabel(option) {
+    return String(option.label || option.textContent || '').trim();
+  }
+
+  function searchableText(option) {
+    return (optionLabel(option) + ' ' + String(option.dataset.searchAliases || ''))
+      .trim().toLocaleLowerCase();
+  }
+
+  function selectedLabel(state) {
+    const option = state.select.selectedOptions && state.select.selectedOptions[0];
+    return option ? optionLabel(option) : String(state.select.dataset.placeholder || 'Choose');
+  }
+
+  function announce(state, message) {
+    state.live.textContent = '';
+    window.requestAnimationFrame(function () { state.live.textContent = message; });
+  }
+
+  function visibleOptions(state) {
+    return state.options.filter(function (entry) { return !entry.node.hidden; });
+  }
+
+  function setActive(state, index) {
+    const visible = visibleOptions(state);
+    if (!visible.length) {
+      state.activeIndex = -1;
+      state.trigger.removeAttribute('aria-activedescendant');
+      return;
+    }
+    const bounded = ((index % visible.length) + visible.length) % visible.length;
+    state.options.forEach(function (entry) { entry.node.dataset.active = 'false'; });
+    visible[bounded].node.dataset.active = 'true';
+    visible[bounded].node.scrollIntoView({ block: 'nearest' });
+    state.activeIndex = bounded;
+    state.trigger.setAttribute('aria-activedescendant', visible[bounded].node.id);
+  }
+
+  function render(state) {
+    const query = state.query.trim().toLocaleLowerCase();
+    let matches = 0;
+    state.options.forEach(function (entry) {
+      const matchesQuery = !query || searchableText(entry.option).includes(query);
+      entry.node.hidden = !matchesQuery;
+      entry.node.dataset.active = 'false';
+      entry.node.setAttribute(
+        'aria-selected',
+        entry.option.selected ? 'true' : 'false'
+      );
+      if (matchesQuery) matches += 1;
+    });
+    state.empty.hidden = matches !== 0;
+    state.triggerLabel.textContent = state.query || selectedLabel(state);
+    state.trigger.setAttribute(
+      'aria-label',
+      state.query ? state.name + ' search: ' + state.query : state.name + ': ' + selectedLabel(state)
+    );
+    state.activeIndex = -1;
+    state.trigger.removeAttribute('aria-activedescendant');
+    if (state.open) announce(state, matches ? matches + ' options' : 'No matching options');
+  }
+
+  function rebuild(state) {
+    state.options = [];
+    state.menu.replaceChildren();
+    Array.from(state.select.options).forEach(function (option) {
+      const node = document.createElement('li');
+      const label = document.createElement('span');
+      node.id = 'k-select-option-' + (++optionSequence);
+      node.className = 'k-select-option';
+      node.setAttribute('role', 'option');
+      node.setAttribute('aria-disabled', option.disabled ? 'true' : 'false');
+      label.textContent = optionLabel(option);
+      node.append(label);
+      const rawCount = String(option.dataset.count || '').trim();
+      if (rawCount) {
+        const count = document.createElement('span');
+        count.className = 'k-select-option-count';
+        count.textContent = rawCount;
+        node.append(count);
+      }
+      node.addEventListener('pointerdown', function (event) { event.preventDefault(); });
+      node.addEventListener('click', function () {
+        if (option.disabled) return;
+        commit(state, option);
+      });
+      state.menu.append(node);
+      state.options.push({ option: option, node: node });
+    });
+    state.menu.append(state.empty);
+    render(state);
+  }
+
+  function close(state, options) {
+    if (!state || !state.open) return;
+    const restoreFocus = Boolean(options && options.restoreFocus);
+    state.open = false;
+    state.query = '';
+    state.menu.hidden = true;
+    state.trigger.setAttribute('aria-expanded', 'false');
+    state.trigger.removeAttribute('aria-activedescendant');
+    render(state);
+    if (openState === state) openState = null;
+    if (restoreFocus) state.trigger.focus();
+  }
+
+  function open(state, query) {
+    if (state.select.disabled) return;
+    if (openState && openState !== state) close(openState);
+    state.open = true;
+    state.query = query || '';
+    state.menu.hidden = false;
+    state.trigger.setAttribute('aria-expanded', 'true');
+    openState = state;
+    render(state);
+  }
+
+  function commit(state, option) {
+    if (!option || option.disabled) return;
+    state.select.value = option.value;
+    state.select.dispatchEvent(new Event('input', { bubbles: true }));
+    state.select.dispatchEvent(new Event('change', { bubbles: true }));
+    close(state, { restoreFocus: true });
+  }
+
+  function handleKey(state, event) {
+    const printable = event.key.length === 1 && /^[a-z0-9.\- ]$/i.test(event.key);
+    if (event.key === 'Escape' && state.open) {
+      event.preventDefault();
+      close(state, { restoreFocus: true });
+      return;
+    }
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && state.open) {
+      event.preventDefault();
+      setActive(state, state.activeIndex + (event.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    if ((event.key === 'Enter' || (event.key === ' ' && !state.query)) && state.open) {
+      const options = visibleOptions(state);
+      const active = state.activeIndex >= 0 ? options[state.activeIndex] : options[0];
+      if (active) {
+        event.preventDefault();
+        commit(state, active.option);
+      }
+      return;
+    }
+    if (event.key === 'Backspace' && state.open) {
+      event.preventDefault();
+      state.query = state.query.slice(0, -1);
+      render(state);
+      return;
+    }
+    if (printable) {
+      event.preventDefault();
+      if (!state.open) open(state, event.key);
+      else {
+        state.query += event.key;
+        render(state);
+      }
+    }
+  }
+
+  function controlName(select) {
+    const label = select.labels && select.labels[0]
+      ? String(select.labels[0].textContent || '').trim() : '';
+    return String(select.getAttribute('aria-label') || select.title || label || select.name || 'Choose');
+  }
+
+  function enhance(select) {
+    if (!(select instanceof HTMLSelectElement) || select.multiple || states.has(select)) return;
+    const shell = document.createElement('span');
+    const trigger = document.createElement('button');
+    const triggerLabel = document.createElement('span');
+    const menu = document.createElement('ul');
+    const empty = document.createElement('li');
+    const live = document.createElement('span');
+    const name = controlName(select);
+    const copiedClasses = Array.from(select.classList).join(' ');
+
+    shell.className = ('k-select-shell ' + copiedClasses).trim();
+    shell.dataset.kSelectShell = 'true';
+    trigger.type = 'button';
+    trigger.className = 'k-select-trigger';
+    trigger.setAttribute('role', 'combobox');
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.disabled = select.disabled;
+    triggerLabel.className = 'k-select-trigger-label';
+    trigger.append(triggerLabel);
+    menu.className = 'k-select-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.hidden = true;
+    empty.className = 'k-select-empty';
+    empty.textContent = 'No matching options';
+    empty.hidden = true;
+    live.className = 'k-select-live';
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    menu.id = 'k-select-list-' + (++optionSequence);
+    trigger.setAttribute('aria-controls', menu.id);
+
+    select.parentNode.insertBefore(shell, select);
+    shell.append(select, trigger, menu, live);
+    select.classList.add('k-select-native');
+    select.tabIndex = -1;
+    select.setAttribute('aria-hidden', 'true');
+
+    const state = {
+      select: select, shell: shell, trigger: trigger, triggerLabel: triggerLabel,
+      menu: menu, empty: empty, live: live, name: name, options: [], query: '',
+      activeIndex: -1, open: false, optionObserver: null
+    };
+    states.set(select, state);
+    trigger.addEventListener('click', function () {
+      if (state.open) close(state, { restoreFocus: true });
+      else open(state);
+    });
+    trigger.addEventListener('keydown', function (event) { handleKey(state, event); });
+    Array.from(select.labels || []).forEach(function (label) {
+      label.addEventListener('click', function (event) {
+        if (state.shell.contains(event.target)) return;
+        event.preventDefault();
+        state.trigger.focus();
+        open(state);
+      });
+    });
+    select.addEventListener('input', function () { render(state); });
+    select.addEventListener('change', function () { render(state); });
+    state.optionObserver = new MutationObserver(function () { rebuild(state); });
+    state.optionObserver.observe(select, {
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ['disabled', 'label', 'selected', 'data-count', 'data-search-aliases']
+    });
+    rebuild(state);
+  }
+
+  function enhanceAll(root) {
+    if (root instanceof HTMLSelectElement) enhance(root);
+    if (!(root instanceof Element || root instanceof Document)) return;
+    root.querySelectorAll('select:not([multiple])').forEach(enhance);
+  }
+
+  function sync(select) {
+    const state = states.get(select);
+    if (!state) {
+      enhance(select);
+      return;
+    }
+    state.trigger.disabled = select.disabled;
+    rebuild(state);
+  }
+
+  document.addEventListener('click', function (event) {
+    if (openState && !openState.shell.contains(event.target)) close(openState);
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (openState) {
+      if (!isEditable(event.target)) handleKey(openState, event);
+      return;
+    }
+    const printable = event.key.length === 1 && /^[a-z0-9.\-]$/i.test(event.key);
+    if (!printable || isEditable(event.target)) return;
+    const selected = document.activeElement instanceof HTMLElement
+      ? document.activeElement.closest('.k-select-shell') : null;
+    const select = selected ? selected.querySelector('select:not([multiple])')
+      : document.querySelector('select[data-k-select-default="true"]');
+    const state = select ? states.get(select) : null;
+    if (!state) return;
+    event.preventDefault();
+    open(state, event.key);
+    state.trigger.focus();
+  });
+
+  const documentObserver = new MutationObserver(function (records) {
+    records.forEach(function (record) {
+      record.addedNodes.forEach(function (node) { enhanceAll(node); });
+    });
+  });
+
+  function start() {
+    enhanceAll(document);
+    documentObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  window.KSelect = { version: '1', enhanceAll: enhanceAll, sync: sync };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+}());
+"""
+
+
+def controls_js() -> str:
+    """Return the one Searchable Single-Select runtime for a page document.
+
+    The runtime progressively enhances every single native ``select`` and any
+    dynamically mounted descendants. The native element remains the hidden
+    typed/form-value carrier, so existing ``change`` handlers and submissions
+    keep their exact behavior.
+    """
+
+    return _CONTROLS_JS
 
 
 def ticker_label(

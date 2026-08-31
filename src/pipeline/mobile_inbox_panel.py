@@ -44,7 +44,7 @@ from pipeline.calibration_receipt import render_calibration_receipt_for
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.operations_styles import MOBILE_INBOX_STYLE as _STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from ui.controls import controls_css, ticker_label
+from ui.controls import controls_css, controls_js, ticker_label
 from ui.tokens import palette_css
 
 _HEAD = (
@@ -704,7 +704,10 @@ def render_mobile_inbox(db_path: Path) -> str:
         '<section class="mi-sec"><h2 class="mi-sec-h">Recent activity</h2>'
         f"{_inbox_stream_section(db_path)}</section>"
     )
-    scripts = f"<script>{CC_ACTION_JS}</script>{_JS}"
+    scripts = (
+        f"<script>{CC_ACTION_JS}</script>{_JS}"
+        f"<script data-k-select-runtime>{controls_js()}</script>"
+    )
     return f"<!doctype html><html><head>{_HEAD}{style}</head><body>{body}{scripts}</body></html>"
 
 

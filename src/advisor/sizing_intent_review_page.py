@@ -21,7 +21,7 @@ from advisor.sizing_intent_review import (
 )
 from pipeline.portfolio_styles import sizing_intent_review_css
 from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
-from ui.controls import controls_css
+from ui.controls import controls_css, controls_js
 from ui.tokens import FAVICON_LINK, palette_css
 
 __all__ = ["render_sizing_intent_review_page"]
@@ -74,6 +74,8 @@ def render_sizing_intent_review_page(
             _action_form(clean_ticker, entries),
             "</main><script>",
             _PAGE_JS,
+            "</script><script data-k-select-runtime>",
+            controls_js(),
             "</script></body></html>",
         )
     )

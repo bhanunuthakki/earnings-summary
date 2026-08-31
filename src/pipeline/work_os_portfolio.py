@@ -572,6 +572,7 @@ def build_work_os_portfolio_research_links(
         library = build_brief_library(
             repo_root,
             conn=conn,
+            artifact_kind="full_brief",
             coverage_role="portfolio",
             limit=10_000,
         )

@@ -2236,3 +2236,309 @@ ${r?'Expression: "'+r+`"
   }
   init();
 })();
+
+
+(function () {
+  'use strict';
+  if (window.KSelect && window.KSelect.version === '1') return;
+
+  const states = new WeakMap();
+  let openState = null;
+  let optionSequence = 0;
+
+  function isEditable(target) {
+    return target instanceof Element && Boolean(target.closest(
+      'input, textarea, [contenteditable="true"], [contenteditable=""]'
+    ));
+  }
+
+  function optionLabel(option) {
+    return String(option.label || option.textContent || '').trim();
+  }
+
+  function searchableText(option) {
+    return (optionLabel(option) + ' ' + String(option.dataset.searchAliases || ''))
+      .trim().toLocaleLowerCase();
+  }
+
+  function selectedLabel(state) {
+    const option = state.select.selectedOptions && state.select.selectedOptions[0];
+    return option ? optionLabel(option) : String(state.select.dataset.placeholder || 'Choose');
+  }
+
+  function announce(state, message) {
+    state.live.textContent = '';
+    window.requestAnimationFrame(function () { state.live.textContent = message; });
+  }
+
+  function visibleOptions(state) {
+    return state.options.filter(function (entry) { return !entry.node.hidden; });
+  }
+
+  function setActive(state, index) {
+    const visible = visibleOptions(state);
+    if (!visible.length) {
+      state.activeIndex = -1;
+      state.trigger.removeAttribute('aria-activedescendant');
+      return;
+    }
+    const bounded = ((index % visible.length) + visible.length) % visible.length;
+    state.options.forEach(function (entry) { entry.node.dataset.active = 'false'; });
+    visible[bounded].node.dataset.active = 'true';
+    visible[bounded].node.scrollIntoView({ block: 'nearest' });
+    state.activeIndex = bounded;
+    state.trigger.setAttribute('aria-activedescendant', visible[bounded].node.id);
+  }
+
+  function render(state) {
+    const query = state.query.trim().toLocaleLowerCase();
+    let matches = 0;
+    state.options.forEach(function (entry) {
+      const matchesQuery = !query || searchableText(entry.option).includes(query);
+      entry.node.hidden = !matchesQuery;
+      entry.node.dataset.active = 'false';
+      entry.node.setAttribute(
+        'aria-selected',
+        entry.option.selected ? 'true' : 'false'
+      );
+      if (matchesQuery) matches += 1;
+    });
+    state.empty.hidden = matches !== 0;
+    state.triggerLabel.textContent = state.query || selectedLabel(state);
+    state.trigger.setAttribute(
+      'aria-label',
+      state.query ? state.name + ' search: ' + state.query : state.name + ': ' + selectedLabel(state)
+    );
+    state.activeIndex = -1;
+    state.trigger.removeAttribute('aria-activedescendant');
+    if (state.open) announce(state, matches ? matches + ' options' : 'No matching options');
+  }
+
+  function rebuild(state) {
+    state.options = [];
+    state.menu.replaceChildren();
+    Array.from(state.select.options).forEach(function (option) {
+      const node = document.createElement('li');
+      const label = document.createElement('span');
+      node.id = 'k-select-option-' + (++optionSequence);
+      node.className = 'k-select-option';
+      node.setAttribute('role', 'option');
+      node.setAttribute('aria-disabled', option.disabled ? 'true' : 'false');
+      label.textContent = optionLabel(option);
+      node.append(label);
+      const rawCount = String(option.dataset.count || '').trim();
+      if (rawCount) {
+        const count = document.createElement('span');
+        count.className = 'k-select-option-count';
+        count.textContent = rawCount;
+        node.append(count);
+      }
+      node.addEventListener('pointerdown', function (event) { event.preventDefault(); });
+      node.addEventListener('click', function () {
+        if (option.disabled) return;
+        commit(state, option);
+      });
+      state.menu.append(node);
+      state.options.push({ option: option, node: node });
+    });
+    state.menu.append(state.empty);
+    render(state);
+  }
+
+  function close(state, options) {
+    if (!state || !state.open) return;
+    const restoreFocus = Boolean(options && options.restoreFocus);
+    state.open = false;
+    state.query = '';
+    state.menu.hidden = true;
+    state.trigger.setAttribute('aria-expanded', 'false');
+    state.trigger.removeAttribute('aria-activedescendant');
+    render(state);
+    if (openState === state) openState = null;
+    if (restoreFocus) state.trigger.focus();
+  }
+
+  function open(state, query) {
+    if (state.select.disabled) return;
+    if (openState && openState !== state) close(openState);
+    state.open = true;
+    state.query = query || '';
+    state.menu.hidden = false;
+    state.trigger.setAttribute('aria-expanded', 'true');
+    openState = state;
+    render(state);
+  }
+
+  function commit(state, option) {
+    if (!option || option.disabled) return;
+    state.select.value = option.value;
+    state.select.dispatchEvent(new Event('input', { bubbles: true }));
+    state.select.dispatchEvent(new Event('change', { bubbles: true }));
+    close(state, { restoreFocus: true });
+  }
+
+  function handleKey(state, event) {
+    const printable = event.key.length === 1 && /^[a-z0-9.\- ]$/i.test(event.key);
+    if (event.key === 'Escape' && state.open) {
+      event.preventDefault();
+      close(state, { restoreFocus: true });
+      return;
+    }
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && state.open) {
+      event.preventDefault();
+      setActive(state, state.activeIndex + (event.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    if ((event.key === 'Enter' || (event.key === ' ' && !state.query)) && state.open) {
+      const options = visibleOptions(state);
+      const active = state.activeIndex >= 0 ? options[state.activeIndex] : options[0];
+      if (active) {
+        event.preventDefault();
+        commit(state, active.option);
+      }
+      return;
+    }
+    if (event.key === 'Backspace' && state.open) {
+      event.preventDefault();
+      state.query = state.query.slice(0, -1);
+      render(state);
+      return;
+    }
+    if (printable) {
+      event.preventDefault();
+      if (!state.open) open(state, event.key);
+      else {
+        state.query += event.key;
+        render(state);
+      }
+    }
+  }
+
+  function controlName(select) {
+    const label = select.labels && select.labels[0]
+      ? String(select.labels[0].textContent || '').trim() : '';
+    return String(select.getAttribute('aria-label') || select.title || label || select.name || 'Choose');
+  }
+
+  function enhance(select) {
+    if (!(select instanceof HTMLSelectElement) || select.multiple || states.has(select)) return;
+    const shell = document.createElement('span');
+    const trigger = document.createElement('button');
+    const triggerLabel = document.createElement('span');
+    const menu = document.createElement('ul');
+    const empty = document.createElement('li');
+    const live = document.createElement('span');
+    const name = controlName(select);
+    const copiedClasses = Array.from(select.classList).join(' ');
+
+    shell.className = ('k-select-shell ' + copiedClasses).trim();
+    shell.dataset.kSelectShell = 'true';
+    trigger.type = 'button';
+    trigger.className = 'k-select-trigger';
+    trigger.setAttribute('role', 'combobox');
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.disabled = select.disabled;
+    triggerLabel.className = 'k-select-trigger-label';
+    trigger.append(triggerLabel);
+    menu.className = 'k-select-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.hidden = true;
+    empty.className = 'k-select-empty';
+    empty.textContent = 'No matching options';
+    empty.hidden = true;
+    live.className = 'k-select-live';
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    menu.id = 'k-select-list-' + (++optionSequence);
+    trigger.setAttribute('aria-controls', menu.id);
+
+    select.parentNode.insertBefore(shell, select);
+    shell.append(select, trigger, menu, live);
+    select.classList.add('k-select-native');
+    select.tabIndex = -1;
+    select.setAttribute('aria-hidden', 'true');
+
+    const state = {
+      select: select, shell: shell, trigger: trigger, triggerLabel: triggerLabel,
+      menu: menu, empty: empty, live: live, name: name, options: [], query: '',
+      activeIndex: -1, open: false, optionObserver: null
+    };
+    states.set(select, state);
+    trigger.addEventListener('click', function () {
+      if (state.open) close(state, { restoreFocus: true });
+      else open(state);
+    });
+    trigger.addEventListener('keydown', function (event) { handleKey(state, event); });
+    Array.from(select.labels || []).forEach(function (label) {
+      label.addEventListener('click', function (event) {
+        if (state.shell.contains(event.target)) return;
+        event.preventDefault();
+        state.trigger.focus();
+        open(state);
+      });
+    });
+    select.addEventListener('input', function () { render(state); });
+    select.addEventListener('change', function () { render(state); });
+    state.optionObserver = new MutationObserver(function () { rebuild(state); });
+    state.optionObserver.observe(select, {
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ['disabled', 'label', 'selected', 'data-count', 'data-search-aliases']
+    });
+    rebuild(state);
+  }
+
+  function enhanceAll(root) {
+    if (root instanceof HTMLSelectElement) enhance(root);
+    if (!(root instanceof Element || root instanceof Document)) return;
+    root.querySelectorAll('select:not([multiple])').forEach(enhance);
+  }
+
+  function sync(select) {
+    const state = states.get(select);
+    if (!state) {
+      enhance(select);
+      return;
+    }
+    state.trigger.disabled = select.disabled;
+    rebuild(state);
+  }
+
+  document.addEventListener('click', function (event) {
+    if (openState && !openState.shell.contains(event.target)) close(openState);
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (openState) {
+      if (!isEditable(event.target)) handleKey(openState, event);
+      return;
+    }
+    const printable = event.key.length === 1 && /^[a-z0-9.\-]$/i.test(event.key);
+    if (!printable || isEditable(event.target)) return;
+    const selected = document.activeElement instanceof HTMLElement
+      ? document.activeElement.closest('.k-select-shell') : null;
+    const select = selected ? selected.querySelector('select:not([multiple])')
+      : document.querySelector('select[data-k-select-default="true"]');
+    const state = select ? states.get(select) : null;
+    if (!state) return;
+    event.preventDefault();
+    open(state, event.key);
+    state.trigger.focus();
+  });
+
+  const documentObserver = new MutationObserver(function (records) {
+    records.forEach(function (record) {
+      record.addedNodes.forEach(function (node) { enhanceAll(node); });
+    });
+  });
+
+  function start() {
+    enhanceAll(document);
+    documentObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  window.KSelect = { version: '1', enhanceAll: enhanceAll, sync: sync };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+}());

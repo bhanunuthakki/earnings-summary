@@ -306,6 +306,18 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Lives in.** `llm_artifacts` with `purpose='post_earnings_readout'` and `fiscal_period=<selected transcript period_end>`; `src/earnings_readout.py`; morning pipeline stage 1d; the Post-ER Readout peek. `llm_artifact_store.quarter_index` is the canonical ticker x quarter reader.
 **Not to be confused with.** The deterministic Post-ER template, which assembles recorded facts without an LLM and burns zero tokens, or a generic Ask response, which is not persisted or quarter-indexed.
 
+## Full Research Brief
+
+**Definition.** The persisted, ticker-scoped complete research artifact assembled from the governed report body and immutable artifact manifest. Its compact UI label is **Brief**. Library titles use `[TICKER] [Qn yy] Brief` only when the artifact carries that exact fiscal-period identity.
+**Lives in.** `report_artifacts.v1.json` and per-artifact manifests under `output/research/`; `src/report/artifacts.py`; the Brief Library and Full Research Brief reader.
+**Not to be confused with.** A Pre-Earnings Brief, which prepares for one expected event; a Post-Earnings Readout, which evaluates one reported quarter; or a conversational Ask response.
+
+## Searchable Single-Select
+
+**Definition.** The program-wide app-owned control for choosing exactly one value from a closed option set. Typing filters the active listbox without exposing a separate search field; committing a result updates the owning typed value, while unmatched text creates no value.
+**Lives in.** `src/ui/controls.py` and its registered consumers. A native `<select>` may remain only as the hidden form/value carrier beneath the app-owned trigger and listbox.
+**Not to be confused with.** A free-text search input, a multi-select listbox, or a related-facet group. Facet dependency is an owning surface behavior; it is not implicit in every Searchable Single-Select.
+
 ## Thought Partner
 
 **Definition.** The program's operating identity — a living system that extracts, explores (Socratically), synthesizes, and learns a user Worldview over time; it treats captures as raw material for thinking, not records to file. Storage is the last step, not the product.

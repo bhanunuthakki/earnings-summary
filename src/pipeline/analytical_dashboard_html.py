@@ -27,7 +27,7 @@ from pipeline.analytical_dashboard import (
     TriggerLadderRow,
 )
 from ui import living_grid as lg
-from ui.controls import k_empty, ticker_label
+from ui.controls import controls_css, controls_js, k_empty, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
@@ -752,6 +752,7 @@ _PAGE_HEAD = (
     + FAVICON_LINK
     + "<style>"
     + CSS.replace("{", "{{").replace("}", "}}")
+    + controls_css("dark").replace("{", "{{").replace("}", "}}")
     + "</style>"
     + """
 </head>
@@ -760,4 +761,4 @@ _PAGE_HEAD = (
 <div class="stamp">{generated_at}</div>
 """
 )
-_PAGE_FOOT = "</body></html>"
+_PAGE_FOOT = f"<script data-k-select-runtime>{controls_js()}</script></body></html>"
