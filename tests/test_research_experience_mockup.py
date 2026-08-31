@@ -7,7 +7,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MOCKUP = REPO_ROOT / "mockups" / "company_research_experience.html"
 DESIGN_LANGUAGE = REPO_ROOT / "directives" / "design_language.md"
-CAPABILITY_CATALOG = REPO_ROOT / "docs" / "design" / "company_research_interaction_catalog.md"
 
 
 class _MockupScan(HTMLParser):
@@ -107,9 +106,8 @@ def test_mockup_uses_the_dashboard_type_and_density_rhythm() -> None:
     assert "Use the spacing ladder and registered grid" in normalized_design_language
 
 
-def test_contextual_card_actions_are_accessible_and_cataloged() -> None:
+def test_contextual_card_actions_are_accessible_and_self_describing() -> None:
     html = MOCKUP.read_text(encoding="utf-8")
-    catalog = CAPABILITY_CATALOG.read_text(encoding="utf-8")
     scan = _scan()
 
     assert ".k-card:hover .card-actions" in html
@@ -126,9 +124,8 @@ def test_contextual_card_actions_are_accessible_and_cataloged() -> None:
         "research.latest_brief.chat",
         "research.capability_catalog.review",
     } <= scan.capabilities
-    for capability in scan.capabilities:
-        assert f"`{capability}`" in catalog
-    assert "Ready now" in catalog
-    assert "Adapter needed" in catalog
-    assert "New governed capability" in catalog
-    assert "Owner approval" in catalog
+    assert "Ready now" in html
+    assert "Adapter needed" in html
+    assert "New governed" in html
+    assert "Owner approval remains the write boundary" in html
+    assert "docs/design/company_research_interaction_catalog.md" not in html
