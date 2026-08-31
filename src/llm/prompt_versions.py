@@ -133,7 +133,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # research.investment_decision_card._build_prompt is materially rewritten.
     # v2 (2026-08-29): adds the typed qualitative investment-profile and
     # four-level moat assessment. Valuation labels remain deterministic.
-    "investment_decision_card": "v2",
+    # v3 (2026-08-31): makes priced-in assumptions, opposing-case proof points,
+    # and the company-specific what-would-change-it path explicit after the
+    # first live v2 rubric run missed those facets.
+    "investment_decision_card": "v3",
     # Senior Partner Brief (P2.2, mode-B rubric,
     # personal_investment_partner_prd.md §9.1/§10). Bump when
     # advisor.senior_partner_brief._build_prompt is materially rewritten, then

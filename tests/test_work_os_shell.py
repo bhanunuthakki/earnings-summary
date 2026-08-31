@@ -132,6 +132,9 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "data-profile-review-action" in html
     assert 'data-work-os-evaluation-filter="label:' in html
     assert "selected.startsWith('label:')" in html
+    assert 'id="workOsEvaluationFilterEmpty" hidden' in html
+    assert "No companies or ETFs match this filter." in html
+    assert "empty.hidden = visible !== 0;" in html
     assert "ETF profile pending deterministic classification" not in html
     assert "'<td>' + workOsInvestmentProfileCell(item) + '</td>'" in html
     assert "item.instrument_type === 'company' ? 'DCF upside' : 'Company DCF'" in html

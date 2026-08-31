@@ -2327,6 +2327,8 @@ def _production_runtime(generated_at: datetime) -> str:
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
     }});
+    const empty = document.getElementById('workOsEvaluationFilterEmpty');
+    if (empty) empty.hidden = visible !== 0;
     const count = document.getElementById('workOsEvaluationSurfaceCount');
     if (count) count.textContent = String(visible) + ' shown';
   }}
@@ -2356,7 +2358,7 @@ def _production_runtime(generated_at: datetime) -> str:
         '<td>' + workOsPortfolioRoleCell(item) + '</td>' +
         '<td><strong class="t-mono">' + escapeWorkOsHtml(valuationValue) + '</strong><div class="k-card-meta">' + valuationContext + '</div>' + valuationLink + '</td>' +
         '<td>' + workOsEvaluationActions(item) + '</td></tr>';
-    }}).join('') : '<tr><td colspan="6"><div class="k-well">No companies or ETFs are currently under evaluation.</div></td></tr>';
+    }}).join('') + '<tr id="workOsEvaluationFilterEmpty" hidden><td colspan="6"><div class="k-well" role="status">No companies or ETFs match this filter.</div></td></tr>' : '<tr><td colspan="6"><div class="k-well">No companies or ETFs are currently under evaluation.</div></td></tr>';
     workOsApplyEvaluationFilter('all');
   }}
   window.workOsRenderEvaluationRows = workOsRenderEvaluationRows;
