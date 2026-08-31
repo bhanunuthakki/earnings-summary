@@ -22,5 +22,19 @@ set "TRIGGER_ARG="
 if /I "%ES_JOB_TRIGGER_KIND%"=="service" set "TRIGGER_ARG=--trigger-kind service"
 set "ES_JOB_TRIGGER_KIND="
 
+if defined ES_JOB_RUNTIME_REPO_ROOT if not defined ES_JOB_RUNTIME_CODE_ROOT (
+  echo ERROR: ES_JOB_RUNTIME_CODE_ROOT is required with ES_JOB_RUNTIME_REPO_ROOT. 1>&2
+  exit /b 1
+)
+if defined ES_JOB_RUNTIME_CODE_ROOT if not defined ES_JOB_RUNTIME_REPO_ROOT (
+  echo ERROR: ES_JOB_RUNTIME_REPO_ROOT is required with ES_JOB_RUNTIME_CODE_ROOT. 1>&2
+  exit /b 1
+)
+if defined ES_JOB_RUNTIME_REPO_ROOT goto explicit_roots
+
 "%PYTHON_EXE%" -u "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" "%PROJECT_ROOT%\cron\job_runtime.py" %TRIGGER_ARG% --scheduler-wrapper --python-executable "%PYTHON_EXE%" --python-bootstrap "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" -- %*
+exit /b %ERRORLEVEL%
+
+:explicit_roots
+"%PYTHON_EXE%" -u "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" "%PROJECT_ROOT%\cron\job_runtime.py" %TRIGGER_ARG% --repo-root "%ES_JOB_RUNTIME_REPO_ROOT%" --code-root "%ES_JOB_RUNTIME_CODE_ROOT%" --scheduler-wrapper --python-executable "%PYTHON_EXE%" --python-bootstrap "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" -- %*
 exit /b %ERRORLEVEL%

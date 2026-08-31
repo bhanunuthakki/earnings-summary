@@ -19,8 +19,8 @@ Metric scope per ticker:
     a universal basket so every ticker gets baseline coverage even when no
     holdings JSON exists.
   - ``chart_priorities`` from ``micro_thesis/holdings/<T>.json`` — each
-    string is normalized via ``_chart_label_to_line_item`` and dispatched
-    to financial / kpi / segment loaders by best-match.
+    string uses the shared exact financial classifier or a verified report-KPI
+    binding; ungoverned aliases are skipped.
   - ``tier_1_kpis[*].name`` from the same JSON — passed as kpi_name to
     ``load_kpi_series``.
 
@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from pipeline.kpi_report_reference_dispositions import canonical_financial_chart_priority
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
     verified_report_kpi_reference_definition,
@@ -206,12 +207,42 @@ def _collect_metric_specs(
 
     raw_priorities = _object_list(holdings.get("chart_priorities"))
     if raw_priorities is not None:
-        for label in raw_priorities:
+        for index, label in enumerate(raw_priorities):
             if not isinstance(label, str):
                 continue
-            mapped = _chart_label_to_line_item(label)
-            if mapped is not None:
-                _add(_MetricSpec(metric_name=mapped, metric_kind="financial", loader="financial"))
+            financial_priority = canonical_financial_chart_priority(label)
+            if financial_priority is not None:
+                _add(
+                    _MetricSpec(
+                        metric_name=financial_priority.line_item,
+                        metric_kind="financial",
+                        loader="financial",
+                    )
+                )
+                continue
+            reference = report_kpi_reference_at(
+                repo_root,
+                ticker=ticker,
+                json_pointer=f"/chart_priorities/{index}",
+            )
+            verified = (
+                None
+                if conn is None or reference is None
+                else verified_report_kpi_reference_definition(
+                    conn,
+                    repo_root=repo_root,
+                    user_id=DEFAULT_USER_ID,
+                    reference=reference,
+                )
+            )
+            if verified is not None:
+                _add(
+                    _MetricSpec(
+                        metric_name=verified.definition_name,
+                        metric_kind="kpi",
+                        loader="kpi",
+                    )
+                )
 
     raw_kpis = _object_list(holdings.get("tier_1_kpis"))
     if raw_kpis is not None:
@@ -267,40 +298,6 @@ def _object_list(value: object) -> list[object] | None:
 def _object_mapping(value: object) -> dict[str, object] | None:
     """Narrow parsed JSON objects at the holdings boundary."""
     return cast("dict[str, object]", value) if isinstance(value, dict) else None
-
-
-# Display labels in holdings JSON ("Revenue", "Operating income") need to
-# map to the financial_facts.line_item canonical name. Best-match table,
-# kept narrow on purpose — anything not listed is skipped silently rather
-# than guessed (a guess that hits the wrong line_item is worse than a miss).
-_CHART_LABEL_MAP: dict[str, str] = {
-    "revenue": "revenue",
-    "operating income": "operating_income",
-    "operating margin": "operating_income",  # the level series; margin is derived
-    "free cash flow": "free_cash_flow",
-    "fcf": "free_cash_flow",
-    "net income": "net_income",
-    "gross profit": "gross_profit",
-    "gross margin": "gross_profit",
-    "operating cash flow": "operating_cash_flow",
-    "capex": "capital_expenditure",
-    "capital expenditure": "capital_expenditure",
-}
-
-
-def _chart_label_to_line_item(label: str) -> str | None:
-    """Map a human chart-priority label to a financial_facts line_item.
-
-    Returns None when the label doesn't unambiguously match — a segment-
-    level chart priority like "GCP revenue growth (YoY)" deliberately
-    falls through (segments are profiled via the KPI path when registered).
-    """
-    norm = label.strip().lower()
-    # Drop trailing parenthetical / units
-    for sep in (" (", " /", " — ", " -"):
-        if sep in norm:
-            norm = norm.split(sep)[0].strip()
-    return _CHART_LABEL_MAP.get(norm)
 
 
 def _load_series(spec: _MetricSpec, *, ticker: str, repo_root: Path) -> list[Observation]:

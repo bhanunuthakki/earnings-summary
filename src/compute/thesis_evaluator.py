@@ -755,20 +755,34 @@ def _replace_json_pointer_value(
     return False
 
 
+def _soft_rules_with_raw_indexes(
+    payload: dict[str, JsonValue],
+) -> list[tuple[int, SoftRule]]:
+    """Load executable soft rules without losing their source-array identity."""
+    raw_rules = payload.get("break_rules_soft")
+    if not isinstance(raw_rules, list):
+        return []
+    out: list[tuple[int, SoftRule]] = []
+    for raw_index, raw_rule in enumerate(cast("list[object]", raw_rules)):
+        loaded = load_soft_rules([raw_rule])
+        if loaded:
+            out.append((raw_index, loaded[0]))
+    return out
+
+
 def _verified_soft_rules(
     conn: sqlite3.Connection,
     *,
     repo_root: Path,
     ticker: str,
-    holdings_path: Path,
     payload: dict[str, JsonValue],
-    original_rules: list[SoftRule],
-) -> tuple[list[SoftRule], frozenset[int]]:
+) -> tuple[list[tuple[int, SoftRule]], frozenset[int]]:
     """Bind every supported KPI soft-rule leaf to its reviewed definition."""
     inventory = load_report_kpi_reference_inventory(repo_root, (ticker.upper(),))
     source = inventory.source_states[0]
     if source.status is not ReportKpiReferenceSourceStatus.VALID:
-        return original_rules, frozenset(range(len(original_rules)))
+        original_rules = _soft_rules_with_raw_indexes(payload)
+        return original_rules, frozenset(raw_index for raw_index, _ in original_rules)
     rebound = copy.deepcopy(payload)
     blocked: set[int] = set()
     for reference in inventory.references:
@@ -790,20 +804,19 @@ def _verified_soft_rules(
             value=verified_name or "",
         ):
             blocked.add(rule_index)
-    rebound_spec = _holdings_spec_from_payload(rebound, path=holdings_path)
-    return rebound_spec.soft_rules, frozenset(blocked)
+    return _soft_rules_with_raw_indexes(rebound), frozenset(blocked)
 
 
 def _evaluate_verified_soft_rules(
     conn: sqlite3.Connection,
     *,
     ticker: str,
-    rules: list[SoftRule],
+    rules: list[tuple[int, SoftRule]],
     blocked_indexes: frozenset[int],
 ) -> list[SoftRuleResult]:
     out: list[SoftRuleResult] = []
-    for index, rule in enumerate(rules):
-        if index not in blocked_indexes:
+    for raw_index, rule in rules:
+        if raw_index not in blocked_indexes:
             out.extend(evaluate_soft_rules(ticker, [rule], conn))
             continue
         out.append(
@@ -897,9 +910,7 @@ def evaluate_ticker_thesis(
             conn,
             repo_root=repo_root,
             ticker=ticker,
-            holdings_path=holdings_path,
             payload=payload,
-            original_rules=spec.soft_rules,
         )
         soft_results = _evaluate_verified_soft_rules(
             conn,

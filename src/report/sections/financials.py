@@ -28,6 +28,7 @@ from compute.kpi_resolver import (
 )
 from identity import DEFAULT_USER_ID
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
+from pipeline.kpi_report_reference_dispositions import canonical_financial_chart_priority
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
     verified_report_kpi_reference_definition,
@@ -328,7 +329,7 @@ def _resolve_priorities(
     a mostly-empty annual metric. Returns
     ``(resolved_names, quarterly_series, annual_series, annual_years)``.
     """
-    li_map = {li.line_item.lower(): li.line_item for li in line_items}
+    li_map = {li.line_item.casefold(): li.line_item for li in line_items}
     resolved: list[str] = []
     kpi_series: list[KpiSeries] = []
     annual_raw: list[tuple[str, str, dict[int, float], dict[int, CellSource]]] = []
@@ -337,9 +338,11 @@ def _resolve_priorities(
 
     try:
         for index, name in enumerate(requested):
-            lower = name.lower()
-            if lower in li_map:
-                resolved.append(li_map[lower])
+            financial_priority = canonical_financial_chart_priority(name)
+            if financial_priority is not None:
+                resolved_name = li_map.get(financial_priority.display_name.casefold())
+                if resolved_name is not None:
+                    resolved.append(resolved_name)
                 continue
             if db_conn is None:
                 continue

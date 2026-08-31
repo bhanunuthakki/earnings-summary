@@ -211,6 +211,87 @@ def test_manifest_binds_locator_excerpt_and_expected_row_effects() -> None:
     assert _manifest().content_sha256() == _manifest().content_sha256()
 
 
+def test_manifest_knowledge_time_rejects_future_decision_authority() -> None:
+    boundary = _manifest().model_copy(update={"knowledge_at": NOW + timedelta(minutes=5)})
+    refresh.validate_manifest_knowledge_time(boundary, now=NOW)
+
+    future = _manifest().model_copy(
+        update={"knowledge_at": NOW + timedelta(minutes=5, microseconds=1)}
+    )
+    with pytest.raises(refresh.RepairBlockedError, match="manifest_knowledge_at_from_future"):
+        refresh.validate_manifest_knowledge_time(future, now=NOW)
+
+
+def test_dry_run_blocks_future_manifest_before_external_evidence_or_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    future_manifest = _manifest().model_copy(
+        update={"knowledge_at": datetime.now(UTC) + timedelta(hours=1)}
+    )
+    manifest_path = tmp_path / "future-manifest.json"
+    manifest_path.write_text(future_manifest.model_dump_json(), encoding="utf-8")
+    placeholder = tmp_path / "placeholder.json"
+    placeholder.write_text("{}", encoding="utf-8")
+
+    def _parse_bundle(_payload: str | bytes | bytearray) -> OperationsReviewBundle:
+        return OperationsReviewBundle.model_construct()
+
+    def _parse_backup(_payload: str | bytes | bytearray) -> BackupRestoreReadinessReceipt:
+        return BackupRestoreReadinessReceipt.model_construct()
+
+    def _parse_pins(_payload: str | bytes | bytearray) -> WindowsReviewPins:
+        return WindowsReviewPins.model_construct()
+
+    monkeypatch.setattr(
+        refresh.OperationsReviewBundle,
+        "model_validate_json",
+        staticmethod(_parse_bundle),
+    )
+    monkeypatch.setattr(
+        refresh.BackupRestoreReadinessReceipt,
+        "model_validate_json",
+        staticmethod(_parse_backup),
+    )
+    monkeypatch.setattr(
+        refresh.WindowsReviewPins,
+        "model_validate_json",
+        staticmethod(_parse_pins),
+    )
+
+    def _unexpected_external_evidence(**_kwargs: object) -> None:
+        raise AssertionError("future manifest reached external evidence validation")
+
+    monkeypatch.setattr(refresh, "_validate_external_evidence", _unexpected_external_evidence)
+    receipt_root = tmp_path / "receipts"
+    result = refresh.main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--user-id",
+            future_manifest.user_id,
+            "--db",
+            str(tmp_path / "must-not-open.db"),
+            "--review-bundle",
+            str(placeholder),
+            "--trusted-review-pins",
+            str(placeholder),
+            "--backup-restore-receipt",
+            str(placeholder),
+            "--receipt-root",
+            str(receipt_root),
+        ]
+    )
+
+    assert result == 2
+    assert not (tmp_path / "must-not-open.db").exists()
+    receipt_files = tuple((receipt_root / "attempts").glob("*.json"))
+    assert len(receipt_files) == 1
+    receipt = KpiRepairAttemptReceipt.model_validate_json(receipt_files[0].read_text())
+    assert receipt.state == "blocked"
+    assert receipt.blocker_codes == ("manifest_knowledge_at_from_future",)
+
+
 @pytest.mark.parametrize(
     ("unit", "scale"),
     [

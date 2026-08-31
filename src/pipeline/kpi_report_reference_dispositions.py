@@ -8,7 +8,7 @@ import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Self, cast
+from typing import NamedTuple, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -163,18 +163,30 @@ def _reference(
     )
 
 
-_CANONICAL_FINANCIAL_CHART_PRIORITIES = frozenset(
-    {
-        "revenue",
-        "gross profit",
-        "operating income",
-        "net income",
-        "eps (diluted)",
-        "operating cash flow",
-        "free cash flow",
-        "capex",
-    }
-)
+class CanonicalFinancialChartPriority(NamedTuple):
+    display_name: str
+    line_item: str
+
+
+_CANONICAL_FINANCIAL_CHART_PRIORITIES = {
+    "revenue": CanonicalFinancialChartPriority("Revenue", "revenue"),
+    "gross profit": CanonicalFinancialChartPriority("Gross profit", "gross_profit"),
+    "operating income": CanonicalFinancialChartPriority("Operating income", "operating_income"),
+    "net income": CanonicalFinancialChartPriority("Net income", "net_income"),
+    "eps (diluted)": CanonicalFinancialChartPriority("EPS (diluted)", "eps_diluted"),
+    "operating cash flow": CanonicalFinancialChartPriority(
+        "Operating cash flow", "operating_cash_flow"
+    ),
+    "free cash flow": CanonicalFinancialChartPriority("Free cash flow", "free_cash_flow"),
+    "fcf": CanonicalFinancialChartPriority("Free cash flow", "free_cash_flow"),
+    "capex": CanonicalFinancialChartPriority("Capex", "capital_expenditure"),
+    "capital expenditure": CanonicalFinancialChartPriority("Capex", "capital_expenditure"),
+}
+
+
+def canonical_financial_chart_priority(label: str) -> CanonicalFinancialChartPriority | None:
+    """Return the exact governed financial identity for a report chart label."""
+    return _CANONICAL_FINANCIAL_CHART_PRIORITIES.get(label.strip().casefold())
 
 
 def is_canonical_financial_chart_priority(label: str) -> bool:
@@ -184,7 +196,7 @@ def is_canonical_financial_chart_priority(label: str) -> bool:
     as ``operating margin`` are intentionally excluded because treating them as
     a financial line item would silently change their semantics.
     """
-    return label.strip().casefold() in _CANONICAL_FINANCIAL_CHART_PRIORITIES
+    return canonical_financial_chart_priority(label) is not None
 
 
 def _soft_rule_kpi_references(
@@ -693,6 +705,7 @@ def persist_report_kpi_reference_disposition(
 
 
 __all__ = [
+    "CanonicalFinancialChartPriority",
     "ReportKpiReference",
     "ReportKpiReferenceDisposition",
     "ReportKpiReferenceDispositionRevision",
@@ -702,6 +715,7 @@ __all__ = [
     "ReportKpiReferenceSourceState",
     "ReportKpiReferenceSourceStatus",
     "ReportKpiReferenceStatus",
+    "canonical_financial_chart_priority",
     "current_report_kpi_reference_disposition",
     "is_canonical_financial_chart_priority",
     "load_report_kpi_reference_inventory",

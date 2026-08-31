@@ -71,7 +71,7 @@ typed result, while the supervisor receipt remains the only authority for succes
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\prepare_kpi_semantic_review` | Every 10 minutes | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Opens the canonical `EARNINGS_SUMMARY_DB_PATH` read-only and publishes bounded, source-safe, content-addressed per-ticker review artifacts plus one atomic current index under the product-state root. Code identity comes only from the deployed code root; mutable export state comes only from the database-derived product-state root. Missing identity, truncation, incomplete evidence, or split-root mismatch fails the task closed. |
+| `earnings-summary\prepare_kpi_semantic_review` | Every 10 minutes | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Opens the canonical `EARNINGS_SUMMARY_DB_PATH` read-only and publishes bounded, source-safe, content-addressed per-ticker review artifacts plus one atomic current index under the product-state root. The wrapper passes that database-derived state root to the shared job runtime for its lock and health receipt while passing the deployed runtime checkout separately as code root. Missing identity, truncation, incomplete evidence, paired root authority, or split-root mismatch fails the task closed. |
 
 Operations surface disposition: `primary surface`. The canonical manifest owns this task, so the
 existing dynamic Jobs projection shows its declaration, ten-minute cadence, registered identity,

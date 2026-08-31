@@ -26,6 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from execution.apply_kpi_semantic_refresh import (  # noqa: E402
+    MAX_KNOWLEDGE_AT_FUTURE_SKEW,
     RefreshEntry,
     RefreshManifest,
     RepairBlockedError,
@@ -305,12 +306,16 @@ def build_kpi_semantic_refresh_manifest(
     repo_root: Path,
     review_export: KpiSemanticReviewExport,
     decisions: KpiSemanticRefreshDecisionBatch,
+    now: datetime,
 ) -> RefreshManifest:
     """Build and fully read-validate one safely grouped refresh manifest."""
     conn.row_factory = sqlite3.Row
     review_export = KpiSemanticReviewExport.model_validate(review_export.model_dump(mode="json"))
     review_batch = review_export.review
     decisions = KpiSemanticRefreshDecisionBatch.model_validate(decisions.model_dump(mode="json"))
+    if now.tzinfo is None:
+        raise ValueError("manifest build time must be timezone-aware")
+    current_time = now.astimezone(UTC)
     if review_batch.truncated:
         raise ValueError("truncated review batch cannot authorize refresh decisions")
     if decisions.review_export_sha256 != review_export.content_sha256:
@@ -319,6 +324,8 @@ def build_kpi_semantic_refresh_manifest(
         raise ValueError("decision nested review hash does not match the review payload")
     if decisions.knowledge_at < review_batch.observed_at:
         raise ValueError("decision knowledge_at predates the observed review evidence")
+    if decisions.knowledge_at > current_time + MAX_KNOWLEDGE_AT_FUTURE_SKEW:
+        raise ValueError("decision knowledge_at exceeds the allowed future clock skew")
     if decisions.expected_schema_revision != review_export.schema_revision:
         raise ValueError("decision schema revision does not match the sealed export")
     if schema_revision(conn) != decisions.expected_schema_revision:
@@ -406,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=args.repo_root,
             review_export=review_export,
             decisions=decisions,
+            now=datetime.now(UTC),
         )
     finally:
         conn.close()

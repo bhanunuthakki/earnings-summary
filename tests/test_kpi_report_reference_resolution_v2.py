@@ -330,6 +330,45 @@ def test_financial_chart_priority_is_consumed_without_kpi_backlog(tmp_path: Path
     assert years == []
 
 
+def test_chart_alias_classification_matches_inventory_report_and_signal_writer(
+    tmp_path: Path,
+) -> None:
+    conn = _db()
+    repo = _repo_payload(
+        tmp_path,
+        '{"ticker":"NU","chart_priorities":["Capital expenditure","Operating margin"]}',
+    )
+    capex = financials_module.QuarterlyLineItem(
+        line_item="Capex",
+        unit="USD millions",
+        quarters=[],
+        values=[],
+        levels_full=[],
+    )
+
+    resolved, _, _, _ = financials_module._resolve_priorities(  # pyright: ignore[reportPrivateUsage]
+        ["Capital expenditure", "Operating margin"],
+        [capex],
+        "NU",
+        repo,
+        [],
+        [],
+        conn=conn,
+    )
+    references = report_kpi_references(repo, ("NU",))
+    specs = _collect_metric_specs("NU", repo, conn=conn)
+
+    assert resolved == ["Capex"]
+    assert [(reference.json_pointer, reference.requested_label) for reference in references] == [
+        ("/chart_priorities/1", "Operating margin")
+    ]
+    assert any(
+        spec.metric_kind == "financial" and spec.metric_name == "capital_expenditure"
+        for spec in specs
+    )
+    assert not any(spec.metric_kind == "kpi" for spec in specs)
+
+
 def test_candidate_proposal_is_deterministic_and_never_persists(tmp_path: Path) -> None:
     conn = _db()
     repo = _repo(tmp_path)
@@ -726,6 +765,41 @@ def test_nu_business_and_soft_rules_share_verified_bindings_and_fail_closed(
 
     assert retired.rule_evaluations[0].status is BreachStatus.UNRESOLVED
     assert retired.soft_rule_results[0].status.value == "unresolved"
+
+
+def test_soft_rule_raw_index_survives_invalid_predecessor_compaction(tmp_path: Path) -> None:
+    conn = _db()
+    repo = _repo_payload(
+        tmp_path,
+        """{
+          "ticker":"NU",
+          "thesis":"customer compounder",
+          "break_rules_soft":[
+            {"name":"invalid_missing_predicate"},
+            {
+              "name":"customers_below_watch",
+              "predicate":{"type":"series_below","params":{
+                "metric":"Total customers",
+                "source":"kpi",
+                "threshold":120000000,
+                "periods":1
+              }}
+            }
+          ]
+        }""",
+    )
+
+    verdict = evaluate_ticker_thesis(
+        conn,
+        ticker="NU",
+        holdings_dir=repo / "micro_thesis" / "holdings",
+    )
+
+    assert len(verdict.soft_rule_results) == 1
+    result = verdict.soft_rule_results[0]
+    assert result.rule_name == "customers_below_watch"
+    assert result.status.value == "unresolved"
+    assert result.details == {"reason": "unverified_report_kpi_reference"}
 
 
 @pytest.mark.parametrize(

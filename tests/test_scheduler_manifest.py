@@ -65,6 +65,11 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert r"runtime\earnings-summary\cron\run_prepare_kpi_semantic_review.bat" in semantic_xml
     semantic_wrapper = (CRON_DIR / semantic_review.wrapper).read_text(encoding="utf-8")
     assert "if not defined EARNINGS_SUMMARY_DB_PATH" in semantic_wrapper
+    assert 'for %%I in ("%EARNINGS_SUMMARY_DB_PATH%") do set "DB_DIR=%%~dpI"' in semantic_wrapper
+    assert 'for %%I in ("%DB_DIR%..") do set "PRODUCT_STATE_ROOT=%%~fI"' in semantic_wrapper
+    assert 'set "ES_JOB_RUNTIME_REPO_ROOT=%PRODUCT_STATE_ROOT%"' in semantic_wrapper
+    assert 'set "ES_JOB_RUNTIME_CODE_ROOT=%PROJECT_ROOT%"' in semantic_wrapper
+    assert r'set "LOG_DIR=%PRODUCT_STATE_ROOT%\.tmp\cron_logs"' in semantic_wrapper
     assert '--code-root "%PROJECT_ROOT%"' in semantic_wrapper
     assert "--user-id" not in semantic_wrapper
     assert '--code-root "%PROJECT_ROOT%" --publish' in semantic_wrapper
@@ -74,6 +79,11 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     )
     assert 'parser.add_argument("--user-id", default=DEFAULT_USER_ID)' in prepare_source
     assert 'default="default"' not in prepare_source
+    shared_wrapper = (CRON_DIR / "run_python.bat").read_text(encoding="utf-8")
+    assert '--repo-root "%ES_JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
+    assert '--code-root "%ES_JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
+    assert "ES_JOB_RUNTIME_CODE_ROOT is required with ES_JOB_RUNTIME_REPO_ROOT" in shared_wrapper
+    assert "ES_JOB_RUNTIME_REPO_ROOT is required with ES_JOB_RUNTIME_CODE_ROOT" in shared_wrapper
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")

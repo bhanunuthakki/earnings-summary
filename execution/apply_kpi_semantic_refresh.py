@@ -83,6 +83,9 @@ from provenance.fulltext_extractor_identity import (  # noqa: E402
 from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
 
 _SHA256 = r"^[0-9a-f]{64}$"
+# Five minutes matches the repository's trusted-evidence clock-skew allowance while
+# remaining far too small to move a decision across a reporting or thesis horizon.
+MAX_KNOWLEDGE_AT_FUTURE_SKEW = timedelta(minutes=5)
 _REVIEWABLE_SOURCE_TYPES = frozenset(
     {
         SourceType.SEC_XBRL,
@@ -254,6 +257,18 @@ class RefreshManifest(BaseModel):
 
     def content_sha256(self) -> str:
         return canonical_sha256(self.model_dump(mode="json"))
+
+
+def validate_manifest_knowledge_time(
+    manifest: RefreshManifest,
+    *,
+    now: datetime,
+) -> None:
+    """Reject future decision authority before its timestamp becomes a cutoff."""
+    if now.tzinfo is None:
+        raise RepairBlockedError("validation_clock_not_timezone_aware")
+    if manifest.knowledge_at > now.astimezone(UTC) + MAX_KNOWLEDGE_AT_FUTURE_SKEW:
+        raise RepairBlockedError("manifest_knowledge_at_from_future")
 
 
 class KpiRepairSummary(BaseModel):
@@ -793,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
             raise RepairBlockedError("manifest_user_identity_mismatch")
         if args.max_review_age_seconds <= 0:
             raise RepairBlockedError("invalid_review_age")
+        validate_manifest_knowledge_time(manifest, now=started)
         _validate_external_evidence(
             manifest=manifest,
             db_path=args.db,

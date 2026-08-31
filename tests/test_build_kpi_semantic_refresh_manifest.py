@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -280,10 +280,10 @@ def test_builds_deterministic_source_bound_refresh_manifest(tmp_path: Path) -> N
     changes_before = conn.total_changes
 
     first = build_kpi_semantic_refresh_manifest(
-        conn, repo_root=tmp_path, review_export=review_export, decisions=decisions
+        conn, repo_root=tmp_path, review_export=review_export, decisions=decisions, now=NOW
     )
     second = build_kpi_semantic_refresh_manifest(
-        conn, repo_root=tmp_path, review_export=review_export, decisions=decisions
+        conn, repo_root=tmp_path, review_export=review_export, decisions=decisions, now=NOW
     )
 
     assert first == second
@@ -328,6 +328,7 @@ def test_spreadsheet_coordinates_survive_export_v5_and_executor_validation(
         repo_root=tmp_path,
         review_export=review_export,
         decisions=_decisions(review_export),
+        now=NOW,
     )
 
     entry = RefreshManifest.model_validate_json(manifest.model_dump_json()).entries[0]
@@ -350,6 +351,32 @@ def test_rejects_decision_before_review_and_tampered_export_coordinates(tmp_path
             repo_root=tmp_path,
             review_export=review_export,
             decisions=stale_decisions,
+            now=NOW,
+        )
+
+    boundary_decisions = _decisions(review_export).model_copy(
+        update={"knowledge_at": NOW + timedelta(minutes=5)}
+    )
+    assert (
+        build_kpi_semantic_refresh_manifest(
+            conn,
+            repo_root=tmp_path,
+            review_export=review_export,
+            decisions=boundary_decisions,
+            now=NOW,
+        ).knowledge_at
+        == boundary_decisions.knowledge_at
+    )
+    future_decisions = _decisions(review_export).model_copy(
+        update={"knowledge_at": NOW + timedelta(minutes=5, microseconds=1)}
+    )
+    with pytest.raises(ValueError, match="future clock skew"):
+        build_kpi_semantic_refresh_manifest(
+            conn,
+            repo_root=tmp_path,
+            review_export=review_export,
+            decisions=future_decisions,
+            now=NOW,
         )
 
     review_payload = review_export.review.model_dump(mode="json", exclude={"content_sha256"})
@@ -367,6 +394,7 @@ def test_rejects_decision_before_review_and_tampered_export_coordinates(tmp_path
             repo_root=tmp_path,
             review_export=tampered_export,
             decisions=_decisions(tampered_export),
+            now=NOW,
         )
 
 
@@ -388,6 +416,7 @@ def test_executor_rejects_manifest_locator_that_disagrees_with_evidence(tmp_path
         repo_root=tmp_path,
         review_export=review_export,
         decisions=_decisions(review_export),
+        now=NOW,
     ).entries[0]
     bad_locator = FactLocator(
         kind=LocatorKind.PDF_SLIDE,
@@ -415,7 +444,11 @@ def test_rejects_review_hash_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="nested review hash"):
         build_kpi_semantic_refresh_manifest(
-            conn, repo_root=tmp_path, review_export=review_export, decisions=nested_mismatch
+            conn,
+            repo_root=tmp_path,
+            review_export=review_export,
+            decisions=nested_mismatch,
+            now=NOW,
         )
 
     export_mismatch = _decisions(review_export).model_copy(
@@ -423,7 +456,11 @@ def test_rejects_review_hash_mismatch(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="review export hash"):
         build_kpi_semantic_refresh_manifest(
-            conn, repo_root=tmp_path, review_export=review_export, decisions=export_mismatch
+            conn,
+            repo_root=tmp_path,
+            review_export=review_export,
+            decisions=export_mismatch,
+            now=NOW,
         )
 
 
@@ -454,6 +491,7 @@ def test_rejects_missing_verbatim_semantic_evidence(tmp_path: Path) -> None:
             repo_root=tmp_path,
             review_export=review_export,
             decisions=_decisions(review_export, semantic_evidence=semantic_evidence),
+            now=NOW,
         )
 
 
@@ -497,6 +535,7 @@ def test_rejects_fact_head_and_issuer_drift(tmp_path: Path) -> None:
             repo_root=tmp_path,
             review_export=head_export,
             decisions=_decisions(head_export),
+            now=NOW,
         )
 
     context_conn = _database()
@@ -515,6 +554,7 @@ def test_rejects_fact_head_and_issuer_drift(tmp_path: Path) -> None:
             repo_root=tmp_path,
             review_export=context_export,
             decisions=_decisions(context_export),
+            now=NOW,
         )
 
     issuer_conn = _database()
@@ -527,6 +567,7 @@ def test_rejects_fact_head_and_issuer_drift(tmp_path: Path) -> None:
             repo_root=tmp_path,
             review_export=issuer_export,
             decisions=_decisions(issuer_export),
+            now=NOW,
         )
 
 
@@ -555,4 +596,5 @@ def test_rejects_unsupported_decision_action_and_review_state(tmp_path: Path) ->
             repo_root=tmp_path,
             review_export=unsupported_export,
             decisions=unsupported_decisions,
+            now=NOW,
         )
