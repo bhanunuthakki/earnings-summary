@@ -176,22 +176,15 @@ def test_manifest_validator_rejects_noncanonical_subsystem_id(tmp_path: Path) ->
     assert receipt.total_issues_count > 0
 
 
-def test_readme_has_distinct_fresh_and_existing_upgrade_branches() -> None:
+def test_readme_quick_start_uses_only_a_disposable_local_database() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-    fresh = readme.split("#### Fresh install (new database)", 1)[1].split(
-        "#### Existing database upgrade", 1
-    )[0]
-    existing = readme.split("#### Existing database upgrade", 1)[1].split("On a fresh install", 1)[
-        0
-    ]
-    assert "--phase0-backup-restore-receipt" not in fresh
-    assert "--phase0-backup-restore-receipt $EarningsSummaryPhase0ReceiptPath" in existing
-    assert "$EarningsSummaryAttemptId" in fresh and "$EarningsSummaryAttemptId" in existing
-    assert fresh.count("[guid]::NewGuid().ToString('N')") == 1
-    assert existing.count("[guid]::NewGuid().ToString('N')") == 1
-    assert "Get-Date -Format 'yyyyMMdd_HHmmss_fff'" not in readme
-    assert "create_sqlite_snapshot.py" in existing
-    assert "backup_restore_readiness_receipt.py" in existing
+    quick_start = readme.split("## Quick start", 1)[1].split("## Public boundary", 1)[0]
+    assert "mktemp -d" in quick_start
+    assert "EARNINGS_SUMMARY_DB_PATH" in quick_start
+    assert "--allow-isolated-db" in quick_start
+    assert "--phase0-backup-restore-receipt" not in quick_start
+    assert "create_sqlite_snapshot.py" not in quick_start
+    assert "backup_restore_readiness_receipt.py" not in quick_start
 
 
 def test_manifest_validator_catches_missing_ownership_and_invalid_tier(tmp_path: Path) -> None:
@@ -588,41 +581,17 @@ def test_alembic_graph_accepts_annotated_revision_assignments(tmp_path: Path) ->
     assert valid is True, issues
 
 
-def test_readme_separates_windows_runtime_from_mac_disposable_database() -> None:
+def test_readme_keeps_private_runtime_state_out_of_the_public_contract() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "### Canonical Windows runtime / product use" in readme
-    assert "### Mac development" in readme
-    mac_section = readme.split("### Mac development", 1)[1].split("## How it works", 1)[0]
-    windows_section = readme.split("### Mac development", 1)[0]
-    assert (
-        "$EarningsSummaryCodeRoot = 'C:\\Users\\Bhanu\\.gemini\\antigravity\\runtime\\earnings-summary'"
-        in windows_section
-    )
-    assert (
-        "$EarningsSummaryDbRoot = 'C:\\Users\\Bhanu\\.gemini\\antigravity\\scratch\\earnings-summary'"
-        in windows_section
-    )
-    assert "Join-Path $EarningsSummaryDbRoot 'data\\portfolio.db'" in windows_section
-    assert "$env:EARNINGS_SUMMARY_DB_PATH = $EarningsSummaryDbPath" in windows_section
-    assert (
-        "upgrade_database.py --db-path $EarningsSummaryDbPath --repo-root $EarningsSummaryCodeRoot --runtime-root $EarningsSummaryCodeRoot"
-        in windows_section
-    )
-    assert "create_sqlite_snapshot.py --source-path $EarningsSummaryDbPath" in windows_section
-    assert (
-        "backup_restore_readiness_receipt.py --source-db $EarningsSummaryDbPath" in windows_section
-    )
-    assert "--snapshot-db $EarningsSummarySnapshotPath" in windows_section
-    assert '"$EarningsSummarySnapshotPath.manifest.json"' in windows_section
-    assert "--phase0-backup-restore-receipt $EarningsSummaryPhase0ReceiptPath" in windows_section
-    assert "--db-path data/portfolio.db" not in windows_section
-    assert "--repo-root . --runtime-root ." not in windows_section
-    assert "sync_thesis_state.py --apply --db $EarningsSummaryDbPath" in windows_section
-    assert "EARNINGS_SUMMARY_DB_PATH" in mac_section
-    assert "mktemp -d" in mac_section
-    assert "--db-path data/portfolio.db" not in mac_section
-    assert '--db-path "$EARNINGS_SUMMARY_DB_PATH"' in mac_section
-    assert "--runtime-root . --allow-isolated-db" in mac_section
-    assert "execution/sqlite_bootstrap.py execution/upgrade_database.py" in mac_section
-    assert "execution/sqlite_bootstrap.py execution/comments_server.py" in mac_section
-    assert "tailscale serve status" in mac_section
+    assert "## Quick start" in readme
+    assert "## Public boundary" in readme
+    assert "EARNINGS_SUMMARY_DB_PATH" in readme
+    assert "mktemp -d" in readme
+    assert '--db-path "$EARNINGS_SUMMARY_DB_PATH"' in readme
+    assert "--runtime-root ." in readme
+    assert "--allow-isolated-db" in readme
+    assert "does not contain a portfolio database" in readme
+    assert "position or cost-basis details" in readme
+    assert "### Canonical Windows runtime / product use" not in readme
+    assert "/Users/" not in readme
+    assert "C:\\Users\\" not in readme

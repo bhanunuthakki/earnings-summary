@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 from datetime import UTC, datetime, timedelta
@@ -17,7 +18,10 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_WINDOWS_STATE_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary")
+CANONICAL_WINDOWS_STATE_ROOT = Path(
+    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
+)
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
