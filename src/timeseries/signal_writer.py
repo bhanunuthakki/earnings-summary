@@ -41,6 +41,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from pipeline.kpi_report_reference_resolver import (
+    report_kpi_reference_at,
+    verified_report_kpi_reference_definition,
+)
 from timeseries.loaders import (
     load_financial_series,
     load_kpi_series,
@@ -122,7 +126,7 @@ def compute_and_persist_signals(
     """
     ticker = ticker.upper()
     root = repo_root if repo_root is not None else Path.cwd()
-    metric_specs = _collect_metric_specs(ticker, root)
+    metric_specs = _collect_metric_specs(ticker, root, conn=db)
     if not metric_specs:
         log.debug({"event": "signal_writer_no_metrics", "ticker": ticker})
         return 0
@@ -166,7 +170,12 @@ def compute_and_persist_signals(
 # ---------------------------------------------------------------------------
 
 
-def _collect_metric_specs(ticker: str, repo_root: Path) -> list[_MetricSpec]:
+def _collect_metric_specs(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[_MetricSpec]:
     """Build the per-ticker list of (metric, kind, loader) tuples to profile.
 
     Pulls from:
@@ -205,15 +214,30 @@ def _collect_metric_specs(ticker: str, repo_root: Path) -> list[_MetricSpec]:
 
     raw_kpis = _object_list(holdings.get("tier_1_kpis"))
     if raw_kpis is not None:
-        for raw_kpi in raw_kpis:
+        for index, raw_kpi in enumerate(raw_kpis):
             kpi = _object_mapping(raw_kpi)
             if kpi is None:
                 continue
             name = kpi.get("name")
-            if isinstance(name, str) and name.strip():
+            reference = report_kpi_reference_at(
+                repo_root,
+                ticker=ticker,
+                json_pointer=f"/tier_1_kpis/{index}/name",
+            )
+            verified = (
+                None
+                if conn is None or reference is None
+                else verified_report_kpi_reference_definition(
+                    conn,
+                    repo_root=repo_root,
+                    user_id="default",
+                    reference=reference,
+                )
+            )
+            if isinstance(name, str) and name.strip() and verified is not None:
                 _add(
                     _MetricSpec(
-                        metric_name=name.strip(),
+                        metric_name=verified.definition_name,
                         metric_kind="kpi",
                         loader="kpi",
                         is_thesis_kpi=True,

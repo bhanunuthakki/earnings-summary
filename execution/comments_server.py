@@ -45,7 +45,7 @@ import time
 import urllib.parse
 from collections import deque
 from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import TracebackType
 from typing import cast
@@ -176,6 +176,11 @@ from logging_config import (  # noqa: E402
     set_correlation_id,
 )
 from operations.attention_projection import build_attention_panel_view  # noqa: E402
+from operations.kpi_semantic_review_export import (  # noqa: E402
+    KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
+    KpiSemanticReviewExportError,
+    load_current_kpi_semantic_review_export,
+)
 from operations.models import OperationsRegistry  # noqa: E402
 from operations.paths import (  # noqa: E402
     portfolio_tracker_activation_receipt_path,
@@ -2220,6 +2225,30 @@ def create_app(
         response = app.json.response(bundle.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         response.headers["ETag"] = f'"{bundle.content_sha256}"'
+        return response
+
+    @app.route("/api/operations/kpi-semantic-review/<ticker>", methods=["GET"])
+    def operations_kpi_semantic_review_api(ticker: str):
+        """Serve one precomputed, authority-bound portfolio review artifact."""
+        try:
+            export, payload = load_current_kpi_semantic_review_export(
+                root=repo_root / KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
+                ticker=ticker,
+                now=datetime.now(UTC),
+                max_age=timedelta(minutes=20),
+            )
+        except KpiSemanticReviewExportError as exc:
+            if str(exc) in {"ticker is invalid", "ticker is outside the current portfolio export"}:
+                return _client_error("semantic review artifact not found", 404)
+            return _client_error("semantic review artifact is unavailable", 503)
+        expected_code_instance = hashlib.sha256(
+            operations_review_code_identity.encode("utf-8")
+        ).hexdigest()
+        if export.code_instance_sha256 != expected_code_instance:
+            return _client_error("semantic review artifact authority is stale", 503)
+        response = Response(payload, mimetype="application/json")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["ETag"] = f'"{export.content_sha256}"'
         return response
 
     @app.route("/api/panel/<name>", methods=["GET"])

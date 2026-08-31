@@ -59,6 +59,10 @@ from compute.thesis_evaluation_episodes import (
 from models.facts import Unit
 from models.kpis import BreachStatus
 from models.unit_convert import convert_unit
+from pipeline.kpi_report_reference_resolver import (
+    report_kpi_reference_at,
+    verified_report_kpi_reference_definition,
+)
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
@@ -429,6 +433,22 @@ def _fetch_kpi_history(
         # materialized, or a metric never extracted). Signal None so the caller
         # marks the rule UNRESOLVED rather than silently OK.
         return None
+    return _fetch_kpi_history_for_resolved_definition(
+        conn,
+        ticker,
+        resolved_name,
+        n_periods,
+    )
+
+
+def _fetch_kpi_history_for_resolved_definition(
+    conn: sqlite3.Connection,
+    ticker: str,
+    resolved_name: str,
+    n_periods: int,
+) -> list[KpiObservation] | None:
+    """Read one definition name returned by the governed report-reference resolver."""
+
     # Annual-cadence breakers count YEARS: restrict to FY rows so the
     # consecutive-periods window is annual, never a mix of year-end + interim.
     period_filter = ""
@@ -689,7 +709,48 @@ def evaluate_ticker_thesis(
     payload = _read_holdings_payload(holdings_path)
     spec = _holdings_spec_from_payload(payload, path=holdings_path)
     evaluations: list[RuleEvaluation] = []
-    for rule in (*spec.break_rules, *spec.business_model_rules):
+    repo_root = (
+        holdings_dir.parent.parent
+        if holdings_dir.name == "holdings" and holdings_dir.parent.name == "micro_thesis"
+        else None
+    )
+    for index, rule in enumerate(spec.break_rules):
+        verified_name: str | None = None
+        if repo_root is not None:
+            reference = report_kpi_reference_at(
+                repo_root,
+                ticker=ticker,
+                json_pointer=f"/break_rules/{index}/kpi_name",
+            )
+            verified = (
+                None
+                if reference is None
+                else verified_report_kpi_reference_definition(
+                    conn,
+                    repo_root=repo_root,
+                    user_id="default",
+                    reference=reference,
+                )
+            )
+            verified_name = None if verified is None else verified.definition_name
+        if repo_root is not None and verified_name is None:
+            history = None
+        elif verified_name is not None:
+            history = _fetch_kpi_history_for_resolved_definition(
+                conn,
+                ticker,
+                verified_name,
+                rule.consecutive_periods,
+            )
+        else:
+            history = _fetch_kpi_history(
+                conn,
+                ticker,
+                rule.kpi_name,
+                rule.consecutive_periods,
+            )
+        evaluations.append(evaluate_rule(rule, history))
+    for rule in spec.business_model_rules:
         history = _fetch_kpi_history(conn, ticker, rule.kpi_name, rule.consecutive_periods)
         evaluations.append(evaluate_rule(rule, history))
     soft_results = evaluate_soft_rules(spec.ticker.upper(), spec.soft_rules, conn)

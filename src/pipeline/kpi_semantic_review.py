@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from models.documents import SourceType
 from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
+from provenance.evidence_ledger import EvidenceLocator
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
 
@@ -74,6 +75,7 @@ class KpiEvidenceCandidate(BaseModel):
     document_version_id: str = Field(min_length=1, max_length=128)
     extraction_run_id: str = Field(min_length=1, max_length=128)
     node_kind: str = Field(min_length=1, max_length=64)
+    evidence_locator: EvidenceLocator
     locator_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_value_text: str = Field(min_length=1, max_length=80)
     excerpt: str = Field(min_length=1, max_length=640)
@@ -84,6 +86,8 @@ class KpiEvidenceCandidate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_verbatim_offsets(self) -> Self:
+        if self.locator_sha256 != self.evidence_locator.canonical_sha256:
+            raise ValueError("candidate locator hash does not match its canonical payload")
         if not self.excerpt_start <= self.match_start < self.match_end <= self.excerpt_end:
             raise ValueError("evidence candidate offsets are inconsistent")
         relative_start = self.match_start - self.excerpt_start
@@ -147,6 +151,7 @@ class _EvidenceNodeSnapshot:
     document_version_id: str
     extraction_run_id: str
     node_kind: str
+    locator: EvidenceLocator
     locator_sha256: str
     text: str
 
@@ -161,7 +166,7 @@ class _EvidenceDocumentSnapshot:
 class KpiSemanticReviewBatch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_review.v1"] = "kpi_semantic_review.v1"
+    schema_version: Literal["kpi_semantic_review.v2"] = "kpi_semantic_review.v2"
     user_id: str
     ticker: str | None
     observed_at: datetime
@@ -481,7 +486,7 @@ def _evidence_state_and_candidates(
         run_marks = ",".join("?" for _ in valid_run_ids)
         kind_marks = ",".join("?" for _ in _SUBSTANTIVE_NODE_KINDS)
         rows = conn.execute(
-            "SELECT node.node_id,node.node_kind,node.locator_sha256,"  # nosec B608 -- SQL shape and placeholder counts come only from closed internal sets; all values remain bound
+            "SELECT node.node_id,node.node_kind,node.locator_json,node.locator_sha256,"  # nosec B608 -- SQL shape and placeholder counts come only from closed internal sets; all values remain bound
             "substr(node.text,1,?) AS bounded_text,length(node.text) AS text_length,"
             "node.extraction_run_id,run.document_version_id FROM evidence_nodes node "
             "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
@@ -502,6 +507,22 @@ def _evidence_state_and_candidates(
         remaining_chars = MAX_EVIDENCE_TEXT_CHARS_PER_DOCUMENT
         nodes: list[_EvidenceNodeSnapshot] = []
         for row in rows[:MAX_EVIDENCE_NODES_PER_DOCUMENT]:
+            locator_json = row["locator_json"]
+            if locator_json is None:
+                search_reasons.add("evidence_node_locator_invalid")
+                continue
+            try:
+                locator = EvidenceLocator.model_validate_json(str(locator_json))
+            except ValueError:
+                search_reasons.add("evidence_node_locator_invalid")
+                continue
+            locator_sha256 = str(row["locator_sha256"] or "")
+            if (
+                str(locator_json) != locator.canonical_json
+                or locator_sha256 != locator.canonical_sha256
+            ):
+                search_reasons.add("evidence_node_locator_invalid")
+                continue
             bounded_text = str(row["bounded_text"] or "")
             allowed_chars = min(
                 len(bounded_text),
@@ -521,7 +542,8 @@ def _evidence_state_and_candidates(
                     document_version_id=str(row["document_version_id"]),
                     extraction_run_id=str(row["extraction_run_id"]),
                     node_kind=str(row["node_kind"]),
-                    locator_sha256=str(row["locator_sha256"] or ""),
+                    locator=locator,
+                    locator_sha256=locator_sha256,
                     text=text,
                 )
             )
@@ -571,6 +593,7 @@ def _evidence_state_and_candidates(
                         document_version_id=node.document_version_id,
                         extraction_run_id=node.extraction_run_id,
                         node_kind=node.node_kind,
+                        evidence_locator=node.locator,
                         locator_sha256=locator_sha256,
                         source_value_text=match.group(0),
                         excerpt=excerpt,
@@ -728,7 +751,7 @@ def build_kpi_semantic_review_batch(
         raise ValueError("observed_at must be timezone-aware")
     at = at.astimezone(UTC)
     payload = {
-        "schema_version": "kpi_semantic_review.v1",
+        "schema_version": "kpi_semantic_review.v2",
         "user_id": user_id,
         "ticker": normalized_ticker,
         "observed_at": at.isoformat().replace("+00:00", "Z"),

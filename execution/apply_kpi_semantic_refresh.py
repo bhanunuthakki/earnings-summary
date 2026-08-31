@@ -533,6 +533,10 @@ def _validate_entry(
     return row, source_type
 
 
+# Public read-only validation seam for deterministic manifest builders.
+validate_refresh_entry = _validate_entry
+
+
 def _apply_entry(
     conn: sqlite3.Connection,
     *,

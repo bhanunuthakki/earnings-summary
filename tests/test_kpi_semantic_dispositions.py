@@ -141,7 +141,7 @@ def test_sol_disposition_judgment_is_bound_to_exact_dry_run_and_code(
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="judge-binding",
-        expected_schema_revision="0034_add_investment_profile_label_reviews",
+        expected_schema_revision="0035_add_report_kpi_reference_resolution_states",
         review_bundle_sha256="d" * 64,
         backup_restore_evidence_id="e" * 64,
         knowledge_at=NOW,
@@ -225,7 +225,7 @@ def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mut
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="crash-safe-replay",
-        expected_schema_revision="0034_add_investment_profile_label_reviews",
+        expected_schema_revision="0035_add_report_kpi_reference_resolution_states",
         review_bundle_sha256="d" * 64,
         backup_restore_evidence_id="e" * 64,
         knowledge_at=NOW,
@@ -324,7 +324,7 @@ def _db() -> sqlite3.Connection:
     conn.executescript(
         """
         CREATE TABLE alembic_version(version_num TEXT PRIMARY KEY);
-        INSERT INTO alembic_version VALUES ('0034_add_investment_profile_label_reviews');
+        INSERT INTO alembic_version VALUES ('0035_add_report_kpi_reference_resolution_states');
         CREATE TABLE database_runtime_identity(singleton INTEGER PRIMARY KEY,database_instance_id TEXT);
         INSERT INTO database_runtime_identity VALUES (1,'database-instance:0123456789abcdef0123456789abcdef');
         CREATE TABLE tracked_companies(
@@ -369,6 +369,9 @@ def _db() -> sqlite3.Connection:
             reference_disposition_count INTEGER,inserted_context_rows INTEGER,
             inserted_reference_rows INTEGER,committed_at TEXT
         );
+        CREATE TABLE fact_overrides(
+            ticker TEXT,fact_kind TEXT,fact_key TEXT,action TEXT,status TEXT
+        );
         """
     )
     conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio','owner',NULL)")
@@ -404,7 +407,7 @@ def test_disposition_rollout_is_append_only_idempotent_and_fail_closed(tmp_path:
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="portfolio-kpi-dispositions-2026-08-30",
-        expected_schema_revision="0034_add_investment_profile_label_reviews",
+        expected_schema_revision="0035_add_report_kpi_reference_resolution_states",
         review_bundle_sha256="b" * 64,
         backup_restore_evidence_id="c" * 64,
         knowledge_at=NOW,
@@ -454,7 +457,7 @@ def test_disposition_rollout_is_append_only_idempotent_and_fail_closed(tmp_path:
         )
 
 
-def test_reference_revision_is_owner_scoped_and_v1_cannot_clear_unresolved(
+def test_reference_revision_is_owner_scoped_and_legacy_schema_cannot_clear_unresolved(
     tmp_path: Path,
 ) -> None:
     conn = _db()
@@ -489,15 +492,23 @@ def test_reference_revision_is_owner_scoped_and_v1_cannot_clear_unresolved(
     assert (
         current_report_kpi_reference_disposition(conn, user_id="other", reference=reference) is None
     )
-    with pytest.raises(ValueError, match="cannot bind"):
+    with pytest.raises(ValueError, match="cannot carry a binding"):
         ReportKpiReferenceDisposition(
             status=ReportKpiReferenceStatus.UNRESOLVED,
             kpi_definition_id=1,
             reason_code="guess_fix",
         )
-    with pytest.raises(ValueError):
-        ReportKpiReferenceDisposition.model_validate(
-            {"status": "retired", "reason_code": "clear_the_gate"}
+    retired = ReportKpiReferenceDisposition.model_validate(
+        {"status": "retired", "reason_code": "not_recurring_reported_kpi"}
+    )
+    with pytest.raises(ValueError, match="v2 schema"):
+        persist_report_kpi_reference_disposition(
+            conn,
+            user_id="owner",
+            reference=reference,
+            disposition=retired,
+            reviewed_by="source-review:owner",
+            knowledge_at=NOW,
         )
 
 
@@ -543,7 +554,7 @@ def test_duplicate_exact_labels_are_ambiguous_and_never_auto_bind(tmp_path: Path
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="ambiguous-label",
-        expected_schema_revision="0034_add_investment_profile_label_reviews",
+        expected_schema_revision="0035_add_report_kpi_reference_resolution_states",
         review_bundle_sha256="b" * 64,
         backup_restore_evidence_id="c" * 64,
         knowledge_at=NOW,
@@ -595,7 +606,7 @@ def test_missing_report_configuration_blocks_manifest_preparation(tmp_path: Path
             user_id="owner",
             reviewer="source-review:owner",
             logical_idempotency_key="missing-report-config",
-            expected_schema_revision="0034_add_investment_profile_label_reviews",
+            expected_schema_revision="0035_add_report_kpi_reference_resolution_states",
             review_bundle_sha256="b" * 64,
             backup_restore_evidence_id="c" * 64,
             knowledge_at=NOW,

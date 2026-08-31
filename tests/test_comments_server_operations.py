@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import sys
@@ -31,6 +32,11 @@ from operations.attention import (  # noqa: E402
     FindingKind,
     derive_finding_id,
 )
+from operations.kpi_semantic_review_export import (  # noqa: E402
+    encoded_kpi_semantic_review_export,
+    payload_sha256,
+    seal_kpi_semantic_review_export,
+)
 from operations.models import OperationsRegistry, OperationsSnapshot  # noqa: E402
 from operations.paths import (  # noqa: E402
     portfolio_tracker_activation_receipt_path,
@@ -40,6 +46,7 @@ from operations.paths import (  # noqa: E402
 )
 from operations.registry import build_operations_registry  # noqa: E402
 from operations.snapshot import collect_operations_snapshot  # noqa: E402
+from pipeline.kpi_semantic_review import KpiSemanticReviewBatch  # noqa: E402
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel  # noqa: E402
 from runtime.portfolio_tracker import (  # noqa: E402
     ListenerObservation,
@@ -919,6 +926,87 @@ def test_operations_review_bundle_fails_closed_for_loopback_http_origin(
 
     assert response.status_code == 503
     assert "not configured as HTTPS" in response.get_json()["error"]
+
+
+def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed_at = datetime.now(UTC)
+    batch_payload: dict[str, object] = {
+        "schema_version": "kpi_semantic_review.v2",
+        "user_id": "default",
+        "ticker": "NU",
+        "observed_at": observed_at,
+        "limit": 1_000,
+        "total_items": 0,
+        "truncated": False,
+        "state_counts": {},
+        "items": (),
+    }
+    batch = KpiSemanticReviewBatch.model_validate(
+        {**batch_payload, "content_sha256": payload_sha256(batch_payload)}
+    )
+    export = seal_kpi_semantic_review_export(
+        review=batch,
+        code_instance_sha256=hashlib.sha256(b"bounded-code-authority").hexdigest(),
+        database_instance_sha256="b" * 64,
+        schema_revision="0035",
+    )
+    payload = encoded_kpi_semantic_review_export(export)
+    captured: dict[str, object] = {}
+
+    def load_export(**kwargs: object):
+        captured.update(kwargs)
+        return export, payload
+
+    def bounded_code_identity(_: Path) -> str:
+        return "bounded-code-authority"
+
+    monkeypatch.setattr(comments_server, "review_code_identity", bounded_code_identity)
+    monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_export", load_export)
+    app = comments_server.create_app(tmp_path)
+    response = app.test_client().get(
+        "/api/operations/kpi-semantic-review/NU",
+        base_url="https://review.example.ts.net",
+    )
+
+    assert response.status_code == 200
+    assert response.data == payload
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["ETag"] == f'"{export.content_sha256}"'
+    assert captured["ticker"] == "NU"
+    assert captured["root"] == (tmp_path / "data" / "operations" / "kpi_semantic_reviews")
+    assert (
+        app.test_client()
+        .post(
+            "/api/operations/kpi-semantic-review/NU",
+            base_url="https://review.example.ts.net",
+        )
+        .status_code
+        == 405
+    )
+
+
+def test_kpi_semantic_review_route_fails_closed_without_current_portfolio_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from operations.kpi_semantic_review_export import KpiSemanticReviewExportError
+
+    def unavailable(**_: object):
+        raise KpiSemanticReviewExportError("ticker is outside the current portfolio export")
+
+    monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_export", unavailable)
+    response = (
+        comments_server.create_app(tmp_path)
+        .test_client()
+        .get(
+            "/api/operations/kpi-semantic-review/NOW",
+            base_url="https://review.example.ts.net",
+        )
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"] == "semantic review artifact not found"
 
 
 @pytest.mark.parametrize(

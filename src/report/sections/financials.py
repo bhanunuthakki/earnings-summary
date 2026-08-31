@@ -27,6 +27,10 @@ from compute.kpi_resolver import (
     semantic_series_identity_sql,
 )
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
+from pipeline.kpi_report_reference_resolver import (
+    report_kpi_reference_at,
+    verified_report_kpi_reference_definition,
+)
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
@@ -331,20 +335,44 @@ def _resolve_priorities(
     db_conn = open_repo_db(repo_root, conn)
 
     try:
-        for name in requested:
+        for index, name in enumerate(requested):
             lower = name.lower()
             if lower in li_map:
                 resolved.append(li_map[lower])
                 continue
             if db_conn is None:
                 continue
-            if reporting_cadence_for(db_conn, ticker, name) == "annual":
-                annual = _annual_kpi_raw_for(db_conn, ticker, name)
+            reference = report_kpi_reference_at(
+                repo_root,
+                ticker=ticker,
+                json_pointer=f"/chart_priorities/{index}",
+            )
+            verified = (
+                None
+                if reference is None
+                else verified_report_kpi_reference_definition(
+                    db_conn,
+                    repo_root=repo_root,
+                    user_id="default",
+                    reference=reference,
+                )
+            )
+            if verified is None:
+                continue
+            verified_name = verified.definition_name
+            if reporting_cadence_for(db_conn, ticker, verified_name) == "annual":
+                annual = _annual_kpi_raw_for(db_conn, ticker, verified_name)
                 if annual is not None:
                     annual_raw.append(annual)
                     resolved.append(annual[0])
                 continue
-            series = _kpi_series_for(db_conn, ticker, name, quarter_labels, quarter_labels_full)
+            series = _kpi_series_for(
+                db_conn,
+                ticker,
+                verified_name,
+                quarter_labels,
+                quarter_labels_full,
+            )
             if series is not None:
                 kpi_series.append(series)
                 resolved.append(series.name)

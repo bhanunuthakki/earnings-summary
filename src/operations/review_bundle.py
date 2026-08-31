@@ -197,12 +197,16 @@ def review_code_identity(repo_root: Path) -> str:
     relative_paths = (
         "execution/comments_server.py",
         "execution/collect_operations_runtime_observations.py",
+        "execution/fetch_windows_kpi_semantic_review.py",
+        "execution/fetch_windows_review_bundle.py",
         "execution/apply_kpi_semantic_refresh.py",
         "execution/apply_kpi_semantic_dispositions.py",
         "execution/prepare_kpi_semantic_dispositions.py",
+        "execution/prepare_kpi_semantic_review.py",
         "execution/record_kpi_disposition_judgment.py",
         "execution/record_kpi_repair_judgment.py",
         "src/operations/models.py",
+        "src/operations/kpi_semantic_review_export.py",
         "src/operations/registry.py",
         "src/operations/review_bundle.py",
         "src/operations/kpi_repair_receipts.py",
@@ -210,6 +214,7 @@ def review_code_identity(repo_root: Path) -> str:
         "src/pipeline/kpi_source_review.py",
         "src/pipeline/kpi_report_reference_dispositions.py",
         "src/pipeline/kpi_semantic_dispositions.py",
+        "src/pipeline/kpi_semantic_review.py",
         "src/pipeline/kpi_semantic_scope.py",
     )
     digest = hashlib.sha256()

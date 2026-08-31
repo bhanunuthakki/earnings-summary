@@ -15,6 +15,7 @@ from pipeline.kpi_report_reference_dispositions import (
     current_report_kpi_reference_disposition,
     load_report_kpi_reference_inventory,
 )
+from pipeline.kpi_report_reference_resolver import verified_report_kpi_reference_definition
 from provenance.financial_fact_resolution import canonical_fact_relation
 
 
@@ -151,26 +152,48 @@ def scoped_kpi_definitions(
             int(row[0])
         )
     for reference in references:
-        direct_ids = definition_keys.get(
-            (reference.ticker, reference.requested_label.strip().casefold())
-        )
-        if direct_ids is not None and len(direct_ids) == 1:
-            resolved_definition_references.setdefault(direct_ids[0], []).append(reference)
-            continue
-        ambiguous_exact_match = direct_ids is not None and len(direct_ids) > 1
         revision = current_report_kpi_reference_disposition(
             conn, user_id=user_id, reference=reference
         )
         if revision is not None and revision.reference != reference:
             revision = None
+        if revision is not None and revision.disposition.status is ReportKpiReferenceStatus.RETIRED:
+            continue
+        verified = verified_report_kpi_reference_definition(
+            conn,
+            repo_root=repo_root,
+            user_id=user_id,
+            reference=reference,
+        )
+        if verified is not None:
+            resolved_definition_references.setdefault(verified.kpi_definition_id, []).append(
+                reference
+            )
+            continue
+        stale_resolved = (
+            revision is not None
+            and revision.disposition.status is ReportKpiReferenceStatus.RESOLVED
+        )
+        direct_ids = definition_keys.get(
+            (reference.ticker, reference.requested_label.strip().casefold())
+        )
+        ambiguous_exact_match = direct_ids is not None and len(direct_ids) > 1
         unresolved_references.append(
             (
                 reference,
-                None if revision is None else revision.disposition.status,
                 (
-                    "ambiguous_exact_reported_definition"
-                    if revision is None and ambiguous_exact_match
-                    else (None if revision is None else revision.disposition.reason_code)
+                    ReportKpiReferenceStatus.UNRESOLVED
+                    if stale_resolved
+                    else (None if revision is None else revision.disposition.status)
+                ),
+                (
+                    "stale_report_reference_binding"
+                    if stale_resolved
+                    else (
+                        "ambiguous_exact_reported_definition"
+                        if revision is None and ambiguous_exact_match
+                        else (None if revision is None else revision.disposition.reason_code)
+                    )
                 ),
             )
         )

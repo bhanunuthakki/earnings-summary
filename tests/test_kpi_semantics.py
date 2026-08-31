@@ -425,8 +425,10 @@ def test_active_migration_head_installs_append_only_report_reference_disposition
         )
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(insert_sql, ("a" * 64, "resolved", 1))
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert_sql, ("a" * 64, "retired", None))
+        conn.execute(
+            insert_sql.replace("/tier_1_kpis/0/name", "/tier_1_kpis/1/name"),
+            ("a" * 64, "retired", None),
+        )
         conn.execute(insert_sql, ("a" * 64, "unresolved", None))
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             conn.execute(

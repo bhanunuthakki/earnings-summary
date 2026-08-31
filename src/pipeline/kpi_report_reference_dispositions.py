@@ -22,7 +22,14 @@ class ReportKpiReferenceKind(StrEnum):
 
 
 class ReportKpiReferenceStatus(StrEnum):
+    RESOLVED = "resolved"
     UNRESOLVED = "unresolved"
+    RETIRED = "retired"
+
+
+class ReportKpiReferenceResolutionMethod(StrEnum):
+    EXACT_DEFINITION_IDENTITY = "exact_definition_identity"
+    UNIT_SURFACE_ALIAS = "unit_surface_alias"
 
 
 class ReportKpiReferenceSourceStatus(StrEnum):
@@ -54,12 +61,34 @@ class ReportKpiReferenceDisposition(BaseModel):
 
     status: ReportKpiReferenceStatus
     kpi_definition_id: int | None = Field(default=None, gt=0)
+    definition_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    evidence_fact_id: int | None = Field(default=None, gt=0)
+    evidence_context_id: int | None = Field(default=None, gt=0)
+    evidence_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    resolution_method: ReportKpiReferenceResolutionMethod | None = None
+    policy_name: str | None = Field(default=None, min_length=1, max_length=128)
+    policy_version: str | None = Field(default=None, min_length=1, max_length=64)
+    policy_config_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     reason_code: str = Field(min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def _status_shape(self) -> Self:
-        if self.kpi_definition_id is not None:
-            raise ValueError("v1 report KPI dispositions cannot bind a definition")
+        binding = (
+            self.kpi_definition_id,
+            self.definition_identity_sha256,
+            self.evidence_fact_id,
+            self.evidence_context_id,
+            self.evidence_sha256,
+            self.resolution_method,
+            self.policy_name,
+            self.policy_version,
+            self.policy_config_sha256,
+        )
+        if self.status is ReportKpiReferenceStatus.RESOLVED:
+            if any(value is None for value in binding):
+                raise ValueError("resolved report KPI references require complete evidence binding")
+        elif any(value is not None for value in binding):
+            raise ValueError("unresolved or retired report KPI references cannot carry a binding")
         return self
 
 
@@ -112,6 +141,10 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
         ).fetchone()
         is not None
     )
+
+
+def _table_columns(conn: sqlite3.Connection, name: str) -> frozenset[str]:
+    return frozenset(str(row[1]) for row in conn.execute(f"PRAGMA table_info({name})"))
 
 
 def _reference(
@@ -358,6 +391,36 @@ def current_report_kpi_reference_disposition(
             kpi_definition_id=(
                 None if values["kpi_definition_id"] is None else int(values["kpi_definition_id"])
             ),
+            definition_identity_sha256=(
+                None
+                if values.get("definition_identity_sha256") is None
+                else str(values["definition_identity_sha256"])
+            ),
+            evidence_fact_id=(
+                None if values.get("evidence_fact_id") is None else int(values["evidence_fact_id"])
+            ),
+            evidence_context_id=(
+                None
+                if values.get("evidence_context_id") is None
+                else int(values["evidence_context_id"])
+            ),
+            evidence_sha256=(
+                None if values.get("evidence_sha256") is None else str(values["evidence_sha256"])
+            ),
+            resolution_method=(
+                None
+                if values.get("resolution_method") is None
+                else ReportKpiReferenceResolutionMethod(str(values["resolution_method"]))
+            ),
+            policy_name=(None if values.get("policy_name") is None else str(values["policy_name"])),
+            policy_version=(
+                None if values.get("policy_version") is None else str(values["policy_version"])
+            ),
+            policy_config_sha256=(
+                None
+                if values.get("policy_config_sha256") is None
+                else str(values["policy_config_sha256"])
+            ),
             reason_code=str(values["reason_code"]),
         ),
         revision=int(values["revision"]),
@@ -383,6 +446,10 @@ def persist_report_kpi_reference_disposition(
     """Append one reference disposition or return its idempotent current identity."""
     if not _table_exists(conn, "report_kpi_reference_resolution_revisions"):
         raise ValueError("report KPI reference disposition schema is unavailable")
+    columns = _table_columns(conn, "report_kpi_reference_resolution_revisions")
+    has_v2 = "definition_identity_sha256" in columns
+    if disposition.status is not ReportKpiReferenceStatus.UNRESOLVED and not has_v2:
+        raise ValueError("report KPI reference resolution v2 schema is unavailable")
     current = current_report_kpi_reference_disposition(conn, user_id=user_id, reference=reference)
     if (
         current is not None
@@ -393,28 +460,80 @@ def persist_report_kpi_reference_disposition(
     observed = knowledge_at or datetime.now(UTC)
     if observed.tzinfo is None:
         raise ValueError("report KPI reference knowledge_at must be timezone-aware")
-    cursor = conn.execute(
-        "INSERT INTO report_kpi_reference_resolution_revisions "
-        "(user_id,ticker,source_path,json_pointer,reference_kind,requested_label,"
-        "reference_content_sha256,status,kpi_definition_id,reason_code,revision,"
-        "supersedes_resolution_id,reviewed_by,knowledge_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            user_id,
-            reference.ticker,
-            reference.source_path,
-            reference.json_pointer,
-            reference.reference_kind.value,
-            reference.requested_label,
-            reference.reference_content_sha256,
-            disposition.status.value,
-            disposition.kpi_definition_id,
+    field_names = [
+        "user_id",
+        "ticker",
+        "source_path",
+        "json_pointer",
+        "reference_kind",
+        "requested_label",
+        "reference_content_sha256",
+        "status",
+        "kpi_definition_id",
+    ]
+    payload: list[object] = [
+        user_id,
+        reference.ticker,
+        reference.source_path,
+        reference.json_pointer,
+        reference.reference_kind.value,
+        reference.requested_label,
+        reference.reference_content_sha256,
+        disposition.status.value,
+        disposition.kpi_definition_id,
+    ]
+    if has_v2:
+        field_names.extend(
+            [
+                "definition_identity_sha256",
+                "evidence_fact_id",
+                "evidence_context_id",
+                "evidence_sha256",
+                "resolution_method",
+                "policy_name",
+                "policy_version",
+                "policy_config_sha256",
+            ]
+        )
+        payload.extend(
+            [
+                disposition.definition_identity_sha256,
+                disposition.evidence_fact_id,
+                disposition.evidence_context_id,
+                disposition.evidence_sha256,
+                (
+                    None
+                    if disposition.resolution_method is None
+                    else disposition.resolution_method.value
+                ),
+                disposition.policy_name,
+                disposition.policy_version,
+                disposition.policy_config_sha256,
+            ]
+        )
+    field_names.extend(
+        [
+            "reason_code",
+            "revision",
+            "supersedes_resolution_id",
+            "reviewed_by",
+            "knowledge_at",
+        ]
+    )
+    payload.extend(
+        [
             disposition.reason_code,
             1 if current is None else current.revision + 1,
             None if current is None else current.id,
             reviewed_by,
             observed.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        ),
+        ]
+    )
+    placeholders = ",".join("?" for _ in field_names)
+    cursor = conn.execute(
+        "INSERT INTO report_kpi_reference_resolution_revisions "
+        f"({','.join(field_names)}) VALUES ({placeholders})",
+        tuple(payload),
     )
     if cursor.lastrowid is None:
         raise RuntimeError("report KPI reference disposition insert returned no identity")
@@ -427,6 +546,7 @@ __all__ = [
     "ReportKpiReferenceDispositionRevision",
     "ReportKpiReferenceInventory",
     "ReportKpiReferenceKind",
+    "ReportKpiReferenceResolutionMethod",
     "ReportKpiReferenceSourceState",
     "ReportKpiReferenceSourceStatus",
     "ReportKpiReferenceStatus",

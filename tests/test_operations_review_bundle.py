@@ -34,6 +34,7 @@ from operations.review_bundle import (
     ReviewSchedulerTask,
     build_operations_review_bundle,
     load_kpi_repair_review,
+    review_code_identity,
 )
 
 NOW = datetime(2026, 8, 27, 19, tzinfo=UTC)
@@ -189,6 +190,27 @@ def test_review_bundle_is_closed_sanitized_and_hash_validated() -> None:
     payload["schema_revision"]["matches"] = False
     with pytest.raises(ValueError, match="content_sha256"):
         OperationsReviewBundle.model_validate(payload)
+
+
+def test_review_code_identity_binds_semantic_review_producer_route_model_and_client(
+    tmp_path: Path,
+) -> None:
+    dependencies = (
+        "execution/comments_server.py",
+        "execution/fetch_windows_kpi_semantic_review.py",
+        "execution/fetch_windows_review_bundle.py",
+        "execution/prepare_kpi_semantic_review.py",
+        "src/operations/kpi_semantic_review_export.py",
+        "src/pipeline/kpi_semantic_review.py",
+    )
+    before = review_code_identity(tmp_path)
+    for relative in dependencies:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(relative, encoding="utf-8")
+        after = review_code_identity(tmp_path)
+        assert after != before, relative
+        before = after
 
 
 def test_mac_validator_rejects_origin_identity_change_and_staleness() -> None:

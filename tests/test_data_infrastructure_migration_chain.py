@@ -13,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0034_add_investment_profile_label_reviews"
+HEAD = "0035_add_report_kpi_reference_resolution_states"
 SCHEDULE_CLASS_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 RETAINED_TABLES = {
     "archive_generations",

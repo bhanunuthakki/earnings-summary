@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import operations.kpi_semantic_review_export as export_module
 import pipeline.kpi_semantic_review as review_module
 from execution.prepare_kpi_semantic_review import (
     KpiSemanticReviewSummary,
@@ -17,6 +18,13 @@ from execution.prepare_kpi_semantic_review import (
 )
 from execution.prepare_kpi_semantic_review import (
     main as prepare_review_main,
+)
+from operations.kpi_semantic_review_export import (
+    KpiSemanticReviewExport,
+    KpiSemanticReviewExportError,
+    load_current_kpi_semantic_review_export,
+    publish_kpi_semantic_review_exports,
+    seal_kpi_semantic_review_export,
 )
 from pipeline.kpi_semantic_review import (
     MAX_EVIDENCE_CANDIDATES_PER_FACT,
@@ -27,11 +35,14 @@ from pipeline.kpi_semantic_review import (
     KpiSemanticReviewState,
     build_kpi_semantic_review_batch,
 )
+from provenance.evidence_ledger import EvidenceLocator
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 SHA = "a" * 64
-LOCATOR_SHA = hashlib.sha256(b'{"page":9}').hexdigest()
+EVIDENCE_LOCATOR = EvidenceLocator(source_ref="C:/sources/document.pdf", page_number=9)
+LOCATOR_JSON = EVIDENCE_LOCATOR.canonical_json
+LOCATOR_SHA = EVIDENCE_LOCATOR.canonical_sha256
 
 
 def _database() -> sqlite3.Connection:
@@ -68,7 +79,7 @@ def _database() -> sqlite3.Connection:
         );
         CREATE TABLE evidence_nodes(
             node_id TEXT,extraction_run_id TEXT,node_kind TEXT,text TEXT,
-            locator_sha256 TEXT,supersedes_node_id TEXT
+            locator_json TEXT,locator_sha256 TEXT,supersedes_node_id TEXT
         );
         CREATE TABLE v_legacy_document_evidence_bindings_current(
             legacy_document_id INTEGER,document_version_id TEXT,evidence_node_id TEXT,
@@ -165,10 +176,10 @@ def _evidence(conn: sqlite3.Connection, *, document_id: int, text: str) -> None:
         ),
     )
     conn.executemany(
-        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?)",
+        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?,?)",
         [
-            ("node-document", "run-1", "document", "", LOCATOR_SHA, None),
-            ("node-1", "run-1", "pdf_page", text, LOCATOR_SHA, None),
+            ("node-document", "run-1", "document", "", LOCATOR_JSON, LOCATOR_SHA, None),
+            ("node-1", "run-1", "pdf_page", text, LOCATOR_JSON, LOCATOR_SHA, None),
         ],
     )
     conn.execute(
@@ -219,7 +230,30 @@ def test_exact_evidence_value_is_a_review_candidate_not_auto_admission(tmp_path:
     assert "Active customers" in item.evidence_candidates[0].excerpt
     candidate = item.evidence_candidates[0]
     assert candidate.excerpt == source_text[candidate.excerpt_start : candidate.excerpt_end]
+    assert candidate.evidence_locator == EVIDENCE_LOCATOR
+    assert candidate.locator_sha256 == candidate.evidence_locator.canonical_sha256
     assert item.context_status is None
+
+
+def test_evidence_locator_payload_and_hash_must_match(tmp_path: Path) -> None:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
+    _fact(conn, fact_id=1, definition_id=1, document_id=10)
+    _evidence(conn, document_id=10, text="Customers (MM) 114.2.")
+    mismatched = EvidenceLocator(source_ref="C:/sources/document.pdf", page_number=10)
+    conn.execute(
+        "UPDATE evidence_nodes SET locator_json=? WHERE node_id='node-1'",
+        (mismatched.canonical_json,),
+    )
+
+    batch = build_kpi_semantic_review_batch(
+        conn, repo_root=tmp_path, user_id="owner", observed_at=NOW
+    )
+
+    item = batch.items[0]
+    assert item.state is KpiSemanticReviewState.EVIDENCE_SEARCH_INCOMPLETE
+    assert item.evidence_search_reason_codes == ("evidence_node_locator_invalid",)
+    assert item.evidence_candidates == ()
 
 
 def test_integer_ending_in_zero_is_not_shortened_for_evidence_matching(tmp_path: Path) -> None:
@@ -409,8 +443,15 @@ def test_evidence_node_and_text_search_budgets_are_explicit(
     _fact(node_limited, fact_id=1, definition_id=1, document_id=10)
     _evidence(node_limited, document_id=10, text="No metric on the first node.")
     node_limited.execute(
-        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,NULL)",
-        ("node-2", "run-1", "pdf_page", "Customers (MM) 114.2.", LOCATOR_SHA),
+        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?,NULL)",
+        (
+            "node-2",
+            "run-1",
+            "pdf_page",
+            "Customers (MM) 114.2.",
+            LOCATOR_JSON,
+            LOCATOR_SHA,
+        ),
     )
     monkeypatch.setattr(review_module, "MAX_EVIDENCE_NODES_PER_DOCUMENT", 1)
 
@@ -663,6 +704,50 @@ def test_cli_refuses_to_overwrite_source_database(
         )
 
 
+def test_cli_publishes_one_atomic_current_index_without_mutating_database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database = migrated_db(tmp_path / "portfolio.db")
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (user_id,ticker,name,list_type) "
+            "VALUES ('owner','NU','Nu Holdings','portfolio')"
+        )
+    before = hashlib.sha256(database.read_bytes()).hexdigest()
+    artifact_root = tmp_path / "published"
+
+    assert (
+        prepare_review_main(
+            [
+                "--db",
+                str(database),
+                "--repo-root",
+                str(tmp_path),
+                "--user-id",
+                "owner",
+                "--artifact-root",
+                str(artifact_root),
+            ]
+        )
+        == 0
+    )
+
+    streams = capsys.readouterr()
+    summary = KpiSemanticReviewSummary.model_validate_json(streams.out)
+    assert summary.truncated is False
+    assert summary.output == str(artifact_root / "latest.json")
+    loaded, _ = load_current_kpi_semantic_review_export(
+        root=artifact_root,
+        ticker="NU",
+        now=datetime.now(UTC),
+        max_age=timedelta(minutes=20),
+    )
+    assert loaded.review.schema_version == "kpi_semantic_review.v2"
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == before
+
+
 def test_cli_limit_is_bounded() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(
@@ -676,4 +761,91 @@ def test_cli_limit_is_bounded() -> None:
                 "--output",
                 "output.json",
             ]
+        )
+
+
+def _review_export(tmp_path: Path) -> KpiSemanticReviewExport:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
+    _fact(conn, fact_id=1, definition_id=1, document_id=10)
+    batch = build_kpi_semantic_review_batch(
+        conn,
+        repo_root=tmp_path,
+        user_id="owner",
+        ticker="NU",
+        limit=1_000,
+        observed_at=NOW,
+    )
+    return seal_kpi_semantic_review_export(
+        review=batch,
+        code_instance_sha256="b" * 64,
+        database_instance_sha256="c" * 64,
+        schema_revision="0035",
+    )
+
+
+def test_semantic_review_export_is_content_addressed_and_current_portfolio_scoped(
+    tmp_path: Path,
+) -> None:
+    export = _review_export(tmp_path)
+    root = tmp_path / "exports"
+
+    index = publish_kpi_semantic_review_exports(root=root, exports=(export,))
+    loaded, payload = load_current_kpi_semantic_review_export(
+        root=root,
+        ticker="nu",
+        now=NOW + timedelta(minutes=1),
+        max_age=timedelta(minutes=20),
+    )
+
+    assert loaded == export
+    assert index.artifacts[0].content_sha256 == export.content_sha256
+    assert payload == (root / "artifacts" / f"{export.content_sha256}.json").read_bytes()
+    with pytest.raises(KpiSemanticReviewExportError, match="outside the current portfolio"):
+        load_current_kpi_semantic_review_export(
+            root=root,
+            ticker="NOW",
+            now=NOW + timedelta(minutes=1),
+            max_age=timedelta(minutes=20),
+        )
+
+
+def test_semantic_review_export_fails_closed_for_v1_truncation_and_oversize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export = _review_export(tmp_path)
+    legacy = export.model_dump(mode="json")
+    legacy["review"]["schema_version"] = "kpi_semantic_review.v1"
+    with pytest.raises(ValidationError, match=r"kpi_semantic_review\.v2"):
+        KpiSemanticReviewExport.model_validate(legacy)
+
+    truncated_payload = export.review.model_dump(mode="json", exclude={"content_sha256"})
+    truncated_payload["truncated"] = True
+    truncated_review = KpiSemanticReviewBatch.model_validate(
+        {**truncated_payload, "content_sha256": export_module.payload_sha256(truncated_payload)}
+    )
+    with pytest.raises(ValidationError, match="truncated"):
+        seal_kpi_semantic_review_export(
+            review=truncated_review,
+            code_instance_sha256="b" * 64,
+            database_instance_sha256="c" * 64,
+            schema_revision="0035",
+        )
+
+    monkeypatch.setattr(export_module, "MAX_KPI_SEMANTIC_EXPORT_BYTES", 100)
+    with pytest.raises(KpiSemanticReviewExportError, match="byte bound"):
+        export_module.encoded_kpi_semantic_review_export(export)
+
+
+def test_semantic_review_artifact_publication_rejects_stale_index(tmp_path: Path) -> None:
+    export = _review_export(tmp_path)
+    root = tmp_path / "exports"
+    publish_kpi_semantic_review_exports(root=root, exports=(export,))
+
+    with pytest.raises(KpiSemanticReviewExportError, match="stale"):
+        load_current_kpi_semantic_review_export(
+            root=root,
+            ticker="NU",
+            now=NOW + timedelta(hours=1),
+            max_age=timedelta(minutes=20),
         )
