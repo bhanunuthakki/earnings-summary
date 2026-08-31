@@ -126,6 +126,9 @@ _SCRIPT = """<script>
           log.textContent += '=== done (exit ' + f.exit_code + ') ===\\n';
           if (f.exit_code === 0) {
             CCAction.receipt(rb, '\\u2713 Rebuild complete — DCF models refreshed');
+            window.dispatchEvent(new CustomEvent('work-os:investment-evidence-updated', {
+              detail: {kind: 'dcf', scope: 'all'}
+            }));
           } else {
             msg.textContent = 'rebuild finished with errors (exit ' + f.exit_code + ') — see log above';
             CCAction.release(rb);

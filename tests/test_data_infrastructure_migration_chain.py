@@ -13,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0033_add_report_kpi_reference_resolutions"
+HEAD = "0034_add_investment_profile_label_reviews"
 SCHEDULE_CLASS_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 RETAINED_TABLES = {
     "archive_generations",
@@ -38,6 +38,7 @@ RETAINED_TABLES = {
     "operations_attention_repair_references",
     "position_sizing_intent_withdrawals",
     "position_sizing_intent_supersessions",
+    "investment_profile_label_reviews",
 }
 
 
@@ -79,6 +80,60 @@ def test_squashed_chain_has_one_head_and_preserves_active_schema(tmp_path: Path)
     assert identity is not None and str(identity[0]).startswith("database-instance:")
     assert integrity == ("ok",)
     assert foreign_keys == []
+
+
+def test_investment_profile_review_ledger_accepts_company_and_etf_labels(tmp_path: Path) -> None:
+    path = tmp_path / "investment-profile-reviews.db"
+    config = _config(path)
+    command.upgrade(config, HEAD)
+
+    with sqlite3.connect(path) as conn:
+        for index, label in enumerate(("long_term_compounder", "defensive_hedge"), start=1):
+            conn.execute(
+                "INSERT INTO investment_profile_label_reviews "
+                "(ticker,label,action,suggestion_fingerprint,evidence_json,reviewed_by,"
+                "idempotency_key) VALUES (?,?,?,?,?,?,?)",
+                (
+                    "ACME" if index == 1 else "TAIL",
+                    label,
+                    "ratify",
+                    str(index) * 64,
+                    "{}",
+                    "bhanu",
+                    str(index + 2) * 64,
+                ),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO investment_profile_label_reviews "
+                "(ticker,label,action,suggestion_fingerprint,evidence_json,reviewed_by,"
+                "idempotency_key) VALUES ('BAD','fake_label','ratify',?,?,?,?)",
+                ("a" * 64, "{}", "bhanu", "b" * 64),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("UPDATE investment_profile_label_reviews SET action='reject' WHERE id=1")
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM investment_profile_label_reviews WHERE id=2")
+
+    command.downgrade(config, "0033_add_report_kpi_reference_resolutions")
+    with sqlite3.connect(path) as conn:
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='investment_profile_label_reviews'"
+            ).fetchone()
+            is None
+        )
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0033_add_report_kpi_reference_resolutions",
+        )
+
+    command.upgrade(config, HEAD)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='investment_profile_label_reviews'"
+        ).fetchone() == ("investment_profile_label_reviews",)
 
 
 def test_managed_ir_publication_migration_is_reversible(tmp_path: Path) -> None:

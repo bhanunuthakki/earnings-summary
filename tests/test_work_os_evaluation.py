@@ -11,10 +11,15 @@ from typing import NoReturn
 import pytest
 
 import pipeline.work_os_evaluation as evaluation
+from allocation.candidate_fit import CandidateFit, FitFactor
 from dcf.availability import DcfRouteArtifact
+from models.instruments import EtfProfile
 from pipeline.dashboard_status import DashboardRow
+from pipeline.etf_score import StyleLoadingRead
+from pipeline.peeks import render_investment_profile_peek, render_portfolio_impact_peek
 from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_briefs import BriefLibraryFacets, BriefLibraryItem, BriefLibraryResponse
+from research.investment_profile import CompanyProfileProjection
 
 
 def _row(
@@ -33,6 +38,8 @@ def _row(
     fair_value: float | None = 120.0,
     dcf_price: float | None = 100.0,
     dcf_unreviewed: bool = False,
+    rev_yoy_pct: float | None = 30.0,
+    fcf_margin_pct: float | None = 18.0,
 ) -> CockpitRow:
     return CockpitRow(
         base=DashboardRow(
@@ -48,6 +55,8 @@ def _row(
         fair_value=fair_value,
         dcf_price=dcf_price,
         dcf_unreviewed=dcf_unreviewed,
+        rev_yoy_pct=rev_yoy_pct,
+        fcf_margin_pct=fcf_margin_pct,
         attractiveness=score,
         attractiveness_why=score_why,
         attractiveness_partial=score_partial,
@@ -117,7 +126,7 @@ def test_mixed_company_and_etf_preserve_input_order_and_user_doorways(
         generated_at=datetime(2026, 8, 25, 12, 0, tzinfo=UTC),
     )
 
-    assert payload.schema_version == "evaluation_surface.v1"
+    assert payload.schema_version == "evaluation_surface.v2"
     assert payload.generated_at == "2026-08-25T12:00:00Z"
     assert payload.count == 2
     assert [item.ticker for item in payload.items] == ["VDE", "MELI"]
@@ -324,3 +333,203 @@ def test_invalid_machine_reference_ticker_is_omitted_before_serialization(
     assert payload.count == 1
     assert "invalid_ticker_omitted" in payload.warnings
     assert machine_ref not in payload.model_dump_json()
+
+
+def test_company_profile_and_direct_portfolio_indicators_reuse_current_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT,
+            purpose TEXT NOT NULL,
+            content_json TEXT,
+            input_sha256 TEXT NOT NULL,
+            superseded_by_id INTEGER
+        );
+        CREATE TABLE investment_profile_label_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            label TEXT NOT NULL,
+            action TEXT NOT NULL,
+            suggestion_fingerprint TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE
+        );
+        """
+    )
+    card = {
+        "investment_profile": {
+            "labels": ["long_term_compounder"],
+            "summary": "A durable core engine with reinvestment runway.",
+            "moat": {
+                "level": "core_business",
+                "evidence_coverage": "sufficient",
+                "rationale": "Scale and embedded workflows defend the core business.",
+            },
+        }
+    }
+    conn.execute(
+        "INSERT INTO llm_artifacts VALUES (9,'MELI','investment_decision_card',?,?,NULL)",
+        (json.dumps(card), "card-input-v2"),
+    )
+
+    def fake_brief_library(*_args: object, **_kwargs: object) -> BriefLibraryResponse:
+        return _brief_response()
+
+    monkeypatch.setattr(evaluation, "build_brief_library", fake_brief_library)
+    fit = CandidateFit(
+        ticker="MELI",
+        fit=1.12,
+        why="structured factors",
+        partial=False,
+        sharpe_delta_bps=8.0,
+        factors=[
+            FitFactor("sharpe", "Marginal Sharpe", 1.12, "SR +0.8 vs hurdle +0.4", False),
+            FitFactor("divers", "Diversification", 1.10, "corr +0.31 to book", False),
+            FitFactor("factor", "Factor fit", 1.12, "balances the book growth tilt", False),
+            FitFactor("sector", "Sector fit", 1.08, "under-represented sector", False),
+        ],
+    )
+
+    def fake_candidate_fit(_root: Path) -> dict[str, CandidateFit]:
+        return {"MELI": fit}
+
+    monkeypatch.setattr(evaluation, "read_materialized_candidate_fit", fake_candidate_fit)
+
+    item = evaluation.build_work_os_evaluation([_row("MELI")], tmp_path, conn).items[0]
+
+    assert isinstance(item.profile, CompanyProfileProjection)
+    assert [label.display_label for label in item.profile.labels] == [
+        "Long-term compounder",
+        "GARP",
+    ]
+    assert item.profile.moat.level is not None
+    assert item.profile.moat.level.display_label == "Core-business moat"
+    assert [indicator.key for indicator in item.portfolio_indicators] == [
+        "sharpe",
+        "divers",
+        "factor",
+        "sector",
+    ]
+    assert "Diversifier" in item.portfolio_role_labels
+    assert "Balances factor tilt" in item.portfolio_role_labels
+    assert "Risk-adjusted accretive" in item.portfolio_role_labels
+
+    profile_html = render_investment_profile_peek(item)
+    assert profile_html is not None
+    assert "Core-business moat" in profile_html
+    assert "Ratify" in profile_html
+    assert 'data-profile-review-label="garp"' in profile_html
+    assert "DCF refreshes never overwrite it" in profile_html
+
+    impact_html = render_portfolio_impact_peek(item)
+    assert impact_html is not None
+    assert "Candidate vs held book" in impact_html
+    assert "Marginal Sharpe" in impact_html
+    assert "not a composite fit score" in impact_html
+
+
+def test_etf_profile_reuses_current_profile_loadings_fit_and_whatif(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE investment_profile_label_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            label TEXT NOT NULL,
+            action TEXT NOT NULL,
+            suggestion_fingerprint TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE
+        );
+        """
+    )
+
+    def fake_brief_library(*_args: object, **_kwargs: object) -> BriefLibraryResponse:
+        return _brief_response()
+
+    monkeypatch.setattr(evaluation, "build_brief_library", fake_brief_library)
+    fit = CandidateFit(
+        ticker="VDE",
+        fit=1.12,
+        why="structured ETF factors",
+        partial=False,
+        sharpe_delta_bps=18.0,
+        factors=[
+            FitFactor("divers", "Diversification", 1.2, "corr +0.12 to book", False),
+            FitFactor("overlap", "Look-through overlap", 1.08, "3% overlap", False),
+            FitFactor("factor", "Factor fit", 1.12, "balances the book", False),
+            FitFactor("sector", "Sector fit", 1.08, "adds energy breadth", False),
+        ],
+    )
+
+    def fake_candidate_fit(_root: Path) -> dict[str, CandidateFit]:
+        return {"VDE": fit}
+
+    def fake_etf_loadings(_root: Path) -> dict[str, list[StyleLoadingRead]]:
+        return {"VDE": [StyleLoadingRead(key="value", beta=0.48, r_squared=0.32, n_obs=252)]}
+
+    def fake_etf_whatif(
+        _root: Path,
+    ) -> dict[str, dict[str, dict[str, float | list[str]]]]:
+        return {
+            "VDE": {
+                "0.03": {
+                    "vol_before_ann": 0.15,
+                    "vol_after_ann": 0.14,
+                    "sharpe_delta_bps": 18.0,
+                    "degraded": [],
+                }
+            }
+        }
+
+    def fake_etf_profile(_conn: sqlite3.Connection, _ticker: str) -> EtfProfile:
+        return EtfProfile(
+            ticker="VDE",
+            name="Vanguard Energy ETF",
+            asset_class="equity",
+            sector_label="Energy",
+            expense_ratio=0.001,
+            distribution_yield=0.035,
+            source="issuer:test",
+            profile_fetched_at=datetime(2026, 8, 20, tzinfo=UTC),
+        )
+
+    monkeypatch.setattr(evaluation, "read_materialized_candidate_fit", fake_candidate_fit)
+    monkeypatch.setattr(
+        evaluation, "read_materialized_etf_loadings", fake_etf_loadings, raising=False
+    )
+    monkeypatch.setattr(evaluation, "read_materialized_etf_whatif", fake_etf_whatif, raising=False)
+    monkeypatch.setattr(evaluation, "get_etf_profile", fake_etf_profile, raising=False)
+
+    item = evaluation.build_work_os_evaluation(
+        [_row("VDE", name="Vanguard Energy ETF", etf=True, sharpe_delta_bps=18.0)],
+        tmp_path,
+        conn,
+    ).items[0]
+
+    assert item.profile is not None
+    assert {label.label.value for label in item.profile.labels} == {
+        "factor_sleeve",
+        "thematic_exposure",
+        "diversifier",
+        "defensive_hedge",
+        "income",
+        "tactical_cyclical",
+    }
+    html = render_investment_profile_peek(item)
+    assert html is not None
+    assert "Defensive / hedge" in html
+    assert "Published fund profile targets Energy" in html
+    assert "Company moat vocabulary is not applied" in html
+    assert "Ratify" in html

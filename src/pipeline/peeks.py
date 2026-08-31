@@ -86,8 +86,10 @@ __all__ = [
     "render_earnings_readout_peek",
     "render_fact_provenance_peek",
     "render_fit_peek",
+    "render_investment_profile_peek",
     "render_memo_peek",
     "render_new_docs_peek",
+    "render_portfolio_impact_peek",
     "render_provenance_peek",
     "render_review_peek",
     "render_score_peek",
@@ -554,6 +556,164 @@ _SCORE_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>
 # (~0.8 to 1.25); the bar maps [0.7, 1.3] to [0, 100]% so a lift reads fuller
 # than a drag. Reuses the cc-score-* layout (the breakdown anatomy is identical).
 _FIT_BAR_MIN, _FIT_BAR_MAX = 0.7, 1.3
+
+
+def render_investment_profile_peek(item: object) -> str | None:
+    """Render the governed qualitative profile, moat evidence, and owner controls.
+
+    ``object`` keeps this read-only renderer independent of the hydration model
+    at import time; the local validation below fails closed for unrelated
+    objects.  Review buttons carry the exact suggestion fingerprint so the
+    mutation route can reject stale decisions.
+    """
+    from pipeline.work_os_evaluation import WorkOsEvaluationItem
+    from research.investment_profile import EtfProfileProjection
+
+    if not isinstance(item, WorkOsEvaluationItem) or item.profile is None:
+        return None
+    profile = item.profile
+    state_copy = {
+        "owner_ratified": ("Owner ratified", "k-pill k-pill-ok"),
+        "review_suggested": ("Review suggested", "k-pill k-pill-warn"),
+        "system_suggested": ("System suggested", "k-pill"),
+        "unavailable": ("Profile pending", "k-pill k-pill-warn"),
+    }
+    state_label, state_class = state_copy[profile.state.value]
+    label_cards: list[str] = []
+    for label in profile.labels:
+        actions: list[str] = []
+        common = (
+            f'data-profile-review-ticker="{escape(item.ticker, quote=True)}" '
+            f'data-profile-review-label="{escape(label.label.value, quote=True)}" '
+            f'data-profile-review-fingerprint="{escape(label.suggestion_fingerprint, quote=True)}"'
+        )
+        if label.suggested and label.state.value != "owner_ratified":
+            actions.extend(
+                [
+                    f'<button class="k-btn k-btn-primary k-btn-sm" type="button" '
+                    f'data-profile-review-action="ratify" {common}>Ratify</button>',
+                    f'<button class="k-btn k-btn-quiet k-btn-sm" type="button" '
+                    f'data-profile-review-action="reject" {common}>Reject</button>',
+                ]
+            )
+        elif label.state.value == "owner_ratified" or not label.suggested:
+            actions.append(
+                f'<button class="k-btn k-btn-quiet k-btn-sm" type="button" '
+                f'data-profile-review-action="retire" {common}>Retire label</button>'
+            )
+        if label.source_kind == "dcf_rule":
+            source = "DCF rule"
+        elif label.source_kind == "etf_rule":
+            source = "Deterministic ETF rule"
+        else:
+            source = "Brief and earnings synthesis"
+        evidence_summary = getattr(label, "evidence_summary", None)
+        evidence_html = f"<p>{escape(evidence_summary)}</p>" if evidence_summary else ""
+        label_cards.append(
+            '<article class="k-well">'
+            '<div class="research-row">'
+            f"<div><strong>{escape(label.display_label)}</strong>"
+            f'<div class="k-card-meta">{escape(source)} · {escape(label.state.value.replace("_", " "))}</div></div>'
+            f'<div class="research-actions">{"".join(actions)}</div>'
+            f"</div>{evidence_html}</article>"
+        )
+    labels_html = "".join(label_cards) or (
+        '<div class="k-well">No profile labels are currently supported by admitted evidence.</div>'
+    )
+    thesis = escape(item.thesis_excerpt or "No current thesis excerpt is available.")
+    if isinstance(profile, EtfProfileProjection):
+        gaps = "".join(f"<li>{escape(value)}</li>" for value in profile.evidence_gaps)
+        gaps_html = (
+            f'<div><div class="k-card-meta">Evidence still needed</div><ul>{gaps}</ul></div>'
+            if gaps
+            else '<p class="k-card-meta">All required evidence families are available.</p>'
+        )
+        return (
+            '<section class="research-screen">'
+            '<header class="research-row">'
+            f'<div><div class="k-card-meta">{escape(item.ticker)} · ETF profile</div>'
+            f'<h2 class="k-card-title">{escape(item.name)}</h2></div>'
+            f'<span class="{state_class}">{state_label}</span>'
+            "</header>"
+            f'<div class="k-well"><strong>Current fund shape</strong><p>{escape(profile.summary)}</p>'
+            f'<div class="k-card-meta">Evaluation context</div><p>{thesis}</p></div>'
+            f"<div>{labels_html}</div>"
+            '<div class="k-well">'
+            f'<div class="research-row"><strong>ETF evidence coverage</strong>'
+            f'<span class="k-pill">{escape(profile.evidence_coverage.value)}</span></div>'
+            f"{gaps_html}</div>"
+            '<p class="k-card-meta">ETF labels are deterministic projections over the current fund '
+            "profile, style loadings, candidate-fit, overlap, and what-if evidence. Company moat "
+            "vocabulary is not applied.</p>"
+            "</section>"
+        )
+    moat = profile.moat
+    moat_label = moat.level.display_label if moat.level is not None else "Evidence insufficient"
+    support = "".join(f"<li>{escape(value)}</li>" for value in moat.supporting_evidence)
+    counter = "".join(f"<li>{escape(value)}</li>" for value in moat.counter_evidence)
+    evidence_lists = ""
+    if support:
+        evidence_lists += (
+            f'<div><div class="k-card-meta">Supporting evidence</div><ul>{support}</ul></div>'
+        )
+    if counter:
+        evidence_lists += (
+            f'<div><div class="k-card-meta">Counter-evidence</div><ul>{counter}</ul></div>'
+        )
+    return (
+        '<section class="research-screen">'
+        '<header class="research-row">'
+        f'<div><div class="k-card-meta">{escape(item.ticker)} · Investment profile</div>'
+        f'<h2 class="k-card-title">{escape(item.name)}</h2></div>'
+        f'<span class="{state_class}">{state_label}</span>'
+        "</header>"
+        f'<div class="k-well"><strong>Current investment flavor</strong><p>{escape(profile.summary)}</p>'
+        f'<div class="k-card-meta">Thesis context</div><p>{thesis}</p></div>'
+        f"<div>{labels_html}</div>"
+        '<div class="k-well">'
+        f'<div class="research-row"><strong>{escape(moat_label)}</strong>'
+        f'<span class="k-pill">{escape(moat.evidence_coverage.value)} evidence</span></div>'
+        f"<p>{escape(moat.rationale)}</p>{evidence_lists}</div>"
+        '<p class="k-card-meta">System suggestions are recomputed from current evidence. '
+        "Ratification is append-only owner evidence; DCF refreshes never overwrite it.</p>"
+        "</section>"
+    )
+
+
+def render_portfolio_impact_peek(item: object) -> str | None:
+    """Render direct candidate-vs-book indicators without the retired fit scalar."""
+    from pipeline.work_os_evaluation import WorkOsEvaluationItem
+
+    if not isinstance(item, WorkOsEvaluationItem):
+        return None
+    roles = "".join(
+        f'<span class="k-chip">{escape(label)}</span>' for label in item.portfolio_role_labels
+    )
+    rows = "".join(
+        '<article class="k-well">'
+        f'<div class="research-row"><strong>{escape(indicator.label)}</strong>'
+        f'<span class="k-pill">{escape(indicator.effect)}</span></div>'
+        f"<p>{escape(indicator.detail)}</p></article>"
+        for indicator in item.portfolio_indicators
+    )
+    if not rows:
+        rows = '<div class="k-well">No current candidate-vs-book evidence is available.</div>'
+    roles_html = roles or '<span class="k-card-meta">No role label yet</span>'
+    held = (
+        f'<span class="k-card-meta">Current held weight {item.held_weight_pct:.2f}%</span>'
+        if item.held_weight_pct is not None
+        else '<span class="k-card-meta">Not currently held or weight unavailable</span>'
+    )
+    return (
+        '<section class="research-screen">'
+        '<header><div class="k-card-meta">Candidate vs held book</div>'
+        f'<h2 class="k-card-title">{escape(item.ticker)} · Portfolio impact</h2></header>'
+        f'<div class="research-actions">{roles_html}</div>'
+        f"{held}<div>{rows}</div>"
+        '<p class="k-card-meta">These are direct sector, factor, diversification, overlap, and '
+        "risk-adjusted observations from the materialized candidate-fit corpus—not a composite fit score.</p>"
+        "</section>"
+    )
 
 
 def render_fit_peek(repo_root: Path, ticker: str) -> str | None:

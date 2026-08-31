@@ -12,16 +12,29 @@ import json
 import math
 import re
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from allocation.candidate_fit import CandidateFit
+from candidate_fit_cache import read_materialized_candidate_fit
 from dcf.availability import resolve_dcf_route_artifact
+from etf_score_cache import read_materialized_etf_loadings, read_materialized_etf_whatif
+from instrument_store import get_etf_profile
 from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_briefs import build_brief_library
+from research.investment_profile import (
+    CompanyProfileProjection,
+    EtfProfileInputs,
+    EtfProfileProjection,
+    EtfStyleEvidence,
+    ValuationEvidence,
+    project_company_profile,
+    project_etf_profile,
+)
 from ticker_validation import safe_ticker
 
 EvaluationInstrument = Literal["company", "etf"]
@@ -76,6 +89,18 @@ _POSITION_ENTRY_QUERIES: dict[tuple[str, ...], str] = {
 }
 
 
+class WorkOsPortfolioIndicator(BaseModel):
+    """One direct candidate-vs-book observation, never a composite score."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key: str
+    label: str
+    detail: str
+    effect: Literal["positive", "neutral", "negative", "unavailable"]
+    missing: bool = False
+
+
 class WorkOsEvaluationItem(BaseModel):
     """One evaluation-list item with only governed, user-facing doorways."""
 
@@ -84,6 +109,8 @@ class WorkOsEvaluationItem(BaseModel):
     ticker: str = Field(min_length=1, max_length=12, pattern=r"^[A-Z0-9][A-Z0-9.\-]{0,11}$")
     name: str = Field(max_length=_NAME_LIMIT)
     instrument_type: EvaluationInstrument
+    # Frontend-removed compatibility seam. Delete these six scalar fields after
+    # 2026-09-28 unless an evidence-backed design explicitly restores them.
     score: float | None = None
     score_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT)
     score_partial: bool = False
@@ -93,6 +120,13 @@ class WorkOsEvaluationItem(BaseModel):
     sharpe_delta_bps: float | None = None
     held_weight_pct: float | None = None
     dcf_upside_pct: float | None = None
+    revenue_growth_yoy_pct: float | None = None
+    fcf_margin_pct: float | None = None
+    profile: CompanyProfileProjection | EtfProfileProjection | None = None
+    portfolio_indicators: list[WorkOsPortfolioIndicator] = Field(
+        default_factory=list[WorkOsPortfolioIndicator]
+    )
+    portfolio_role_labels: list[str] = Field(default_factory=list[str])
     thesis_excerpt: str | None = Field(default=None, max_length=_EXCERPT_LIMIT)
     source: ThesisSource = "unavailable"
     company_desk_url: str | None = None
@@ -124,7 +158,7 @@ class WorkOsEvaluationHydration(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["evaluation_surface.v1"] = "evaluation_surface.v1"
+    schema_version: Literal["evaluation_surface.v2"] = "evaluation_surface.v2"
     generated_at: str
     count: int
     items: list[WorkOsEvaluationItem]
@@ -139,6 +173,12 @@ def _finite(value: float | None) -> float | None:
     return float(value)
 
 
+def _finite_object(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return _finite(float(value))
+
+
 def _dcf_upside_pct(row: CockpitRow) -> float | None:
     """Compute guarded fair-value upside from the DCF run's own price basis."""
 
@@ -150,6 +190,139 @@ def _dcf_upside_pct(row: CockpitRow) -> float | None:
         return None
     upside = (fair_value / dcf_price - 1.0) * 100.0
     return _finite(upside)
+
+
+def _factor_effect(
+    multiplier: float, *, missing: bool
+) -> Literal["positive", "neutral", "negative", "unavailable"]:
+    if missing:
+        return "unavailable"
+    if multiplier >= 1.05:
+        return "positive"
+    if multiplier <= 0.95:
+        return "negative"
+    return "neutral"
+
+
+def _portfolio_projection(
+    fit: CandidateFit | None,
+    *,
+    sharpe_delta_bps: float | None,
+) -> tuple[list[WorkOsPortfolioIndicator], list[str]]:
+    if fit is None:
+        return [], []
+    indicators = [
+        WorkOsPortfolioIndicator(
+            key=factor.key,
+            label=factor.label,
+            detail=factor.detail,
+            effect=_factor_effect(factor.multiplier, missing=factor.missing),
+            missing=factor.missing,
+        )
+        for factor in fit.factors
+        if factor.key in {"sharpe", "divers", "factor", "sector", "overlap"}
+    ]
+    by_key = {factor.key: factor for factor in fit.factors}
+    labels: list[str] = []
+    divers = by_key.get("divers")
+    if divers is not None and not divers.missing:
+        if divers.multiplier >= 1.05:
+            labels.append("Diversifier")
+        elif divers.multiplier <= 0.95:
+            labels.append("Correlation risk")
+    factor = by_key.get("factor")
+    if factor is not None and not factor.missing:
+        if factor.multiplier >= 1.05:
+            labels.append("Balances factor tilt")
+        elif factor.multiplier <= 0.95:
+            labels.append("Deepens factor tilt")
+    sector = by_key.get("sector")
+    if sector is not None and not sector.missing:
+        if sector.multiplier >= 1.05:
+            labels.append("Adds sector breadth")
+        elif sector.multiplier <= 0.95:
+            labels.append("Sector crowding")
+    if sharpe_delta_bps is not None:
+        if sharpe_delta_bps > 0:
+            labels.append("Risk-adjusted accretive")
+        elif sharpe_delta_bps < 0:
+            labels.append("Risk-adjusted dilutive")
+    return indicators, labels
+
+
+def _etf_profile_inputs(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fit: CandidateFit | None,
+    sharpe_delta_bps: float | None,
+    loadings_cache: Mapping[str, Sequence[object]],
+    whatif_cache: Mapping[str, Mapping[str, dict[str, object]]],
+    warnings: set[str],
+) -> EtfProfileInputs:
+    try:
+        fund_profile = get_etf_profile(conn, ticker)
+    except (sqlite3.Error, KeyError, TypeError, ValueError):
+        fund_profile = None
+        warnings.add("etf_profile_unavailable")
+
+    style_rows = loadings_cache.get(ticker, [])
+    style_evidence: list[EtfStyleEvidence] = []
+    for row in style_rows:
+        key = getattr(row, "key", None)
+        beta = _finite_object(getattr(row, "beta", None))
+        r_squared = _finite_object(getattr(row, "r_squared", None))
+        if key not in {"value", "size", "momentum"} or beta is None or r_squared is None:
+            continue
+        try:
+            style_evidence.append(EtfStyleEvidence(key=key, beta=beta, r_squared=r_squared))
+        except ValueError:
+            continue
+
+    factors = {factor.key: factor for factor in fit.factors} if fit is not None else {}
+    divers = factors.get("divers")
+    overlap = factors.get("overlap")
+    book_available = fit is not None and any(not factor.missing for factor in fit.factors)
+    divers_multiplier = (
+        _finite(divers.multiplier) if divers is not None and not divers.missing else None
+    )
+    overlap_multiplier = (
+        _finite(overlap.multiplier) if overlap is not None and not overlap.missing else None
+    )
+
+    whatif_row = whatif_cache.get(ticker, {}).get("0.03")
+    whatif_available = False
+    vol_before_ann: float | None = None
+    vol_after_ann: float | None = None
+    whatif_sharpe = sharpe_delta_bps
+    if isinstance(whatif_row, dict):
+        degraded = whatif_row.get("degraded")
+        whatif_available = not isinstance(degraded, list) or not degraded
+        vol_before_ann = _finite_object(whatif_row.get("vol_before_ann"))
+        vol_after_ann = _finite_object(whatif_row.get("vol_after_ann"))
+        cached_delta = _finite_object(whatif_row.get("sharpe_delta_bps"))
+        if cached_delta is not None:
+            whatif_sharpe = cached_delta
+
+    return EtfProfileInputs(
+        profile_available=fund_profile is not None,
+        asset_class=fund_profile.asset_class if fund_profile is not None else None,
+        benchmark_index=fund_profile.benchmark_index if fund_profile is not None else None,
+        sector_label=fund_profile.sector_label if fund_profile is not None else None,
+        expense_ratio=_finite(fund_profile.expense_ratio) if fund_profile is not None else None,
+        distribution_yield=(
+            _finite(fund_profile.distribution_yield) if fund_profile is not None else None
+        ),
+        style_evidence_available=ticker in loadings_cache,
+        style_loadings=style_evidence,
+        book_evidence_available=book_available,
+        diversification_multiplier=divers_multiplier,
+        overlap_multiplier=overlap_multiplier,
+        sharpe_delta_bps=whatif_sharpe,
+        whatif_evidence_available=whatif_available,
+        vol_before_ann=vol_before_ann,
+        vol_after_ann=vol_after_ann,
+    )
 
 
 def _bounded_human_text(value: str, *, limit: int) -> str:
@@ -281,7 +454,7 @@ def build_work_os_evaluation(
     *,
     generated_at: datetime | None = None,
 ) -> WorkOsEvaluationHydration:
-    """Project evaluation cockpit rows into ``evaluation_surface.v1``.
+    """Project evaluation cockpit rows into ``evaluation_surface.v2``.
 
     ``rows`` is intentionally not sorted here: ``build_cockpit_rows`` owns the
     evaluation ordering, and preserving it makes the API deterministic and
@@ -290,6 +463,21 @@ def build_work_os_evaluation(
 
     warnings: set[str] = set()
     report_urls = _report_urls(repo_root, conn, warnings)
+    try:
+        fit_cache = read_materialized_candidate_fit(repo_root)
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
+        fit_cache = {}
+        warnings.add("candidate_fit_unavailable")
+    try:
+        etf_loadings_cache = read_materialized_etf_loadings(repo_root)
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
+        etf_loadings_cache = {}
+        warnings.add("etf_style_loadings_unavailable")
+    try:
+        etf_whatif_cache = read_materialized_etf_whatif(repo_root)
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
+        etf_whatif_cache = {}
+        warnings.add("etf_whatif_unavailable")
     items: list[WorkOsEvaluationItem] = []
     for row in rows:
         try:
@@ -299,6 +487,39 @@ def build_work_os_evaluation(
             continue
         thesis_excerpt, source = _thesis_excerpt(repo_root, conn, ticker, warnings)
         instrument_type: EvaluationInstrument = "etf" if row.is_etf else "company"
+        dcf_upside_pct = _dcf_upside_pct(row)
+        structured_fit = fit_cache.get(ticker)
+        sharpe_delta_bps = _finite(row.sharpe_delta_bps)
+        portfolio_indicators, portfolio_role_labels = _portfolio_projection(
+            structured_fit,
+            sharpe_delta_bps=sharpe_delta_bps,
+        )
+        if instrument_type == "company":
+            profile: CompanyProfileProjection | EtfProfileProjection | None = (
+                project_company_profile(
+                    conn,
+                    ticker=ticker,
+                    valuation=ValuationEvidence(
+                        revenue_growth_yoy_pct=_finite(row.rev_yoy_pct),
+                        fcf_margin_pct=_finite(row.fcf_margin_pct),
+                        dcf_upside_pct=dcf_upside_pct,
+                    ),
+                )
+            )
+        else:
+            profile = project_etf_profile(
+                conn,
+                ticker=ticker,
+                inputs=_etf_profile_inputs(
+                    conn,
+                    ticker=ticker,
+                    fit=structured_fit,
+                    sharpe_delta_bps=sharpe_delta_bps,
+                    loadings_cache=etf_loadings_cache,
+                    whatif_cache=etf_whatif_cache,
+                    warnings=warnings,
+                ),
+            )
         held_weight = _finite(row.held_weight)
         held_weight_pct = held_weight * 100.0 if held_weight is not None else None
         if held_weight_pct is not None and not math.isfinite(held_weight_pct):
@@ -326,9 +547,14 @@ def build_work_os_evaluation(
                 fit=_finite(row.fit),
                 fit_why=_bounded_optional(row.fit_why, limit=_EXPLANATION_LIMIT),
                 fit_partial=row.fit_partial,
-                sharpe_delta_bps=_finite(row.sharpe_delta_bps),
+                sharpe_delta_bps=sharpe_delta_bps,
                 held_weight_pct=held_weight_pct,
-                dcf_upside_pct=_dcf_upside_pct(row),
+                dcf_upside_pct=dcf_upside_pct,
+                revenue_growth_yoy_pct=_finite(row.rev_yoy_pct),
+                fcf_margin_pct=_finite(row.fcf_margin_pct),
+                profile=profile,
+                portfolio_indicators=portfolio_indicators,
+                portfolio_role_labels=portfolio_role_labels,
                 thesis_excerpt=thesis_excerpt,
                 source=source,
                 company_desk_url=(f"/ticker/{ticker}" if instrument_type == "company" else None),
