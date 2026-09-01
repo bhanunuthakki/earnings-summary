@@ -56,7 +56,7 @@ def test_public_urls_pass_through(url: str) -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "file:///C:/Users/bhanu/.env",
+        "file:///C:/Users/example/.env",
         "file:///etc/passwd",
         "ftp://example.com/secret.xlsx",
         "data:text/plain,hello",

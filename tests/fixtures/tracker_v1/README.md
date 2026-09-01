@@ -4,7 +4,7 @@ All 16 files here are copied **verbatim** from the provider (`portfolio-tracker`
 repo's official synthetic fixture set:
 
 ```
-C:\Users\Bhanu\.gemini\antigravity\scratch\portfolio-tracker\docs\api\fixtures\v1\*.json
+%USERPROFILE%\.gemini\antigravity\scratch\portfolio-tracker\docs\api\fixtures\v1\*.json
 ```
 
 Regenerate them in the provider repo with:
