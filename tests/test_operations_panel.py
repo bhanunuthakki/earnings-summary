@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
@@ -35,6 +36,15 @@ from pipeline.provenance_panel import PROVENANCE_SECTIONS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OBSERVED_AT = datetime(2026, 8, 13, 12, tzinfo=UTC)
+
+
+def test_pair_receipt_uses_explicit_display_label() -> None:
+    from pipeline import operations_panel
+
+    source_label = cast(Callable[[str], str], getattr(operations_panel, "_source_label"))
+    assert source_label("operations.runtime.pair.latest.json") == (
+        "Scheduler/service runtime pair receipt"
+    )
 
 
 def _view(tmp_path: Path) -> OperationsPanelView:
@@ -79,9 +89,144 @@ def test_operations_projection_groups_every_declared_task_wrapper_and_step(
     assert all(task.steps for task in view.tasks)
     capture = next(task for task in view.tasks if task.service_owned)
     assert capture.declared_owner == "Managed service"
-    assert capture.scheduler_state == "N/A - service-owned"
+    assert capture.scheduler_state == "Unavailable"
+    assert capture.runtime.state == "Unavailable"
+    assert capture.runtime.recorded_label == "Evidence time unavailable"
+    assert capture.attention is False
     assert capture.runtime_owner.startswith("Managed service")
     assert all(step.execution_rails for task in view.tasks for step in task.steps)
+
+
+def test_missing_scheduler_receipt_is_unavailable_for_every_expectation_policy(
+    tmp_path: Path,
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    ).model_copy(
+        update={
+            "services": ServiceObservation(
+                state="current",
+                observed_at=OBSERVED_AT,
+                evidence_source="service:cached",
+                evidence_recorded_at=OBSERVED_AT,
+                values=tuple(
+                    ServiceRow(name=service.name, state="Running", registry_match="expected")
+                    for service in registry.services
+                ),
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+
+    assert {task.scheduler_state for task in view.tasks} == {"Unavailable"}
+    assert not any(task.attention for task in view.tasks)
+    assert all(task.attention_rank == 4 for task in view.tasks)
+    assert view.evidence_gap_count > 0
+    assert all(task.runtime.state == "Unavailable" for task in view.tasks)
+    assert all(task.runtime.recorded_label == "Evidence time unavailable" for task in view.tasks)
+    assert {task.scheduler_expectation for task in registry.scheduled_tasks} == {
+        "required_enabled",
+        "required_disabled",
+        "absent_service_owned",
+    }
+
+
+def test_noncurrent_service_observation_cannot_promote_retained_running_to_green(
+    tmp_path: Path,
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    capture_service = next(
+        service for service in registry.services if service.role == "capture_poller"
+    )
+    base = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    snapshot = base.model_copy(
+        update={
+            "scheduler": SchedulerObservation(
+                state="current",
+                observed_at=OBSERVED_AT,
+                evidence_source="scheduler:cached",
+                evidence_recorded_at=OBSERVED_AT,
+                values=tuple(
+                    SchedulerTaskRow(
+                        task_name=task.task_name,
+                        state="Missing" if task.service_owned else "Ready",
+                        registry_match="expected",
+                        scheduler_expectation=task.scheduler_expectation,
+                        expectation_match=True,
+                    )
+                    for task in registry.scheduled_tasks
+                ),
+            ),
+            "services": ServiceObservation(
+                state="stale",
+                observed_at=OBSERVED_AT,
+                evidence_source="service:cached",
+                evidence_recorded_at=OBSERVED_AT - timedelta(minutes=30),
+                detail="retained service evidence is outside freshness",
+                values=(
+                    ServiceRow(
+                        name=capture_service.name,
+                        state="Running",
+                        registry_match="expected",
+                    ),
+                ),
+            ),
+        }
+    )
+
+    task = next(
+        task for task in build_operations_panel_view(registry, snapshot).tasks if task.service_owned
+    )
+
+    assert task.runtime.state == "Unavailable"
+    assert task.runtime.tone == "warn"
+    assert task.runtime.recorded_label == "Evidence time 2026-08-13 11:30 UTC"
+    assert task.service_runtime_state is None
+    assert task.service_runtime_tone is None
+    assert task.attention is False
+
+
+def test_invalid_runtime_domains_count_once_without_task_fanout(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    base = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    missing = build_operations_panel_view(registry, base)
+    invalid = build_operations_panel_view(
+        registry,
+        base.model_copy(
+            update={
+                "scheduler": SchedulerObservation(
+                    state="invalid",
+                    observed_at=OBSERVED_AT,
+                    evidence_source="scheduler:cached",
+                    detail="receipt contract invalid",
+                ),
+                "services": ServiceObservation(
+                    state="invalid",
+                    observed_at=OBSERVED_AT,
+                    evidence_source="service:cached",
+                    detail="receipt contract invalid",
+                ),
+            }
+        ),
+    )
+
+    assert not any(task.attention for task in invalid.tasks)
+    assert invalid.attention_count == missing.attention_count + 2
 
 
 def test_operations_surface_dispositions_cover_every_registry_and_snapshot_field() -> None:
@@ -161,7 +306,12 @@ def test_readme_governance_failures_contribute_to_headline_attention(
     view = build_operations_panel_view(registry, snapshot, readme_status=status)
     html = render_operations_panel(view)
 
-    assert view.attention_count == baseline.attention_count + 1
+    if state in {"not_run", "stale"}:
+        assert view.attention_count == baseline.attention_count
+        assert view.evidence_gap_count == baseline.evidence_gap_count + 1
+    else:
+        assert view.attention_count == baseline.attention_count + 1
+        assert view.evidence_gap_count == baseline.evidence_gap_count
     assert view.runtime_summary_tone == "warn"
     assert "operational or governance observation(s) need attention" in html
 
@@ -194,8 +344,9 @@ def test_operations_renderer_has_governance_tab_and_related_views(
     html = render_operations_panel(_view(tmp_path))
     tablist = html.split('role="tablist"', 1)[1].split("</div>", 1)[0]
 
-    assert tablist.count('role="tab"') == 4
+    assert tablist.count('role="tab"') == 5
     assert ">Overview</button>" in tablist
+    assert ">Attention</button>" in tablist
     assert ">Jobs</button>" in tablist
     assert ">Runtime &amp; Recovery</button>" in tablist
     assert ">Governance</button>" in tablist
@@ -315,6 +466,143 @@ def test_failed_fresh_receipt_is_bad_first_and_exposes_terminal_evidence(
     assert "[path]" in html
 
 
+@pytest.mark.parametrize("status", ("partial", "degraded_corpus", "skipped_locked"))
+def test_current_non_ok_receipt_remains_actionable(tmp_path: Path, status: str) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    observation = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source=f"job_health:{step.job}",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status=cast(Literal["partial", "degraded_corpus", "skipped_locked"], status),
+            exit_code=0,
+            severity="warning",
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                observation if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    task = next(
+        item
+        for item in build_operations_panel_view(registry, snapshot).tasks
+        if any(candidate.job == step.job for candidate in item.steps)
+    )
+
+    assert task.attention is True
+    assert task.attention_rank == 3
+
+
+def test_stale_failed_receipt_is_visible_as_gap_not_current_attention(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    stale_failed = JobReceiptObservation(
+        state="stale",
+        observed_at=OBSERVED_AT,
+        evidence_source=f"job_health:{step.job}",
+        evidence_recorded_at=OBSERVED_AT - timedelta(hours=2),
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT - timedelta(hours=2),
+            ended_at=OBSERVED_AT - timedelta(hours=2),
+            status="failed",
+            exit_code=9,
+            severity="error",
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                stale_failed if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+    task = next(
+        item for item in view.tasks if any(candidate.job == step.job for candidate in item.steps)
+    )
+    card = (
+        render_operations_panel(view)
+        .split(f">{task.task_name}</div>", 1)[1]
+        .split("</article>", 1)[0]
+    )
+
+    assert task.attention is False
+    assert task.attention_rank == 4
+    assert 'k-pill-warn">Evidence gap</span>' in card
+    assert 'k-pill-ok">Observed</span>' not in card
+
+
+def test_gap_count_tracks_distinct_job_receipts_not_shared_display_labels(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    missing = build_operations_panel_view(registry, snapshot)
+    step = registry.job_steps[-1]
+    current = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source=f"job_health:{step.job}",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status="ok",
+            exit_code=0,
+            severity="info",
+        ),
+    )
+    one_current = build_operations_panel_view(
+        registry,
+        snapshot.model_copy(
+            update={
+                "job_receipts": tuple(
+                    current if item.job == step.job else item for item in snapshot.job_receipts
+                )
+            }
+        ),
+    )
+
+    assert missing.evidence_gap_count >= len(registry.job_steps)
+    assert missing.evidence_gap_count == one_current.evidence_gap_count + 1
+
+
 def test_blocked_schema_drift_is_structured_bad_terminal_and_sorted_first(
     tmp_path: Path,
 ) -> None:
@@ -390,7 +678,23 @@ def test_service_runtime_state_is_separate_from_receipt_freshness(
                 values=(
                     ServiceRow(name=capture_service.name, state=state, registry_match="expected"),
                 ),
-            )
+            ),
+            "scheduler": SchedulerObservation(
+                state="current",
+                observed_at=OBSERVED_AT,
+                evidence_source="scheduler:cached",
+                evidence_recorded_at=OBSERVED_AT,
+                values=tuple(
+                    SchedulerTaskRow(
+                        task_name=task.task_name,
+                        state="Missing" if task.service_owned else "Ready",
+                        registry_match="expected",
+                        scheduler_expectation=task.scheduler_expectation,
+                        expectation_match=task.service_owned,
+                    )
+                    for task in registry.scheduled_tasks
+                ),
+            ),
         }
     )
 
@@ -564,13 +868,35 @@ def test_every_registered_service_is_visible_and_nonrunning_state_gets_attention
     )
     running_snapshot = snapshot.model_copy(
         update={
+            "scheduler": SchedulerObservation(
+                state="current",
+                observed_at=OBSERVED_AT,
+                evidence_source="scheduler:receipt",
+                evidence_recorded_at=OBSERVED_AT,
+                values=tuple(
+                    SchedulerTaskRow(
+                        task_name=task.task_name,
+                        state=(
+                            "Missing"
+                            if task.service_owned
+                            else "Disabled"
+                            if task.scheduler_expectation == "required_disabled"
+                            else "Ready"
+                        ),
+                        registry_match="expected",
+                        scheduler_expectation=task.scheduler_expectation,
+                        expectation_match=True,
+                    )
+                    for task in registry.scheduled_tasks
+                ),
+            ),
             "services": ServiceObservation(
                 state="current",
                 observed_at=OBSERVED_AT,
                 evidence_source="service:receipt",
                 evidence_recorded_at=OBSERVED_AT,
                 values=running_rows,
-            )
+            ),
         }
     )
     running = build_operations_panel_view(
@@ -592,6 +918,9 @@ def test_every_registered_service_is_visible_and_nonrunning_state_gets_attention
     runtime = html.split('id="operations-pane-runtime"', 1)[1]
 
     assert stopped.attention_count == running.attention_count + 1
+    assert {task.task_name for task in stopped.tasks if task.attention} == {
+        task.task_name for task in running.tasks if task.attention
+    }
     for service in registry.services:
         card = runtime.split(f"Managed service · {service.name}", 1)[1].split("</article>", 1)[0]
         assert service.purpose in card
@@ -599,6 +928,46 @@ def test_every_registered_service_is_visible_and_nonrunning_state_gets_attention
         "</article>", 1
     )[0]
     assert "Stopped" in dashboard_card
+
+
+def test_unexpected_current_service_is_explicitly_visible_with_attention(
+    tmp_path: Path,
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    base = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    unexpected_name = "UnexpectedCaptureService"
+    snapshot = base.model_copy(
+        update={
+            "services": ServiceObservation(
+                state="current",
+                observed_at=OBSERVED_AT,
+                evidence_source="service:receipt",
+                evidence_recorded_at=OBSERVED_AT,
+                values=(
+                    *(
+                        ServiceRow(name=service.name, state="Running", registry_match="expected")
+                        for service in registry.services
+                    ),
+                    ServiceRow(name=unexpected_name, state="Stopped", registry_match="unexpected"),
+                ),
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+    unexpected = next(task for task in view.tasks if task.task_name == unexpected_name)
+
+    assert unexpected.runtime_owner == "Unexpected live managed service"
+    assert unexpected.service_runtime_state == "Stopped"
+    assert unexpected.service_runtime_tone == "bad"
+    assert unexpected.attention is True
+    assert unexpected_name in unexpected.runtime.detail
+    assert "Stopped" in unexpected.runtime.detail
 
 
 def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) -> None:
@@ -612,7 +981,10 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert "data-operations-results" in html
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
-    assert html.count('data-operations-task-card="true"') == 43
+    # The manifest-owned semantic-review producer is a truthful primary
+    # Operations card, bringing the declared Scheduler fleet to 46 tasks.
+    assert html.count('data-operations-task-card="true"') == 46
+    assert "monthly_p3_refresh" not in html
     assert "@media (max-width:" in html
     assert "min-block-size:var(--touch-target-size)" in html
     assert 'data-operations-table-scroll="true"' not in html
