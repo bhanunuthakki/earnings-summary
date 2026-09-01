@@ -92,7 +92,7 @@ def test_operations_projection_groups_every_declared_task_wrapper_and_step(
     assert capture.scheduler_state == "Unavailable"
     assert capture.runtime.state == "Unavailable"
     assert capture.runtime.recorded_label == "Evidence time unavailable"
-    assert capture.attention is True
+    assert capture.attention is False
     assert capture.runtime_owner.startswith("Managed service")
     assert all(step.execution_rails for task in view.tasks for step in task.steps)
 
@@ -124,7 +124,9 @@ def test_missing_scheduler_receipt_is_unavailable_for_every_expectation_policy(
     view = build_operations_panel_view(registry, snapshot)
 
     assert {task.scheduler_state for task in view.tasks} == {"Unavailable"}
-    assert all(task.attention for task in view.tasks)
+    assert not any(task.attention for task in view.tasks)
+    assert all(task.attention_rank == 4 for task in view.tasks)
+    assert view.evidence_gap_count > 0
     assert all(task.runtime.state == "Unavailable" for task in view.tasks)
     assert all(task.runtime.recorded_label == "Evidence time unavailable" for task in view.tasks)
     assert {task.scheduler_expectation for task in registry.scheduled_tasks} == {
@@ -191,7 +193,40 @@ def test_noncurrent_service_observation_cannot_promote_retained_running_to_green
     assert task.runtime.recorded_label == "Evidence time 2026-08-13 11:30 UTC"
     assert task.service_runtime_state is None
     assert task.service_runtime_tone is None
-    assert task.attention is True
+    assert task.attention is False
+
+
+def test_invalid_runtime_domains_count_once_without_task_fanout(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    base = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    missing = build_operations_panel_view(registry, base)
+    invalid = build_operations_panel_view(
+        registry,
+        base.model_copy(
+            update={
+                "scheduler": SchedulerObservation(
+                    state="invalid",
+                    observed_at=OBSERVED_AT,
+                    evidence_source="scheduler:cached",
+                    detail="receipt contract invalid",
+                ),
+                "services": ServiceObservation(
+                    state="invalid",
+                    observed_at=OBSERVED_AT,
+                    evidence_source="service:cached",
+                    detail="receipt contract invalid",
+                ),
+            }
+        ),
+    )
+
+    assert not any(task.attention for task in invalid.tasks)
+    assert invalid.attention_count == missing.attention_count + 2
 
 
 def test_operations_surface_dispositions_cover_every_registry_and_snapshot_field() -> None:
@@ -271,7 +306,12 @@ def test_readme_governance_failures_contribute_to_headline_attention(
     view = build_operations_panel_view(registry, snapshot, readme_status=status)
     html = render_operations_panel(view)
 
-    assert view.attention_count == baseline.attention_count + 1
+    if state in {"not_run", "stale"}:
+        assert view.attention_count == baseline.attention_count
+        assert view.evidence_gap_count == baseline.evidence_gap_count + 1
+    else:
+        assert view.attention_count == baseline.attention_count + 1
+        assert view.evidence_gap_count == baseline.evidence_gap_count
     assert view.runtime_summary_tone == "warn"
     assert "operational or governance observation(s) need attention" in html
 
@@ -304,8 +344,9 @@ def test_operations_renderer_has_governance_tab_and_related_views(
     html = render_operations_panel(_view(tmp_path))
     tablist = html.split('role="tablist"', 1)[1].split("</div>", 1)[0]
 
-    assert tablist.count('role="tab"') == 4
+    assert tablist.count('role="tab"') == 5
     assert ">Overview</button>" in tablist
+    assert ">Attention</button>" in tablist
     assert ">Jobs</button>" in tablist
     assert ">Runtime &amp; Recovery</button>" in tablist
     assert ">Governance</button>" in tablist
@@ -423,6 +464,143 @@ def test_failed_fresh_receipt_is_bad_first_and_exposes_terminal_evidence(
     assert "worker failed" in receipt.detail
     assert "C:\\private" not in html
     assert "[path]" in html
+
+
+@pytest.mark.parametrize("status", ("partial", "degraded_corpus", "skipped_locked"))
+def test_current_non_ok_receipt_remains_actionable(tmp_path: Path, status: str) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    observation = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source=f"job_health:{step.job}",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status=cast(Literal["partial", "degraded_corpus", "skipped_locked"], status),
+            exit_code=0,
+            severity="warning",
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                observation if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    task = next(
+        item
+        for item in build_operations_panel_view(registry, snapshot).tasks
+        if any(candidate.job == step.job for candidate in item.steps)
+    )
+
+    assert task.attention is True
+    assert task.attention_rank == 3
+
+
+def test_stale_failed_receipt_is_visible_as_gap_not_current_attention(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    stale_failed = JobReceiptObservation(
+        state="stale",
+        observed_at=OBSERVED_AT,
+        evidence_source=f"job_health:{step.job}",
+        evidence_recorded_at=OBSERVED_AT - timedelta(hours=2),
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT - timedelta(hours=2),
+            ended_at=OBSERVED_AT - timedelta(hours=2),
+            status="failed",
+            exit_code=9,
+            severity="error",
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                stale_failed if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+    task = next(
+        item for item in view.tasks if any(candidate.job == step.job for candidate in item.steps)
+    )
+    card = (
+        render_operations_panel(view)
+        .split(f">{task.task_name}</div>", 1)[1]
+        .split("</article>", 1)[0]
+    )
+
+    assert task.attention is False
+    assert task.attention_rank == 4
+    assert 'k-pill-warn">Evidence gap</span>' in card
+    assert 'k-pill-ok">Observed</span>' not in card
+
+
+def test_gap_count_tracks_distinct_job_receipts_not_shared_display_labels(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    missing = build_operations_panel_view(registry, snapshot)
+    step = registry.job_steps[-1]
+    current = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source=f"job_health:{step.job}",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status="ok",
+            exit_code=0,
+            severity="info",
+        ),
+    )
+    one_current = build_operations_panel_view(
+        registry,
+        snapshot.model_copy(
+            update={
+                "job_receipts": tuple(
+                    current if item.job == step.job else item for item in snapshot.job_receipts
+                )
+            }
+        ),
+    )
+
+    assert missing.evidence_gap_count >= len(registry.job_steps)
+    assert missing.evidence_gap_count == one_current.evidence_gap_count + 1
 
 
 def test_blocked_schema_drift_is_structured_bad_terminal_and_sorted_first(
@@ -803,7 +981,10 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert "data-operations-results" in html
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
-    assert html.count('data-operations-task-card="true"') == 43
+    # The manifest-owned semantic-review producer is a truthful primary
+    # Operations card, bringing the declared Scheduler fleet to 46 tasks.
+    assert html.count('data-operations-task-card="true"') == 46
+    assert "monthly_p3_refresh" not in html
     assert "@media (max-width:" in html
     assert "min-block-size:var(--touch-target-size)" in html
     assert 'data-operations-table-scroll="true"' not in html
