@@ -12,12 +12,20 @@
 
 ## Cadence
 
-Weekly Windows scheduled task `\earnings-summary\fetch_sec_xbrl`, Saturday 02:00 (`cron/fetch_sec_xbrl.task.xml` + `cron/run_fetch_sec_xbrl.bat`). Also runnable inside the quarterly refresh DAG via `execution/quarterly_refresh.py --fetch-sec`. The idempotency key remains the SEC fact/accession evidence contract. Rate limit: 0.2s between authorized portfolio tickers (~5 req/sec, half SEC's 10 req/sec cap) with the identifying User-Agent in `_HEADERS`. Missing/ambiguous identity, an invalid role, or denied depth is skipped before network access. At the direct CompanyFacts boundary, HTTP 401/403 becomes a typed auth denial and halts the current job without retry; ordinary non-auth transport failures and per-ticker schema failures remain visible and isolated.
+Weekly Windows scheduled task `\earnings-summary\fetch_sec_xbrl`, Saturday 02:00 (`cron/fetch_sec_xbrl.task.xml` + `cron/run_fetch_sec_xbrl.bat`). Also runnable inside the quarterly refresh DAG via `execution/quarterly_refresh.py --fetch-sec`.
+
+- **Logical Idempotency Key:** SEC accession plus canonical fact locator and period.
+- **Content Identity:** SHA-256 of the exact SEC response/document bytes.
+- **Observation Version:** accession/filing identity, source filing time, fetched-at
+  knowledge time, and Content Identity.
+- **Attempt Identity:** unique scheduled or interactive ingestion invocation and receipt.
+
+Rate limit: 0.2s between authorized portfolio tickers (~5 req/sec, half SEC's 10 req/sec cap) with the identifying User-Agent in `_HEADERS`. Missing/ambiguous identity, an invalid role, or denied depth is skipped before network access. At the direct CompanyFacts boundary, HTTP 401/403 becomes a typed auth denial and halts the current job without retry; ordinary non-auth transport failures and per-ticker schema failures remain visible and isolated.
 
 Register (or re-register after editing the XML) from the MAIN checkout — editing the XML alone does NOT update the live task:
 
 ```
-schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "C:\Users\bhanu\.gemini\antigravity\scratch\earnings-summary\cron\fetch_sec_xbrl.task.xml" /f
+schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_sec_xbrl.task.xml" /f
 ```
 
 ## Conventions the ladders enforce (do not regress)
