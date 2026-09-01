@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import execution.verify_public_tree as public_guard
 from execution.verify_public_tree import audit_public_refs, verify
 
 
@@ -207,3 +208,31 @@ def test_all_ref_audit_reports_categories_without_paths(tmp_path: Path) -> None:
 
     assert summary == {"account-level-fact": {"files": 1, "refs": 1}}
     assert "sample.json" not in repr(summary)
+
+
+def test_all_ref_audit_classifies_repeated_blobs_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_repo(tmp_path)
+    readme = tmp_path / "README.md"
+    readme.write_text("public\n", encoding="utf-8")
+    _commit(tmp_path, "public root")
+    subprocess.run(
+        ["git", "-C", tmp_path, "switch", "-c", "second-branch"],
+        check=True,
+        env=_git_env(),
+    )
+    note = tmp_path / "note.md"
+    note.write_text("also public\n", encoding="utf-8")
+    _commit(tmp_path, "second public branch")
+
+    calls: list[tuple[str, bytes]] = []
+
+    def record_classification(relative: str, data: bytes) -> set[str]:
+        calls.append((relative, data))
+        return set()
+
+    monkeypatch.setattr(public_guard, "content_violation_categories", record_classification)
+
+    assert audit_public_refs(tmp_path) == {}
+    assert calls.count(("README.md", b"public\n")) == 1

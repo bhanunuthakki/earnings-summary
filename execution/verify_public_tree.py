@@ -223,13 +223,19 @@ def audit_public_refs(repo_root: Path) -> dict[str, dict[str, int]]:
         ref_entries[ref] = entries
 
     blobs = _read_blobs(repo_root, blob_oids)
+    classification_cache: dict[tuple[str, str], frozenset[str]] = {}
     for _ref, entries in ref_entries.items():
         categories: set[str] = set()
         for relative, oid in entries:
-            file_categories = content_violation_categories(relative, blobs[oid])
-            path_category = forbidden_path_category(relative)
-            if path_category is not None:
-                file_categories.add(path_category)
+            cache_key = (relative, oid)
+            file_categories = classification_cache.get(cache_key)
+            if file_categories is None:
+                detected_categories = content_violation_categories(relative, blobs[oid])
+                path_category = forbidden_path_category(relative)
+                if path_category is not None:
+                    detected_categories.add(path_category)
+                file_categories = frozenset(detected_categories)
+                classification_cache[cache_key] = file_categories
             for category in file_categories:
                 file_counts[category] += 1
                 categories.add(category)
