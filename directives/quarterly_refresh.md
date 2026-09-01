@@ -79,7 +79,7 @@ typical window where the prior quarter's earnings have all reported.
 ```powershell
 schtasks /Create `
   /TN "EarningsRefresh" `
-  /TR "C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\cron\run_python.bat quarterly-refresh portfolio-db execution\quarterly_refresh.py" `
+  /TR "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_python.bat quarterly-refresh portfolio-db execution\quarterly_refresh.py" `
   /SC MONTHLY /D 5 /ST 06:00
 ```
 
