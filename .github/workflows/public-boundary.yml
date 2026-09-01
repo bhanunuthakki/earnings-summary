@@ -3,6 +3,8 @@ name: Public Boundary
 on:
   pull_request:
   push:
+  schedule:
+    - cron: "17 13 * * 1"
 
 permissions:
   contents: read
@@ -19,3 +21,20 @@ jobs:
           python-version: "3.13"
       - name: Reject private material in the published tree
         run: python execution/verify_public_tree.py
+
+  all-public-refs:
+    name: All Public Refs
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Fetch all public branch tips
+        run: git fetch --force origin '+refs/heads/*:refs/remotes/origin/*'
+      - name: Audit all published branch tips
+        run: python execution/verify_public_tree.py --all-refs
