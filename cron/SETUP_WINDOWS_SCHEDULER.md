@@ -8,7 +8,7 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-45 operational declarations total — 44 Task Scheduler registrations and one
+46 operational declarations total — 45 Task Scheduler registrations and one
 separately managed Windows service. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. Run
@@ -57,16 +57,33 @@ rows, and archived migrations remain retained evidence.
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\portfolio_tracker_api` | Boot, LOCAL SYSTEM | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | The sole always-on API owner. It requires system-visible `PORTFOLIO_TRACKER_ROOT` and loopback-only `PORTFOLIO_TRACKER_API_URL`; a missing/unsafe value fails instead of guessing a checkout, interpreter, or bind address. It proves its child PID owns the configured loopback endpoint and writes a receipt heartbeat every five minutes; lost proof stops the child before Scheduler retries. |
-| `earnings-summary\refresh_portfolio_tracker` | Daily 07:30 | `refresh_portfolio_tracker.task.xml` | `run_refresh_portfolio_tracker.bat` | Runs the read-only receipt producer: typed HealthV1/database, snapshot, currency, reconciliation, and account-coverage evidence. It does not start the API or claim listener ownership; before attribution it verifies through Task Scheduler COM that the exact registered task and this checkout wrapper are running. Its refresh and Scheduler planes are expected current for 26 hours, while the API listener remains on the five-minute/15-minute heartbeat contract. |
+| `earnings-summary\portfolio_tracker_api` | Boot, LOCAL SYSTEM | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | The sole always-on API owner. It requires system-visible `PORTFOLIO_TRACKER_ROOT`, loopback-only `PORTFOLIO_TRACKER_API_URL`, and canonical `EARNINGS_SUMMARY_DB_PATH`; a missing/unsafe value fails instead of guessing a checkout, state root, interpreter, or bind address. It proves its child PID owns the configured loopback endpoint and writes a state-root receipt heartbeat every five minutes; lost proof stops the child before Scheduler retries. |
+| `earnings-summary\refresh_portfolio_tracker` | Daily 07:30 | `refresh_portfolio_tracker.task.xml` | `run_refresh_portfolio_tracker.bat` | Runs the read-only receipt producer: typed HealthV1/database, snapshot, currency, reconciliation, and account-coverage evidence. It does not start the API or claim listener ownership; before attribution it verifies through Task Scheduler COM that the exact registered task and code-root wrapper are running, then writes its refresh and Scheduler planes to the same state-root receipt derived from `EARNINGS_SUMMARY_DB_PATH`. Those planes are expected current for 26 hours, while the API listener remains on the five-minute/15-minute heartbeat contract. |
 
 The generated registration script creates both declarations. Run it elevated and pass the intended checkout as `-RepoRoot`; it renders the registered action to that absolute checkout path before calling `schtasks`. LOCAL SYSTEM reads only machine-visible environment values, so user-scoped variables and a user `.env` are not a configuration source for the API task. Roll back a bad Scheduler change by restoring the last known-good manifest, XML, wrappers, and generated artifacts in the canonical runtime checkout, rerunning **Install or re-register**, and completing **Verify live state**. Deleting these required tasks is retirement, not rollback.
+
+Operations surface disposition: the supervisor receipt remains the primary live-health surface. The
+separate dashboard activation receipt is deliberately excluded from current-health projection because
+it records one operator action attempt, not listener health; the action response reports that attempt's
+typed result, while the supervisor receipt remains the only authority for successful listener ownership.
+
+### KPI semantic-review export
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\prepare_kpi_semantic_review` | Every 10 minutes | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Opens the canonical `EARNINGS_SUMMARY_DB_PATH` read-only and publishes source-safe, content-addressed review partitions (at most 1,000 items and 8 MiB each), bounded per-ticker manifests, and one atomic current index under the product-state root. The wrapper passes that database-derived state root to the shared job runtime for its lock and health receipt while passing the deployed runtime checkout separately as code root. Missing authority identity, a broken cursor chain, an oversized or tampered partition, incomplete portfolio coverage, paired-root disagreement, or split-root mismatch fails the task closed. Evidence-search gaps remain visible in the export but are non-actionable in the governed refresh-manifest builder. |
+
+Operations surface disposition: `primary surface`. The canonical manifest owns this task, so the
+existing dynamic Jobs projection shows its declaration, ten-minute cadence, registered identity,
+latest attempt, and failure state. This adds no dashboard control or request-time producer; the
+read-only review endpoints serve only the producer's precomputed current ticker manifest and its
+current-index-bound content-addressed partitions.
 
 ### Pre-chain backup
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which snapshots the canonical database with SQLite's online-backup API, compresses it locally, and publishes only an authenticated AES-256-GCM `.gz.enc` envelope to `ES_DB_BACKUP_DIR`. When that variable is unset, both backup and restore choose the first existing mounted `<drive>:\My Drive` from `D:` through `Z:` (for example, `G:\My Drive`), then fall back to `C:\Users\Bhanu\My Drive`; the backup folder is `earnings-summary-db-backups` beneath that root. The key stays in the external secrets directory. Fires 15 minutes before the 03:00 refresh chain and retains the newest `ES_DB_BACKUP_RETAIN` encrypted snapshots (default 14). |
+| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which snapshots the canonical database with SQLite's online-backup API, compresses it locally, and publishes only an authenticated AES-256-GCM `.gz.enc` envelope to `ES_DB_BACKUP_DIR`. When that variable is unset, both backup and restore choose the first existing mounted `<drive>:\My Drive` from `D:` through `Z:` (for example, `G:\My Drive`), then fall back to `%USERPROFILE%\My Drive`; the backup folder is `earnings-summary-db-backups` beneath that root. The key stays in the external secrets directory. Fires 15 minutes before the 03:00 refresh chain and retains the newest `ES_DB_BACKUP_RETAIN` encrypted snapshots (default 14). |
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -176,15 +193,15 @@ The scheduled counterpart to the daily `backup_db` — a backup you have never r
 ### Backup inventory and non-destructive restore verification
 
 Run these commands from the canonical runtime checkout. The durable state stays
-at `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\data\portfolio.db`;
+at `%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\data\portfolio.db`;
 the runtime checkout is code, not a second database authority. The restore host
 must have `ES_DB_BACKUP_KEY_FILE` pointing at the escrowed key and, when the
 default Google Drive directory is not used, `ES_DB_BACKUP_DIR` pointing at the
 encrypted backup directory.
 
 ```powershell
-$EarningsSummaryCodeRoot = 'C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary'
-$EarningsSummaryDataRoot = 'C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary'
+$EarningsSummaryCodeRoot = "$env:USERPROFILE\.gemini\antigravity\runtime\earnings-summary"
+$EarningsSummaryDataRoot = "$env:USERPROFILE\.gemini\antigravity\scratch\earnings-summary"
 $EarningsSummaryDbPath = Join-Path $EarningsSummaryDataRoot 'data\portfolio.db'
 $env:EARNINGS_SUMMARY_DB_PATH = $EarningsSummaryDbPath
 $EarningsSummaryAttemptId = [guid]::NewGuid().ToString('N')
@@ -352,11 +369,11 @@ ORDER BY COUNT(*) DESC;
   `FMP_TIER=premium|starter|basic` (defaults to `basic` if unset — set
   `FMP_TIER=premium` when you have a paid sub to unlock the full rate).
 - Canonical code checkout at
-  `C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary`. Wrappers resolve
+  `%USERPROFILE%\.gemini\antigravity\runtime\earnings-summary`. Wrappers resolve
   their code root from their own registered action; do not edit them to point at
   the scratch directory.
 - Canonical durable-state root at
-  `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary`. Keep
+  `%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary`. Keep
   `data\portfolio.db` there; never create a runtime-checkout database as a
   fallback.
 - A machine-visible `EARNINGS_SUMMARY_DB_PATH` set to that canonical database
@@ -380,7 +397,7 @@ the generated installer from the runtime checkout. Always pass `-RepoRoot`
 explicitly so every rendered action points at that checkout:
 
 ```powershell
-$EarningsSummaryCodeRoot = 'C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary'
+$EarningsSummaryCodeRoot = "$env:USERPROFILE\.gemini\antigravity\runtime\earnings-summary"
 $EarningsSummaryPython = (Get-Command python.exe -ErrorAction Stop).Source
 Set-Location $EarningsSummaryCodeRoot
 
@@ -429,7 +446,7 @@ $TrackerApiXml = (schtasks.exe /Query `
 if ($LASTEXITCODE -ne 0) { throw 'portfolio_tracker_api is not registered' }
 $ExpectedTrackerApiAction = Join-Path $EarningsSummaryCodeRoot 'cron\run_portfolio_tracker_api.bat'
 foreach ($Expected in @(
-  'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)',
+  'D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;IU)',
   '<UserId>S-1-5-18</UserId>',
   "<Command>$ExpectedTrackerApiAction</Command>"
 )) {
@@ -437,6 +454,11 @@ foreach ($Expected in @(
     throw "portfolio_tracker_api live XML mismatch: $Expected"
   }
 }
+
+& (Join-Path $EarningsSummaryCodeRoot 'cron\apply_task_security_descriptor.ps1') `
+  -TaskPath '\earnings-summary\portfolio_tracker_api' `
+  -RenderedXmlPath (Join-Path $EarningsSummaryCodeRoot 'cron\portfolio_tracker_api.task.xml') `
+  -VerifyOnly
 
 $TrackerRefreshXml = (schtasks.exe /Query `
   /TN '\earnings-summary\refresh_portfolio_tracker' /XML | Out-String)
@@ -447,10 +469,31 @@ if (-not $TrackerRefreshXml.Contains("<Command>$ExpectedTrackerRefreshAction</Co
 }
 ```
 
+`GRGX` grants the Task Scheduler read/query access required by the unprivileged
+Operations collector. The grant is limited to `IU` (Interactive Users), matching
+the collector's `InteractiveToken`; do not broaden it to Builtin or Authenticated
+Users. `GR` alone can expose the folder but still deny `GetTask`, and the
+file-specific `FR` token is also insufficient. Windows treats execute access as
+capable of task control, so the Operations collector must remain query-only and
+must not expose Scheduler mutation through its API surface.
+
+`schtasks.exe /Create /XML` retains the XML `SecurityDescriptor` property but
+does not apply it as the registered task's actual task DACL on the production Windows
+host. The generated registration script therefore calls the Task Scheduler COM
+`SetSecurityDescriptor` method after creation, using
+`TASK_DONT_ADD_PRINCIPAL_ACE`, and fails unless an immediate
+`GetSecurityDescriptor` readback proves the protected, allow-only actual task
+DACL. Windows maps the declaration's generic rights when attaching the
+descriptor: `GA` becomes mask `0x1f01ff`, and `GRGX` becomes `0x1200a9`. A failed
+postcondition restores and verifies the prior actual task access semantics before
+failing loudly. Do not register this task with a raw `schtasks.exe /Create`
+command outside that generated path.
+
 The verifier must report no missing, extra, disabled, schedule-mismatched, or
-wrong-checkout Scheduler declarations. The XML checks additionally prove the
-API's exact SDDL, LOCAL SYSTEM principal (`S-1-5-18`), and both tracker actions.
-Do not infer those properties from source XML or a successful health endpoint.
+wrong-checkout Scheduler declarations. The live XML checks prove the API's
+declared SDDL, LOCAL SYSTEM principal (`S-1-5-18`), and both tracker actions; only
+the COM `GetSecurityDescriptor(4)` check proves the actual task DACL. Do not infer
+those properties from source XML or a successful health endpoint.
 
 ## Test fire (without waiting for the schedule)
 
@@ -532,7 +575,7 @@ Then check:
 You can also run any wrapper directly to bypass the scheduler entirely:
 
 ```cmd
-C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary\cron\run_<task>.bat
+%USERPROFILE%\.gemini\antigravity\runtime\earnings-summary\cron\run_<task>.bat
 ```
 
 ## Uninstall
