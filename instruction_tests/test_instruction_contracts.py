@@ -245,14 +245,12 @@ def test_project_rulebook_uses_manifest_classes_as_the_directive_authority() -> 
     assert "[[root:Evidence and delegation]]" in agents
 
 
-def test_project_rulebook_names_windows_db_authority_and_investment_grade_gate() -> None:
+def test_project_rulebook_names_external_db_authority_and_investment_grade_gate() -> None:
     agents = _read("AGENTS.md")
     folder_contract = _read("directives/folder_structure.md")
 
-    assert (
-        r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\data\portfolio.db" in agents
-    )
-    assert "/Applications/earnings-summary/data/portfolio.db" in agents
+    assert "production database authority is configured outside this repository" in agents
+    assert "checkout-local database is never a live" in agents
     assert "is never a live, fallback, replica, or roster authority" in agents
     assert "Investment-grade financial-data invariant" in agents
     assert (
