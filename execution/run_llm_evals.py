@@ -24,7 +24,7 @@ model/prompt purpose without a configured executable quality-eval mode fails.
 Examples:
     python execution/run_llm_evals.py --purpose viewspec_compile
     python execution/run_llm_evals.py --purpose bear_case \
-        --repo-root C:/Users/Bhanu/.gemini/antigravity/scratch/earnings-summary --limit 5
+        --repo-root . --limit 5
     python execution/run_llm_evals.py --purpose transcript_summary --since-days 7
     python execution/run_llm_evals.py --purpose intake_classifier --no-persist
     python execution/run_llm_evals.py --purpose viewspec_compile --min-score 0.8  # gate
@@ -240,18 +240,6 @@ def main() -> int:
 
             golden_path = (args.golden or (PROJECT_ROOT / KM_GOLDEN)).resolve()
             summary = run_key_metrics_eval(
-                golden_path=golden_path,
-                code_root=PROJECT_ROOT,
-                limit=args.limit,
-            )
-        elif args.purpose == "podcast_takeaway_summary":
-            from evals.podcast_takeaway import (
-                DEFAULT_GOLDEN_RELPATH as PODCAST_GOLDEN,
-            )
-            from evals.podcast_takeaway import run_podcast_takeaway_eval
-
-            golden_path = (args.golden or (PROJECT_ROOT / PODCAST_GOLDEN)).resolve()
-            summary = run_podcast_takeaway_eval(
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,
