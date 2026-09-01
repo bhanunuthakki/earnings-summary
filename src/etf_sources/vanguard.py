@@ -34,7 +34,7 @@ from models.instruments import EtfHolding
 log = logging.getLogger(__name__)
 
 API_BASE = "https://investor.vanguard.com/investment-products/etfs/profile/api"
-USER_AGENT = "earnings-summary/1.0 (personal research; bhanumufcpraneeth@gmail.com)"
+USER_AGENT = "earnings-summary/1.0 (+https://github.com/bhanunuthakki/earnings-summary)"
 REQUEST_TIMEOUT = (10, 30)
 MAX_PAGES = 120
 SOURCE = "issuer:vanguard"
