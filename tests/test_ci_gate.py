@@ -297,6 +297,9 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
 
 def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    all_refs_workflow = (
+        REPO_ROOT / ".github" / "workflows" / "public-boundary.yml"
+    ).read_text(encoding="utf-8")
     public_job = workflow.split("  public-boundary:\n", maxsplit=1)[1].split(
         "\n  tests:", maxsplit=1
     )[0]
@@ -311,6 +314,10 @@ def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None
     assert "always_run: true" in pre_commit
     assert "stages: [pre-push]" in pre_commit
     assert 'run "$python_bin" execution/verify_public_tree.py' in pre_push
+    assert "  pull_request:\n" in all_refs_workflow
+    assert "  push:\n" in all_refs_workflow
+    assert "branches:" not in all_refs_workflow
+    assert "python execution/verify_public_tree.py" in all_refs_workflow
 
 
 def test_security_job_runs_every_scanner_before_failing_closed() -> None:

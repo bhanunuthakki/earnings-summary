@@ -21,6 +21,7 @@ name: CI
 on:
   pull_request:
   push:
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
