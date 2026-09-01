@@ -26,6 +26,7 @@ resolve_python() {
 }
 
 python_bin=$(resolve_python) || exit 1
+run "$python_bin" execution/verify_public_tree.py
 run "$python_bin" -m ruff --version
 run "$python_bin" -m pytest --version
 run "$python_bin" execution/validate_directive_manifest.py
