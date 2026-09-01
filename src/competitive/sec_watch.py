@@ -48,7 +48,7 @@ _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 # SEC fair access — descriptive UA with a contact (override via EDGAR_USER_AGENT),
 # same default + env var the rest of the EDGAR code uses.
 _USER_AGENT_ENV = "EDGAR_USER_AGENT"
-_DEFAULT_USER_AGENT = "earnings-summary/1.0 (personal research; bhanumufcpraneeth@gmail.com)"
+_DEFAULT_USER_AGENT = "earnings-summary/1.0 (+https://github.com/bhanunuthakki/earnings-summary)"
 _MIN_REQUEST_INTERVAL_S = 0.15
 _REQUEST_TIMEOUT = 30
 

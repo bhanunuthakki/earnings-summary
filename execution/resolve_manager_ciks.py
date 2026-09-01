@@ -46,7 +46,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from discovery.sources import SourceRow, list_sources, set_source_cik  # noqa: E402
 
-_UA = "earnings-summary/1.0 (personal research; bhanumufcpraneeth@gmail.com)"
+_UA = "earnings-summary/1.0 (+https://github.com/bhanunuthakki/earnings-summary)"
 _SEARCH_URL = (
     "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={q}"
     "&type=13F-HR&dateb=&owner=include&count=10&output=atom"
