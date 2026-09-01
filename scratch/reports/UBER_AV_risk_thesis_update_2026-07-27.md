@@ -154,7 +154,7 @@ The present local KPI ledger has an AV rollout item but no value, and the core t
 
 | Date | Decision | Company thesis | Security readiness | Position action | Owner | Next review |
 |---|---|---|---|---|---|---|
-| 2026-07-27 | Approved the AV thesis, scenario overlay, KPI definitions, and add/trim/exit monitoring rules in this report. | Watch: core growth intact; AV distribution economics unproven. | Conditional: current price supports a hold, but AV take rate, contribution profit, city overlap data, and capital exposure remain missing. | Hold around 2.0%-2.5%; cap at 3.0% before proof. | Bhanu | Uber Q2 earnings, 2026-08-05 |
+| 2026-07-27 | Approved the AV thesis, scenario overlay, KPI definitions, and add/trim/exit monitoring rules in this report. | Watch: core growth intact; AV distribution economics unproven. | Conditional: current price supports a hold, but AV take rate, contribution profit, city overlap data, and capital exposure remain missing. | Hold around 2.0%-2.5%; cap at 3.0% before proof. | the owner | Uber Q2 earnings, 2026-08-05 |
 
 ## Sources
 
