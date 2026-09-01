@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import zipfile
@@ -46,7 +47,7 @@ ACCOUNT_LEVEL_DETAIL = re.compile(
     r"|\b(?:quantity|shares?|share[\s_-]*quantity)\s*[\"']?\s*[:=]"
     r"\s*[\"']?[-+]?\d"
     r"|\baccount[\s_-]*(?:id|number|no\.?)\s*[\"']?\s*[:=]"
-    r"\s*[\"']?[A-Za-z0-9*_-]{4,}",
+    r"\s*[\"']?[A-Za-z0-9*_-]+",
     re.IGNORECASE,
 )
 PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
@@ -58,7 +59,7 @@ HIGH_CONFIDENCE_SECRET = re.compile(
 )
 CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)"
-    r"\s*[=:]\s*[\"'`][^\"'`$<{\s]{12,}[\"'`]"
+    r"\s*[=:]\s*[\"'`](?P<value>[^\"'`$<{\s]{12,})[\"'`]"
 )
 SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
 SYNTHETIC_MARKER = re.compile(r"\b(?:dummy|example|fake|fixture|placeholder|redacted|test)\b", re.I)
@@ -78,17 +79,15 @@ MAX_WORKBOOK_ENTRIES = 10_000
 MAX_WORKBOOK_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 
 
+def _clean_git_env() -> dict[str, str]:
+    """Keep callers' hook-scoped Git variables from overriding an explicit repo."""
+
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def is_exempt_account_document(relative: str) -> bool:
-    """Keep conceptual operator prose and test fixtures out of data scanning."""
-    return relative.startswith(
-        ("tests/", "instruction_tests/", "docs/", "directives/", "evals/")
-    ) or relative in {
-        "HOW_TO_USE_REPORTS.md",
-        "AGENTS.md",
-        "GEMINI.md",
-        "CLAUDE.md",
-        "cron/SETUP_WINDOWS_SCHEDULER.md",
-    }
+    """Keep only synthetic test fixtures out of account-data scanning."""
+    return relative.startswith(("tests/", "instruction_tests/"))
 
 
 def tracked_files(repo_root: Path) -> list[str]:
@@ -96,6 +95,7 @@ def tracked_files(repo_root: Path) -> list[str]:
         ["git", "-C", str(repo_root), "ls-files", "-z"],
         check=True,
         capture_output=True,
+        env=_clean_git_env(),
     )
     return [item for item in result.stdout.decode().split("\0") if item]
 
@@ -149,13 +149,11 @@ def content_violation_categories(relative: str, data: bytes) -> set[str]:
     if PERSONAL_EMAIL.search(text) or (not is_fixture and SSN.search(text)):
         categories.add("personal-identifier")
     for line in text.splitlines():
-        if SYNTHETIC_MARKER.search(line):
-            continue
-        if (
-            PRIVATE_KEY.search(line)
-            or HIGH_CONFIDENCE_SECRET.search(line)
-            or CREDENTIAL_ASSIGNMENT.search(line)
-        ):
+        if PRIVATE_KEY.search(line) or HIGH_CONFIDENCE_SECRET.search(line):
+            categories.add("credential-material")
+            break
+        credential = CREDENTIAL_ASSIGNMENT.search(line)
+        if credential and not SYNTHETIC_MARKER.search(credential.group("value")):
             categories.add("credential-material")
             break
     if (
@@ -174,6 +172,7 @@ def _public_refs(repo_root: Path) -> list[str]:
             check=True,
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
         )
         return sorted(line for line in result.stdout.splitlines() if line)
 
@@ -195,6 +194,7 @@ def audit_public_refs(repo_root: Path) -> dict[str, dict[str, int]]:
             ["git", "-C", str(repo_root), "ls-tree", "-r", "-z", ref],
             check=True,
             capture_output=True,
+            env=_clean_git_env(),
         )
         entries: list[tuple[str, str]] = []
         for raw_entry in result.stdout.split(b"\0"):
@@ -237,6 +237,7 @@ def _read_blobs(repo_root: Path, object_ids: set[str]) -> dict[str, bytes]:
         input=("\n".join(ordered_ids) + "\n").encode("ascii"),
         check=True,
         capture_output=True,
+        env=_clean_git_env(),
     )
     blobs: dict[str, bytes] = {}
     offset = 0
