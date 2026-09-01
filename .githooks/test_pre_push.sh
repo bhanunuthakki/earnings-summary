@@ -55,6 +55,7 @@ grep -q 'PRE-PUSH FAILED at:.*-m pytest --version' "$tmp_dir/stderr"
 
 : >"$log"
 FAST_PUSH=1 run_hook
+grep -qx -- 'execution/verify_public_tree.py' "$log"
 grep -qx -- 'execution/validate_directive_manifest.py' "$log"
 grep -qx -- 'execution/validate_folder_contract.py' "$log"
 grep -q -- '-m pytest -q instruction_tests/test_instruction_contracts.py' "$log"
@@ -62,6 +63,7 @@ unset FAST_PUSH
 
 : >"$log"
 run_hook
+grep -qx -- 'execution/verify_public_tree.py' "$log"
 grep -qx -- '-m pytest -q' "$log"
 
 printf 'pre-push-tests: ok\n'
