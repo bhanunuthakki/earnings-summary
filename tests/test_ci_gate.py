@@ -297,9 +297,9 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
 
 def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    all_refs_workflow = (
-        REPO_ROOT / ".github" / "workflows" / "public-boundary.yml"
-    ).read_text(encoding="utf-8")
+    all_refs_workflow = (REPO_ROOT / ".github" / "workflows" / "public-boundary.yml").read_text(
+        encoding="utf-8"
+    )
     public_job = workflow.split("  public-boundary:\n", maxsplit=1)[1].split(
         "\n  tests:", maxsplit=1
     )[0]
