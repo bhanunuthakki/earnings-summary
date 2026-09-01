@@ -98,9 +98,10 @@ def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> li
     """Explain every terminal result that makes the aggregate gate unsafe."""
 
     failures: list[str] = []
-    changes_result = results.get("changes", "")
-    if changes_result != "success":
-        failures.append(f"changes must succeed; got {changes_result or 'missing result'}")
+    for job_name in ("changes", "public-boundary"):
+        result = results.get(job_name, "")
+        if result != "success":
+            failures.append(f"{job_name} must succeed; got {result or 'missing result'}")
 
     for job_name in CONDITIONAL_JOBS:
         result = results.get(job_name, "")
@@ -281,6 +282,7 @@ def _classify_command(github_output: Path) -> int:
 def _verify_command(args: argparse.Namespace) -> int:
     results = {
         "changes": args.changes_result,
+        "public-boundary": args.public_boundary_result,
         "tests": args.tests_result,
         "design": args.design_result,
         "quality": args.quality_result,
@@ -306,7 +308,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
-    for job_name in ("changes", *CONDITIONAL_JOBS):
+    for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     subparsers.add_parser("pyright-count")
     pyright_diff = subparsers.add_parser("pyright-diff")

@@ -76,6 +76,7 @@ def test_gate_requires_every_applicable_job_to_succeed(helper: ModuleType) -> No
         python=True,
         results={
             "changes": "success",
+            "public-boundary": "success",
             "tests": "success",
             "design": "success",
             "quality": "success",
@@ -92,6 +93,7 @@ def test_gate_accepts_skipped_expensive_jobs_for_docs_only(helper: ModuleType) -
             python=False,
             results={
                 "changes": "success",
+                "public-boundary": "success",
                 "tests": "skipped",
                 "design": "skipped",
                 "quality": "skipped",
@@ -109,6 +111,7 @@ def test_gate_never_hides_failed_or_cancelled_jobs(helper: ModuleType) -> None:
         python=False,
         results={
             "changes": "failure",
+            "public-boundary": "success",
             "tests": "skipped",
             "design": "skipped",
             "quality": "skipped",
@@ -127,6 +130,7 @@ def test_gate_rejects_skipped_change_classification(helper: ModuleType) -> None:
         python=False,
         results={
             "changes": "skipped",
+            "public-boundary": "success",
             "tests": "skipped",
             "design": "skipped",
             "quality": "skipped",
@@ -134,6 +138,23 @@ def test_gate_rejects_skipped_change_classification(helper: ModuleType) -> None:
             "security": "skipped",
         },
     ) == ["changes must succeed; got skipped"]
+
+
+def test_gate_always_requires_public_boundary(helper: ModuleType) -> None:
+    gate_failures = helper.gate_failures(
+        code=False,
+        python=False,
+        results={
+            "changes": "success",
+            "public-boundary": "skipped",
+            "tests": "skipped",
+            "design": "skipped",
+            "quality": "skipped",
+            "typecheck": "skipped",
+            "security": "skipped",
+        },
+    )
+    assert gate_failures == ["public-boundary must succeed; got skipped"]
 
 
 def test_pyright_count_requires_valid_non_negative_integer(helper: ModuleType) -> None:
@@ -266,6 +287,30 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "python .github/scripts/ci_gate.py verify" in workflow
     assert "if: ${{ always() }}" in workflow
     assert "name: CI Gate" in workflow
+    assert "name: Public Boundary" in workflow
+    assert "python execution/verify_public_tree.py" in workflow
+    assert (
+        "needs: [changes, public-boundary, tests, design, quality, typecheck, security]" in workflow
+    )
+    assert "PUBLIC_BOUNDARY_RESULT" in workflow
+
+
+def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    public_job = workflow.split("  public-boundary:\n", maxsplit=1)[1].split(
+        "\n  tests:", maxsplit=1
+    )[0]
+    pre_commit = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    pre_push = (REPO_ROOT / ".githooks" / "pre-push").read_text(encoding="utf-8")
+
+    assert "needs:" not in public_job
+    assert "if:" not in public_job
+    assert "python execution/verify_public_tree.py" in public_job
+    assert "id: public-tree-boundary" in pre_commit
+    assert "entry: python execution/verify_public_tree.py" in pre_commit
+    assert "always_run: true" in pre_commit
+    assert "stages: [pre-push]" in pre_commit
+    assert 'run "$python_bin" execution/verify_public_tree.py' in pre_push
 
 
 def test_security_job_runs_every_scanner_before_failing_closed() -> None:
