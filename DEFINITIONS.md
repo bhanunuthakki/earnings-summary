@@ -2,15 +2,91 @@
 
 **Scope:** project
 **Owner:** earnings-summary
-**Inherits:** C:\Users\Bhanu\.gemini\DEFINITIONS.md
+**Inherits:** the harness-loaded global `DEFINITIONS.md`; no host-specific path is authoritative.
 
-Canonical terminology for this project. Use these terms verbatim in code (variables, functions, types, columns), comments, commit messages, and PR descriptions. New domain terms must be added here before being used.
+Canonical terminology for this project. Use these terms verbatim at durable
+boundaries: code and schema identifiers, APIs, persisted state, canonical UI and
+instruction contracts, and shipped operational documentation. Exploration may use
+clearly marked provisional wording; define or reconcile a term here (or in the
+inherited global vocabulary) before it crosses one of those durable boundaries.
+
+## Logical Idempotency Key
+
+**Definition.** The stable business identity of the effect a directive intends to
+produce. Repeating an authorized operation with the same Logical Idempotency Key
+must not create a second logical deliverable or duplicate state transition.
+**Not to be confused with.** Content Identity, which identifies exact bytes;
+Observation Version, which distinguishes source states over time; or Attempt
+Identity, which identifies one execution and therefore changes on retry.
+
+## Content Identity
+
+**Definition.** A digest, normally SHA-256, of exact artifact bytes or canonicalized
+content. Equal Content Identity proves equal content, not equal business purpose or
+source observation time.
+**Not to be confused with.** A Logical Idempotency Key. Different bytes may be new
+versions of the same logical deliverable; identical bytes may be observed by
+different attempts.
+
+## Observation Version
+
+**Definition.** The append-only identity of what a source exposed at a particular
+source or knowledge time. A changed upstream payload creates a new Observation
+Version even when its Logical Idempotency Key is unchanged.
+**Not to be confused with.** Fetch time alone. Preserve the source timestamp or
+filing identity when available, the fetched-at knowledge time, and Content Identity.
+
+## Source Inventory Presence
+
+**Definition.** The explicit agreement state for one document or attachment across
+the authoritative inventory surfaces used to enumerate it. Its values are
+`matched` when every required surface lists the item, `index_only` when only the
+archive directory lists it, and `manifest_only` when only the filing manifest
+lists it. Metadata absent from one surface remains unknown rather than inferred.
+**Lives in.** `SecFilingPackageAttachment` and
+`src/filings/sec_filing_package_inventory.py`.
+**Not to be confused with.** Source coverage or acquisition completeness. Source
+Inventory Presence preserves an authority disagreement for one item; the enclosing
+inventory still separately proves whether every required authority response was
+captured and reconciled.
+
+## Attachment Locator Status
+
+**Definition.** The SEC authority's ability to identify a fetchable locator for one
+declared filing-package attachment. Its values are `available` when both an exact
+filename and SEC archive URL are present, and `authority_omitted` when the SEC
+directory and filing manifest declare the same attachment in matching authority
+order and byte size but publish neither filename nor fetchable document URL.
+**Lives in.** `SecFilingPackageAttachment.locator_status` and the corresponding
+expected-document coverage reason details.
+**Not to be confused with.** Source Inventory Presence. An authority-omitted
+attachment may be `matched` across both inventory surfaces while remaining
+unfetchable; consumers requiring document bytes must exclude it and retain the
+explicit `authority_unavailable` coverage disposition.
+
+## Attempt Identity
+
+**Definition.** The unique identity of one execution attempt, including retries.
+Attempt Identity supports logs, checkpoints, cost attribution, and failure recovery;
+it must never be used as the Logical Idempotency Key because it changes on every run.
+
+## DCF Debt Scope
+
+**Definition.** The exact liability set included in a DCF equity bridge. Its value
+is either `interest_bearing_debt_only`, which excludes lease liabilities, or
+`debt_and_lease_obligations`, which includes both debt and lease liabilities.
+**Contract.** Every governed equity bridge states its DCF Debt Scope explicitly;
+component selection and provenance must reconcile to that scope without silently
+mixing the two sets.
+**Not to be confused with.** `total_debt_basis`, which records how the selected
+amount was resolved from an aggregate or component source. DCF Debt Scope defines
+what belongs in the amount; `total_debt_basis` explains how that amount was found.
 
 ## Research Level
 
 **Definition.** The evidence depth authorized for an active tracked instrument. The four levels are mutually exclusive and collectively exhaustive: `catalog` preserves identity and raw-source availability; `screened` adds compact deterministic screening metrics; `monitored` adds narrow company-specific monitoring; `governed` admits the company to the complete document, fact, provenance, brief, DCF, and research-artifact contract.
 **Derivation.** Research Level is derived vocabulary, not a new database column: active `portfolio` and `evaluation` rows are governed; active `watchlist` rows are monitored; active `index_member` rows are screened; active `none` rows are catalog. An archived row has no active Research Level and authorizes no scheduled work.
-**Not to be confused with.** Coverage Role (`list_type`) records the owner's relationship to the name; Schedule Class (`processing_tier`) controls cadence; Instrument Kind (`instrument_type`) describes the security; Lifecycle (`archived_at`) controls whether any active work is allowed. Legacy `list_type='etf'` is compatibility debt; ETF is an Instrument Kind, not a Coverage Role.
+**Not to be confused with.** Coverage Role (`list_type`) records the owner's relationship to the name; Schedule Class is derived from Coverage Role and controls cadence; Instrument Kind (`instrument_type`) describes the security; Lifecycle (`archived_at`) controls whether any active work is allowed. Legacy `list_type='etf'` is compatibility debt; ETF is an Instrument Kind, not a Coverage Role.
 
 ## Tracked Instrument State
 
@@ -23,6 +99,17 @@ Every tracked-company row is described by four independent axes. Together they a
 
 The database row is the sole membership authority. Workbooks, research directories, thesis files, cached LLM artifacts, and WACC seeds are outputs or inputs; they never create, restore, or upgrade membership.
 
+## Research Task
+
+**Definition.** A staged, owner-visible request for a bounded research pass. A task
+may carry `estimated_cost_usd`, the pre-run estimate used for approval and queue
+presentation, and `task_metadata_json`, a small lifecycle metadata object such as
+the session prompt and packet timestamps.
+**Not to be confused with.** Realized provider or LLM spend, which belongs in the
+corresponding source-cost or LLM-call ledger; or Attempt Identity, which identifies
+one execution. Research-task metadata is not a run identifier and must not be
+stored in or exposed as one.
+
 ## Filing Regime
 
 **Definition.** The regulatory framework governing an issuer's SEC periodic reporting obligations and filing document formats. The canonical regimes are:
@@ -32,6 +119,13 @@ The database row is the sole membership authority. Workbooks, research directori
 - `none`: Non-SEC registrants or unsponsored ADRs with no direct EDGAR reporting obligation (e.g. `NTDOY`, `FLKR`).
 
 **Contract.** Pipelines branch deterministically on `tracked_companies.filing_regime`. Interim quarters for `20-F`/`40-F` issuers MUST route through the 6-K exhibit ingestion pipeline rather than assuming US 10-Q XBRL availability.
+`NULL` means the regime has not yet been resolved; it is not equivalent to the
+known `none` regime. Until `none` is round-trippable through the typed company
+model and every filing router, persisted `none` values remain compatibility debt.
+The quarterly-segment router returns an explicit unsupported state for unresolved
+rows. The older `Company.interim_doc_type` and `Company.annual_doc_type` fallback
+heuristics remain compatibility debt and must not be interpreted as a resolved
+Filing Regime.
 
 ## Foreign Private Issuer (FPI)
 
@@ -212,6 +306,18 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Lives in.** `llm_artifacts` with `purpose='post_earnings_readout'` and `fiscal_period=<selected transcript period_end>`; `src/earnings_readout.py`; morning pipeline stage 1d; the Post-ER Readout peek. `llm_artifact_store.quarter_index` is the canonical ticker x quarter reader.
 **Not to be confused with.** The deterministic Post-ER template, which assembles recorded facts without an LLM and burns zero tokens, or a generic Ask response, which is not persisted or quarter-indexed.
 
+## Full Research Brief
+
+**Definition.** The persisted, ticker-scoped complete research artifact assembled from the governed report body and immutable artifact manifest. Its compact UI label is **Brief**. Library titles use `[TICKER] [Qn yy] Brief` only when the artifact carries that exact fiscal-period identity.
+**Lives in.** `report_artifacts.v1.json` and per-artifact manifests under `output/research/`; `src/report/artifacts.py`; the Brief Library and Full Research Brief reader.
+**Not to be confused with.** A Pre-Earnings Brief, which prepares for one expected event; a Post-Earnings Readout, which evaluates one reported quarter; or a conversational Ask response.
+
+## Searchable Single-Select
+
+**Definition.** The program-wide app-owned control for choosing exactly one value from a closed option set. Typing filters the active listbox without exposing a separate search field; committing a result updates the owning typed value, while unmatched text creates no value.
+**Lives in.** `src/ui/controls.py` and its registered consumers. A native `<select>` may remain only as the hidden form/value carrier beneath the app-owned trigger and listbox.
+**Not to be confused with.** A free-text search input, a multi-select listbox, or a related-facet group. Facet dependency is an owning surface behavior; it is not implicit in every Searchable Single-Select.
+
 ## Thought Partner
 
 **Definition.** The program's operating identity — a living system that extracts, explores (Socratically), synthesizes, and learns a user Worldview over time; it treats captures as raw material for thinking, not records to file. Storage is the last step, not the product.
@@ -221,22 +327,22 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 
 ## On My Mind
 
-**Definition.** The reverse-chronological living feed of what the analyst is currently thinking about and reading — each item indexed to themes, holdings, and overall positioning, carrying the action ladder **dismiss · save-for-later · discuss · incorporate-into-research**. The front-of-funnel where the LLM extracts and explores *before* anything is distilled.
-**Lives in.** (to be built) the capture feed surfaced in Telegram and the dashboard notecard/library; a read model over `analyst_notes` (`source='capture'`); feeds the Worldview.
+**Definition.** The reverse-chronological living feed of what the analyst is currently thinking about and reading — each item indexed to themes, holdings, and overall positioning, carrying the action ladder **dismiss · save-for-later · discuss · incorporate-into-research · worldview**. The front-of-funnel where the LLM extracts and explores *before* anything is distilled.
+**Lives in.** `src/onmymind/feed.py`, the Telegram and dashboard capture surfaces, and the `analyst_notes` read model for `source='capture'`; its `worldview` action stages a candidate Tenet.
 **Not to be confused with.** The Worldview (durable, synthesized) — On My Mind is transient working memory that feeds it.
-**Subsumes.** The **Wondering** flag and its detection (`wondering_detect`, flag `LEDGER_RESEARCH_TAP`). On My Mind is strictly broader — reading and exploration, not just self-posed questions — and absorbs it.
+**Subsumes.** The former **Wondering** concept and its retired `wondering_detect` classifier. The legacy-named `LEDGER_RESEARCH_TAP` flag still gates live `capture_intent` classification and is compatibility debt; On My Mind remains strictly broader — reading and exploration, not just self-posed questions.
 
 ## Worldview
 
 **Definition.** The durable, evolving model of how the analyst thinks — the synthesized set of Tenets that subtly conditions investment reasoning (hold / add / trim / sell / evaluate).
-**Lives in.** (to be built) a durable tenets store; injected into thesis / ask / decision reasoning via the anchor mechanism (`src/llm/anchors.py`).
+**Lives in.** Current and proposed Tenets in `insight_notes`; `src/synthesis/tenets.py` owns the store, `src/pipeline/worldview_panel.py` owns the review surface, and `src/llm/anchors.py` composes the flag-gated reasoning anchor.
 **Not to be confused with.** A per-ticker thesis (company-specific, in `micro_thesis/holdings/`) — the Worldview is cross-company, about the analyst's *own* reasoning.
 **Subsumes.** The merged `influence` analyst-notes kind (PR #701), which is superseded by Tenets.
 
 ## Tenet
 
 **Definition.** A single revisable belief-unit in the Worldview — a principle about *how the analyst invests* — with provenance to the insights that formed it; the system proposes revisions the analyst approves and flags contradictions when a new insight conflicts with a standing Tenet.
-**Lives in.** (to be built) `insight_notes` with `kind='tenet'`; composes the Worldview.
+**Lives in.** `insight_notes` with `kind='tenet'`, owned by `src/synthesis/tenets.py`; current Tenets compose the Worldview and proposed Tenets remain in the approval queue.
 **Not to be confused with.** A **conviction** (see below) — a `conviction` is a *1–5 confidence rating on a position/decision* (`bucket_for_conviction`, conviction calibration/Brier in `src/advisor/`, and the `conviction` field on `decision_capture`). A Tenet is a cross-company belief about *method*, not a confidence level on a name. Also distinct from a `musing` (an in-the-moment captured thought) and an `insight_note` of `kind='theme'` (a topic cluster, not a belief).
 **Subsumes.** — (was proposed as "Conviction" 2026-07-01; renamed to avoid collision with the entrenched `conviction` rating.)
 
