@@ -9,8 +9,8 @@ that a judge scores its own family's outputs materially higher, which makes
 same-family verdicts the weakest evidence in the whole loop — and the loop's
 verdicts are what auto-apply prompt and model changes.
 
-This routes judge calls to the owner's ChatGPT-membership Codex CLI via the
-canonical wrapper at ``C:\\Users\\Bhanu\\.gemini\\snippets\\codex_cli.py``,
+This routes judge calls to the owner's ChatGPT-membership Codex CLI via a
+configurable local wrapper,
 per the machine rulebook: membership billing, never the metered OpenAI SDK.
 The wrapper refuses to run if ``OPENAI_API_KEY``/``CODEX_API_KEY`` is set,
 which is the guard that keeps this off metered billing.
@@ -31,19 +31,21 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
+from llm.resolver import CapabilityProfile, require_model_capabilities
 from log_redact import redact
 
 log = logging.getLogger(__name__)
 
 CODEX = "codex"
 
-# Mirrors the machine wrapper's WebSearchMode (C:\Users\Bhanu\.gemini\snippets\
+# Mirrors the machine wrapper's WebSearchMode (configured by the local runtime).
 # codex_cli.py). "disabled" is the default so every pre-existing caller (judge
 # traffic, call_llm's Codex-primary leg) stays byte-identical; only an
 # explicit "live" (the web-grounded purposes, e.g. recent_developments) opts
@@ -55,7 +57,9 @@ DEFAULT_WEB_SEARCH: WebSearchMode = "disabled"
 
 # The canonical subscription wrapper (global CLAUDE.md). Importing by path
 # keeps this repo from vendoring a copy that could drift from the machine's.
-_SNIPPETS_DIR = Path(r"C:\Users\Bhanu\.gemini\snippets")
+_SNIPPETS_DIR = Path(
+    os.environ.get("CODEX_SNIPPETS_DIR") or Path.home() / ".gemini" / "snippets"
+).expanduser()
 
 # Judge default. The wrapper's own DEFAULT_MODEL is authoritative for general
 # use; the judge pins a value so a wrapper-side default change cannot silently
@@ -162,6 +166,7 @@ def call_codex_llm(
     fallback_used: str | None = None,
     fallback_from_provider: str | None = None,
     fallback_from_transport: str | None = None,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """One Codex call with a ledger row. Raises on failure (the caller's
     judge wrapper records it as a judge error — infra, never a score).
@@ -174,6 +179,7 @@ def call_codex_llm(
     no shell/apps/hooks) bounds the blast radius of anything a hostile page
     could try. See directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md.
     """
+    require_model_capabilities(model, capability_profile or CapabilityProfile())
     if model not in _CODEX_API_PRICES:
         raise ValueError(f"missing public API price for Codex model {model!r}")
     from llm.ledger import record_llm_call
