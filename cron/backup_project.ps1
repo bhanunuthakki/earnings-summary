@@ -25,7 +25,7 @@ $runPython = Join-Path $repo 'cron\run_python.bat'
 # drive (usually G:) and the old C:\...\My Drive folder lingers on disk stale
 # and UNSYNCED, so any mounted "<letter>:\My Drive" must win over the mirror
 # path. Mirrors _google_drive_root() in cron/backup_db.py / cron/restore_db.py.
-$driveRoot = 'C:\Users\Bhanu\My Drive'
+$driveRoot = if ($env:ES_MIRROR_DRIVE_ROOT) { $env:ES_MIRROR_DRIVE_ROOT } else { Join-Path $HOME 'My Drive' }
 foreach ($l in [char[]]('DEFGHIJKLMNOPQRSTUVWXYZ')) {
     if (Test-Path -LiteralPath "$($l):\My Drive") { $driveRoot = "$($l):\My Drive"; break }
 }
