@@ -23,13 +23,17 @@ package).
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
-_DEFAULT_WEALTHPLAN_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\wealthplan")
+_DEFAULT_WEALTHPLAN_ROOT = Path(
+    os.environ.get("WEALTHPLAN_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "wealthplan"
+)
 
 # ~24 months — matches the position-review capacity block's own life-event
 # lookahead window (advisor.position_review.CAPACITY_HORIZON_DAYS) so a "baby
