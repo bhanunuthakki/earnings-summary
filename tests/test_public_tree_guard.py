@@ -162,6 +162,27 @@ def test_placeholder_generic_credential_is_allowed(tmp_path: Path) -> None:
     assert verify(tmp_path) == []
 
 
+def test_unquoted_generic_credential_is_rejected(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    note = tmp_path / "notes.md"
+    key = "pass" + "word"
+    value = "Ultra" + "Secret" + "Value123"
+    note.write_text(f"{key}={value}\n", encoding="utf-8")
+    _commit(tmp_path, "add unsafe configuration")
+
+    assert verify(tmp_path) == ["credential-material in: notes.md"]
+
+
+@pytest.mark.parametrize("suffix", [".docx", ".pdf", ".zip", ".db", ".sqlite"])
+def test_unscannable_private_artifact_is_rejected(tmp_path: Path, suffix: str) -> None:
+    _init_repo(tmp_path)
+    artifact = tmp_path / f"artifact{suffix}"
+    artifact.write_bytes(b"opaque\x00content")
+    _commit(tmp_path, "add unscannable artifact")
+
+    assert verify(tmp_path) == [f"unscannable-private-artifact in: artifact{suffix}"]
+
+
 def test_all_ref_audit_reports_categories_without_paths(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     readme = tmp_path / "README.md"
