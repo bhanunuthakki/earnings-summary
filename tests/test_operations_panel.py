@@ -344,8 +344,9 @@ def test_operations_renderer_has_governance_tab_and_related_views(
     html = render_operations_panel(_view(tmp_path))
     tablist = html.split('role="tablist"', 1)[1].split("</div>", 1)[0]
 
-    assert tablist.count('role="tab"') == 4
+    assert tablist.count('role="tab"') == 5
     assert ">Overview</button>" in tablist
+    assert ">Attention</button>" in tablist
     assert ">Jobs</button>" in tablist
     assert ">Runtime &amp; Recovery</button>" in tablist
     assert ">Governance</button>" in tablist
@@ -980,7 +981,10 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert "data-operations-results" in html
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
+    # The manifest-owned semantic-review producer is a truthful primary
+    # Operations card, bringing the declared Scheduler fleet to 46 tasks.
     assert html.count('data-operations-task-card="true"') == 46
+    assert "monthly_p3_refresh" not in html
     assert "@media (max-width:" in html
     assert "min-block-size:var(--touch-target-size)" in html
     assert 'data-operations-table-scroll="true"' not in html
