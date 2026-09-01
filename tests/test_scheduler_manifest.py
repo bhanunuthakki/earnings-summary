@@ -33,7 +33,7 @@ EXPECTED_DISABLED_TASKS = {
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 45
+    assert len(manifest.tasks) == 46
     collector = next(
         task
         for task in manifest.tasks
@@ -51,6 +51,53 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert collector_xml.index("<Repetition>") < collector_xml.index("<StartBoundary>")
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert all(task.task_name != r"\earnings-summary\monthly_p3_refresh" for task in manifest.tasks)
+    semantic_review = next(
+        task
+        for task in manifest.tasks
+        if task.task_name == r"\earnings-summary\prepare_kpi_semantic_review"
+    )
+    assert semantic_review.schedule.repetition_interval == "PT10M"
+    assert semantic_review.xml == "prepare_kpi_semantic_review.task.xml"
+    assert semantic_review.wrapper == "run_prepare_kpi_semantic_review.bat"
+    semantic_xml = (CRON_DIR / semantic_review.xml).read_text(encoding="utf-8")
+    assert "<ExecutionTimeLimit>PT30M</ExecutionTimeLimit>" in semantic_xml
+    assert semantic_xml.index("<Repetition>") < semantic_xml.index("<StartBoundary>")
+    assert r"runtime\earnings-summary\cron\run_prepare_kpi_semantic_review.bat" in semantic_xml
+    semantic_wrapper = (CRON_DIR / semantic_review.wrapper).read_text(encoding="utf-8")
+    assert "if not defined EARNINGS_SUMMARY_DB_PATH" in semantic_wrapper
+    assert 'for %%I in ("%EARNINGS_SUMMARY_DB_PATH%") do set "DB_DIR=%%~dpI"' in semantic_wrapper
+    assert 'for %%I in ("%DB_DIR%..") do set "PRODUCT_STATE_ROOT=%%~fI"' in semantic_wrapper
+    assert 'set "ES_JOB_RUNTIME_REPO_ROOT=%PRODUCT_STATE_ROOT%"' in semantic_wrapper
+    assert 'set "ES_JOB_RUNTIME_CODE_ROOT=%PROJECT_ROOT%"' in semantic_wrapper
+    assert r'set "LOG_DIR=%PRODUCT_STATE_ROOT%\.tmp\cron_logs"' in semantic_wrapper
+    assert r'"%PROJECT_ROOT%\execution\prepare_kpi_semantic_review.py"' in semantic_wrapper
+    assert '--code-root "%PROJECT_ROOT%"' in semantic_wrapper
+    assert "--user-id" not in semantic_wrapper
+    assert '--code-root "%PROJECT_ROOT%" --publish' in semantic_wrapper
+    assert "http" not in semantic_wrapper.casefold()
+    prepare_source = (PROJECT_ROOT / "execution" / "prepare_kpi_semantic_review.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'parser.add_argument("--user-id", default=DEFAULT_USER_ID)' in prepare_source
+    assert 'default="default"' not in prepare_source
+    shared_wrapper = (CRON_DIR / "run_python.bat").read_text(encoding="utf-8")
+    scope_gate = 'if /I not "%~1"=="prepare-kpi-semantic-review" goto clear_runtime_root_env'
+    assert scope_gate in shared_wrapper
+    assert 'set "JOB_RUNTIME_REPO_ROOT=%ES_JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
+    assert 'set "JOB_RUNTIME_CODE_ROOT=%ES_JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
+    assert '--repo-root "%JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
+    assert '--code-root "%JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
+    assert "ES_JOB_RUNTIME_CODE_ROOT is required with ES_JOB_RUNTIME_REPO_ROOT" in shared_wrapper
+    assert "ES_JOB_RUNTIME_REPO_ROOT is required with ES_JOB_RUNTIME_CODE_ROOT" in shared_wrapper
+    clear_label = shared_wrapper.index(":clear_runtime_root_env")
+    first_launch = shared_wrapper.index('"%PYTHON_EXE%" -u', clear_label)
+    assert shared_wrapper.index('set "ES_JOB_RUNTIME_REPO_ROOT="', clear_label) < first_launch
+    assert shared_wrapper.index('set "ES_JOB_RUNTIME_CODE_ROOT="', clear_label) < first_launch
+    assert shared_wrapper.index(scope_gate) < shared_wrapper.index(
+        "if defined ES_JOB_RUNTIME_REPO_ROOT if not defined ES_JOB_RUNTIME_CODE_ROOT"
+    )
+    assert "%ES_JOB_RUNTIME_REPO_ROOT%" not in shared_wrapper[first_launch:]
+    assert "%ES_JOB_RUNTIME_CODE_ROOT%" not in shared_wrapper[first_launch:]
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")
@@ -233,8 +280,8 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
 
     assert f"{len(manifest.tasks)} operational declarations" in runbook
     assert f"{len(scheduler_tasks)} Task Scheduler registrations" in runbook
-    assert r"C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary" in runbook
-    assert r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary" in runbook
+    assert r"%USERPROFILE%\.gemini\antigravity\runtime\earnings-summary" in runbook
+    assert r"%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary" in runbook
     assert "register_tasks.generated.ps1" in runbook
     assert "-RepoRoot $EarningsSummaryCodeRoot" in runbook
     assert "schtasks /create /tn" not in normalized
@@ -264,8 +311,7 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
     # restore_db.py: mounted Drive roots D:..Z: win over the stale C: mirror.
     assert "first existing mounted `<drive>:\\My Drive` from `D:` through `Z:`" in runbook
     assert "`G:\\My Drive`" in runbook
-    assert "`C:\\Users\\Bhanu\\My Drive`" in runbook
-    assert "%USERPROFILE%\\My Drive" not in runbook
+    assert "`%USERPROFILE%\\My Drive`" in runbook
     assert "an exact schema-version match against the live DB" in runbook
     assert "a soft schema-version match" not in runbook
 
