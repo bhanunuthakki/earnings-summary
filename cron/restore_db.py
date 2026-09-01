@@ -48,14 +48,14 @@ from schema_compat import expected_head  # noqa: E402
 
 DEFAULT_DB = (PROJECT_ROOT / "data" / "portfolio.db").resolve()
 
-MIRROR_DRIVE_ROOT = Path(r"C:\Users\Bhanu\My Drive")
+MIRROR_DRIVE_ROOT = Path(os.environ.get("ES_MIRROR_DRIVE_ROOT") or Path.home() / "My Drive")
 
 
 def _google_drive_root() -> Path:
     """Locate the Google Drive root in either sync mode.
 
     In Stream mode Drive mounts a virtual drive (usually G:), and the old
-    mirror folder at C:\\Users\\Bhanu\\My Drive lingers on disk as a stale,
+    mirror folder under the user profile lingers on disk as a stale,
     UNSYNCED leftover until manually deleted. A mounted "<letter>:\\My Drive"
     can only be the Drive mount, so any non-C: hit wins over the mirror path —
     checking C: first would keep writing backups into the dead folder while
