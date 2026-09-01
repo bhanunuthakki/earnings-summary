@@ -68,9 +68,10 @@ EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 EDGAR_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 
 # SEC fair-access policy wants a descriptive UA with a real contact. The repo is
-# private, so the default carries one; override via EDGAR_USER_AGENT.
+# public, so the default uses the repository URL; operators should override it
+# with a monitored contact through EDGAR_USER_AGENT.
 USER_AGENT_ENV = "EDGAR_USER_AGENT"
-DEFAULT_USER_AGENT = "earnings-summary/1.0 (personal research; bhanumufcpraneeth@gmail.com)"
+DEFAULT_USER_AGENT = "earnings-summary/1.0 (+https://github.com/bhanunuthakki/earnings-summary)"
 
 DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "edgar"
 TICKERS_CACHE_TTL_HOURS = 7 * 24.0

@@ -31,6 +31,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: public-tree-boundary
+        name: public tree boundary
+        entry: python execution/verify_public_tree.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
       # Strict type gate on changed files. Heavier, so it runs at pre-push
       # rather than on every commit. Requires the project deps installed
       # (`pip install -e .[dev]`) so imports resolve.
