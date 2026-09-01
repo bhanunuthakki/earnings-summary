@@ -59,7 +59,8 @@ HIGH_CONFIDENCE_SECRET = re.compile(
 )
 CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)"
-    r"\s*[=:]\s*[\"'`](?P<value>[^\"'`$<{\s]{12,})[\"'`]"
+    r"\s*[=:]\s*(?:[\"'`](?P<quoted>[^\"'`$<{\s]{12,})[\"'`]"
+    r"|(?P<bare>[A-Za-z0-9_./+=-]{12,}))"
 )
 SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
 SYNTHETIC_MARKER = re.compile(r"\b(?:dummy|example|fake|fixture|placeholder|redacted|test)\b", re.I)
@@ -75,6 +76,8 @@ ACCOUNT_DETAIL_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+UNSCANNABLE_PRIVATE_SUFFIXES = {".db", ".docx", ".pdf", ".sqlite", ".sqlite3", ".zip"}
+CODE_SUFFIXES = {".js", ".py", ".sh", ".ts"}
 MAX_WORKBOOK_ENTRIES = 10_000
 MAX_WORKBOOK_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 
@@ -125,8 +128,11 @@ def _workbook_text(data: bytes) -> tuple[str | None, str | None]:
 
 
 def _text_for_scan(relative: str, data: bytes) -> tuple[str | None, str | None]:
-    if Path(relative).suffix.lower() == ".xlsx":
+    suffix = Path(relative).suffix.lower()
+    if suffix == ".xlsx":
         return _workbook_text(data)
+    if suffix in UNSCANNABLE_PRIVATE_SUFFIXES:
+        return None, "unscannable-private-artifact"
     try:
         return data.decode("utf-8"), None
     except UnicodeDecodeError:
@@ -153,7 +159,13 @@ def content_violation_categories(relative: str, data: bytes) -> set[str]:
             categories.add("credential-material")
             break
         credential = CREDENTIAL_ASSIGNMENT.search(line)
-        if credential and not SYNTHETIC_MARKER.search(credential.group("value")):
+        value = credential and (credential.group("quoted") or credential.group("bare"))
+        is_bare_code_value = (
+            credential is not None
+            and credential.group("bare") is not None
+            and Path(relative).suffix.lower() in CODE_SUFFIXES
+        )
+        if value and not SYNTHETIC_MARKER.search(value) and not is_bare_code_value:
             categories.add("credential-material")
             break
     if (
