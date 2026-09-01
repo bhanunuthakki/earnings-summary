@@ -280,8 +280,8 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
 
     assert f"{len(manifest.tasks)} operational declarations" in runbook
     assert f"{len(scheduler_tasks)} Task Scheduler registrations" in runbook
-    assert r"C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary" in runbook
-    assert r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary" in runbook
+    assert r"%USERPROFILE%\.gemini\antigravity\runtime\earnings-summary" in runbook
+    assert r"%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary" in runbook
     assert "register_tasks.generated.ps1" in runbook
     assert "-RepoRoot $EarningsSummaryCodeRoot" in runbook
     assert "schtasks /create /tn" not in normalized
@@ -311,8 +311,7 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
     # restore_db.py: mounted Drive roots D:..Z: win over the stale C: mirror.
     assert "first existing mounted `<drive>:\\My Drive` from `D:` through `Z:`" in runbook
     assert "`G:\\My Drive`" in runbook
-    assert "`C:\\Users\\Bhanu\\My Drive`" in runbook
-    assert "%USERPROFILE%\\My Drive" not in runbook
+    assert "`%USERPROFILE%\\My Drive`" in runbook
     assert "an exact schema-version match against the live DB" in runbook
     assert "a soft schema-version match" not in runbook
 
