@@ -25,7 +25,7 @@ Rate limit: 0.2s between authorized portfolio tickers (~5 req/sec, half SEC's 10
 Register (or re-register after editing the XML) from the MAIN checkout — editing the XML alone does NOT update the live task:
 
 ```
-schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "C:\Users\bhanu\.gemini\antigravity\scratch\earnings-summary\cron\fetch_sec_xbrl.task.xml" /f
+schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_sec_xbrl.task.xml" /f
 ```
 
 ## Conventions the ladders enforce (do not regress)
