@@ -24,7 +24,7 @@ model/prompt purpose without a configured executable quality-eval mode fails.
 Examples:
     python execution/run_llm_evals.py --purpose viewspec_compile
     python execution/run_llm_evals.py --purpose bear_case \
-        --repo-root C:/Users/Bhanu/.gemini/antigravity/scratch/earnings-summary --limit 5
+        --repo-root . --limit 5
     python execution/run_llm_evals.py --purpose transcript_summary --since-days 7
     python execution/run_llm_evals.py --purpose intake_classifier --no-persist
     python execution/run_llm_evals.py --purpose viewspec_compile --min-score 0.8  # gate
