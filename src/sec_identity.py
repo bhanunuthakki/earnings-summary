@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import os
 
-#: Contact declared to the SEC. A real, monitored address is the requirement;
-#: this is the project owner's.
-DEFAULT_USER_AGENT = "earnings-summary/1.0 (personal research; bhanumufcpraneeth@gmail.com)"
+#: Public fallback identity. Operators should set ``EDGAR_USER_AGENT`` to a
+#: monitored contact address in their private runtime configuration.
+DEFAULT_USER_AGENT = "earnings-summary/1.0 (+https://github.com/bhanunuthakki/earnings-summary)"
 
 #: Environment override, already honoured by several execution/ CLIs.
 USER_AGENT_ENV = "EDGAR_USER_AGENT"
