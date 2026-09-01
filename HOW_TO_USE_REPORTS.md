@@ -116,7 +116,7 @@ Make sure these are installed:
 ### 1. Build a report
 
 ```cmd
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU --enable-llm
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU --enable-llm
 ```
 
 - `--enable-llm` runs the full pipeline (bear case, news, valuation, company description). Omit for a faster build that reuses cached outputs.
@@ -125,7 +125,7 @@ C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU 
 ### 2. Start the comments + chat server
 
 ```cmd
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\start_comments_server.bat
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\start_comments_server.bat
 ```
 
 Or just **double-click** `start_comments_server.bat` in Explorer.
@@ -147,7 +147,7 @@ action surface.
 
 ### 3. Open the report in your browser
 
-Open `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\output\research\NU\<DATE>_workspace.html`
+Open `%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\output\research\NU\<DATE>_workspace.html`
 (double-click in Explorer, or drag into Chrome).
 
 ### 4. Comment on anything
@@ -244,18 +244,18 @@ When you're ready to act on the comments you've left:
 
 ```cmd
 :: dry-run preview (default — won't touch files)
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\process_comments.bat NU
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\process_comments.bat NU
 
 :: actually mutate files (edits holdings JSON, runs LLM, etc.)
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\process_comments.bat NU --apply
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\process_comments.bat NU --apply
 
 :: ...and drop addressed/dismissed comments after processing
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\process_comments.bat NU --apply --clear
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\process_comments.bat NU --apply --clear
 ```
 
 After processing, **rebuild the report** to see the updates:
 ```cmd
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU --enable-llm
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU --enable-llm
 ```
 
 Then refresh the browser tab. Addressed comments turn green; their
@@ -273,13 +273,13 @@ them in isolation.
 
 ```cmd
 :: One ticker, last 8 quarters
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_fmp.bat NU
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_fmp.bat NU
 
 :: One ticker, deeper history
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_fmp.bat NU 20
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_fmp.bat NU 20
 
 :: All tracked tickers (uses FMP API quota — be mindful)
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_fmp.bat --all
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_fmp.bat --all
 ```
 
 Writes JSON to `data/historical/fmp/<TICKER>_<endpoint>.json`. Updates
@@ -291,10 +291,10 @@ Financials tab, valuation multiples, and DCF inputs.
 ```cmd
 :: One ticker — pulls the last 6 fiscal quarters from the free aggregators
 :: (roic.ai → stockanalysis.com → tickertrends.io)
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_transcripts.bat NU
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_transcripts.bat NU
 
 :: All active tickers
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_transcripts.bat --all
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_transcripts.bat --all
 ```
 
 Drops new files into `transcripts/processed/<T>_Q<n>_<YYYY>.txt` and
@@ -326,7 +326,7 @@ These feed the Earnings tab and the bear case.
 ### 4. KPI extraction (populate the Thesis tab's tracked KPIs)
 
 ```cmd
-python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
+python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root %USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 ```
 
 Reads the `.tmp/<T>_*_summary.txt` files, asks Haiku to extract values
@@ -340,7 +340,7 @@ hasn't run yet.
 ### 5. SayDo pairwise rebuild
 
 ```cmd
-python execution/sqlite_bootstrap.py execution/build_saydo_pairs.py --ticker NU --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
+python execution/sqlite_bootstrap.py execution/build_saydo_pairs.py --ticker NU --repo-root %USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 ```
 
 Walks the per-quarter summaries chronologically and generates one
@@ -352,13 +352,13 @@ force-regenerate every pair (use after a prompt change).
 
 ```cmd
 :: Default 7-day lookback
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_news.bat NU
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_news.bat NU
 
 :: 14-day lookback
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_news.bat NU 14
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_news.bat NU 14
 
 :: Refresh news for everyone tracked
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\refresh_news.bat --all-tracked
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\refresh_news.bat --all-tracked
 ```
 
 Bypasses the 7-day cache, runs Claude WebSearch + WebFetch with the
@@ -370,10 +370,10 @@ internally with `--refresh-news --enable-llm`).
 
 ```cmd
 :: Workspace renderer + full LLM pipeline (bear case + valuation + news + company description)
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU --enable-llm
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU --enable-llm
 
 :: Fast rebuild — reuse cached LLM outputs (just re-renders HTML from existing JSON)
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\build_report.bat NU
 ```
 
 **Cache invalidation by deletion** — to force a specific section to
@@ -638,7 +638,7 @@ to unset it. Cron jobs and `.bat` launchers all route through the same
 ## Troubleshooting
 
 **`python: can't open file '...\execution\comments_server.py'`**
-You're trying to run the bare `execution/...` path from `C:\Users\Bhanu`.
+You're trying to run the bare `execution/...` path from `%USERPROFILE%`.
 Use the `.bat` launchers — they self-locate the repo.
 
 **`'#' is not recognized as an internal or external command`**
@@ -659,7 +659,7 @@ anchor it lives under, or look in `data/report_comments/<T>/<DATE>.json`.
 **Tracked KPIs are empty in the report**
 Run the KPI extractor first:
 ```cmd
-python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
+python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root %USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 ```
 
 The single canonical procedure lives under
