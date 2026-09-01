@@ -51,7 +51,7 @@ MF_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
 EDGAR_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 EDGAR_FILE_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc}/{name}"
 
-DEFAULT_USER_AGENT = "earnings-summary/1.0 (personal research; bhanumufcpraneeth@gmail.com)"
+DEFAULT_USER_AGENT = "earnings-summary/1.0 (+https://github.com/bhanunuthakki/earnings-summary)"
 MIN_REQUEST_INTERVAL_S = 0.15  # SEC fair-access; same spacing as thirteenf/news
 REQUEST_TIMEOUT = 30
 

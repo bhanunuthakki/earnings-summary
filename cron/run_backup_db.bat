@@ -1,6 +1,6 @@
 @echo off
 REM Daily 02:45 — SQLite online backup of data/portfolio.db to the configured
-REM backup directory (ES_DB_BACKUP_DIR, default: C:\Users\bhanu\My Drive\
+REM backup directory (ES_DB_BACKUP_DIR, default: %USERPROFILE%\My Drive\
 REM earnings-summary-db-backups). Runs BEFORE the 03:00 refresh_cache chain
 REM so a consistent snapshot exists before the day's writes begin. Keeps the
 REM most recent ES_DB_BACKUP_RETAIN snapshots (default 14). Drive receives only
