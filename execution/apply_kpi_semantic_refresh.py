@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -20,13 +21,25 @@ from contextlib import ExitStack, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_WINDOWS_STATE_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary")
+CANONICAL_WINDOWS_STATE_ROOT = Path(
+    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
+)
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
@@ -54,7 +67,11 @@ from operations.review_bundle import (  # noqa: E402
     database_lineage_identity,
     review_code_identity,
 )
-from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
+from pipeline.kpi_semantic_review import (  # noqa: E402
+    KpiEvidenceLocatorCoordinates,
+    fact_locator_from_evidence_coordinates,
+)
+from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions  # noqa: E402
 from pipeline.kpi_semantics import (  # noqa: E402
     KpiAccountingBasis,
     KpiConsolidationScope,
@@ -71,6 +88,7 @@ from pipeline.kpi_source_review import (  # noqa: E402
     require_canonical_kpi_resolution,
 )
 from pipeline.queries import open_db  # noqa: E402
+from provenance.evidence_ledger import EvidenceLocator  # noqa: E402
 from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
 from provenance.fulltext_extractor_identity import (  # noqa: E402
     resolve_fulltext_extractor_identity,
@@ -78,6 +96,9 @@ from provenance.fulltext_extractor_identity import (  # noqa: E402
 from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
 
 _SHA256 = r"^[0-9a-f]{64}$"
+# Five minutes matches the repository's trusted-evidence clock-skew allowance while
+# remaining far too small to move a decision across a reporting or thesis horizon.
+MAX_KNOWLEDGE_AT_FUTURE_SKEW = timedelta(minutes=5)
 _REVIEWABLE_SOURCE_TYPES = frozenset(
     {
         SourceType.SEC_XBRL,
@@ -162,6 +183,9 @@ class RefreshEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     action: Literal["bind_existing", "supersede"]
+    predecessor_resolution_state: Literal["canonical_current", "quarantined_legacy"] = (
+        "canonical_current"
+    )
     old_fact_id: int = Field(gt=0)
     expected_fact_head_id: int = Field(gt=0)
     expected_context_head_id: int | None = Field(default=None, gt=0)
@@ -196,6 +220,8 @@ class RefreshEntry(BaseModel):
             raise ValueError("bind_existing cannot insert a fact row")
         if self.action == "supersede" and self.expected_inserted_fact_rows != 1:
             raise ValueError("supersede must expect one fact row")
+        if self.predecessor_resolution_state == "quarantined_legacy" and self.action != "supersede":
+            raise ValueError("quarantined legacy predecessors may only be superseded")
         if self.context.status.value != "admitted":
             raise ValueError("repair context must be source-qualified")
         if self.locator.verbatim_snippet != self.source_excerpt:
@@ -230,7 +256,7 @@ class RefreshEntry(BaseModel):
 class RefreshManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_refresh.v5"]
+    schema_version: Literal["kpi_semantic_refresh.v5", "kpi_semantic_refresh.v6"]
     user_id: str = Field(min_length=1, max_length=128)
     logical_idempotency_key: str = Field(min_length=1, max_length=256)
     reviewer: str = Field(min_length=1, max_length=128)
@@ -239,6 +265,59 @@ class RefreshManifest(BaseModel):
     expected_schema_revision: str = Field(min_length=1, max_length=160)
     backup_restore_evidence_id: str = Field(pattern=_SHA256)
     entries: tuple[RefreshEntry, ...] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _v6_requires_explicit_predecessor_resolution_state(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = cast(dict[str, object], value)
+        if payload.get("schema_version") != "kpi_semantic_refresh.v6":
+            return payload
+        raw_entries = payload.get("entries")
+        if not isinstance(raw_entries, (list, tuple)):
+            return payload
+        entries = cast(list[object] | tuple[object, ...], raw_entries)
+        if any(
+            isinstance(entry, dict)
+            and "predecessor_resolution_state" not in cast(dict[str, object], entry)
+            for entry in entries
+        ):
+            raise ValueError(
+                "kpi_semantic_refresh.v6 requires predecessor_resolution_state on every entry"
+            )
+        return payload
+
+    @model_validator(mode="after")
+    def _schema_matches_predecessor_contract(self) -> RefreshManifest:
+        if self.schema_version == "kpi_semantic_refresh.v5" and any(
+            entry.predecessor_resolution_state != "canonical_current" for entry in self.entries
+        ):
+            raise ValueError("kpi_semantic_refresh.v5 supports canonical-current predecessors only")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_versioned_contract(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        serialized = handler(self)
+        if not isinstance(serialized, dict):
+            raise TypeError("refresh manifest serializer must return an object")
+        payload = cast(dict[str, object], serialized)
+        if self.schema_version != "kpi_semantic_refresh.v5":
+            return payload
+        raw_entries = payload.get("entries")
+        if not isinstance(raw_entries, (list, tuple)):
+            raise TypeError("refresh manifest entries must serialize as an array")
+        serialized_entries = cast(list[object] | tuple[object, ...], raw_entries)
+        entries: list[dict[str, object]] = []
+        for raw_entry in serialized_entries:
+            if not isinstance(raw_entry, dict):
+                raise TypeError("refresh manifest entries must serialize as objects")
+            entry = cast(dict[str, object], raw_entry).copy()
+            entry.pop("predecessor_resolution_state", None)
+            entries.append(entry)
+        return {**payload, "entries": entries}
 
     @field_validator("knowledge_at")
     @classmethod
@@ -249,6 +328,18 @@ class RefreshManifest(BaseModel):
 
     def content_sha256(self) -> str:
         return canonical_sha256(self.model_dump(mode="json"))
+
+
+def validate_manifest_knowledge_time(
+    manifest: RefreshManifest,
+    *,
+    now: datetime,
+) -> None:
+    """Reject future decision authority before its timestamp becomes a cutoff."""
+    if now.tzinfo is None:
+        raise RepairBlockedError("validation_clock_not_timezone_aware")
+    if manifest.knowledge_at > now.astimezone(UTC) + MAX_KNOWLEDGE_AT_FUTURE_SKEW:
+        raise RepairBlockedError("manifest_knowledge_at_from_future")
 
 
 class KpiRepairSummary(BaseModel):
@@ -396,7 +487,8 @@ def _validate_source_binding(
     if source_type not in _REVIEWABLE_SOURCE_TYPES:
         raise RepairBlockedError("source_type_not_reviewable")
     evidence = conn.execute(
-        "SELECT node.text,node.locator_sha256,node.node_kind,run.document_version_id,"
+        "SELECT node.text,node.locator_json,node.locator_sha256,node.node_kind,"
+        "run.document_version_id,"
         "run.extractor_name,run.extractor_config_sha256,run.extractor_code_version,"
         "run.outcome,version.blob_sha256,version.ticker FROM evidence_nodes node "
         "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
@@ -450,6 +542,21 @@ def _validate_source_binding(
         raise RepairBlockedError("source_evidence_binding_content_mismatch")
     if str(evidence["locator_sha256"] or "") != entry.evidence_locator_sha256:
         raise RepairBlockedError("evidence_locator_mismatch")
+    try:
+        evidence_locator = EvidenceLocator.model_validate_json(str(evidence["locator_json"] or ""))
+        if (
+            str(evidence["locator_json"]) != evidence_locator.canonical_json
+            or evidence_locator.canonical_sha256 != entry.evidence_locator_sha256
+        ):
+            raise ValueError("evidence locator is not canonical")
+        expected_locator = fact_locator_from_evidence_coordinates(
+            KpiEvidenceLocatorCoordinates.from_evidence_locator(evidence_locator),
+            verbatim_snippet=entry.source_excerpt,
+        )
+    except ValueError as exc:
+        raise RepairBlockedError("evidence_locator_payload_invalid") from exc
+    if entry.locator != expected_locator:
+        raise RepairBlockedError("fact_locator_evidence_mismatch")
     evidence_text = str(evidence["text"])
     if entry.source_excerpt not in evidence_text:
         raise RepairBlockedError("source_excerpt_mismatch")
@@ -481,7 +588,11 @@ def _validate_source_binding(
 
 
 def _validate_entry(
-    conn: sqlite3.Connection, entry: RefreshEntry, allowed: set[int]
+    conn: sqlite3.Connection,
+    entry: RefreshEntry,
+    allowed: set[int],
+    *,
+    owner_tickers: frozenset[str] = frozenset(),
 ) -> tuple[sqlite3.Row, SourceType]:
     row = conn.execute(
         "SELECT fact.*,definition.name,definition.ticker AS definition_ticker,"
@@ -492,8 +603,25 @@ def _validate_entry(
     ).fetchone()
     if row is None:
         raise RepairBlockedError("old_fact_missing")
-    if int(row["kpi_definition_id"]) not in allowed:
-        raise RepairBlockedError("fact_outside_owner_visible_scope")
+    definition_id = int(row["kpi_definition_id"])
+    canonical = canonical_fact_relation(conn, "kpi_facts")
+    predecessor_is_canonical = (
+        conn.execute(
+            f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+            (entry.old_fact_id,),
+        ).fetchone()
+        is not None
+    )
+    if entry.predecessor_resolution_state == "canonical_current":
+        if definition_id not in allowed:
+            raise RepairBlockedError("fact_outside_owner_visible_scope")
+        if not predecessor_is_canonical:
+            raise RepairBlockedError("expected_canonical_predecessor_missing")
+    else:
+        if str(row["ticker"]).upper() not in owner_tickers:
+            raise RepairBlockedError("quarantined_predecessor_outside_owner_portfolio")
+        if predecessor_is_canonical:
+            raise RepairBlockedError("quarantined_predecessor_is_canonical")
     if (
         int(row["source_doc_id"]) != entry.expected_old_source_doc_id
         or str(row["old_source_sha256"]) != entry.expected_old_source_sha256
@@ -514,6 +642,8 @@ def _validate_entry(
         or actual_context_revision != entry.expected_context_revision
     ):
         raise RepairBlockedError("semantic_context_head_changed")
+    if entry.predecessor_resolution_state == "quarantined_legacy" and current is not None:
+        raise RepairBlockedError("quarantined_predecessor_has_semantic_context")
     if current is not None and current.context == entry.context:
         raise RepairBlockedError("semantic_context_already_current")
     if entry.context.reported_period_end != datetime.fromisoformat(str(row["period_end"])).date():
@@ -531,6 +661,10 @@ def _validate_entry(
         if Decimal(str(row["value"])) != entry.value or Unit(str(row["unit"])) != entry.unit:
             raise RepairBlockedError("bind_value_or_unit_mismatch")
     return row, source_type
+
+
+# Public read-only validation seam for deterministic manifest builders.
+validate_refresh_entry = _validate_entry
 
 
 def _apply_entry(
@@ -600,6 +734,105 @@ def _require_canonical_result_heads(
             raise RepairBlockedError("result_fact_not_canonically_resolved")
 
 
+def _validate_applied_entry_postcondition(
+    conn: sqlite3.Connection,
+    *,
+    manifest: RefreshManifest,
+    entry: RefreshEntry,
+    head_id: int,
+) -> None:
+    """Prove one exact committed result for marker replay or crash recovery."""
+    row = conn.execute(
+        "SELECT fact.*,document.sha256 AS source_sha256 "
+        "FROM kpi_facts fact JOIN documents document ON document.id=fact.source_doc_id "
+        "WHERE fact.id=?",
+        (head_id,),
+    ).fetchone()
+    if row is None:
+        raise RepairBlockedError("replay_fact_postcondition_mismatch")
+    successor_count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM kpi_facts WHERE supersedes_id=?",
+            (head_id,),
+        ).fetchone()[0]
+    )
+    if successor_count != 0:
+        raise RepairBlockedError("replay_fact_head_changed")
+    if entry.action == "bind_existing":
+        exact_fact = (
+            int(row["id"]) == entry.old_fact_id
+            and int(row["source_doc_id"]) == entry.source_doc_id
+            and Decimal(str(row["value"])) == entry.value
+            and Unit(str(row["unit"])) is entry.unit
+        )
+    else:
+        expected_currency = None if entry.currency is None else entry.currency.value
+        predecessor_successors = tuple(
+            int(successor[0])
+            for successor in conn.execute(
+                "SELECT id FROM kpi_facts WHERE supersedes_id=? ORDER BY id",
+                (entry.old_fact_id,),
+            )
+        )
+        exact_fact = (
+            int(row["id"]) != entry.old_fact_id
+            and predecessor_successors == (head_id,)
+            and row["supersedes_id"] is not None
+            and int(row["supersedes_id"]) == entry.old_fact_id
+            and int(row["source_doc_id"]) == entry.source_doc_id
+            and str(row["source_sha256"]) == entry.source_content_sha256
+            and Decimal(str(row["value"])) == entry.value
+            and Unit(str(row["unit"])) is entry.unit
+            and row["currency"] == expected_currency
+            and row["source_excerpt"] == entry.source_excerpt
+            and row["locator"] == entry.locator.to_json()
+            and row["extracted_by"] == f"source_review:{manifest.reviewer}"
+        )
+    if not exact_fact:
+        raise RepairBlockedError("replay_fact_postcondition_mismatch")
+    try:
+        _validate_source_binding(conn, entry)
+    except RepairBlockedError as exc:
+        raise RepairBlockedError("replay_source_postcondition_mismatch") from exc
+    canonical = canonical_fact_relation(conn, "kpi_facts")
+    if (
+        conn.execute(
+            f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+            (head_id,),
+        ).fetchone()
+        is None
+    ):
+        raise RepairBlockedError("replay_fact_not_canonically_resolved")
+    context = current_kpi_semantic_context(conn, kpi_fact_id=head_id)
+    if (
+        context is None
+        or context.context != _context_for_entry(entry)
+        or context.reviewed_by != manifest.reviewer
+        or context.knowledge_at != manifest.knowledge_at
+    ):
+        raise RepairBlockedError("replay_semantic_context_changed")
+    if entry.predecessor_resolution_state != "quarantined_legacy":
+        return
+    predecessor = conn.execute(
+        "SELECT fact.source_doc_id,document.sha256 AS source_sha256 "
+        "FROM kpi_facts fact JOIN documents document ON document.id=fact.source_doc_id "
+        "WHERE fact.id=?",
+        (entry.old_fact_id,),
+    ).fetchone()
+    if (
+        predecessor is None
+        or int(predecessor["source_doc_id"]) != entry.expected_old_source_doc_id
+        or str(predecessor["source_sha256"]) != entry.expected_old_source_sha256
+        or conn.execute(
+            f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+            (entry.old_fact_id,),
+        ).fetchone()
+        is not None
+        or current_kpi_semantic_context(conn, kpi_fact_id=entry.old_fact_id) is not None
+    ):
+        raise RepairBlockedError("replay_quarantined_predecessor_changed")
+
+
 def _verify_replay(
     conn: sqlite3.Connection,
     *,
@@ -609,28 +842,14 @@ def _verify_replay(
     if len(result_heads) != len(manifest.entries):
         raise RepairBlockedError("idempotency_marker_result_shape_mismatch")
     for entry, head_id in zip(manifest.entries, result_heads, strict=True):
-        expected_head = entry.old_fact_id if entry.action == "bind_existing" else head_id
-        if head_id != expected_head:
+        if entry.action == "bind_existing" and head_id != entry.old_fact_id:
             raise RepairBlockedError("idempotency_marker_result_head_mismatch")
-        head = conn.execute(
-            "SELECT id FROM kpi_facts fact WHERE fact.id=? AND NOT EXISTS ("
-            "SELECT 1 FROM kpi_facts successor WHERE successor.supersedes_id=fact.id)",
-            (head_id,),
-        ).fetchone()
-        if head is None:
-            raise RepairBlockedError("replay_fact_head_changed")
-        canonical = canonical_fact_relation(conn, "kpi_facts")
-        if (
-            conn.execute(
-                f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
-                (head_id,),
-            ).fetchone()
-            is None
-        ):
-            raise RepairBlockedError("replay_fact_not_canonically_resolved")
-        context = current_kpi_semantic_context(conn, kpi_fact_id=head_id)
-        if context is None or context.context != _context_for_entry(entry):
-            raise RepairBlockedError("replay_semantic_context_changed")
+        _validate_applied_entry_postcondition(
+            conn,
+            manifest=manifest,
+            entry=entry,
+            head_id=head_id,
+        )
 
 
 def _detect_applied_postcondition(
@@ -644,33 +863,20 @@ def _detect_applied_postcondition(
         else:
             row = conn.execute(
                 "SELECT fact.id FROM kpi_facts fact WHERE fact.supersedes_id=? "
-                "AND fact.source_doc_id=? AND fact.value=? AND fact.unit=? "
-                "AND fact.source_excerpt=? AND fact.locator=? AND NOT EXISTS ("
-                "SELECT 1 FROM kpi_facts successor WHERE successor.supersedes_id=fact.id) "
                 "ORDER BY fact.id DESC LIMIT 1",
-                (
-                    entry.old_fact_id,
-                    entry.source_doc_id,
-                    str(entry.value),
-                    entry.unit.value,
-                    entry.source_excerpt,
-                    entry.locator.to_json(),
-                ),
+                (entry.old_fact_id,),
             ).fetchone()
             if row is None:
                 return None
             head_id = int(row["id"])
-        context = current_kpi_semantic_context(conn, kpi_fact_id=head_id)
-        if context is None or context.context != _context_for_entry(entry):
-            return None
-        canonical = canonical_fact_relation(conn, "kpi_facts")
-        if (
-            conn.execute(
-                f"SELECT 1 FROM {canonical.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
-                (head_id,),
-            ).fetchone()
-            is None
-        ):
+        try:
+            _validate_applied_entry_postcondition(
+                conn,
+                manifest=manifest,
+                entry=entry,
+                head_id=head_id,
+            )
+        except RepairBlockedError:
             return None
         heads.append(head_id)
     return tuple(heads)
@@ -768,6 +974,7 @@ def main(argv: list[str] | None = None) -> int:
             raise RepairBlockedError("manifest_user_identity_mismatch")
         if args.max_review_age_seconds <= 0:
             raise RepairBlockedError("invalid_review_age")
+        validate_manifest_knowledge_time(manifest, now=started)
         _validate_external_evidence(
             manifest=manifest,
             db_path=args.db,
@@ -879,8 +1086,17 @@ def main(argv: list[str] | None = None) -> int:
                             )
                             if row.kpi_definition_id is not None
                         }
+                        owner_ticker_set = frozenset(
+                            portfolio_tickers(conn, user_id=manifest.user_id)
+                        )
                         validated = [
-                            _validate_entry(conn, entry, allowed) for entry in manifest.entries
+                            _validate_entry(
+                                conn,
+                                entry,
+                                allowed,
+                                owner_tickers=owner_ticker_set,
+                            )
+                            for entry in manifest.entries
                         ]
                         heads: list[int] = []
                         for entry, (row, source_type) in zip(
