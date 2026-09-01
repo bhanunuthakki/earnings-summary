@@ -33,7 +33,7 @@ EXPECTED_DISABLED_TASKS = {
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 45
+    assert len(manifest.tasks) == 46
     collector = next(
         task
         for task in manifest.tasks
@@ -51,6 +51,53 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert collector_xml.index("<Repetition>") < collector_xml.index("<StartBoundary>")
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert all(task.task_name != r"\earnings-summary\monthly_p3_refresh" for task in manifest.tasks)
+    semantic_review = next(
+        task
+        for task in manifest.tasks
+        if task.task_name == r"\earnings-summary\prepare_kpi_semantic_review"
+    )
+    assert semantic_review.schedule.repetition_interval == "PT10M"
+    assert semantic_review.xml == "prepare_kpi_semantic_review.task.xml"
+    assert semantic_review.wrapper == "run_prepare_kpi_semantic_review.bat"
+    semantic_xml = (CRON_DIR / semantic_review.xml).read_text(encoding="utf-8")
+    assert "<ExecutionTimeLimit>PT30M</ExecutionTimeLimit>" in semantic_xml
+    assert semantic_xml.index("<Repetition>") < semantic_xml.index("<StartBoundary>")
+    assert r"runtime\earnings-summary\cron\run_prepare_kpi_semantic_review.bat" in semantic_xml
+    semantic_wrapper = (CRON_DIR / semantic_review.wrapper).read_text(encoding="utf-8")
+    assert "if not defined EARNINGS_SUMMARY_DB_PATH" in semantic_wrapper
+    assert 'for %%I in ("%EARNINGS_SUMMARY_DB_PATH%") do set "DB_DIR=%%~dpI"' in semantic_wrapper
+    assert 'for %%I in ("%DB_DIR%..") do set "PRODUCT_STATE_ROOT=%%~fI"' in semantic_wrapper
+    assert 'set "ES_JOB_RUNTIME_REPO_ROOT=%PRODUCT_STATE_ROOT%"' in semantic_wrapper
+    assert 'set "ES_JOB_RUNTIME_CODE_ROOT=%PROJECT_ROOT%"' in semantic_wrapper
+    assert r'set "LOG_DIR=%PRODUCT_STATE_ROOT%\.tmp\cron_logs"' in semantic_wrapper
+    assert r'"%PROJECT_ROOT%\execution\prepare_kpi_semantic_review.py"' in semantic_wrapper
+    assert '--code-root "%PROJECT_ROOT%"' in semantic_wrapper
+    assert "--user-id" not in semantic_wrapper
+    assert '--code-root "%PROJECT_ROOT%" --publish' in semantic_wrapper
+    assert "http" not in semantic_wrapper.casefold()
+    prepare_source = (PROJECT_ROOT / "execution" / "prepare_kpi_semantic_review.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'parser.add_argument("--user-id", default=DEFAULT_USER_ID)' in prepare_source
+    assert 'default="default"' not in prepare_source
+    shared_wrapper = (CRON_DIR / "run_python.bat").read_text(encoding="utf-8")
+    scope_gate = 'if /I not "%~1"=="prepare-kpi-semantic-review" goto clear_runtime_root_env'
+    assert scope_gate in shared_wrapper
+    assert 'set "JOB_RUNTIME_REPO_ROOT=%ES_JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
+    assert 'set "JOB_RUNTIME_CODE_ROOT=%ES_JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
+    assert '--repo-root "%JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
+    assert '--code-root "%JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
+    assert "ES_JOB_RUNTIME_CODE_ROOT is required with ES_JOB_RUNTIME_REPO_ROOT" in shared_wrapper
+    assert "ES_JOB_RUNTIME_REPO_ROOT is required with ES_JOB_RUNTIME_CODE_ROOT" in shared_wrapper
+    clear_label = shared_wrapper.index(":clear_runtime_root_env")
+    first_launch = shared_wrapper.index('"%PYTHON_EXE%" -u', clear_label)
+    assert shared_wrapper.index('set "ES_JOB_RUNTIME_REPO_ROOT="', clear_label) < first_launch
+    assert shared_wrapper.index('set "ES_JOB_RUNTIME_CODE_ROOT="', clear_label) < first_launch
+    assert shared_wrapper.index(scope_gate) < shared_wrapper.index(
+        "if defined ES_JOB_RUNTIME_REPO_ROOT if not defined ES_JOB_RUNTIME_CODE_ROOT"
+    )
+    assert "%ES_JOB_RUNTIME_REPO_ROOT%" not in shared_wrapper[first_launch:]
+    assert "%ES_JOB_RUNTIME_CODE_ROOT%" not in shared_wrapper[first_launch:]
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")
@@ -79,10 +126,12 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     assert "<BootTrigger>" in api_xml
     assert "<UserId>S-1-5-18</UserId>" in api_xml
     assert (
-        "<SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)</SecurityDescriptor>"
+        "<SecurityDescriptor>D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;IU)</SecurityDescriptor>"
         in api_xml
     )
     for forbidden_query_ace in (
+        "(A;;FA;;;SY)",
+        "(A;;FA;;;BA)",
         "(A;;GRGX;;;BU)",
         "(A;;GRGX;;;AU)",
         "(A;;GR;;;IU)",
@@ -95,6 +144,8 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     )
     assert "(A;;GRGX;;;IU)" in rendered_api_xml
     for forbidden_query_ace in (
+        "(A;;FA;;;SY)",
+        "(A;;FA;;;BA)",
         "(A;;GRGX;;;BU)",
         "(A;;GRGX;;;AU)",
         "(A;;GR;;;IU)",
@@ -169,7 +220,51 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     ]
     assert first_script.count("schtasks.exe /Create") == len(registered_tasks)
     assert first_script.count("Failed to register scheduled task") == len(registered_tasks)
+    tracker_create = (
+        "& schtasks.exe /Create /TN '\\earnings-summary\\portfolio_tracker_api' "
+        "/XML (Join-Path $renderDir 'portfolio_tracker_api.task.xml') /F"
+    )
+    tracker_acl = (
+        "& $taskSecurityScript -TaskPath '\\earnings-summary\\portfolio_tracker_api' "
+        "-RenderedXmlPath (Join-Path $renderDir 'portfolio_tracker_api.task.xml')"
+    )
+    assert tracker_create in first_script
+    assert tracker_acl in first_script
+    assert first_script.index(tracker_create) < first_script.index(tracker_acl)
+    assert first_script.count("& $taskSecurityScript -TaskPath") == len(registered_tasks)
     assert "| Windows service |" in first_doc
+
+
+def test_task_security_descriptor_helper_is_fail_closed_and_rollback_safe() -> None:
+    helper = (CRON_DIR / "apply_task_security_descriptor.ps1").read_text(encoding="utf-8")
+
+    assert "'/t:Task/t:RegistrationInfo/t:SecurityDescriptor'" in helper
+    assert "'/t:Task/t:RegistrationInfo/t:URI'" in helper
+    assert "Rendered task XML URI does not exactly match TaskPath" in helper
+    assert "$TaskDontAddPrincipalAce = 0x10" in helper
+    assert "$registeredTask.GetSecurityDescriptor(" in helper
+    assert "$previousDescriptor" in helper
+    assert "$registeredTask.SetSecurityDescriptor(" in helper
+    assert "Rollback readback did not match" in helper
+    assert "DiscretionaryAclProtected" in helper
+    assert "AccessAllowed" in helper
+    assert "S-1-5-18" in helper
+    assert "S-1-5-32-544" in helper
+    assert "S-1-5-4" in helper
+    assert "[uint32]268435456" in helper
+    assert "[uint32]2684354560" in helper
+    assert "[uint32]2032127" in helper
+    assert "[uint32]1179817" in helper
+    assert "unexpected trustee" in helper
+    assert "unexpected access mask" in helper
+    assert "nonzero ACE flags" in helper
+    assert "Assert-DeclaredQueryOnlyTaskDacl" in helper
+    assert "Assert-ActualQueryOnlyTaskDacl" in helper
+    assert "Get-DaclSemanticSignature" in helper
+    assert '"protected=$protected;daclNull=$daclNull;"' in helper
+    assert '"aceCount=$($aceSignatures.Count);aces=' in helper
+    assert "$VerifyOnly" in helper
+    assert "GetSddlForm" not in helper
 
 
 def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract() -> None:
@@ -185,8 +280,8 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
 
     assert f"{len(manifest.tasks)} operational declarations" in runbook
     assert f"{len(scheduler_tasks)} Task Scheduler registrations" in runbook
-    assert r"C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary" in runbook
-    assert r"C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary" in runbook
+    assert r"%USERPROFILE%\.gemini\antigravity\runtime\earnings-summary" in runbook
+    assert r"%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary" in runbook
     assert "register_tasks.generated.ps1" in runbook
     assert "-RepoRoot $EarningsSummaryCodeRoot" in runbook
     assert "schtasks /create /tn" not in normalized
@@ -200,18 +295,23 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
 
     assert "execution/verify_cron_registration.py" in runbook
     assert "schtasks.exe /Query" in runbook
-    assert "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;IU)" in runbook
+    assert "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;IU)" in runbook
     assert "`GR` alone can expose the" in runbook
     assert "do not broaden it to Builtin or Authenticated" in runbook
     assert "must remain query-only" in runbook
+    assert "SetSecurityDescriptor" in runbook
+    assert "GetSecurityDescriptor(4)" in runbook
+    assert "-VerifyOnly" in runbook
+    assert "0x1f01ff" in runbook
+    assert "0x1200a9" in runbook
+    assert "actual task DACL" in runbook
     assert "S-1-5-18" in runbook
 
     # Keep the operator path contract aligned with backup_db.py and
     # restore_db.py: mounted Drive roots D:..Z: win over the stale C: mirror.
     assert "first existing mounted `<drive>:\\My Drive` from `D:` through `Z:`" in runbook
     assert "`G:\\My Drive`" in runbook
-    assert "`C:\\Users\\Bhanu\\My Drive`" in runbook
-    assert "%USERPROFILE%\\My Drive" not in runbook
+    assert "`%USERPROFILE%\\My Drive`" in runbook
     assert "an exact schema-version match against the live DB" in runbook
     assert "a soft schema-version match" not in runbook
 
