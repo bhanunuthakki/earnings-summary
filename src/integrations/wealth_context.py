@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -35,7 +36,10 @@ from integrations.wealthplan_capacity import read_cash_need_summary
 
 # Same sibling-checkout default as integrations.wealthplan_capacity (kept
 # local rather than importing its private constant).
-DEFAULT_WEALTHPLAN_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\wealthplan")
+DEFAULT_WEALTHPLAN_ROOT = Path(
+    os.environ.get("WEALTHPLAN_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "wealthplan"
+)
 
 # wealthplan buckets the tracker owns live (auto-filled into the plan at save
 # time, stale afterwards). CASH / ILLIQUID / home_equity stay wealthplan-manual.
