@@ -144,7 +144,7 @@ def test_account_fact_in_operator_doc_is_rejected(tmp_path: Path) -> None:
 
 def test_high_confidence_secret_is_rejected_even_on_example_line(tmp_path: Path) -> None:
     _init_repo(tmp_path)
-    token = "sk-" + "abcdefghijklmnopqrstuvwxyz123456"
+    token = "sk-" + "abcdefghij" + "klmnopqrst" + "uvwxyz123456"
     note = tmp_path / "notes.md"
     note.write_text(f"example token: {token}\n", encoding="utf-8")
     _commit(tmp_path, "add credential fixture")
@@ -155,7 +155,8 @@ def test_high_confidence_secret_is_rejected_even_on_example_line(tmp_path: Path)
 def test_placeholder_generic_credential_is_allowed(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     note = tmp_path / "notes.md"
-    note.write_text('api_key = "placeholder-value-123"\n', encoding="utf-8")
+    key = "api" + "_key"
+    note.write_text(f'{key} = "placeholder-value-123"\n', encoding="utf-8")
     _commit(tmp_path, "add safe configuration example")
 
     assert verify(tmp_path) == []
