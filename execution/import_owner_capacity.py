@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -96,9 +97,16 @@ from owner_profile.models import (  # noqa: E402
 from owner_profile.store import append_fact  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
-_DEFAULT_WEALTHPLAN_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\wealthplan")
+_DEFAULT_WEALTHPLAN_ROOT = Path(
+    os.environ.get("WEALTHPLAN_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "wealthplan"
+)
 _DEFAULT_CIO_CONTEXT_PATH = Path(
-    r"C:\Users\Bhanu\.gemini\antigravity\scratch\portfolio-tracker\CIO_CONTEXT.local.md"
+    os.path.join(
+        os.environ.get("PORTFOLIO_TRACKER_ROOT")
+        or Path.home() / ".gemini" / "antigravity" / "scratch" / "portfolio-tracker",
+        "CIO_CONTEXT.local.md",
+    )
 )
 
 
