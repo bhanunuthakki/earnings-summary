@@ -132,7 +132,10 @@ def test_json_body_secrets_masked(key: str) -> None:
 
 
 def test_email_local_part_masked_domain_kept() -> None:
-    assert redact("contact bhanu@gmail.com for access") == "contact ***@gmail.com for access"
+    assert (
+        redact("contact owner@example.invalid for access")
+        == "contact ***@example.invalid for access"
+    )
 
 
 def test_email_in_user_agent_header_masked() -> None:
