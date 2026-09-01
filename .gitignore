@@ -19,6 +19,29 @@ cache/
 logs/
 *.log
 
+# Private/generated runtime material. These directories may exist in a local
+# checkout, but they are never part of the public source tree.
+/scratch/*
+!/scratch/seed_kpi_registry.py
+/outputs/
+/output/
+/.harden/state.json
+/cron/*.generated.md
+!/cron/TASKS.generated.md
+/docs/hardening/**/evidence/
+/docs/design/
+/docs/hardening/
+/mockups/*
+!/mockups/company_desk_mockup.html
+!/mockups/company_research_experience.html
+!/mockups/copilot_conversation_prototype.html
+!/mockups/evaluation_investment_profile_mockup.html
+!/mockups/harvey_sidebar_flow.html
+!/mockups/performance_risk_mockup.html
+!/mockups/portfolio_copilot_mockup.html
+/HOW_TO_USE_REPORTS.html
+/directives/self_host*.md
+
 # Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible
 # from execution/save_fmp_data.py and alembic migrations). Ignore the CONTENTS
 # (data/*) rather than the dir itself so specific durable files can be
@@ -41,15 +64,15 @@ data/deferred_fmp/*
 # longitudinal-tracking package, docs/design/disclosure_change_build_stack.md).
 /transcripts/
 
-# Generated brief artifacts written by execution/build_artifacts.py
-# (output/research/<TICKER>/<DATE>_workspace.html etc.). Reproducible from
-# data/ + transcripts/ + micro_thesis/.
-output/
-
 # Newly generated DCF workbooks are runtime artifacts. Historical workbooks
 # already tracked by Git remain tracked; this prevents scheduled onboarding
 # from dirtying the immutable runtime checkout when it creates a new ticker.
+/dcf/**/*.xlsx
 /dcf/*.xlsx
+
+# Per-account/per-portfolio thesis snapshots are private runtime inputs. The
+# public tree may retain anonymized research fixtures elsewhere in this area.
+/micro_thesis/holdings/
 
 # Auto-generated per-run thesis tracker markdowns (micro_thesis/holdings/
 # JSON schemas ARE checked in; the dated tracker outputs are not).
