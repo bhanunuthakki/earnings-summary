@@ -26,6 +26,8 @@ from integrations.portfolio_tracker_client import (
     PortfolioAnalytics,
     PositionAlpha,
     PositionAlphaRow,
+    PositionAlphaTimePoint,
+    PositionMatchedReturns,
 )
 from pipeline.explore_panel import render_explore_panel
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel
@@ -510,6 +512,8 @@ def _canary_performance_fragment() -> str:
             alpha_vs_qqq=190.0,
             alpha_vs_policy=230.0,
             incomplete=False,
+            qqq_counterfactual_pl=510.0,
+            policy_counterfactual_pl=470.0,
         ),
         PositionAlphaRow(
             ticker="CANARY",
@@ -524,6 +528,8 @@ def _canary_performance_fragment() -> str:
             alpha_vs_qqq=-80.0,
             alpha_vs_policy=-45.0,
             incomplete=False,
+            qqq_counterfactual_pl=230.0,
+            policy_counterfactual_pl=195.0,
         ),
     ]
     alpha = PositionAlpha(
@@ -536,6 +542,25 @@ def _canary_performance_fragment() -> str:
         total_alpha_vs_qqq=110.0,
         total_alpha_vs_policy=185.0,
         rows=rows,
+        total_qqq_pl=740.0,
+        total_policy_pl=665.0,
+        matched_returns=PositionMatchedReturns(
+            dietz_denominator=10000.0,
+            portfolio_return_pct=8.5,
+            spy_return_pct=6.3,
+            qqq_return_pct=7.4,
+            policy_return_pct=6.65,
+            alpha_vs_spy_pct=2.2,
+            alpha_vs_qqq_pct=1.1,
+            alpha_vs_policy_pct=1.85,
+        ),
+        series=[
+            PositionAlphaTimePoint("2025-10-01", 0.0, 0.0, 0.0, 0.0),
+            PositionAlphaTimePoint("2026-01-01", 8.5, 6.3, 7.4, 6.65),
+        ],
+        qqq_benchmark_priced=True,
+        policy_benchmark_priced=True,
+        calculation_status="available",
     )
     analytics = PortfolioAnalytics(
         available=True,
@@ -548,8 +573,9 @@ def _canary_performance_fragment() -> str:
             backfill_start_unreliable=False,
             points=[
                 PerformancePoint("2025-10-01", 0.0, 0.0, 0.0, 0.0),
-                PerformancePoint("2026-01-01", 8.5, 6.3, 7.8, 6.9),
+                PerformancePoint("2026-01-01", 8.5, 6.3, 7.4, 6.65),
             ],
+            calculation_status="available",
         ),
         position_alpha=alpha,
     )

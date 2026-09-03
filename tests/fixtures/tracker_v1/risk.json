@@ -1,39 +1,48 @@
 {
   "beta": {
-    "alpha_annualized_pct": null,
-    "alpha_significant": null,
-    "alpha_std_error_annualized_pct": null,
-    "alpha_t_stat": null,
+    "alpha_annualized_pct": 42.85202857400609,
+    "alpha_significant": false,
+    "alpha_std_error_annualized_pct": 57.23366610706062,
+    "alpha_t_stat": 0.7487206654532245,
     "benchmark": "SPY",
-    "benchmark_volatility_annualized": null,
-    "beta": null,
-    "correlation": null,
+    "benchmark_volatility_annualized": 0.1782970162782468,
+    "beta": 0.8859115725318077,
+    "calculation_reason_codes": [],
+    "calculation_status": "available",
+    "correlation": 0.5245300403124741,
     "end_date": "2026-07-23",
-    "information_ratio": null,
+    "information_ratio": 1.4583624630144212,
+    "methodology": "risk.beta_drawdown",
+    "methodology_version": "2",
     "notes": [
       "Risk-free rate defaulted to 4.0%/yr \u2014 no 13-week T-bill (^IRX) data for the window; run jobs.benchmarks.",
-      "No overlapping return days. Need at least 2 paired (portfolio, benchmark) observations."
+      "Alpha +42.9%/yr is NOT statistically distinguishable from zero (t=0.75, n=53) \u2014 likely noise, not demonstrated skill, on this sample.",
+      "R\u00b2 is low (0.28) \u2014 beta poorly summarizes this portfolio's relationship to SPY. Consider a different benchmark or a multi-factor model."
     ],
-    "portfolio_volatility_annualized": null,
-    "r_squared": null,
+    "portfolio_volatility_annualized": 0.3011369758244798,
+    "r_squared": 0.27513176319020566,
     "risk_free_annual": 0.04,
-    "sample_size": 0,
-    "sharpe": null,
-    "sortino": null,
+    "sample_size": 53,
+    "sharpe": 2.6682401917134015,
+    "sortino": 321.9925838866391,
     "start_date": "2025-07-23",
-    "tracking_error_annualized": null
+    "tracking_error_annualized": 0.2571912803999674
   },
   "drawdown": {
-    "annualized_return_pct": "968.57",
-    "calmar": "30.3597",
+    "annualized_return_pct": "11.20",
+    "calculation_reason_codes": [],
+    "calculation_status": "available",
+    "calmar": null,
     "current_drawdown_pct": "0.00",
-    "days_to_recovery": 7,
+    "days_to_recovery": 1,
     "end_date": "2026-07-23",
-    "max_drawdown_pct": "-31.90",
+    "max_drawdown_pct": "0.00",
+    "methodology": "risk.beta_drawdown",
+    "methodology_version": "2",
     "peak_date": "2025-07-23",
-    "recovery_date": "2026-07-22",
+    "recovery_date": "2025-07-24",
     "start_date": "2025-07-23",
-    "trough_date": "2026-07-15",
+    "trough_date": "2025-07-23",
     "underwater": [
       {
         "date": "2025-07-23",
@@ -1465,31 +1474,31 @@
       },
       {
         "date": "2026-07-15",
-        "drawdown_pct": "-31.90"
+        "drawdown_pct": "0.00"
       },
       {
         "date": "2026-07-16",
-        "drawdown_pct": "-31.90"
+        "drawdown_pct": "0.00"
       },
       {
         "date": "2026-07-17",
-        "drawdown_pct": "-31.24"
+        "drawdown_pct": "0.00"
       },
       {
         "date": "2026-07-18",
-        "drawdown_pct": "-31.24"
+        "drawdown_pct": "0.00"
       },
       {
         "date": "2026-07-19",
-        "drawdown_pct": "-31.24"
+        "drawdown_pct": "0.00"
       },
       {
         "date": "2026-07-20",
-        "drawdown_pct": "-31.25"
+        "drawdown_pct": "0.00"
       },
       {
         "date": "2026-07-21",
-        "drawdown_pct": "-31.27"
+        "drawdown_pct": "0.00"
       },
       {
         "date": "2026-07-22",
@@ -1520,7 +1529,7 @@
       "positioning": "/api/v1/analytics/positioning"
     },
     "methodology": "risk.beta_drawdown",
-    "methodology_version": "1",
+    "methodology_version": "2",
     "schema_version": "1.0.0",
     "source_providers": [
       "plaid",

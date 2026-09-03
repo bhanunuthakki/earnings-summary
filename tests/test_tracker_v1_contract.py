@@ -230,10 +230,56 @@ def test_data_quality_fixture_typed_values() -> None:
 def test_performance_fixture_has_full_year_series() -> None:
     """The official fixture is a full 365-point daily series."""
     result = tv1.PerformanceV1Result.model_validate(_load(FIXTURES_DIR / "performance.json"))
+    assert result.series.calculation_status == "available"
+    assert result.series.calculation_reason_codes == []
     assert len(result.series.points) == 365
     first = result.series.points[0]
     assert isinstance(first.portfolio_value, Decimal)
-    assert first.spy_return_pct is None  # no benchmark history yet on day 1
+    assert first.portfolio_return_pct == Decimal("0")
+    assert first.spy_return_pct == Decimal("0")
+    assert first.spy_equivalent_value == result.series.base_value
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["net_external_cashflow_in", "backfill_start_unreliable"],
+)
+def test_performance_required_financial_provenance_field_omission_is_invalid(field: str) -> None:
+    data = _deep_copy(_load(FIXTURES_DIR / "performance.json"))
+    series = cast("dict[str, object]", data["series"])
+    series.pop(field)
+
+    with pytest.raises(ValidationError):
+        tv1.PerformanceV1Result.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["net_external_cashflow_in", "backfill_start_unreliable"],
+)
+def test_performance_fetch_fails_closed_when_required_field_is_omitted(
+    field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _deep_copy(_load(FIXTURES_DIR / "performance.json"))
+    series = cast("dict[str, object]", data["series"])
+    series.pop(field)
+
+    def fake_get(
+        self: requests.Session,
+        url: str,
+        params: object = None,
+        timeout: object = None,
+    ) -> _FakeResponse:
+        return _FakeResponse(data)
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+    fetch = tv1.TrackerV1Client().get_performance()
+
+    assert fetch.available is False
+    assert fetch.data is None
+    assert fetch.error is not None
+    assert "schema_validation_error" in fetch.error
+    assert field in fetch.error
 
 
 def test_risk_fixture_has_meta_beta_drawdown_top_level_shape() -> None:

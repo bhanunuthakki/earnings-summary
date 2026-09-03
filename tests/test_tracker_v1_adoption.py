@@ -23,6 +23,7 @@ from execution.tracker_v1_parity import (
     compare_live,
 )
 from integrations import portfolio_tracker_client as tc
+from pipeline.portfolio_panel import render_portfolio_analytics_sections
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "tracker_v1"
 
@@ -252,8 +253,20 @@ def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
     assert analytics.positioning is not None
     assert analytics.positioning.concentration is not None
     assert analytics.beta is not None and analytics.beta.benchmark == "SPY"
+    assert analytics.beta.calculation_status == "available"
+    assert analytics.beta.provenance is not None
+    assert analytics.beta.provenance.as_of == "2026-07-22"
+    assert analytics.beta.provenance.source_providers == ("plaid", "snaptrade")
+    assert analytics.beta.provenance.included_account_count == 3
     assert analytics.drawdown is not None
-    assert analytics.drawdown.max_drawdown_pct == pytest.approx(-31.90)
+    risk_fixture = _fixture("risk")
+    expected_drawdown = cast("dict[str, object]", risk_fixture["drawdown"])
+    assert analytics.drawdown.calculation_status == "available"
+    assert analytics.drawdown.calculation_reason_codes == []
+    assert analytics.drawdown.provenance == analytics.beta.provenance
+    assert analytics.drawdown.max_drawdown_pct == pytest.approx(
+        float(cast("str", expected_drawdown["max_drawdown_pct"]))
+    )
     assert analytics.policy is not None and analytics.policy.total_pct == pytest.approx(100.0)
     assert legacy_calls == [f"{analytics.api_url}/api/policy"]
     # beta + drawdown share ONE /analytics/risk read.
@@ -262,6 +275,11 @@ def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
     # Envelope aggregated across sections.
     assert analytics.as_of is not None
     assert analytics.is_stale is False
+    rendered = render_portfolio_analytics_sections(analytics)
+    assert "Analytics as of 2026-07-22" in rendered
+    assert "providers: plaid, snaptrade" in rendered
+    assert "accounts: 3 included, 1 excluded, 0 lagging" in rendered
+    assert "method: risk.beta_drawdown v2" in rendered
 
 
 def test_analytics_v1_per_section_isolation(v1_on: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,6 +294,33 @@ def test_analytics_v1_per_section_isolation(v1_on: None, monkeypatch: pytest.Mon
     assert analytics.performance is not None
     assert analytics.beta is None
     assert "beta" in analytics.errors and analytics.errors["beta"].startswith("v1:")
+
+
+def test_analytics_v1_explicit_window_mismatch_fails_closed(
+    v1_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/analytics/performance": _fixture("performance"),
+            "/api/v1/analytics/risk": _fixture("risk"),
+        },
+    )
+    analytics = tc.fetch_portfolio_analytics(
+        start_date="2026-01-01",
+        end_date="2026-07-23",
+        only={"performance", "beta", "drawdown"},
+    )
+
+    assert analytics.performance is not None
+    assert analytics.performance.compatibility_issue == "returned_window_mismatch"
+    assert analytics.performance.points == []
+    assert analytics.beta is not None
+    assert analytics.beta.compatibility_issue == "returned_window_mismatch"
+    assert analytics.beta.beta is None
+    assert analytics.drawdown is not None
+    assert analytics.drawdown.compatibility_issue == "returned_window_mismatch"
+    assert analytics.drawdown.underwater == []
 
 
 def test_exit_quality_v1_standalone_carries_envelope(

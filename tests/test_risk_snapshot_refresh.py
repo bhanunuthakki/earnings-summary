@@ -236,6 +236,7 @@ def _canned_analytics() -> PortfolioAnalytics:
             net_external_cashflow_in=0.0,
             backfill_start_unreliable=False,
             points=points,
+            calculation_status="available",
         ),
         positioning=Positioning(
             snapshot_date="2026-07-23",
@@ -270,6 +271,7 @@ def _canned_analytics() -> PortfolioAnalytics:
             portfolio_volatility_annualized=0.22,
             benchmark_volatility_annualized=0.15,
             tracking_error_annualized=0.09,
+            calculation_status="available",
         ),
     )
 
@@ -315,6 +317,26 @@ def test_refresh_script_invalid_capture_writes_nothing(
         conn.close()
     assert n_alerts == 1
     assert alerts_store is not None  # imported cleanly against the head schema
+
+
+def test_refresh_script_unavailable_newer_read_preserves_last_good(
+    head_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_refresh_module()
+    write_snapshot(RiskSnapshot(beta=0.8), db_path=head_db)
+    unavailable = _canned_analytics()
+    assert unavailable.performance is not None
+    assert unavailable.beta is not None
+    unavailable.performance.calculation_status = "unavailable"
+    unavailable.performance.points = []
+    unavailable.beta.calculation_status = "unavailable"
+    unavailable.beta.beta = None
+    monkeypatch.setattr(mod, "fetch_portfolio_analytics", _returning(unavailable))
+
+    assert mod.main(["--db-path", str(head_db)]) == 1
+    latest = read_latest_snapshot(db_path=head_db)
+    assert latest is not None and latest.beta == pytest.approx(0.8)
+    assert len(read_history(db_path=head_db)) == 1
 
 
 def test_refresh_script_tracker_down_exits_nonzero(

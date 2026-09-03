@@ -142,8 +142,16 @@ def main(argv: list[str] | None = None) -> int:
     # The §7.1.6 degenerate-payload gate (same rule as the render path's
     # NULL-clobber fix, 2026-07-19 review G5): a capture must carry the
     # sections its substance comes from.
-    if analytics.performance is None or analytics.positioning is None:
-        reason = "partial tracker payload (performance/positioning missing)"
+    if (
+        analytics.performance is None
+        or analytics.performance.calculation_status != "available"
+        or not analytics.performance.points
+        or analytics.beta is None
+        or analytics.beta.calculation_status != "available"
+        or analytics.beta.beta is None
+        or analytics.positioning is None
+    ):
+        reason = "partial or unavailable tracker payload (performance/beta/positioning)"
         _log("invalid", reason=reason, errors=list(fetch_errors))
         _fire_deadman(db_path, reason=reason)
         return 1

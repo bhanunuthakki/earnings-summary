@@ -58,3 +58,10 @@ def test_family_master_exposes_each_composition() -> None:
         "page_css",
     ):
         assert f"def {name}()" in source
+
+
+def test_performance_methodology_popover_is_viewport_bounded_on_narrow_screens() -> None:
+    source = (ROOT / "src" / "pipeline" / "portfolio_styles.py").read_text(encoding="utf-8")
+    assert "@media (max-width:700px) { .pf-info-pop" in source
+    assert "position:fixed" in source
+    assert "right:var(--sp-3); left:var(--sp-3); width:auto" in source
