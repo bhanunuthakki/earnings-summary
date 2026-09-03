@@ -153,8 +153,9 @@ def test_retention_decisions_live_with_canonical_owners_and_existing_writers() -
     assert "DEFAULT_DISPOSABLE_RETENTION_DAYS = 30" in weekly_cleanup
     assert "DEFAULT_CACHE_RETENTION_DAYS = 7" in weekly_cleanup
     agents = _read("AGENTS.md")
+    folder_structure = _read("directives/folder_structure.md")
     assert "Safe to wipe." not in agents
-    assert "no active run or recovery path depends on them" in " ".join(agents.split())
+    assert "no active run or recovery path depends on it" in " ".join(folder_structure.split())
 
 
 def test_semantic_manifest_edges_match_current_directive_status_and_state_owner() -> None:
@@ -235,14 +236,14 @@ def test_draft_and_history_are_non_governing_but_lineage_is_retained() -> None:
 
 def test_project_rulebook_uses_manifest_classes_as_the_directive_authority() -> None:
     agents = _read("AGENTS.md")
-    assert "Only `canonical` entries own active policy or task contracts" in agents
-    assert "A `runbook` executes a named canonical contract but does not redefine it" in agents
-    assert "`draft` and `history` entries never govern current behavior" in agents
-    assert "Executable canonical directives and runbooks" in agents
+    assert "Only `canonical` entries own active policy" in agents
+    assert "a `runbook` supplies task mechanics within its named owners" in agents
+    assert "`draft` and `history` entries do not govern current behavior" in agents
     assert "Each directive must specify" not in agents
     assert "[[root:Delegation & Subagent Calibration]]" not in agents
     assert "[[root:Evidence governance]]" not in agents
-    assert "[[root:Evidence and delegation]]" in agents
+    assert "global Evidence and delegation rules" in agents
+    assert "[[root:Evidence and delegation]]" not in agents
 
 
 def test_project_rulebook_names_external_db_authority_and_investment_grade_gate() -> None:
@@ -390,7 +391,9 @@ def test_design_behavior_uses_the_live_interaction_contract_only() -> None:
 
 
 def test_project_rulebook_states_current_subscription_transport_truth() -> None:
-    agents = _read("AGENTS.md")
-    assert "Codex membership transport" in agents
-    assert "Claude subscription fallback" in agents
-    assert "src/llm/cli.py` → subscription `claude` CLI" not in agents
+    calls = _read("directives/llm_calls.md")
+    cli = _read("src/llm/cli.py")
+    for owner in (calls, cli):
+        assert "Codex membership transport" in owner
+        assert "Claude subscription transport" in owner
+        assert "LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude" in owner  # pragma: allowlist secret

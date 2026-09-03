@@ -9,7 +9,7 @@ def test_repo_instructions_route_operational_changes_to_the_surface_directive() 
     instructions = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
     assert "directives/operations_governance_surface.md" in instructions
-    assert "adds, removes, renames, or materially changes" in instructions
+    assert "owns operator actions and operational truth" in instructions
     assert "explicit tested no-surface-change disposition" in instructions
 
 
