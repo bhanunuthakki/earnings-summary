@@ -287,8 +287,9 @@ def discover_document_history(
         except Exception:  # one page's browser/network failure is non-fatal
             return []
         for href, text in anchors:
-            if href and _DOC_HREF_RX.search(href) and href not in candidates:
-                candidates[href] = _to_candidate(href, text, page_url, do_fetch)
+            target = _document_url(urllib.parse.urljoin(page_url, href))
+            if href and _DOC_HREF_RX.search(target) and target not in candidates:
+                candidates[target] = _to_candidate(target, text, page_url, do_fetch)
         if effective_delay > 0:
             time.sleep(effective_delay)
         return anchors

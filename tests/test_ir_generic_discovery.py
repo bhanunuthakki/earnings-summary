@@ -81,6 +81,19 @@ def test_harvests_only_document_links() -> None:
     }
 
 
+def test_harvest_normalizes_relative_urls_and_fragments() -> None:
+    pages = {
+        "https://ir.x/results/index.html": [
+            ("../files/q3-2025.pdf", "Q3 2025 Results"),
+            ("https://ir.x/files/q3-2025.pdf#download", "Q3 duplicate"),
+        ]
+    }
+
+    docs, _ = _run(pages, ir_url="https://ir.x/results/index.html")
+
+    assert [doc.url for doc in docs] == ["https://ir.x/files/q3-2025.pdf"]
+
+
 def test_attributes_period_and_doc_type() -> None:
     pages = {"https://ir.x/": [("https://ir.x/q3-2025-press-release.pdf", "Q3 2025 Press Release")]}
     docs, _ = _run(pages)
@@ -318,6 +331,7 @@ def test_hybrid_does_not_swallow_mz_auth_denial(monkeypatch: pytest.MonkeyPatch)
         platform="mz",
         results_center_url="https://ir.example/",
     )
+
     def no_generic_history(**_kwargs: object) -> list[object]:
         return []
 
