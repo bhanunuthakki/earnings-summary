@@ -47,7 +47,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import subprocess
 import sys
 from calendar import monthrange
@@ -218,48 +217,6 @@ def _has_ingested_evidence(ticker: str, year: int, quarter: int, fye_month: int)
     return False
 
 
-def _try_audio_fallback(ticker: str, year: int, quarter: int) -> bool:
-    """Escalate an aggregator miss to the YouTube-audio + Whisper fallback.
-
-    Lazy-imports ``fetch_audio_transcripts`` so yt-dlp / faster-whisper stay
-    optional — the default backfill path never imports them. Returns True when a
-    transcript file was produced. CPU Whisper is slow (minutes per call), which
-    is why this is opt-in via ``--audio-fallback`` rather than the unattended
-    default.
-    """
-    try:
-        import fetch_audio_transcripts as fat  # type: ignore[import-not-found]
-    except Exception as e:  # optional heavy deps (yt-dlp / whisper) may be absent
-        sys.stderr.write(
-            f"[audio-fallback] unavailable ({type(e).__name__}: {e}); "
-            f"install yt-dlp + faster-whisper to enable.\n"
-        )
-        return False
-    # Resolve ffmpeg the way fetch_audio_transcripts' CLI does (FFMPEG_LOCATION
-    # env, then the Windows default, else PATH) without reaching into its
-    # private helper.
-    ffmpeg_env = os.environ.get("FFMPEG_LOCATION")
-    if ffmpeg_env:
-        ffmpeg: Path | None = Path(ffmpeg_env)
-    elif os.name == "nt" and Path("C:/ffmpeg/bin").exists():
-        ffmpeg = Path("C:/ffmpeg/bin")
-    else:
-        ffmpeg = None
-    try:
-        res = fat.fetch_and_transcribe(
-            fat.FetchSpec(ticker=ticker, year=year, quarter=quarter),
-            ffmpeg,
-            db_path=Path(db.DB_PATH),
-            owner_requested=True,
-        )
-    except Exception as e:  # audio fetch/transcribe is best-effort
-        sys.stderr.write(
-            f"[audio-fallback] {ticker} Q{quarter} {year} failed: {type(e).__name__}: {e}\n"
-        )
-        return False
-    return res is not None
-
-
 def _backfill_one(
     ticker: str,
     fye_month: int,
@@ -268,7 +225,6 @@ def _backfill_one(
     dry_run: bool,
     db_path: Path,
     owner_requested: bool,
-    audio_fallback: bool = False,
 ) -> TickerBackfillResult:
     if lookback < 1 or lookback > _DEFAULT_LOOKBACK:
         raise ValueError(f"lookback must be between 1 and {_DEFAULT_LOOKBACK}")
@@ -299,8 +255,6 @@ def _backfill_one(
             result.fetched.append(label)
         elif hit.status == FetchQaStatus.DENIED:
             result.errors.append(f"{label}: transcript acquisition denied")
-        elif audio_fallback and _try_audio_fallback(ticker, y, q):
-            result.fetched.append(f"{label} [audio]")
         else:
             result.aggregator_misses.append(label)
     return result
@@ -488,11 +442,6 @@ def main() -> int:
         help="Plan only — print what WOULD be fetched/ingested/extracted",
     )
     p.add_argument(
-        "--audio-fallback",
-        action="store_true",
-        help="Deprecated compatibility flag; rejected because webcasts/audio are excluded",
-    )
-    p.add_argument(
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
@@ -502,9 +451,6 @@ def main() -> int:
     args = p.parse_args()
     if args.lookback_quarters < 1 or args.lookback_quarters > _DEFAULT_LOOKBACK:
         p.error(f"--lookback-quarters must be between 1 and {_DEFAULT_LOOKBACK}")
-    if args.audio_fallback:
-        p.error("--audio-fallback is excluded by the text-transcript collection policy")
-
     repo_root = args.repo_root.resolve()
     if repo_root != PROJECT_ROOT:
         _retarget_paths(repo_root)
@@ -531,7 +477,6 @@ def main() -> int:
             args.dry_run,
             selected_db_path,
             args.ticker is not None,
-            audio_fallback=args.audio_fallback,
         )
         per_ticker.append(r)
         print(

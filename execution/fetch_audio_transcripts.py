@@ -56,11 +56,7 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     authorize_transcript_request,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from transcript_qa import (  # noqa: E402
-    QaStatus,
-    validate_audio_transcript,
-    validate_transcript,
-)
+from transcript_qa import validate_transcript  # noqa: E402
 from transcripts.acquisition_semantics import (  # noqa: E402
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
@@ -579,14 +575,12 @@ def fetch_and_transcribe(
 
     if spec.url is not None:
         url = _validate_audio_url(str(spec.url))
-        source = TranscriptSource.YT_DLP_WHISPER_URL
         print(
             f"[{canonical_ticker} {qlabel} {spec.year}] "
             f"Using curated source: {_safe_url_label(url)}"
         )
     else:
         url = smart_search_url(spec.ticker, spec.year, spec.quarter, ffmpeg_location)
-        source = TranscriptSource.YT_DLP_WHISPER_SEARCH
 
     audio_stem = TMP_DIR / f"temp_audio_{canonical_ticker}_{qlabel}_{spec.year}"
     # If a leftover from a prior aborted run exists (any extension), wipe it.
@@ -600,16 +594,9 @@ def fetch_and_transcribe(
     )
     _transcribe(audio_path, output_path, whisper_model, beam_size)
 
-    # Two independent QA checks against the just-produced transcript:
-    #   (a) structural validity — file size, timestamps, words/sec, hallucination
-    #       repeat ratio. Gates the audio-cache cleanup (failed transcripts keep
-    #       the cached audio so the user can rerun with different decode params
-    #       without re-downloading).
-    #   (b) Q&A-section presence — was analyst Q&A in the recording at all,
-    #       or did the source cut off at the hand-off? A structurally-OK file
-    #       can still be prepared-remarks only; downstream Say-Do / commitments
-    #       extraction needs to know.
-    qa_result = validate_audio_transcript(output_path)
+    # Preserve the diagnostic before failing closed: downstream Say-Do /
+    # commitments extraction must know when a retained legacy recording lacks
+    # analyst Q&A, even though new audio indexing is policy-excluded.
     qa_section = detect_qa_section(output_path.read_text(encoding="utf-8"))
     if qa_section.status is QASectionStatus.ABSENT:
         sys.stderr.write(
@@ -622,29 +609,6 @@ def fetch_and_transcribe(
 
     raise AudioCollectionPolicyError(
         "audio transcript indexing requires an authorized acquisition receipt"
-    )
-
-    if qa_result.status == QaStatus.OK:
-        audio_path.unlink(missing_ok=True)
-        print(f"[done] {output_path}  qa=ok  has_qa={qa_section.status.value}  audio_cleaned")
-    else:
-        print(
-            f"[done-qa-failed] {output_path}  qa=failed  "
-            f"has_qa={qa_section.status.value}  audio_kept={audio_path.name}  "
-            f"issues={len(qa_result.issues)}"
-        )
-        for issue in qa_result.issues:
-            print(f"      - {issue}")
-
-    return TranscriptionResult(
-        ticker=canonical_ticker,
-        year=spec.year,
-        quarter=spec.quarter,
-        output_path=output_path,
-        source=source,
-        video_url=url,
-        qa_section_status=qa_section.status,
-        qa_section_signals=qa_section.signals,
     )
 
 

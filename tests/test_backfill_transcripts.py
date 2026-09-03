@@ -263,3 +263,15 @@ def test_scheduled_transcript_scope_is_portfolio_only_but_explicit_evaluation_is
 def test_transcript_automatic_lookback_defaults_to_five() -> None:
     mod = _load_module()
     assert mod._DEFAULT_LOOKBACK == 5
+
+
+def test_help_does_not_advertise_retired_audio_fallback() -> None:
+    result = subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "execution" / "backfill_transcripts.py"), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "--audio-fallback" not in result.stdout

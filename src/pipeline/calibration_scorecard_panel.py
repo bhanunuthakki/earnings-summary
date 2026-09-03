@@ -117,7 +117,4 @@ def _experiment_block(card: CalibrationScorecard) -> str:
     )
 
 
-""""""
-
-
 __all__ = ["SCORECARD_CSS", "render_scorecard_section"]

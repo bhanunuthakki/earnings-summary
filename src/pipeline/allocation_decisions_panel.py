@@ -1387,8 +1387,6 @@ def _audit_row(r: SizingAuditRow) -> str:
     return main + editor
 
 
-_OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn"}
-
 # How many trailing periods the trend curve renders (older ones roll off the
 # left so the recent trajectory stays legible).
 _MAX_TREND_PERIODS = 12
