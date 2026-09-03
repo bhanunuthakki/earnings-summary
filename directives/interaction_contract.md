@@ -21,6 +21,12 @@
   typed behavior/state owner. Comments and Copilot behavior live in
   `directives/report_comments_and_chat.md`; provenance meaning in `directives/data_provenance.md`;
   and operator controls in `directives/operations_governance_surface.md`.
+- **Explore is a doorway, not another model owner:** DCF owns valuation assumptions and recomputation.
+  Explore may read the current DCF state and expose analysis on demand, but it does not mutate DCF
+  truth or turn that analysis into a persistent dashboard by default. Explanations of an Explore
+  scenario name the DCF as the owner so the source-of-truth and mutation boundary stay explicit. A
+  completed-edit report states that the mutation and recomputation occurred in DCF before presenting
+  the resulting read-only state in Explore.
 - **One searchable single-select:** every closed single-value dropdown uses the shared app-owned
   trigger and listbox. Typing filters the open or focused control; a surface may nominate one
   default control when focus is elsewhere and the event did not originate in editable content.

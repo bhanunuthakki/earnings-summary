@@ -359,7 +359,7 @@ def test_agent_facing_design_contract_is_compact_and_points_to_executable_author
     ):
         assert executable_owner in directive
 
-    ui_section = agent_contract.split("## UI / Front-end", 1)[1].split("\n## ", 1)[0]
+    ui_section = agent_contract.split("## Interface", 1)[1].split("\n## ", 1)[0]
     assert len(ui_section.splitlines()) <= 10
     assert "The guard is partial" not in ui_section
     assert "scripts/check_design_sync.py" in ui_section
