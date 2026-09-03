@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for §5 Earnings — cross-quarter themes split (prepared vs Q&A).
 
 Covers:
@@ -31,12 +32,26 @@ from report.sections import earnings as earnings_section
 from report.sections.earnings import (
     _parse_themes_response,
     _split_transcript_sections,
+    _themes_cache_key,
     build,
 )
 
 # ---------------------------------------------------------------------------
 # Splitter
 # ---------------------------------------------------------------------------
+
+
+def test_themes_cache_key_hashes_complete_transcript_content() -> None:
+    prefix = "A" * 64
+    first: list[dict[str, object]] = [
+        {"period": "Q2 2026", "prepared": prefix + "X", "qa": "question"}
+    ]
+    second: list[dict[str, object]] = [
+        {"period": "Q2 2026", "prepared": prefix + "Y", "qa": "question"}
+    ]
+
+    assert _themes_cache_key(first) != _themes_cache_key(second)
+    assert _themes_cache_key(first) == _themes_cache_key(first)
 
 
 def test_split_aggregator_qa_only_banner_returns_qa_only() -> None:

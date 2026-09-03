@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Unit tests for list_type_reconcile — the holdings → list_type reconciler.
 
 The rule (user directive 2026-06-15): operating companies held > $threshold are
@@ -16,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from list_type_reconcile import (  # noqa: E402
+    _held_operating_companies,
     apply_reclassification,
     compute_reclassification,
     load_pins,
@@ -139,6 +141,23 @@ def test_etfs_funds_cash_never_promoted() -> None:
     assert plan.promotions == []
     assert plan.untracked_held == []  # ETFs aren't "held operating companies"
     assert not plan.has_changes
+
+
+def test_mixed_security_types_do_not_pollute_operating_company_value() -> None:
+    tk = _tracker_db()
+    _hold(tk, 1, "MIX", "cs", 200.0)
+    _hold(tk, 2, "MIX", "etf", 50_000.0)
+    _hold(tk, 3, "MIX", "cash", 25_000.0, cash_eq=1)
+
+    assert _held_operating_companies(tk, min_value=100.0) == {"MIX": 200.0}
+
+
+def test_mixed_etf_row_does_not_suppress_operating_company() -> None:
+    tk = _tracker_db()
+    _hold(tk, 1, "DUPE", "cs", 5_000.0)
+    _hold(tk, 2, "DUPE", "etf", 5_000.0)
+
+    assert _held_operating_companies(tk, min_value=100.0) == {"DUPE": 5_000.0}
 
 
 def test_threshold_excludes_tiny_positions() -> None:

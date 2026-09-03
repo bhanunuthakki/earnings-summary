@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import subprocess
+import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -225,7 +226,7 @@ def test_dry_run_mode_does_not_mutate_db(tmp_path: Path, migrated_db: Any) -> No
 def test_ingest_ir_events_cli_runs_cleanly(tmp_path: Path, migrated_db: Any) -> None:
     db_path = migrated_db(tmp_path / "portfolio.db")
     cmd = [
-        "python",
+        sys.executable,
         "execution/sqlite_bootstrap.py",
         "execution/ingest_ir_events.py",
         "--db",
