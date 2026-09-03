@@ -205,7 +205,7 @@
 
     .window-controls { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-block-end: var(--sp-3); }
     .window-label { color: var(--muted); font-size: var(--fs-caption); }
-    .pnl-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); margin-block-end: var(--sp-4); }
+    .pnl-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin-block-end: var(--sp-4); max-width: 28rem; }
     .pnl-metric { min-inline-size: 0; padding: var(--sp-3); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); background: var(--paper); }
     .metric-label { color: var(--muted); font-size: var(--fs-caption); }
     .metric-value { margin-block-start: var(--sp-1); font-family: var(--mono); font-size: var(--fs-display); font-weight: 600; }
@@ -376,24 +376,9 @@
 
           <div class="pnl-row" data-testid="pnl-row">
             <div class="pnl-metric" data-testid="pnl-metric">
-              <div class="metric-label">Actual P&amp;L</div>
-              <div class="metric-value" id="actualPnl">$190,529</div>
-              <div class="metric-note">2025-08-21 → 2026-08-21</div>
-            </div>
-            <div class="pnl-metric" data-testid="pnl-metric">
-              <div class="metric-label">Matched SPY P&amp;L</div>
-              <div class="metric-value" id="matchedPnl">$108,446</div>
-              <div class="metric-note">Same-day cash flows</div>
-            </div>
-            <div class="pnl-metric" data-testid="pnl-metric">
-              <div class="metric-label">Alpha vs SPY</div>
-              <div class="metric-value" id="alphaPnl">$82,083</div>
-              <div class="metric-note">Actual minus matched SPY</div>
-            </div>
-            <div class="pnl-metric" data-testid="pnl-metric">
-              <div class="metric-label">Modified Dietz</div>
+              <div class="metric-label">Whole-portfolio cash-flow-matched return</div>
               <div class="metric-value" id="dietzReturn">+12.8%</div>
-              <div class="metric-note">Cash-flow adjusted return</div>
+              <div class="metric-note">Modified Dietz · 2026-05-09 → 2026-08-21</div>
             </div>
           </div>
 
@@ -571,10 +556,10 @@
 
   <script>
     const windowFixtures = {
-      "1M": { actual: "$46,100", matched: "$20,700", alpha: "$25,400", dietz: "+4.8%", portfolio: "+4.8%", spy: "+2.1%", qqq: "+1.7%", policy: "+1.6%" },
-      "3M": { actual: "$190,529", matched: "$108,446", alpha: "$82,083", dietz: "+12.8%", portfolio: "+12.8%", spy: "+3.7%", qqq: "+0.1%", policy: "+2.0%" },
-      "YTD": { actual: "$212,900", matched: "$129,800", alpha: "$83,100", dietz: "+15.1%", portfolio: "+15.1%", spy: "+6.9%", qqq: "+5.4%", policy: "+5.1%" },
-      "1Y": { actual: "$190,529", matched: "$108,446", alpha: "$82,083", dietz: "+12.8%", portfolio: "+12.8%", spy: "+3.7%", qqq: "+0.1%", policy: "+2.0%" }
+      "1M": { dietz: "+4.8%", portfolio: "+4.8%", spy: "+2.1%", qqq: "+1.7%", policy: "+1.6%" },
+      "3M": { dietz: "+12.8%", portfolio: "+12.8%", spy: "+3.7%", qqq: "+0.1%", policy: "+2.0%" },
+      "YTD": { dietz: "+15.1%", portfolio: "+15.1%", spy: "+6.9%", qqq: "+5.4%", policy: "+5.1%" },
+      "1Y": { dietz: "+12.8%", portfolio: "+12.8%", spy: "+3.7%", qqq: "+0.1%", policy: "+2.0%" }
     };
 
     function setPerformanceWindow(windowName) {
@@ -586,9 +571,6 @@
         button.setAttribute("aria-pressed", String(active));
       });
       document.getElementById("performanceState").textContent = windowName + " observed";
-      document.getElementById("actualPnl").textContent = fixture.actual;
-      document.getElementById("matchedPnl").textContent = fixture.matched;
-      document.getElementById("alphaPnl").textContent = fixture.alpha;
       document.getElementById("dietzReturn").textContent = fixture.dietz;
       document.getElementById("portfolioReturn").textContent = fixture.portfolio;
       document.getElementById("spyReturn").textContent = fixture.spy;

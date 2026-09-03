@@ -276,6 +276,18 @@ def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
     assert analytics.as_of is not None
     assert analytics.is_stale is False
     rendered = render_portfolio_analytics_sections(analytics)
+    # The fixtures deliberately diverge. Whole-account Modified Dietz owns the
+    # sole headline/chart; position price/trade return is secondary detail.
+    assert analytics.performance.points[-1].portfolio_return_pct == pytest.approx(11.1573501)
+    assert analytics.position_alpha.matched_returns is not None
+    assert analytics.position_alpha.matched_returns.portfolio_return_pct == pytest.approx(18.8233)
+    assert "Whole-portfolio cash-flow-matched return" in rendered
+    assert "+11.2%" in rendered
+    assert "+18.8%" in rendered
+    assert rendered.index("+11.2%") < rendered.index("Position drivers")
+    assert rendered.index("Position drivers") < rendered.index("+18.8%")
+    assert "method: performance.modified_dietz v2" in rendered
+    assert "method: position_alpha.split_normalized_price_trade_modified_dietz v3" in rendered
     assert "Analytics as of 2026-07-22" in rendered
     assert "providers: plaid, snaptrade" in rendered
     assert "accounts: 3 included, 1 excluded, 0 lagging" in rendered

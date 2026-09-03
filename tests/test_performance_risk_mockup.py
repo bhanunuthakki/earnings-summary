@@ -54,7 +54,7 @@ def test_removed_cards_and_tables_are_absent() -> None:
         assert removed not in html
 
 
-def test_performance_card_has_one_title_and_one_horizontal_pnl_row() -> None:
+def test_performance_card_has_one_title_and_one_authoritative_return() -> None:
     html = _mockup()
     section = _section(html, "performance-card")
     pnl_row = section.split('data-testid="pnl-row"', 1)[1].split(
@@ -64,11 +64,12 @@ def test_performance_card_has_one_title_and_one_horizontal_pnl_row() -> None:
     assert section.count("<h2") == 1
     assert '<h2 class="k-card-title">Index Benchmarking</h2>' in section
     assert "Performance vs benchmarks" not in section
-    assert section.count('data-testid="pnl-metric"') == 4
-    for label in ("Actual P&amp;L", "Matched SPY P&amp;L", "Alpha vs SPY", "Modified Dietz"):
-        assert label in section
-    assert ".pnl-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));" in html
-    assert pnl_row.index("Actual P&amp;L") < pnl_row.index("Matched SPY P&amp;L")
+    assert section.count('data-testid="pnl-metric"') == 1
+    assert "Whole-portfolio cash-flow-matched return" in pnl_row
+    assert "Modified Dietz" in pnl_row
+    for forbidden in ("Actual P&amp;L", "Matched SPY P&amp;L", "Alpha vs SPY"):
+        assert forbidden not in section
+    assert ".pnl-row { display: grid; grid-template-columns: minmax(0, 1fr);" in html
 
 
 def test_every_content_card_has_one_visible_title() -> None:
@@ -151,7 +152,6 @@ def test_prototype_interactions_and_responsive_contract_are_present() -> None:
     assert 'role="tablist"' in html
     assert "@media (max-width: 70rem)" in html
     assert "@media (max-width: 48rem)" in html
-    assert ".pnl-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }" in html
     assert ".pnl-row { grid-template-columns: minmax(0, 1fr); }" in html
     assert ".correlation-scroll { overflow: auto;" in html
     assert "prefers-reduced-motion: reduce" in html

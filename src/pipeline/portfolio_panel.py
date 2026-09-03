@@ -218,12 +218,15 @@ def render_portfolio_panel(
     # painted. Down → skip the fetchers entirely and render the banner now.
     alive, base = probe_tracker(api_url)
     if alive:
+        requested_analytics = {"performance", "policy"}
+        if include_position_drivers:
+            requested_analytics.add("position_alpha")
         analytics = fetch_portfolio_analytics(
             api_url=api_url,
             start_date=window.start_date,
             end_date=window.end_date,
             include_backfill=window.include_backfill,
-            only={"performance", "position_alpha", "policy"},
+            only=requested_analytics,
         )
         # The liveness probe already established availability. This compact
         # surface does not need a second holdings/transactions walk.
@@ -577,7 +580,6 @@ def render_portfolio_analytics_sections(
                 a.performance,
                 a.policy,
                 w,
-                a.position_alpha,
                 title=performance_title,
                 refresh_endpoint=refresh_endpoint,
                 refresh_target_selector=refresh_target_selector,
@@ -593,19 +595,15 @@ def render_portfolio_analytics_sections(
             )
             + "</div>"
         )
-    position_drivers_available = bool(
-        a.performance is not None
-        and a.position_alpha is not None
-        and a.position_alpha.calculation_status == "available"
-        and a.position_alpha.matched_returns is not None
-        and a.position_alpha.start_date == a.performance.start_date
-        and a.position_alpha.end_date == a.performance.end_date
-        and a.position_alpha.rows
-    )
-    if include_position_drivers and position_drivers_available and a.position_alpha is not None:
+    if include_position_drivers and a.position_alpha is not None:
+        summary = (
+            f"Position drivers ({len(a.position_alpha.rows)})"
+            if a.position_alpha.rows
+            else "Position drivers"
+        )
         out.append(
             '<details class="pf-alpha-details"><summary>'
-            f"Position drivers ({len(a.position_alpha.rows)})"
+            f"{summary}"
             "</summary>"
             f"{_alpha_section(a.position_alpha)}</details>"
         )
@@ -626,59 +624,18 @@ def _performance_section(
     perf: PerformanceSeries,
     policy: PolicyMix | None,
     window: WindowSelection,
-    position_alpha: PositionAlpha | None = None,
     *,
     title: str = "Performance vs benchmarks",
     refresh_endpoint: str = "/api/panel/portfolio",
     refresh_target_selector: str | None = None,
 ) -> str:
     window_label = f"{perf.start_date or '?'} → {perf.end_date or '?'}"
-    matched_window_aligned = bool(
-        position_alpha is not None
-        and position_alpha.calculation_status == "available"
-        and perf.start_date is not None
-        and perf.end_date is not None
-        and position_alpha.start_date == perf.start_date
-        and position_alpha.end_date == perf.end_date
-    )
-    matched = (
-        position_alpha.matched_returns
-        if position_alpha is not None and matched_window_aligned
-        else None
-    )
-    matched_points = (
-        [
-            PerformancePoint(
-                date=point.date,
-                portfolio_return_pct=point.portfolio_return_pct,
-                spy_return_pct=point.spy_return_pct,
-                qqq_return_pct=(
-                    point.qqq_return_pct if position_alpha.qqq_benchmark_priced else None
-                ),
-                policy_return_pct=(
-                    point.policy_return_pct if position_alpha.policy_benchmark_priced else None
-                ),
-            )
-            for point in position_alpha.series
-        ]
-        if position_alpha is not None and matched is not None and position_alpha.series
-        else []
-    )
-    chart_points = matched_points or perf.points
     # The methodology note rides a hover affordance on the title, not permanent
     # prose; the window controls share the title's band (one operating band).
     note = (
-        "Cash-flow-matched Modified Dietz price/trade return for the invested position book. "
-        "Portfolio, SPY, and QQQ use the same opening capital and the same dated "
-        "buys and sells. Cash equivalents are excluded; cash dividends or interest paid "
-        "to cash, account fees, and in-kind transfers are not normalized by this metric. "
-        "It is not a total portfolio return."
-        if matched is not None
-        else (
-            "Money-weighted return (Modified Dietz) from the tracker. Each benchmark "
-            "is a synthetic book receiving the same external cashflows; net external "
-            f"inflow {_money(perf.net_external_cashflow_in)} over the window."
-        )
+        "Whole-portfolio money-weighted return (Modified Dietz) from the tracker. "
+        "Each benchmark is a synthetic book receiving the same dated external cash flows; "
+        f"net external inflow {_money(perf.net_external_cashflow_in)} over the window."
     )
     head = (
         '<section class="panel"><div class="pf-perf-head">'
@@ -687,97 +644,36 @@ def _performance_section(
         f'<span class="pf-info-pop">{escape(note)}</span></span></h2>'
         f"{_window_bar(window, refresh_endpoint=refresh_endpoint, refresh_target_selector=refresh_target_selector)}</div>"
     )
+    chart_points = perf.points if perf.calculation_status == "available" else []
     if not chart_points:
-        unavailable = _position_calculation_notice(
-            position_alpha, window_aligned=matched_window_aligned
-        )
         provenance = _analytics_provenance(perf.provenance)
         performance_empty = (
             _performance_calculation_notice(perf)
             if perf.calculation_status == "unavailable"
             else k_empty("Tracker returned no performance history for the window.")
         )
-        return f"{head}{performance_empty}{unavailable}{provenance}{_policy_line(policy)}</section>"
+        return f"{head}{performance_empty}{provenance}{_policy_line(policy)}</section>"
 
     finals: dict[str, float | None] = {
         label: next((v for p in reversed(chart_points) if (v := get(p)) is not None), None)
         for label, _color, _class, get in _CHART_SPECS
     }
-    cards: list[str] = []
-    if position_alpha is not None and matched is not None:
-        alpha_window = f"{position_alpha.start_date or '?'} → {position_alpha.end_date or '?'}"
-        cards.extend(
-            [
-                _kpi_card(
-                    "Invested-position price/trade return",
-                    _pct(matched.portfolio_return_pct, signed=True),
-                    sub=f"{_money(position_alpha.total_actual_pl)} P&L · {alpha_window}",
-                    tone=_tone(matched.portfolio_return_pct),
-                ),
-                _kpi_card(
-                    "Matched SPY price/trade return",
-                    _pct(matched.spy_return_pct, signed=True),
-                    sub=f"{_money(position_alpha.total_spy_pl)} P&L",
-                    tone=_tone(matched.spy_return_pct),
-                ),
-                _kpi_card(
-                    "Price/trade alpha vs SPY",
-                    _pp(matched.alpha_vs_spy_pct),
-                    sub=_money(position_alpha.total_alpha),
-                    tone=_tone(matched.alpha_vs_spy_pct),
-                ),
-            ]
+    cards = [
+        _kpi_card(
+            "Whole-portfolio cash-flow-matched return",
+            _pct(finals["Portfolio"], signed=True),
+            sub=f"Modified Dietz · {window_label}",
+            tone=_tone(finals["Portfolio"]),
         )
-        if position_alpha.qqq_benchmark_priced:
-            cards.extend(
-                [
-                    _kpi_card(
-                        "Matched QQQ price/trade return",
-                        _pct(matched.qqq_return_pct, signed=True),
-                        sub=f"{_money(position_alpha.total_qqq_pl)} P&L",
-                        tone=_tone(matched.qqq_return_pct),
-                    ),
-                    _kpi_card(
-                        "Price/trade alpha vs QQQ",
-                        _pp(matched.alpha_vs_qqq_pct),
-                        sub=_money(position_alpha.total_alpha_vs_qqq),
-                        tone=_tone(matched.alpha_vs_qqq_pct),
-                    ),
-                ]
-            )
-    else:
-        # Position-dollar diagnostics can be distorted by an unmatched in-kind
-        # transfer. If the provider did not supply a complete matched result,
-        # show only the whole-account performance series, whose external-flow
-        # classifier owns that normalization.
-        cards.append(
-            _kpi_card(
-                "Modified Dietz",
-                _pct(finals["Portfolio"], signed=True),
-                sub=window_label,
-                tone=_tone(finals["Portfolio"]),
-            )
-        )
+    ]
     warn = backfill_warning(perf)
-    provenance = _analytics_provenance(
-        position_alpha.provenance
-        if position_alpha is not None and matched is not None
-        else perf.provenance
-    )
-    unavailable = _position_calculation_notice(
-        position_alpha, window_aligned=matched_window_aligned
-    )
-    performance_unavailable = (
-        _performance_calculation_notice(perf)
-        if matched is None and perf.calculation_status == "unavailable"
-        else ""
-    )
+    provenance = _analytics_provenance(perf.provenance)
     return (
         f"{head}"
         f'<div class="kpi-strip">{"".join(cards)}</div>'
-        f"{performance_unavailable}{unavailable}{provenance}"
+        f"{provenance}"
         f"{_chart_legend(chart_points)}"
-        f"{_benchmark_chart(chart_points, invested_position_book=matched is not None)}"
+        f"{_benchmark_chart(chart_points)}"
         f"{_policy_line(policy)}"
         f"{warn}</section>"
     )
@@ -945,9 +841,7 @@ def _chart_legend(points: list[PerformancePoint]) -> str:
     return f'<div class="pf-legend">{"".join(chips)}</div>' if chips else ""
 
 
-def _benchmark_chart(
-    points: list[PerformancePoint], *, invested_position_book: bool = False
-) -> str:
+def _benchmark_chart(points: list[PerformancePoint]) -> str:
     """Static multi-series SVG of cumulative window return %. Presentation only:
     the values are plotted exactly as the tracker returned them (a light stride
     keeps the fragment small on year-long daily series; endpoints always kept)."""
@@ -981,11 +875,7 @@ def _benchmark_chart(
     def y_of(v: float) -> float:
         return pad_t + plot_h - ((v - y0) / (y1 - y0)) * plot_h
 
-    chart_label = (
-        "Cumulative invested-position price/trade Modified-Dietz return versus priced benchmarks"
-        if invested_position_book
-        else "Cumulative Modified-Dietz return vs SPY, QQQ, and policy benchmarks"
-    )
+    chart_label = "Cumulative whole-portfolio Modified-Dietz return vs matched benchmarks"
     parts: list[str] = [
         f'<svg class="pf-chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
         f'aria-label="{escape(chart_label)}">'
@@ -1153,10 +1043,46 @@ def _alpha_section(pa: PositionAlpha) -> str:
         '<section class="panel"><h2>Per-position alpha</h2>'
         f'<p class="sub">{escape(pa.start_date or "?")} → {escape(pa.end_date or "?")} · '
         "dollar alpha vs a counterfactual that routes each position's exact buys/sells into "
-        f"the benchmark on the same days ({_ALPHA} = actual P&amp;L - benchmark P&amp;L).</p>"
+        f"the benchmark on the same days ({_ALPHA} = actual P&amp;L - benchmark P&amp;L). "
+        "This secondary price/trade view excludes cash equivalents; cash dividends or "
+        "interest paid to cash, account fees, and in-kind transfers are not normalized. "
+        "It is not a total portfolio return.</p>"
     )
+    provenance = _analytics_provenance(pa.provenance)
+    if pa.calculation_status != "available":
+        return (
+            f"{head}{_position_calculation_notice(pa, window_aligned=True)}{provenance}</section>"
+        )
     if not pa.rows:
-        return f'{head}<p class="muted">Tracker returned no positions for the window.</p></section>'
+        return (
+            f'{head}<p class="muted">Tracker returned no positions for the window.</p>'
+            f"{provenance}</section>"
+        )
+    matched = pa.matched_returns
+    summary_cards: list[str] = []
+    if matched is not None:
+        summary_cards.extend(
+            [
+                _kpi_card(
+                    "Invested-position price/trade return",
+                    _pct(matched.portfolio_return_pct, signed=True),
+                    sub=f"{_money(pa.total_actual_pl)} P&L",
+                    tone=_tone(matched.portfolio_return_pct),
+                ),
+                _kpi_card(
+                    "Matched SPY price/trade return",
+                    _pct(matched.spy_return_pct, signed=True),
+                    sub=f"{_money(pa.total_spy_pl)} P&L",
+                    tone=_tone(matched.spy_return_pct),
+                ),
+                _kpi_card(
+                    "Price/trade alpha vs SPY",
+                    _pp(matched.alpha_vs_spy_pct),
+                    sub=_money(pa.total_alpha),
+                    tone=_tone(matched.alpha_vs_spy_pct),
+                ),
+            ]
+        )
     show_qqq = pa.qqq_benchmark_priced
     show_policy = pa.policy_benchmark_priced
     qqq_th = lg.th(f"{_ALPHA} vs QQQ", "qqq", "num") if show_qqq else ""
@@ -1223,6 +1149,8 @@ def _alpha_section(pa: PositionAlpha) -> str:
     )
     return (
         head
+        + (f'<div class="kpi-strip">{"".join(summary_cards)}</div>' if summary_cards else "")
+        + provenance
         + lg.grid_open()
         + lg.filter_bar(len(pa.rows), noun="positions")
         + '<table class="alpha-table"><thead><tr>'

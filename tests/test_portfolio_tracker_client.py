@@ -37,6 +37,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
     tax_treatment,
 )
+from pipeline import portfolio_panel as portfolio_panel_module
 from pipeline.portfolio_panel import (
     WindowSelection,
     backfill_warning,
@@ -46,6 +47,7 @@ from pipeline.portfolio_panel import (
     render_live_portfolio_section,
     render_next_dollar_panel,
     render_portfolio_analytics_sections,
+    render_portfolio_panel,
     render_portfolio_risk_panel,
     validated_window,
 )
@@ -1180,32 +1182,57 @@ def test_fetch_analytics_partial_failure_isolates_the_failed_endpoint(
 # ----- analytics renderer (P2.1) -----
 
 
+def test_compact_performance_surface_skips_position_fetch_when_drivers_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: set[str] = set()
+
+    def _probe(_api_url: str | None) -> tuple[bool, str]:
+        return True, "http://tracker.test"
+
+    monkeypatch.setattr(portfolio_panel_module, "probe_tracker", _probe)
+
+    def _fetch(**kwargs: object) -> PortfolioAnalytics:
+        requested.update(cast("set[str]", kwargs["only"]))
+        return PortfolioAnalytics(available=True, api_url="http://tracker.test")
+
+    monkeypatch.setattr(portfolio_panel_module, "fetch_portfolio_analytics", _fetch)
+
+    render_portfolio_panel(include_position_drivers=False)
+
+    assert requested == {"performance", "policy"}
+
+
 def test_render_analytics_sections_populated(mock_tracker: None) -> None:
     a = fetch_portfolio_analytics(api_url="http://tracker.test")
     html = render_portfolio_analytics_sections(a)
     # Performance uses one cashflow basis for both percentages and dollars.
     assert "Performance vs benchmarks" in html
+    assert "Whole-portfolio cash-flow-matched return" in html
+    assert "+18.2%" in html
+    assert "+11.5%" in html
+    assert "+14.1%" in html
+    assert "+4.2%" in html
+    # Position price/trade results remain available only inside the secondary
+    # Position drivers disclosure and never replace the whole-account chart.
     assert "+9.0%" in html
     assert "+4.3%" in html
-    assert "+5.3%" in html
     assert "+4.7pp" in html
-    assert "+3.7pp" in html
     assert "Invested-position price/trade return" in html
     assert "Matched SPY price/trade return" in html
-    assert "Matched QQQ price/trade return" in html
     assert "Price/trade alpha vs SPY" in html
-    assert "Price/trade alpha vs QQQ" in html
     assert "$2,700" in html
     assert "$1,300" in html
-    assert "$1,600" in html
-    assert "+18.2%" not in html
-    assert "same opening capital and the same dated buys and sells" in html
+    assert html.index("Whole-portfolio cash-flow-matched return") < html.index("Position drivers")
+    assert "same dated external cash flows" in html
     assert "not a total portfolio return" in html
+    assert "excludes cash equivalents" in html
     assert "cash dividends or interest paid to cash" in html
+    assert "account fees" in html
     assert "in-kind transfers are not normalized" in html
     assert 'class="pf-chart"' in html
     assert "Policy mix:" in html and "VOO 70%" in html
-    assert "+3.3%" in html  # policy uses the same matched cashflow series
+    assert "+3.3%" not in html  # secondary position series cannot replace the chart
     # Risk strip (fraction-united fields render as percent).
     assert "Risk &amp; efficiency" in html
     assert "Beta vs SPY" in html and "1.12" in html
@@ -1248,7 +1275,7 @@ def test_incomplete_matched_returns_preserve_legacy_performance(
     assert "Modified Dietz" in html
     assert "+18.2%" in html
     assert 'class="kpi-label">Invested-position price/trade return' not in html
-    assert "Position drivers" not in html
+    assert "Position drivers" in html
     assert "$2,700" not in html
     assert "$1,400" not in html
     assert "provider response did not satisfy the supported calculation contract" in html
@@ -1278,7 +1305,7 @@ def test_missing_or_unknown_position_status_fails_closed(
     assert analytics.position_alpha.rows == []
     assert analytics.position_alpha.total_actual_pl is None
     assert "+18.2%" in html
-    assert "Position drivers" not in html
+    assert "Position drivers" in html
     assert "$2,700" not in html
 
 
@@ -1289,7 +1316,7 @@ def test_missing_or_unknown_position_status_fails_closed(
         ("no_invested_position_capital", "no invested position capital"),
     ],
 )
-def test_position_unavailable_reason_uses_safe_performance_fallback(
+def test_position_unavailable_reason_does_not_affect_authoritative_performance(
     monkeypatch: pytest.MonkeyPatch,
     reason_code: str,
     expected_label: str,
@@ -1309,7 +1336,7 @@ def test_position_unavailable_reason_uses_safe_performance_fallback(
 
     assert "+18.2%" in html
     assert expected_label in html
-    assert "Position drivers" not in html
+    assert "Position drivers" in html
     assert "$2,700" not in html
 
 
@@ -1358,15 +1385,13 @@ def test_nonpositive_dietz_reason_is_a_supported_unavailable_state() -> None:
     assert "nonpositive Modified Dietz denominator" in html
 
 
-def test_unavailable_performance_is_not_used_as_position_fallback(
+def test_available_position_data_never_substitutes_for_unavailable_performance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     performance = cast("dict[str, object]", deepcopy(_PERFORMANCE))
     performance["calculation_status"] = "unavailable"
     performance["calculation_reason_codes"] = ["external_share_movement_price_unavailable"]
     position = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
-    position["calculation_status"] = "unavailable"
-    position["calculation_reason_codes"] = ["share_movement_price_unavailable"]
 
     def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
         if "/api/portfolio/performance" in url:
@@ -1384,9 +1409,12 @@ def test_unavailable_performance_is_not_used_as_position_fallback(
     assert analytics.performance.points == []
     assert "+18.2%" not in html
     assert 'class="pf-chart"' not in html
+    assert "Whole-portfolio cash-flow-matched return" not in html
+    assert "Invested-position price/trade return" in html
+    assert "+9.0%" in html
     assert "Whole-account Modified Dietz return unavailable" in html
     assert "external share-movement price unavailable" in html
-    assert "Position drivers" not in html
+    assert "Position drivers" in html
 
 
 def test_missing_performance_status_fails_closed(
@@ -1654,7 +1682,7 @@ def test_mismatched_matched_window_preserves_performance_warning(
     assert "2025-06-12" in html
 
 
-def test_unpriced_matched_benchmarks_are_suppressed(
+def test_unpriced_position_benchmarks_do_not_suppress_whole_account_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     unavailable = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
@@ -1691,8 +1719,8 @@ def test_unpriced_matched_benchmarks_are_suppressed(
     assert "Matched SPY price/trade return" in html
     assert "Matched QQQ price/trade return" not in html
     assert "Price/trade alpha vs QQQ" not in html
-    assert "pf-swatch-qqq" not in html
-    assert "pf-swatch-policy" not in html
+    assert "pf-swatch-qqq" in html
+    assert "pf-swatch-policy" in html
     assert "$0 P&amp;L" not in html
     assert "sortBy('qqq','num')" not in html
     assert "sortBy('policy','num')" not in html
@@ -1702,7 +1730,20 @@ def test_performance_renders_public_analytics_freshness_and_coverage(
     mock_tracker: None,
 ) -> None:
     analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    assert analytics.performance is not None
     assert analytics.position_alpha is not None
+    analytics.performance.provenance = ptc.AnalyticsProvenance(
+        as_of="2026-06-10",
+        is_stale=False,
+        is_partial=False,
+        warning_codes=(),
+        source_providers=("plaid", "snaptrade"),
+        included_account_count=2,
+        excluded_account_count=1,
+        lagging_account_count=0,
+        methodology="performance.modified_dietz",
+        methodology_version="2",
+    )
     analytics.position_alpha.provenance = ptc.AnalyticsProvenance(
         as_of="2026-06-09",
         is_stale=True,
@@ -1721,6 +1762,8 @@ def test_performance_renders_public_analytics_freshness_and_coverage(
 
     html = render_portfolio_analytics_sections(analytics)
 
+    assert "Analytics as of 2026-06-10" in html
+    assert "performance.modified_dietz v2" in html
     assert "Analytics as of 2026-06-09" in html
     assert "stale" in html
     assert "partial coverage" in html
@@ -1729,6 +1772,10 @@ def test_performance_renders_public_analytics_freshness_and_coverage(
     assert "providers: plaid, snaptrade" in html
     assert "accounts: 3 included, 1 excluded, 1 lagging" in html
     assert "position_alpha.split_normalized_price_trade_modified_dietz v3" in html
+    assert html.index("performance.modified_dietz v2") < html.index("Position drivers")
+    assert html.index("Position drivers") < html.index(
+        "position_alpha.split_normalized_price_trade_modified_dietz v3"
+    )
 
 
 def test_render_analytics_partial_notes_missing_sections(
