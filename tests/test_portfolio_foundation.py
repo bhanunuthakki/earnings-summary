@@ -173,7 +173,7 @@ def test_canonical_adapter_preserves_held_not_held_and_unavailable() -> None:
     assert not_held.state == "not_held"
     assert unavailable.state == "source_unavailable"
     assert held.provenance is not None
-    assert held.provenance.schema_version == "1.0.0"
+    assert held.provenance.schema_version == "1.1.0"
     assert held.provenance.currency == "USD"
     assert held.provenance.snapshot_account_coverage == 3
     assert held.provenance.excluded_account_ids == [4]

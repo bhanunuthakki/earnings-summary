@@ -45,7 +45,7 @@
     },
     "methodology": "positioning.value_weighted_cuts",
     "methodology_version": "1",
-    "schema_version": "1.0.0",
+    "schema_version": "1.1.0",
     "source_providers": [
       "plaid",
       "snaptrade"
@@ -120,13 +120,13 @@
     "correlations": [
       {
         "beta_policy": null,
-        "beta_qqq": null,
-        "beta_spy": null,
+        "beta_qqq": 0.3169144981412638,
+        "beta_spy": 0.5079320989602731,
         "correlation_policy": null,
-        "correlation_qqq": null,
-        "correlation_spy": null,
+        "correlation_qqq": 0.16050904688556725,
+        "correlation_spy": 0.2076621773740391,
         "name": "Alpha Corp",
-        "sample_size": 0,
+        "sample_size": 53,
         "security_id": 1,
         "ticker": "AAAA",
         "value": "13200.000000",
@@ -134,13 +134,13 @@
       },
       {
         "beta_policy": null,
-        "beta_qqq": null,
-        "beta_spy": null,
+        "beta_qqq": 1.5539033457249072,
+        "beta_spy": 1.9059385001925422,
         "correlation_policy": null,
-        "correlation_qqq": null,
-        "correlation_spy": null,
+        "correlation_qqq": 0.9837651260728318,
+        "correlation_spy": 0.9740262027669908,
         "name": "Beta Corp",
-        "sample_size": 0,
+        "sample_size": 53,
         "security_id": 2,
         "ticker": "BBBB",
         "value": "5800.000000",
@@ -151,12 +151,11 @@
     "has_policy": false,
     "notes": [
       "Funds/ETFs are shown as their own 'ETF/Fund' sector bucket (no single GICS sector); cash is excluded from the correlation table.",
-      "2 position(s) lack enough price history in the window for a correlation estimate.",
       "No policy weights set \u2014 the policy correlation column is empty."
     ],
     "snapshot_date": "2026-07-22",
     "start_date": "2025-07-23",
     "total_value": "20000.000000",
-    "weighted_avg_correlation_spy": null
+    "weighted_avg_correlation_spy": 0.4416048798624138
   }
 }

@@ -146,11 +146,34 @@ _TXNS = [
 # --- Analytics payloads (P2.1), shaped like the tracker's response models:
 # PerformanceSeries / PositionAlphaResult / PositioningOut / PolicyOut /
 # BetaResult. Numbers arrive as Decimal-strings; dates as ISO strings.
-_PERFORMANCE = {
+def _benchmark_price_inputs(ticker: str) -> list[dict[str, str]]:
+    return [
+        {
+            "ticker": ticker,
+            "target_date": target_date,
+            "source_date": target_date,
+            "close": "100.00",
+            "resolution": "same_day_close",
+        }
+        for target_date in ("2025-06-10", "2025-12-10", "2026-06-10")
+    ]
+
+
+_PERFORMANCE: dict[str, object] = {
     "methodology": "performance.modified_dietz",
     "methodology_version": "2",
     "calculation_status": "available",
     "calculation_reason_codes": [],
+    "source_coverage": {
+        "status": "complete",
+        "is_complete": True,
+        "requested_start_date": "2025-06-10",
+        "requested_end_date": "2026-06-10",
+        "required_start_date": "2025-06-11",
+        "required_end_date": "2026-06-10",
+        "accounts": [],
+        "attestations": [],
+    },
     "start_date": "2025-06-10",
     "end_date": "2026-06-10",
     "base_value": "100000.00",
@@ -178,22 +201,75 @@ _PERFORMANCE = {
             "policy_equivalent_value": "114200.00",
         },
         {
-            # Final day has a policy-benchmark gap (None) — cards/legend must
-            # fall back to the last valid value instead of dropping the series.
+            # Final day is fully covered; available responses may not carry
+            # partial required benchmark legs.
             "date": "2026-06-10",
-            "portfolio_value": "133200.00",
+            "portfolio_value": "143200.00",
             "portfolio_return_pct": "18.2",
             "spy_return_pct": "11.5",
             "qqq_return_pct": "14.1",
-            "policy_return_pct": None,
-            "spy_equivalent_value": "111500.00",
-            "qqq_equivalent_value": "114100.00",
-            "policy_equivalent_value": None,
+            "policy_return_pct": "13.0",
+            "spy_equivalent_value": "136500.00",
+            "qqq_equivalent_value": "139100.00",
+            "policy_equivalent_value": "138000.00",
         },
     ],
     "earliest_observed_date": "2025-06-12",
     "net_external_cashflow_in": "25000.00",
     "backfill_start_unreliable": False,
+    "opening_value_provenance": "modeled_transaction_walkback",
+    "ending_value_provenance": "observed_complete_snapshot",
+    "valuation_account_ids": [1],
+    "equation_receipt": {
+        "calculation_id": "calc-1",
+        "external_flow_ledger_id": "ledger-1",
+        "portfolio_valuation_input_id": "valuation-1",
+        "included_account_ids": [1],
+        "requested_start_date": "2025-06-10",
+        "requested_end_date": "2026-06-10",
+        "benchmark_price_resolution_policy": "same_day_or_previous_us_market_close",
+        "opening_value": "100000.00",
+        "dated_external_cashflows": [{"date": "2026-06-10", "amount": "25000.00"}],
+        "net_external_cashflow_in": "25000.00",
+        "ending_value": "143200.00",
+        "investment_gain": "18200.00",
+        "modified_dietz_denominator": "100000.00",
+        "portfolio_return_pct": "18.2",
+        "portfolio_equation_residual": "0",
+        "spy": {
+            "benchmark": "SPY",
+            "ending_value": "136500.00",
+            "investment_gain": "11500.00",
+            "return_pct": "11.5",
+            "dollar_alpha": "6700.00",
+            "percentage_point_alpha": "6.7",
+            "equation_residual": "0",
+            "price_input_id": "sha256:4ca7ea8a7360cd1c1f5e787e4d34b34d6cf0dfa8aa29c0da0eef3224e7b32b37",
+            "price_inputs": _benchmark_price_inputs("SPY"),
+        },
+        "qqq": {
+            "benchmark": "QQQ",
+            "ending_value": "139100.00",
+            "investment_gain": "14100.00",
+            "return_pct": "14.1",
+            "dollar_alpha": "4100.00",
+            "percentage_point_alpha": "4.1",
+            "equation_residual": "0",
+            "price_input_id": "sha256:e346d2f71d6f2ae21b22772bd08e9533b6de05a4e3cc9b52b8cd930047010dca",
+            "price_inputs": _benchmark_price_inputs("QQQ"),
+        },
+        "policy": {
+            "benchmark": "policy",
+            "ending_value": "138000.00",
+            "investment_gain": "13000.00",
+            "return_pct": "13.0",
+            "dollar_alpha": "5200.00",
+            "percentage_point_alpha": "5.2",
+            "equation_residual": "0",
+            "price_input_id": "sha256:6e7ddb8328ce5b1d36b23332cd087d19a78855175f85ac9a5c00dbf345b2c113",
+            "price_inputs": _benchmark_price_inputs("SPY"),
+        },
+    },
 }
 _POSITION_ALPHA = {
     "methodology": "position_alpha.split_normalized_price_trade_modified_dietz",
@@ -794,7 +870,7 @@ def test_fetch_analytics_parses_all_endpoints(mock_tracker: None) -> None:
     assert perf.base_value == pytest.approx(100000.0)
     assert [p.date for p in perf.points] == ["2025-06-10", "2025-12-10", "2026-06-10"]
     assert perf.points[-1].portfolio_return_pct == pytest.approx(18.2)
-    assert perf.points[-1].policy_return_pct is None  # final-day benchmark gap preserved
+    assert perf.points[-1].policy_return_pct == pytest.approx(13.0)
     assert perf.net_external_cashflow_in == pytest.approx(25000.0)
     assert perf.backfill_start_unreliable is False
 
@@ -922,9 +998,9 @@ def test_v1_position_alpha_uses_rebased_performance_window(
     analytics = fetch_portfolio_analytics(only={"performance", "position_alpha"})
 
     assert analytics.performance is not None
-    assert analytics.performance.start_date == "2026-06-23"
-    assert alpha_params["start_date"] == "2026-06-23"
-    assert alpha_params["end_date"] == "2026-07-23"
+    assert analytics.performance.start_date == "2026-07-22"
+    assert alpha_params["start_date"] == "2026-07-22"
+    assert alpha_params["end_date"] == "2026-07-22"
 
 
 def test_beta_significance_absent_is_tristate_none() -> None:
@@ -1212,7 +1288,7 @@ def test_render_analytics_sections_populated(mock_tracker: None) -> None:
     assert "+18.2%" in html
     assert "+11.5%" in html
     assert "+14.1%" in html
-    assert "+4.2%" in html
+    assert "+13.0%" in html
     # Position price/trade results remain available only inside the secondary
     # Position drivers disclosure and never replace the whole-account chart.
     assert "+9.0%" in html
@@ -1369,7 +1445,7 @@ def test_position_nonpositive_dietz_reason_is_a_supported_unavailable_state() ->
 
 
 def test_nonpositive_dietz_reason_is_a_supported_unavailable_state() -> None:
-    payload = cast("dict[str, object]", deepcopy(_PERFORMANCE))
+    payload = deepcopy(_PERFORMANCE)
     payload["calculation_status"] = "unavailable"
     payload["calculation_reason_codes"] = ["nonpositive_dietz_denominator"]
 
@@ -1388,7 +1464,7 @@ def test_nonpositive_dietz_reason_is_a_supported_unavailable_state() -> None:
 def test_available_position_data_never_substitutes_for_unavailable_performance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    performance = cast("dict[str, object]", deepcopy(_PERFORMANCE))
+    performance = deepcopy(_PERFORMANCE)
     performance["calculation_status"] = "unavailable"
     performance["calculation_reason_codes"] = ["external_share_movement_price_unavailable"]
     position = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
@@ -1495,7 +1571,7 @@ def test_legacy_analytics_missing_embedded_methodology_fails_closed(
     ],
 )
 def test_available_performance_core_contradictions_fail_closed(field: str, value: object) -> None:
-    payload = cast("dict[str, object]", deepcopy(_PERFORMANCE))
+    payload = deepcopy(_PERFORMANCE)
     payload[field] = value
 
     parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
@@ -1507,7 +1583,7 @@ def test_available_performance_core_contradictions_fail_closed(field: str, value
 
 @pytest.mark.parametrize("mutation", ["nan", "duplicate_date", "wrong_endpoint"])
 def test_available_performance_series_contradictions_fail_closed(mutation: str) -> None:
-    payload = cast("dict[str, object]", deepcopy(_PERFORMANCE))
+    payload = deepcopy(_PERFORMANCE)
     points = cast("list[dict[str, object]]", payload["points"])
     if mutation == "nan":
         points[-1]["portfolio_return_pct"] = "NaN"
@@ -1521,6 +1597,116 @@ def test_available_performance_series_contradictions_fail_closed(mutation: str) 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
     assert parsed.points == []
+
+
+@pytest.mark.parametrize("mutation", ["missing", "tampered_alpha"])
+def test_available_performance_requires_a_reconciling_equation_receipt(mutation: str) -> None:
+    payload = deepcopy(_PERFORMANCE)
+    if mutation == "missing":
+        payload["equation_receipt"] = None
+    else:
+        receipt = cast("dict[str, object]", payload["equation_receipt"])
+        spy = cast("dict[str, object]", receipt["spy"])
+        spy["dollar_alpha"] = "6700.01"
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.equation_receipt is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_policy",
+        "unknown_policy",
+        "missing_inputs",
+        "empty_inputs",
+        "malformed_input",
+        "wrong_ticker",
+        "invalid_date",
+        "duplicate_target",
+        "missing_target",
+        "extra_target",
+        "nonpositive_close",
+        "nonfinite_close",
+        "wrong_resolution",
+        "source_after_target",
+        "opaque_id_missing",
+        "final_point_mismatch",
+        "policy_receipt_mismatch",
+        "duplicate_flow_date",
+        "out_of_window_flow",
+    ],
+)
+def test_available_performance_requires_complete_market_session_lineage(mutation: str) -> None:
+    payload = deepcopy(_PERFORMANCE)
+    receipt = cast("dict[str, object]", payload["equation_receipt"])
+    spy = cast("dict[str, object]", receipt["spy"])
+    inputs = cast("list[object]", spy["price_inputs"])
+    first_input = cast("dict[str, object]", inputs[0])
+    if mutation == "missing_policy":
+        receipt.pop("benchmark_price_resolution_policy")
+    elif mutation == "unknown_policy":
+        receipt["benchmark_price_resolution_policy"] = "nearest_close"
+    elif mutation == "missing_inputs":
+        spy.pop("price_inputs")
+    elif mutation == "empty_inputs":
+        spy["price_inputs"] = []
+    elif mutation == "malformed_input":
+        inputs.append("not-an-input")
+    elif mutation == "wrong_ticker":
+        first_input["ticker"] = "QQQ"
+    elif mutation == "invalid_date":
+        first_input["target_date"] = "not-a-date"
+    elif mutation == "duplicate_target":
+        inputs.append(deepcopy(inputs[0]))
+    elif mutation == "missing_target":
+        inputs.pop()
+    elif mutation == "extra_target":
+        extra = deepcopy(first_input)
+        extra["target_date"] = "2026-01-15"
+        extra["source_date"] = "2026-01-15"
+        inputs.append(extra)
+    elif mutation == "nonpositive_close":
+        first_input["close"] = "0"
+    elif mutation == "nonfinite_close":
+        first_input["close"] = "NaN"
+    elif mutation == "wrong_resolution":
+        first_input["resolution"] = "previous_market_close"
+    elif mutation == "source_after_target":
+        first_input["source_date"] = "2025-06-11"
+    elif mutation == "opaque_id_missing":
+        spy["price_input_id"] = ""
+    elif mutation == "final_point_mismatch":
+        spy["ending_value"] = "136501.00"
+    elif mutation == "policy_receipt_mismatch":
+        receipt["policy"] = None
+    else:
+        flows = cast("list[object]", receipt["dated_external_cashflows"])
+        extra_flow = {"date": "2026-06-10", "amount": "0"}
+        if mutation == "out_of_window_flow":
+            extra_flow["date"] = "2025-06-10"
+        flows.append(extra_flow)
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.equation_receipt is None
+
+
+def test_available_performance_rejects_unverified_source_cashflows() -> None:
+    payload = deepcopy(_PERFORMANCE)
+    source_coverage = cast("dict[str, object]", payload["source_coverage"])
+    source_coverage["status"] = "incomplete"
+    source_coverage["is_complete"] = False
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "source_cashflow_coverage_incomplete"
 
 
 def test_available_position_series_rejects_nonpositive_intermediate_dietz_denominator() -> None:

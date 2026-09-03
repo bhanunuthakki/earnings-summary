@@ -120,7 +120,7 @@
     },
     "methodology": null,
     "methodology_version": null,
-    "schema_version": "1.0.0",
+    "schema_version": "1.1.0",
     "source_providers": [
       "plaid",
       "snaptrade"

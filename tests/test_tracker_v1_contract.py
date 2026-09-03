@@ -218,12 +218,12 @@ def test_positions_result_has_no_meta_envelope() -> None:
 
 
 def test_data_quality_fixture_typed_values() -> None:
-    """The official fixture carries 5 findings (1 info, 4 warning)."""
+    """The official fixture carries one informational snapshot-history finding."""
     result = tv1.DataQualityV1Result.model_validate(_load(FIXTURES_DIR / "data-quality.json"))
-    assert len(result.report.findings) == 5
-    assert result.report.summary_counts == {"info": 1, "warning": 4}
+    assert len(result.report.findings) == 1
+    assert result.report.summary_counts == {"info": 1}
     severities = [f.severity for f in result.report.findings]
-    assert severities.count("warning") == 4
+    assert severities.count("warning") == 0
     assert severities.count("info") == 1
 
 
@@ -238,6 +238,28 @@ def test_performance_fixture_has_full_year_series() -> None:
     assert first.portfolio_return_pct == Decimal("0")
     assert first.spy_return_pct == Decimal("0")
     assert first.spy_equivalent_value == result.series.base_value
+    receipt = result.series.equation_receipt
+    assert receipt is not None
+    assert receipt.benchmark_price_resolution_policy == "same_day_or_previous_us_market_close"
+    assert receipt.spy.price_inputs
+    assert receipt.qqq.price_inputs
+
+
+@pytest.mark.parametrize("mutation", ["missing_policy", "unknown_policy", "empty_inputs"])
+def test_performance_receipt_market_session_lineage_is_required(mutation: str) -> None:
+    data = _deep_copy(_load(FIXTURES_DIR / "performance.json"))
+    series = cast("dict[str, object]", data["series"])
+    receipt = cast("dict[str, object]", series["equation_receipt"])
+    if mutation == "missing_policy":
+        receipt.pop("benchmark_price_resolution_policy")
+    elif mutation == "unknown_policy":
+        receipt["benchmark_price_resolution_policy"] = "nearest_close"
+    else:
+        spy = cast("dict[str, object]", receipt["spy"])
+        spy["price_inputs"] = []
+
+    with pytest.raises(ValidationError):
+        tv1.PerformanceV1Result.model_validate(data)
 
 
 @pytest.mark.parametrize(
@@ -630,7 +652,7 @@ def test_telemetry_log_has_no_payload_contents(
         assert leaked not in log_text
     # The allowed telemetry fields ARE expected to be present.
     assert "/api/v1/accounts" in log_text
-    assert "schema_version=1.0.0" in log_text
+    assert "schema_version=1.1.0" in log_text
     assert "status=200" in log_text
 
 

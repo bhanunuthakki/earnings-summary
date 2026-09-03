@@ -2,35 +2,65 @@
   "cash_flows": [
     {
       "account_id": 3,
+      "account_ids": [
+        3
+      ],
       "account_name": "Example Brokerage",
       "amount": "1000.000000",
       "classification": "external_in",
+      "classification_rule": "name.inflow",
       "classification_source": "heuristic",
+      "component_transaction_ids": [],
       "currency": "USD",
       "date": "2026-07-22",
+      "flow_id": "transaction:fx-t4",
       "name": "ACH deposit",
+      "security_id": null,
+      "security_ids": [],
       "signed_external_amount": "1000.000000",
+      "source_kind": "transaction",
+      "source_provider": "snaptrade",
       "subtype": "deposit",
+      "ticker": null,
       "transaction_id": "fx-t4",
-      "type": "cash"
+      "type": "cash",
+      "valuation_price": null,
+      "valuation_price_date": null,
+      "valuation_price_source": null
     },
     {
       "account_id": 3,
+      "account_ids": [
+        3
+      ],
       "account_name": "Example Brokerage",
       "amount": "250.000000",
       "classification": "external_out",
+      "classification_rule": "name.outflow",
       "classification_source": "heuristic",
+      "component_transaction_ids": [],
       "currency": "USD",
       "date": "2026-07-19",
+      "flow_id": "transaction:fx-t3",
       "name": "ACH withdrawal",
+      "security_id": null,
+      "security_ids": [],
       "signed_external_amount": "-250.000000",
+      "source_kind": "transaction",
+      "source_provider": "snaptrade",
       "subtype": "withdrawal",
+      "ticker": null,
       "transaction_id": "fx-t3",
-      "type": "cash"
+      "type": "cash",
+      "valuation_price": null,
+      "valuation_price_date": null,
+      "valuation_price_source": null
     }
   ],
   "end_date": "2026-07-23",
   "include_internal": false,
+  "is_complete": true,
+  "issues": [],
   "meta": {
     "account_coverage": {
       "excluded_account_ids": [
@@ -53,8 +83,8 @@
       "transactions": "/api/v1/transactions"
     },
     "methodology": "cash_flow.twr_classification",
-    "methodology_version": "1",
-    "schema_version": "1.0.0",
+    "methodology_version": "2",
+    "schema_version": "1.1.0",
     "source_providers": [
       "plaid",
       "snaptrade"
@@ -63,5 +93,111 @@
   },
   "net_external_cashflow_in": "750.000000",
   "next_cursor": null,
-  "start_date": "2026-06-23"
+  "source_coverage": {
+    "accounts": [
+      {
+        "account_id": 1,
+        "attestation_keys": [
+          "fixture-source-coverage-1"
+        ],
+        "covered_ranges": [
+          {
+            "end_date": "2026-07-23",
+            "start_date": "2026-06-24"
+          }
+        ],
+        "status": "complete",
+        "uncovered_ranges": []
+      },
+      {
+        "account_id": 2,
+        "attestation_keys": [
+          "fixture-source-coverage-2"
+        ],
+        "covered_ranges": [
+          {
+            "end_date": "2026-07-23",
+            "start_date": "2026-06-24"
+          }
+        ],
+        "status": "complete",
+        "uncovered_ranges": []
+      },
+      {
+        "account_id": 3,
+        "attestation_keys": [
+          "fixture-source-coverage-3"
+        ],
+        "covered_ranges": [
+          {
+            "end_date": "2026-07-23",
+            "start_date": "2026-06-24"
+          }
+        ],
+        "status": "complete",
+        "uncovered_ranges": []
+      }
+    ],
+    "attestations": [
+      {
+        "account_id": 1,
+        "approved_at": "2026-07-22T12:00:00",
+        "attestation_key": "fixture-source-coverage-1",
+        "captured_at": "2026-07-22T12:00:00",
+        "coverage_end": "2026-07-23",
+        "coverage_start": "2024-07-24",
+        "gaps": [],
+        "lifecycle_status": "approved",
+        "methodology_version": "1",
+        "source_reference": "synthetic:fixture-export-1",
+        "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "source_type": "provider_export",
+        "superseded_at": null,
+        "superseded_by_attestation_key": null,
+        "validation_reason_codes": []
+      },
+      {
+        "account_id": 2,
+        "approved_at": "2026-07-22T12:00:00",
+        "attestation_key": "fixture-source-coverage-2",
+        "captured_at": "2026-07-22T12:00:00",
+        "coverage_end": "2026-07-23",
+        "coverage_start": "2024-07-24",
+        "gaps": [],
+        "lifecycle_status": "approved",
+        "methodology_version": "1",
+        "source_reference": "synthetic:fixture-export-2",
+        "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "source_type": "provider_export",
+        "superseded_at": null,
+        "superseded_by_attestation_key": null,
+        "validation_reason_codes": []
+      },
+      {
+        "account_id": 3,
+        "approved_at": "2026-07-22T12:00:00",
+        "attestation_key": "fixture-source-coverage-3",
+        "captured_at": "2026-07-22T12:00:00",
+        "coverage_end": "2026-07-23",
+        "coverage_start": "2024-07-24",
+        "gaps": [],
+        "lifecycle_status": "approved",
+        "methodology_version": "1",
+        "source_reference": "synthetic:fixture-export-3",
+        "source_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "source_type": "provider_export",
+        "superseded_at": null,
+        "superseded_by_attestation_key": null,
+        "validation_reason_codes": []
+      }
+    ],
+    "is_complete": true,
+    "requested_end_date": "2026-07-23",
+    "requested_start_date": "2026-06-23",
+    "required_end_date": "2026-07-23",
+    "required_start_date": "2026-06-24",
+    "status": "complete"
+  },
+  "start_date": "2026-06-23",
+  "structural_is_complete": true
 }

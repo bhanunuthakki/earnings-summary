@@ -388,6 +388,17 @@ class CashFlowV1(V1Model):
     currency: str
 
 
+class CashFlowSourceCoverage(V1Model):
+    status: str
+    is_complete: bool
+    requested_start_date: date
+    requested_end_date: date
+    required_start_date: date | None
+    required_end_date: date | None
+    accounts: list[dict[str, object]]
+    attestations: list[dict[str, object]]
+
+
 class CashFlowsV1Result(V1Model):
     """``GET /api/v1/cash-flows`` — keyset-cursor paginated."""
 
@@ -396,7 +407,11 @@ class CashFlowsV1Result(V1Model):
     end_date: date
     include_internal: bool
     cash_flows: list[CashFlowV1] = Field(default_factory=list[CashFlowV1])
-    net_external_cashflow_in: Money
+    net_external_cashflow_in: MoneyOrNone
+    structural_is_complete: bool
+    source_coverage: CashFlowSourceCoverage
+    is_complete: bool
+    issues: list[dict[str, object]]
     next_cursor: str | None
 
 
@@ -591,17 +606,68 @@ class PerformancePoint(V1Model):
     policy_equivalent_value: MoneyOrNone
 
 
+class PerformanceBenchmarkPriceInput(V1Model):
+    ticker: str
+    target_date: date
+    source_date: date
+    close: Money
+    resolution: Literal["same_day_close", "previous_market_close"]
+
+
+class PerformanceBenchmarkReceipt(V1Model):
+    benchmark: str
+    ending_value: Money
+    investment_gain: Money
+    return_pct: Money
+    dollar_alpha: Money
+    percentage_point_alpha: Money
+    equation_residual: Money
+    price_input_id: str
+    price_inputs: list[PerformanceBenchmarkPriceInput] = Field(min_length=1)
+
+
+class PerformanceDatedCashflow(V1Model):
+    date: date
+    amount: Money
+
+
+class PerformanceEquationReceipt(V1Model):
+    calculation_id: str
+    external_flow_ledger_id: str
+    portfolio_valuation_input_id: str
+    included_account_ids: list[int]
+    requested_start_date: date
+    requested_end_date: date
+    benchmark_price_resolution_policy: Literal["same_day_or_previous_us_market_close"]
+    opening_value: Money
+    dated_external_cashflows: list[PerformanceDatedCashflow]
+    net_external_cashflow_in: Money
+    ending_value: Money
+    investment_gain: Money
+    modified_dietz_denominator: Money
+    portfolio_return_pct: Money
+    portfolio_equation_residual: Money
+    spy: PerformanceBenchmarkReceipt
+    qqq: PerformanceBenchmarkReceipt
+    policy: PerformanceBenchmarkReceipt | None
+
+
 class PerformanceSeries(V1Model):
     methodology: Literal["performance.modified_dietz"]
     methodology_version: Literal["2"]
     calculation_status: Literal["available", "unavailable"]
     calculation_reason_codes: list[str]
+    source_coverage: CashFlowSourceCoverage
     start_date: date
     end_date: date
     base_value: Money
     net_external_cashflow_in: Money | None
+    equation_receipt: PerformanceEquationReceipt | None = None
     backfill_start_unreliable: bool
     earliest_observed_date: date | None = None
+    opening_value_provenance: str | None
+    ending_value_provenance: str | None
+    valuation_account_ids: list[int]
     points: list[PerformancePoint] = Field(default_factory=list[PerformancePoint])
 
 

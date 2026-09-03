@@ -1,32 +1,30 @@
 {
   "beta": {
-    "alpha_annualized_pct": 42.85202857400609,
-    "alpha_significant": false,
-    "alpha_std_error_annualized_pct": 57.23366610706062,
-    "alpha_t_stat": 0.7487206654532245,
+    "alpha_annualized_pct": 0.0,
+    "alpha_significant": null,
+    "alpha_std_error_annualized_pct": null,
+    "alpha_t_stat": null,
     "benchmark": "SPY",
-    "benchmark_volatility_annualized": 0.1782970162782468,
-    "beta": 0.8859115725318077,
+    "benchmark_volatility_annualized": 0.08031936254727126,
+    "beta": 0.5806451612903226,
     "calculation_reason_codes": [],
     "calculation_status": "available",
-    "correlation": 0.5245300403124741,
-    "end_date": "2026-07-23",
-    "information_ratio": 1.4583624630144212,
+    "correlation": 0.9999999999999999,
+    "end_date": "2026-07-22",
+    "information_ratio": -1.0039920318408906,
     "methodology": "risk.beta_drawdown",
     "methodology_version": "2",
     "notes": [
-      "Risk-free rate defaulted to 4.0%/yr \u2014 no 13-week T-bill (^IRX) data for the window; run jobs.benchmarks.",
-      "Alpha +42.9%/yr is NOT statistically distinguishable from zero (t=0.75, n=53) \u2014 likely noise, not demonstrated skill, on this sample.",
-      "R\u00b2 is low (0.28) \u2014 beta poorly summarizes this portfolio's relationship to SPY. Consider a different benchmark or a multi-factor model."
+      "Risk-free rate defaulted to 4.0%/yr \u2014 no 13-week T-bill (^IRX) data for the window; run jobs.benchmarks."
     ],
-    "portfolio_volatility_annualized": 0.3011369758244798,
-    "r_squared": 0.27513176319020566,
+    "portfolio_volatility_annualized": 0.046637049220996214,
+    "r_squared": 0.9999999999999998,
     "risk_free_annual": 0.04,
-    "sample_size": 53,
-    "sharpe": 2.6682401917134015,
-    "sortino": 321.9925838866391,
+    "sample_size": 250,
+    "sharpe": 0.14630483532778424,
+    "sortino": 2.7078837934663675,
     "start_date": "2025-07-23",
-    "tracking_error_annualized": 0.2571912803999674
+    "tracking_error_annualized": 0.03368231332627504
   },
   "drawdown": {
     "annualized_return_pct": "11.20",
@@ -35,7 +33,7 @@
     "calmar": null,
     "current_drawdown_pct": "0.00",
     "days_to_recovery": 1,
-    "end_date": "2026-07-23",
+    "end_date": "2026-07-22",
     "max_drawdown_pct": "0.00",
     "methodology": "risk.beta_drawdown",
     "methodology_version": "2",
@@ -1530,7 +1528,7 @@
     },
     "methodology": "risk.beta_drawdown",
     "methodology_version": "2",
-    "schema_version": "1.0.0",
+    "schema_version": "1.1.0",
     "source_providers": [
       "plaid",
       "snaptrade"

@@ -736,6 +736,17 @@ _PERFORMANCE_REASON_LABELS = {
     "external_share_movement_missing_ticker": "external share movement missing ticker identity",
     "external_share_movement_price_unavailable": "external share-movement price unavailable",
     "nonpositive_dietz_denominator": "nonpositive Modified Dietz denominator",
+    "portfolio_start_value_unavailable": "requested start-date valuation unavailable",
+    "portfolio_end_value_unavailable": "requested end-date valuation unavailable",
+    "partial_snapshot_start_date": "start-date account snapshot is incomplete",
+    "partial_snapshot_end_date": "end-date account snapshot is incomplete",
+    "modeled_opening_account_coverage_incomplete": "modeled opening account coverage incomplete",
+    "modeled_opening_valuation_coverage_incomplete": "modeled opening valuation incomplete",
+    "spy_benchmark_price_unavailable": "SPY benchmark history incomplete",
+    "qqq_benchmark_price_unavailable": "QQQ benchmark history incomplete",
+    "policy_benchmark_price_unavailable": "policy benchmark history incomplete",
+    "external_flow_source_coverage_incomplete": "broker-statement cash-flow coverage incomplete",
+    "unpriceable_holding_snapshot": "one or more held positions could not be valued",
 }
 
 

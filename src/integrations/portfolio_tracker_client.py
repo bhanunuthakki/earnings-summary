@@ -56,7 +56,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from math import isfinite
 from typing import Literal, TypeVar, cast
 from urllib.parse import urlencode
@@ -118,6 +118,17 @@ _PERFORMANCE_REASON_CODES = frozenset(
         "external_share_movement_missing_ticker",
         "external_share_movement_price_unavailable",
         "nonpositive_dietz_denominator",
+        "portfolio_start_value_unavailable",
+        "portfolio_end_value_unavailable",
+        "partial_snapshot_start_date",
+        "partial_snapshot_end_date",
+        "modeled_opening_account_coverage_incomplete",
+        "modeled_opening_valuation_coverage_incomplete",
+        "spy_benchmark_price_unavailable",
+        "qqq_benchmark_price_unavailable",
+        "policy_benchmark_price_unavailable",
+        "external_flow_source_coverage_incomplete",
+        "unpriceable_holding_snapshot",
     }
 )
 _BETA_REASON_CODES = _POSITION_REASON_CODES | {"insufficient_return_observations"}
@@ -499,6 +510,311 @@ def _dicts(v: object) -> list[dict[str, object]]:
     ]
 
 
+def _decimal(v: object) -> Decimal | None:
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        parsed = Decimal(str(v))
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _close_decimal(left: Decimal, right: Decimal) -> bool:
+    return abs(left - right) <= Decimal("0.000001")
+
+
+def _parse_performance_receipt(
+    data: dict[str, object], points: list[dict[str, object]]
+) -> PerformanceEquationReceipt | None:
+    raw = data.get("equation_receipt")
+    if not isinstance(raw, dict):
+        return None
+    receipt = cast("dict[str, object]", raw)
+    numeric_names = (
+        "opening_value",
+        "net_external_cashflow_in",
+        "ending_value",
+        "investment_gain",
+        "modified_dietz_denominator",
+        "portfolio_return_pct",
+        "portfolio_equation_residual",
+    )
+    values = {name: _decimal(receipt.get(name)) for name in numeric_names}
+    if any(value is None for value in values.values()):
+        return None
+    decimals = cast("dict[str, Decimal]", values)
+    if decimals["modified_dietz_denominator"] <= 0:
+        return None
+    requested_start_text = _s(receipt.get("requested_start_date"))
+    requested_end_text = _s(receipt.get("requested_end_date"))
+    if requested_start_text is None or requested_end_text is None:
+        return None
+    try:
+        requested_start = date.fromisoformat(requested_start_text)
+        requested_end = date.fromisoformat(requested_end_text)
+    except ValueError:
+        return None
+    if requested_start >= requested_end:
+        return None
+    dated_flows: list[PerformanceDatedCashflow] = []
+    dated_flow_total = Decimal(0)
+    dated_flow_dates: set[date] = set()
+    raw_dated_flows = receipt.get("dated_external_cashflows")
+    if not isinstance(raw_dated_flows, list):
+        return None
+    dated_flow_items = cast("list[object]", raw_dated_flows)
+    if not all(isinstance(flow, dict) for flow in dated_flow_items):
+        return None
+    for raw_flow in dated_flow_items:
+        flow = cast("dict[str, object]", raw_flow)
+        flow_date = _s(flow.get("date"))
+        amount = _decimal(flow.get("amount"))
+        if flow_date is None or amount is None:
+            return None
+        try:
+            parsed_flow_date = date.fromisoformat(flow_date)
+        except ValueError:
+            return None
+        if (
+            parsed_flow_date in dated_flow_dates
+            or parsed_flow_date <= requested_start
+            or parsed_flow_date > requested_end
+        ):
+            return None
+        dated_flow_dates.add(parsed_flow_date)
+        dated_flow_total += amount
+        dated_flows.append(PerformanceDatedCashflow(flow_date, float(amount)))
+    if dated_flow_total != decimals["net_external_cashflow_in"]:
+        return None
+    if not _close_decimal(
+        decimals["investment_gain"],
+        decimals["ending_value"] - decimals["opening_value"] - decimals["net_external_cashflow_in"],
+    ):
+        return None
+    if decimals["portfolio_equation_residual"] != 0:
+        return None
+    if not _close_decimal(
+        decimals["portfolio_return_pct"],
+        decimals["investment_gain"] / decimals["modified_dietz_denominator"] * Decimal(100),
+    ):
+        return None
+    if requested_start_text != _s(data.get("start_date")) or requested_end_text != _s(
+        data.get("end_date")
+    ):
+        return None
+    if _decimal(data.get("base_value")) != decimals["opening_value"]:
+        return None
+    if _decimal(data.get("net_external_cashflow_in")) != decimals["net_external_cashflow_in"]:
+        return None
+    if not points:
+        return None
+    final_point = points[-1]
+    if _decimal(final_point.get("portfolio_value")) != decimals["ending_value"]:
+        return None
+    if _decimal(final_point.get("portfolio_return_pct")) != decimals["portfolio_return_pct"]:
+        return None
+
+    raw_account_ids = receipt.get("included_account_ids")
+    valuation_account_ids = data.get("valuation_account_ids")
+    if not isinstance(raw_account_ids, list):
+        return None
+    account_id_items = cast("list[object]", raw_account_ids)
+    if (
+        not all(
+            isinstance(account_id, int) and not isinstance(account_id, bool)
+            for account_id in account_id_items
+        )
+        or raw_account_ids != valuation_account_ids
+    ):
+        return None
+    account_ids = cast("list[int]", raw_account_ids)
+    identity_names = (
+        "calculation_id",
+        "external_flow_ledger_id",
+        "portfolio_valuation_input_id",
+    )
+    identities = {name: _s(receipt.get(name)) for name in identity_names}
+    if any(not value for value in identities.values()):
+        return None
+    resolution_policy = _s(receipt.get("benchmark_price_resolution_policy"))
+    if resolution_policy != "same_day_or_previous_us_market_close":
+        return None
+
+    required_target_dates: set[date] = set()
+    for point in points:
+        point_date = _s(point.get("date"))
+        if point_date is None:
+            return None
+        try:
+            required_target_dates.add(date.fromisoformat(point_date))
+        except ValueError:
+            return None
+    for flow in dated_flows:
+        try:
+            required_target_dates.add(date.fromisoformat(flow.date))
+        except ValueError:
+            return None
+
+    parsed_benchmarks: list[PerformanceBenchmarkReceipt] = []
+    for key, expected_name in (("spy", "SPY"), ("qqq", "QQQ"), ("policy", "policy")):
+        raw_benchmark = receipt.get(key)
+        if raw_benchmark is None and key == "policy":
+            if (
+                final_point.get("policy_return_pct") is not None
+                or final_point.get("policy_equivalent_value") is not None
+            ):
+                return None
+            continue
+        if not isinstance(raw_benchmark, dict):
+            return None
+        benchmark_raw = cast("dict[str, object]", raw_benchmark)
+        benchmark = _s(benchmark_raw.get("benchmark"))
+        numeric = {
+            name: _decimal(benchmark_raw.get(name))
+            for name in (
+                "ending_value",
+                "investment_gain",
+                "return_pct",
+                "dollar_alpha",
+                "percentage_point_alpha",
+                "equation_residual",
+            )
+        }
+        price_input_id = _s(benchmark_raw.get("price_input_id"))
+        if (
+            benchmark != expected_name
+            or not price_input_id
+            or any(value is None for value in numeric.values())
+        ):
+            return None
+        raw_price_inputs = benchmark_raw.get("price_inputs")
+        if not isinstance(raw_price_inputs, list) or not raw_price_inputs:
+            return None
+        price_input_items = cast("list[object]", raw_price_inputs)
+        if not all(isinstance(item, dict) for item in price_input_items):
+            return None
+        parsed_price_inputs: list[PerformanceBenchmarkPriceInput] = []
+        input_targets: dict[str, set[date]] = {}
+        seen_inputs: set[tuple[str, date]] = set()
+        for raw_input in price_input_items:
+            price_input = cast("dict[str, object]", raw_input)
+            ticker = _s(price_input.get("ticker"))
+            target_text = _s(price_input.get("target_date"))
+            source_text = _s(price_input.get("source_date"))
+            close = _decimal(price_input.get("close"))
+            resolution = _s(price_input.get("resolution"))
+            if (
+                not ticker
+                or target_text is None
+                or source_text is None
+                or close is None
+                or close <= 0
+            ):
+                return None
+            try:
+                target_date = date.fromisoformat(target_text)
+                source_date = date.fromisoformat(source_text)
+            except ValueError:
+                return None
+            if expected_name != "policy" and ticker != expected_name:
+                return None
+            if source_date > target_date or resolution not in {
+                "same_day_close",
+                "previous_market_close",
+            }:
+                return None
+            if (source_date == target_date) != (resolution == "same_day_close"):
+                return None
+            input_key = (ticker, target_date)
+            if input_key in seen_inputs:
+                return None
+            seen_inputs.add(input_key)
+            input_targets.setdefault(ticker, set()).add(target_date)
+            parsed_price_inputs.append(
+                PerformanceBenchmarkPriceInput(
+                    ticker=ticker,
+                    target_date=target_text,
+                    source_date=source_text,
+                    close=float(close),
+                    resolution=cast(
+                        "Literal['same_day_close', 'previous_market_close']", resolution
+                    ),
+                )
+            )
+        if not input_targets or any(
+            target_dates != required_target_dates for target_dates in input_targets.values()
+        ):
+            return None
+        numbers = cast("dict[str, Decimal]", numeric)
+        point_return_name = f"{key}_return_pct"
+        point_value_name = f"{key}_equivalent_value"
+        if (
+            _decimal(final_point.get(point_return_name)) != numbers["return_pct"]
+            or _decimal(final_point.get(point_value_name)) != numbers["ending_value"]
+        ):
+            return None
+        if not _close_decimal(
+            numbers["investment_gain"],
+            numbers["ending_value"]
+            - decimals["opening_value"]
+            - decimals["net_external_cashflow_in"],
+        ):
+            return None
+        if numbers["equation_residual"] != 0:
+            return None
+        if not _close_decimal(
+            numbers["return_pct"],
+            numbers["investment_gain"] / decimals["modified_dietz_denominator"] * Decimal(100),
+        ):
+            return None
+        if not _close_decimal(
+            numbers["percentage_point_alpha"],
+            decimals["portfolio_return_pct"] - numbers["return_pct"],
+        ):
+            return None
+        if not _close_decimal(
+            numbers["dollar_alpha"],
+            decimals["investment_gain"] - numbers["investment_gain"],
+        ) or not _close_decimal(
+            numbers["dollar_alpha"],
+            decimals["modified_dietz_denominator"]
+            * numbers["percentage_point_alpha"]
+            / Decimal(100),
+        ):
+            return None
+        parsed_benchmarks.append(
+            PerformanceBenchmarkReceipt(
+                benchmark=expected_name,
+                ending_value=float(numbers["ending_value"]),
+                investment_gain=float(numbers["investment_gain"]),
+                return_pct=float(numbers["return_pct"]),
+                dollar_alpha=float(numbers["dollar_alpha"]),
+                percentage_point_alpha=float(numbers["percentage_point_alpha"]),
+                equation_residual=float(numbers["equation_residual"]),
+                price_input_id=price_input_id,
+                price_inputs=tuple(parsed_price_inputs),
+            )
+        )
+    return PerformanceEquationReceipt(
+        calculation_id=cast("str", identities["calculation_id"]),
+        external_flow_ledger_id=cast("str", identities["external_flow_ledger_id"]),
+        portfolio_valuation_input_id=cast("str", identities["portfolio_valuation_input_id"]),
+        included_account_ids=tuple(account_ids),
+        requested_start_date=_s(receipt.get("requested_start_date")) or "",
+        requested_end_date=_s(receipt.get("requested_end_date")) or "",
+        benchmark_price_resolution_policy=resolution_policy,
+        opening_value=float(decimals["opening_value"]),
+        dated_external_cashflows=tuple(dated_flows),
+        net_external_cashflow_in=float(decimals["net_external_cashflow_in"]),
+        ending_value=float(decimals["ending_value"]),
+        investment_gain=float(decimals["investment_gain"]),
+        modified_dietz_denominator=float(decimals["modified_dietz_denominator"]),
+        portfolio_return_pct=float(decimals["portfolio_return_pct"]),
+        benchmarks=tuple(parsed_benchmarks),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Portfolio analytics (master build P2.1). Read-only consumers of the
 # tracker's performance / alpha / positioning / policy / beta endpoints.
@@ -521,6 +837,53 @@ class PerformancePoint:
     spy_return_pct: float | None
     qqq_return_pct: float | None
     policy_return_pct: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceBenchmarkPriceInput:
+    ticker: str
+    target_date: str
+    source_date: str
+    close: float
+    resolution: Literal["same_day_close", "previous_market_close"]
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceBenchmarkReceipt:
+    benchmark: str
+    ending_value: float
+    investment_gain: float
+    return_pct: float
+    dollar_alpha: float
+    percentage_point_alpha: float
+    equation_residual: float
+    price_input_id: str
+    price_inputs: tuple[PerformanceBenchmarkPriceInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceDatedCashflow:
+    date: str
+    amount: float
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceEquationReceipt:
+    calculation_id: str
+    external_flow_ledger_id: str
+    portfolio_valuation_input_id: str
+    included_account_ids: tuple[int, ...]
+    requested_start_date: str
+    requested_end_date: str
+    benchmark_price_resolution_policy: Literal["same_day_or_previous_us_market_close"]
+    opening_value: float
+    dated_external_cashflows: tuple[PerformanceDatedCashflow, ...]
+    net_external_cashflow_in: float
+    ending_value: float
+    investment_gain: float
+    modified_dietz_denominator: float
+    portfolio_return_pct: float
+    benchmarks: tuple[PerformanceBenchmarkReceipt, ...]
 
 
 @dataclass(slots=True)
@@ -556,6 +919,8 @@ class PerformanceSeries:
     calculation_status: Literal["available", "unavailable"] = "unavailable"
     calculation_reason_codes: list[str] = field(default_factory=list[str])
     compatibility_issue: str | None = None
+    source_coverage_status: str = "incomplete"
+    equation_receipt: PerformanceEquationReceipt | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1326,6 +1691,7 @@ def _parse_performance(
     ):
         compatibility_issue = "returned_window_mismatch"
 
+    raw_points = _dicts(data.get("points"))
     points = [
         PerformancePoint(
             date=_s(p.get("date")) or "",
@@ -1334,20 +1700,41 @@ def _parse_performance(
             qqq_return_pct=_f(p.get("qqq_return_pct")),
             policy_return_pct=_f(p.get("policy_return_pct")),
         )
-        for p in _dicts(data.get("points"))
+        for p in raw_points
     ]
     base_value = _f(data.get("base_value"))
+    raw_source_coverage = data.get("source_coverage")
+    source_coverage = (
+        cast("dict[str, object]", raw_source_coverage)
+        if isinstance(raw_source_coverage, dict)
+        else None
+    )
+    source_coverage_status = _s(source_coverage.get("status")) if source_coverage else None
+    source_coverage_complete = (
+        source_coverage is not None and source_coverage.get("is_complete") is True
+    )
+    receipt = _parse_performance_receipt(data, raw_points)
+    if compatibility_issue is None and source_coverage is None:
+        compatibility_issue = "missing_source_coverage"
+    elif compatibility_issue is None and raw_status == "available" and not source_coverage_complete:
+        compatibility_issue = "source_cashflow_coverage_incomplete"
     calculation_available = bool(
         raw_status == "available"
         and compatibility_issue is None
+        and source_coverage_complete
+        and receipt is not None
         and base_value is not None
         and base_value > 0
         and _f(data.get("net_external_cashflow_in")) is not None
         and isinstance(data.get("backfill_start_unreliable"), bool)
-        and _series_dates_valid(
-            _dicts(data.get("points")), data.get("start_date"), data.get("end_date")
+        and _series_dates_valid(raw_points, data.get("start_date"), data.get("end_date"))
+        and all(
+            point.date
+            and point.portfolio_return_pct is not None
+            and point.spy_return_pct is not None
+            and point.qqq_return_pct is not None
+            for point in points
         )
-        and all(point.date and point.portfolio_return_pct is not None for point in points)
     )
     if raw_status == "available" and not calculation_available and compatibility_issue is None:
         compatibility_issue = "contradictory_available_payload"
@@ -1375,6 +1762,8 @@ def _parse_performance(
             code for code in reason_codes if code in _PERFORMANCE_REASON_CODES
         ],
         compatibility_issue=compatibility_issue,
+        source_coverage_status=source_coverage_status or "incomplete",
+        equation_receipt=receipt if calculation_available else None,
         provenance=_analytics_provenance(
             meta,
             embedded_methodology=data.get("methodology"),

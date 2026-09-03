@@ -23,7 +23,7 @@
     },
     "methodology": "data_quality.findings",
     "methodology_version": "1",
-    "schema_version": "1.0.0",
+    "schema_version": "1.1.0",
     "source_providers": [
       "plaid",
       "snaptrade"
@@ -32,54 +32,6 @@
   },
   "report": {
     "findings": [
-      {
-        "category": "no_historical_prices",
-        "context": {
-          "name": "Alpha Corp",
-          "ticker": "AAAA"
-        },
-        "detail": "Ticker AAAA (Alpha Corp) was fetched but yfinance returned no daily close prices. Without prices, transaction-walk backfill can't value this position on past dates \u2014 its weight in your historical portfolio curve is implicitly 0.",
-        "recommended_action": "Re-run `python -m portfolio_tracker.jobs.prices --start 2024-01-01`. If still empty, the symbol may be a foreign listing yfinance doesn't carry.",
-        "severity": "warning",
-        "title": "AAAA: no historical price data on file"
-      },
-      {
-        "category": "no_historical_prices",
-        "context": {
-          "name": "Beta Corp",
-          "ticker": "BBBB"
-        },
-        "detail": "Ticker BBBB (Beta Corp) was fetched but yfinance returned no daily close prices. Without prices, transaction-walk backfill can't value this position on past dates \u2014 its weight in your historical portfolio curve is implicitly 0.",
-        "recommended_action": "Re-run `python -m portfolio_tracker.jobs.prices --start 2024-01-01`. If still empty, the symbol may be a foreign listing yfinance doesn't carry.",
-        "severity": "warning",
-        "title": "BBBB: no historical price data on file"
-      },
-      {
-        "category": "anomalous_backfill_day",
-        "context": {
-          "curr_value": "1238.0000000000",
-          "date": "2026-07-15",
-          "prev_value": "1818.0000000000",
-          "raw_return": "-0.3190319031903190319031903190"
-        },
-        "detail": "On 2026-07-15, the transaction-walk reconstruction shows the portfolio going from $1,818 to $1,238 (net cashflow on this date: $0). That's -32% in a day \u2014 almost certainly an unrecorded position transfer or a transaction Plaid didn't capture. The TWR is held flat for this day to avoid compounding noise.",
-        "recommended_action": "Check the Transactions page for this date. If there was an ACATS transfer, gifted stock, or intra-account move that isn't reflected, you can ignore this; the TWR accounts for it. If it's a true data error, report to Plaid.",
-        "severity": "warning",
-        "title": "2026-07-15: reconstructed value jumped -32% with no recorded cashflow"
-      },
-      {
-        "category": "anomalous_backfill_day",
-        "context": {
-          "curr_value": "20000.000000",
-          "date": "2026-07-22",
-          "prev_value": "1000.0000000000",
-          "raw_return": "18"
-        },
-        "detail": "On 2026-07-22, the transaction-walk reconstruction shows the portfolio going from $1,000 to $20,000 (net cashflow on this date: $1,000). That's +1800% in a day \u2014 almost certainly an unrecorded position transfer or a transaction Plaid didn't capture. The TWR is held flat for this day to avoid compounding noise.",
-        "recommended_action": "Check the Transactions page for this date. If there was an ACATS transfer, gifted stock, or intra-account move that isn't reflected, you can ignore this; the TWR accounts for it. If it's a true data error, report to Plaid.",
-        "severity": "warning",
-        "title": "2026-07-22: reconstructed value jumped +1800% with no recorded cashflow"
-      },
       {
         "category": "sparse_forward_snapshots",
         "context": {
@@ -93,8 +45,7 @@
     ],
     "generated_at": "2026-07-23T06:00:00Z",
     "summary_counts": {
-      "info": 1,
-      "warning": 4
+      "info": 1
     }
   }
 }
