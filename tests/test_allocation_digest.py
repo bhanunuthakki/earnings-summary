@@ -9,10 +9,16 @@ import allocation.recommendation as recommendation_mod
 from allocation.digest import allocation_payload_sha
 
 NESTED_PAYLOAD: dict[str, object] = {"b": 1, "a": {"d": 4, "c": 3}}
-NESTED_SHA = "943d56ce0b02b80a8afcd12d849426226b68f2d8cd2840af8f6f93067f14c360"
+NESTED_SHA = (
+    "943d56ce0b02b80a8afcd12d849426226b68f2d8cd2840af8f6f93067f14c360"  # pragma: allowlist secret
+)
 
-CUSTOM_STR_SHA = "57d4aa4593398f163b1fc0a4ad19a99efee68ef1d375f5c5d84ae4f8fc0e8827"
-CASH_SHA = "aab0c51847b8485c87043c112916d6c07fbf1b18d3d3d82c600dc30454a4c5ab"
+CUSTOM_STR_SHA = (
+    "57d4aa4593398f163b1fc0a4ad19a99efee68ef1d375f5c5d84ae4f8fc0e8827"  # pragma: allowlist secret
+)
+CASH_SHA = (
+    "aab0c51847b8485c87043c112916d6c07fbf1b18d3d3d82c600dc30454a4c5ab"  # pragma: allowlist secret
+)
 
 
 class _Custom:
