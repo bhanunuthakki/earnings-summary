@@ -51,6 +51,7 @@ from dcf import (
 )
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
+from dcf.fiscal_periods import detect_fy_periods
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
@@ -244,31 +245,6 @@ def idx(records, segmode=False):
         if isinstance(per, str) and per.startswith("Q"):
             out[(yr, per)] = r.get("data") if segmode else r
     return out
-
-
-def detect_fy_periods(
-    records_i: dict[tuple[int, str], object],
-    default: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4"),
-) -> tuple[str, ...]:
-    """Canonical period labels that make up ONE fiscal year for this issuer.
-
-    Generalises the "four quarters per year" assumption to any consistent cadence
-    — e.g. a semi-annual filer (BHP) that reports only H1/H2 as Q2/Q4, which sum
-    to the fiscal year exactly as four quarters do. The cadence is the LARGEST
-    period-set that recurs across >=2 fiscal years, so a single partial year (the
-    current in-progress year, or an IPO mid-ramp) is never mistaken for it; with
-    too little history to establish one, fall back to quarterly so short-history
-    names self-skip below instead of building on a one-off period set.
-    """
-    by_fy: dict[int, set[str]] = defaultdict(set)
-    for y, p in records_i:
-        by_fy[y].add(p)
-    counts: dict[frozenset[str], int] = defaultdict(int)
-    for s in by_fy.values():
-        if s:
-            counts[frozenset(s)] += 1
-    recurring = [s for s, n in counts.items() if n >= 2]
-    return tuple(sorted(max(recurring, key=len))) if recurring else default
 
 
 inc_i, bal_i, cf_i = idx(inc), idx(bal), idx(cf)
