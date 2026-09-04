@@ -69,36 +69,43 @@ def workbook_semantic_hash(path: Path) -> tuple[str, str, tuple[str, ...]]:
     # Formula/value parity alone misses workbook-level behavior. Keep this
     # metadata explicit and deterministic so defined names, calculation
     # policy, and hidden sheets cannot drift while cell hashes still match.
-    defined_names: list[dict[str, object]] = []
-    collection = getattr(workbook, "defined_names", {})
-    candidates = collection.values() if hasattr(collection, "values") else ()
-    for defined_name in candidates:
-        attrs = (
-            "name",
-            "localSheetId",
-            "hidden",
-            "function",
-            "vbProcedure",
-            "xlm",
-            "functionGroupId",
-            "shortcutKey",
-            "publishToServer",
-            "workbookParameter",
-            "attr_text",
-        )
-        defined_names.append(
-            {attribute: repr(getattr(defined_name, attribute, None)) for attribute in attrs}
-        )
-    calculation = getattr(workbook, "calculation", None)
-    calculation_attrs = getattr(calculation, "__attrs__", ())
+    defined_names = [
+        {
+            "name": repr(item.name),
+            "localSheetId": repr(item.localSheetId),
+            "hidden": repr(item.hidden),
+            "function": repr(item.function),
+            "vbProcedure": repr(item.vbProcedure),
+            "xlm": repr(item.xlm),
+            "functionGroupId": repr(item.functionGroupId),
+            "shortcutKey": repr(item.shortcutKey),
+            "publishToServer": repr(item.publishToServer),
+            "workbookParameter": repr(item.workbookParameter),
+            "attr_text": repr(item.attr_text),
+        }
+        for item in workbook.defined_names.values()
+    ]
+    calculation = workbook.calculation
     calc_settings = {
-        attribute: repr(getattr(calculation, attribute, None)) for attribute in calculation_attrs
+        "calcId": repr(calculation.calcId),
+        "calcMode": repr(calculation.calcMode),
+        "fullCalcOnLoad": repr(calculation.fullCalcOnLoad),
+        "refMode": repr(calculation.refMode),
+        "iterate": repr(calculation.iterate),
+        "iterateCount": repr(calculation.iterateCount),
+        "iterateDelta": repr(calculation.iterateDelta),
+        "fullPrecision": repr(calculation.fullPrecision),
+        "calcCompleted": repr(calculation.calcCompleted),
+        "calcOnSave": repr(calculation.calcOnSave),
+        "concurrentCalc": repr(calculation.concurrentCalc),
+        "concurrentManualCount": repr(calculation.concurrentManualCount),
+        "forceFullCalc": repr(calculation.forceFullCalc),
     }
     metadata = {
         "defined_names": sorted(defined_names, key=lambda item: repr(item)),
         "calculation": calc_settings,
         "sheet_states": [(sheet.title, sheet.sheet_state) for sheet in workbook.worksheets],
-        "active_sheet": getattr(workbook.active, "title", None),
+        "active_sheet": workbook.active.title if workbook.active is not None else None,
     }
     values.append(f"__workbook_metadata__={json.dumps(metadata, sort_keys=True)}")
     return (
