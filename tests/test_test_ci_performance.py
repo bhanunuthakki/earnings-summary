@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.quality.test_ci_performance import (
+    CacheState,
     FrozenTestCohort,
     PhaseTimings,
     WorkerEvidence,
@@ -25,7 +26,7 @@ def _worker(
     node_ids: tuple[str, ...] = ("tests/test_a.py::test_one",),
     *,
     worker_id: str = "gw0",
-    cache_state: str = "cold",
+    cache_state: CacheState = "cold",
 ) -> WorkerEvidence:
     return WorkerEvidence(
         worker_id=worker_id,
@@ -42,7 +43,7 @@ def _worker(
         ),
         elapsed_seconds=1.2,
         peak_rss_bytes=100,
-        cache_state=cache_state if cache_state in {"cold", "warm", "unknown"} else "unknown",
+        cache_state=cache_state,
     )
 
 
