@@ -29,8 +29,10 @@ PYTEST_WORKERS ?= 2
 PYTEST_XDIST_ARGS := $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS) --dist=loadfile)
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
 CHANGED := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
+CHANGED_ALL := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD)
+TOUCHED_ARGS := $(foreach path,$(CHANGED_ALL),--touched $(path))
 
-.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed instruction-check public-boundary-check public-ref-check check check-fast ci-local
+.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed instruction-check public-boundary-check public-ref-check quality-architecture-check quality-duplicates-check quality-reachability-check quality-ratchets check check-fast ci-local
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -84,7 +86,18 @@ public-boundary-check:  ## Reject private material in the current tracked tree
 public-ref-check:  ## Audit fetched origin branches by private path category
 	$(PY) execution/verify_public_tree.py --all-refs
 
-check: format-changed lint-changed typecheck-changed test  ## Pre-push gate: your-lines format + your-files lint/types + tests
+quality-architecture-check:  ## Prevent architecture metric regressions
+	$(PY) execution/score_code_quality.py --repo-root . --revision WORKTREE --baseline docs/quality/architecture-ratchet.json --ratchet-only
+
+quality-duplicates-check:  ## Prevent normalized-AST duplication regressions
+	$(PY) execution/analyze_code_duplicates.py --repo-root . --revision WORKTREE --baseline docs/quality/duplicates-ratchet.json
+
+quality-reachability-check:  ## Hold changed files with unknown operational edges
+	$(PY) execution/build_operational_reachability.py --repo-root . --output .tmp/quality/reachability-check.json $(TOUCHED_ARGS)
+
+quality-ratchets: quality-architecture-check quality-duplicates-check quality-reachability-check  ## Run Train 0 architecture, clone, and reachability gates
+
+check: format-changed lint-changed typecheck-changed quality-ratchets test  ## Pre-push gate: changed quality + ratchets + tests
 
 check-fast: format-changed lint-changed typecheck-changed test-changed  ## Fast inner-loop gate: format + lint + typecheck + changed-tests
 
