@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Explore · DCF peek</title>
+  <link rel="stylesheet" href="explore_concepts.css"><link rel="stylesheet" href="explore_readonly_dcf.css">
+</head>
+<body>
+<div class="rv-app">
+  <header class="rv-head"><a class="k-btn k-btn-quiet rv-back" href="explore_hybrid_2_analysis_sheet.html">← Explore</a><div class="rv-title"><h1>MELI segment economics</h1><p>Conversation first · model context only when requested</p></div><div class="rv-actions"><span class="rv-readonly">DCF access is read-only</span><button class="k-btn k-btn-save" data-open="snapshot">◆ Save snapshot</button></div></header>
+  <main class="rv-main rv-main-narrow">
+    <div class="rv-page-head"><div><div class="rv-kicker">Attempt 01 · DCF peek</div><h2>Explore</h2><p>The answer stays primary. DCF context is a temporary reference drawer.</p></div></div>
+    <section aria-label="Analysis conversation">
+      <article class="rv-turn"><div class="rv-avatar">B</div><div><div class="rv-turn-label">You</div><p class="rv-question">What are MELI’s segments, and which is growing faster?</p></div></article>
+      <article class="rv-turn"><div class="rv-avatar rv-avatar-ai">✦</div><div><div class="rv-turn-label">Explore</div><p class="rv-answer"><strong>Fintech is growing faster and gaining mix.</strong> On the closest comparable issuer-reported series, its illustrative two-year CAGR is <span class="mono ok">29.8%</span> versus <span class="mono">24.1%</span> for Commerce.</p><div class="rv-chips"><span class="k-chip k-chip-accent">Commerce revenue</span><span class="k-chip k-chip-accent">Fintech revenue</span><span class="k-chip">Quarterly · 2 years</span><span class="k-chip k-chip-ok">16 / 16 observations</span></div>
+        <section class="rv-result"><div class="rv-result-head"><div><h3>Segment revenue trend</h3><p>Illustrative indexed growth · Q3 ’24 = 100</p></div><div class="actions"><button class="k-btn k-btn-sm k-btn-quiet" data-open="dcf-peek">View DCF inputs</button><button class="k-btn k-btn-sm k-btn-quiet">Work with data ↗</button></div></div>
+          <svg class="rv-chart" viewBox="0 0 760 250" role="img" aria-label="Illustrative Commerce and Fintech growth"><line class="grid" x1="38" y1="205" x2="738" y2="205"/><line class="grid" x1="38" y1="130" x2="738" y2="130"/><line class="grid" x1="38" y1="55" x2="738" y2="55"/><polyline class="actual-a" points="55,201 150,185 245,164 340,140 435,114 530,87 625,62 720,35"/><polyline class="actual-b" points="55,201 150,191 245,180 340,166 435,150 530,131 625,109 720,84"/><line class="divider" x1="565" y1="34" x2="565" y2="205"/><text x="575" y="48">definition revised</text><text x="42" y="229">Q3 ’24</text><text x="230" y="229">Q1 ’25</text><text x="420" y="229">Q3 ’25</text><text x="610" y="229">Q1 ’26</text></svg>
+          <div class="rv-legend"><span class="a">Fintech</span><span class="b">Commerce</span><span>Values illustrative</span></div>
+        </section>
+      </div></article>
+    </section>
+  </main>
+  <footer class="rv-compose-zone"><div class="rv-compose-inner"><div class="rv-compose"><input id="follow-up" aria-label="Ask a follow-up" placeholder="Ask a follow-up, add a metric, or request a comparison…"><button class="k-btn k-btn-primary">Ask</button></div><div class="rv-followups"><button class="rv-followup">Compare margin contribution</button><button class="rv-followup">Add total payment volume</button><button class="rv-followup">Show the current DCF assumptions</button></div></div></footer>
+</div>
+
+<div class="scrim" hidden></div>
+<aside class="rv-peek" id="dcf-peek" hidden aria-label="Current DCF inputs"><div class="rv-peek-head"><div><span class="k-pill k-pill-accent">Read-only · revision 184</span><h2>Current DCF inputs</h2><p class="meta">MELI live model · captured 29 Aug 2026</p></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><h3>Segment growth</h3><div class="rv-peek-row"><span>Commerce · near term</span><span>21.0%</span></div><div class="rv-peek-row"><span>Commerce · terminal</span><span>7.0%</span></div><div class="rv-peek-row"><span>Fintech · near term</span><span>27.0%</span></div><div class="rv-peek-row"><span>Fintech · terminal</span><span>9.0%</span></div><h3>Model context</h3><div class="rv-peek-row"><span>Operating margin · near term</span><span>13.5%</span></div><div class="rv-peek-row"><span>WACC</span><span>11.2%</span></div><div class="rv-peek-row"><span>Exit multiple</span><span>18.0×</span></div><div class="rv-foot"><span>Explore cannot modify these values.</span><button class="k-btn k-btn-quiet">Open live DCF ↗</button></div></aside>
+
+<aside class="drawer" id="snapshot" hidden aria-label="Save immutable snapshot"><div class="drawer-head"><div><span class="k-pill">Immutable save</span><h2>Save analysis snapshot</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="save-form"><label>Name<input value="MELI segment growth · Aug 29"></label><div class="rv-snapshot-list"><div class="rv-snapshot-row"><span>Analysis specification</span><span>PINNED</span></div><div class="rv-snapshot-row"><span>16 observations</span><span>PINNED</span></div><div class="rv-snapshot-row"><span>Viewed DCF revision 184</span><span>PINNED</span></div></div><button class="k-btn k-btn-save">◆ Save immutable snapshot</button><p class="meta">To change it later, open the snapshot and choose “Edit as new.” The saved evidence does not move.</p></div></aside>
+<script>
+const scrim=document.querySelector('.scrim'),surfaces=[...document.querySelectorAll('.drawer,.rv-peek')],follow=document.getElementById('follow-up');
+function closeAll(){surfaces.forEach(x=>x.hidden=true);scrim.hidden=true}function openOne(id){surfaces.forEach(x=>x.hidden=x.id!==id);scrim.hidden=false}
+document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openOne(b.dataset.open)));document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',closeAll));scrim.addEventListener('click',closeAll);addEventListener('keydown',e=>{if(e.key==='Escape')closeAll()});document.querySelectorAll('.rv-followup').forEach(b=>b.addEventListener('click',()=>{follow.value=b.textContent.trim();follow.focus()}));
+</script>
+</body></html>
