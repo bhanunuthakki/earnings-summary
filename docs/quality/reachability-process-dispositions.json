@@ -1,12 +1,14 @@
 {
   "schema_version": "reachability-process-dispositions/v1",
   "graph_provenance": {
-    "path": ".tmp/quality/unknown-production-current.tsv",
+    "path": ".tmp/quality/reachability-check.json",
+    "schema_version": "operational-reachability/v1",
     "parser": {
-      "name": "operational-reachability",
-      "version": "1.1.0"
+      "name": "ast+xml+literal-scanner",
+      "version": "1.1.0",
+      "python": "3.14.7"
     },
-    "source_sha256": "5827c6db8cbee906c06fca3ca5ba902b98e4ca602b7cb3b391cf9c9898251c1e"
+    "source_sha256": "b7d9c6e647da6c52e092e8512c397ba5fe545282e9f824eac72d347e1b6b084d"
   },
   "scope": {
     "source_roots": [
@@ -15,16 +17,16 @@
       "scripts/"
     ],
     "evidence": "subprocess/runpy expression",
-    "current_production_keys": 73
+    "current_production_keys": 77
   },
   "counts": {
-    "unknown_process_edges": 73,
+    "unknown_process_edges": 77,
     "dispositions": {
-      "internal_python_target": 44,
-      "closed_command_set": 8,
+      "internal_python_target": 47,
+      "closed_command_set": 7,
       "external_process": 17,
       "runtime_registry": 1,
-      "operator_supplied_process": 3
+      "operator_supplied_process": 5
     },
     "omissions": 0
   },
@@ -655,15 +657,6 @@
       "evidence": "Call site and helper identify a finite external executable family."
     },
     {
-      "path": "src/quality/performance.py",
-      "line": 357,
-      "fingerprint": "6f109b0dec2dd284be09ece7c83f8e456a78bcb591142a939ef418045326e0fb",
-      "disposition": "closed_command_set",
-      "target": "frozen benchmark cohort command",
-      "command_family": "schema-validated benchmark argv",
-      "evidence": "The executed argv is loaded from the frozen performance cohort and validated before invocation."
-    },
-    {
       "path": "src/provenance/ocr_extraction.py",
       "line": 374,
       "fingerprint": "7e5d730cb7d836e4b5b60938e9e55aabbdafbe1679540446a095f3db2b874ab4",
@@ -752,6 +745,51 @@
       "target": "external executable family",
       "command_family": "validated external executable family",
       "evidence": "Call site and helper identify a finite external executable family."
+    },
+    {
+      "path": "execution/benchmark_dcf_workload.py",
+      "line": 106,
+      "fingerprint": "0ddd14d4882261a5904a6090b8a9417e9df72a2651f16ef2da2c902c87f62744",
+      "disposition": "internal_python_target",
+      "target": "execution/build_redesigned_dcf.py",
+      "command_family": "managed Python child",
+      "evidence": "The DCF workload invokes the checked-in build_redesigned_dcf.py entrypoint with the managed interpreter and a disposable fixture root."
+    },
+    {
+      "path": "execution/collect_paired_ci_performance.py",
+      "line": 350,
+      "fingerprint": "51a81b4610d96bcc44a13f3e2d15862d62fd35c1c1c4497ddb426a0fbda63ccd",
+      "disposition": "internal_python_target",
+      "target": "execution/capture_test_ci_performance.py",
+      "command_family": "managed Python child",
+      "evidence": "The production collector builds its capture argv from the immutable worktree and the checked-in capture_test_ci_performance.py entrypoint; the hermetic fixture branch is test-only."
+    },
+    {
+      "path": "src/quality/performance.py",
+      "line": 187,
+      "fingerprint": "ee7f2cf628d95756b848a3f8cb44d2715f89e4efb4151f0c9ab7e28cc928cee4",
+      "disposition": "operator_supplied_process",
+      "target": "operator-supplied benchmark argv",
+      "command_family": "operator command boundary",
+      "evidence": "The public timing adapter accepts an operator-supplied command; this boundary is intentionally raw timing-only and categorically HOLD unless a separately validated causal envelope is present."
+    },
+    {
+      "path": "src/quality/performance.py",
+      "line": 227,
+      "fingerprint": "0715981bbfe8beab02d527faf1a722f747455d781abae8cca9cf77964dd6f3b7",
+      "disposition": "operator_supplied_process",
+      "target": "operator-supplied benchmark argv",
+      "command_family": "operator command boundary",
+      "evidence": "The adaptive repeat uses the same operator-supplied benchmark argv boundary as the timing-only adapter and cannot upgrade its HOLD status."
+    },
+    {
+      "path": "src/quality/performance_source_analysis.py",
+      "line": 137,
+      "fingerprint": "770989e9192c45d0de7a81876d669b138b7917c4e4c5c1b347a1347bcf07489c",
+      "disposition": "internal_python_target",
+      "target": "execution/analyze_code_duplicates.py",
+      "command_family": "managed Python child",
+      "evidence": "The source-analysis cohort command is frozen in COHORT_REGISTRY, requires the checked-in analyze_code_duplicates.py target, and runs only inside immutable revision snapshots through the managed interpreter."
     }
   ],
   "residual_unresolved": "0 current edges remain unresolved.",
