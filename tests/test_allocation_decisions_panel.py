@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for the allocation-decisions record (master build P2.2).
 
 Covers the three layers separately:
@@ -1324,13 +1325,44 @@ def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(adp, "fetch_live_portfolio", _live)
     monkeypatch.setattr(adp, "fetch_portfolio_analytics", _analytics)
-    monkeypatch.setattr(adp, "build_calibration", lambda *a, **k: None)
-    monkeypatch.setattr(adp, "latest_dcf_runs", lambda *a, **k: {})
-    monkeypatch.setattr(adp, "latest_dcf_scenarios", lambda *a, **k: {})
-    monkeypatch.setattr(adp, "_scorecard_html", lambda *a, **k: "<!--sc-->")
-    monkeypatch.setattr(adp, "_redteam_pnl_html", lambda *a, **k: "<!--rt-->")
-    monkeypatch.setattr(adp, "_annual_letter_html", lambda *a, **k: "<!--al-->")
-    monkeypatch.setattr(adp, "_coach_digest_section", lambda *a, **k: "<!--dg-->")
+
+    def _fake_build_calibration(
+        *,
+        db_path: Path | str,
+        cohort_granularity: str = "",
+        magnitudes_by_ticker: dict[str, float] | None = None,
+    ) -> adp.CalibrationStats | None:
+        return None
+
+    def _fake_latest_dcf_runs(
+        conn: sqlite3.Connection,
+    ) -> dict[str, tuple[float | None, float | None, float | None, str | None]]:
+        return {}
+
+    def _fake_latest_dcf_scenarios(
+        conn: sqlite3.Connection,
+    ) -> dict[str, tuple[float | None, float | None]]:
+        return {}
+
+    def _fake_scorecard_html(path: Path, *, n_graded: int = 0) -> str:
+        return "<!--sc-->"
+
+    def _fake_redteam_pnl_html(path: Path, *, user_id: str = "") -> str:
+        return "<!--rt-->"
+
+    def _fake_annual_letter_html(path: Path) -> str:
+        return "<!--al-->"
+
+    def _fake_coach_digest_section(path: Path) -> str:
+        return "<!--dg-->"
+
+    monkeypatch.setattr(adp, "build_calibration", _fake_build_calibration)
+    monkeypatch.setattr(adp, "latest_dcf_runs", _fake_latest_dcf_runs)
+    monkeypatch.setattr(adp, "latest_dcf_scenarios", _fake_latest_dcf_scenarios)
+    monkeypatch.setattr(adp, "_scorecard_html", _fake_scorecard_html)
+    monkeypatch.setattr(adp, "_redteam_pnl_html", _fake_redteam_pnl_html)
+    monkeypatch.setattr(adp, "_annual_letter_html", _fake_annual_letter_html)
+    monkeypatch.setattr(adp, "_coach_digest_section", _fake_coach_digest_section)
     html = adp.render_allocation_decisions_panel(db, user_id="bhanu")
     assert len(conns) == 2
     for c in conns:
