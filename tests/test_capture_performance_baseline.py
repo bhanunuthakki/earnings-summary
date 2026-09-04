@@ -62,7 +62,9 @@ def test_adaptive_statistics_and_labels_are_present() -> None:
         samples=7,
         provenance="mac_guidance",
     )
-    assert len(receipt.timing_samples) == 7
+    # Adaptive collection may add warm repeats when the initial requested
+    # cohort is noisy; the requested value is the minimum measured cohort.
+    assert 7 <= len(receipt.timing_samples) <= 21
     assert receipt.timing_samples[0].label == "cold"
     assert all(sample.label == "warm" for sample in receipt.timing_samples[1:])
     assert receipt.median_seconds is not None
