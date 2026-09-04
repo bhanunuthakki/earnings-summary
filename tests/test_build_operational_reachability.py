@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import quality.reachability as reachability
 from quality.reachability import build_graph, main
 
 
@@ -44,6 +45,42 @@ def test_collects_static_dynamic_and_operational_edges(tmp_path: Path) -> None:
     assert any(edge.unknown for edge in graph.edges)
 
 
+def test_literal_getattr_and_non_python_process_are_not_unknown(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "execution/main.py",
+        "import subprocess\ngetattr(mod, 'handler')\nsubprocess.run(['git', 'status'])\n",
+    )
+    graph = build_graph(tmp_path)
+    assert any(edge.target == "<attribute:handler>" for edge in graph.edges)
+    assert not graph.unknown_edges
+
+
+def test_only_current_directives_create_authority_edges(tmp_path: Path) -> None:
+    _write(tmp_path, "execution/live.py", "VALUE = 1\n")
+    _write(tmp_path, "execution/old.py", "VALUE = 1\n")
+    _write(tmp_path, "directives/live.md", "Use execution/live.py\n")
+    _write(tmp_path, "directives/old.md", "Use execution/old.py\n")
+    _write(
+        tmp_path,
+        "directives/directive_manifest.json",
+        json.dumps(
+            {
+                "directives": {
+                    "live.md": {"class": "runbook"},
+                    "old.md": {"class": "history"},
+                }
+            }
+        ),
+    )
+    graph = build_graph(tmp_path)
+    directive_edges = {
+        (edge.source, edge.target) for edge in graph.edges if edge.kind == "directive"
+    }
+    assert ("directives/live.md", "execution/live.py") in directive_edges
+    assert ("directives/old.md", "execution/old.py") not in directive_edges
+
+
 def test_malformed_sources_are_diagnostics_and_deterministic(tmp_path: Path) -> None:
     _write(tmp_path, "execution/bad.py", "def broken(:\n")
     _write(tmp_path, "cron/bad.xml", "<Task>")
@@ -69,6 +106,29 @@ def test_import_index_distinguishes_project_external_and_unresolved(tmp_path: Pa
     assert not any(edge.kind == "reexport" for edge in graph.edges)
 
 
+def test_package_root_import_resolves_to_init(tmp_path: Path) -> None:
+    _write(tmp_path, "execution/__init__.py", "VALUE = 1\n")
+    _write(tmp_path, "src/feature.py", "import execution\n")
+    graph = build_graph(tmp_path)
+    assert any(
+        edge.source == "src/feature.py" and edge.target == "execution/__init__.py"
+        for edge in graph.edges
+    )
+    assert not graph.unresolved
+
+
+def test_namespace_package_root_import_resolves(tmp_path: Path) -> None:
+    _write(tmp_path, "scripts/tool.py", "VALUE = 1\n")
+    _write(tmp_path, "tests/test_tool.py", "import scripts\n")
+    graph = build_graph(tmp_path)
+    assert any(
+        edge.source == "tests/test_tool.py" and edge.target == "scripts/"
+        for edge in graph.edges
+    )
+    assert any(node.id == "scripts/" and node.kind == "package" for node in graph.nodes)
+    assert not graph.unresolved
+
+
 def test_from_package_module_and_operational_missing_hold(tmp_path: Path) -> None:
     _write(tmp_path, "src/pkg/__init__.py", "from . import module\n")
     _write(tmp_path, "src/pkg/module.py", "VALUE = 1\n")
@@ -86,6 +146,21 @@ def test_from_package_module_and_operational_missing_hold(tmp_path: Path) -> Non
     )
 
 
+def test_utf16_windows_schedule_is_parsed(tmp_path: Path) -> None:
+    _write(tmp_path, "execution/main.py", "VALUE = 1\n")
+    path = tmp_path / "cron/job.task.xml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        "<Task><Actions><Exec><Command>python</Command><Arguments>execution/main.py</Arguments>"
+        "</Exec></Actions></Task>".encode("utf-16")
+    )
+    graph = build_graph(tmp_path)
+    assert any(
+        edge.kind == "schedule" and edge.target == "execution/main.py" for edge in graph.edges
+    )
+    assert not any(d.path == "cron/job.task.xml" for d in graph.diagnostics)
+
+
 def test_parse_diagnostics_are_preserved(tmp_path: Path) -> None:
     _write(tmp_path, "execution/bad.py", "def broken(:\n")
     graph = build_graph(tmp_path)
@@ -100,3 +175,21 @@ def test_touched_unknowns_return_hold_exit_and_json(
     payload = json.loads(capsys.readouterr().out)
     assert payload["hold"] is True
     assert payload["unknown_edges"][0]["confidence"] == "low"
+
+
+def test_worktree_inside_dot_tmp_does_not_hide_every_file(tmp_path: Path) -> None:
+    root = tmp_path / ".tmp" / "linked-worktree"
+    _write(root, "execution/main.py", "VALUE = 1\n")
+    graph = build_graph(root)
+    assert any(node.id == "execution/main.py" for node in graph.nodes)
+
+
+def test_large_cli_result_is_redirected_to_tmp(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, "execution/main.py", "VALUE = 1\n")
+    monkeypatch.setattr(reachability, "_MAX_STDOUT_BYTES", 1)
+    assert main(["--repo-root", str(tmp_path)]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["output"] == ".tmp/quality/operational-reachability.json"
+    assert (tmp_path / summary["output"]).is_file()

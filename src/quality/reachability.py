@@ -17,9 +17,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 PARSER_VERSION = "1.0.0"
+_MAX_STDOUT_BYTES = 100_000
 EdgeKind = Literal[
     "import",
     "relative_import",
@@ -37,7 +38,16 @@ EdgeKind = Literal[
     "unknown",
 ]
 NodeKind = Literal[
-    "python", "javascript", "xml", "make", "ci", "json", "directive", "wrapper", "service"
+    "python",
+    "package",
+    "javascript",
+    "xml",
+    "make",
+    "ci",
+    "json",
+    "directive",
+    "wrapper",
+    "service",
 ]
 Confidence = Literal["high", "medium", "low"]
 
@@ -79,6 +89,16 @@ class ReachabilityGraph(BaseModel):
     stats: dict[str, int]
 
 
+class DirectiveEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    classification: Literal["canonical", "runbook", "draft", "history"] = Field(alias="class")
+
+
+class DirectiveManifest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    directives: dict[str, DirectiveEntry]
+
+
 _SKIP = {
     ".git",
     ".venv",
@@ -105,21 +125,42 @@ def _files(root: Path) -> list[Path]:
         )
         paths = [root / p for p in listed.stdout.decode().split("\0") if p]
     except (OSError, subprocess.SubprocessError):
-        paths = [p for p in root.rglob("*") if p.is_file() and not any(x in _SKIP for x in p.parts)]
-    return sorted(p for p in paths if p.is_file() and not any(x in _SKIP for x in p.parts))
+        paths = list(root.rglob("*"))
+    return sorted(
+        path
+        for path in paths
+        if path.is_file() and not any(part in _SKIP for part in path.relative_to(root).parts)
+    )
 
 
 def _module_index(root: Path, files: list[Path]) -> dict[str, str]:
     """Index only project Python modules; third-party names are not unresolved."""
     index: dict[str, str] = {}
+    namespace_roots: set[str] = set()
     for path in files:
         rel_parts = path.relative_to(root).parts
-        if path.suffix != ".py" or not rel_parts or rel_parts[0] not in {"src", "execution"}:
+        if (
+            path.suffix != ".py"
+            or not rel_parts
+            or rel_parts[0]
+            not in {
+                "src",
+                "execution",
+                "tests",
+                "instruction_tests",
+                "scripts",
+            }
+        ):
             continue
+        namespace_roots.add(rel_parts[0])
         rel = path.relative_to(root).as_posix()
         parts = list(path.relative_to(root).with_suffix("").parts)
         if parts[-1] == "__init__":
             parts.pop()
+            if parts == ["execution"]:
+                index["execution"] = rel
+            elif parts == ["src"]:
+                index["src"] = rel
         if parts and parts[0] in {"src", "execution"}:
             parts.pop(0)
         if not parts:
@@ -129,7 +170,69 @@ def _module_index(root: Path, files: list[Path]) -> dict[str, str]:
         index["src." + module] = rel
         if rel.startswith("execution/"):
             index["execution." + module] = rel
+    for name in namespace_roots:
+        index.setdefault(name, f"{name}/")
     return index
+
+
+def _active_directives(root: Path) -> set[str] | None:
+    """Return current directive paths, or None when a fixture has no manifest."""
+    manifest_path = root / "directives" / "directive_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = DirectiveManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    return {
+        f"directives/{name}"
+        for name, metadata in manifest.directives.items()
+        if metadata.classification in {"canonical", "runbook"}
+    }
+
+
+def _literal_string(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _process_target(call: ast.Call, fn: str) -> tuple[str | None, bool]:
+    """Return a literal Python target and whether the launch is dynamic."""
+    if not call.args:
+        return None, True
+    first = call.args[0]
+    if fn == "run_path":
+        literal = _literal_string(first)
+        return literal, literal is None
+    if isinstance(first, (ast.List, ast.Tuple)):
+        values = [_literal_string(item) for item in first.elts]
+        if any(value is None for value in values):
+            return None, True
+        argv = [value for value in values if value is not None]
+        python_at = next(
+            (
+                index
+                for index, value in enumerate(argv)
+                if Path(value.replace("\\", "/")).name.lower()
+                in {"python", "python3", "python.exe", "python3.exe", "py", "py.exe"}
+            ),
+            None,
+        )
+        if python_at is None:
+            return None, False
+        tail = argv[python_at + 1 :]
+        while tail and tail[0] in {"-u", "-B", "-I"}:
+            tail.pop(0)
+        if len(tail) >= 2 and tail[0] == "-m":
+            return tail[1], False
+        return (tail[0], False) if tail else (None, True)
+    literal = _literal_string(first)
+    if literal is None:
+        return None, True
+    match = _PY_RE.search(literal)
+    if match:
+        return match.group(1), False
+    if literal.replace("\\", "/").endswith(".py"):
+        return literal, False
+    return None, False
 
 
 def _import_base(source_rel: str, module: str, level: int) -> str:
@@ -165,6 +268,13 @@ def _literal_target(root: Path, value: str, index: dict[str, str]) -> str | None
     return None
 
 
+def _read_text(path: Path) -> tuple[bytes, str]:
+    raw = path.read_bytes()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw, raw.decode("utf-16")
+    return raw, raw.decode("utf-8-sig")
+
+
 def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> ReachabilityGraph:
     root = Path(repo_root).resolve()
     files = _files(root)
@@ -174,6 +284,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
     edges: list[GraphEdge] = []
     diagnostics: list[Diagnostic] = []
     source_hashes: dict[str, str] = {}
+    active_directives = _active_directives(root)
 
     def node(path: str, kind: NodeKind) -> None:
         nodes.setdefault(path, GraphNode(id=path, kind=kind))
@@ -205,7 +316,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
         if target:
             return target
         normalized = value.replace("\\", "/")
-        if normalized.startswith(("src/", "execution/")):
+        if normalized.startswith(("src/", "execution/")) and normalized.endswith(".py"):
             diagnostics.append(
                 Diagnostic(
                     path=source,
@@ -241,13 +352,13 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
             continue
         node(rel, kind)
         try:
-            text = path.read_text(encoding="utf-8")
+            raw, text = _read_text(path)
         except (OSError, UnicodeDecodeError) as exc:
             diagnostics.append(
                 Diagnostic(path=rel, message=f"read failed: {exc}", kind="parse_error")
             )
             continue
-        source_hashes[rel] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        source_hashes[rel] = hashlib.sha256(raw).hexdigest()
         if suffix == ".py":
             try:
                 tree = ast.parse(text, filename=rel)
@@ -261,7 +372,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                     for alias in item.names:
                         target, internal = _resolve_module(rel, alias.name, 0, module_index)
                         if target:
-                            node(target, "python")
+                            node(target, "package" if target.endswith("/") else "python")
                             add(rel, target, "import", f"import {alias.name}", "high", item.lineno)
                         elif internal:
                             diagnostics.append(
@@ -285,7 +396,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                         rel, item.module or "", item.level, module_index
                     )
                     if target:
-                        node(target, "python")
+                        node(target, "package" if target.endswith("/") else "python")
                         add(
                             rel,
                             target,
@@ -348,7 +459,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                     if fn in {"import_module", "__import__"}:
                         target = _literal_target(root, val, module_index) if val else None
                         if target:
-                            node(target, "python")
+                            node(target, "package" if target.endswith("/") else "python")
                             add(
                                 rel,
                                 target,
@@ -377,28 +488,25 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                                         kind="unresolved",
                                     )
                                 )
-                    elif fn in {"getattr"}:
+                    elif fn == "getattr":
+                        attribute = _literal_string(item.args[1]) if len(item.args) >= 2 else None
                         add(
                             rel,
-                            val or "<dynamic attribute>",
+                            f"<attribute:{attribute}>" if attribute else "<dynamic attribute>",
                             "getattr",
-                            "getattr expression",
-                            "low",
+                            "literal getattr attribute"
+                            if attribute
+                            else "dynamic getattr expression",
+                            "medium" if attribute else "low",
                             item.lineno,
-                            True,
+                            not bool(attribute),
                         )
                     elif fn in {"run", "call", "check_call", "check_output", "Popen", "run_path"}:
-                        arg = val or (
-                            item.args[0].value
-                            if item.args and isinstance(item.args[0], ast.Constant)
-                            else None
-                        )
-                        normalized = (
-                            _literal_target(root, arg, module_index)
-                            if isinstance(arg, str)
-                            else None
-                        )
-                        if normalized:
+                        process_target, dynamic = _process_target(item, fn)
+                        normalized = None
+                        if process_target:
+                            normalized = _literal_target(root, process_target, module_index)
+                        if normalized is not None:
                             add(
                                 rel,
                                 normalized,
@@ -407,7 +515,17 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                                 "medium",
                                 item.lineno,
                             )
-                        else:
+                        elif process_target:
+                            normalized_target = process_target.replace("\\", "/")
+                            if normalized_target.startswith(("src/", "execution/")):
+                                diagnostics.append(
+                                    Diagnostic(
+                                        path=rel,
+                                        message=f"unresolved operational target {process_target}",
+                                        kind="unresolved",
+                                    )
+                                )
+                        elif dynamic:
                             add(
                                 rel,
                                 "<dynamic process entrypoint>",
@@ -417,16 +535,6 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                                 item.lineno,
                                 True,
                             )
-                            if isinstance(arg, str) and arg.replace("\\", "/").startswith(
-                                ("src/", "execution/")
-                            ):
-                                diagnostics.append(
-                                    Diagnostic(
-                                        path=rel,
-                                        message=f"unresolved operational target {arg}",
-                                        kind="unresolved",
-                                    )
-                                )
             for match in re.finditer(r"@[^\n]*\.route\s*\(", text):
                 add(
                     rel,
@@ -492,7 +600,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                             "manifest path",
                             "high",
                         )
-            if kind == "directive":
+            if kind == "directive" and (active_directives is None or rel in active_directives):
                 for match in re.finditer(r"(?:execution/|src/)[\w./-]+", text):
                     add(
                         rel,
@@ -557,6 +665,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(payload, encoding="utf-8")
+        elif len(payload.encode("utf-8")) > _MAX_STDOUT_BYTES:
+            output = args.repo_root / ".tmp" / "quality" / "operational-reachability.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(payload, encoding="utf-8")
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "output": output.relative_to(args.repo_root).as_posix(),
+                        "hold": result.hold,
+                        "stats": result.stats,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
         else:
             sys.stdout.write(payload)
         return 2 if result.hold else 0
