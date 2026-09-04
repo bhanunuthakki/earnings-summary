@@ -12,7 +12,7 @@ Scanner and source hashes inside each receipt make definition drift explicit.
 
 Current evidence at the Train 0 instrumentation baseline:
 
-- 1,333 executable modules and 491,856 non-comment lines.
+- 1,333 executable modules and 491,870 non-comment lines.
 - 91 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
 - 17 import cycles spanning 80 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.

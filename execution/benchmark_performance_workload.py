@@ -9,7 +9,6 @@ import json
 import logging
 import platform
 import resource
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -22,6 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 from quality import performance_routes as _performance_routes  # noqa: E402
 from quality.performance import CausalRunEnvelope, RouteCausalCompanion  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Compatibility aliases retain the private seams used by focused tests and
 # downstream benchmark helpers while the implementation lives in one module.
@@ -49,7 +49,7 @@ def _event(name: str, **fields: object) -> None:
 
 
 def _schema_object_count(database: Path) -> int:
-    with sqlite3.connect(database) as connection:
+    with connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY) as connection:
         return int(
             connection.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'index', 'trigger', 'view')"
@@ -81,7 +81,7 @@ def _migrate(root: Path, database: Path) -> tuple[int, str, float, int]:
             command.upgrade(config, "head")
     finally:
         event.remove(Engine, "before_cursor_execute", count_statement)
-    with sqlite3.connect(database) as connection:
+    with connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY) as connection:
         revision = str(connection.execute("SELECT version_num FROM alembic_version").fetchone()[0])
     return statement_count, revision, max(0.000001, time.perf_counter() - started), 1
 
@@ -124,7 +124,7 @@ def _migrations(root: Path) -> tuple[int, str, int, float, int, int]:
     with tempfile.TemporaryDirectory(prefix="bha115-migrations-") as temp_name:
         database = Path(temp_name) / "portfolio.db"
         statement_count, revision, migration_elapsed, alembic_invocations = _migrate(root, database)
-        with sqlite3.connect(database) as connection:
+        with connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY) as connection:
             observed_revision = str(
                 connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
             )

@@ -32,6 +32,7 @@ from quality.performance import (
     external_trap_proof_sha256,
 )
 from quality.performance_state import database_state_sha256
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 ROUTE_FIXTURE_IDENTITY = "localhost-unauthenticated-fixture-v1"
 ROUTE_NAMES: tuple[str, ...] = (
@@ -150,7 +151,7 @@ def _seed_route_fixture(root: Path, database: Path, fixture_repo: Path) -> dict[
         exchange_request_id="bha115-fixture-exchange",
     )
     tenet = record_tenet(body_md="BHA-115 deterministic tenet", status="proposed", db_path=database)
-    with sqlite3.connect(database) as connection:
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER) as connection:
         proposed_fact_id = append_fact(
             connection,
             category="capacity",
@@ -160,7 +161,7 @@ def _seed_route_fixture(root: Path, database: Path, fixture_repo: Path) -> dict[
             provenance="wealthplan_import",
         )
         connection.commit()
-    with sqlite3.connect(database) as connection:
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER) as connection:
         expired_fact_id = append_fact(
             connection,
             category="appetite",
@@ -176,7 +177,7 @@ def _seed_route_fixture(root: Path, database: Path, fixture_repo: Path) -> dict[
             (expired_fact_id,),
         )
         connection.commit()
-    with sqlite3.connect(database) as connection:
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER) as connection:
         cursor = connection.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, made_at, created_at) "
             "VALUES ('NU', 'add', 'owner', 'BHA-115 falsifier (inferred)', '2026-01-01T00:00:00', '2026-01-01T00:00:00')"
@@ -328,7 +329,7 @@ def _routes(root: Path) -> tuple[int, str, int, tuple[RouteCausalCompanion, ...]
         canonical = temp_root / "canonical.db"
         fixture_repo = temp_root / "repo"
         ids = _seed_route_fixture(root, canonical, fixture_repo)
-        with sqlite3.connect(canonical) as connection:
+        with connect_sqlite(canonical, role=SQLiteConnectionRole.WRITER) as connection:
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         fixture_template = temp_root / "fixture-template.db"
         shutil.copyfile(canonical, fixture_template)
@@ -407,7 +408,7 @@ def _routes(root: Path) -> tuple[int, str, int, tuple[RouteCausalCompanion, ...]
             shutil.copyfile(fixture_template, destination)
 
         def checkpoint_database(database: Path) -> None:
-            with sqlite3.connect(database) as connection:
+            with connect_sqlite(database, role=SQLiteConnectionRole.WRITER) as connection:
                 checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 if checkpoint is not None and int(checkpoint[0]) != 0:
                     raise RuntimeError(f"database WAL checkpoint was busy: {checkpoint!r}")
@@ -571,7 +572,7 @@ def _routes(root: Path) -> tuple[int, str, int, tuple[RouteCausalCompanion, ...]
                 raise RuntimeError(
                     f"cold/warm route identity mismatch: {name} cold={left.model_dump()} warm={right.model_dump()}"
                 )
-        with sqlite3.connect(fixture_template) as connection:
+        with connect_sqlite(fixture_template, role=SQLiteConnectionRole.READ_ONLY) as connection:
             revision = str(
                 connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
             )

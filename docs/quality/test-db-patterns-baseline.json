@@ -1,6 +1,6 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "e7e18f3dea0625b33387524bc402bfe663be177c",
+  "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
   "source_sha256": "cf1103dfa600863bfe47d2fd951c2c2dccbc22fba94a0517fd118e6459ca4cf9",
   "status": "PASS",

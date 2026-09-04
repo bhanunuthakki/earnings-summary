@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "e7e18f3dea0625b33387524bc402bfe663be177c",
+  "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
   "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
-  "source_sha256": "d5b87cc992bf7427d64b8eaac2debc837f87bebb27427d32e2e40e50fd4302f1",
+  "source_sha256": "644f3d6d918ee6eeea6261a81d8c808b96ebb84cf442f13c2b6ecc854c51dae2",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1333,
-    "total_noncomment_loc": 491856,
+    "total_noncomment_loc": 491870,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -15972,11 +15972,11 @@
         "path": "src/quality/dcf_benchmark_fixture.py",
         "module": "quality.dcf_benchmark_fixture",
         "lines": {
-          "physical": 212,
-          "nonblank": 199,
-          "noncomment": 193
+          "physical": 226,
+          "nonblank": 213,
+          "noncomment": 206
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database",
           "filesystem"
@@ -16066,11 +16066,11 @@
         "path": "src/quality/performance_routes.py",
         "module": "quality.performance_routes",
         "lines": {
-          "physical": 587,
-          "nonblank": 556,
-          "noncomment": 554
+          "physical": 588,
+          "nonblank": 557,
+          "noncomment": 555
         },
-        "internal_fan_out": 13,
+        "internal_fan_out": 14,
         "responsibilities": [
           "database",
           "filesystem",
@@ -16100,11 +16100,11 @@
         "path": "src/quality/performance_state.py",
         "module": "quality.performance_state",
         "lines": {
-          "physical": 83,
+          "physical": 84,
           "nonblank": 76,
           "noncomment": 76
         },
-        "internal_fan_out": 0,
+        "internal_fan_out": 1,
         "responsibilities": [
           "database",
           "network"

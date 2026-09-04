@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "e7e18f3dea0625b33387524bc402bfe663be177c",
-  "source_sha256": "38a14410ef5cd4ab93afc35abea4c6a4114480ee8323aeb569edbcd31f011378",
+  "current_revision": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+  "source_sha256": "aff23658018b102a6e53759c9f99b71c29ac94e0a7eef24bf282416957815f3f",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -453,7 +453,7 @@
     },
     {
       "path": "execution/benchmark_performance_workload.py",
-      "current_sha256": "c6bf53eaed4fb6f38f7070c08f5ddaa22eea2a9cae2e57ea567411a967e67fa1",
+      "current_sha256": "2f3e25655df10612ed63a54068587203b3891545b40481acf2ee6efcbb3488aa",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6381,7 +6381,7 @@
     },
     {
       "path": "src/quality/dcf_benchmark_fixture.py",
-      "current_sha256": "c451dec93606778b3016dfd4fbe64a2b35f201d4c679978fe26de523aa153347",
+      "current_sha256": "58354617ea6413f0e7753214a9ba6e622d09eb51648a3109ade6d585aec6892e",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6417,7 +6417,7 @@
     },
     {
       "path": "src/quality/performance_routes.py",
-      "current_sha256": "02f9bf37b985742609a222601d5541549ad22d908fd7c0a9be914e179b1d3924",
+      "current_sha256": "4638437c4b6c776f4f307cd90d6f4212ac6c8d75744f1eb984469e25f85a0898",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6429,7 +6429,7 @@
     },
     {
       "path": "src/quality/performance_state.py",
-      "current_sha256": "946cfbd0d5e53d123b574975947e4ac8c7bdf480d5fbf6176fddffa57cbd5cc5",
+      "current_sha256": "af5304c5053b9af01d7406916ae61169568d2954ad8f37a5c1adfffeb1901173",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6459,7 +6459,7 @@
     },
     {
       "path": "src/quality/roadmap_freeze_contract.py",
-      "current_sha256": "a06bc319e1c206947357385ff4d635f7cf16fda019578df315a2689a5bd9b68e",
+      "current_sha256": "81e0bda9d75fdbe64deb4e85d67eb819c55900e6665de3a83a0b0ae940dda323",
       "baseline_sha256": null,
       "status": "added"
     },

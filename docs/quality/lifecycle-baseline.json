@@ -9378,7 +9378,7 @@
       "endpoint": null,
       "owner_evidence": null,
       "invocation_evidence": null,
-      "incoming_edge": "src/quality/performance_routes.py:321:import",
+      "incoming_edge": "src/quality/performance_routes.py:322:import",
       "sealed_completion_evidence": null,
       "tombstone_consumer": null,
       "tombstone_expiry": null,
@@ -23288,15 +23288,15 @@
     "reconstruction": 56,
     "registry": 68
   },
-  "tracked_tree_hash": "2044ba4e5acb5ce57e2534717ca330050121339df02cea17febcaf19b73d48a2",
-  "revision": "e7e18f3dea0625b33387524bc402bfe663be177c",
+  "tracked_tree_hash": "4f56a61fa55662b85bd348369508650dd2a363a2cdf1fc2dd9ac718f36cafa47",
+  "revision": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
   "worktree_dirty": true,
-  "reachability_graph_hash": "4a2c91813e13baeffa493c3805a0c9924a58dca8ccbeebbf298481d3e5b480a7",
+  "reachability_graph_hash": "94856583712e976453f00619268702904ba36b53ace4bdc5fb459215d39d4116",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.1.0",
     "python": ">=3.11",
-    "source_sha256": "52e652587c3a244a46fb52402c58f259cc05397978059792476dff8a1a6ad31a",
+    "source_sha256": "948cb65f4dc78bf8c1bb5593ec1abd312d5b0acbf2842653ee0b34b4d268f1bd",
     "dispositions_sha256": "a29a609cd50da8e9c02350733b95b6faafcd7f8b37c2892dfff297eeaf0a6836"
   },
   "coverage": {

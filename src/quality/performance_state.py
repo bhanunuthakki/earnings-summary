@@ -5,9 +5,10 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
-import sqlite3
 from pathlib import Path
 from typing import cast
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def database_state_sha256(database: Path) -> str:
@@ -52,7 +53,7 @@ def database_state_sha256(database: Path) -> str:
             return [normalize_json(item, keys) for item in items]
         return value
 
-    with sqlite3.connect(database) as connection:
+    with connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY) as connection:
         objects = connection.execute(
             "SELECT name, type, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' "
             "ORDER BY type, name"

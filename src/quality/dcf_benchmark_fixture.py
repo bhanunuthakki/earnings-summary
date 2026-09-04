@@ -6,12 +6,16 @@ import contextlib
 import io
 import json
 import logging
-import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+
+from compute._common import insert_financial_facts
+from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
+from pipeline.locators import table_cell_locator
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 @dataclass(frozen=True)
@@ -42,7 +46,7 @@ def _upgrade_fixture_database(database: Path, migration_root: Path) -> DcfFixtur
     with contextlib.redirect_stderr(io.StringIO()):
         command.upgrade(config, "head")
     elapsed = max(0.000001, time.perf_counter() - started)
-    with sqlite3.connect(database) as conn:
+    with connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY) as conn:
         revision_row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
         if revision_row is None or str(revision_row[0]) != expected_head:
             raise RuntimeError(
@@ -157,8 +161,7 @@ def write_fixture(repo: Path, ticker: str, *, migration_root: Path) -> DcfFixtur
     database = repo / "data" / "portfolio.db"
     database.parent.mkdir(parents=True, exist_ok=True)
     evidence = _upgrade_fixture_database(database, migration_root)
-    with sqlite3.connect(database) as conn:
-        conn.row_factory = sqlite3.Row
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER) as conn:
         # Index the local source bytes through the production evidence bridge,
         # then seed the legacy fact table with parameterized SQL. This keeps
         # the DCF equity bridge on the same evidence-backed path as production.
@@ -178,29 +181,40 @@ def write_fixture(repo: Path, ticker: str, *, migration_root: Path) -> DcfFixtur
             (balance_doc_id,),
         )
         latest = bal[-1]
-        # Route fixture facts through the production admission/resolution
-        # helper; this exercises the migrated canonical relation rather than
-        # manufacturing rows that a live writer could not produce.
-        from pipeline.restatement_detector import insert_with_restatement_detection
-
         period_end = datetime.fromisoformat(str(latest["date"]))
-        for line_item, value in (
-            ("cash_and_short_term_investments", latest["cashAndShortTermInvestments"]),
-            ("total_debt", latest["totalDebt"]),
-            ("finance_lease_liability", 0),
-        ):
-            insert_with_restatement_detection(
-                conn,
-                ticker=ticker,
-                period_end=period_end,
-                fiscal_period_type=str(latest["period"]),
-                line_item=line_item,
-                value=Decimal(str(value)),
-                currency="USD",
-                unit="actual",
-                source_doc_id=balance_doc_id,
-                extracted_by="fmp_fixture",
-            )
+        # Route fixture facts through the typed production writer, which owns
+        # admission, restatement handling, and canonical resolution. This
+        # keeps the benchmark representative of a live extractor without
+        # making the fixture a direct consumer of a legacy helper.
+        insert_financial_facts(
+            conn,
+            [
+                FinancialFact(
+                    ticker=ticker,
+                    period_end=period_end,
+                    fiscal_period_type=FiscalPeriodType(str(latest["period"])),
+                    line_item=line_item,
+                    value=Decimal(str(value)),
+                    currency=Currency.USD,
+                    unit=Unit.ACTUAL,
+                    source_doc_id=balance_doc_id,
+                    confidence=1.0,
+                    locator=table_cell_locator(
+                        section="balance_sheet_quarterly",
+                        row_label=line_item,
+                        column_header=str(latest["date"]),
+                        json_path=f"[{len(bal) - 1}].{line_item}",
+                        cell_value_as_extracted=str(value),
+                    ),
+                )
+                for line_item, value in (
+                    ("cash_and_short_term_investments", latest["cashAndShortTermInvestments"]),
+                    ("total_debt", latest["totalDebt"]),
+                    ("finance_lease_liability", 0),
+                )
+            ],
+            extracted_by="fmp_fixture",
+        )
         conn.execute(
             "INSERT INTO dcf_runs "
             "(ticker, valuation_date, horizon_years, revenue_growths_json, fcf_margin, "
