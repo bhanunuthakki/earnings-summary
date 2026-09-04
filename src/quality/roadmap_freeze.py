@@ -330,7 +330,10 @@ def build_freeze(root: Path) -> RoadmapFreeze:
             ownership_lane="typed-contracts",
             risk="high",
             units=debt_totals["total"],
-            estimated_hours=round(sum(cluster.estimated_hours for cluster in clusters), 2),
+            # The evidence cohort can be corrected independently of the
+            # owner-approved roadmap estimate.  Keep the estimate frozen until
+            # the program is explicitly amended and rejudged.
+            estimated_hours=FROZEN_ESTIMATE_MATRIX["active-type-debt"][0],
             estimated_prs=20,
             estimated_calendar_weeks=8.0,
             acceptance="active diagnostics decline without adding ignores or weakening strictness",
