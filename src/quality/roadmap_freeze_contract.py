@@ -53,9 +53,10 @@ LOC_TARGET_CAPS = {
     "src/pipeline/portfolio_panel.py": 200,
 }
 TYPE_DEBT_AUTHORITY_PATH = "docs/quality/type-debt-membership-authority.json"
-TYPE_DEBT_AUTHORITY_SHA256 = "ca5be946403ad172a7ec96a177033d15673fa22f4ac2df9a434a5a271da10a98"
+TYPE_DEBT_AUTHORITY_SHA256 = "a2bcb12efb5e4ed2bcbcd953c5b32c5db0a13c4d68ad883a8c910736e18d7b56"
+TYPE_DEBT_EVIDENCE_ALGORITHM = "pyright-generalDiagnostics/v1"
 FROZEN_TYPE_DEBT_AUTHORITY_SHA256 = (
-    "6785672f42a8883db1761c4b37ff6cc5b0a938e38d1fc4320ae237ecd57114ed"
+    "137ef2464d159a3cd032cc3fc6ce28f6ec01c679200d6991465fc37b4a353e70"
 )
 FROZEN_TYPE_DEBT_TOTALS = {"total": 4200, "archived": 175, "all": 4375}
 

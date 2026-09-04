@@ -28,6 +28,7 @@ from .roadmap_freeze_contract import (
     PROGRAM_OWNER,
     TYPE_DEBT_AUTHORITY_PATH,
     TYPE_DEBT_AUTHORITY_SHA256,
+    TYPE_DEBT_EVIDENCE_ALGORITHM,
     BudgetMapping,
     BuilderDisposition,
     LargeModule,
@@ -39,6 +40,48 @@ from .roadmap_freeze_contract import (
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_diagnostic_value(root: Path, key: str | None, value: object) -> object:
+    """Normalize one Pyright diagnostic value for stable membership hashing."""
+    if isinstance(value, dict):
+        mapping = cast(dict[str, object], value)
+        return {
+            child_key: _canonical_diagnostic_value(root, child_key, child_value)
+            for child_key, child_value in mapping.items()
+        }
+    if isinstance(value, list):
+        values = cast(list[object], value)
+        return [_canonical_diagnostic_value(root, key, child) for child in values]
+    if key == "file" and isinstance(value, str):
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            return candidate.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            return value.replace("\\", "/")
+    return value
+
+
+def _canonical_diagnostic_membership_sha256(root: Path, rows: list[dict[str, object]]) -> str:
+    """Hash semantic diagnostic membership, excluding volatile receipt metadata.
+
+    Pyright's top-level ``time`` and ``summary`` fields are runtime metadata;
+    each diagnostic row is the membership authority.  Sorting canonical rows
+    makes output ordering irrelevant while preserving duplicate diagnostics.
+    Repository-relative file paths keep the digest stable across checkouts.
+    """
+    canonical_rows = sorted(
+        json.dumps(
+            _canonical_diagnostic_value(root, None, row),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for row in rows
+    )
+    payload = TYPE_DEBT_EVIDENCE_ALGORITHM + "\n" + "\n".join(canonical_rows)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _read_json(root: Path, path: str) -> dict[str, object]:
@@ -252,12 +295,12 @@ def _type_debt(
         # still validate the frozen membership from the tracked, hash-pinned
         # authority; a candidate cannot replace that authority's digest.
         return _tracked_type_debt_authority(root)
-    evidence_sha256 = _sha256(evidence_file)
     raw: object = json.loads(evidence_file.read_text(encoding="utf-8"))
     raw_object = cast(dict[str, object], raw) if isinstance(raw, dict) else {}
     raw_values: object = raw_object.get("generalDiagnostics", [])
     values = cast(list[object], raw_values) if isinstance(raw_values, list) else []
     rows = [cast(dict[str, object], value) for value in values if isinstance(value, dict)]
+    evidence_sha256 = _canonical_diagnostic_membership_sha256(root, rows)
     by_cluster: Counter[tuple[str, str]] = Counter()
     files_by_cluster: dict[tuple[str, str], set[str]] = defaultdict(set)
     for row in rows:

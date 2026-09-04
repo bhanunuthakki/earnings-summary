@@ -169,6 +169,75 @@ def test_type_debt_membership_uses_tracked_authority_when_raw_receipt_is_absent(
     assert len(clusters) == 61
 
 
+def test_type_debt_evidence_digest_ignores_pyright_runtime_metadata(tmp_path: Path) -> None:
+    receipt = tmp_path / "pyright.json"
+    static: dict[str, object] = {
+        "diagnostics": [{"tool": "pyright", "receipt_path": "pyright.json"}]
+    }
+    rows = [
+        {
+            "file": str(tmp_path / "src/app.py"),
+            "severity": "error",
+            "message": 'Type of "value" is unknown',
+            "range": {
+                "start": {"line": 3, "character": 0},
+                "end": {"line": 3, "character": 5},
+            },
+            "rule": "reportUnknownVariableType",
+        }
+    ]
+    receipt.write_text(
+        json.dumps({"version": "1.1.411", "time": "first", "generalDiagnostics": rows}),
+        encoding="utf-8",
+    )
+    first_raw_sha256 = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    _, first_clusters = roadmap_inventory.type_debt(tmp_path, static)
+    receipt.write_text(
+        json.dumps(
+            {
+                "version": "1.1.411",
+                "time": "second",
+                "summary": {"timeInSec": 99.0},
+                "generalDiagnostics": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    second_raw_sha256 = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    _, second_clusters = roadmap_inventory.type_debt(tmp_path, static)
+
+    assert first_raw_sha256 != second_raw_sha256
+    assert first_clusters == second_clusters
+    assert first_clusters[0].evidence_sha256 != first_raw_sha256
+
+
+def test_validator_rejects_changed_pyright_diagnostic_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    raw_path = (ROOT / roadmap_freeze.STATIC_RECEIPT).resolve()
+    static = roadmap_inventory.read_json(ROOT, roadmap_freeze.STATIC_RECEIPT)
+    diagnostics = cast(list[dict[str, object]], static["diagnostics"])
+    pyright = next(row for row in diagnostics if row.get("tool") == "pyright")
+    receipt_path = pyright.get("receipt_path")
+    assert isinstance(receipt_path, str)
+    raw_path = (ROOT / receipt_path).resolve()
+    original_read_text = Path.read_text
+
+    def tamper_membership(
+        path: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        text = original_read_text(path, encoding=encoding, errors=errors)
+        if path.resolve() != raw_path:
+            return text
+        raw = json.loads(text)
+        raw["generalDiagnostics"][0]["message"] = "forged diagnostic membership"
+        return json.dumps(raw)
+
+    monkeypatch.setattr(Path, "read_text", tamper_membership)
+    _assert_rejected(tmp_path, payload)
+
+
 def test_validator_rejects_changed_estimate_matrix_even_when_totals_reconcile(
     tmp_path: Path,
 ) -> None:
