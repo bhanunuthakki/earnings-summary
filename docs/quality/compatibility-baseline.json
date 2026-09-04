@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "024a2b11b257ecc720d8b0785493f7db5b994cde",
-  "source_sha256": "2aa5e4398a3beedd76e223bbe91c49af64b1fd95e83951cabdd4a14d0c81f681",
+  "current_revision": "9cec19394f394d2342edcc9f820a56de38c1d6a0",
+  "source_sha256": "d75854489b563d5865b9b6e831f639a59f45260dc0949ea0bddccb795bfa4392",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -6303,7 +6303,7 @@
     },
     {
       "path": "src/quality/compatibility.py",
-      "current_sha256": "a153fac965cc648a5df8d34438109fc2b35c1bd73a4a27ca422d15f3ab87b8c7",
+      "current_sha256": "a36b28dfd5aa2def49d165518cfbd39b52a3d94cec3cbf8f64398e343a440a54",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6315,13 +6315,13 @@
     },
     {
       "path": "src/quality/performance.py",
-      "current_sha256": "76654e7508e247fe6cd9b243923d2cf77f699df2a4a9e9865e0f30dd24a1d0af",
+      "current_sha256": "388cc81fc5333c086ebf6b142e5b0886eb954ddbdd49de4d709b7e4e9ec05dc2",
       "baseline_sha256": null,
       "status": "added"
     },
     {
       "path": "src/quality/reachability.py",
-      "current_sha256": "9bb34a08f79d693a2dac28ffacb19064ab20e2c286b5b714cf064f795a4cb1a2",
+      "current_sha256": "fb7200ff669f73efdef8277f49c6a54f05aae2a334cad7fe682455f52bef023d",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -7970,7 +7970,7 @@
     {
       "name": "flask_url_method_endpoint_map",
       "status": "PASS",
-      "reason": "checked-in implementation and test/golden evidence present",
+      "reason": "all required evidence conditions present",
       "artifacts": [
         "execution/comments_server.py",
         "tests/test_comments_server_actions.py",
@@ -7984,12 +7984,649 @@
         "tests/test_comments_server_operations.py",
         "tests/test_comments_server_startup.py"
       ],
-      "artifact_sha256": "124417f700a1ffce49a99be72e72c698b81f3cb9123f83293663ead6c2ef6816"
+      "implementation_artifacts": [
+        "execution/comments_server.py"
+      ],
+      "verification_artifacts": [
+        "tests/test_comments_server_actions.py",
+        "tests/test_comments_server_alerting_routes.py",
+        "tests/test_comments_server_architecture_fixes.py",
+        "tests/test_comments_server_budget.py",
+        "tests/test_comments_server_cors_and_chat.py",
+        "tests/test_comments_server_dashboard.py",
+        "tests/test_comments_server_dcf.py",
+        "tests/test_comments_server_dcf_globals.py",
+        "tests/test_comments_server_operations.py",
+        "tests/test_comments_server_startup.py"
+      ],
+      "artifact_sha256": "124417f700a1ffce49a99be72e72c698b81f3cb9123f83293663ead6c2ef6816",
+      "extracted": [
+        {
+          "kind": "flask_route",
+          "identifier": "/",
+          "value": "GET:dashboard_page"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/advisor-memo",
+          "value": "OPTIONS,POST:start_advisor_memo"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/dcf-export",
+          "value": "OPTIONS,POST:start_dcf_export"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/dcf-import",
+          "value": "OPTIONS,POST:start_dcf_import"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/discovery-build",
+          "value": "OPTIONS,POST:start_discovery_build"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/discovery-run",
+          "value": "OPTIONS,POST:start_discovery_run"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/jobs",
+          "value": "GET:list_jobs"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/maintenance",
+          "value": "OPTIONS,POST:start_maintenance"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/position-review",
+          "value": "OPTIONS,POST:start_position_review"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/readme-update",
+          "value": "OPTIONS,POST:start_readme_update"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/rebuild-dcfs",
+          "value": "OPTIONS,POST:rebuild_dcfs"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/refresh",
+          "value": "OPTIONS,POST:start_refresh"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/refresh-ir",
+          "value": "OPTIONS,POST:start_refresh_ir"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/resolve-issue",
+          "value": "OPTIONS,POST:resolve_issue"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/run-eval",
+          "value": "OPTIONS,POST:start_eval_run"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/run-scenario",
+          "value": "OPTIONS,POST:start_run_scenario"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/socratic-questions",
+          "value": "OPTIONS,POST:start_socratic_questions"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/start-tracker",
+          "value": "OPTIONS,POST:start_tracker_server"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/actions/stream/<job_id>",
+          "value": "GET:stream_action"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/advisor/sizing-intents/<ticker>",
+          "value": "GET:sizing_intent_review_page"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/analytical",
+          "value": "GET:analytical_page"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/allocation/compare",
+          "value": "OPTIONS,POST:allocation_compare"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/allocation/recommendation",
+          "value": "GET:allocation_recommendation_get"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/allocation/recommendation",
+          "value": "OPTIONS,POST:allocation_recommendation_post"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/allocation/recommendation/<int:artifact_id>/adopt",
+          "value": "OPTIONS,POST:allocation_recommendation_adopt"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/ask/sessions",
+          "value": "GET:ask_sessions_list"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/ask/sessions/<session_id>",
+          "value": "DELETE,GET,PATCH:ask_session_detail"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/ask/sessions/<session_id>/distill",
+          "value": "POST:ask_session_distill"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/ask/stream",
+          "value": "OPTIONS,POST:ask_stream_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/capture/text",
+          "value": "OPTIONS,POST:capture_text"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/coach/attest-change",
+          "value": "OPTIONS,POST:coach_attest_change_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/coach/unmute",
+          "value": "OPTIONS,POST:coach_unmute_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/comments/process",
+          "value": "OPTIONS,POST:comments_process"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/dashboard",
+          "value": "GET:dashboard_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decision-draft-groups/<int:draft_id>/confirm",
+          "value": "OPTIONS,POST:decision_draft_group_confirm_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decision-draft-groups/<int:draft_id>/correct",
+          "value": "OPTIONS,POST:decision_draft_group_correct_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decision-draft-groups/<int:draft_id>/dismiss",
+          "value": "OPTIONS,POST:decision_draft_group_dismiss_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decision-drafts",
+          "value": "GET:decision_drafts_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decision-drafts/<int:draft_id>/confirm",
+          "value": "OPTIONS,POST:decision_draft_confirm_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decision-drafts/<int:draft_id>/correct",
+          "value": "OPTIONS,POST:decision_draft_correct_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decision-drafts/<int:draft_id>/dismiss",
+          "value": "OPTIONS,POST:decision_draft_dismiss_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decisions/<int:decision_id>/process-quality",
+          "value": "OPTIONS,POST:record_process_quality_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/decisions/pass",
+          "value": "POST:record_pass_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/discovery/candidates",
+          "value": "GET:discovery_candidates_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/discovery/candidates/<int:cand_id>/status",
+          "value": "POST:discovery_status_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/discovery/candidates/<int:cand_id>/watch",
+          "value": "OPTIONS,POST:discovery_watch_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/discovery/sources",
+          "value": "GET:discovery_sources_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/discovery/sources/<source_key>/weight",
+          "value": "OPTIONS,POST:discovery_source_weight_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/earnings-readout/generate",
+          "value": "OPTIONS,POST:generate_earnings_readout_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/metrics/panel",
+          "value": "GET:panel_metrics_get"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/metrics/panel",
+          "value": "OPTIONS,POST:panel_metrics_post"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/onmymind/<int:note_id>/<verb>",
+          "value": "OPTIONS,POST:onmymind_act"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/onmymind/<int:note_id>/answer",
+          "value": "GET:onmymind_answer"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/onmymind/<int:note_id>/reply",
+          "value": "OPTIONS,POST:onmymind_reply"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/operations/kpi-semantic-review/<ticker>",
+          "value": "GET:operations_kpi_semantic_review_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/operations/kpi-semantic-review/<ticker>/partitions/<content_sha256>",
+          "value": "GET:operations_kpi_semantic_review_partition_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/operations/review-bundle",
+          "value": "GET:operations_review_bundle_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/overview",
+          "value": "GET:overview_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/panel/<name>",
+          "value": "GET:panel_fragment"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/panel/holding",
+          "value": "GET:holding_panel_fragment"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/panel/notes_drawer",
+          "value": "GET:notes_drawer_panel_fragment"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/panel/since_last",
+          "value": "GET:since_last_fragment"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/peers/<ticker>",
+          "value": "GET:peers_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/portfolio/policy",
+          "value": "OPTIONS,PUT:replace_portfolio_policy_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/portfolio/risk-matrix",
+          "value": "GET:portfolio_risk_matrix_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/position-entries/<int:entry_id>",
+          "value": "OPTIONS,POST:position_entry_grade"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/position-lifecycle/<ticker>",
+          "value": "GET:position_lifecycle_fragment"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/positioning/approve",
+          "value": "POST:positioning_approve"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/positioning/coach",
+          "value": "POST:positioning_coach"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/positioning/confirm-posture",
+          "value": "OPTIONS,POST:positioning_confirm_posture"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/positioning/propose",
+          "value": "POST:positioning_propose"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/positioning/simulate",
+          "value": "OPTIONS,POST:positioning_simulate_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/profile/fact/<int:fact_id>/affirm",
+          "value": "OPTIONS,POST:profile_fact_affirm"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/profile/fact/<int:fact_id>/reaffirm",
+          "value": "OPTIONS,POST:profile_fact_reaffirm"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/profile/fact/<int:fact_id>/reject",
+          "value": "OPTIONS,POST:profile_fact_reject"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/profile/fact/<int:fact_id>/retire",
+          "value": "OPTIONS,POST:profile_fact_retire"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/profile/fact/<int:fact_id>/update",
+          "value": "OPTIONS,POST:profile_fact_update"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/readme-governance/status",
+          "value": "GET:readme_governance_status"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/reconcile/<kind>/<int:item_id>/<verdict>",
+          "value": "OPTIONS,POST:reconcile_verdict"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/reconcile/falsifier/<int:decision_id>",
+          "value": "OPTIONS,POST:reconcile_falsifier"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/red_team/<int:item_id>/respond",
+          "value": "OPTIONS,POST:respond_red_team_item"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/card/<int:artifact_id>/<verb>",
+          "value": "OPTIONS,POST:investment_decision_card_disposition"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/card/<ticker>/refresh",
+          "value": "OPTIONS,POST:investment_decision_card_refresh"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/investment-profile/<ticker>/labels/<label>/<action>",
+          "value": "OPTIONS,POST:investment_profile_label_review_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/proposal/<int:proposal_id>/<verb>",
+          "value": "OPTIONS,POST:research_act"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/proposals/<int:proposal_id>",
+          "value": "GET:ask_proposal_detail"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/proposals/<int:proposal_id>/decision",
+          "value": "OPTIONS,POST:ask_proposal_decision"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/task/<int:task_id>/reject",
+          "value": "OPTIONS,POST:research_reject"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/task/<int:task_id>/run",
+          "value": "OPTIONS,POST:research_run"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/research/task/<int:task_id>/status",
+          "value": "GET:research_task_status"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/senior-partner-brief/dismiss-item/<int:ping_id>",
+          "value": "OPTIONS,POST:senior_partner_brief_dismiss_item_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/sizing-intents",
+          "value": "OPTIONS,POST:sizing_intents_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/sizing-intents/<ticker>/checkpoint",
+          "value": "OPTIONS,POST:sizing_intent_checkpoint_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/socratic/memo",
+          "value": "OPTIONS,POST:socratic_memo"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/socratic/questions/<ticker>",
+          "value": "GET:socratic_questions_result"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/source-calls",
+          "value": "GET:source_calls_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/tenets",
+          "value": "OPTIONS,POST:tenets_create"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/tenets/<int:tenet_id>/<action>",
+          "value": "OPTIONS,POST:tenets_act"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/tenets/distill",
+          "value": "OPTIONS,POST:tenets_distill"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/thesis/<ticker>/preview",
+          "value": "OPTIONS,POST:thesis_preview"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/views",
+          "value": "GET,POST:views_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/views/<int:view_id>",
+          "value": "DELETE:views_delete_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/views/<int:view_id>/fragment",
+          "value": "GET:views_fragment_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/viewspec/catalog",
+          "value": "GET:viewspec_catalog_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/viewspec/compile",
+          "value": "POST:viewspec_compile_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/viewspec/run",
+          "value": "POST:viewspec_run_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/work-os/evaluation",
+          "value": "GET:work_os_evaluation_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/work-os/evaluation-dialogues",
+          "value": "GET:evaluation_dialogues_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/work-os/open-loops",
+          "value": "GET:work_os_open_loops_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/api/work-os/portfolio",
+          "value": "GET:work_os_portfolio_api"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/chat/<ticker>",
+          "value": "GET:list_chat_endpoint"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/chat/<ticker>",
+          "value": "OPTIONS:chat_options"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/chat/<ticker>",
+          "value": "POST:chat_endpoint"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/chat/<ticker>/apply",
+          "value": "OPTIONS:chat_apply_options"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/chat/<ticker>/apply",
+          "value": "POST:chat_apply_endpoint"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/comments",
+          "value": "GET:list_comments_endpoint"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/comments",
+          "value": "OPTIONS:comments_options"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/comments",
+          "value": "POST:create_comment_endpoint"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/comments/<comment_id>",
+          "value": "DELETE:delete_comment_endpoint"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/comments/<comment_id>",
+          "value": "OPTIONS,PATCH:patch_comment_endpoint"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/export/cio",
+          "value": "GET:export_cio"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/healthz",
+          "value": "GET:healthz"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/mobile/inbox",
+          "value": "GET:mobile_inbox_page"
+        },
+        {
+          "kind": "flask_route",
+          "identifier": "/socratic/<ticker>",
+          "value": "GET:socratic_page"
+        }
+      ]
     },
     {
       "name": "integrity_serialized_ordering",
       "status": "PASS",
-      "reason": "checked-in implementation and test/golden evidence present",
+      "reason": "all required evidence conditions present",
       "artifacts": [
         "src/models/facts.py",
         "src/provenance/integrity_audit.py",
@@ -8000,12 +8637,956 @@
         "tests/test_fact_plane_v2_integrity_audit.py",
         "tests/test_integrity_audit_performance_indexes.py"
       ],
-      "artifact_sha256": "e23eb83054a5de5077382ffbb418a4794a8f46f1aa340730f37ca82056d794fc"
+      "implementation_artifacts": [
+        "src/models/facts.py",
+        "src/provenance/integrity_audit.py"
+      ],
+      "verification_artifacts": [
+        "tests/test_calendar_integrity.py",
+        "tests/test_data_integrity_foundation.py",
+        "tests/test_eval_cohort_integrity.py",
+        "tests/test_evidence_integrity_audit.py",
+        "tests/test_fact_plane_v2_integrity_audit.py",
+        "tests/test_integrity_audit_performance_indexes.py"
+      ],
+      "artifact_sha256": "e23eb83054a5de5077382ffbb418a4794a8f46f1aa340730f37ca82056d794fc",
+      "extracted": [
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/models/facts.py",
+          "value": "\"\"\"Inverse of to_json. None/blank input maps to None; malformed JSON"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/models/facts.py",
+          "value": "# FactLocator-shaped JSON (section, json_path) — serialize via"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/models/facts.py",
+          "value": "# FactLocator.to_json(), do not hand-roll a second locator shape."
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/models/facts.py",
+          "value": "# the two branches serialize at the actual DB write."
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/models/facts.py",
+          "value": "def to_json(self) -> str | None:"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/models/facts.py",
+          "value": "pre-existing row's serialized shape is byte-identical whether or not"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/models/facts.py",
+          "value": "whichever the extractor actually knows; an all-empty locator serializes"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\") ORDER BY item.trace_id, item.rank\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND (successor.id IS NULL OR child.id = child.superseded_by_id) ORDER BY child.id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND anchor.observation_id IS NULL ORDER BY observation.observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND candidate.observation_id = revision.selected_observation_id WHERE candidate.observation_id IS NULL ORDER BY revision.resolution_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND component.outcome <> 'succeeded')) ORDER BY seal.snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND governance.extraction_run_id IS NULL ORDER BY run.extraction_run_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND page.requires_ocr = 1)) ORDER BY assessment.assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND projection.index_run_id IS NULL ORDER BY run.index_run_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND result.outcome = 'accepted') ORDER BY run.extraction_run_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"AND superseded_by_id IS NOT NULL ORDER BY id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM fact_cell_identity_seals_v2 ORDER BY fact_cell_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM fact_cell_identity_seals_v2 ORDER BY fact_cell_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM fact_reported_observation_anchors_v2 ORDER BY observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM filing_xbrl_extraction_input_seals ORDER BY extraction_run_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM filing_xbrl_processor_artifacts ORDER BY processor_artifact_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM ocr_page_results ORDER BY extraction_run_id, page_number\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM search_corpus_manifest_seals ORDER BY manifest_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM search_fact_projection_memberships ORDER BY membership_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM search_fact_projection_rows ORDER BY fact_hit_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"FROM source_inventory_snapshot_seals ORDER BY snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"GROUP BY candidate.candidate_set_id ORDER BY candidate.candidate_set_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"GROUP BY document.issuer_id ORDER BY document.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"GROUP BY edge.output_observation_id ORDER BY edge.output_observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"HAVING COUNT(chunk.chunk_id) = 0 ORDER BY membership.manifest_id, membership.document_version_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ON node.node_id = observation.evidence_node_id WHERE node.node_id IS NULL ORDER BY observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ON seal.fact_cell_id = cell.fact_cell_id ORDER BY cell.fact_cell_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"OR (node.revision > 1 AND prior.node_id IS NULL) ORDER BY node.node_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"OR (revision.revision > 1 AND prior.resolution_id IS NULL) ORDER BY revision.resolution_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"OR recorded_at < available_at ORDER BY observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"OR row.recorded_at > run.recorded_at ORDER BY row.fact_hit_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY anchor.observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY approved_at DESC,promotion_id DESC LIMIT 1\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY artifact.embedding_artifact_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY assessment.assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY assessment.assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY assessment.assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY basis.derivation_seal_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY binding.binding_revision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY binding.binding_revision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY binding.binding_revision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY binding.recorded_issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY binding.recorded_issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY candidate.candidate_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY decision.decision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY decision.decision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY derivation_seal_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY disposition.assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY disposition.assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY document.document_version_id LIMIT 1\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY document.document_version_id LIMIT 1\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY document.document_version_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY document_version_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY evidence_seal_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY expected.expected_document_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY expected_document_key, membership_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY extraction_run_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY extraction_run_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY extraction_seal_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY extraction_seal_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY fact.id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY fact_cell_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY failed.document_version_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY generation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY governance.extraction_run_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY inventory.snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY item.trace_id,item.rank\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY lifecycle.lifecycle_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY link.fact_table, link.fact_row_id, link.fact_revision\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY link.fact_table, link.fact_row_id, link.fact_revision\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY link.link_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY location.location_observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY location.location_observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY manifest.manifest_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY match_revision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY membership.manifest_id, membership.document_version_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY membership.manifest_id, membership.document_version_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY membership.membership_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY membership.membership_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY obligation.obligation_revision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY observation.observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY ontology_snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY ordinal,component_key\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY outcome.resolution_id, candidate.observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY payload.observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY processing_snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY promotion_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY publication_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY publication_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY recorded_issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY recorded_issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY relation.relation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY relation.relationship_revision_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY research_snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution.logical_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution.resolution_revision_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution.resolution_revision_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution.resolution_revision_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution.resolution_revision_id,candidate.candidate_ordinal\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution.resolution_revision_id,candidate.observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY resolution_snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY result.extraction_run_id, result.page_number\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY result.extraction_run_id, result.page_number\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY row.fact_hit_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY row.fact_hit_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY run.index_run_id, chunk.chunk_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY run.index_run_id, membership.chunk_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY run.projection_run_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY run.projection_run_id,cell.fact_cell_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY scope.scope_key, scope.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY scope.scope_key, scope.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY scope.scope_key, scope.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY scope.scope_key, scope.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY scope.scope_key, scope.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY scope.scope_key, scope.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY scope.scope_key, scope.issuer_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY seal.derivation_seal_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY seal.derivation_seal_id,edge.input_observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY seal.derivation_seal_id,edge.input_ordinal\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY seal.extraction_seal_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY seal.projection_seal_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY seal.projection_seal_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY seal.snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY security.security_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY snapshot.snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY subject.fact_cell_id,relation.subject_observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"ORDER BY trace_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"SELECT sha256, byte_size, storage_uri FROM evidence_content_blobs ORDER BY sha256\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"UNION SELECT assessment_id FROM extra ORDER BY assessment_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"UNION SELECT logical_key FROM extra_members ORDER BY logical_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE assessment.assessment_id IS NULL ORDER BY expected.expected_document_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE canonical.issuer_id IS NULL ORDER BY expected.expected_document_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE canonical.issuer_id IS NULL ORDER BY inventory.snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE child.parent_document_id IS NOT NULL AND parent.id IS NULL ORDER BY child.id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE chunk.manifest_id <> item.manifest_id ORDER BY item.trace_id, item.rank\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE current.snapshot_id IS NULL ORDER BY link.manifest_id, link.snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE extraction_run_id = ? ORDER BY node_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE extraction_run_id = ? ORDER BY observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE extraction_run_id=? ORDER BY input_ordinal\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE extraction_run_id=? ORDER BY input_ordinal\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE extraction_run_id=? ORDER BY input_ordinal,footnote_ordinal\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE extraction_run_id=? ORDER BY member_ordinal\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE fact_cell_id = ? ORDER BY dimension_ordinal\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE lifecycle.lifecycle_id IS NULL ORDER BY expected.expected_document_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE link.link_id IS NULL ORDER BY document.document_version_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE link.manifest_id IS NULL ORDER BY manifest.manifest_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE location.location_observation_id IS NULL ORDER BY blob.sha256\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE locator_json IS NOT NULL OR locator_sha256 IS NOT NULL ORDER BY node_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE member_kind = 'typed' ORDER BY dimension_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE node.parent_node_id IS NOT NULL AND parent.node_id IS NULL ORDER BY node.node_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE observation_kind = 'reported' ORDER BY observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome <> 'succeeded' ORDER BY inventory_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome = 'ready' AND manifest_ids_json = '[]' ORDER BY trace_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome = 'selected' AND material_dissent = 1 ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome = 'selected' AND material_dissent = 1 ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome = 'unresolved' ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome = 'unresolved' ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome = 'unresolved' ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE outcome = 'unresolved' ORDER BY resolution_key\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE projection_run_id = ? ORDER BY fact_hit_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE projection_run_id = ? ORDER BY membership_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE revision.resolution_id IS NULL ORDER BY candidate.resolution_id, candidate.observation_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE seal.extraction_seal_id IS NULL ORDER BY anchor.observation_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE seal.fact_cell_id IS NULL ORDER BY cell.fact_cell_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE seal.manifest_id IS NULL ORDER BY manifest.manifest_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE seal.projection_run_id IS NULL ORDER BY run.projection_run_id\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "\"WHERE seal.snapshot_id IS NULL ORDER BY current.snapshot_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "# ``Path.as_uri`` serializes a Windows drive as ``/C:/...``.  Stripping"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "cursor = conn.execute(\"SELECT index_run_id FROM search_projection_seals ORDER BY index_run_id\")"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "f\"GROUP BY {key_sql} HAVING COUNT(*) > 1 ORDER BY {key_sql}\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "f\"ORDER BY {spec.key_column} LIMIT :_cutover_page_size\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "src/provenance/integrity_audit.py",
+          "value": "if \" ORDER BY \" not in f\" {normalized} \":"
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "tests/test_evidence_integrity_audit.py",
+          "value": "query=\"SELECT value FROM violations ORDER BY value\","
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "tests/test_integrity_audit_performance_indexes.py",
+          "value": "\"ORDER BY revision.resolution_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "tests/test_integrity_audit_performance_indexes.py",
+          "value": "\"ORDER BY revision.resolution_id\""
+        },
+        {
+          "kind": "ordering_contract",
+          "identifier": "tests/test_integrity_audit_performance_indexes.py",
+          "value": "f\"WHERE {INVALID_VALUE_OR_CLOCK} ORDER BY observation_id\""
+        }
+      ]
     },
     {
       "name": "public_import_surfaces",
       "status": "PASS",
-      "reason": "checked-in implementation and test/golden evidence present",
+      "reason": "all required evidence conditions present",
       "artifacts": [
         "execution/__init__.py",
         "src/advisor/__init__.py",
@@ -8061,12 +9642,1451 @@
         "src/viewspec/__init__.py",
         "tests/test_import_owner_capacity.py"
       ],
-      "artifact_sha256": "e25569fdc5bde73582578cc4c91791658edd27bd9c64533139638b8457e554d6"
+      "implementation_artifacts": [
+        "execution/__init__.py",
+        "src/advisor/__init__.py",
+        "src/alerts/__init__.py",
+        "src/allocation/__init__.py",
+        "src/ask/__init__.py",
+        "src/capture/__init__.py",
+        "src/competitive/__init__.py",
+        "src/compute/__init__.py",
+        "src/compute/metrics_engine/__init__.py",
+        "src/credibility/__init__.py",
+        "src/dashboard/__init__.py",
+        "src/dcf/__init__.py",
+        "src/discovery/__init__.py",
+        "src/etf_sources/__init__.py",
+        "src/evals/__init__.py",
+        "src/filings/__init__.py",
+        "src/integrations/__init__.py",
+        "src/ir_pipeline/__init__.py",
+        "src/ir_pipeline/discover/__init__.py",
+        "src/llm/__init__.py",
+        "src/model_provenance/__init__.py",
+        "src/models/__init__.py",
+        "src/net/__init__.py",
+        "src/news/__init__.py",
+        "src/onmymind/__init__.py",
+        "src/operations/__init__.py",
+        "src/owner_profile/__init__.py",
+        "src/pipeline/__init__.py",
+        "src/positioning/__init__.py",
+        "src/provenance/__init__.py",
+        "src/quality/__init__.py",
+        "src/redteam/__init__.py",
+        "src/report/__init__.py",
+        "src/report/renderers/__init__.py",
+        "src/report/renderers/workspace_sections/__init__.py",
+        "src/report/sections/__init__.py",
+        "src/research/__init__.py",
+        "src/runtime/__init__.py",
+        "src/search/__init__.py",
+        "src/server_runtime/__init__.py",
+        "src/signals/__init__.py",
+        "src/sources/__init__.py",
+        "src/standup/__init__.py",
+        "src/synthesis/__init__.py",
+        "src/synthesis/lenses/__init__.py",
+        "src/table_extractors/__init__.py",
+        "src/timeseries/__init__.py",
+        "src/transcripts/__init__.py",
+        "src/triggers/__init__.py",
+        "src/ui/__init__.py",
+        "src/user_state/__init__.py",
+        "src/viewspec/__init__.py"
+      ],
+      "verification_artifacts": [
+        "tests/test_import_owner_capacity.py"
+      ],
+      "artifact_sha256": "e25569fdc5bde73582578cc4c91791658edd27bd9c64533139638b8457e554d6",
+      "extracted": [
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "ACTION_STATUS_APPLIED"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "ACTION_STATUS_CANCELLED"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "ACTION_STATUS_PENDING"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "ALERT_STATUS_APPROVED"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "ALERT_STATUS_DISMISSED"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "ALERT_STATUS_EXPIRED"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "ALERT_STATUS_PENDING"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "AlertRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "QueuedActionRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "apply_action"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "approve_alert"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "cancel_action"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "compute_signature_sha"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "dismiss_alert"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "find_by_signature"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "fire_alert"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "get_action"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "get_alert"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "list_alerts"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "list_pending_actions"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "list_pending_alerts"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "list_queued_actions_for_alert"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "list_queued_actions_for_alerts"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "queue_action"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "set_alert_dismiss_reason"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/alerts/__init__.py",
+          "value": "uncancel_action"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "BLEND_WEIGHTS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_CANDIDATE_FIT"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_DIRECTIONAL_HYPOTHESIS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_DISCONFIRMERS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_KPI_COVERAGE"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_PORTFOLIO_CONTEXT"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_PRICE_FRESHNESS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_SOURCE_PROVENANCE"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "CHECK_USABLE_DCF"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "DecisionReadyAssessment"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "DeterministicFrontier"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "ENTRY_APPRECIATION"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "ENTRY_INTENTIONAL"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "EligibilityCheck"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "FACTOR_LABELS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "FactorReading"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "FrontierPlan"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "HoldingScore"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "NextDollarModel"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "PlanAllocation"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "TRIM_ASSESSMENT_THRESHOLD_PCT"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "ZONE_BOUNDS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "Zone"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "ZoneAssessment"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "assess_eligibility"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "assess_universe"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "build_frontier"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "build_next_dollar_model"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "cash_assessment"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "classify_entry_method"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "classify_zone"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/allocation/__init__.py",
+          "value": "zone_at_least"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/dashboard/__init__.py",
+          "value": "render_alert_card"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/dashboard/__init__.py",
+          "value": "render_alert_feed"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/dashboard/__init__.py",
+          "value": "render_evidence_drawer"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "AdjacencyHit"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "CANDIDATE_STATUSES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "CandidateRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "ScreenHit"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "get_candidate"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "list_candidates"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "mine_adjacency"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "run_screens"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "set_status"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/discovery/__init__.py",
+          "value": "upsert_candidate"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "AUDIT_SPECS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "AuditItem"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "CLASSIFIER_PURPOSES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "CORPUS_LOADERS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "CaseResult"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "CoverageRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "EvalAbortError"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "EvalRunSummary"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "GoldenCase"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "JudgeOutcome"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "JudgeVerdict"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "Rubric"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "RubricVerdict"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "eval_coverage"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "load_golden"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "load_rubric"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "persist_summary"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "run_classifier_eval"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "run_judge"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "run_rubric_eval"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "run_viewspec_eval"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/evals/__init__.py",
+          "value": "spec_diff"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "ANCHOR_BLOCK_CHAR_CAP"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "BACKEND_COMPARE_JUDGE_PURPOSE"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "CLAUDE_WEB_TIMEOUT_SECONDS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "CLAUDE_WEB_TOOLS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "CapabilityProfile"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "DEFAULT_MODEL"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "DEFAULT_TIMEOUT_SECONDS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "FAST_CLASSIFIER_MODEL"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "GEMINI_BACKEND_ALLOWED_PURPOSES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "GEMINI_BACKEND_DEFAULT_MODEL"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "GEMINI_BACKEND_FAST_MODEL"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "GEMINI_FALLBACK_MODEL"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "IR_ANCHOR_CHAR_CAP"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "LLMBudgetExceeded"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "LLM_MODELS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "NUMBER_FORMATTING_BLOCK"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "OPENROUTER_BACKEND_ALLOWED_PURPOSES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "OPENROUTER_BACKEND_DEFAULT_MODEL"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "OWNER_PROFILE_ANCHOR_CHAR_CAP"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "PRIORS_ANCHOR_CHAR_CAP"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "WEB_CONTENT_NOTICE"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "WORLDVIEW_ANCHOR_CHAR_CAP"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "aggregate_by_purpose"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "call_gemini"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "call_llm"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "call_llm_with_web"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "call_openrouter"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "compose_anchor_block"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "compose_brief_prompt"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "cross_judge_agreement"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "fallback_call_logged"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "gemini_allowed_purposes"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "gemini_model_for"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "is_fallback_disabled"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "judge_pair"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "load_bear_anchor"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "load_ir_anchor"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "load_owner_profile_anchor"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "load_priors_anchor"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "load_thesis_anchor"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "load_worldview_anchor"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "openrouter_model_for"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "record_llm_call"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "spotlight"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "style_block_cache_token"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/llm/__init__.py",
+          "value": "try_gemini_fallback"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "BASIS_KINDS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "BASIS_STATUSES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "Basis"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "DecisionFreshness"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "MATERIAL_DRIFT_PCT"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "dcf_basis"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "decision_freshness"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "mark_superseded_by"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "stale_material_decisions"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/model_provenance/__init__.py",
+          "value": "supersede_current"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "FMP_CLIENT"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "FMP_ORIGIN"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "FmpClient"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "HTTP_CLIENT"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "HostRateBudget"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "HttpAttempt"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "HttpCallError"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "HttpErrorKind"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "HttpJsonResponse"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "JsonShape"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "JsonValue"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "QueryValue"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "RetryPolicy"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/net/__init__.py",
+          "value": "default_rate_budget"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "NewsRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "SOURCE_FEED_EDGAR_13D"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "SOURCE_FEED_EDGAR_13G"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "SOURCE_FEED_EDGAR_8K"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "SOURCE_FEED_FMP"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "SOURCE_FEED_WEBSEARCH"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "SOURCE_FEED_YF_GRADES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "drop_duplicate_stories"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "normalize_headline"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/news/__init__.py",
+          "value": "upsert_news_rows"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "ActionResult"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "FeedItem"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "FeedPage"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "LADDER_LABELS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "LADDER_VERBS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "act_on_feed_item"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "load_feed"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/onmymind/__init__.py",
+          "value": "onmymind_enabled"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/operations/__init__.py",
+          "value": "ObservationState"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/operations/__init__.py",
+          "value": "OperationsRegistry"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/operations/__init__.py",
+          "value": "OperationsSnapshot"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/operations/__init__.py",
+          "value": "build_operations_registry"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/operations/__init__.py",
+          "value": "collect_operations_snapshot"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "CorpusDocumentMembership"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "CorpusManifest"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "CorpusManifestSeal"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "EmbeddingArtifact"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "EvidenceBundle"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "GroundedSearchStore"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "HybridRetriever"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "IndexMembership"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "IndexRun"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "SearchChunk"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "SearchFilter"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "VectorBackend"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "VectorCandidate"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/search/__init__.py",
+          "value": "membership_digest"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "DeliveredBrief"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "STANDUP_SESSION_SCOPE"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "STANDUP_SESSION_TITLE"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "StandupConfig"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "StandupReport"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "StandupSignal"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "collect_signals"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/standup/__init__.py",
+          "value": "run_standup"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "LENSES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "Lens"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "LensContext"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "MACRO_LENS_NAMES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "list_lenses_for_ticker"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "list_portfolio_lenses"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "read_lens_artifact"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "run_lens"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "run_macro_scenario_lens"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/synthesis/lenses/__init__.py",
+          "value": "run_portfolio_macro_stress_lens"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/table_extractors/__init__.py",
+          "value": "ExtractionOutcome"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/table_extractors/__init__.py",
+          "value": "ExtractorContract"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/table_extractors/__init__.py",
+          "value": "XbrlRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/table_extractors/__init__.py",
+          "value": "iter_xbrl_table"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/table_extractors/__init__.py",
+          "value": "parse_units"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "Observation"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "compute_and_persist_signals"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "correlation_matrix"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "detect_inflection"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "detect_trend"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "load_financial_fact_provenance"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "load_financial_series"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "load_kpi_series"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "load_segment_series"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "rolling_zscore_anomalies"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "seasonal_decompose"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/timeseries/__init__.py",
+          "value": "yoy_acceleration"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "ALL_TRIGGERS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "AlertDraft"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "Cadence"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "DecisionConditionTrigger"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "ENABLED_TRIGGERS"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "EarningsToneTrigger"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "KpiInflectionTrigger"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "MaterialNewsTrigger"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "QueuedActionDraft"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "RestatementTrigger"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "SayDoDueTrigger"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "ThesisAnchor"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "Trigger"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "TriggerCandidate"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/triggers/__init__.py",
+          "value": "UserStateContext"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/ui/__init__.py",
+          "value": "CHART_SERIES"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/ui/__init__.py",
+          "value": "FAVICON_LINK"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/ui/__init__.py",
+          "value": "PALETTE_DARK"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/ui/__init__.py",
+          "value": "PALETTE_LIGHT"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/ui/__init__.py",
+          "value": "page_title"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/ui/__init__.py",
+          "value": "palette_css"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/ui/__init__.py",
+          "value": "render_prose"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "PositionSizingIntentRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "ThesisLedgerEntryRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "UserKpiRegistryRow"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "append_entry"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "append_intent"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "delete_kpi"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "get_thesis_breakers"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "latest_intent"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "list_entries"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "list_intents"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "list_kpis"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/user_state/__init__.py",
+          "value": "upsert_kpi"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/viewspec/__init__.py",
+          "value": "MetricRef"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/viewspec/__init__.py",
+          "value": "ViewResult"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/viewspec/__init__.py",
+          "value": "ViewSpec"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/viewspec/__init__.py",
+          "value": "ViewSpecError"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/viewspec/__init__.py",
+          "value": "execute_view"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/viewspec/__init__.py",
+          "value": "metric_catalog"
+        },
+        {
+          "kind": "public_export",
+          "identifier": "src/viewspec/__init__.py",
+          "value": "render_view_fragment"
+        }
+      ]
     },
     {
       "name": "dcf_formula_cell_receipts",
       "status": "PASS",
-      "reason": "checked-in implementation and test/golden evidence present",
+      "reason": "all required evidence conditions present",
       "artifacts": [
         "execution/audit_dcf_outliers.py",
         "execution/build_all_redesigned_dcf.py",
@@ -8112,12 +11132,1391 @@
         "tests/test_reprice_dcf.py",
         "tests/test_specialized_dcf_live_price.py"
       ],
-      "artifact_sha256": "085ef71200b734a5f6cb6a2d4588c15cea4d630501b16b9b744112057a753d89"
+      "implementation_artifacts": [
+        "execution/audit_dcf_outliers.py",
+        "execution/build_all_redesigned_dcf.py",
+        "execution/build_bank_dcf.py",
+        "execution/build_meli_platform_dcf.py",
+        "execution/build_nu_platform_dcf.py",
+        "execution/build_redesigned_dcf.py",
+        "execution/comments_server_dcf_routes.py",
+        "execution/dcf_opus_assumptions.py",
+        "execution/dcf_sheets.py",
+        "execution/refresh_dcf.py",
+        "execution/reprice_dcf.py"
+      ],
+      "verification_artifacts": [
+        "tests/test_alembic_dcf_run_inputs.py",
+        "tests/test_build_bank_dcf.py",
+        "tests/test_comments_server_dcf.py",
+        "tests/test_comments_server_dcf_globals.py",
+        "tests/test_dcf_analyst_segments.py",
+        "tests/test_dcf_artifact.py",
+        "tests/test_dcf_assumptions_doc.py",
+        "tests/test_dcf_country_risk.py",
+        "tests/test_dcf_equity_bridge.py",
+        "tests/test_dcf_global_assumptions.py",
+        "tests/test_dcf_grade_evidence.py",
+        "tests/test_dcf_inject_mapping.py",
+        "tests/test_dcf_latest.py",
+        "tests/test_dcf_live_write.py",
+        "tests/test_dcf_persist_provenance.py",
+        "tests/test_dcf_primary_fact_overlay.py",
+        "tests/test_dcf_redesign.py",
+        "tests/test_dcf_reverse.py",
+        "tests/test_dcf_reverse_valuation.py",
+        "tests/test_dcf_runs_over_under_convention.py",
+        "tests/test_dcf_sanity_gate.py",
+        "tests/test_dcf_segment_coverage.py",
+        "tests/test_dcf_sheets.py",
+        "tests/test_dcf_sync_and_coverage.py",
+        "tests/test_dcf_sync_globals.py",
+        "tests/test_dcf_tweak.py",
+        "tests/test_dcf_universe.py",
+        "tests/test_dcf_valuation_engine.py",
+        "tests/test_meli_platform_dcf.py",
+        "tests/test_redesigned_dcf_smoke.py",
+        "tests/test_reprice_dcf.py",
+        "tests/test_specialized_dcf_live_price.py"
+      ],
+      "artifact_sha256": "085ef71200b734a5f6cb6a2d4588c15cea4d630501b16b9b744112057a753d89",
+      "extracted": [
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "\"\"\"Formula-first bank / credit valuation workbook (NU = first instance)."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "\"\"\"Python value-of-record; mirrors the in-sheet formulas exactly.\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "# ---------- Model (formula-first engine) ----------"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(\"Book equity (Y0)\", f\"={D}!$B${R['eq0']}\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(\"Implied P/B\", f\"=B8/{D}!$B${R['eq0']}\", MULT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(\"Upside vs price\", f\"=B14/{D}!$B${R['px']}-1\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(R[\"pb\"], \"Implied P/B\", \"Valuation!$B$11\", MULT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(R[\"pe2\"], \"Implied P/E (fwd)\", \"Valuation!$B$12\", MULT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(R[\"roet\"], \"Terminal ROE\", \"Valuation!$B$5\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(R[\"up\"], \"Upside vs price\", \"Valuation!$B$10\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(R[\"val\"], \"Value of equity (reporting, M)\", \"Valuation!$B$8\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(R[\"vps\"], \"Value per share / ADR (USD)\", \"Valuation!$B$14\", NUM2),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(tv_label, f\"=(B5-{KE})*B4/({KE}-{D}!$B${R['g']})\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "(vps_rep_label, f\"=B8/{D}!$B${R['sh']}\", NUM2),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "INPUT cells; every projected cell is a formula referencing those inputs + the"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "KE = f\"{D}!$B${R['ke']}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "_hdr(mod, \"A1\", f\"{T} — Credit Model (formula-first; $M)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "c = fin.cell(row=i, column=2, value=round(v, 2))"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "c = val.cell(row=14, column=2, value=\"=B9*B15*B16\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "c = val.cell(row=15, column=2, value=s.adr_ratio)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "c = val.cell(row=16, column=2, value=s.fx_to_usd)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "c = ws.cell(row=row, column=2, value=val)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "cc = dash.cell(row=rr, column=2, value=f\"={ref}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "cc = mod.cell(row=r, column=col0 + j)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=R[\"book0\"], column=1, value=\"Credit book Y0 ($M)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=R[\"eq0\"], column=1, value=\"Book equity Y0 ($M)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=R[\"eqm1\"], column=1, value=\"Book equity Y-1 ($M)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=R[\"ke\"], column=1, value=\"Cost of equity  Ke\").font = SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=R[\"px\"], column=1, value=\"Current price ($)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=R[\"sh\"], column=1, value=\"Diluted shares (M)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=r, column=4, value=lab).font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=r, column=4, value=label).font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=r, column=4, value=name[:46]).font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=r, column=5, value=txt).font = Font(size=9, color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=r, column=6, value=rule).font = Font(size=9, color=\"6B7280\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=r, column=6, value=rule_txt).font = Font(size=9, color=\"6B7280\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "dash.cell(row=rr, column=1, value=lab).font = SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "def interp_formula(col: str, near: str, term: str) -> str:"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "evaluate formulas offline) and matches the in-sheet formulas exactly."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "f\"/({KE}-{D}!$B${R['g']}))*Model!{cN}31\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "f\"=SUM(Model!{cl(col0 + 1)}33:{cN}33)+(Model!{cN}29*(1+{D}!$B${R['g']})\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "fin.cell(row=i, column=1, value=lab).font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "fin_book = \"Financials!$B$3\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "fin_eq0, fin_eqm1 = \"Financials!$B$11\", \"Financials!$B$12\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "fin_sh, fin_px = \"Financials!$B$13\", \"Financials!$B$14\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "for lab, formula, fmt in vrows:"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "ke = dash.cell(row=R[\"ke\"], column=2, value=f\"=B{R['rf']}+B{R['beta']}*B{R['erp']}+B{R['crp']}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "lk = dash.cell(row=R[\"book0\"], column=2, value=f\"={fin_book}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod.cell(row=4, column=2, value=\"Year\").font = SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod.cell(row=4, column=col0 + j, value=j).font = SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod.cell(row=r, column=2, value=lab).font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c0}25\"] = f\"={D}!$B${R['eq0']}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c0}26\"] = f\"=({D}!$B${R['eq0']}+{D}!$B${R['eqm1']})/2\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c0}28\"] = f\"={D}!$B${R['cap']}*{c0}6\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c0}6\"] = f\"={D}!$B${R['book0']}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c0}8\"] = f\"={c0}6*{D}!$B${R['eamult']}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}10\"] = interp_formula(c, f\"{D}!$B${R['nimnear']}\", f\"{D}!$B${R['nimterm']}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}12\"] = interp_formula(c, f\"{D}!$B${R['cornear']}\", f\"{D}!$B${R['corterm']}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}15\"] = interp_formula(c, f\"{D}!$B${R['feenear']}\", f\"{D}!$B${R['feeterm']}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}18\"] = interp_formula(c, f\"{D}!$B${R['effnear']}\", f\"{D}!$B${R['effterm']}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}21\"] = f\"={D}!$B${R['tax']}*{c}20\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}23\"] = interp_formula(c, f\"{D}!$B${R['paynear']}\", f\"{D}!$B${R['payterm']}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}28\"] = f\"={D}!$B${R['cap']}*{c}6\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}5\"] = interp_formula(c, f\"{D}!$B${R['gnear']}\", f\"{D}!$B${R['gterm']}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "mod[f\"{c}8\"] = f\"={c}6*{D}!$B${R['eamult']}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "not part of the formula-linked valuation engine. Skips silently with no data.\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "oc = dash.cell(row=rr, column=2, value=f\"={ref}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "only (blue); not part of the formula-linked valuation engine.\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "return f\"={near}+({term}-{near})*({yi}-1)/({D}!$B${R['years']}-1)\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "sc = dash.cell(row=r, column=7, value=status)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "sc = dash.cell(row=r, column=7, value=status)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "val.cell(row=14, column=1, value=\"Value per share / ADR (USD)\").font = SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "val.cell(row=15, column=1, value=\"ADR ratio (ordinary shares / ADR)\").font = Font("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "val.cell(row=16, column=1, value=\"FX (reporting ccy -> USD)\").font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "val.cell(row=r, column=1, value=lab).font = ("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "vc = dash.cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "vc = dash.cell(row=r, column=5, value=round(value, 2) if value is not None else \"n/a\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "vc = val.cell(row=r, column=2, value=formula)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_bank_dcf.py",
+          "value": "ws.cell(row=row, column=1, value=label).font = Font(color=\"6B7280\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "\"\"\"Excel convex-fade formula mirroring _fade for the year in row 3 of col c.\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "# ---------- Model (formula-first engine) ----------"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(\"+ Net non-operating cash\", f\"={D}!$B${R['netcash']}\", USD0, 10),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(\"Upside vs price\", f\"=B12/{D}!$B${R['px']}-1\", PCT, 13),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(\"Value per share ($)\", f\"=B11/{D}!$B${R['sh']}\", NUM2, 12),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(R[\"crev\"], \"Credit equity value ($M)\", \"Valuation!$B$9\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(R[\"croet\"], \"Terminal credit ROE\", \"Valuation!$B$15\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(R[\"eqv\"], \"Equity value ($M)\", \"Valuation!$B$11\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(R[\"opev\"], \"Operating EV ($M)\", \"Valuation!$B$5\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(R[\"termrev\"], \"Terminal operating revenue ($M)\", \"Valuation!$B$14\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(R[\"up\"], \"Upside vs price\", \"Valuation!$B$13\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "(R[\"vps\"], \"Value per share ($)\", \"Valuation!$B$12\", NUM2),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "_hdr(mod, \"A1\", f\"{T} - SOTP engine (formula-first; $M)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "c = ws.cell(row=row, column=2, value=val)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "cc = mod.cell(row=r, column=col0 + j - 1)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "dash.cell(row=rr, column=1, value=lab).font = SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "ec = scn.cell(row=r, column=5, value=round(v, 2))"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "f\"=(Model!{cN}7+Model!{cN}8)*{D}!$B${R['opmult']}\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "f\"=Model!{cN}14*(1+{D}!$B${R['cgt']})*(1-{D}!$B${R['cgt']}/{D}!$B${R['croe']})/({D}!$B${R['cke']}-{D}!$B${R['cgt']})\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "for lab, formula, fmt, rr in vrows:"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "is the value-of-record and matches the in-sheet formulas exactly."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "mod.cell(row=r, column=2, value=lab).font = SUB_FONT if r == 3 else Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "oc = dash.cell(row=rr, column=2, value=f\"={ref}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "prov_cell = scn.cell(row=r, column=2, value=prov_label)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "return f\"{D}!$B${R[key]}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "scn.cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "scn.cell(row=r, column=1, value=\"Bear provenance\").font = Font(italic=True, color=\"6B7280\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "scn.cell(row=r, column=1, value=lab).font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "scn.cell(row=r, column=1, value=name).font = Font(bold=(name == \"Base\"), color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "scn.cell(row=r, column=2, value=txt).font = Font(size=10, color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "val.cell(row=rr, column=1, value=lab).font = ("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "vc = val.cell(row=rr, column=2, value=formula)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_meli_platform_dcf.py",
+          "value": "ws.cell(row=row, column=1, value=label).font = Font(color=\"6B7280\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "# ---------- Model (formula-first engine) ----------"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(\"Exit-P/E value\", f\"=Model!{cN}13*{D}!$B${R['pe']}*Model!{cN}17+B2\", USD0, 13),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(\"Terminal ROE (sustainable)\", f\"={D}!$B${R['troe']}\", PCT, 15),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(\"Upside vs price\", f\"=B9/{D}!$B${R['px']}-1\", PCT, 10),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(\"Value per share - FCFE ($)\", f\"=B8/{D}!$B${R['sh']}\", NUM2, 9),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(\"Value/share - exit P/E\", f\"=B13/{D}!$B${R['sh']}\", NUM2, 14),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(\"Value/share - residual income\", f\"=B11/{D}!$B${R['sh']}\", NUM2, 12),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(R[\"roet\"], \"Terminal ROE\", \"Valuation!$B$15\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(R[\"up\"], \"Upside vs price\", \"Valuation!$B$10\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(R[\"val\"], \"Equity value - FCFE ($M)\", \"Valuation!$B$8\", USD0),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(R[\"vps\"], \"Value per share - FCFE ($)\", \"Valuation!$B$9\", NUM2),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(R[\"vpspe\"], \"Value/share - exit P/E\", \"Valuation!$B$14\", NUM2),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "(R[\"vpsri\"], \"Value/share - residual income\", \"Valuation!$B$12\", NUM2),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "_hdr(mod, \"A1\", f\"{T} - Platform engine (formula-first; $M)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "and matches the in-sheet formulas exactly."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "c = ws.cell(row=row, column=2, value=val)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "cc = mod.cell(row=r, column=col0 + j - 1)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "dash.cell(row=rr, column=1, value=lab).font = SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "ec = scn.cell(row=r, column=5, value=round(v, 2))"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "f\"=Model!{cN}13*(1+{D}!$B${R['g']})*(1-{D}!$B${R['g']}/{D}!$B${R['troe']})/({D}!$B${R['ke']}-{D}!$B${R['g']})\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "f\"={D}!$B${R['eq0']}+SUM(Model!{c1}21:{cN}21)+((Model!{cN}13/Model!{cN}19)-{D}!$B${R['ke']})*Model!{cN}19/({D}!$B${R['ke']}-{D}!$B${R['g']})*Model!{cN}17\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "for lab, formula, fmt, rr in vrows:"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "mod.cell(row=r, column=2, value=lab).font = Font(color=\"374151\") if r != 4 else SUB_FONT"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "oc = dash.cell(row=rr, column=2, value=f\"={ref}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "prov_cell = scn.cell(row=r, column=2, value=prov_label)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "return f\"{D}!$B${R[key]}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "scn.cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "scn.cell(row=r, column=1, value=\"Bear provenance\").font = Font(italic=True, color=\"6B7280\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "scn.cell(row=r, column=1, value=lab).font = Font(color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "scn.cell(row=r, column=1, value=name).font = Font(bold=(name == \"Base\"), color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "scn.cell(row=r, column=2, value=txt).font = Font(size=10, color=\"374151\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "val.cell(row=rr, column=1, value=lab).font = ("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "vc = val.cell(row=rr, column=2, value=formula)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_nu_platform_dcf.py",
+          "value": "ws.cell(row=row, column=1, value=label).font = Font(color=\"6B7280\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"\"\"Build a Damodaran/MBI-style, formula-driven DCF workbook for one ticker."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"\"\"Wrap a ratio/growth formula so a blank/zero denominator shows blank,"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"\"\"kind: act=blue hardcode, in=yellow input, f=formula (auto-green if cross-sheet).\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"basis\": \"Dashboard!$B$44\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"beta\": \"Dashboard!$B$40\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"capex26\": \"Dashboard!$B$34\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"capex_term_da\": \"Dashboard!$B$35\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"crp\": \"Dashboard!$B$47\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"curv\": \"Dashboard!$B$49\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"erp\": \"Dashboard!$B$39\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"g1\": lambda i: f\"Dashboard!$B${SEG_ROW0 + i}\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"gT\": lambda i: f\"Dashboard!$C${SEG_ROW0 + i}\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"kd\": \"Dashboard!$B$41\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"margin_near\": \"Dashboard!$B$29\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"margin_term\": \"Dashboard!$B$30\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"method\": \"Dashboard!$B$43\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"mult\": \"Dashboard!$B$45\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"price\": \"Dashboard!$B$48\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"ref\": lambda i: f\"Dashboard!$D${SEG_ROW0 + i}\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"rf\": \"Dashboard!$B$38\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"sbc_near\": f\"Dashboard!$B${redesign_mod._DB_SBC_NEAR}\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"sbc_term\": f\"Dashboard!$B${redesign_mod._DB_SBC_TERM}\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"tax\": \"Dashboard!$B$31\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "\"tg\": \"Dashboard!$B$46\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "# actuals (blue), NOT a formula, so the offline reader (redesign.py._find_row/"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "# collapsed to 2 inputs (near-term + terminal), interpolated by formula."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "# into every downstream surface. Failing here keeps the workbook's ×FX formula"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "# live-formula based and still works; only this unused Python snapshot is"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "(\"Exit basis / multiple\", \"=Valuation!$B$7\", None),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "(\"Exit multiple\", \"=Valuation!$B$8\", MULT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "(\"Terminal growth (g)\", \"=Valuation!$B$4\", PCT),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "(\"Terminal method\", \"=Valuation!$B$6\", None),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "(\"tax\", \"=Valuation!$B$5\"),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "Excel/Sheets formula; only blue=hardcoded actuals and yellow=assumptions are"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "FormulaRule(formula=[f\"$B{SEG_ROW0}<>$D{SEG_ROW0}\"], fill=ORANGE),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "PR = \"Valuation!$B$2\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "cell = ws.cell(r, c, v)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "ddb = DataValidation(type=\"list\", formula1='\"EV/EBITDA,EV/Sales,EV/EBIT,EV/FCF\"', allow_blank=False)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "ddm = DataValidation(type=\"list\", formula1='\"Perpetuity,Exit multiple\"', allow_blank=False)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "def val_formula(rs):"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "dsh.conditional_formatting.add(\"B29\", FormulaRule(formula=[\"$B29<>$D29\"], fill=ORANGE))"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "dsh.conditional_formatting.add(\"B34\", FormulaRule(formula=[\"$B34<>$D34\"], fill=ORANGE))"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "f\"={mc(y)}{fcff_row}-{mc(y)}{sbc_row}-{mc(y)}{sbc_row}*(1-Valuation!$B$5)\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "from openpyxl.formatting.rule import FormulaRule  # noqa: E402"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "fs, frow + 1, 1, \"Blue = hardcoded actuals from FMP filings. Same-sheet ratios are formulas.\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(cc, 2, 2, \"Formula-driven (same-sheet)\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(cc, 5, 2, \"A formula that links to another sheet\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(cv, 11, 2, \"=Valuation!$B$2\", fmt=PXS)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(cv, 13, 2, f'=IF(Valuation!B{vps_row}>Valuation!$B$2,\"Undervalued\",\"Overvalued\")', bold=True)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(mcs, rr, 15, val_formula(rs), fmt=PXS)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(md, r + 2, 1, \"Blue/green = actual  ·  Yellow = assumption  ·  Black = formula\").font = SUB"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(md, r, yc[y], f\"={mc(y)}{oi_row}*(1-Valuation!$B$5)\", fmt=USD)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "put(md, r, yc[y], ie(f\"{mc(y)}{roic_row}-WACC!$B${WACC_ROW}\"), fmt=PCT)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "ws.cell(r, 1, \"  \" + text).font = SEC"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/build_redesigned_dcf.py",
+          "value": "ws.cell(r, c).fill = SECFILL"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/refresh_dcf.py",
+          "value": "Financials actuals (openpyxl can't evaluate the formulas offline), via"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/refresh_dcf.py",
+          "value": "latest FMP, regenerating all formula links and current price;"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_build_bank_dcf.py",
+          "value": "* the value formula must NOT double-count terminal book equity (the terminal is"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_build_bank_dcf.py",
+          "value": "def test_pv_tv_matches_continuing_residual_income_formula() -> None:"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_assumptions_doc.py",
+          "value": "first.cell(row=redesign.SEG_ROW0 + i, column=1, value=s)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_assumptions_doc.py",
+          "value": "workbook (live current-value formulas, static source columns)."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_equity_bridge.py",
+          "value": "\"formula\": \"cash_and_equivalents + short_term_investments\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_equity_bridge.py",
+          "value": "\"formula\": \"long_term_debt + short_term_debt\","
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_primary_fact_overlay.py",
+          "value": "assert aggregate.derivation.formula == \"cash_and_equivalents + short_term_investments\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "(the in-sheet valfcf formula + the reader mirror agree).\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell(dest, 39) == pytest.approx(0.055)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell(dest, 40) == pytest.approx(1.62)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert _dashboard_cell(dest, redesign._DB_MARGIN_NEAR) == pytest.approx(0.42)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert dsh.cell(row=45, column=2).value == pytest.approx(11.0)  # Opus applied"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert sens.cell(*_GRID_CENTER).value == pytest.approx(rv.value_per_share_usd)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "assert sens.cell(*_GRID_CENTER).value == pytest.approx(rv.value_per_share_usd)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "base_fv = dsh.cell(redesign.SCEN_FV_ROW, 2).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "bear_fv = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BEAR).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "bear_mult = dsh.cell(redesign.SCEN_ROW_EXIT_MULT, redesign.SCEN_COL_BEAR).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "bear_mult = dsh2.cell(redesign.SCEN_ROW_EXIT_MULT, redesign.SCEN_COL_BEAR).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "bull_fv = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BULL).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "bull_margin = dsh.cell(redesign.SCEN_ROW_MARGIN_TERM, redesign.SCEN_COL_BULL).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "bull_margin = dsh2.cell(redesign.SCEN_ROW_MARGIN_TERM, redesign.SCEN_COL_BULL).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "capex/D&A base nuance — the reader matches the in-sheet formula exactly).\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "debt_cell = ws.cell(debt_row, 1)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "def _dashboard_cell(path: Path, row: int, col: int = 2) -> object:"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=29, column=2, value=-1.0)  # near op margin -100%"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=30, column=2, value=-1.0)  # terminal op margin -100%"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=30, column=2, value=0.33)  # terminal op margin -> 33%"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=40, column=2, value=1.55)  # beta -> 1.55"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=45, column=2, value=8.0)  # exit multiple -> 8x"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=45, column=2, value=8.0)  # the user's edit"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=r, column=2, value=0.50)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=redesign.SCEN_ROW_EXIT_MULT, column=redesign.SCEN_COL_BEAR, value=-4.0)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=redesign.SCEN_ROW_MARGIN_TERM, column=redesign.SCEN_COL_BULL, value=0.10)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=redesign.SCEN_WEIGHTS_ROW, column=redesign.SCEN_COL_BEAR, value=0.10)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=redesign.SCEN_WEIGHTS_ROW, column=redesign.SCEN_COL_BULL, value=0.40)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "dsh.cell(row=redesign.SCEN_WEIGHTS_ROW, column=redesign.SCEN_COL_WEIGHT_BASE, value=0.50)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "formula; the reporting-currency value is the USD value ÷ FX.\"\"\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "if dsh.cell(row=r, column=1).value == \"Cloud\":"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "post_bear = dsh2.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BEAR).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "post_bull = dsh2.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BULL).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "pre_bear = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BEAR).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "pre_bull = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BULL).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "return wb[\"Dashboard\"].cell(row=row, column=col).value"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "row for row in range(1, ws.max_row + 1) if ws.cell(row, 1).value == \"Total Debt\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "wb[\"Dashboard\"].cell(row=30, column=2, value=0.40)  # terminal op margin up"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_dcf_redesign.py",
+          "value": "wb[\"Dashboard\"].cell(row=redesign.SCEN_ROW_TG, column=redesign.SCEN_COL_BULL).value = None"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "# no column-A label accidentally became a formula (the leading-'=' bug) on the"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "# text-label sheets (the Monte Carlo sheet legitimately has formula bin labels)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "column-A label that accidentally became a formula (the leading-'=' bug)."
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "f\"label formula at {name}!{row[0].coordinate}: {v}\""
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "fy_headers = [md.cell(1, c).value for c in range(2, md.max_column + 1)]"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "if isinstance(fs.cell(1, c).value, str) and str(fs.cell(1, c).value).startswith(\"Q\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "str(fs.cell(1, c).value).split()[0]"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "tests/test_redesigned_dcf_smoke.py",
+          "value": "str(val.cell(r, 1).value).strip() == \"VALUE / SHARE\" for r in range(1, val.max_row + 1)"
+        }
+      ]
     },
     {
       "name": "population_dry_run_apply_receipts",
       "status": "PASS",
-      "reason": "checked-in implementation and test/golden evidence present",
+      "reason": "all required evidence conditions present",
       "artifacts": [
         "execution/evaluate_population_cutover.py",
         "tests/test_evaluate_population_cutover_cli.py",
@@ -8132,12 +12531,40 @@
         "tests/test_population_retrieval_runtime.py",
         "tests/test_population_source_facts.py"
       ],
-      "artifact_sha256": "02b10e4bb765bbc6920655feda021939566e8385fafa91206542e4f22b3f916a"
+      "implementation_artifacts": [
+        "execution/evaluate_population_cutover.py"
+      ],
+      "verification_artifacts": [
+        "tests/test_evaluate_population_cutover_cli.py",
+        "tests/test_population_canonical_resolution.py",
+        "tests/test_population_cli_harness.py",
+        "tests/test_population_completeness.py",
+        "tests/test_population_cutover_evaluator.py",
+        "tests/test_population_document_processing.py",
+        "tests/test_population_identity.py",
+        "tests/test_population_metric_ontology.py",
+        "tests/test_population_research_snapshots.py",
+        "tests/test_population_retrieval_runtime.py",
+        "tests/test_population_source_facts.py"
+      ],
+      "artifact_sha256": "02b10e4bb765bbc6920655feda021939566e8385fafa91206542e4f22b3f916a",
+      "extracted": [
+        {
+          "kind": "population_mode",
+          "identifier": "execution/evaluate_population_cutover.py",
+          "value": "apply"
+        },
+        {
+          "kind": "population_mode",
+          "identifier": "execution/evaluate_population_cutover.py",
+          "value": "dry_run"
+        }
+      ]
     },
     {
       "name": "report_dashboard_goldens",
       "status": "PASS",
-      "reason": "checked-in implementation and test/golden evidence present",
+      "reason": "all required evidence conditions present",
       "artifacts": [
         "src/dashboard/__init__.py",
         "src/dashboard/_card.py",
@@ -8263,7 +12690,296 @@
         "tests/test_dashboard_upcoming.py",
         "tests/test_workspace_golden.py"
       ],
-      "artifact_sha256": "5f439b3b882bfedd6b55accfdb09e8a351cd72c67851a80ec66cfb215e73d1c8"
+      "implementation_artifacts": [
+        "src/dashboard/__init__.py",
+        "src/dashboard/_card.py",
+        "src/dashboard/_styles.py",
+        "src/dashboard/cio_export.py",
+        "src/dashboard/evidence_drawer.py",
+        "src/dashboard/feed.py",
+        "src/dashboard/inbox.py",
+        "src/dashboard/inbox_rank.py",
+        "src/dashboard/upcoming.py",
+        "src/pipeline/analytical_dashboard.py",
+        "src/pipeline/analytical_dashboard_html.py",
+        "src/pipeline/dashboard_html.py",
+        "src/pipeline/dashboard_status.py",
+        "src/report/__init__.py",
+        "src/report/artifacts.py",
+        "src/report/builder.py",
+        "src/report/etf_models.py",
+        "src/report/kpi_naming.py",
+        "src/report/legacy_body.py",
+        "src/report/metrics_view.py",
+        "src/report/models.py",
+        "src/report/offline_artifact.py",
+        "src/report/render_clock.py",
+        "src/report/renderers/__init__.py",
+        "src/report/renderers/charts_v2.py",
+        "src/report/renderers/etf_markdown.py",
+        "src/report/renderers/markdown.py",
+        "src/report/renderers/numfmt.py",
+        "src/report/renderers/sections_json.py",
+        "src/report/renderers/workspace_charts.py",
+        "src/report/renderers/workspace_chat.py",
+        "src/report/renderers/workspace_comments.py",
+        "src/report/renderers/workspace_data.py",
+        "src/report/renderers/workspace_dcf.py",
+        "src/report/renderers/workspace_decision_card.py",
+        "src/report/renderers/workspace_html.py",
+        "src/report/renderers/workspace_reader_assets.py",
+        "src/report/renderers/workspace_script.py",
+        "src/report/renderers/workspace_sections/__init__.py",
+        "src/report/renderers/workspace_sections/_shared.py",
+        "src/report/renderers/workspace_sections/boot.py",
+        "src/report/renderers/workspace_sections/chrome.py",
+        "src/report/renderers/workspace_sections/company.py",
+        "src/report/renderers/workspace_sections/earnings.py",
+        "src/report/renderers/workspace_sections/eval_screen.py",
+        "src/report/renderers/workspace_sections/exec_comp.py",
+        "src/report/renderers/workspace_sections/financials.py",
+        "src/report/renderers/workspace_sections/position.py",
+        "src/report/renderers/workspace_sections/saydo.py",
+        "src/report/renderers/workspace_sections/sources.py",
+        "src/report/renderers/workspace_sections/synthesis.py",
+        "src/report/renderers/workspace_sections/thesis_risk.py",
+        "src/report/renderers/workspace_sections/valuation.py",
+        "src/report/renderers/workspace_styles.py",
+        "src/report/rules.py",
+        "src/report/sections/__init__.py",
+        "src/report/sections/_common.py",
+        "src/report/sections/_ts_signals.py",
+        "src/report/sections/appendix.py",
+        "src/report/sections/bear_case.py",
+        "src/report/sections/comp_set_context.py",
+        "src/report/sections/company_description.py",
+        "src/report/sections/earnings.py",
+        "src/report/sections/etf_holdings.py",
+        "src/report/sections/evaluation_snapshot.py",
+        "src/report/sections/exec_compensation.py",
+        "src/report/sections/filing_intelligence.py",
+        "src/report/sections/financials.py",
+        "src/report/sections/investment_decision_card.py",
+        "src/report/sections/ir_docs.py",
+        "src/report/sections/p3_data.py",
+        "src/report/sections/portfolio_position.py",
+        "src/report/sections/provenance.py",
+        "src/report/sections/qa_roster.py",
+        "src/report/sections/recent_developments.py",
+        "src/report/sections/saydo.py",
+        "src/report/sections/segments.py",
+        "src/report/sections/signals.py",
+        "src/report/sections/snapshot.py",
+        "src/report/sections/synthesis.py",
+        "src/report/sections/thesis.py",
+        "src/report/sections/valuation.py",
+        "src/report/windows_appcontainer.py"
+      ],
+      "verification_artifacts": [
+        "tests/golden/workspace/evaluation/pane_bear.html",
+        "tests/golden/workspace/evaluation/pane_company.html",
+        "tests/golden/workspace/evaluation/pane_comps.html",
+        "tests/golden/workspace/evaluation/pane_decisions.html",
+        "tests/golden/workspace/evaluation/pane_earnings.html",
+        "tests/golden/workspace/evaluation/pane_exec_comp.html",
+        "tests/golden/workspace/evaluation/pane_financials.html",
+        "tests/golden/workspace/evaluation/pane_news.html",
+        "tests/golden/workspace/evaluation/pane_saydo.html",
+        "tests/golden/workspace/evaluation/pane_sources.html",
+        "tests/golden/workspace/evaluation/pane_synthesis.html",
+        "tests/golden/workspace/evaluation/pane_thesis.html",
+        "tests/golden/workspace/evaluation/pane_valuation.html",
+        "tests/golden/workspace/evaluation/shell.html",
+        "tests/golden/workspace/portfolio/pane_bear.html",
+        "tests/golden/workspace/portfolio/pane_company.html",
+        "tests/golden/workspace/portfolio/pane_comps.html",
+        "tests/golden/workspace/portfolio/pane_decisions.html",
+        "tests/golden/workspace/portfolio/pane_earnings.html",
+        "tests/golden/workspace/portfolio/pane_exec_comp.html",
+        "tests/golden/workspace/portfolio/pane_financials.html",
+        "tests/golden/workspace/portfolio/pane_news.html",
+        "tests/golden/workspace/portfolio/pane_position.html",
+        "tests/golden/workspace/portfolio/pane_saydo.html",
+        "tests/golden/workspace/portfolio/pane_sources.html",
+        "tests/golden/workspace/portfolio/pane_synthesis.html",
+        "tests/golden/workspace/portfolio/pane_thesis.html",
+        "tests/golden/workspace/portfolio/pane_valuation.html",
+        "tests/golden/workspace/portfolio/shell.html",
+        "tests/golden/workspace/scripts.js",
+        "tests/golden/workspace/styles.css",
+        "tests/golden/workspace/styles_sorted.css",
+        "tests/test_dashboard_evidence_drawer.py",
+        "tests/test_dashboard_feed.py",
+        "tests/test_dashboard_html.py",
+        "tests/test_dashboard_inbox.py",
+        "tests/test_dashboard_status.py",
+        "tests/test_dashboard_style_master.py",
+        "tests/test_dashboard_upcoming.py",
+        "tests/test_workspace_golden.py"
+      ],
+      "artifact_sha256": "5f439b3b882bfedd6b55accfdb09e8a351cd72c67851a80ec66cfb215e73d1c8",
+      "extracted": [
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_bear.html",
+          "value": "sha256:7c2ce225d0f57af17abb84cf0a81968022f507521f617a9aea6ef225435a7adc"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_company.html",
+          "value": "sha256:de996ab4741137753787f1950d7cb619e7249bc8ada975cecb2f3c8900b20db1"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_comps.html",
+          "value": "sha256:98da979ec44c5760a8058aea6fd4fe6f508b3984463530185b00355478681427"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_decisions.html",
+          "value": "sha256:94ca014daddc308652e072a0e80c5d8c7495f1702f0e51e733a6d20441298a8f"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_earnings.html",
+          "value": "sha256:cc50808defb2ec32f5bf269ebaccef4a4583de3ab04093f002a8073b0bb05b8f"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_exec_comp.html",
+          "value": "sha256:aad4d4e0a16ff651ee9a1cefad9aaf967b1c7c46f2ffc699b15857868b5a57e1"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_financials.html",
+          "value": "sha256:113072f2ebcf4c43f8b7e166a8c6db419f89d6fd7a731c2b1880ae51b65a6836"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_news.html",
+          "value": "sha256:b2a9447a2f622783b90b5d3a2e17cce46fbfd637152c0f8ff32cbbf8df444e7e"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_saydo.html",
+          "value": "sha256:925e568a43f51e752bc4570b0220012ebd998ac3ea622fbbc9c65bda2afbe2ea"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_sources.html",
+          "value": "sha256:c56618a7d8e5e9e6c31edf6e76dea3fc83e1a457a7ad0889ed231aef7e55956d"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_synthesis.html",
+          "value": "sha256:ab5aa309c61421726ddbe0ca32bac3b2b01ff40a4559258db86a9b9dc69c8150"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_thesis.html",
+          "value": "sha256:68674a296179dd1a32d8b8376eb401cad21351021c7d76c40ce7047a40110c7e"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/pane_valuation.html",
+          "value": "sha256:4cff5be70648a51591724ecfa40c7cd88275850e01ca52de7b3ad658a06c5c35"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/evaluation/shell.html",
+          "value": "sha256:aa62fe4d82b5ec6be3bc978528b1163602edf82fcdb6a1389a011186e2723e8e"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_bear.html",
+          "value": "sha256:7c2ce225d0f57af17abb84cf0a81968022f507521f617a9aea6ef225435a7adc"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_company.html",
+          "value": "sha256:8ed9d520cb9ebc297047c42c8c315af3a527fb2bbeb39fe711670c58f56af7c1"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_comps.html",
+          "value": "sha256:98da979ec44c5760a8058aea6fd4fe6f508b3984463530185b00355478681427"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_decisions.html",
+          "value": "sha256:94ca014daddc308652e072a0e80c5d8c7495f1702f0e51e733a6d20441298a8f"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_earnings.html",
+          "value": "sha256:cc50808defb2ec32f5bf269ebaccef4a4583de3ab04093f002a8073b0bb05b8f"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_exec_comp.html",
+          "value": "sha256:aad4d4e0a16ff651ee9a1cefad9aaf967b1c7c46f2ffc699b15857868b5a57e1"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_financials.html",
+          "value": "sha256:113072f2ebcf4c43f8b7e166a8c6db419f89d6fd7a731c2b1880ae51b65a6836"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_news.html",
+          "value": "sha256:b2a9447a2f622783b90b5d3a2e17cce46fbfd637152c0f8ff32cbbf8df444e7e"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_position.html",
+          "value": "sha256:f95841d9ff8480d9cfce7376550c53a162a0b62eb2ab93ec48d83bcc1c1fecfb"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_saydo.html",
+          "value": "sha256:925e568a43f51e752bc4570b0220012ebd998ac3ea622fbbc9c65bda2afbe2ea"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_sources.html",
+          "value": "sha256:c56618a7d8e5e9e6c31edf6e76dea3fc83e1a457a7ad0889ed231aef7e55956d"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_synthesis.html",
+          "value": "sha256:ab5aa309c61421726ddbe0ca32bac3b2b01ff40a4559258db86a9b9dc69c8150"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_thesis.html",
+          "value": "sha256:68674a296179dd1a32d8b8376eb401cad21351021c7d76c40ce7047a40110c7e"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/pane_valuation.html",
+          "value": "sha256:4cff5be70648a51591724ecfa40c7cd88275850e01ca52de7b3ad658a06c5c35"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/portfolio/shell.html",
+          "value": "sha256:2ab5055a8dc6c6b978463c15ffff27d902530dc901c20a7b715df549d4a5d8f6"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/scripts.js",
+          "value": "sha256:23364c338c204b6880ba49d15f5986525a11691f9e7c62663251200303232329"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/styles.css",
+          "value": "sha256:1588a8644f6688c33c3070eae4d640bc0400a6747bbe0d3d83d8621fafd5c4e1"
+        },
+        {
+          "kind": "golden",
+          "identifier": "tests/golden/workspace/styles_sorted.css",
+          "value": "sha256:27c49c54f309999249896a4b15395f0235a4621e05249a023f22ddbbf9b8ab69"
+        }
+      ]
     }
   ],
   "checklist_sha256": "62f5dca0bd622a70f0b8d6f739aa0cff2fcc310d8509cb8126f76de217c7d7ca",

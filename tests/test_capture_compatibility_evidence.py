@@ -55,6 +55,11 @@ def test_receipt_is_typed_deterministic_and_reports_parity(tmp_path: Path) -> No
         "report_dashboard_goldens",
     }
     assert first.hold is True
+    for category in first.categories:
+        assert category.artifact_sha256
+        assert set(category.implementation_artifacts + category.verification_artifacts) == set(
+            category.artifacts
+        )
 
 
 def test_changed_entrypoint_is_explicitly_detected(tmp_path: Path) -> None:
@@ -64,6 +69,38 @@ def test_changed_entrypoint_is_explicitly_detected(tmp_path: Path) -> None:
     receipt = capture_compatibility_evidence(root, baseline)
     changed = next(item for item in receipt.entrypoint_parity if item.path == "execution/run.py")
     assert changed.status == "changed"
+
+
+def test_malformed_route_contract_forces_category_hold(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    baseline = _git(root, "rev-parse", "HEAD")
+    server = root / "execution/comments_server.py"
+    server.write_text("def broken(:\n", encoding="utf-8")
+    route_test = root / "tests/test_comments_server_routes.py"
+    route_test.parent.mkdir()
+    route_test.write_text("def test_routes(): pass\n", encoding="utf-8")
+    receipt = capture_compatibility_evidence(root, baseline)
+    flask = next(
+        item for item in receipt.categories if item.name == "flask_url_method_endpoint_map"
+    )
+    assert flask.status == "HOLD"
+    assert flask.extracted == []
+
+
+def test_population_receipt_names_missing_mode(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    baseline = _git(root, "rev-parse", "HEAD")
+    script = root / "execution/evaluate_population_cutover.py"
+    script.write_text("parser.add_argument('--apply')\nmode = 'apply'\n", encoding="utf-8")
+    test = root / "tests/test_population_cutover.py"
+    test.parent.mkdir()
+    test.write_text("def test_population(): pass\n", encoding="utf-8")
+    receipt = capture_compatibility_evidence(root, baseline)
+    population = next(
+        item for item in receipt.categories if item.name == "population_dry_run_apply_receipts"
+    )
+    assert population.status == "HOLD"
+    assert "population dry_run mode" in population.reason
 
 
 def test_missing_baseline_or_goldens_fails_closed(tmp_path: Path) -> None:

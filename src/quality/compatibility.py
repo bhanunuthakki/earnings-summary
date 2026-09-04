@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import json
@@ -38,7 +39,17 @@ class EvidenceCategory(BaseModel):
     status: Literal["PASS", "HOLD"]
     reason: str
     artifacts: list[str]
+    implementation_artifacts: list[str]
+    verification_artifacts: list[str]
     artifact_sha256: str
+    extracted: list[EvidenceRecord]
+
+
+class EvidenceRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str
+    identifier: str
+    value: str
 
 
 class CompatibilityEvidence(BaseModel):
@@ -184,6 +195,126 @@ def _entrypoints(
     return records, current_items, baseline_items
 
 
+def _extract_records(root: Path, name: str, artifacts: list[str]) -> list[EvidenceRecord]:
+    records: list[EvidenceRecord] = []
+    if name == "flask_url_method_endpoint_map":
+        path = root / "execution/comments_server.py"
+        if path.exists():
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                for node in ast.walk(tree):
+                    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    for decorator in node.decorator_list:
+                        if not isinstance(decorator, ast.Call) or not isinstance(
+                            decorator.func, ast.Attribute
+                        ):
+                            continue
+                        if decorator.func.attr != "route" or not decorator.args:
+                            continue
+                        rule = (
+                            decorator.args[0].value
+                            if isinstance(decorator.args[0], ast.Constant)
+                            else None
+                        )
+                        if not isinstance(rule, str):
+                            continue
+                        methods = next(
+                            (
+                                keyword.value
+                                for keyword in decorator.keywords
+                                if keyword.arg == "methods"
+                            ),
+                            None,
+                        )
+                        method_names = ["GET"]
+                        if isinstance(methods, (ast.List, ast.Tuple)):
+                            parsed_methods = [
+                                item.value
+                                for item in methods.elts
+                                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                            ]
+                            if parsed_methods:
+                                method_names = sorted(parsed_methods)
+                        records.append(
+                            EvidenceRecord(
+                                kind="flask_route",
+                                identifier=rule,
+                                value=f"{','.join(method_names)}:{node.name}",
+                            )
+                        )
+            except (OSError, SyntaxError, UnicodeDecodeError):
+                return []
+    elif name == "public_import_surfaces":
+        for relative in artifacts:
+            if not relative.endswith("__init__.py"):
+                continue
+            try:
+                tree = ast.parse((root / relative).read_text(encoding="utf-8"))
+            except (OSError, SyntaxError, UnicodeDecodeError):
+                continue
+            for node in tree.body:
+                if (
+                    isinstance(node, ast.Assign)
+                    and isinstance(node.value, (ast.List, ast.Tuple))
+                    and any(
+                        isinstance(target, ast.Name) and target.id == "__all__"
+                        for target in node.targets
+                    )
+                ):
+                    for item in node.value.elts:
+                        if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                            records.append(
+                                EvidenceRecord(
+                                    kind="public_export", identifier=relative, value=item.value
+                                )
+                            )
+    elif name == "population_dry_run_apply_receipts":
+        for relative in artifacts:
+            if relative.startswith("execution/"):
+                text = (root / relative).read_text(encoding="utf-8")
+                if "--apply" in text:
+                    records.append(
+                        EvidenceRecord(kind="population_mode", identifier=relative, value="apply")
+                    )
+                # The canonical evaluator defaults request.apply to false and
+                # emits mode='dry_run'; either spelling proves that branch.
+                if "--dry-run" in text or ("request.apply" in text and "dry_run" in text):
+                    records.append(
+                        EvidenceRecord(kind="population_mode", identifier=relative, value="dry_run")
+                    )
+    elif name == "dcf_formula_cell_receipts":
+        for relative in artifacts:
+            text = (root / relative).read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if "formula" in line.lower() or "cell(" in line.lower() or "!$" in line:
+                    records.append(
+                        EvidenceRecord(
+                            kind="dcf_contract", identifier=relative, value=line.strip()[:240]
+                        )
+                    )
+    elif name == "integrity_serialized_ordering":
+        for relative in artifacts:
+            text = (root / relative).read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if any(token in line for token in ("ORDER", "_FIELDS", "to_json", "serialize")):
+                    records.append(
+                        EvidenceRecord(
+                            kind="ordering_contract", identifier=relative, value=line.strip()[:240]
+                        )
+                    )
+    elif name == "report_dashboard_goldens":
+        for relative in artifacts:
+            if relative.startswith(("tests/golden/", "evals/")):
+                raw = (root / relative).read_bytes()
+                records.append(
+                    EvidenceRecord(
+                        kind="golden", identifier=relative, value=f"sha256:{_sha256(raw)}"
+                    )
+                )
+    return sorted(records, key=lambda record: (record.kind, record.identifier, record.value))
+
+
 def _category(root: Path, name: str, patterns: tuple[str, ...]) -> EvidenceCategory:
     artifacts = sorted(
         {
@@ -194,20 +325,40 @@ def _category(root: Path, name: str, patterns: tuple[str, ...]) -> EvidenceCateg
         }
     )
     payload = [(path, (root / path).read_bytes()) for path in artifacts]
-    implementation = any(path.startswith(("src/", "execution/")) for path in artifacts)
-    verification = any(path.startswith(("tests/", "evals/")) for path in artifacts)
-    status: Literal["PASS", "HOLD"] = "PASS" if implementation and verification else "HOLD"
+    implementation_artifacts = [
+        path for path in artifacts if path.startswith(("src/", "execution/"))
+    ]
+    verification_artifacts = [path for path in artifacts if path.startswith(("tests/", "evals/"))]
+    implementation = bool(implementation_artifacts)
+    verification = bool(verification_artifacts)
+    extracted = _extract_records(root, name, artifacts)
+    missing: list[str] = []
+    if not implementation:
+        missing.append("implementation artifact")
+    if not verification:
+        missing.append("behavior-pinning test/golden artifact")
+    if not extracted:
+        missing.append("extracted contract")
+    if name == "population_dry_run_apply_receipts":
+        modes = {record.value for record in extracted if record.kind == "population_mode"}
+        missing.extend(
+            f"population {mode} mode" for mode in ("dry_run", "apply") if mode not in modes
+        )
+    status: Literal["PASS", "HOLD"] = "PASS" if not missing else "HOLD"
     reason = (
-        "checked-in implementation and test/golden evidence present"
+        "all required evidence conditions present"
         if status == "PASS"
-        else "missing checked-in implementation or test/golden evidence"
+        else "missing " + ", ".join(missing)
     )
     return EvidenceCategory(
         name=name,
         status=status,
         reason=reason,
         artifacts=artifacts,
+        implementation_artifacts=implementation_artifacts,
+        verification_artifacts=verification_artifacts,
         artifact_sha256=_aggregate(payload),
+        extracted=extracted,
     )
 
 
