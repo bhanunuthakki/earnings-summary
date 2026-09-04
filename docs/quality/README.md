@@ -25,7 +25,7 @@ Current evidence at the Train 0 instrumentation baseline:
 - 692 database-builder occurrences across 1,117 tracked test files are
   classified with zero violations or unclassified cases.
 - The operational graph has no parse failures, unresolved targets, stale
-  dispositions, or unknown production edges. The remaining 90 unknown edges
+  dispositions, or unknown production edges. The remaining 84 unknown edges
   are confined to tests and instruction tests and remain visible in the raw
   graph.
 - The lifecycle receipt classifies all 835 candidates with zero omissions,

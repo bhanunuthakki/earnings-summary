@@ -6,24 +6,26 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "version": "1.1.0",
-      "python": "3.14.7"
+      "python": ">=3.11"
     },
-    "source_sha256": "fde61900194b3d67f11fdf66a11fc9fe1a8866d4973786a821aa932142171ac4"
+    "source_sha256": "0a7a0b3f42cb19c6178734073564f93ca8611d785a7a6dd058ff682bf357a3ba"
   },
   "scope": {
     "source_roots": [
       "src/",
       "execution/",
-      "scripts/"
+      "scripts/",
+      "tests/"
     ],
     "evidence": "subprocess/runpy expression",
-    "current_production_keys": 79
+    "current_production_keys": 79,
+    "current_test_keys": 6
   },
   "counts": {
-    "unknown_process_edges": 79,
+    "unknown_process_edges": 85,
     "dispositions": {
-      "internal_python_target": 48,
-      "closed_command_set": 8,
+      "internal_python_target": 53,
+      "closed_command_set": 9,
       "external_process": 17,
       "runtime_registry": 1,
       "operator_supplied_process": 5
@@ -817,6 +819,63 @@
       "target": "function inventory git metadata probes",
       "command_family": "closed git read-only command set",
       "evidence": "The function lifecycle collector invokes only its internally fixed git ls-files, rev-parse, and status probes through the injected runner; no repository data selects an executable or command family."
+    },
+    {
+      "path": "tests/test_bha115_route_workload.py",
+      "line": 111,
+      "fingerprint": "8f2a605931eb7d4b6a3588899bb227ed518be2e6b2c9e2d489cd6a0189f95285",
+      "disposition": "internal_python_target",
+      "target": "execution/sqlite_bootstrap.py",
+      "command_family": "test-only managed Python child",
+      "evidence": "The integration test invokes the checked-in SQLite bootstrap entrypoint with a fixed benchmark workload and a disposable database."
+    },
+    {
+      "path": "tests/test_capture_performance_evidence.py",
+      "line": 356,
+      "fingerprint": "964dcc663be70554618647c00663b2ae2916aa1c15820445f5af6cb491c6b1ba",
+      "disposition": "internal_python_target",
+      "target": "execution/benchmark_dcf_workload.py",
+      "command_family": "test-only managed Python child",
+      "evidence": "The test invokes the checked-in DCF benchmark entrypoint with fixed typed arguments and a disposable fixture root."
+    },
+    {
+      "path": "tests/test_collect_paired_ci_performance.py",
+      "line": 199,
+      "fingerprint": "d205912d3298d4b3329684466884deba75720d705a3935495f46931d10445cbc",
+      "disposition": "closed_command_set",
+      "target": "temporary collection-lock probe",
+      "command_family": "test-only generated Python probe",
+      "evidence": "The test writes and invokes one fixed temporary child script solely to prove inter-process lock exclusion; repository data cannot select the command."
+    },
+    {
+      "path": "tests/test_collect_paired_ci_performance.py",
+      "line": 338,
+      "fingerprint": "961a2181f932799b53cb53b6e9ea3d1cd8f23a6aff85779b3c30cf80b945e39f",
+      "disposition": "internal_python_target",
+      "target": "execution/capture_test_ci_performance.py",
+      "command_family": "test-only managed Python child",
+      "evidence": "The test invokes the checked-in performance capture entrypoint with a fixed synthetic cohort and disposable output paths."
+    },
+    {
+      "path": "tests/test_collect_paired_ci_performance.py",
+      "line": 390,
+      "fingerprint": "10a5c7f09f2c2692bca8438713325bab4149de60df47bea81ef96f6fea3481e3",
+      "disposition": "internal_python_target",
+      "target": "execution/capture_test_ci_performance.py",
+      "command_family": "test-only managed Python child",
+      "evidence": "The negative-path test invokes the same checked-in capture entrypoint with fixed arguments to prove a forged sidecar is rejected."
+    },
+    {
+      "path": "tests/test_test_ci_performance.py",
+      "line": 235,
+      "fingerprint": "18e5b2f914a15ec6d7554740f78635fd57460d1e390597868f7ee9b5441c4f7f",
+      "disposition": "internal_python_target",
+      "targets": [
+        "execution/capture_test_ci_performance.py",
+        "execution/compare_test_ci_performance.py"
+      ],
+      "command_family": "test-only managed Python child set",
+      "evidence": "The parameterized importability test selects only two checked-in performance entrypoints and invokes their --help paths with the managed interpreter."
     }
   ],
   "residual_unresolved": "0 current edges remain unresolved.",
