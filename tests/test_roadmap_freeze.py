@@ -254,9 +254,10 @@ def test_validator_accepts_clean_clone_without_ignored_quality_state(
 ) -> None:
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     original_is_file = Path.is_file
+    ignored_quality_root = (ROOT / ".tmp").resolve()
 
     def hide_ignored_quality_state(path: Path) -> bool:
-        if ".tmp" in path.resolve().parts:
+        if path.resolve().is_relative_to(ignored_quality_root):
             return False
         return original_is_file(path)
 

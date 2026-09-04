@@ -1,7 +1,7 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "a5868f6631fc52b634e4c001d6cb1b0056a496b5",
+  "scoped_commit": "e7e18f3dea0625b33387524bc402bfe663be177c",
   "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
   "source_sha256": "d5b87cc992bf7427d64b8eaac2debc837f87bebb27427d32e2e40e50fd4302f1",
   "python_version": "3.14.7",
