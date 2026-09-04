@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from collections.abc import Callable
+from functools import cache
 from pathlib import Path
 from typing import TypeVar
 
@@ -10,13 +11,19 @@ from pydantic import BaseModel
 
 from src.quality.architecture import ArchitectureReceipt
 from src.quality.duplicates import DuplicateInventory
-from src.quality.reachability import ReachabilityGraph
+from src.quality.reachability import ReachabilityGraph, build_graph
 from src.quality.roadmap_reconciliation import CurrentReceipts, reconcile
 from src.quality.static_quality import StaticQualityInventory
 from src.quality.test_db_patterns import TestDbAudit as DbAuditReceipt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 Receipt = TypeVar("Receipt", bound=BaseModel)
+
+
+@cache
+def _current_reachability() -> ReachabilityGraph:
+    """Build the typed graph from tracked source instead of ignored artifacts."""
+    return build_graph(PROJECT_ROOT)
 
 
 def _load(name: str, model: type[Receipt]) -> Receipt:
@@ -35,9 +42,7 @@ def _seed(tmp_path: Path, *, omit: str | None = None) -> CurrentReceipts:
         duplicates=_load("duplicates-ratchet.json", DuplicateInventory),
         static=static,
         test_db=_load("test-db-patterns-baseline.json", DbAuditReceipt),
-        reachability=ReachabilityGraph.model_validate_json(
-            (PROJECT_ROOT / ".tmp/quality/reachability-check.json").read_bytes()
-        ),
+        reachability=_current_reachability(),
     )
     values = {
         "architecture-ratchet.json": receipts.architecture,

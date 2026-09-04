@@ -215,7 +215,6 @@ def test_validator_rejects_changed_pyright_diagnostic_membership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
-    raw_path = (ROOT / roadmap_freeze.STATIC_RECEIPT).resolve()
     static = roadmap_inventory.read_json(ROOT, roadmap_freeze.STATIC_RECEIPT)
     diagnostics = cast(list[dict[str, object]], static["diagnostics"])
     pyright = next(row for row in diagnostics if row.get("tool") == "pyright")
@@ -223,17 +222,42 @@ def test_validator_rejects_changed_pyright_diagnostic_membership(
     assert isinstance(receipt_path, str)
     raw_path = (ROOT / receipt_path).resolve()
     original_read_text = Path.read_text
+    original_is_file = Path.is_file
+
+    # The raw Pyright receipt is intentionally ignored and absent in a clean
+    # clone.  Materialize the smallest synthetic receipt at the filesystem
+    # boundary so this regression remains hermetic while still exercising the
+    # validator's raw-membership path.
+    synthetic_raw = json.dumps(
+        {
+            "generalDiagnostics": [
+                {
+                    "file": "src/forged.py",
+                    "severity": "error",
+                    "message": "forged diagnostic membership",
+                    "rule": "reportUnknownVariableType",
+                    "range": {
+                        "start": {"line": 1, "character": 0},
+                        "end": {"line": 1, "character": 1},
+                    },
+                }
+            ]
+        }
+    )
+
+    def raw_is_file(path: Path) -> bool:
+        if path.resolve() == raw_path:
+            return True
+        return original_is_file(path)
 
     def tamper_membership(
         path: Path, encoding: str | None = None, errors: str | None = None
     ) -> str:
-        text = original_read_text(path, encoding=encoding, errors=errors)
-        if path.resolve() != raw_path:
-            return text
-        raw = json.loads(text)
-        raw["generalDiagnostics"][0]["message"] = "forged diagnostic membership"
-        return json.dumps(raw)
+        if path.resolve() == raw_path:
+            return synthetic_raw
+        return original_read_text(path, encoding=encoding, errors=errors)
 
+    monkeypatch.setattr(Path, "is_file", raw_is_file)
     monkeypatch.setattr(Path, "read_text", tamper_membership)
     _assert_rejected(tmp_path, payload)
 
