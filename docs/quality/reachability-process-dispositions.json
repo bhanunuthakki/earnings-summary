@@ -808,6 +808,15 @@
       "target": ".github/scripts/ci_gate.py",
       "command_family": "managed Python child",
       "evidence": "The collector invokes the checked-in CI selector through the managed interpreter, with the selector path and argv assembled from typed collection state and its immutable revision population."
+    },
+    {
+      "path": "src/quality/function_lifecycle.py",
+      "line": 113,
+      "fingerprint": "4a4d7a1f4636b246af71d59fd3e9cbb2fb356baf00052551b783771679f28539",
+      "disposition": "closed_command_set",
+      "target": "function inventory git metadata probes",
+      "command_family": "closed git read-only command set",
+      "evidence": "The function lifecycle collector invokes only its internally fixed git ls-files, rev-parse, and status probes through the injected runner; no repository data selects an executable or command family."
     }
   ],
   "residual_unresolved": "0 current edges remain unresolved.",

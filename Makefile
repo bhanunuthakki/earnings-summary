@@ -59,10 +59,10 @@ lint-changed:  ## Lint only files changed vs BASE (the enforceable gate)
 	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs ruff check; else echo "no changed .py files"; fi
 
 typecheck:  ## pyright strict over the tree (informational — has a baseline)
-	pyright
+	pyright --pythonpath $(PY)
 
 typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable gate)
-	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs pyright; else echo "no changed .py files"; fi
+	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs pyright --pythonpath $(PY); else echo "no changed .py files"; fi
 
 test:  ## Run the full test suite
 	$(PY) -m pytest -q $(PYTEST_XDIST_ARGS)
