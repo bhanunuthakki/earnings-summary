@@ -167,8 +167,7 @@ def extract_for_ticker(
     if not refresh and cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         if cached.get("cache_sha256") == inputs_sha:
-            cached.pop("history", None)
-            hist_raw = json.loads(cache_path.read_text(encoding="utf-8")).get("history") or []
+            hist_raw = cached.pop("history", None) or []
             history = [ValuationHistPoint(**h) for h in hist_raw]
             return ValuationBasisResult(**cached, history=history)
 
