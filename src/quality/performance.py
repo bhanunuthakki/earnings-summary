@@ -1,125 +1,72 @@
-"""Deterministic, local-only performance baseline receipts."""
+"""Deterministic, local-only performance baseline receipt facade."""
 
 from __future__ import annotations
 
-import hashlib
-import io
-import json
-import os
-import platform
-import random
 import shlex
 import statistics
 import subprocess
 import sys
-import tarfile
-import tempfile
 import time
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
-from runtime.python_process import ensure_managed_python_argv
+from .performance_models import (
+    EXTERNAL_TRAP_BOUNDARIES,
+    EXTERNAL_TRAP_PROOF_VERSION,
+    CausalEvidence,
+    CausalRunEnvelope,
+    CohortName,
+    CompanionMeasures,
+    FrozenPerformanceCohort,
+    PerformanceEvidenceReceipt,
+    PerformanceReceipt,
+    ReceiptStatus,
+    RouteCausalCompanion,
+    SourceAnalysisSummary,
+    TimingSample,
+    TimingStats,
+    external_trap_proof_sha256,
+)
+from .performance_source_analysis import paired_source_analysis
+from .performance_support import (
+    _bootstrap_median,
+    _environment,
+    _git,
+    _managed_command,
+    _sha256_bytes,
+    _source_hash,
+    _timing,
+    _tree_hash,
+    held_evidence_receipt,
+)
 
-ReceiptStatus = Literal["PASS", "HOLD", "FAIL"]
-CohortName = Literal["integrity", "migrations", "route_cold_warm", "dcf", "source_analysis", "ci"]
+__all__ = [
+    "COHORT_REGISTRY",
+    "EXTERNAL_TRAP_BOUNDARIES",
+    "EXTERNAL_TRAP_PROOF_VERSION",
+    "CausalEvidence",
+    "CausalRunEnvelope",
+    "CohortName",
+    "CompanionMeasures",
+    "FrozenPerformanceCohort",
+    "PerformanceEvidenceReceipt",
+    "PerformanceReceipt",
+    "ReceiptStatus",
+    "RouteCausalCompanion",
+    "SourceAnalysisSummary",
+    "TimingSample",
+    "TimingStats",
+    "capture_performance_baseline",
+    "capture_performance_evidence",
+    "external_trap_proof_sha256",
+]
 
-
-class TimingStats(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    samples: list[float]
-    count: int
-    minimum_seconds: float | None
-    median_seconds: float | None
-    mean_seconds: float | None
-    maximum_seconds: float | None
-    stdev_seconds: float | None
-
-
-class TimingSample(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    label: Literal["cold", "warm"]
-    elapsed_seconds: float
-
-
-class CompanionMeasures(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    sql_statements: int | None
-    rows: int | None
-    elapsed_seconds: float | None
-    peak_rss_bytes: int | None
-
-
-class CausalRunEnvelope(BaseModel):
-    """Required per-invocation envelope emitted by a benchmark command."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    sql_statements: int
-    rows: int
-    elapsed_seconds: float
-    peak_rss_bytes: int
-    alembic_revision: str | None
-    query_plan_sha256: str | None
-    connection_role: Literal["read", "write", "request_scoped_read", "none"]
-    stage: str
-    revision: str
-
-
-class PerformanceReceipt(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    schema_version: str = "performance-baseline/v1"
-    benchmark_command: str
-    command_argv: list[str]
-    revision: str | None
-    source_sha256: str | None
-    config_sha256: str | None
-    timing: TimingStats
-    environment: dict[str, str]
-    status: ReceiptStatus
-    hold: bool
-    hold_reasons: list[str]
-    exit_codes: list[int]
-    output_sha256: str | None
-    output_bytes: int
-    output: str
-    warmup_seconds: float | None
-    timing_samples: list[TimingSample]
-    median_seconds: float | None
-    mad_seconds: float | None
-    bootstrap_ci_95: tuple[float, float] | None
-    stability_verdict: Literal["stable", "unstable", "insufficient"]
-    adaptive_verdict: Literal["eligible", "hold", "failed"]
-    companion_measures: CompanionMeasures
-    provenance: Literal["mac_guidance", "approved_windows_production_shaped"]
-    causal_runs: list[CausalRunEnvelope] = []
-
-
-class CausalEvidence(BaseModel):
-    """Typed companions that explain what a timing sample exercised."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    sql_statements: int | None
-    rows: int | None
-    elapsed_seconds: float | None
-    peak_rss_bytes: int | None
-    alembic_revision: str | None
-    query_plan_sha256: str | None
-    connection_role: Literal["read", "write", "request_scoped_read", "none"]
-    stage: str | None
-
-
-class FrozenPerformanceCohort(BaseModel):
-    """Versioned declaration of a Train-0 benchmark cohort."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    cohort: CohortName
-    config_version: str = "train0/v1"
-    declared_command: str
-    route_count: int = 0
-    route_names: tuple[str, ...] = ()
-
+# Keep these facade aliases stable: callers and tests use them as seams for
+# the public baseline adapter and source-analysis subprocess boundary.
+_paired_source_analysis = paired_source_analysis
+_held_evidence_receipt = held_evidence_receipt
 
 _ROUTE_NAMES: tuple[str, ...] = (
     "/healthz",
@@ -144,19 +91,17 @@ _ROUTE_NAMES: tuple[str, ...] = (
     "/api/tenets/distill",
 )
 
-
 _COHORT_COMMANDS: dict[CohortName, str] = {
-    "integrity": "python execution/verify_reconstruction_inventory.py --json",
-    "migrations": "python execution/validate_directive_manifest.py",
-    "route_cold_warm": "python execution/comments_server.py --help",
-    "dcf": "python execution/build_redesigned_dcf.py --help",
+    "integrity": "python execution/benchmark_performance_workload.py --workload integrity",
+    "migrations": "python execution/benchmark_performance_workload.py --workload migrations",
+    "route_cold_warm": "python execution/benchmark_performance_workload.py --workload routes",
+    "dcf": "python execution/benchmark_dcf_workload.py",
     "source_analysis": (
         "python execution/analyze_code_duplicates.py "
         "--repo-root {repo_root} --revision WORKTREE --out {output}"
     ),
-    "ci": "python execution/format_changed.py --help",
+    "ci": "python execution/collect_paired_ci_performance.py --manifest <immutable-ci-manifest> --state .tmp/<attempt>/state.json --repo-root <revision-repository>",
 }
-
 
 COHORT_REGISTRY: dict[CohortName, FrozenPerformanceCohort] = {
     name: FrozenPerformanceCohort(
@@ -169,328 +114,6 @@ COHORT_REGISTRY: dict[CohortName, FrozenPerformanceCohort] = {
 }
 
 
-class PerformanceEvidenceReceipt(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    schema_version: str = "performance-evidence/v1"
-    cohort: FrozenPerformanceCohort
-    baseline: PerformanceReceipt
-    causal_evidence: CausalEvidence
-    causal_runs: tuple[CausalRunEnvelope, ...]
-    baseline_revision: str | None
-    current_revision: str | None
-    paired_identity: bool
-
-
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _git(root: Path, *args: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout.strip() or None
-
-
-def _tree_hash(root: Path, paths: list[str]) -> str | None:
-    entries: list[bytes] = []
-    for name in sorted(paths):
-        path = root / name
-        if not path.is_file():
-            continue
-        try:
-            content = path.read_bytes()
-        except OSError:
-            continue
-        entries.append(name.encode() + b"\0" + _sha256_bytes(content).encode() + b"\n")
-    return _sha256_bytes(b"".join(entries)) if entries else None
-
-
-def _source_hash(root: Path) -> str | None:
-    listing = _git(root, "ls-files", "-z", "--", "src", "execution")
-    if listing is None:
-        return None
-    names = listing.split("\0")
-    return _tree_hash(root, [name for name in names if name.endswith(".py")])
-
-
-def _environment() -> dict[str, str]:
-    return {
-        "python": platform.python_version(),
-        "python_implementation": platform.python_implementation(),
-        "platform": platform.platform(aliased=True),
-        "machine": platform.machine(),
-        "processor": platform.processor() or "unknown",
-        "executable": os.path.realpath(sys.executable),
-    }
-
-
-def _timing(samples: list[float]) -> TimingStats:
-    return TimingStats(
-        samples=samples,
-        count=len(samples),
-        minimum_seconds=min(samples) if samples else None,
-        median_seconds=statistics.median(samples) if samples else None,
-        mean_seconds=statistics.fmean(samples) if samples else None,
-        maximum_seconds=max(samples) if samples else None,
-        stdev_seconds=statistics.stdev(samples) if len(samples) > 1 else None,
-    )
-
-
-def _int_measure(measures: Mapping[str, float | int | None] | None, key: str) -> int | None:
-    value = measures.get(key) if measures else None
-    if isinstance(value, (int, float)):
-        return int(value)
-    return None
-
-
-def _archive_revision(root: Path, revision: str, destination: Path) -> None:
-    """Materialize a tracked revision without changing the caller's checkout."""
-    completed = subprocess.run(
-        ["git", "-C", str(root), "archive", "--format=tar", revision],
-        capture_output=True,
-        check=True,
-    )
-    with tarfile.open(fileobj=io.BytesIO(completed.stdout), mode="r:") as archive:
-        for member in archive.getmembers():
-            target = (destination / member.name).resolve()
-            if destination.resolve() not in target.parents:
-                raise ValueError("git archive contained an unsafe path")
-            archive.extract(member, destination)
-
-
-def _child_peak_rss(before: int) -> int:
-    try:
-        import resource
-    except ImportError:
-        return 0
-    current = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
-    if platform.system() != "Darwin":
-        current *= 1024
-    return max(0, current - before)
-
-
-def _paired_source_analysis(
-    root: Path,
-    cohort: FrozenPerformanceCohort,
-    *,
-    baseline_revision: str,
-    current_revision: str,
-    samples: int,
-    timeout_seconds: float,
-    config_paths: list[str] | None,
-    provenance: Literal["mac_guidance", "approved_windows_production_shaped"],
-) -> PerformanceEvidenceReceipt:
-    """Run the real duplicate inventory in isolated snapshots at both refs."""
-    reasons: list[str] = []
-    if samples < 7:
-        reasons.append("at least 7 measured repeats are required")
-    count = min(max(samples, 0), 21)
-    runs: list[CausalRunEnvelope] = []
-    durations: list[float] = []
-    revision_durations: dict[str, list[float]] = {
-        baseline_revision: [],
-        current_revision: [],
-    }
-    outputs: list[bytes] = []
-    exit_codes: list[int] = []
-    with tempfile.TemporaryDirectory(prefix="performance-paired-") as temp_name:
-        temp_root = Path(temp_name)
-        for round_number in range(21):
-            completed_round = True
-            stability_by_revision: dict[str, bool] = {}
-            for revision in (baseline_revision, current_revision):
-                revision_samples = revision_durations[revision]
-                stable = False
-                if len(revision_samples) >= 7:
-                    revision_median = statistics.median(revision_samples)
-                    revision_mad = statistics.median(
-                        abs(value - revision_median) for value in revision_samples
-                    )
-                    stable = revision_mad <= revision_median * 0.05
-                stability_by_revision[revision] = stable
-            any_unstable = any(
-                len(revision_durations[revision]) >= 7 and not stable
-                for revision, stable in stability_by_revision.items()
-            )
-            for revision in (baseline_revision, current_revision):
-                if round_number >= count and not any_unstable and stability_by_revision[revision]:
-                    continue
-                completed_round = False
-                snapshot = temp_root / revision.replace("/", "_")
-                if not snapshot.exists():
-                    snapshot.mkdir()
-                    try:
-                        _archive_revision(root, revision, snapshot)
-                    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-                        reasons.append(
-                            f"cannot materialize revision {revision}: {type(exc).__name__}"
-                        )
-                        completed_round = True
-                        continue
-                output_path = snapshot / ".tmp" / "quality" / "performance-duplicates.json"
-                command = cohort.declared_command.format(
-                    repo_root=str(snapshot), revision=revision, output=str(output_path)
-                )
-                try:
-                    argv = shlex.split(command)
-                except ValueError as exc:
-                    reasons.append(f"invalid cohort command: {exc}")
-                    completed_round = True
-                    continue
-                argv = _managed_command(snapshot, argv)
-                rss_before = 0
-                try:
-                    import resource
-
-                    rss_before = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
-                except ImportError:
-                    reasons.append("child RSS measurement unavailable")
-                started = time.perf_counter()
-                try:
-                    completed = subprocess.run(
-                        argv,
-                        cwd=snapshot,
-                        capture_output=True,
-                        timeout=timeout_seconds,
-                        check=False,
-                    )
-                except (OSError, subprocess.SubprocessError) as exc:
-                    reasons.append(f"paired benchmark failed: {type(exc).__name__}")
-                    completed_round = True
-                    continue
-                elapsed = time.perf_counter() - started
-                durations.append(elapsed)
-                revision_durations[revision].append(elapsed)
-                exit_codes.append(completed.returncode)
-                outputs.append(completed.stdout + completed.stderr)
-                if completed.returncode not in (0, 2) or not output_path.is_file():
-                    reasons.append("source analysis command produced no valid inventory")
-                    completed_round = True
-                    continue
-                try:
-                    inventory = json.loads(output_path.read_text(encoding="utf-8"))
-                    rows = int(inventory["files_scanned"])
-                    if completed.returncode == 2:
-                        reasons.append("source analysis reported parse errors")
-                except (OSError, ValueError, KeyError, TypeError):
-                    reasons.append("source analysis inventory is malformed")
-                    completed_round = True
-                    continue
-                runs.append(
-                    CausalRunEnvelope(
-                        sql_statements=0,
-                        rows=rows,
-                        elapsed_seconds=elapsed,
-                        peak_rss_bytes=_child_peak_rss(rss_before),
-                        alembic_revision=None,
-                        query_plan_sha256=None,
-                        connection_role="none",
-                        stage="source-analysis",
-                        revision=revision,
-                    )
-                )
-            if reasons and len(runs) < count * 2:
-                break
-            if completed_round:
-                break
-    timing_samples = [TimingSample(label="cold", elapsed_seconds=value) for value in durations]
-    median = statistics.median(durations) if durations else None
-    mad = statistics.median(abs(value - median) for value in durations) if median else None
-    if any(len(values) < count for values in revision_durations.values()):
-        reasons.append("paired baseline/current samples are incomplete")
-    for revision, values in revision_durations.items():
-        if len(values) >= 7:
-            revision_median = statistics.median(values)
-            revision_mad = statistics.median(abs(value - revision_median) for value in values)
-            if revision_mad > revision_median * 0.05:
-                reasons.append(f"timing samples remain unstable for revision {revision}")
-    if provenance == "approved_windows_production_shaped" and sys.platform != "win32":
-        reasons.append("approved Windows production-shaped evidence requires Windows host")
-    receipt = PerformanceReceipt(
-        benchmark_command=cohort.declared_command,
-        command_argv=shlex.split(cohort.declared_command),
-        revision=current_revision,
-        source_sha256=_source_hash(root),
-        config_sha256=_tree_hash(root, config_paths or ["pyproject.toml", "requirements.lock"]),
-        timing=_timing(durations),
-        environment=_environment(),
-        status="HOLD" if reasons else "PASS",
-        hold=bool(reasons),
-        hold_reasons=reasons,
-        exit_codes=exit_codes,
-        output_sha256=_sha256_bytes(b"".join(outputs)) if outputs else None,
-        output_bytes=sum(len(output) for output in outputs),
-        output=b"".join(outputs)[:12000].decode("utf-8", errors="replace"),
-        warmup_seconds=None,
-        timing_samples=timing_samples,
-        median_seconds=median,
-        mad_seconds=mad,
-        bootstrap_ci_95=_bootstrap_median(durations),
-        stability_verdict="stable"
-        if mad is not None and median and mad <= median * 0.05
-        else "unstable",
-        adaptive_verdict="eligible" if not reasons else "hold",
-        companion_measures=CompanionMeasures(
-            sql_statements=0,
-            rows=int(statistics.median([run.rows for run in runs])) if runs else None,
-            elapsed_seconds=median,
-            peak_rss_bytes=int(statistics.median([run.peak_rss_bytes for run in runs]))
-            if runs
-            else None,
-        ),
-        provenance=provenance,
-        causal_runs=runs,
-    )
-    aggregate = CausalEvidence(
-        sql_statements=0,
-        rows=receipt.companion_measures.rows,
-        elapsed_seconds=median,
-        peak_rss_bytes=receipt.companion_measures.peak_rss_bytes,
-        alembic_revision=None,
-        query_plan_sha256=None,
-        connection_role="none",
-        stage="source-analysis",
-    )
-    return PerformanceEvidenceReceipt(
-        cohort=cohort,
-        baseline=receipt,
-        causal_evidence=aggregate,
-        causal_runs=tuple(runs),
-        baseline_revision=baseline_revision,
-        current_revision=current_revision,
-        paired_identity=not reasons,
-    )
-
-
-def _bootstrap_median(samples: list[float]) -> tuple[float, float] | None:
-    if len(samples) < 2:
-        return None
-    rng = random.Random(0)
-    estimates = [statistics.median(rng.choices(samples, k=len(samples))) for _ in range(1000)]
-    estimates.sort()
-    return estimates[25], estimates[974]
-
-
-def _managed_command(repo_root: Path, argv: list[str]) -> list[str]:
-    """Run repository Python scripts through the verified runtime bootstrap.
-
-    Cohort declarations use the portable ``python`` spelling so they remain
-    stable evidence labels. Resolve that spelling only at launch, then let the
-    canonical managed-argv helper wrap repository scripts in the SQLite
-    bootstrap. Inline probes and external commands remain untouched.
-    """
-    if argv and Path(argv[0]).name.lower() in {"python", "python3", "python.exe"}:
-        argv[0] = sys.executable
-    return ensure_managed_python_argv(repo_root, argv)
-
-
 def capture_performance_baseline(
     repo_root: str | Path,
     command: str,
@@ -498,12 +121,31 @@ def capture_performance_baseline(
     samples: int = 3,
     timeout_seconds: float = 120.0,
     config_paths: list[str] | None = None,
-    companion_measures: Mapping[str, float | int | None] | None = None,
+    provenance: Literal["mac_guidance", "approved_windows_production_shaped"] | None = None,
+) -> PerformanceReceipt:
+    """Capture raw timing only; caller-supplied metrics cannot make it pass."""
+    return _capture_performance_baseline(
+        repo_root,
+        command,
+        samples=samples,
+        timeout_seconds=timeout_seconds,
+        config_paths=config_paths,
+        provenance=provenance,
+        require_causal_envelope=False,
+    )
+
+
+def _capture_performance_baseline(
+    repo_root: str | Path,
+    command: str,
+    *,
+    samples: int = 3,
+    timeout_seconds: float = 120.0,
+    config_paths: list[str] | None = None,
     provenance: Literal["mac_guidance", "approved_windows_production_shaped"] | None = None,
     require_causal_envelope: bool = False,
-    require_companion_measures: bool = True,
 ) -> PerformanceReceipt:
-    """Run a declared local command and return evidence, never contacting a network."""
+    """Run a declared workload, optionally requiring its validated envelope."""
     root = Path(repo_root).resolve()
     reasons: list[str] = []
     revision = _git(root, "rev-parse", "HEAD")
@@ -527,11 +169,8 @@ def capture_performance_baseline(
         reasons.append("sample count must be positive")
     if samples < 7:
         reasons.append("at least 7 measured repeats are required")
-    required_companions = {"sql_statements", "rows", "elapsed_seconds", "peak_rss_bytes"}
-    if require_companion_measures and (
-        not companion_measures or not required_companions <= companion_measures.keys()
-    ):
-        reasons.append("all companion measures are required")
+    if not require_causal_envelope:
+        reasons.append("validated causal evidence envelope is required for PASS")
     if provenance is None:
         reasons.append("evidence provenance is required")
     durations: list[float] = []
@@ -545,32 +184,28 @@ def capture_performance_baseline(
     for run_number in range((requested_runs + 1) if argv else 0):
         started = time.perf_counter()
         try:
-            completed = subprocess.run(  # reachability: external-process
-                argv,
-                cwd=root,
-                capture_output=True,
-                timeout=timeout_seconds,
-                check=False,
+            completed = subprocess.run(
+                argv, cwd=root, capture_output=True, timeout=timeout_seconds, check=False
             )
         except (OSError, subprocess.SubprocessError) as exc:
             reasons.append(f"benchmark execution failed: {type(exc).__name__}")
             failed = True
             break
         durations.append(time.perf_counter() - started)
-        elapsed = durations[-1]
         if run_number == 0:
-            warmup_seconds = elapsed
+            warmup_seconds = durations[-1]
         else:
             timing_samples.append(
-                TimingSample(label="cold" if run_number == 1 else "warm", elapsed_seconds=elapsed)
+                TimingSample(
+                    label="cold" if run_number == 1 else "warm",
+                    elapsed_seconds=durations[-1],
+                )
             )
         exit_codes.append(completed.returncode)
         output_parts.append(completed.stdout + completed.stderr)
         if require_causal_envelope:
             try:
                 envelope = CausalRunEnvelope.model_validate_json(completed.stdout.strip())
-                if envelope.elapsed_seconds <= 0 or envelope.peak_rss_bytes < 0:
-                    raise ValueError("causal envelope contains non-positive elapsed evidence")
                 causal_runs.append(envelope)
             except (ValidationError, UnicodeDecodeError, ValueError):
                 reasons.append("missing or invalid per-run causal evidence envelope")
@@ -579,8 +214,6 @@ def capture_performance_baseline(
             failed = True
             reasons.append(f"benchmark exited {completed.returncode}")
             break
-    # A noisy first batch gets bounded adaptive retries.  This only improves
-    # precision; it never turns an under-sampled or failed run into PASS.
     while not failed and len(timing_samples) < 21:
         measured_now = [sample.elapsed_seconds for sample in timing_samples]
         if len(measured_now) < 7:
@@ -589,15 +222,10 @@ def capture_performance_baseline(
         mad_now = statistics.median(abs(value - median_now) for value in measured_now)
         if mad_now <= median_now * 0.05:
             break
-        run_number = len(timing_samples) + 1
         started = time.perf_counter()
         try:
-            completed = subprocess.run(  # reachability: external-process
-                argv,
-                cwd=root,
-                capture_output=True,
-                timeout=timeout_seconds,
-                check=False,
+            completed = subprocess.run(
+                argv, cwd=root, capture_output=True, timeout=timeout_seconds, check=False
             )
         except (OSError, subprocess.SubprocessError) as exc:
             reasons.append(f"adaptive benchmark execution failed: {type(exc).__name__}")
@@ -609,10 +237,7 @@ def capture_performance_baseline(
         output_parts.append(completed.stdout + completed.stderr)
         if require_causal_envelope:
             try:
-                envelope = CausalRunEnvelope.model_validate_json(completed.stdout.strip())
-                if envelope.elapsed_seconds <= 0 or envelope.peak_rss_bytes < 0:
-                    raise ValueError("causal envelope contains non-positive elapsed evidence")
-                causal_runs.append(envelope)
+                causal_runs.append(CausalRunEnvelope.model_validate_json(completed.stdout.strip()))
             except (ValidationError, UnicodeDecodeError, ValueError):
                 reasons.append("missing or invalid per-run causal evidence envelope")
                 break
@@ -624,7 +249,7 @@ def capture_performance_baseline(
     measured = [sample.elapsed_seconds for sample in timing_samples]
     median = statistics.median(measured) if measured else None
     mad = (
-        statistics.median([abs(value - median) for value in measured])
+        statistics.median(abs(value - median) for value in measured)
         if measured and median is not None
         else None
     )
@@ -657,12 +282,10 @@ def capture_performance_baseline(
         stability_verdict=stability,
         adaptive_verdict="failed" if failed else ("hold" if reasons else "eligible"),
         companion_measures=CompanionMeasures(
-            sql_statements=_int_measure(companion_measures, "sql_statements"),
-            rows=_int_measure(companion_measures, "rows"),
-            elapsed_seconds=companion_measures.get("elapsed_seconds")
-            if companion_measures
-            else None,
-            peak_rss_bytes=_int_measure(companion_measures, "peak_rss_bytes"),
+            sql_statements=None,
+            rows=None,
+            elapsed_seconds=None,
+            peak_rss_bytes=None,
         ),
         provenance=provenance or "mac_guidance",
         causal_runs=causal_runs,
@@ -673,7 +296,6 @@ def capture_performance_evidence(
     repo_root: str | Path,
     cohort: FrozenPerformanceCohort,
     *,
-    evidence: CausalEvidence | None = None,
     samples: int = 7,
     timeout_seconds: float = 120.0,
     config_paths: list[str] | None = None,
@@ -682,6 +304,16 @@ def capture_performance_evidence(
     current_revision: str | None = None,
 ) -> PerformanceEvidenceReceipt:
     """Capture one declared cohort; missing causal companions fail closed."""
+    canonical_cohort = COHORT_REGISTRY[cohort.cohort]
+    if cohort.cohort == "source_analysis" and cohort != canonical_cohort:
+        return _held_evidence_receipt(
+            cohort,
+            command=cohort.declared_command,
+            provenance=provenance,
+            baseline_revision=baseline_revision,
+            current_revision=current_revision,
+            reason="cohort declaration does not match the frozen registry; no workload executed",
+        )
     if (
         cohort.cohort == "source_analysis"
         and baseline_revision is not None
@@ -698,17 +330,29 @@ def capture_performance_evidence(
             config_paths=config_paths,
             provenance=provenance,
         )
-    reasons: list[str] = []
-    # This adapter can execute one checkout only.  Revision labels emitted by a
-    # child process are claims, not proof that the same cohort ran at both
-    # revisions.  Keep the receipt fail-closed until a revision-aware runner
-    # (Windows harness or an equivalent immutable worktree runner) supplies
-    # paired execution provenance.
-    reasons.append("paired execution provenance requires a revision-aware harness")
+    if cohort.cohort == "ci" and cohort == canonical_cohort:
+        return _held_evidence_receipt(
+            cohort,
+            command=cohort.declared_command,
+            provenance=provenance,
+            baseline_revision=baseline_revision,
+            current_revision=current_revision,
+            reason=(
+                "CI evidence requires collect_paired_ci_performance.py; "
+                "protocol template was not executed"
+            ),
+        )
+    reasons: list[str] = ["paired execution provenance requires a revision-aware harness"]
     required: dict[CohortName, set[str]] = {
         "integrity": {"stage", "sql_statements", "rows"},
         "migrations": {"stage", "alembic_revision"},
-        "route_cold_warm": {"stage", "sql_statements", "rows", "connection_role"},
+        "route_cold_warm": {
+            "stage",
+            "sql_statements",
+            "rows",
+            "connection_role",
+            "route_companions",
+        },
         "dcf": {"stage", "elapsed_seconds", "peak_rss_bytes"},
         "source_analysis": {"stage", "elapsed_seconds", "peak_rss_bytes"},
         "ci": {"stage", "elapsed_seconds"},
@@ -717,16 +361,14 @@ def capture_performance_evidence(
         cohort.route_count != 20 or len(cohort.route_names) != 20
     ):
         reasons.append("route_cold_warm requires exactly 20 declared routes")
-    baseline = capture_performance_baseline(
+    baseline = _capture_performance_baseline(
         repo_root,
         cohort.declared_command,
         samples=samples,
         timeout_seconds=timeout_seconds,
         config_paths=config_paths,
-        companion_measures=None,
         provenance=provenance,
         require_causal_envelope=True,
-        require_companion_measures=False,
     )
     runs = tuple(baseline.causal_runs)
     requirement_values: dict[str, list[object]] = {
@@ -737,10 +379,76 @@ def capture_performance_evidence(
         "peak_rss_bytes": [run.peak_rss_bytes for run in runs],
         "alembic_revision": [run.alembic_revision for run in runs],
         "connection_role": [run.connection_role for run in runs],
+        "route_companions": [run.route_companions for run in runs],
     }
     for field in required[cohort.cohort]:
         if not runs or any(value in (None, "") for value in requirement_values[field]):
             reasons.append(f"{cohort.cohort} requires causal evidence: {field}")
+    if cohort.cohort == "route_cold_warm":
+        for run in runs:
+            if len(run.route_companions) != 40:
+                reasons.append("route_cold_warm requires 20 routes measured cold and warm")
+                break
+            names = {companion.route_name for companion in run.route_companions}
+            phases = {companion.phase for companion in run.route_companions}
+            if names != set(cohort.route_names) or phases != {"cold", "warm"}:
+                reasons.append("route_cold_warm route companion identity is incomplete")
+                break
+            expected_keys = {
+                (name, phase) for name in cohort.route_names for phase in ("cold", "warm")
+            }
+            actual_keys = {
+                (companion.route_name, companion.phase) for companion in run.route_companions
+            }
+            if actual_keys != expected_keys:
+                reasons.append(
+                    "route_cold_warm requires one unique cold and warm companion per route"
+                )
+                break
+            invalid = [
+                companion
+                for companion in run.route_companions
+                if companion.status_code not in companion.allowed_success_statuses
+                or companion.elapsed_seconds <= 0
+                or companion.network_disabled is not True
+                or companion.external_attempt_count != 0
+                or companion.external_call_hold_seconds < 0
+                or not companion.external_trap_sha256
+                or not companion.state_sha256
+            ]
+            if invalid:
+                reasons.append(
+                    "route_cold_warm requires valid status, SQL/connection, state, and external-boundary proof"
+                )
+                break
+            if not any(companion.sql_statements > 0 for companion in run.route_companions):
+                reasons.append("route_cold_warm requires nontrivial SQL measurement")
+                break
+            if not any(companion.connection_count > 0 for companion in run.route_companions):
+                reasons.append("route_cold_warm requires nontrivial connection measurement")
+                break
+            by_route: dict[str, dict[str, RouteCausalCompanion]] = {}
+            for companion in run.route_companions:
+                by_route.setdefault(companion.route_name, {})[companion.phase] = companion
+            if any(
+                (
+                    by_route[name]["cold"].status_code,
+                    by_route[name]["cold"].allowed_success_statuses,
+                    by_route[name]["cold"].response_sha256,
+                    by_route[name]["cold"].fixture_sha256,
+                    by_route[name]["cold"].state_sha256,
+                )
+                != (
+                    by_route[name]["warm"].status_code,
+                    by_route[name]["warm"].allowed_success_statuses,
+                    by_route[name]["warm"].response_sha256,
+                    by_route[name]["warm"].fixture_sha256,
+                    by_route[name]["warm"].state_sha256,
+                )
+                for name in cohort.route_names
+            ):
+                reasons.append("route_cold_warm cold/warm response and state identity is required")
+                break
     sql_values = [run.sql_statements for run in runs]
     row_values = [run.rows for run in runs]
     elapsed_values = [run.elapsed_seconds for run in runs]

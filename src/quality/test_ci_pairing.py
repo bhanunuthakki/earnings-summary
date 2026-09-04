@@ -9,6 +9,8 @@ per side into a performance conclusion.
 from __future__ import annotations
 
 import json
+import random
+import statistics
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, cast
@@ -21,7 +23,7 @@ from .test_ci_performance import (
     config_identity,
 )
 
-PairStatus = Literal["HOLD", "INVALID"]
+PairStatus = Literal["HOLD", "INVALID", "PASS"]
 
 _UNPAIRED_REASON = "single raw run is unpaired; paired evidence is required"
 _ALLOWED_RAW_HOLDS = frozenset(
@@ -61,11 +63,15 @@ class PairedTestCIPerformanceReceipt(BaseModel):
     delta_seconds: float | None = None
     hold_reasons: tuple[str, ...]
     invalid_reasons: tuple[str, ...]
+    baseline_mad_seconds: float | None = None
+    current_mad_seconds: float | None = None
+    bootstrap_ci_95: tuple[float, float] | None = None
+    regression_reasons: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_admission(self) -> PairedTestCIPerformanceReceipt:
-        if self.comparable and self.status != "HOLD":
-            raise ValueError("one-run pairing cannot be admitted as comparable")
+        if self.comparable and self.status not in {"HOLD", "PASS"}:
+            raise ValueError("comparable pairing must be HOLD or PASS")
         if self.comparable and self.sample_count_per_side < 2:
             raise ValueError("comparable evidence requires repeated samples")
         if not self.comparable and any(
@@ -270,6 +276,169 @@ def evaluate_test_ci_pair(
             "hold_reasons": tuple(dict.fromkeys(errors)),
             "invalid_reasons": (),
         }
+    )
+
+
+def aggregate_test_ci_pairs(
+    baseline_raw: list[object], current_raw: list[object], *, max_runs: int = 22
+) -> PairedTestCIPerformanceReceipt:
+    """Aggregate repeated raw receipts after one warmup, fail-closed."""
+    if len(baseline_raw) < 8 or len(current_raw) < 8:
+        return PairedTestCIPerformanceReceipt(
+            status="HOLD",
+            baseline_attempt_id=None,
+            current_attempt_id=None,
+            baseline_source_sha256=None,
+            current_source_sha256=None,
+            baseline_revision=None,
+            current_revision=None,
+            cohort_sha256=None,
+            config_sha256=None,
+            cache_state=None,
+            sample_count_per_side=0,
+            hold_reasons=(
+                "at least 8 raw runs per side are required (one warmup plus 7 measured)",
+            ),
+            invalid_reasons=(),
+        )
+    baseline = [_parse_receipt(item, "baseline") for item in baseline_raw[:max_runs]]
+    current = [_parse_receipt(item, "current") for item in current_raw[:max_runs]]
+    if len(baseline) != len(current):
+        return PairedTestCIPerformanceReceipt(
+            status="HOLD",
+            baseline_attempt_id=None,
+            current_attempt_id=None,
+            baseline_source_sha256=None,
+            current_source_sha256=None,
+            baseline_revision=None,
+            current_revision=None,
+            cohort_sha256=None,
+            config_sha256=None,
+            cache_state=None,
+            sample_count_per_side=0,
+            hold_reasons=("baseline/current raw run lengths differ",),
+            invalid_reasons=(),
+        )
+    errors = tuple(error for parsed in (*baseline, *current) for error in parsed.errors)
+    if errors or any(parsed.receipt is None for parsed in (*baseline, *current)):
+        return PairedTestCIPerformanceReceipt(
+            status="INVALID",
+            baseline_attempt_id=None,
+            current_attempt_id=None,
+            baseline_source_sha256=None,
+            current_source_sha256=None,
+            baseline_revision=None,
+            current_revision=None,
+            cohort_sha256=None,
+            config_sha256=None,
+            cache_state=None,
+            sample_count_per_side=0,
+            hold_reasons=(),
+            invalid_reasons=errors or ("receipt parsing failed",),
+        )
+    b = [parsed.receipt for parsed in baseline[1:] if parsed.receipt]
+    c = [parsed.receipt for parsed in current[1:] if parsed.receipt]
+    assert b and c
+    reasons: list[str] = []
+    for side, runs in (("baseline", b), ("current", c)):
+        identities = {(run.source_sha256, run.revision) for run in runs}
+        attempts = [run.attempt_id for run in runs]
+        if len(identities) != 1:
+            reasons.append(f"{side} source/revision identity changes across repeats")
+        if len(attempts) != len(set(attempts)):
+            reasons.append(f"{side} attempt identifiers are not unique")
+        # A digest supplied inside a receipt is not an attestation: a caller
+        # can rewrite both the observation and its digest.  The approved
+        # runner must provide an independently retained OS/network/cache
+        # trace before this evaluator may admit PASS.
+        reasons.append(f"{side} runner network/cache attestations are unavailable")
+        for run in runs:
+            reasons.extend(_raw_holds_are_permitted(run, side))
+            reasons.extend(_receipt_nodes(run, side))
+            if run.execution_outcome != "passed":
+                reasons.append(f"{side} execution outcome is {run.execution_outcome}")
+    for left, right in zip(b, c, strict=True):
+        reasons.extend(_compatibility_reasons(left, right))
+    if len(b) < 7 or len(c) < 7:
+        reasons.append("at least 7 measured repeats per side are required")
+    if any(
+        (run.source_sha256, run.revision) == (other.source_sha256, other.revision)
+        for run in b
+        for other in c
+    ):
+        reasons.append("baseline and current identify the same source revision")
+
+    def elapsed(run: TestCIPerformanceReceipt) -> float:
+        return run.process_wall_seconds or max(worker.elapsed_seconds for worker in run.workers)
+
+    bv, cv = [elapsed(run) for run in b], [elapsed(run) for run in c]
+    bm, cm = statistics.median(bv), statistics.median(cv)
+    bmad = statistics.median(abs(v - bm) for v in bv)
+    cmad = statistics.median(abs(v - cm) for v in cv)
+    if bmad > bm * 0.05 or cmad > cm * 0.05:
+        reasons.append("timing samples remain unstable after warmup")
+    if any(cval > bval * 1.10 for bval, cval in zip(bv, cv, strict=True)):
+        reasons.append("current run exceeds baseline by more than 10%")
+    for left, right in zip(b, c, strict=True):
+        if left.runtime.worker_count != right.runtime.worker_count:
+            reasons.append("worker-count companion differs")
+        left_workers = {worker.worker_id: worker for worker in left.workers}
+        right_workers = {worker.worker_id: worker for worker in right.workers}
+        for worker_id in left_workers.keys() & right_workers.keys():
+            old, new = left_workers[worker_id], right_workers[worker_id]
+            old_metrics = (
+                old.peak_rss_bytes or 0,
+                old.timings.collection_seconds,
+                old.timings.setup_seconds,
+                old.timings.call_seconds,
+                old.timings.teardown_seconds,
+                old.timings.migrated_db_template_build_seconds,
+                old.timings.migrated_db_template_copy_seconds,
+            )
+            new_metrics = (
+                new.peak_rss_bytes or 0,
+                new.timings.collection_seconds,
+                new.timings.setup_seconds,
+                new.timings.call_seconds,
+                new.timings.teardown_seconds,
+                new.timings.migrated_db_template_build_seconds,
+                new.timings.migrated_db_template_copy_seconds,
+            )
+            if any(n > o * 1.10 for o, n in zip(old_metrics, new_metrics, strict=True) if o > 0):
+                reasons.append(f"worker companion regression >10% ({worker_id})")
+    deltas = [cval - bval for bval, cval in zip(bv, cv, strict=True)]
+    rng = random.Random(0)
+    estimates = [statistics.median(rng.choices(deltas, k=len(deltas))) for _ in range(1000)]
+    estimates.sort()
+    ci = (estimates[25], estimates[974])
+    if not all(run.cache_state in {"cold", "warm"} for run in (*b, *c)):
+        reasons.append("cache state is not proven")
+    if any(run.network_isolation != "proven" for run in (*b, *c)):
+        reasons.append("network isolation is not proven")
+    if ci[1] >= 0:
+        reasons.append("bootstrap confidence interval includes zero; improvement is unproven")
+    status: PairStatus = "PASS" if not reasons and ci[1] < 0 else "HOLD"
+    return PairedTestCIPerformanceReceipt(
+        status=status,
+        comparable=True,
+        baseline_attempt_id=b[0].attempt_id,
+        current_attempt_id=c[0].attempt_id,
+        baseline_source_sha256=b[0].source_sha256,
+        current_source_sha256=c[0].source_sha256,
+        baseline_revision=b[0].revision,
+        current_revision=c[0].revision,
+        cohort_sha256=b[0].cohort_sha256,
+        config_sha256=b[0].config_sha256,
+        cache_state=b[0].cache_state,
+        sample_count_per_side=min(len(b), len(c)),
+        baseline_median_seconds=bm,
+        current_median_seconds=cm,
+        delta_seconds=cm - bm,
+        hold_reasons=tuple(dict.fromkeys(reasons)),
+        invalid_reasons=(),
+        baseline_mad_seconds=bmad,
+        current_mad_seconds=cmad,
+        bootstrap_ci_95=ci,
     )
 
 

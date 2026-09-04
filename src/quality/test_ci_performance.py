@@ -157,8 +157,10 @@ class TestCIPerformanceReceipt(BaseModel):
     workers: tuple[WorkerEvidence, ...]
     cache_state: CacheState
     paired: Literal[False] = False
-    network_isolation: Literal["requested-not-proven"] = "requested-not-proven"
-    cache_evidence: Literal["declared-only"] = "declared-only"
+    network_isolation: Literal["requested-not-proven", "proven"] = "requested-not-proven"
+    cache_evidence: Literal["declared-only", "measured"] = "declared-only"
+    network_isolation_proof_sha256: str | None = None
+    cache_evidence_proof_sha256: str | None = None
     output_sha256: str | None = None
     process_wall_seconds: float | None = Field(default=None, ge=0)
     process_peak_rss_bytes: int | None = Field(default=None, ge=0)

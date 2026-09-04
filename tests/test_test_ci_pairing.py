@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 
-from src.quality.test_ci_pairing import evaluate_test_ci_pair
+import pytest
+
+from src.quality.test_ci_pairing import aggregate_test_ci_pairs, evaluate_test_ci_pair
 from src.quality.test_ci_performance import (
     ArtifactIdentity,
     FrozenTestCohort,
@@ -138,6 +140,47 @@ def test_invalid_raw_receipt_is_invalid() -> None:
     result = evaluate_test_ci_pair({"schema_version": "forged"}, _receipt(revision=_REV_B))
     assert result.status == "INVALID"
     assert result.invalid_reasons
+
+
+def test_repeated_aggregate_discards_warmup_and_computes_bootstrap() -> None:
+    baseline: list[object] = []
+    current: list[object] = []
+    for index in range(8):
+        left = _receipt(attempt=f"b-{index}", revision=_REV_A)
+        right = _receipt(source="f" * 64, attempt=f"c-{index}", revision=_REV_B)
+        left["network_isolation"] = right["network_isolation"] = "proven"
+        left["cache_evidence"] = right["cache_evidence"] = "measured"
+        left["output_sha256"] = right["output_sha256"] = f"{index + 1:064x}"
+        left["network_isolation_proof_sha256"] = right["network_isolation_proof_sha256"] = (
+            hashlib.sha256(f"network-isolation/v1:{left['output_sha256']}".encode()).hexdigest()
+        )
+        left["cache_evidence_proof_sha256"] = right["cache_evidence_proof_sha256"] = hashlib.sha256(
+            f"cache-observation/v1:{left['output_sha256']}".encode()
+        ).hexdigest()
+        left["process_wall_seconds"] = 1.0
+        right["process_wall_seconds"] = 0.9
+        baseline.append(left)
+        current.append(right)
+    result = aggregate_test_ci_pairs(baseline, current)
+    assert result.status == "HOLD"
+    assert "attestations are unavailable" in " ".join(result.hold_reasons)
+    assert result.sample_count_per_side == 7
+    assert result.bootstrap_ci_95 is not None
+    assert result.delta_seconds == pytest.approx(-0.1)
+
+
+def test_aggregate_accepts_warmup_plus_21_raw_receipts() -> None:
+    baseline: list[object] = []
+    current: list[object] = []
+    for index in range(22):
+        left = _receipt(attempt=f"b22-{index}", revision=_REV_A)
+        right = _receipt(source="f" * 64, attempt=f"c22-{index}", revision=_REV_B)
+        left["process_wall_seconds"] = right["process_wall_seconds"] = 1.0
+        baseline.append(left)
+        current.append(right)
+    result = aggregate_test_ci_pairs(baseline, current)
+    assert result.sample_count_per_side == 21
+    assert result.status == "HOLD"
 
 
 def test_missing_revision_is_an_explicit_hold() -> None:
