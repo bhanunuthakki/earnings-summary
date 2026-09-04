@@ -12,6 +12,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -142,6 +143,7 @@ class TestCIPerformanceReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: str = "test-ci-performance/v2"
     attempt_id: str = Field(min_length=1)
+    revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     cohort: FrozenTestCohort
     source_sha256: str | None
     config_sha256: str | None
@@ -193,6 +195,16 @@ def source_identity(repo_root: Path) -> str | None:
         return _sha256(b"".join(parts)) if parts else None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def revision_identity(repo_root: Path) -> str | None:
+    try:
+        value = subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"], text=True
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
 
 
 _CONFIG_PATHS = (
@@ -308,8 +320,13 @@ def receipt_from_fragments(
     if source_sha256 is None:
         reasons.append("source identity is unavailable")
         invalid = True
+    revision = revision_identity(Path(repo_root).resolve())
+    if revision is None:
+        reasons.append("revision identity is unavailable")
+        invalid = True
     return TestCIPerformanceReceipt(
         attempt_id=attempt_id,
+        revision=revision,
         cohort=cohort,
         source_sha256=source_sha256,
         config_sha256=config_identity(configuration),

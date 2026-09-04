@@ -59,6 +59,22 @@ def _repo(tmp_path: Path) -> Path:
     source = tmp_path / "src" / "module.py"
     source.parent.mkdir(parents=True)
     source.write_text("VALUE = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
     return tmp_path
 
 

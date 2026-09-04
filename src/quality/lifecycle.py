@@ -110,6 +110,8 @@ class LifecycleEntry(BaseModel):
         if self.disposition == "compatibility-tombstone":
             if not self.tombstone_consumer or not self.tombstone_expiry:
                 raise ValueError("compatibility-tombstone requires consumer and expiry")
+            if self.tombstone_consumer.lower() in {"none", "unknown", "n/a"}:
+                raise ValueError("compatibility-tombstone requires a named consumer")
             _require_current_iso_date(self.tombstone_expiry, field="tombstone_expiry")
         if self.disposition == "dormant-until" and not all(
             (
@@ -498,9 +500,25 @@ def _scheduled_targets(
     python_targets: set[str] = set()
     while queue:
         path = queue.pop()
-        if path not in available or not (root / path).is_file():
+        candidate = Path(path)
+        resolved_root = root.resolve()
+        resolved = (resolved_root / candidate).resolve()
+        if (
+            candidate.is_absolute()
+            or not resolved.is_relative_to(resolved_root)
+            or path not in available
+            or not resolved.is_file()
+        ):
             continue
-        normalized = _read_text(root / path).replace("\\", "/")
+        raw_text = _read_text(resolved)
+        executable_lines: list[str] = []
+        for line in raw_text.splitlines():
+            stripped = line.lstrip()
+            lowered = stripped.lower()
+            if lowered.startswith(("#", "::", "rem ")):
+                continue
+            executable_lines.append(line)
+        normalized = "\n".join(executable_lines).replace("\\", "/")
         for match in _OPERATIONAL_PY_PATH.finditer(normalized):
             python_targets.add(match.group(1).replace("\\", "/"))
         for match in _PY_TARGET.finditer(normalized):
@@ -651,7 +669,12 @@ _EVIDENCE = re.compile(
 
 def _lifecycle_evidence(text: str) -> dict[str, str]:
     """Read only explicit, line-oriented lifecycle receipts from source."""
-    return {key: value for key, value in _EVIDENCE.findall(text)}
+    values: dict[str, str] = {}
+    for key, value in _EVIDENCE.findall(text):
+        if key in values:
+            raise LifecycleError(f"duplicate lifecycle evidence field: {key}")
+        values[key] = value
+    return values
 
 
 def _owned_file(root: Path, relative: str, *, evidence: str) -> Path:
@@ -713,7 +736,22 @@ def lifecycle_evidence_fields(
         raise LifecycleError(f"one-shot lifecycle requires sealed completion evidence: {path}")
     if completion and root is not None and completion.startswith("sealed:"):
         receipt_path = completion.split(":", 1)[1]
-        _owned_file(root, receipt_path, evidence="one-shot sealed completion receipt")
+        receipt_file = _owned_file(
+            root, receipt_path, evidence="one-shot sealed completion receipt"
+        )
+        try:
+            receipt_payload = json.loads(receipt_file.read_text(encoding="utf-8"))
+            receipt_status = receipt_payload.get("status")
+            receipt_sealed = receipt_payload.get("sealed")
+        except (OSError, AttributeError, json.JSONDecodeError) as exc:
+            raise LifecycleError(
+                f"one-shot completion receipt is not typed JSON: {receipt_path}"
+            ) from exc
+        if (
+            receipt_status not in {"PASS", "complete", "completed", "sealed"}
+            and receipt_sealed is not True
+        ):
+            raise LifecycleError(f"one-shot completion receipt is not terminal: {receipt_path}")
     if disposition == "compatibility-tombstone" and (
         not values.get("consumer") or not values.get("expiry")
     ):
@@ -740,6 +778,17 @@ def lifecycle_evidence_fields(
             review=dormant_policy.review_on,
         )
     elif disposition == "dormant-until":
+        explicit_owner = values["owner"]
+        if not explicit_owner.startswith(("linear:", "canonical:", "runbook:")):
+            raise LifecycleError(f"dormant lifecycle owner is not authoritative: {path}")
+        if (
+            dormant_policy is not None
+            and explicit_owner.startswith("linear:")
+            and explicit_owner != dormant_policy.owner_evidence
+        ):
+            raise LifecycleError(f"dormant lifecycle owner conflicts with policy: {path}")
+        if root is not None and explicit_owner.startswith(("canonical:", "runbook:")):
+            _validate_directive_owner(root, explicit_owner)
         dormant_policy_evidence = f"source:{path}"
     if disposition == "dormant-until":
         try:
@@ -780,7 +829,15 @@ def _graph_entry(root: Path, edge: GraphEdge) -> LifecycleEntry:
     )
 
 
-_NON_RUNTIME_EDGE_SOURCES = ("tests/", "instruction_tests/", "docs/", "directives/")
+_RUNTIME_EDGE_SOURCE_PREFIXES = ("src/", "execution/", "cron/", "scripts/", ".github/")
+
+
+def _is_runtime_edge_source(path: str) -> bool:
+    return (
+        path.startswith(_RUNTIME_EDGE_SOURCE_PREFIXES)
+        or path == "Makefile"
+        or path.endswith((*_WRAPPER_SUFFIXES, ".service"))
+    )
 
 
 def _runtime_incoming_edge(graph: ReachabilityGraph, path: str) -> str | None:
@@ -790,9 +847,15 @@ def _runtime_incoming_edge(graph: ReachabilityGraph, path: str) -> str | None:
             for candidate in graph.edges
             if candidate.target.replace("\\", "/") == path
             and candidate.line is not None
-            and candidate.kind not in {"unknown", "directive", "reconstruction"}
             and not candidate.unknown
-            and not candidate.source.startswith(_NON_RUNTIME_EDGE_SOURCES)
+            and _is_runtime_edge_source(candidate.source)
+            and (
+                candidate.kind not in {"unknown", "directive", "reconstruction"}
+                or (
+                    candidate.kind == "unknown"
+                    and candidate.reviewed_disposition == "internal_python_target"
+                )
+            )
         ),
         None,
     )
@@ -1063,6 +1126,9 @@ def build_inventory(root: Path) -> LifecycleInventory:
                 if path in scheduled_wrappers or path.startswith(".github/workflows/")
                 else "dormant-until"
             )
+            if disposition == "dormant-until" and not dormant_policy.covers(path):
+                violations.append(f"dormant lifecycle policy does not cover wrapper: {path}")
+                continue
             entries.append(
                 LifecycleEntry(
                     path=path,

@@ -326,3 +326,48 @@ def test_test_only_import_does_not_establish_runtime_reachability(tmp_path: Path
     assert entry.disposition == "dormant-until"
     assert entry.incoming_edge is None
     assert entry.dormant_policy_evidence is not None
+
+
+def test_wrapper_comments_do_not_create_scheduled_targets(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(
+        repo / "cron/task_manifest.json",
+        json.dumps(
+            {
+                "version": 1,
+                "tasks": [{"task_name": "daily", "xml": "daily.task.xml", "wrapper": "daily.bat"}],
+            }
+        ),
+    )
+    _write(repo / "cron/daily.task.xml", "<Task><Command>daily.bat</Command></Task>\n")
+    _write(
+        repo / "cron/daily.bat",
+        "REM python execution/comment_only.py\npython execution/entry.py\n",
+    )
+    _write(
+        repo / "execution/comment_only.py",
+        "if __name__ == '__main__':\n    print('dormant')\n",
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    _refresh_graph(repo)
+    report = build_inventory(repo)
+    comment_only = next(item for item in report.entries if item.path == "execution/comment_only.py")
+    assert comment_only.disposition == "dormant-until"
+
+
+def test_duplicate_and_unauthoritative_dormant_evidence_fail_closed() -> None:
+    with pytest.raises(LifecycleError, match="duplicate lifecycle evidence"):
+        lifecycle_evidence_fields(
+            path="execution/parked.py",
+            text="# lifecycle: dormant\n# lifecycle: owner=linear:BHA-119\n"
+            "# lifecycle: owner=linear:BHA-120\n# lifecycle: activation=owner-approval\n"
+            "# lifecycle: review=2026-12-31\n",
+            disposition="dormant-until",
+        )
+    with pytest.raises(LifecycleError, match="owner is not authoritative"):
+        lifecycle_evidence_fields(
+            path="execution/parked.py",
+            text="# lifecycle: dormant\n# lifecycle: owner=garbage\n"
+            "# lifecycle: activation=owner-approval\n# lifecycle: review=2026-12-31\n",
+            disposition="dormant-until",
+        )

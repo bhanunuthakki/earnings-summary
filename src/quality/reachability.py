@@ -326,8 +326,11 @@ def _literal_target(root: Path, value: str, index: dict[str, str]) -> str | None
     if value in index:
         return index[value]
     candidate = Path(value.replace("\\", "/"))
-    if candidate.suffix == ".py" and (root / candidate).is_file():
-        return candidate.as_posix()
+    if candidate.suffix == ".py" and not candidate.is_absolute():
+        resolved_root = root.resolve()
+        resolved = (resolved_root / candidate).resolve()
+        if resolved.is_relative_to(resolved_root) and resolved.is_file():
+            return resolved.relative_to(resolved_root).as_posix()
     return None
 
 
@@ -339,8 +342,15 @@ def _read_text(path: Path) -> tuple[bytes, str]:
 
 
 def _line_fingerprint(root: Path, path: str, line: int) -> str | None:
-    source = root / path
-    if line < 1 or not source.is_file():
+    candidate = Path(path)
+    resolved_root = root.resolve()
+    source = (resolved_root / candidate).resolve()
+    if (
+        line < 1
+        or candidate.is_absolute()
+        or not source.is_relative_to(resolved_root)
+        or not source.is_file()
+    ):
         return None
     try:
         _raw, text = _read_text(source)

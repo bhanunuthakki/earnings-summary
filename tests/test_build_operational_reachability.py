@@ -57,6 +57,13 @@ def test_literal_getattr_and_non_python_process_are_not_unknown(tmp_path: Path) 
     assert not graph.unknown_edges
 
 
+def test_literal_targets_cannot_escape_repository(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.py"
+    outside.write_text("VALUE = 1\n", encoding="utf-8")
+    assert reachability._literal_target(tmp_path, "../outside.py", {}) is None
+    assert reachability._literal_target(tmp_path, str(outside), {}) is None
+
+
 def test_unrelated_run_and_call_methods_are_not_process_edges(tmp_path: Path) -> None:
     _write(
         tmp_path,
