@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import cast
 
 import pytest
 
@@ -181,6 +182,32 @@ def test_aggregate_accepts_warmup_plus_21_raw_receipts() -> None:
     result = aggregate_test_ci_pairs(baseline, current)
     assert result.sample_count_per_side == 21
     assert result.status == "HOLD"
+
+
+def test_aggregate_holds_when_experiment_declarations_change_mid_series() -> None:
+    baseline: list[object] = []
+    current: list[object] = []
+    for index in range(8):
+        left = _receipt(attempt=f"frozen-b-{index}", revision=_REV_A)
+        right = _receipt(source="f" * 64, attempt=f"frozen-c-{index}", revision=_REV_B)
+        left["network_isolation"] = right["network_isolation"] = "proven"
+        left["cache_evidence"] = right["cache_evidence"] = "measured"
+        left["output_sha256"] = right["output_sha256"] = f"{index + 1:064x}"
+        left["network_isolation_proof_sha256"] = right["network_isolation_proof_sha256"] = (
+            hashlib.sha256(f"network-isolation/v1:{left['output_sha256']}".encode()).hexdigest()
+        )
+        left["cache_evidence_proof_sha256"] = right["cache_evidence_proof_sha256"] = hashlib.sha256(
+            f"cache-observation/v1:{left['output_sha256']}".encode()
+        ).hexdigest()
+        left["process_wall_seconds"] = right["process_wall_seconds"] = 1.0
+        baseline.append(left)
+        current.append(right)
+    changed = cast(dict[str, object], baseline[3])
+    changed_runtime = cast(dict[str, object], changed["runtime"])
+    changed_runtime["worker_count"] = 2
+    result = aggregate_test_ci_pairs(baseline, current)
+    assert result.status == "HOLD"
+    assert "baseline experiment declarations change" in " ".join(result.hold_reasons)
 
 
 def test_missing_revision_is_an_explicit_hold() -> None:

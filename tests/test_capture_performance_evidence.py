@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import quality.performance as performance
+import quality.performance_source_analysis as performance_source_analysis
 from execution import benchmark_performance_workload as workload
 from execution.capture_performance_evidence import main as capture_cli
 from quality.performance import (
@@ -204,6 +205,33 @@ def test_source_analysis_runs_real_paired_revisions(tmp_path: Path) -> None:
     assert len(receipt.baseline.hold_reasons) == len(set(receipt.baseline.hold_reasons))
 
 
+def test_source_analysis_rejects_identical_revisions_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single immutable revision cannot satisfy both sides of a pair."""
+    root, baseline, _current = _source_analysis_fixture(tmp_path)
+
+    def fail_if_materialized(*args: object, **kwargs: object) -> object:
+        raise AssertionError("identical revisions must not launch the benchmark")
+
+    monkeypatch.setattr(performance_source_analysis, "_archive_revision", fail_if_materialized)
+    receipt = getattr(performance, "_paired_source_analysis")(
+        root,
+        COHORT_REGISTRY["source_analysis"],
+        samples=7,
+        provenance="mac_guidance",
+        baseline_revision=baseline,
+        current_revision=baseline,
+        timeout_seconds=30,
+        config_paths=None,
+    )
+
+    assert receipt.baseline.status == "HOLD"
+    assert receipt.paired_identity is False
+    assert receipt.causal_runs == ()
+    assert any("must be distinct" in reason for reason in receipt.baseline.hold_reasons)
+
+
 def test_source_analysis_uses_collector_pinned_scanner_for_malicious_revision(
     tmp_path: Path,
 ) -> None:
@@ -389,16 +417,16 @@ def test_dcf_semantic_hash_includes_defined_names(tmp_path: Path) -> None:
     from openpyxl import Workbook, load_workbook
     from openpyxl.workbook.defined_name import DefinedName
 
-    from execution.benchmark_dcf_workload import _semantic_hash
+    from execution.benchmark_dcf_workload import workbook_semantic_hash
 
     workbook_path = tmp_path / "defined-name.xlsx"
     workbook = Workbook()
     workbook.defined_names.add(DefinedName("ForecastInput", attr_text="'Sheet'!$A$1"))
     workbook.save(workbook_path)
-    before = _semantic_hash(workbook_path)
+    before = workbook_semantic_hash(workbook_path)
     workbook = load_workbook(workbook_path)
     workbook.defined_names["ForecastInput"].attr_text = "'Sheet'!$A$2"
     workbook.save(workbook_path)
-    after = _semantic_hash(workbook_path)
+    after = workbook_semantic_hash(workbook_path)
     assert before[0] != after[0]
     assert before[1] == after[1]

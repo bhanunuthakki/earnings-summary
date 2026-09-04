@@ -53,7 +53,7 @@ def _stage(name: str, action: Callable[[], None]) -> tuple[float, int]:
     return elapsed, peak
 
 
-def _semantic_hash(path: Path) -> tuple[str, str, tuple[str, ...]]:
+def workbook_semantic_hash(path: Path) -> tuple[str, str, tuple[str, ...]]:
     from openpyxl import load_workbook
 
     workbook = load_workbook(path, data_only=False)
@@ -148,13 +148,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
             stage_timings["builder"], stage_rss["builder"] = _stage("builder", build)
-            semantic_hash, formula_hash, sheets = _semantic_hash(workbook_path)
+            semantic_hash, formula_hash, sheets = workbook_semantic_hash(workbook_path)
             state["semantic_sha256"] = semantic_hash
             state["formula_sha256"] = formula_hash
             state["artifact_sha256"] = hashlib.sha256(workbook_path.read_bytes()).hexdigest()
 
             def formulas() -> None:
-                actual, formulas, actual_sheets = _semantic_hash(workbook_path)
+                actual, formulas, actual_sheets = workbook_semantic_hash(workbook_path)
                 if (actual, formulas, actual_sheets) != (
                     state["semantic_sha256"],
                     state["formula_sha256"],
@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             second_path = Path(temp_name) / "benchmark-second.xlsx"
             workbook_path.replace(second_path)
             stage_timings["parity-build"], stage_rss["parity-build"] = _stage("parity-build", build)
-            second_semantic, second_formula, second_sheets = _semantic_hash(workbook_path)
+            second_semantic, second_formula, second_sheets = workbook_semantic_hash(workbook_path)
             semantic_parity = (second_semantic, second_formula, second_sheets) == (
                 state["semantic_sha256"],
                 state["formula_sha256"],

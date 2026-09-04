@@ -65,6 +65,11 @@ def paired_source_analysis(
     """
     reasons: list[str] = []
     identity_reasons: list[str] = []
+    revisions_are_distinct = baseline_revision != current_revision
+    if not revisions_are_distinct:
+        identity_reasons.append(
+            "baseline and current revisions must be distinct immutable revisions"
+        )
     trusted_root = Path(__file__).resolve().parents[2]
     trusted_wrapper = trusted_root / _TRUSTED_SCANNER_RELATIVE_PATH
     trusted_implementation = trusted_root / _TRUSTED_SCANNER_IMPLEMENTATION_RELATIVE_PATH
@@ -96,7 +101,11 @@ def paired_source_analysis(
     exit_codes: list[int] = []
     with tempfile.TemporaryDirectory(prefix="performance-paired-") as temp_name:
         temp_root = Path(temp_name)
-        for round_number in range(22):
+        # Equality collapses the revision-keyed maps below and can otherwise
+        # make one revision appear to satisfy both sides of the pair.  Reject
+        # it before any benchmark execution or set comparison is attempted.
+        rounds = range(22) if revisions_are_distinct else ()
+        for round_number in rounds:
             warmup = round_number == 0
             completed_round = True
             stability_by_revision: dict[str, bool] = {}

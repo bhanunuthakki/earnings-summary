@@ -3,76 +3,33 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Literal
+from typing import cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-
-class CollectionManifest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    schema_version: Literal["ci-paired-collection/v1"] = "ci-paired-collection/v1"
-    cohort: Literal["full-suite", "ci-shard"]
-    source_shard: int | None = None
-    source_shards: int = Field(default=8, ge=1)
-    split_count: int = Field(default=1, ge=1)
-    split_part: int = Field(default=0, ge=0)
-    baseline_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    current_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    measured_repeats: int = Field(default=7, ge=7, le=21)
-    max_measured_repeats: int = Field(default=21, ge=7, le=21)
-    warmups: int = Field(default=1, ge=1, le=1)
-    cache_proof_method: Literal["runner-isolated", "unavailable"] = "unavailable"
-    network_proof_method: Literal["runner-isolated", "unavailable"] = "unavailable"
-    # Only the repository-owned hermetic fixture is permitted for tests.  The
-    # production default is deliberately the real capture entrypoint.
-    capture_mode: Literal["production", "hermetic"] = "production"
-    timing_profile: Literal["stable", "noisy", "max-unstable"] = "stable"
-
-    @model_validator(mode="after")
-    def proof_methods_are_honest(self) -> CollectionManifest:
-        if self.cache_proof_method != "unavailable" or self.network_proof_method != "unavailable":
-            raise ValueError("runner proof acquisition is not implemented by this collector")
-        if self.cohort == "full-suite" and self.source_shard is not None:
-            raise ValueError("full-suite manifest cannot carry shard coordinates")
-        if self.cohort == "ci-shard" and self.source_shard is None:
-            raise ValueError("ci-shard manifest requires source_shard")
-        if (
-            self.cohort == "ci-shard"
-            and self.source_shard is not None
-            and not 1 <= self.source_shard <= self.source_shards
-        ):
-            raise ValueError("source_shard is outside source_shards")
-        if not 0 <= self.split_part < self.split_count:
-            raise ValueError("split_part is outside split_count")
-        return self
-
-
-class CollectionState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    schema_version: Literal["ci-paired-state/v1"] = "ci-paired-state/v1"
-    manifest_sha256: str
-    baseline_completed: int = 0
-    current_completed: int = 0
-    baseline_warmups_completed: int = 0
-    current_warmups_completed: int = 0
-    completed_units: tuple[str, ...] = ()
-    status: Literal["pending", "interrupted", "complete"] = "pending"
-    pairing_status: Literal["pending", "HOLD", "INVALID", "PASS"] = "pending"
-    measured_pairs: int = 0
-    stop_reason: Literal["pending", "stable", "max-exhausted"] = "pending"
-    receipt_paths: tuple[str, ...] = ()
-
-
-def _digest(manifest: CollectionManifest) -> str:
-    import hashlib
-
-    return hashlib.sha256(manifest.model_dump_json().encode()).hexdigest()
+from src.quality.ci_collection import (
+    CollectionManifest,
+    CollectionState,
+    capture_python_sha256,
+)
+from src.quality.ci_collection import (
+    file_sha256 as _file_sha256,
+)
+from src.quality.ci_collection import (
+    manifest_digest as _digest,
+)
+from src.quality.ci_collection import (
+    population as _population,
+)
+from src.quality.ci_collection import (
+    trusted_paths as _trusted_paths,
+)
 
 
 def _revision(root: Path, value: str) -> None:
@@ -92,11 +49,12 @@ def _capture_command(
     fragments_dir: Path,
     python: str,
 ) -> list[str]:
-    # Production code must be resolved from the immutable revision.  The
-    # hermetic fixture is deliberately a test-only boundary and is resolved
-    # from this collector's checkout because it is not part of old revisions.
+    # The production harness is pinned to this collector checkout.  Only the
+    # test/config/source inputs and pytest invocation root come from the
+    # immutable revision worktree; a tested revision cannot replace the
+    # evidence writer or its shard selector.
     script = (
-        (worktree / "execution" / "capture_test_ci_performance.py")
+        (Path(__file__).resolve())
         if mode == "production"
         else Path(__file__).with_name("capture_test_ci_performance_fixture.py")
     )
@@ -164,7 +122,13 @@ def _receipt_revision(path: Path, revision: str) -> None:
 
 
 def _validate_resume(
-    state: CollectionState, receipt_dir: Path, manifest: CollectionManifest
+    state: CollectionState,
+    receipt_dir: Path,
+    manifest: CollectionManifest,
+    *,
+    population_sha256: str | None = None,
+    expected_test_files: tuple[str, ...] = (),
+    expected_node_ids: tuple[str, ...] = (),
 ) -> None:
     from src.quality.test_ci_performance import TestCIPerformanceReceipt, cohort_identity
 
@@ -173,6 +137,16 @@ def _validate_resume(
         for side in ("baseline", "current")
         for repeat in range(manifest.warmups + manifest.max_measured_repeats)
     }
+    if state.population_sha256 != population_sha256:
+        raise SystemExit("state expected-population identity mismatch")
+    if manifest.capture_mode == "production":
+        harness, selector, plugin = _trusted_paths()
+        if state.trusted_harness_sha256 != _file_sha256(harness):
+            raise SystemExit("state trusted capture harness identity mismatch")
+        if state.trusted_selector_sha256 != _file_sha256(selector):
+            raise SystemExit("state trusted selector identity mismatch")
+        if state.trusted_plugin_sha256 != _file_sha256(plugin):
+            raise SystemExit("state trusted pytest plugin identity mismatch")
     if len(state.completed_units) != len(set(state.completed_units)):
         raise SystemExit("state contains duplicate collection units")
     if not set(state.completed_units).issubset(expected_units):
@@ -204,8 +178,27 @@ def _validate_resume(
         )
         if receipt.revision != revision or receipt.cohort_sha256 != cohort_identity(receipt.cohort):
             raise SystemExit("resumed receipt identity does not match the manifest")
+        if manifest.capture_mode == "production":
+            harness, selector, plugin = _trusted_paths()
+            trusted = {item.path: item.sha256 for item in receipt.configuration}
+            if trusted.get("__trusted__/capture_test_ci_performance.py") != _file_sha256(harness):
+                raise SystemExit("resumed receipt trusted harness identity is invalid")
+            if trusted.get("__trusted__/.github/scripts/ci_gate.py") != _file_sha256(selector):
+                raise SystemExit("resumed receipt trusted selector identity is invalid")
+            if trusted.get("__trusted__/src/quality/pytest_performance_plugin.py") != _file_sha256(
+                plugin
+            ):
+                raise SystemExit("resumed receipt trusted pytest plugin identity is invalid")
         if receipt.cohort.kind != manifest.cohort:
             raise SystemExit("resumed receipt cohort kind does not match the manifest")
+        if expected_test_files and receipt.cohort.test_files != expected_test_files:
+            raise SystemExit("resumed receipt test-file population does not match the manifest")
+        if expected_node_ids:
+            actual_nodes = tuple(
+                sorted(node for worker in receipt.workers for node in worker.node_ids)
+            )
+            if actual_nodes != expected_node_ids:
+                raise SystemExit("resumed receipt node population does not match the manifest")
         if (
             receipt.cohort.source_shard != manifest.source_shard
             or receipt.cohort.source_shards
@@ -267,7 +260,45 @@ def _write_state(path: Path, state: CollectionState) -> None:
     os.replace(temporary, path)
 
 
-def main(argv: list[str] | None = None) -> int:
+@contextlib.contextmanager
+def collection_state_lock(path: Path) -> Generator[None, None, None]:
+    """Hold an exclusive lock for the full collection lifetime."""
+    lock_path = path.with_name(f"{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except (BlockingIOError, OSError) as exc:
+            raise SystemExit("collection state is already locked by another writer") from exc
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _main_unlocked(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
@@ -275,8 +306,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interrupt-after", type=int, default=None)
     parser.add_argument("--capture-python", default=sys.executable)
     args = parser.parse_args(argv)
+    args.manifest = args.manifest.resolve()
+    args.state = args.state.resolve()
+    args.repo_root = args.repo_root.resolve()
     manifest = CollectionManifest.model_validate_json(args.manifest.read_text(encoding="utf-8"))
-    root = args.repo_root.resolve()
+    root = args.repo_root
+    harness, selector, plugin = _trusted_paths()
+    harness_sha256 = _file_sha256(harness)
+    selector_sha256 = _file_sha256(selector)
+    if manifest.capture_mode == "production":
+        if manifest.trusted_harness_sha256 != harness_sha256:
+            raise SystemExit("manifest trusted capture harness identity does not match collector")
+        if manifest.trusted_selector_sha256 != selector_sha256:
+            raise SystemExit("manifest trusted selector identity does not match collector")
+        plugin_sha256 = _file_sha256(plugin)
+        if manifest.trusted_plugin_sha256 != plugin_sha256:
+            raise SystemExit("manifest trusted pytest plugin identity does not match collector")
+    else:
+        plugin_sha256 = None
+    capture_python_digest = capture_python_sha256(args.capture_python)
+    population, population_sha256 = _population(root, manifest, selector)
+    population_path = args.state.parent / "expected-population.json"
+    encoded_population = json.dumps(population, sort_keys=True, separators=(",", ":")) + "\n"
+    if (
+        population_path.exists()
+        and population_path.read_text(encoding="utf-8") != encoded_population
+    ):
+        raise SystemExit("expected-population.json does not match the immutable manifest cohort")
+    population_path.parent.mkdir(parents=True, exist_ok=True)
+    if not population_path.exists():
+        population_path.write_text(encoded_population, encoding="utf-8")
     _revision(root, manifest.baseline_revision)
     _revision(root, manifest.current_revision)
     if manifest.baseline_revision == manifest.current_revision:
@@ -287,7 +346,20 @@ def main(argv: list[str] | None = None) -> int:
         if state.manifest_sha256 != digest:
             raise SystemExit("state manifest identity mismatch")
     else:
-        state = CollectionState(manifest_sha256=digest)
+        state = CollectionState(
+            manifest_sha256=digest,
+            population_sha256=population_sha256,
+            trusted_harness_sha256=harness_sha256
+            if manifest.capture_mode == "production"
+            else None,
+            trusted_selector_sha256=selector_sha256
+            if manifest.capture_mode == "production"
+            else None,
+            trusted_plugin_sha256=plugin_sha256,
+            capture_python_sha256=capture_python_digest,
+        )
+    if state.capture_python_sha256 != capture_python_digest:
+        raise SystemExit("state capture Python identity mismatch")
     if args.interrupt_after is not None and (
         args.interrupt_after < 0
         or args.interrupt_after > 2 * (manifest.warmups + manifest.max_measured_repeats)
@@ -298,7 +370,36 @@ def main(argv: list[str] | None = None) -> int:
     launched = 0
     if len(state.receipt_paths) != len(completed):
         raise SystemExit("state receipt/unit cardinality mismatch")
-    _validate_resume(state, receipt_dir, manifest)
+    raw_expected_files_obj = population.get("test_files")
+    raw_expected_nodes_obj = population.get("node_ids")
+    raw_expected_files = (
+        cast(list[object], raw_expected_files_obj)
+        if isinstance(raw_expected_files_obj, list)
+        else None
+    )
+    raw_expected_nodes = (
+        cast(list[object], raw_expected_nodes_obj)
+        if isinstance(raw_expected_nodes_obj, list)
+        else None
+    )
+    if raw_expected_files is None or not all(
+        isinstance(value, str) for value in raw_expected_files
+    ):
+        raise SystemExit("trusted expected test-file population is invalid")
+    if raw_expected_nodes is None or not all(
+        isinstance(value, str) for value in raw_expected_nodes
+    ):
+        raise SystemExit("trusted expected node population is invalid")
+    expected_files: tuple[str, ...] = tuple(cast(list[str], raw_expected_files))
+    expected_nodes: tuple[str, ...] = tuple(cast(list[str], raw_expected_nodes))
+    _validate_resume(
+        state,
+        receipt_dir,
+        manifest,
+        population_sha256=population_sha256,
+        expected_test_files=expected_files,
+        expected_node_ids=expected_nodes,
+    )
     with tempfile.TemporaryDirectory(prefix="bha115-worktrees-") as temp_name:
         worktrees: dict[str, Path] = {}
         try:
@@ -347,6 +448,25 @@ def main(argv: list[str] | None = None) -> int:
                         receipt_dir / "fragments" / key,
                         args.capture_python,
                     )
+                    if manifest.capture_mode == "production":
+                        if plugin_sha256 is None:
+                            raise SystemExit("trusted pytest plugin identity is unavailable")
+                        command.extend(
+                            [
+                                "--expected-population",
+                                str(population_path),
+                                "--expected-population-sha256",
+                                population_sha256,
+                                "--trusted-harness-sha256",
+                                harness_sha256,
+                                "--trusted-selector-sha256",
+                                selector_sha256,
+                                "--trusted-plugin-sha256",
+                                plugin_sha256,
+                                "--capture-python-sha256",
+                                capture_python_digest,
+                            ]
+                        )
                     completed_process = subprocess.run(command, cwd=worktree, check=False)
                     if completed_process.returncode not in (0, 2):
                         raise SystemExit(
@@ -451,6 +571,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(state.model_dump_json())
     return 0 if pairing.status == "PASS" else 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--state", type=Path, required=True)
+    args, _ = bootstrap.parse_known_args(argv)
+    with collection_state_lock(args.state):
+        return _main_unlocked(argv)
 
 
 if __name__ == "__main__":

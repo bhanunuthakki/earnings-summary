@@ -34,6 +34,63 @@ _ALLOWED_RAW_HOLDS = frozenset(
         "cache evidence is declared-only",
     }
 )
+_TRUSTED_HARNESS_PATH = "__trusted__/capture_test_ci_performance.py"
+_TRUSTED_SELECTOR_PATH = "__trusted__/.github/scripts/ci_gate.py"
+_TRUSTED_PLUGIN_PATH = "__trusted__/src/quality/pytest_performance_plugin.py"
+
+
+def _experiment_signature(receipt: TestCIPerformanceReceipt) -> tuple[object, ...]:
+    """Return declarations that must be frozen throughout one experiment.
+
+    Pairwise checks alone admit an A/B/A sequence when each adjacent pair is
+    compatible.  This signature is intentionally limited to declarations, not
+    measured timings, so every measured run on a side must describe one exact
+    cohort, configuration, runtime, cache/network mode, and worker ownership.
+    """
+    worker_declarations = tuple(
+        (
+            worker.worker_id,
+            worker.node_ids,
+            worker.node_id_sha256,
+            worker.cache_state,
+        )
+        for worker in receipt.workers
+    )
+    return (
+        receipt.cohort_sha256,
+        receipt.cohort.model_dump_json(),
+        receipt.config_sha256,
+        tuple((item.path, item.sha256) for item in receipt.configuration),
+        receipt.runtime.model_dump_json(),
+        receipt.cache_state,
+        receipt.network_isolation,
+        receipt.cache_evidence,
+        worker_declarations,
+    )
+
+
+def _trusted_boundary_reasons(receipt: TestCIPerformanceReceipt, side: str) -> tuple[str, ...]:
+    """Require raw receipts to identify the collector-owned evidence boundary."""
+    root = Path(__file__).resolve().parents[2]
+    expected = {
+        _TRUSTED_HARNESS_PATH: root / "execution" / "capture_test_ci_performance.py",
+        _TRUSTED_SELECTOR_PATH: root / ".github" / "scripts" / "ci_gate.py",
+        _TRUSTED_PLUGIN_PATH: root / "src" / "quality" / "pytest_performance_plugin.py",
+    }
+    actual = {item.path: item.sha256 for item in receipt.configuration}
+    reasons: list[str] = []
+    for name, path in expected.items():
+        try:
+            digest = path.read_bytes()
+        except OSError:
+            reasons.append(f"{side} trusted boundary file is unavailable ({name})")
+            continue
+        import hashlib
+
+        expected_sha = hashlib.sha256(digest).hexdigest()
+        if actual.get(name) != expected_sha:
+            reasons.append(f"{side} trusted boundary identity is missing or mismatched ({name})")
+    return tuple(reasons)
 
 
 class PairedTestCIPerformanceReceipt(BaseModel):
@@ -84,11 +141,6 @@ class PairedTestCIPerformanceReceipt(BaseModel):
         ):
             raise ValueError("held or invalid comparisons cannot emit timing values")
         return self
-
-
-# Short aliases keep the boundary discoverable for callers that use the
-# generic ``PairingEvaluation`` terminology.
-PairingEvaluation = PairedTestCIPerformanceReceipt
 
 
 class _ParsedReceipt:
@@ -238,6 +290,8 @@ def evaluate_test_ci_pair(
     assert current.receipt is not None
     errors = list(_raw_holds_are_permitted(baseline.receipt, "baseline"))
     errors.extend(_raw_holds_are_permitted(current.receipt, "current"))
+    errors.extend(_trusted_boundary_reasons(baseline.receipt, "baseline"))
+    errors.extend(_trusted_boundary_reasons(current.receipt, "current"))
     if baseline.receipt.execution_outcome != "passed":
         errors.append(f"baseline execution outcome is {baseline.receipt.execution_outcome}")
     if current.receipt.execution_outcome != "passed":
@@ -280,9 +334,25 @@ def evaluate_test_ci_pair(
 
 
 def aggregate_test_ci_pairs(
-    baseline_raw: list[object], current_raw: list[object], *, max_runs: int = 22
+    baseline_raw: list[object], current_raw: list[object], *, max_runs: object = 22
 ) -> PairedTestCIPerformanceReceipt:
     """Aggregate repeated raw receipts after one warmup, fail-closed."""
+    if isinstance(max_runs, bool) or not isinstance(max_runs, int) or max_runs < 8:
+        return PairedTestCIPerformanceReceipt(
+            status="INVALID",
+            baseline_attempt_id=None,
+            current_attempt_id=None,
+            baseline_source_sha256=None,
+            current_source_sha256=None,
+            baseline_revision=None,
+            current_revision=None,
+            cohort_sha256=None,
+            config_sha256=None,
+            cache_state=None,
+            sample_count_per_side=0,
+            hold_reasons=(),
+            invalid_reasons=("max_runs must be an integer of at least 8",),
+        )
     if len(baseline_raw) < 8 or len(current_raw) < 8:
         return PairedTestCIPerformanceReceipt(
             status="HOLD",
@@ -342,9 +412,12 @@ def aggregate_test_ci_pairs(
     reasons: list[str] = []
     for side, runs in (("baseline", b), ("current", c)):
         identities = {(run.source_sha256, run.revision) for run in runs}
+        experiments = {_experiment_signature(run) for run in runs}
         attempts = [run.attempt_id for run in runs]
         if len(identities) != 1:
             reasons.append(f"{side} source/revision identity changes across repeats")
+        if len(experiments) != 1:
+            reasons.append(f"{side} experiment declarations change across repeats")
         if len(attempts) != len(set(attempts)):
             reasons.append(f"{side} attempt identifiers are not unique")
         # A digest supplied inside a receipt is not an attestation: a caller
@@ -354,6 +427,7 @@ def aggregate_test_ci_pairs(
         reasons.append(f"{side} runner network/cache attestations are unavailable")
         for run in runs:
             reasons.extend(_raw_holds_are_permitted(run, side))
+            reasons.extend(_trusted_boundary_reasons(run, side))
             reasons.extend(_receipt_nodes(run, side))
             if run.execution_outcome != "passed":
                 reasons.append(f"{side} execution outcome is {run.execution_outcome}")
@@ -440,9 +514,6 @@ def aggregate_test_ci_pairs(
         current_mad_seconds=cmad,
         bootstrap_ci_95=ci,
     )
-
-
-evaluate_pair = evaluate_test_ci_pair
 
 
 def write_pairing_receipt(receipt: PairedTestCIPerformanceReceipt, destination: str | Path) -> None:
