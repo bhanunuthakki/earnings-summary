@@ -202,7 +202,11 @@ def inventory(
     specs = [
         ("ruff", [_executable("ruff"), "check", "--output-format", "json", "."], "ruff-check.json"),
         ("ruff", [_executable("ruff"), "format", "--check", "."], "ruff-format.txt"),
-        ("pyright", [_executable("pyright"), "--outputjson"], "pyright.json"),
+        (
+            "pyright",
+            [_executable("pyright"), "--pythonpath", sys.executable, "--outputjson"],
+            "pyright.json",
+        ),
     ]
     versions: dict[str, str] = {}
     for tool, command, _name in specs:

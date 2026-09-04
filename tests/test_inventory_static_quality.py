@@ -59,6 +59,8 @@ def test_inventory_partitions_tracked_python_and_counts_diagnostics(tmp_path: Pa
     assert result.diagnostics[-1].diagnostics_by_rule["# type: ignore"] == 5
     assert result.diagnostics[0].receipt_path.startswith(".tmp/static_quality/")
     assert result.diagnostics[0].diagnostics_by_directory == {"src": 1}
+    pyright = next(item for item in result.diagnostics if item.tool == "pyright")
+    assert pyright.command[-3:] == ["--pythonpath", static_quality.sys.executable, "--outputjson"]
 
 
 def test_absolute_diagnostic_paths_are_checkout_portable(tmp_path: Path) -> None:
