@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "9feb008529c4c3dcdaf942c253805e47a6c069d0",
+  "scoped_commit": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
   "scanner_sha256": "bce415f8a6c1270f4eb767c2ce0af0b10dd0250014b3437853a665d60663b975",
-  "source_sha256": "a3ea1928799d4eb326061403440de3a7763cd7ff68bb70c90de3254556678419",
+  "source_sha256": "4eb79c9a0932e23e86cae548dd4131f81287703747c52f4e21bb83df9202bd71",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1316,
-    "total_noncomment_loc": 485877,
+    "total_noncomment_loc": 485885,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -15930,9 +15930,9 @@
         "path": "src/quality/reachability.py",
         "module": "quality.reachability",
         "lines": {
-          "physical": 1008,
-          "nonblank": 947,
-          "noncomment": 947
+          "physical": 1019,
+          "nonblank": 958,
+          "noncomment": 955
         },
         "internal_fan_out": 0,
         "responsibilities": [

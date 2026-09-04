@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -21,6 +22,10 @@ from src.quality.reachability import build_graph
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def _fingerprint(path: str, line: int, source_line: str) -> str:
+    return hashlib.sha256(f"{path}:{line}:{source_line.strip()}".encode()).hexdigest()
 
 
 def _refresh_graph(repo: Path) -> None:
@@ -358,6 +363,44 @@ def test_test_only_import_does_not_establish_runtime_reachability(tmp_path: Path
     assert entry.disposition == "dormant-until"
     assert entry.incoming_edge is None
     assert entry.dormant_policy_evidence is not None
+
+
+def test_reviewed_multi_target_process_edges_retain_each_child(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    source_line = "subprocess.run(command)"
+    _write(
+        repo / "execution/entry.py",
+        "import subprocess\n" + source_line + "\nif __name__ == '__main__':\n    print('manual')\n",
+    )
+    _write(repo / "src/child_a.py", "if __name__ == '__main__':\n    print('a')\n")
+    _write(repo / "src/child_b.py", "if __name__ == '__main__':\n    print('b')\n")
+    _write(
+        repo / "docs/quality/reachability-process-dispositions.json",
+        json.dumps(
+            {
+                "schema_version": "reachability-process-dispositions/v1",
+                "edges": [
+                    {
+                        "path": "execution/entry.py",
+                        "line": 2,
+                        "fingerprint": _fingerprint("execution/entry.py", 2, source_line),
+                        "disposition": "internal_python_target",
+                        "targets": ["src/child_b.py", "src/child_a.py"],
+                        "evidence": "fixed child entrypoints",
+                    }
+                ],
+            }
+        ),
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    _refresh_graph(repo)
+
+    report = build_inventory(repo)
+    by_path = {entry.path: entry for entry in report.entries if entry.kind == "python_module"}
+    assert by_path["src/child_a.py"].disposition == "internal-delegate"
+    assert by_path["src/child_b.py"].disposition == "internal-delegate"
+    assert by_path["src/child_a.py"].incoming_edge == "execution/entry.py:2:unknown"
+    assert by_path["src/child_b.py"].incoming_edge == "execution/entry.py:2:unknown"
 
 
 def test_wrapper_comments_do_not_create_scheduled_targets(tmp_path: Path) -> None:

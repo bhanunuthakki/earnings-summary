@@ -28,7 +28,7 @@ Current evidence at the Train 0 instrumentation baseline:
   graph.
 - The lifecycle receipt classifies all 824 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
-  UI-reachable, 187 internal-delegate, and 303 time-bounded dormant entries.
+  UI-reachable, 223 internal-delegate, and 267 time-bounded dormant entries.
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced
   or corrected by typed generators and 66 are explicitly rejected from scoring
   for lack of an admissible generator.

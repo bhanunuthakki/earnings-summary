@@ -218,6 +218,47 @@ def test_internal_process_review_requires_existing_repo_file_and_keeps_target(
     assert graph.hold is False
 
 
+def test_internal_process_review_emits_one_edge_per_target(tmp_path: Path) -> None:
+    source_line = "subprocess.run(command)"
+    _write(tmp_path, "execution/main.py", "import subprocess\n" + source_line + "\n")
+    _write(tmp_path, "execution/first.py", "VALUE = 1\n")
+    _write(tmp_path, "execution/second.py", "VALUE = 2\n")
+    _write(
+        tmp_path,
+        "docs/quality/reachability-process-dispositions.json",
+        json.dumps(
+            {
+                "schema_version": "reachability-process-dispositions/v1",
+                "edges": [
+                    {
+                        "path": "execution/main.py",
+                        "line": 2,
+                        "fingerprint": _fingerprint("execution/main.py", 2, source_line),
+                        "disposition": "internal_python_target",
+                        "targets": [
+                            "execution/second.py",
+                            "execution/first.py",
+                            "execution/first.py",
+                        ],
+                        "evidence": "fixed child entrypoints",
+                    }
+                ],
+            }
+        ),
+    )
+
+    graph = build_graph(tmp_path)
+    reviewed = [edge for edge in graph.edges if edge.kind == "unknown"]
+    assert [(edge.target, edge.reviewed_disposition) for edge in reviewed] == [
+        ("execution/first.py", "internal_python_target"),
+        ("execution/second.py", "internal_python_target"),
+    ]
+    assert all(not edge.unknown for edge in reviewed)
+    assert not any("," in edge.target for edge in reviewed)
+    assert not graph.unknown_edges
+    assert graph.hold is False
+
+
 def test_internal_process_review_rejects_prose_target(tmp_path: Path) -> None:
     source_line = "subprocess.run(command)"
     _write(tmp_path, "execution/main.py", "import subprocess\n" + source_line + "\n")

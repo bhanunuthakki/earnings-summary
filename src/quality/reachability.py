@@ -391,12 +391,12 @@ def _reviewed_targets(root: Path, entry: DispositionEntry) -> tuple[str, ...] | 
     values = entry.targets or ((entry.target,) if entry.target else ())
     if not values or any(_repo_file_target(root, value) is None for value in values):
         return None
-    canonical_targets: list[str] = []
+    canonical_targets: set[str] = set()
     for value in values:
         canonical = _repo_file_target(root, value)
         assert canonical is not None
-        canonical_targets.append(canonical)
-    return tuple(canonical_targets)
+        canonical_targets.add(canonical)
+    return tuple(sorted(canonical_targets))
 
 
 def _apply_reviewed_dispositions(
@@ -498,20 +498,31 @@ def _apply_reviewed_dispositions(
         target_values = (
             reviewed_targets or entry.targets or ((entry.target,) if entry.target else ())
         )
-        reviewed.append(
-            edge.model_copy(
-                update={
-                    "target": ", ".join(target_values) or edge.target,
-                    "evidence": (
-                        f"{edge.evidence}; reviewed as {entry.disposition} in "
-                        f"{manifest_rel}: {entry.evidence}"
-                    ),
-                    "confidence": "medium",
-                    "unknown": False,
-                    "reviewed_disposition": entry.disposition,
-                }
-            )
+        evidence = (
+            f"{edge.evidence}; reviewed as {entry.disposition} in {manifest_rel}: {entry.evidence}"
         )
+        updates = {
+            "evidence": evidence,
+            "confidence": "medium",
+            "unknown": False,
+            "reviewed_disposition": entry.disposition,
+        }
+        if reviewed_targets:
+            # A reviewed internal process disposition can prove several concrete
+            # children. Keep each child as its own edge so lifecycle consumers can
+            # attribute incoming reachability without parsing pseudo-targets.
+            for target in reviewed_targets:
+                reviewed.append(edge.model_copy(update={**updates, "target": target}))
+        else:
+            reviewed.append(
+                edge.model_copy(
+                    update={**updates, "target": target_values[0] if target_values else edge.target}
+                )
+            )
+    reviewed = sorted(
+        {edge.model_dump_json(): edge for edge in reviewed}.values(),
+        key=lambda edge: (edge.source, edge.target, edge.kind, edge.line or 0, edge.evidence),
+    )
     return reviewed, diagnostics, hashes
 
 
