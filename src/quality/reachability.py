@@ -179,7 +179,10 @@ def _files(root: Path) -> list[Path]:
         path
         for path in paths
         if path.is_file()
-        and path.relative_to(root).as_posix() != "docs/quality/lifecycle-baseline.json"
+        and not (
+            path.relative_to(root).as_posix().startswith("docs/quality/")
+            and path.name.endswith(("-baseline.json", "-ratchet.json"))
+        )
         and not any(part in _SKIP for part in path.relative_to(root).parts)
     )
 

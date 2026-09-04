@@ -6,12 +6,18 @@
   "review_on": "2026-12-03",
   "path_prefixes": [
     ".github/",
+    ".githooks/",
     "cron/",
     "execution/",
     "scripts/",
     "src/"
   ],
   "exact_paths": [
-    "Makefile"
+    "Makefile",
+    "build_report.bat",
+    "process_comments.bat",
+    "refresh_fmp.bat",
+    "refresh_news.bat",
+    "refresh_transcripts.bat"
   ]
 }
