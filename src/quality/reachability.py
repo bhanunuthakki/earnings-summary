@@ -17,9 +17,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-PARSER_VERSION = "1.0.0"
+PARSER_VERSION = "1.1.0"
 _MAX_STDOUT_BYTES = 100_000
 EdgeKind = Literal[
     "import",
@@ -51,6 +51,19 @@ NodeKind = Literal[
     "service",
 ]
 Confidence = Literal["high", "medium", "low"]
+Disposition = Literal[
+    "internal_target",
+    "external_optional_dependency",
+    "runtime_registry",
+    "closed_literal_set",
+    "closed_command_set",
+    "schema_field",
+    "external_adapter",
+    "internal_python_target",
+    "external_process",
+    "operator_supplied_process",
+    "unresolved",
+]
 
 
 class GraphNode(BaseModel):
@@ -68,6 +81,7 @@ class GraphEdge(BaseModel):
     confidence: Literal["high", "medium", "low"]
     line: int | None = None
     unknown: bool = False
+    reviewed_disposition: Disposition | None = None
 
 
 class Diagnostic(BaseModel):
@@ -100,6 +114,24 @@ class DirectiveManifest(BaseModel):
     directives: dict[str, DirectiveEntry]
 
 
+class DispositionEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    path: str
+    line: int
+    fingerprint: str
+    disposition: Disposition
+    targets: tuple[str, ...] = ()
+    target: str | None = None
+    evidence: str
+
+
+class DispositionManifest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    schema_version: str
+    entries: tuple[DispositionEntry, ...] = ()
+    edges: tuple[DispositionEntry, ...] = ()
+
+
 _SKIP = {
     ".git",
     ".venv",
@@ -117,6 +149,11 @@ _PY_RE = re.compile(
     re.IGNORECASE,
 )
 _STR = re.compile(r"['\"]([^'\"]+)['\"]")
+_DISPOSITION_MANIFESTS: tuple[tuple[str, EdgeKind], ...] = (
+    ("docs/quality/reachability-dynamic-import-dispositions.json", "dynamic_import"),
+    ("docs/quality/reachability-getattr-dispositions.json", "getattr"),
+    ("docs/quality/reachability-process-dispositions.json", "unknown"),
+)
 
 
 def _files(root: Path) -> list[Path]:
@@ -288,6 +325,121 @@ def _read_text(path: Path) -> tuple[bytes, str]:
     return raw, raw.decode("utf-8-sig")
 
 
+def _line_fingerprint(root: Path, path: str, line: int) -> str | None:
+    source = root / path
+    if line < 1 or not source.is_file():
+        return None
+    try:
+        _raw, text = _read_text(source)
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = text.splitlines()
+    if line > len(lines):
+        return None
+    payload = f"{path}:{line}:{lines[line - 1].strip()}".encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _apply_reviewed_dispositions(
+    root: Path,
+    edges: list[GraphEdge],
+) -> tuple[list[GraphEdge], list[Diagnostic], dict[str, str]]:
+    """Resolve reviewed dynamic edges while failing closed on stale evidence."""
+    manifests: dict[tuple[str, int, EdgeKind], tuple[DispositionEntry, str]] = {}
+    diagnostics: list[Diagnostic] = []
+    hashes: dict[str, str] = {}
+    for manifest_rel, edge_kind in _DISPOSITION_MANIFESTS:
+        manifest_path = root / manifest_rel
+        if not manifest_path.is_file():
+            continue
+        try:
+            raw = manifest_path.read_bytes()
+            manifest = DispositionManifest.model_validate_json(raw)
+        except (OSError, ValidationError, ValueError) as exc:
+            diagnostics.append(
+                Diagnostic(
+                    path=manifest_rel,
+                    message=f"invalid reachability disposition manifest: {type(exc).__name__}",
+                    kind="unknown",
+                )
+            )
+            continue
+        hashes[manifest_rel] = hashlib.sha256(raw).hexdigest()
+        entries = (*manifest.entries, *manifest.edges)
+        for entry in entries:
+            key = (entry.path, entry.line, edge_kind)
+            actual = _line_fingerprint(root, entry.path, entry.line)
+            if actual != entry.fingerprint:
+                diagnostics.append(
+                    Diagnostic(
+                        path=entry.path,
+                        message=(
+                            f"stale reachability disposition at line {entry.line} "
+                            f"from {manifest_rel}"
+                        ),
+                        kind="unknown",
+                    )
+                )
+                continue
+            if key in manifests:
+                diagnostics.append(
+                    Diagnostic(
+                        path=entry.path,
+                        message=(
+                            f"duplicate reachability disposition at line {entry.line} "
+                            f"for {edge_kind}"
+                        ),
+                        kind="unknown",
+                    )
+                )
+                continue
+            manifests[key] = (entry, manifest_rel)
+
+    raw_keys = {
+        (edge.source, edge.line, edge.kind)
+        for edge in edges
+        if edge.unknown and edge.line is not None
+    }
+    for key, (_entry, manifest_rel) in manifests.items():
+        if key not in raw_keys:
+            path, line, edge_kind = key
+            diagnostics.append(
+                Diagnostic(
+                    path=path,
+                    message=(
+                        f"reachability disposition no longer matches an unknown {edge_kind} "
+                        f"edge at line {line} from {manifest_rel}"
+                    ),
+                    kind="unknown",
+                )
+            )
+
+    reviewed: list[GraphEdge] = []
+    for edge in edges:
+        matched = (
+            manifests.get((edge.source, edge.line, edge.kind)) if edge.line is not None else None
+        )
+        if not edge.unknown or matched is None or matched[0].disposition == "unresolved":
+            reviewed.append(edge)
+            continue
+        entry, manifest_rel = matched
+        reviewed.append(
+            edge.model_copy(
+                update={
+                    "target": ", ".join(entry.targets) or entry.target or edge.target,
+                    "evidence": (
+                        f"{edge.evidence}; reviewed as {entry.disposition} in "
+                        f"{manifest_rel}: {entry.evidence}"
+                    ),
+                    "confidence": "medium",
+                    "unknown": False,
+                    "reviewed_disposition": entry.disposition,
+                }
+            )
+        )
+    return reviewed, diagnostics, hashes
+
+
 def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> ReachabilityGraph:
     root = Path(repo_root).resolve()
     files = _files(root)
@@ -321,8 +473,6 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
             unknown=unknown,
         )
         edges.append(edge)
-        if unknown:
-            diagnostics.append(Diagnostic(path=source, message=evidence, kind="unknown"))
 
     def operational_target(value: str, source: str) -> str:
         target = _literal_target(root, value, module_index)
@@ -380,6 +530,34 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                     Diagnostic(path=rel, message=f"syntax error: {exc.msg}", kind="parse_error")
                 )
                 continue
+            subprocess_modules = {
+                alias.asname or alias.name
+                for item in ast.walk(tree)
+                if isinstance(item, ast.Import)
+                for alias in item.names
+                if alias.name == "subprocess"
+            }
+            runpy_modules = {
+                alias.asname or alias.name
+                for item in ast.walk(tree)
+                if isinstance(item, ast.Import)
+                for alias in item.names
+                if alias.name == "runpy"
+            }
+            subprocess_functions = {
+                alias.asname or alias.name: alias.name
+                for item in ast.walk(tree)
+                if isinstance(item, ast.ImportFrom) and item.module == "subprocess"
+                for alias in item.names
+                if alias.name in {"run", "call", "check_call", "check_output", "Popen"}
+            }
+            runpy_functions = {
+                alias.asname or alias.name: alias.name
+                for item in ast.walk(tree)
+                if isinstance(item, ast.ImportFrom) and item.module == "runpy"
+                for alias in item.names
+                if alias.name == "run_path"
+            }
             for item in ast.walk(tree):
                 if isinstance(item, ast.Import):
                     for alias in item.names:
@@ -469,6 +647,26 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                         and isinstance(item.args[0].value, str)
                         else None
                     )
+                    process_fn: str | None = None
+                    if (
+                        isinstance(item.func, ast.Attribute)
+                        and isinstance(item.func.value, ast.Name)
+                        and (
+                            (
+                                item.func.value.id in subprocess_modules
+                                and item.func.attr
+                                in {"run", "call", "check_call", "check_output", "Popen"}
+                            )
+                            or (
+                                item.func.value.id in runpy_modules and item.func.attr == "run_path"
+                            )
+                        )
+                    ):
+                        process_fn = item.func.attr
+                    elif isinstance(item.func, ast.Name):
+                        process_fn = subprocess_functions.get(item.func.id) or runpy_functions.get(
+                            item.func.id
+                        )
                     if fn in {"import_module", "__import__"}:
                         target = _literal_target(root, val, module_index) if val else None
                         if target:
@@ -514,7 +712,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                             item.lineno,
                             not bool(attribute),
                         )
-                    elif fn in {"run", "call", "check_call", "check_output", "Popen", "run_path"}:
+                    elif process_fn is not None:
                         source_lines = text.splitlines()
                         source_line = (
                             source_lines[item.lineno - 1]
@@ -531,7 +729,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                                 item.lineno,
                             )
                             continue
-                        process_target, dynamic = _process_target(item, fn)
+                        process_target, dynamic = _process_target(item, process_fn)
                         normalized = None
                         if process_target:
                             normalized = _literal_target(root, process_target, module_index)
@@ -642,7 +840,12 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
         {e.model_dump_json(): e for e in edges}.values(),
         key=lambda e: (e.source, e.target, e.kind, e.line or 0, e.evidence),
     )
+    edges, disposition_diagnostics, disposition_hashes = _apply_reviewed_dispositions(root, edges)
+    diagnostics.extend(disposition_diagnostics)
     unknown = [e for e in edges if e.unknown]
+    diagnostics.extend(
+        Diagnostic(path=edge.source, message=edge.evidence, kind="unknown") for edge in unknown
+    )
     roots = sorted(
         n
         for n in nodes
@@ -651,7 +854,9 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
         or n in {"Makefile", "reconstruction_manifest.json"}
     )
     touched = touched or set()
-    hold = bool(touched and any(d.path in touched for d in diagnostics))
+    hold = bool(disposition_diagnostics) or bool(
+        touched and any(d.path in touched for d in diagnostics)
+    )
     return ReachabilityGraph(
         parser={
             "name": "ast+xml+literal-scanner",
@@ -659,6 +864,11 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
             "python": sys.version.split()[0],
             "source_sha256": hashlib.sha256(
                 "".join(f"{key}:{source_hashes[key]}\n" for key in sorted(source_hashes)).encode()
+            ).hexdigest(),
+            "dispositions_sha256": hashlib.sha256(
+                "".join(
+                    f"{key}:{disposition_hashes[key]}\n" for key in sorted(disposition_hashes)
+                ).encode()
             ).hexdigest(),
         },
         nodes=sorted(nodes.values(), key=lambda n: n.id),

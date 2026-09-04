@@ -1,0 +1,459 @@
+{
+  "schema_version": "reachability-getattr-dispositions/v1",
+  "fingerprint_algorithm": "sha256(UTF-8(f\"{path}:{line}:{source_line.strip()}\"))",
+  "graph_provenance": {
+    "path": ".tmp/quality/reachability-check.json",
+    "schema_version": "operational-reachability/v1",
+    "parser": {
+      "name": "ast+xml+literal-scanner",
+      "version": "1.0.0",
+      "python": "3.14.7",
+      "source_sha256": "5827c6db8cbee906c06fca3ca5ba902b98e4ca602b7cb3b391cf9c9898251c1e"
+    }
+  },
+  "scope": {
+    "edge_kind": "getattr",
+    "unknown": true,
+    "source_prefixes": [
+      "src/",
+      "execution/"
+    ]
+  },
+  "counts": {
+    "graph_unknown_getattr": 47,
+    "dispositions": {
+      "closed_literal_set": 26,
+      "external_adapter": 3,
+      "unresolved": 0,
+      "schema_field": 12,
+      "runtime_registry": 6
+    },
+    "omissions": 0
+  },
+  "residual_unresolved": [],
+  "edges": [
+    {
+      "path": "execution/build_holdco_sotp.py",
+      "line": 428,
+      "target": "<dynamic attribute>",
+      "fingerprint": "a82d23aa835fd2ad8052288c1cb2938ea93769dacb997e8feb209325a1ef4987",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_SOTP_SPEC",
+      "evidence": "_SOTP_SPEC field column; fields are declared in the local SOTP specification."
+    },
+    {
+      "path": "execution/build_holdco_sotp.py",
+      "line": 591,
+      "target": "<dynamic attribute>",
+      "fingerprint": "eb91d94b5439a7d0dc6519c350fed257c4ef9433806034129f6d8919b9fdc9a1",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_SOTP_SPEC",
+      "evidence": "_SOTP_SPEC field column; fields are declared in the local SOTP specification."
+    },
+    {
+      "path": "execution/build_holdco_sotp.py",
+      "line": 593,
+      "target": "<dynamic attribute>",
+      "fingerprint": "ba5ae6ccd19b909e2e804b1ba4cd169562927e6772122e3f1674fc2a44fa9ee4",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_SOTP_SPEC",
+      "evidence": "_SOTP_SPEC field column; fields are declared in the local SOTP specification."
+    },
+    {
+      "path": "execution/build_holdco_sotp.py",
+      "line": 717,
+      "target": "<dynamic attribute>",
+      "fingerprint": "439013111792c73827bd00d06031ea25da182a270e8d1e77b95b85a4ae412c2a",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_SOTP_SPEC",
+      "evidence": "_SOTP_SPEC field column; fields are declared in the local SOTP specification."
+    },
+    {
+      "path": "execution/build_meli_platform_dcf.py",
+      "line": 451,
+      "target": "<dynamic attribute>",
+      "fingerprint": "88e05586aa34d3077908dbc8dfe2701e3ff3fed4cf06df76016a075ed090e065",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "comm_g_near, fpay_g_near, cbg_near",
+      "evidence": "Loop literal names are the near-growth scenario fields."
+    },
+    {
+      "path": "execution/build_meli_platform_dcf.py",
+      "line": 453,
+      "target": "<dynamic attribute>",
+      "fingerprint": "45b5873dbfebf1d1479b6674e00377d0eb14cb913bacc012269adf807c862ef5",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "comm_g_term, fpay_g_term, cbg_term",
+      "evidence": "Loop literal names are the terminal-growth scenario fields."
+    },
+    {
+      "path": "execution/build_meli_platform_dcf.py",
+      "line": 455,
+      "target": "<dynamic attribute>",
+      "fingerprint": "8b9f69bcd4af30059183e4d0310f215afa7f04b44af60e0b151569523f3fb9ce",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "comm_margin_near, fpay_margin_near, nimal_near",
+      "evidence": "Loop literal names are the near-margin scenario fields."
+    },
+    {
+      "path": "execution/build_meli_platform_dcf.py",
+      "line": 457,
+      "target": "<dynamic attribute>",
+      "fingerprint": "6e170cd8aa6c4c72264e5f1c4cb773a923e0a25718558027ce6a696ebe3bb9ed",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "comm_margin_term, fpay_margin_term, nimal_term",
+      "evidence": "Loop literal names are the terminal-margin scenario fields."
+    },
+    {
+      "path": "execution/build_offline_artifact.py",
+      "line": 249,
+      "target": "<dynamic attribute>",
+      "fingerprint": "e25bcf6625fe877527e9165b20ec3d370db906db6d8fab7b19fd3ee97c20dbbb",
+      "disposition": "schema_field",
+      "allowed_attributes": "spec model fields",
+      "evidence": "Pydantic/model fields supplied by the artifact specification."
+    },
+    {
+      "path": "execution/comments_server.py",
+      "line": 630,
+      "target": "<dynamic attribute>",
+      "fingerprint": "0d23742db00b7c890fc8b723c15b6f83d435724b8f30cb3c52a5917c85cfb687",
+      "disposition": "external_adapter",
+      "allowed_attributes": "debug, info, warning, error, exception, critical, log",
+      "evidence": "Logger API selected by a caller-provided level; standard logging methods are the adapter boundary."
+    },
+    {
+      "path": "execution/discover_ir_documents_all.py",
+      "line": 1140,
+      "target": "<dynamic attribute>",
+      "fingerprint": "5a4e0253dca91d48a50456727fcab80123ecfa3b8b3dbb013a1d90a174bcd852",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "positive_fields",
+      "evidence": "positive_fields tuple is the argparse validation authority."
+    },
+    {
+      "path": "execution/fetch_yf_estimates.py",
+      "line": 132,
+      "target": "<dynamic attribute>",
+      "fingerprint": "0ada94d09f8fd0f690a1d496e48946c319ddd0474145179199a4fbb69e51b66f",
+      "disposition": "external_adapter",
+      "allowed_attributes": "_FRAME_TABLES provider attribute column",
+      "evidence": "_FRAME_TABLES explicitly maps provider attributes to normalized tables."
+    },
+    {
+      "path": "execution/filing_xbrl_bridge.py",
+      "line": 494,
+      "target": "<dynamic attribute>",
+      "fingerprint": "a363d7af04e4e624be79bc86c2ab22a1f7793bc987495fc3fe5e0b5e3cc55865",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "filepath, uri",
+      "evidence": "The local tuple explicitly permits document filepath and uri."
+    },
+    {
+      "path": "execution/filing_xbrl_bridge.py",
+      "line": 933,
+      "target": "<dynamic attribute>",
+      "fingerprint": "18bddc25e5ef7604123632be780a0fc3bbef6ef59d2a8fe8dd28fcd85f6856ca",
+      "disposition": "external_adapter",
+      "allowed_attributes": "Session, RuntimeOptions, XMLParser, parse, getroot, iter, relationshipSet, factFootnote, fromModelObject",
+      "evidence": "All nine production callers pass literal names at the Arelle, lxml, or XBRL relationship adapter boundaries."
+    },
+    {
+      "path": "execution/refresh_cache.py",
+      "line": 816,
+      "target": "<dynamic attribute>",
+      "fingerprint": "80a84afe0f43ebb52af5f0906ff422b435d478fb3acf3d0b9d2e4cf0cf300f91",
+      "disposition": "runtime_registry",
+      "allowed_attributes": "Windows kernel32 function registry",
+      "evidence": "Windows ctypes function name is selected by the platform API call site."
+    },
+    {
+      "path": "execution/refresh_cache.py",
+      "line": 820,
+      "target": "<dynamic attribute>",
+      "fingerprint": "f68b668bf903c48560baae18a8de7e45502fbfdc56a47c02ca5edb128770865f",
+      "disposition": "runtime_registry",
+      "allowed_attributes": "Windows kernel32 function registry",
+      "evidence": "Windows ctypes function name is selected by the platform API call site."
+    },
+    {
+      "path": "execution/run_morning_pipeline.py",
+      "line": 158,
+      "target": "<dynamic attribute>",
+      "fingerprint": "ace40d29eaa119f80f4c2a986d8002eb4a6c3f39d75a472b52bcab1988fc3116",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "StageSpec.skip_flags",
+      "evidence": "StageSpec.skip_flags is the manifest-declared flag set."
+    },
+    {
+      "path": "src/ask/context.py",
+      "line": 133,
+      "target": "<dynamic attribute>",
+      "fingerprint": "7b35aebe06e32ac2b07c5b3b99bd88636016b0a6253dbc51de1aa58fc2a15bf2",
+      "disposition": "runtime_registry",
+      "allowed_attributes": "anchor loader registry",
+      "evidence": "loader_name is selected from the local anchor loader tuple before invocation."
+    },
+    {
+      "path": "src/compute/_common.py",
+      "line": 82,
+      "target": "<dynamic attribute>",
+      "fingerprint": "27c20b90bc592025a43ab28dcec4880af3ee5636c7d4043a90ede08e3cff2cf7",
+      "disposition": "schema_field",
+      "allowed_attributes": "line_item_spec",
+      "evidence": "line_item_spec supplies validated provider field names and canonical mappings."
+    },
+    {
+      "path": "src/compute/evidence_snapshot.py",
+      "line": 83,
+      "target": "<dynamic attribute>",
+      "fingerprint": "05ed6a70b3d8391d0bef4d2f805590e4cbae4c2b845774e58d2cfb48d4bf372c",
+      "disposition": "runtime_registry",
+      "allowed_attributes": "Windows kernel32 function registry",
+      "evidence": "Windows ctypes function name is selected by the platform API call site."
+    },
+    {
+      "path": "src/compute/evidence_snapshot.py",
+      "line": 87,
+      "target": "<dynamic attribute>",
+      "fingerprint": "46e6f6dd06200caacdcf598d3d745210d1c932813cd7cae8381450604afcab3d",
+      "disposition": "runtime_registry",
+      "allowed_attributes": "Windows kernel32 function registry",
+      "evidence": "Windows ctypes function name is selected by the platform API call site."
+    },
+    {
+      "path": "src/dcf/assumptions_doc.py",
+      "line": 262,
+      "target": "<dynamic attribute>",
+      "fingerprint": "7032c3644f874cf966c5a1b0360032832d9d891e89ef33413db1e81957ca83c3",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_BASELINE_SCALAR_FIELDS",
+      "evidence": "_BASELINE_SCALAR_FIELDS declares every source attribute used for the document."
+    },
+    {
+      "path": "src/dcf/assumptions_doc.py",
+      "line": 534,
+      "target": "<dynamic attribute>",
+      "fingerprint": "8d9c0adf6b8b9422bee58f2441df486ce8474c320936857712f2b1bc37ac3091",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "scenario attribute list",
+      "evidence": "Scenario row construction iterates the declared scenario attribute list."
+    },
+    {
+      "path": "src/dcf/assumptions_doc.py",
+      "line": 535,
+      "target": "<dynamic attribute>",
+      "fingerprint": "1ad5b4ec0db73eb99ddda100866cb87017d6b74a5d885726ccd6450d5d5e275a",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "scenario attribute list",
+      "evidence": "Scenario seed construction iterates the declared scenario attribute list."
+    },
+    {
+      "path": "src/dcf/redesign.py",
+      "line": 1462,
+      "target": "<dynamic attribute>",
+      "fingerprint": "214214082d8af74d7e64f5f9888855b106ca6001eacff4b71fccf14669ee49eb",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_SCALAR_ROW_ATTR",
+      "evidence": "_SCALAR_ROW_ATTR declares the dashboard scalar attributes."
+    },
+    {
+      "path": "src/earnings_surprise_store.py",
+      "line": 195,
+      "target": "<dynamic attribute>",
+      "fingerprint": "f88f090e808fcfa26ef1ec9907ce5fb95fe557cd6a55423543f7336cdc5f1d8e",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "eps_estimate, eps_actual, eps_surprise, eps_surprise_percent",
+      "evidence": "The tuple literal is the persisted earnings-surprise field set."
+    },
+    {
+      "path": "src/estimates_archive.py",
+      "line": 172,
+      "target": "<dynamic attribute>",
+      "fingerprint": "db6f9c628420340af4b2f27aa1e74790ddc078c96c0d172f05cf46fbdd8a304d",
+      "disposition": "schema_field",
+      "allowed_attributes": "validated estimate schema",
+      "evidence": "metric is validated against the analyst-estimate record schema before access."
+    },
+    {
+      "path": "src/integrations/wealth_context.py",
+      "line": 95,
+      "target": "<dynamic attribute>",
+      "fingerprint": "c07ab04df6b76d19830de120fb4e5c1e24829e85a40796df6bbd15f9795f3b27",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "net_worth_total, liquid_total, investable_total, home_equity",
+      "evidence": "The local tuple is the core wealth sanity-check field set."
+    },
+    {
+      "path": "src/integrations/wealthplan_capacity.py",
+      "line": 169,
+      "target": "<dynamic attribute>",
+      "fingerprint": "d24609b4bd74a372d5ddaa6778d3a00fa5e26723b57dbfefee02961f221a15bd",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_kind_to_date_attr",
+      "evidence": "_kind_to_date_attr maps accepted event kinds to date attributes."
+    },
+    {
+      "path": "src/llm_call_ledger.py",
+      "line": 341,
+      "target": "<dynamic attribute>",
+      "fingerprint": "3e4219e0b4339e751304225c4c16ead957f099c9c98499fb4043a01b5a2a8ea3",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_OPTIONAL_COLUMNS",
+      "evidence": "optional is filtered from _OPTIONAL_COLUMNS and schema columns."
+    },
+    {
+      "path": "src/models/yf_payloads.py",
+      "line": 146,
+      "target": "<dynamic attribute>",
+      "fingerprint": "be7e7771013e86696570dc42bd741a8d78b6fa08ef25bc8146233cf75aa475a5",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "eps_trend, eps_revisions",
+      "evidence": "The local tuple is the optional analyst payload field set."
+    },
+    {
+      "path": "src/pipeline/peeks.py",
+      "line": 2126,
+      "target": "<dynamic attribute>",
+      "fingerprint": "83e45d41bccca12e2a3c419d5f568a790dc32444cf6a22aff3459a26b45e6ae4",
+      "disposition": "schema_field",
+      "allowed_attributes": "sector, industry, market_cap, rev_yoy, roic_ttm, fcf_yield_ttm, nd_to_ebitda_ttm, gross_margin_ttm, op_margin_ttm; authorities: _COMPARE_METRIC_ROWS and TickerMetrics",
+      "evidence": "The sole caller iterates _COMPARE_METRIC_ROWS, whose nine keys are declared fields on discovery.screens.TickerMetrics."
+    },
+    {
+      "path": "src/portfolio_risk_snapshot_store.py",
+      "line": 161,
+      "target": "<dynamic attribute>",
+      "fingerprint": "228cccfcd38e0d46d870a217b4b1921dfa61736fd5d867938134cc2012bc4f79",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_METRIC_COLUMNS",
+      "evidence": "_METRIC_COLUMNS is the canonical snapshot metric column authority."
+    },
+    {
+      "path": "src/portfolio_risk_snapshot_store.py",
+      "line": 263,
+      "target": "<dynamic attribute>",
+      "fingerprint": "e81cd6c8893a1ead8fa4590563767ddfb7e86d83513c1c5962212c16cd19073e",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_METRIC_COLUMNS",
+      "evidence": "_METRIC_COLUMNS is the canonical snapshot metric column authority."
+    },
+    {
+      "path": "src/provenance/filing_xbrl_extraction_ledger.py",
+      "line": 220,
+      "target": "<dynamic attribute>",
+      "fingerprint": "dedf20b2e0c84ce6b6486f8c8b65f89c4321adf4b8188cc24c03bd45b6c204c1",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_DISPOSITION_COLUMNS",
+      "evidence": "_DISPOSITION_COLUMNS is the database projection authority."
+    },
+    {
+      "path": "src/provenance/filing_xbrl_extraction_ledger.py",
+      "line": 269,
+      "target": "<dynamic attribute>",
+      "fingerprint": "77ff3e0f621077b32039eef0a84101dce5e79ee9e3d4c27d3756673553db03e9",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "_SEAL_COLUMNS",
+      "evidence": "_SEAL_COLUMNS is the database seal projection authority."
+    },
+    {
+      "path": "src/provenance/issuer_registry.py",
+      "line": 503,
+      "target": "<dynamic attribute>",
+      "fingerprint": "7000d52085aadbc3024f284eb4d47495a28e4b1dc3cad77eb95a149d55304394",
+      "disposition": "schema_field",
+      "allowed_attributes": "IssuerRegistrySpec.id_column",
+      "evidence": "spec.id_column is built from the typed issuer registry specification."
+    },
+    {
+      "path": "src/provenance/legacy_fact_evidence_match.py",
+      "line": 385,
+      "target": "<dynamic attribute>",
+      "fingerprint": "d83ed5352b31f5eefac496697c02c8b07602d9f4f409d15903ffcd9427fc5ed7",
+      "disposition": "schema_field",
+      "allowed_attributes": "locator parity validator fields",
+      "evidence": "field_name is constrained by the locator parity validator fields."
+    },
+    {
+      "path": "src/provenance/legacy_fact_evidence_match.py",
+      "line": 399,
+      "target": "<dynamic attribute>",
+      "fingerprint": "19c22a972a71bcbee569ef553370e632fcc39d0d578d2cd3a8e74cab61545925",
+      "disposition": "schema_field",
+      "allowed_attributes": "locator digest validator fields",
+      "evidence": "digest_field is constrained by the locator digest validator fields."
+    },
+    {
+      "path": "src/provenance/pdf_table_extraction.py",
+      "line": 104,
+      "target": "<dynamic attribute>",
+      "fingerprint": "4fa2fd0029c2ede342a002ed1bf0bc4237f4e1ab2e17f2bf723dd511d664af23",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "extraction policy expected mapping",
+      "evidence": "expected is the pinned extraction policy field set."
+    },
+    {
+      "path": "src/provenance/reporting_entity_registry.py",
+      "line": 469,
+      "target": "<dynamic attribute>",
+      "fingerprint": "1aa604f2c1ebec5a14c50d9af8ab12bcf5ebac192cd27183d76d5e97ec71411a",
+      "disposition": "schema_field",
+      "allowed_attributes": "ReportingEntitySpec.id_column",
+      "evidence": "spec.id_column is built from the typed reporting-entity specification."
+    },
+    {
+      "path": "src/provenance/search_index_lineage.py",
+      "line": 179,
+      "target": "<dynamic attribute>",
+      "fingerprint": "89a37d6de4e0f9cc2992b9b30421f547e57e8f08021fd246ba5b4d1351483cf4",
+      "disposition": "schema_field",
+      "allowed_attributes": "SearchProjectionSeal.model_fields",
+      "evidence": "columns comes from SearchProjectionSeal.model_fields."
+    },
+    {
+      "path": "src/provenance/source_fact_repository.py",
+      "line": 760,
+      "target": "<dynamic attribute>",
+      "fingerprint": "47a9c70d5d2c9e39bfc22fc18e27c69db70da7d9f37665e402f1b2578de473bc",
+      "disposition": "schema_field",
+      "allowed_attributes": "member_columns",
+      "evidence": "member_columns is the typed publication-member projection list."
+    },
+    {
+      "path": "src/report/offline_artifact.py",
+      "line": 552,
+      "target": "<dynamic attribute>",
+      "fingerprint": "83f9b6fcb00d476e0b01364ebbe8722d91b5629316823852df8c3c69976aecc8",
+      "disposition": "runtime_registry",
+      "allowed_attributes": "kernel32 API registry",
+      "evidence": "Windows kernel32 function_name is resolved at the OS API boundary."
+    },
+    {
+      "path": "src/search/embedding_evaluation_receipt.py",
+      "line": 108,
+      "target": "<dynamic attribute>",
+      "fingerprint": "885a71905692ea9666990039bbb90c10e66656f32a2693fa294ce356a09420cd",
+      "disposition": "schema_field",
+      "allowed_attributes": "EmbeddingEvaluationReceipt.model_fields",
+      "evidence": "columns comes from EmbeddingEvaluationReceipt.model_fields."
+    },
+    {
+      "path": "src/search/embedding_runtime_registration.py",
+      "line": 115,
+      "target": "<dynamic attribute>",
+      "fingerprint": "865973482f4c491dacfcbfe625035cc69c5c37436f8bbad64dd411366bd9526d",
+      "disposition": "schema_field",
+      "allowed_attributes": "EmbeddingRuntimeRegistration.model_fields",
+      "evidence": "columns comes from EmbeddingRuntimeRegistration.model_fields."
+    },
+    {
+      "path": "src/search/fact_projection.py",
+      "line": 1945,
+      "target": "<dynamic attribute>",
+      "fingerprint": "df6a715a69c0501170e954bbfbb9c2754256e38f51b554307a8cd45f3d983051",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "comparable seal fields",
+      "evidence": "comparable is the locally declared seal comparison field tuple."
+    }
+  ]
+}

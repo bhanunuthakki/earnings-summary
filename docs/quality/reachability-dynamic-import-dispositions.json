@@ -1,0 +1,38 @@
+{
+  "schema_version": "reachability-dynamic-import-dispositions/v1",
+  "scanner": {
+    "report": ".tmp/quality/reachability-check.json",
+    "report_sha256": "eb504ba3be2b44cc918f899a8ec7b6675ba8685bc6729b3e057f0e9a3d3f57a0",
+    "name": "ast+xml+literal-scanner",
+    "version": "1.0.0",
+    "python": "3.14.7",
+    "source_sha256": "5827c6db8cbee906c06fca3ca5ba902b98e4ca602b7cb3b391cf9c9898251c1e",
+    "fingerprint_algorithm": "sha256(UTF-8({path}:{line}:{source_line.strip()}))"
+  },
+  "disposition_policy": {
+    "internal_target": "The call site and checked-in registry prove one or more repository targets.",
+    "external_optional_dependency": "The call site imports a package outside src/ and execution, with an explicit optional/runtime boundary.",
+    "runtime_registry": "A checked-in registry maps a runtime key to a target pattern; the registry, not source equality, is the authority.",
+    "unresolved": "Available source evidence does not prove an exact target; no guess is admitted."
+  },
+  "entries": [
+    {"path":"execution/fetch_macro_series.py","line":303,"kind":"dynamic_import","fingerprint":"d467abc7d1ca09f39e91d4634829139c2241a6a03b0c3b9f93d2778d616710e0","disposition":"external_optional_dependency","targets":["yfinance"],"evidence":"importlib.import_module('yfinance') is the optional provider used by _default_yfinance_loader."},
+    {"path":"execution/filing_xbrl_bridge.py","line":338,"kind":"dynamic_import","fingerprint":"a734ab7b7568a72fb8519927557f789e08e4ba78786ffe4d59c42ee25514844e","disposition":"external_optional_dependency","targets":["arelle.api.Session"],"evidence":"Arelle session factory is loaded at the XBRL bridge boundary and is not a repository module."},
+    {"path":"execution/filing_xbrl_bridge.py","line":342,"kind":"dynamic_import","fingerprint":"7f03132271fb47a13a453811c9e272a18d90a02da692f1c4cc34311f02ff32a4","disposition":"external_optional_dependency","targets":["arelle.RuntimeOptions"],"evidence":"Arelle runtime options are loaded beside the session factory for the optional bridge."},
+    {"path":"execution/filing_xbrl_bridge.py","line":404,"kind":"dynamic_import","fingerprint":"cd0298c2db2809f1b2b0ea70ec0283ae036a37085158e497161a22dd406e2283","disposition":"external_optional_dependency","targets":["lxml.etree"],"evidence":"XML parser is loaded from lxml inside the bridge helper with no repository alternative."},
+    {"path":"execution/filing_xbrl_bridge.py","line":840,"kind":"dynamic_import","fingerprint":"f4fe6d5e6a2f044451a7c2b320101f751b7a1af3952fa1e4cf63c748a66b1c44","disposition":"external_optional_dependency","targets":["arelle.XbrlConst"],"evidence":"Footnote arcrole is obtained from the optional Arelle XbrlConst module."},
+    {"path":"execution/refresh_cache.py","line":811,"kind":"dynamic_import","fingerprint":"a1b612c48539166cbc558057d1ef7b66b6b58419fe3354460606c2d7c9a62b1f","disposition":"external_optional_dependency","targets":["msvcrt"],"evidence":"Windows-only cache snapshot support loads the platform runtime module after Win32 capability checks."},
+    {"path":"execution/validate_environment.py","line":99,"kind":"dynamic_import","fingerprint":"225d75eca9df7b148010515519c4f60623926b1320e9f0881adca86626cb784d","disposition":"external_optional_dependency","targets":["playwright.sync_api"],"evidence":"Environment validation intentionally probes optional Playwright and records ImportError as a capability result."},
+    {"path":"execution/verify_design_conformance.py","line":1100,"kind":"dynamic_import","fingerprint":"a883624d3c2288b125cfc4c677ab969cb2ba30332cbfc0dcee26dec0113993b1","disposition":"external_optional_dependency","targets":["playwright.sync_api"],"evidence":"Design canary loads Playwright only for the browser verification path."},
+    {"path":"execution/verify_design_conformance.py","line":1181,"kind":"dynamic_import","fingerprint":"1f861c1e20e26331664465b703c442e61d53aeff5d756855108179735671c35c","disposition":"external_optional_dependency","targets":["playwright.sync_api"],"evidence":"Fixture rendering uses the same optional Playwright sync API as the canary path."},
+    {"path":"src/compute/evidence_snapshot.py","line":78,"kind":"dynamic_import","fingerprint":"4af3ed39cb0c187e25de37df01842b328e238190dc409f244e42294c4bede546","disposition":"external_optional_dependency","targets":["msvcrt"],"evidence":"Windows evidence capture loads msvcrt only after checking Win32 API availability."},
+    {"path":"src/integrations/gsheets.py","line":175,"kind":"dynamic_import","fingerprint":"63bb395143ef017debcf10907b881016613c59d48083345b45fe20505b24efc9","disposition":"external_optional_dependency","targets":["google.oauth2.service_account","google.oauth2.credentials","google.auth.transport.requests","google_auth_oauthlib.flow","googleapiclient.discovery","googleapiclient.http"],"evidence":"_import(module) is the deliberate lazy boundary for the optional gsheets extra; callers provide the listed fixed module strings."},
+    {"path":"src/ir_pipeline/approved_ir_observation_capture.py","line":340,"kind":"dynamic_import","fingerprint":"1191fb8b611d83b0e49f77c316b2c25da45826824ba600be7f9a48d10ef240fd","disposition":"external_optional_dependency","targets":["playwright.sync_api"],"evidence":"Approved IR capture loads the browser dependency lazily and raises a typed unavailable error when absent."},
+    {"path":"src/ir_pipeline/discover/__init__.py","line":40,"kind":"dynamic_import","fingerprint":"2c70099e25d4296ee0dcb5770fc426e3eb391c1dae1614da864b1b152d8eaaff","disposition":"runtime_registry","targets":["ir_pipeline.discover.mz"],"evidence":"_ADAPTERS maps platform key mz to ir_pipeline.discover.mz before importlib dispatch; unknown platforms fail closed."},
+    {"path":"src/llm/codex_backend.py","line":133,"kind":"dynamic_import","fingerprint":"905d2a4f0ecb659b5428f10fd85079c2cc6ffee8f5d6601177f071a45e3c87c7","disposition":"external_optional_dependency","targets":["codex_cli"],"evidence":"codex_cli is loaded from the machine snippets directory outside this repository and is explicitly treated as unavailable when absent."},
+    {"path":"src/llm/codex_backend.py","line":147,"kind":"dynamic_import","fingerprint":"3814afd4d73cd2aa52aed8e48f1ca7ffdbf8b74a22d96951f085552ab0974f8b","disposition":"external_optional_dependency","targets":["codex_cli"],"evidence":"Availability/auth probing repeats the same external snippets-module boundary and catches failure."},
+    {"path":"src/provenance/pdf_table_extraction.py","line":439,"kind":"dynamic_import","fingerprint":"6875d0631fd114311327f402d6a1d1f845b9ab964ef24486d272908a36ae6f57","disposition":"external_optional_dependency","targets":["fitz"],"evidence":"PyMuPDF is an optional PDF extraction dependency and the helper raises PdfTableDependencyError if missing."},
+    {"path":"src/research/apply.py","line":66,"kind":"dynamic_import","fingerprint":"aaa079ba3bc000f89002e2b010b9b36d370fcf204f77b83284b829d61a156894","disposition":"runtime_registry","targets":["research.ask_proposal_artifact","research.{kind}_artifact"],"evidence":"Mutation kind selects a checked-in research artifact module by convention, which self-registers through register_mutating_applier; missing kinds return None."}
+  ],
+  "counts": {"reported_production_dynamic_imports":17,"dispositions":17,"internal_target":0,"external_optional_dependency":14,"runtime_registry":3,"unresolved":0,"omissions":0}
+}

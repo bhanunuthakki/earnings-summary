@@ -21,8 +21,11 @@ Current evidence at the Train 0 instrumentation baseline:
   diagnostics, and 621 suppression directives. This environment-sensitive
   static receipt is `HOLD` until reproduced in the CI-matched environment.
 - 691 database-building test files classified with zero unclassified cases.
-- The operational graph has no parse or unresolved-target failures, while 271
-  dynamic edges remain for BHA-118 to resolve before Train 0 exits.
+- The operational graph has no parse failures, unresolved targets, stale
+  dispositions, or unknown production edges. Its reviewed production dynamics
+  comprise 17 dynamic imports, 47 reflective attribute accesses, and 69 true
+  process launches. The remaining 85 unknown edges are confined to tests and
+  tooling and remain visible in the raw graph.
 
 Reproduce the receipts from the repository root:
 
@@ -37,5 +40,7 @@ python execution/build_operational_reachability.py --output .tmp/quality/reachab
 
 The raw reachability graph is deliberately generated under `.tmp/` because it
 is several megabytes. Its typed schema, parser version, source hash, counts,
-and regeneration command remain checked in here; absence of the raw local
-artifact never becomes a silent pass.
+disposition-manifest hashes, and regeneration command remain checked in here;
+absence of the raw local artifact never becomes a silent pass. Each disposition
+is bound to the exact source line by SHA-256. A stale, duplicate, or unmatched
+disposition forces `HOLD`.

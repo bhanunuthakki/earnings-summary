@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -56,6 +57,28 @@ def test_literal_getattr_and_non_python_process_are_not_unknown(tmp_path: Path) 
     assert not graph.unknown_edges
 
 
+def test_unrelated_run_and_call_methods_are_not_process_edges(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "execution/main.py",
+        "app.run(options)\nprovider.call(payload)\nrun(job)\n",
+    )
+    graph = build_graph(tmp_path)
+    assert not graph.unknown_edges
+    assert not any(edge.kind in {"python_entrypoint", "external_process"} for edge in graph.edges)
+
+
+def test_aliased_subprocess_and_runpy_calls_are_scanned(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "execution/main.py",
+        "import subprocess as sp\nfrom runpy import run_path as execute\n"
+        "sp.run(command)\nexecute(target)\n",
+    )
+    graph = build_graph(tmp_path)
+    assert len(graph.unknown_edges) == 2
+
+
 def test_reviewed_dynamic_external_process_is_not_unknown(tmp_path: Path) -> None:
     _write(
         tmp_path,
@@ -65,6 +88,92 @@ def test_reviewed_dynamic_external_process_is_not_unknown(tmp_path: Path) -> Non
     graph = build_graph(tmp_path)
     assert any(edge.kind == "external_process" for edge in graph.edges)
     assert not graph.unknown_edges
+
+
+def _fingerprint(path: str, line: int, source_line: str) -> str:
+    return hashlib.sha256(f"{path}:{line}:{source_line.strip()}".encode()).hexdigest()
+
+
+def test_valid_reviewed_disposition_resolves_unknown_edge(tmp_path: Path) -> None:
+    source_line = "getattr(mod, name)"
+    _write(tmp_path, "execution/main.py", source_line + "\n")
+    _write(
+        tmp_path,
+        "docs/quality/reachability-getattr-dispositions.json",
+        json.dumps(
+            {
+                "schema_version": "reachability-getattr-dispositions/v1",
+                "edges": [
+                    {
+                        "path": "execution/main.py",
+                        "line": 1,
+                        "fingerprint": _fingerprint("execution/main.py", 1, source_line),
+                        "disposition": "closed_literal_set",
+                        "evidence": "caller registry fixes the names",
+                    }
+                ],
+            }
+        ),
+    )
+    graph = build_graph(tmp_path)
+    reviewed = next(edge for edge in graph.edges if edge.kind == "getattr")
+    assert reviewed.unknown is False
+    assert reviewed.reviewed_disposition == "closed_literal_set"
+    assert not graph.unknown_edges
+    assert graph.hold is False
+    assert graph.parser["dispositions_sha256"]
+
+
+def test_stale_reviewed_disposition_holds_and_does_not_resolve(tmp_path: Path) -> None:
+    _write(tmp_path, "execution/main.py", "getattr(mod, name)\n")
+    _write(
+        tmp_path,
+        "docs/quality/reachability-getattr-dispositions.json",
+        json.dumps(
+            {
+                "schema_version": "reachability-getattr-dispositions/v1",
+                "edges": [
+                    {
+                        "path": "execution/main.py",
+                        "line": 1,
+                        "fingerprint": "0" * 64,
+                        "disposition": "closed_literal_set",
+                        "evidence": "stale",
+                    }
+                ],
+            }
+        ),
+    )
+    graph = build_graph(tmp_path)
+    assert len(graph.unknown_edges) == 1
+    assert graph.hold is True
+    assert any("stale reachability disposition" in item.message for item in graph.diagnostics)
+
+
+def test_unresolved_reviewed_disposition_remains_unknown(tmp_path: Path) -> None:
+    source_line = "getattr(mod, name)"
+    _write(tmp_path, "execution/main.py", source_line + "\n")
+    _write(
+        tmp_path,
+        "docs/quality/reachability-getattr-dispositions.json",
+        json.dumps(
+            {
+                "schema_version": "reachability-getattr-dispositions/v1",
+                "edges": [
+                    {
+                        "path": "execution/main.py",
+                        "line": 1,
+                        "fingerprint": _fingerprint("execution/main.py", 1, source_line),
+                        "disposition": "unresolved",
+                        "evidence": "target is still arbitrary",
+                    }
+                ],
+            }
+        ),
+    )
+    graph = build_graph(tmp_path)
+    assert len(graph.unknown_edges) == 1
+    assert graph.unknown_edges[0].reviewed_disposition is None
 
 
 def test_only_current_directives_create_authority_edges(tmp_path: Path) -> None:
