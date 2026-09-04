@@ -14,6 +14,8 @@ from quality.roadmap_freeze import RoadmapFreeze, validate_freeze
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "docs/quality/roadmap-freeze.json"
+TYPE_IGNORE_KEY = "# type: ignore"
+PYRIGHT_IGNORE_KEY = "# pyright: ignore"
 
 
 def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
@@ -67,8 +69,8 @@ def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
     assert freeze.suppression_retirement.baseline == 628
     assert freeze.suppression_retirement.target == 0
     assert freeze.suppression_retirement.source_rule_counts == {
-        "# type: ignore": 263,
-        "# pyright: ignore": 365,
+        TYPE_IGNORE_KEY: 263,
+        PYRIGHT_IGNORE_KEY: 365,
     }
     assert freeze.function_lifecycle.candidate_count > 0
     assert freeze.target_arithmetic.static_quality_baseline == 4891
@@ -424,7 +426,7 @@ def test_validator_rejects_status_or_closure_drift(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    (("baseline", 627), ("target", 1), ("source_rule_counts", {"# type: ignore": 628})),
+    (("baseline", 627), ("target", 1), ("source_rule_counts", {TYPE_IGNORE_KEY: 628})),
 )
 def test_validator_rejects_suppression_retirement_drift(
     tmp_path: Path, field: str, value: object

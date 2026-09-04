@@ -160,6 +160,33 @@ def test_active_file_outside_pyright_include_is_hold_and_identity_is_stable(
     assert first.suppressions_by_file["scripts/tool.py"]["# pyright: ignore"] == 1
 
 
+def test_suppression_inventory_ignores_string_literals(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/app.py").write_text(
+        'TEXT = "# type: ignore and # pyright: ignore"\n# type: ignore[assignment]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pyright]\ninclude = ["src"]\nexclude = []\n', encoding="utf-8"
+    )
+
+    def run(command: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
+        if command[:3] == ["git", "ls-files", "--"]:
+            return subprocess.CompletedProcess(command, 0, "src/app.py\n", "")
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, "head\n", "")
+        if command[-1:] == ["--version"]:
+            return subprocess.CompletedProcess(command, 0, "tool 1\n", "")
+        if str(command[0]).endswith("pyright"):
+            return subprocess.CompletedProcess(command, 0, '{"generalDiagnostics":[]}', "")
+        return subprocess.CompletedProcess(command, 0, "[]" if "format" not in command else "", "")
+
+    result = inventory(tmp_path, run)
+    assert result.suppressions_by_file == {
+        "src/app.py": {"# type: ignore": 1, "# pyright: ignore": 0}
+    }
+
+
 def test_unavailable_tool_and_malformed_machine_output_fail_closed(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")

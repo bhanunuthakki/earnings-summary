@@ -9,10 +9,12 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import io
 import json
 import re
 import subprocess
 import sys
+import tokenize
 import tomllib
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -71,6 +73,21 @@ def _run(args: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # reachability: external-process
         args, cwd=root, text=True, capture_output=True, check=False
     )
+
+
+def _suppression_counts(content: str) -> dict[str, int]:
+    """Count suppression directives only in lexical comments, never strings."""
+    counts = {"# type: ignore": 0, "# pyright: ignore": 0}
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(content).readline)
+        for token in tokens:
+            if token.type != tokenize.COMMENT:
+                continue
+            for directive in counts:
+                counts[directive] += token.string.count(directive)
+    except (IndentationError, tokenize.TokenError) as exc:
+        raise InventoryFailure(f"unable to tokenize tracked Python source: {exc}") from exc
+    return counts
 
 
 def _tracked(root: Path, runner: CommandRunner) -> list[str]:
@@ -255,22 +272,18 @@ def inventory(
             )
         else:
             diagnostics.append(_summary(tool, command, result, version, receipt, root))
-    text_blob = "\n".join((root / p).read_text(encoding="utf-8", errors="replace") for p in files)
-    type_ignores = text_blob.count("# type: ignore")
-    pyright_ignores = text_blob.count("# pyright: ignore")
+    suppressions: dict[str, dict[str, int]] = {}
+    for path in files:
+        content = (root / path).read_text(encoding="utf-8", errors="replace")
+        counts = _suppression_counts(content)
+        if any(counts.values()):
+            suppressions[path] = counts
+    type_ignores = sum(counts["# type: ignore"] for counts in suppressions.values())
+    pyright_ignores = sum(counts["# pyright: ignore"] for counts in suppressions.values())
     ignore_receipt = receipt_dir / "source-ignore-comments.txt"
     ignore_receipt.write_text(
         f"# type: ignore: {type_ignores}\n# pyright: ignore: {pyright_ignores}\n", encoding="utf-8"
     )
-    suppressions: dict[str, dict[str, int]] = {}
-    for path in files:
-        content = (root / path).read_text(encoding="utf-8", errors="replace")
-        counts = {
-            "# type: ignore": content.count("# type: ignore"),
-            "# pyright: ignore": content.count("# pyright: ignore"),
-        }
-        if any(counts.values()):
-            suppressions[path] = counts
     diagnostics.append(
         DiagnosticSummary(
             tool="source-ignore-comments",
