@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explore · Full-screen analysis workbench prototype</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+  <style>
+    /* Isolated prototype exploration. Production must recompose an approved
+       direction through Counterread's registered masters and controls. */
+    html, body { height: 100%; overflow: hidden; }
+    .fs-app { height: 100dvh; display: grid; grid-template-rows: 66px minmax(0,1fr) 106px; background: var(--bg); }
+    .fs-head { display: grid; grid-template-columns: minmax(220px,1fr) minmax(380px,1.6fr) minmax(260px,1fr); align-items: center; gap: 18px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .fs-back { justify-self: start; }
+    .fs-title { min-width: 0; text-align: center; }
+    .fs-title h1 { margin: 0; overflow: hidden; font-size: var(--fs-title); text-overflow: ellipsis; white-space: nowrap; }
+    .fs-title p { margin: 3px 0 0; overflow: hidden; color: var(--muted); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+    .fs-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+    .fs-body { min-height: 0; display: grid; grid-template-columns: 232px minmax(560px,1fr) 292px; }
+
+    .fs-fields, .fs-context { min-height: 0; overflow: auto; background: color-mix(in srgb, var(--surface) 84%, black); }
+    .fs-fields { border-right: 1px solid var(--border); }
+    .fs-context { border-left: 1px solid var(--border); }
+    .fs-panel-head { padding: 15px 14px 12px; border-bottom: 1px solid var(--border); }
+    .fs-panel-head h2 { margin: 0; font-size: var(--fs-title); }
+    .fs-panel-head p { margin: 4px 0 0; color: var(--muted); font-size: var(--fs-caption); line-height: 1.45; }
+    .fs-field-search { width: 100%; margin-top: 11px; }
+    .fs-field-group { padding: 13px 9px 3px; }
+    .fs-field { width: 100%; display: grid; grid-template-columns: 21px minmax(0,1fr) auto; align-items: center; gap: 7px; margin-top: 2px; padding: 7px 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg-soft); text-align: left; cursor: pointer; }
+    .fs-field:hover, .fs-field:focus-visible { background: var(--paper); }
+    .fs-field.is-used { background: var(--accent-soft); color: var(--fg); }
+    .fs-rank { color: var(--muted); font: var(--fs-caption) var(--mono); }
+    .fs-match { color: var(--muted); font-size: 10px; }
+
+    .fs-workspace { min-width: 0; min-height: 0; overflow: auto; }
+    .fs-intent { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 9px; min-height: 48px; padding: 7px 14px; border-bottom: 1px solid var(--border); }
+    .fs-intent input { width: 100%; }
+    .fs-shape { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+    .fs-shape-label { margin-right: 3px; color: var(--muted); font-size: var(--fs-caption); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .fs-pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-caption); font-weight: 650; }
+    .fs-pill.measure { background: color-mix(in srgb, var(--violet) 14%, transparent); color: var(--violet); }
+    .fs-result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 15px 16px 9px; }
+    .fs-result-head h2 { margin: 0; font-size: var(--fs-title); }
+    .fs-result-head p { margin: 3px 0 0; color: var(--muted); font-size: var(--fs-caption); }
+    .fs-table-wrap { padding: 0 16px 24px; overflow: auto; }
+    .fs-table { width: 100%; min-width: 720px; border-collapse: collapse; }
+    .fs-table th, .fs-table td { padding: 9px 10px; border: 1px solid var(--border); text-align: right; font-family: var(--mono); white-space: nowrap; }
+    .fs-table th { background: var(--paper); color: var(--muted); font: 600 var(--fs-caption) var(--sans); }
+    .fs-table th:first-child, .fs-table td:first-child { text-align: left; font-family: var(--sans); }
+    .fs-metric-cell { min-width: 220px; }
+    .fs-metric-line { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .fs-dcf-link { min-height: 25px; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent); border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 750; cursor: pointer; }
+    .fs-dcf-link[aria-expanded="true"] { background: var(--accent); color: var(--accent-contrast); }
+    .fs-break { color: var(--warn); }
+    .fs-derived { color: var(--muted); }
+    .fs-editor-row[hidden] { display: none; }
+    .fs-editor-row td { padding: 0; border-top: 0; text-align: left; white-space: normal; }
+    .fs-inline-editor { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 18px; padding: 13px 14px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); border-left: 2px solid var(--accent); }
+    .fs-editor-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .fs-editor-head strong { margin-right: auto; font-family: var(--sans); }
+    .fs-edit-fields { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
+    .fs-edit-fields label { display: grid; gap: 5px; color: var(--muted); font: var(--fs-caption) var(--sans); }
+    .fs-edit-fields input { width: 86px; }
+    .fs-preview { min-width: 210px; align-self: stretch; display: grid; align-content: center; gap: 6px; padding-left: 16px; border-left: 1px solid var(--border-2); font-family: var(--sans); }
+    .fs-preview strong { font: 700 var(--fs-title) var(--mono); }
+    .fs-preview .delta { color: var(--ok); font: 650 var(--fs-caption) var(--mono); }
+    .fs-editor-actions { display: flex; align-items: center; gap: 7px; margin-top: 10px; }
+
+    .fs-context-section { padding: 14px; border-bottom: 1px solid var(--border); }
+    .fs-context-section h3 { margin: 0 0 9px; font-size: var(--fs-title); }
+    .fs-context-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; color: var(--fg-soft); }
+    .fs-context-row span:last-child { color: var(--muted); font: var(--fs-caption) var(--mono); text-align: right; }
+    .fs-note { padding: 9px; border: 1px solid color-mix(in srgb, var(--warn) 42%, transparent); border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 7%, transparent); color: var(--fg-soft); }
+    .fs-note p { margin: 5px 0 0; }
+    .fs-model-list { display: grid; gap: 8px; }
+    .fs-model-item { display: flex; align-items: center; justify-content: space-between; gap: 9px; color: var(--fg-soft); }
+
+    .fs-compose-zone { border-top: 1px solid var(--border); background: var(--bg); }
+    .fs-compose-inner { width: min(820px, calc(100% - 40px)); margin: 12px auto 0; }
+    .fs-compose { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px; padding: 8px 8px 8px 13px; border: 1px solid var(--border-2); border-radius: var(--radius-card); background: var(--surface); }
+    .fs-compose input { width: 100%; border: 0; background: transparent; font-size: var(--fs-body); }
+    .fs-compose input:focus-visible { outline: 0; }
+    .fs-followups { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .fs-followup { padding: 3px 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: var(--fs-caption); }
+    .fs-followup:hover, .fs-followup:focus-visible { color: var(--accent); }
+
+    .fs-drawer-copy { color: var(--fg-soft); line-height: 1.55; }
+    .fs-diff { margin: 14px 0; border-block: 1px solid var(--border); }
+    .fs-diff-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+    .fs-diff-row:last-child { border-bottom: 0; }
+    .fs-diff-row span:nth-child(n+2) { font-family: var(--mono); }
+    .fs-logic-step { padding: 13px 0; border-bottom: 1px solid var(--border); }
+    .fs-logic-step h3 { margin: 0 0 7px; }
+    .fs-logic-step label { display: grid; gap: 5px; color: var(--muted); }
+    .fs-logic-step select, .fs-logic-step input { width: 100%; }
+
+    @media (max-width: 1180px) {
+      .fs-body { grid-template-columns: 220px minmax(540px,1fr); }
+      .fs-context { display: none; }
+    }
+    @media (max-width: 820px) {
+      .fs-app { grid-template-rows: auto minmax(0,1fr) 122px; }
+      .fs-head { grid-template-columns: 1fr auto; min-height: 70px; padding: 8px 12px; }
+      .fs-title { grid-column: 1 / -1; grid-row: 2; text-align: left; }
+      .fs-head-actions .k-pill, .fs-head-actions [data-open="sources"] { display: none; }
+      .fs-body { grid-template-columns: 1fr; }
+      .fs-fields { display: none; }
+      .fs-inline-editor { grid-template-columns: 1fr; }
+      .fs-preview { padding: 10px 0 0; border-top: 1px solid var(--border-2); border-left: 0; }
+    }
+  </style>
+</head>
+<body>
+<div class="fs-app">
+  <header class="fs-head">
+    <a class="k-btn k-btn-quiet fs-back" href="explore_hybrid_2_analysis_sheet.html" aria-label="Back to Explore answer">← Back to answer</a>
+    <div class="fs-title"><h1>MELI segment growth</h1><p>Full analysis workspace · generated from “What are MELI’s segments, and which is growing faster?”</p></div>
+    <div class="fs-head-actions"><span class="k-pill k-pill-accent">Illustrative data</span><button class="k-btn k-btn-quiet" data-open="sources">Sources</button><button class="k-btn k-btn-save">◆ Save analysis</button></div>
+  </header>
+
+  <div class="fs-body">
+    <aside class="fs-fields" aria-label="Available fields">
+      <div class="fs-panel-head"><h2>Fields</h2><p>Ranked for this question, not alphabetically.</p><input class="fs-field-search" placeholder="Find a metric…" aria-label="Find a metric"></div>
+      <div class="fs-field-group"><span class="label">Best matches</span><button class="fs-field is-used"><span class="fs-rank">01</span><span>Commerce revenue</span><span class="fs-match">Used</span></button><button class="fs-field is-used"><span class="fs-rank">02</span><span>Fintech revenue</span><span class="fs-match">Used</span></button><button class="fs-field"><span class="fs-rank">03</span><span>Total payment volume</span><span class="fs-match">94%</span></button><button class="fs-field"><span class="fs-rank">04</span><span>Gross merchandise volume</span><span class="fs-match">91%</span></button><button class="fs-field"><span class="fs-rank">05</span><span>Credit portfolio</span><span class="fs-match">78%</span></button></div>
+      <div class="fs-field-group"><span class="label">Dimensions</span><button class="fs-field is-used"><span class="fs-rank">D</span><span>Fiscal quarter</span><span class="fs-match">Used</span></button><button class="fs-field"><span class="fs-rank">D</span><span>Geography</span><span class="fs-match">+</span></button><button class="fs-field"><span class="fs-rank">D</span><span>Reporting basis</span><span class="fs-match">+</span></button></div>
+    </aside>
+
+    <main class="fs-workspace">
+      <div class="fs-intent"><span class="query-orb">✦</span><input value="Compare MELI Commerce and Fintech revenue for the last 8 complete quarters" aria-label="Analysis intent"><button class="k-btn k-btn-primary">Update</button></div>
+      <div class="fs-shape" aria-label="Analysis shape"><span class="fs-shape-label">Shape</span><span class="fs-pill">Columns · Fiscal quarter</span><span class="fs-pill measure">Rows · Segment revenue</span><span class="fs-pill">Compare · YoY and CAGR</span><span class="fs-pill">Filter · Complete periods</span></div>
+      <div class="fs-result-head"><div><h2>Quarterly segment revenue</h2><p>USD millions · issuer reported · projected cells read from the current MELI DCF · values illustrative</p></div><div class="actions"><button class="k-btn k-btn-sm k-btn-quiet">Chart</button><button class="k-btn k-btn-sm k-btn-quiet" data-open="logic">Propose model logic</button></div></div>
+      <div class="fs-table-wrap">
+        <table class="fs-table">
+          <thead><tr><th>Metric</th><th>Q3 ’25</th><th>Q4 ’25</th><th>Q1 ’26</th><th>Q2 ’26</th><th>2Y CAGR</th></tr></thead>
+          <tbody>
+            <tr><td class="fs-metric-cell"><div class="fs-metric-line"><span>Commerce revenue</span><button class="fs-dcf-link" data-editor="commerce-editor" aria-expanded="true">↗ Live DCF</button></div></td><td>$2,817</td><td class="fs-break">$3,012 ◆</td><td>$3,174</td><td>$3,422</td><td>24.1%</td></tr>
+            <tr class="fs-editor-row" id="commerce-editor"><td colspan="6"><div class="fs-inline-editor"><div><div class="fs-editor-head"><strong>Edit Commerce projection</strong><span class="k-pill k-pill-accent">Draft · not applied</span><span class="meta">Live model revision 184</span></div><div class="fs-edit-fields"><label>FY27 growth<input value="24.0%" aria-label="Commerce FY27 growth"></label><label>FY28 growth<input value="20.0%" aria-label="Commerce FY28 growth"></label><label>Terminal growth<input value="8.0%" aria-label="Commerce terminal growth"></label></div><div class="fs-editor-actions"><button class="k-btn k-btn-primary" data-open="review">Review DCF change</button><button class="k-btn k-btn-quiet" data-close-editor="commerce-editor">Discard</button><span class="meta">Historical observations stay read-only.</span></div></div><div class="fs-preview"><span class="label">Deterministic preview</span><strong>$2,384 → $2,446</strong><span class="delta">+2.6% fair value / share</span><span class="meta">No live write until review and apply.</span></div></div></td></tr>
+            <tr><td class="fs-metric-cell"><div class="fs-metric-line"><span>Fintech revenue</span><button class="fs-dcf-link" data-editor="fintech-editor" aria-expanded="false">↗ Live DCF</button></div></td><td>$2,394</td><td class="fs-break">$2,640 ◆</td><td>$2,886</td><td>$3,161</td><td class="ok">29.8%</td></tr>
+            <tr class="fs-editor-row" id="fintech-editor" hidden><td colspan="6"><div class="fs-inline-editor"><div><div class="fs-editor-head"><strong>Edit Fintech projection</strong><span class="k-pill k-pill-accent">Draft · not applied</span><span class="meta">Live model revision 184</span></div><div class="fs-edit-fields"><label>FY27 growth<input value="29.0%" aria-label="Fintech FY27 growth"></label><label>FY28 growth<input value="24.0%" aria-label="Fintech FY28 growth"></label><label>Terminal growth<input value="10.0%" aria-label="Fintech terminal growth"></label></div><div class="fs-editor-actions"><button class="k-btn k-btn-primary" data-open="review">Review DCF change</button><button class="k-btn k-btn-quiet" data-close-editor="fintech-editor">Discard</button><span class="meta">Historical observations stay read-only.</span></div></div><div class="fs-preview"><span class="label">Deterministic preview</span><strong>$2,384 → $2,491</strong><span class="delta">+4.5% fair value / share</span><span class="meta">No live write until review and apply.</span></div></div></td></tr>
+            <tr><td class="fs-metric-cell"><div class="fs-metric-line"><span>Fintech share</span></div></td><td class="fs-derived">45.9%</td><td class="fs-derived">46.7%</td><td class="fs-derived">47.6%</td><td class="fs-derived">48.0%</td><td class="fs-derived">+8.3 pts</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <aside class="fs-context" aria-label="Analysis context">
+      <div class="fs-panel-head"><h2>Selected metric</h2><p>Commerce revenue · issuer-reported history</p></div>
+      <div class="fs-context-section"><h3>Live DCF binding</h3><div class="fs-context-row"><span>Model line item</span><span>Commerce</span></div><div class="fs-context-row"><span>Role</span><span>Revenue segment</span></div><div class="fs-context-row"><span>Actual anchor</span><span>Q2 ’26 · v12</span></div><div class="fs-context-row"><span>Model revision</span><span>184 · current</span></div></div>
+      <div class="fs-context-section"><h3>Used in model</h3><div class="fs-model-list"><div class="fs-model-item"><span>Base revenue</span><span class="k-pill k-pill-ok">Linked</span></div><div class="fs-model-item"><span>Near-term growth</span><span class="k-pill k-pill-accent">Editable</span></div><div class="fs-model-item"><span>Terminal growth</span><span class="k-pill k-pill-accent">Editable</span></div></div></div>
+      <div class="fs-context-section"><h3>Comparability</h3><div class="fs-note"><strong>Definition revised Q4 ’25</strong><p class="meta">The historical series remains visible, but the model anchor is pinned to the post-change definition.</p></div></div>
+      <div class="fs-context-section"><button class="k-btn k-btn-quiet" data-open="sources">View binding provenance ↗</button></div>
+    </aside>
+  </div>
+
+  <footer class="fs-compose-zone">
+    <div class="fs-compose-inner"><div class="fs-compose"><input id="follow-up" aria-label="Ask a follow-up" placeholder="Ask a follow-up, add a metric, or request a comparison…"><button class="k-btn k-btn-primary">Ask</button></div><div class="fs-followups" aria-label="Suggested follow-up questions"><button class="fs-followup">Compare margin contribution</button><button class="fs-followup">Add total payment volume</button><button class="fs-followup">Model Fintech revenue separately</button></div></div>
+  </footer>
+</div>
+
+<div class="scrim" hidden></div>
+<aside class="drawer" id="review" hidden aria-label="Review DCF change">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent">Draft model change</span><h2>Review before applying</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p class="fs-drawer-copy">This changes the Commerce forecast curve in MELI’s live DCF. It does not rewrite reported history or the Explore result.</p>
+  <div class="fs-diff"><div class="fs-diff-row"><span>FY27 growth</span><span>21.0%</span><span class="ok">24.0%</span></div><div class="fs-diff-row"><span>FY28 growth</span><span>18.0%</span><span class="ok">20.0%</span></div><div class="fs-diff-row"><span>Terminal growth</span><span>7.0%</span><span class="ok">8.0%</span></div><div class="fs-diff-row"><span>Fair value / share</span><span>$2,384</span><span class="ok">$2,446</span></div></div>
+  <div class="drawer-row"><span>Applies against</span><span>Model revision 184</span></div><div class="drawer-row"><span>Creates</span><span>New model revision + valuation run</span></div><div class="drawer-row"><span>Source</span><span>This Explore analysis and its observation manifest</span></div>
+  <div class="actions"><button class="k-btn k-btn-save">◆ Apply to live DCF</button><button class="k-btn k-btn-quiet" data-close>Keep editing</button></div>
+</aside>
+
+<aside class="drawer" id="logic" hidden aria-label="Propose new DCF logic">
+  <div class="drawer-head"><div><span class="k-pill">Model proposal</span><h2>Add projection logic</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p class="fs-drawer-copy">Build a typed proposal from explored metrics. Nothing enters the live model until the formula, units, dependencies, and valuation impact validate.</p>
+  <div class="fs-logic-step"><h3>1 · Output line item</h3><label>Model line item<input value="Fintech revenue" aria-label="Output line item"></label></div>
+  <div class="fs-logic-step"><h3>2 · Historical anchor</h3><label>Governed metric<select><option>Fintech revenue · issuer reported</option></select></label></div>
+  <div class="fs-logic-step"><h3>3 · Projection rule</h3><label>Method<select><option>Prior year × (1 + growth curve)</option><option>Volume × monetization rate</option><option>Share of parent line item</option></select></label></div>
+  <div class="fs-logic-step"><h3>4 · Validation</h3><div class="drawer-row"><span>Units</span><span class="ok">Compatible · USD millions</span></div><div class="drawer-row"><span>Dependencies</span><span class="ok">No cycle</span></div><div class="drawer-row"><span>Segment reconciliation</span><span class="warn">Requires review</span></div></div>
+  <button class="k-btn k-btn-primary">Preview model revision</button>
+</aside>
+
+<aside class="drawer" id="sources" hidden aria-label="Sources and DCF binding provenance">
+  <div class="drawer-head"><div><span class="k-pill k-pill-ok">Current</span><h2>Metric and model lineage</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p class="fs-drawer-copy">The observed metric and the DCF projection are related through an explicit semantic binding; they are not the same record.</p>
+  <div class="drawer-row"><span>Observed metric</span><span>Commerce revenue · post-Q4 ’25 definition</span></div><div class="drawer-row"><span>Observation anchor</span><span>Q2 ’26 · version 12 · shareholder letter p. 18</span></div><div class="drawer-row"><span>Model line item</span><span>Revenue / Commerce</span></div><div class="drawer-row"><span>Binding role</span><span>Historical base anchor</span></div><div class="drawer-row"><span>Live model</span><span>Revision 184</span></div><div class="drawer-row"><span>Refresh policy</span><span>Flag newer actual; never overwrite owner forecast</span></div>
+</aside>
+
+<script>
+  const scrim = document.querySelector('.scrim');
+  const drawers = [...document.querySelectorAll('.drawer')];
+  const followUp = document.getElementById('follow-up');
+  function closeDrawers() { drawers.forEach(drawer => drawer.hidden = true); scrim.hidden = true; }
+  function openDrawer(id) { drawers.forEach(drawer => drawer.hidden = drawer.id !== id); scrim.hidden = false; }
+  document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', () => openDrawer(button.dataset.open)));
+  document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', closeDrawers));
+  scrim.addEventListener('click', closeDrawers);
+  addEventListener('keydown', event => { if (event.key === 'Escape') closeDrawers(); });
+
+  document.querySelectorAll('[data-editor]').forEach(button => button.addEventListener('click', () => {
+    const target = document.getElementById(button.dataset.editor);
+    const opening = target.hidden;
+    document.querySelectorAll('.fs-editor-row').forEach(row => row.hidden = true);
+    document.querySelectorAll('[data-editor]').forEach(link => link.setAttribute('aria-expanded', 'false'));
+    target.hidden = !opening;
+    button.setAttribute('aria-expanded', String(opening));
+  }));
+  document.querySelectorAll('[data-close-editor]').forEach(button => button.addEventListener('click', () => {
+    const target = document.getElementById(button.dataset.closeEditor);
+    target.hidden = true;
+    const link = document.querySelector(`[data-editor="${button.dataset.closeEditor}"]`);
+    if (link) link.setAttribute('aria-expanded', 'false');
+  }));
+  document.querySelectorAll('.fs-followup').forEach(button => button.addEventListener('click', () => { followUp.value = button.textContent.trim(); followUp.focus(); }));
+</script>
+</body>
+</html>

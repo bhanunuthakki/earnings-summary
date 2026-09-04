@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Explore · Forecast overlay approval prototype</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+  <link rel="stylesheet" href="explore_readonly_dcf.css">
+  <style>
+    /* Approval prototype only. Production must recompose the selected behavior
+       through the registered Explore family and shared interaction controls. */
+    .rx-app { min-height: 100dvh; background: var(--bg); }
+    .rx-prototype { min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--paper); }
+    .rx-prototype-label { color: var(--muted); font-size: var(--fs-caption); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .rx-scenarios { display: inline-flex; gap: 3px; }
+    .rx-scenario { min-height: 28px; padding: 4px 10px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--muted); cursor: pointer; font-weight: 650; }
+    .rx-scenario[aria-pressed="true"] { border-color: var(--border-2); background: var(--surface); color: var(--fg); }
+    .rx-head { min-height: 62px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 9px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .rx-title { min-width: 0; text-align: center; }
+    .rx-title h1 { margin: 0; font-size: var(--fs-title); }
+    .rx-title p { margin: 3px 0 0; color: var(--muted); font-size: var(--fs-caption); }
+    .rx-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+    .rx-main { width: min(1040px, calc(100% - 36px)); margin: 0 auto; padding: 24px 0 162px; }
+    .rx-context { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+    .rx-context h2 { margin: 0; font-size: var(--fs-display); }
+    .rx-context p { margin: 5px 0 0; color: var(--muted); }
+    .rx-analysis-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .rx-coverage { color: var(--muted); font-size: var(--fs-caption); white-space: nowrap; }
+    .rx-result { border-block: 1px solid var(--border); }
+    .rx-result-head { min-height: 56px; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 0 6px; }
+    .rx-result-head h3 { margin: 0; font-size: var(--fs-title); }
+    .rx-result-head p { margin: 3px 0 0; color: var(--muted); font-size: var(--fs-caption); }
+    .rx-chart { display: block; width: 100%; height: 255px; }
+    .rx-chart .grid { stroke: var(--border); }
+    .rx-chart .actual-a, .rx-chart .actual-b, .rx-chart .actual-c, .rx-chart .forecast-a, .rx-chart .forecast-b { fill: none; stroke-width: 2.5; }
+    .rx-chart .actual-a, .rx-chart .forecast-a { stroke: var(--accent); }
+    .rx-chart .actual-b, .rx-chart .forecast-b { stroke: var(--violet); }
+    .rx-chart .actual-c { stroke: var(--warn); }
+    .rx-chart .forecast-a, .rx-chart .forecast-b { stroke-dasharray: 7 6; }
+    .rx-chart .divider { stroke: var(--border-2); stroke-dasharray: 4 4; }
+    .rx-chart text { fill: var(--muted); font: 11px var(--sans); }
+    .rx-chart .data-label { fill: var(--fg-soft); font: 10px var(--mono); text-anchor: middle; }
+    .rx-chart .data-label-a { fill: var(--accent); }
+    .rx-chart .data-label-b { fill: var(--violet); }
+    .rx-chart .data-label-c { fill: var(--warn); }
+    .rx-chart .forecast-label { fill: var(--accent); font-weight: 700; }
+    .rx-legend { min-height: 32px; display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 4px 0 10px; color: var(--muted); font-size: var(--fs-caption); }
+    .rx-legend span::before { content: ""; display: inline-block; width: 10px; height: 2px; margin-right: 6px; vertical-align: 3px; background: currentColor; }
+    .rx-legend .a { color: var(--accent); }
+    .rx-legend .b { color: var(--violet); }
+    .rx-legend .c { color: var(--warn); }
+    .rx-legend .forecast::before { background: repeating-linear-gradient(90deg,currentColor 0 4px,transparent 4px 7px); }
+    .rx-model-band { margin: 2px 0 10px; border-block: 1px solid var(--border); }
+    .rx-model-head { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .rx-model-head strong { font-size: var(--fs-caption); }
+    .rx-model-head span { margin-left: 7px; color: var(--muted); font-size: var(--fs-caption); }
+    .rx-inputs { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); border-top: 1px solid var(--border); }
+    .rx-input { min-width: 0; padding: 10px 12px; border-right: 1px solid var(--border); }
+    .rx-input:last-child { border-right: 0; }
+    .rx-input span, .rx-input small { display: block; color: var(--muted); font-size: var(--fs-caption); }
+    .rx-input strong { display: block; margin: 3px 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); white-space: nowrap; }
+    .rx-model-foot { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--fs-caption); }
+    .rx-note { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: var(--fs-caption); }
+    .rx-narrative { max-width: 820px; margin: 10px auto 0; }
+    .rx-turn { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 12px; padding: 12px 0; }
+    .rx-turn + .rx-turn { border-top: 1px solid var(--border); }
+    .rx-avatar { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--border-2); border-radius: var(--radius-full); color: var(--muted); font-size: var(--fs-caption); font-weight: 750; }
+    .rx-avatar-ai { border-color: color-mix(in srgb,var(--accent) 45%,transparent); background: var(--accent-soft); color: var(--accent); }
+    .rx-turn-label { min-height: 28px; display: flex; align-items: center; color: var(--muted); font-size: var(--fs-caption); font-weight: 650; }
+    .rx-turn p { margin: 4px 0 0; color: var(--fg-soft); font-size: 15px; line-height: 1.65; }
+    .rx-turn strong { color: var(--fg); }
+    .rx-attachment { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+    .rx-attachment span { color: var(--muted); font-size: var(--fs-caption); }
+    .rx-compose-zone { position: fixed; inset: auto 0 0; z-index: 12; min-height: 144px; border-top: 1px solid var(--border); background: color-mix(in srgb,var(--bg) 96%,transparent); backdrop-filter: blur(16px); }
+    .rx-compose-inner { width: min(820px, calc(100% - 40px)); margin: 10px auto 0; }
+    .rx-compose-modes { display: flex; gap: 12px; margin: 0 0 5px 4px; }
+    .rx-compose-mode { padding: 2px 0 4px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: var(--fs-caption); font-weight: 700; }
+    .rx-compose-mode[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--fg); }
+    .rx-compose { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px; padding: 8px 8px 8px 13px; border: 1px solid var(--border-2); border-radius: var(--radius-card); background: var(--surface); }
+    .rx-compose input { width: 100%; border: 0; background: transparent; font-size: var(--fs-body); }
+    .rx-compose input:focus-visible { outline: 0; }
+    .rx-followups { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+    .rx-followup { padding: 3px 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: var(--fs-caption); }
+    .rx-followup:hover, .rx-followup:focus-visible { color: var(--accent); }
+    .rx-drawer-summary { margin-top: 14px; border-block: 1px solid var(--border); }
+    .rx-drawer-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .rx-drawer-row:last-child { border-bottom: 0; }
+    .rx-drawer-row span:last-child { color: var(--muted); font: var(--fs-caption) var(--mono); }
+    @media (max-width: 820px) {
+      .rx-prototype { align-items: flex-start; justify-content: flex-start; overflow-x: auto; }
+      .rx-prototype-label { padding-top: 6px; }
+      .rx-scenarios { min-width: max-content; }
+      .rx-head { grid-template-columns: 1fr auto; }
+      .rx-title { grid-column: 1 / -1; grid-row: 2; text-align: left; }
+      .rx-actions .rv-readonly { display: none; }
+      .rx-main { padding-top: 18px; }
+      .rx-context { align-items: flex-start; }
+      .rx-analysis-actions { max-width: 46%; }
+      .rx-coverage { width: 100%; text-align: right; }
+      .rx-inputs { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .rx-input:nth-child(2) { border-right: 0; }
+      .rx-input:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+      .rx-chart { height: 220px; }
+    }
+    @media (max-width: 560px) {
+      .rx-context { display: block; }
+      .rx-analysis-actions { max-width: none; justify-content: flex-start; margin-top: 12px; }
+      .rx-coverage { text-align: left; }
+      .rx-head { padding-inline: 12px; }
+      .rx-actions .k-btn-save { padding-inline: 9px; }
+    }
+  </style>
+</head>
+<body>
+<div class="rx-app">
+  <div class="rx-prototype" aria-label="Prototype state switcher">
+    <span class="rx-prototype-label">Preview state</span>
+    <div class="rx-scenarios">
+      <button class="rx-scenario" aria-pressed="true" data-scenario="covered">Fintech question</button>
+      <button class="rx-scenario" aria-pressed="false" data-scenario="mixed">Mixed coverage</button>
+      <button class="rx-scenario" aria-pressed="false" data-scenario="uncovered">No DCF metrics</button>
+    </div>
+  </div>
+
+  <header class="rx-head">
+    <a class="k-btn k-btn-quiet" href="explore_readonly_dcf_3_overlay.html">← Back to answer</a>
+    <div class="rx-title"><h1>MELI segment growth</h1><p>Explore · analysis in progress</p></div>
+    <div class="rx-actions"><span class="rv-readonly">DCF access is read-only</span><button class="k-btn k-btn-save" data-open="snapshot">◆ Save snapshot</button></div>
+  </header>
+
+  <main class="rx-main">
+    <section id="analysis-view">
+      <div class="rx-context">
+        <div><h2 id="analysis-title">“Tell me about the growth of the fintech business”</h2><p id="analysis-subtitle">Explore ranked the most relevant reported metrics and added matching DCF context.</p></div>
+        <div class="rx-analysis-actions">
+          <span class="rx-coverage" id="coverage-label">1 forecast series + 2 assumptions matched</span>
+          <button class="rv-toggle" id="dcf-toggle" aria-pressed="true">✓ DCF forecast included</button>
+          <button class="k-btn k-btn-quiet" id="table-toggle" aria-pressed="false">Table</button>
+        </div>
+      </div>
+
+      <div class="rx-result">
+        <div class="rx-result-head">
+          <div><h3 id="chart-title">Top fintech growth indicators</h3><p id="chart-subtitle">Indexed · Q2 ’25 = 100 · ranked by semantic relevance · values illustrative</p></div>
+          <div class="rv-chips" id="metric-chips"><span class="k-chip">1 · Fintech revenue</span><span class="k-chip">2 · TPV</span><span class="k-chip">3 · Fintech active users</span></div>
+        </div>
+
+        <svg class="rx-chart" viewBox="0 0 980 255" role="img" aria-label="Illustrative analysis chart with optional DCF forecast">
+          <line class="grid" x1="50" y1="208" x2="950" y2="208"/><line class="grid" x1="50" y1="132" x2="950" y2="132"/><line class="grid" x1="50" y1="56" x2="950" y2="56"/>
+          <g id="chart-covered">
+            <polyline class="actual-a" points="70,200 165,174 260,144 355,112 450,80"/>
+            <polyline class="actual-b" points="70,200 165,183 260,163 355,141 450,115"/>
+            <polyline class="actual-c" points="70,200 165,188 260,175 355,159 450,143"/>
+            <g aria-label="Reported data labels"><text class="data-label" x="70" y="194">100</text><text class="data-label data-label-a" x="165" y="166">123</text><text class="data-label data-label-a" x="260" y="136">151</text><text class="data-label data-label-a" x="355" y="104">185</text><text class="data-label data-label-a" x="450" y="72">224</text><text class="data-label data-label-b" x="165" y="200">119</text><text class="data-label data-label-b" x="260" y="156">140</text><text class="data-label data-label-b" x="355" y="134">163</text><text class="data-label data-label-b" x="450" y="108">190</text><text class="data-label data-label-c" x="165" y="181">116</text><text class="data-label data-label-c" x="260" y="192">132</text><text class="data-label data-label-c" x="355" y="176">151</text><text class="data-label data-label-c" x="450" y="160">172</text></g>
+            <g class="dcf-plot"><line class="divider" x1="450" y1="34" x2="450" y2="208"/><text x="462" y="47">DCF · revision 184 · auto-matched</text><polyline class="forecast-a" points="450,80 570,64 690,50 810,39 930,31"/><text class="data-label forecast-label" x="570" y="57">252E</text><text class="data-label forecast-label" x="690" y="43">281E</text><text class="data-label forecast-label" x="810" y="32">310E</text><text class="data-label forecast-label" x="930" y="24">338E</text></g>
+          </g>
+          <g id="chart-mixed" hidden>
+            <polyline class="actual-a" points="70,196 165,178 260,158 355,136 450,112"/>
+            <polyline class="actual-b" points="70,201 165,183 260,161 355,141 450,119"/>
+            <polyline class="actual-c" points="70,187 165,176 260,165 355,153 450,144"/>
+            <g><text class="data-label" x="70" y="190">100</text><text class="data-label data-label-a" x="165" y="170">122</text><text class="data-label data-label-a" x="260" y="150">147</text><text class="data-label data-label-a" x="355" y="128">176</text><text class="data-label data-label-a" x="450" y="104">209</text><text class="data-label data-label-b" x="450" y="136">198</text><text class="data-label data-label-c" x="450" y="161">171</text></g>
+            <g class="dcf-plot" hidden><line class="divider" x1="450" y1="34" x2="450" y2="208"/><text x="462" y="47">DCF · Fintech revenue only · auto-matched</text><polyline class="forecast-a" points="450,112 570,91 690,73 810,58 930,46"/><text class="data-label forecast-label" x="570" y="84">235E</text><text class="data-label forecast-label" x="690" y="66">264E</text><text class="data-label forecast-label" x="810" y="51">292E</text><text class="data-label forecast-label" x="930" y="39">318E</text></g>
+          </g>
+          <g id="chart-uncovered" hidden>
+            <polyline class="actual-a" points="70,197 165,181 260,160 355,142 450,120 570,105 690,88 810,74 930,61"/>
+            <polyline class="actual-b" points="70,202 165,188 260,171 355,151 450,131 570,113 690,97 810,82 930,69"/>
+            <polyline class="actual-c" points="70,189 165,180 260,169 355,156 450,146 570,132 690,119 810,108 930,96"/>
+            <g><text class="data-label" x="70" y="184">100</text><text class="data-label data-label-a" x="260" y="152">138</text><text class="data-label data-label-a" x="450" y="112">184</text><text class="data-label data-label-a" x="690" y="80">226</text><text class="data-label data-label-a" x="930" y="53">261</text><text class="data-label data-label-b" x="450" y="148">171</text><text class="data-label data-label-b" x="930" y="82">247</text><text class="data-label data-label-c" x="450" y="163">153</text><text class="data-label data-label-c" x="930" y="109">211</text></g>
+          </g>
+          <text id="period-label-a" x="58" y="233">FY24</text><text id="period-label-b" x="300" y="233">FY25</text><text id="period-label-c" x="430" y="233">FY26</text><text id="period-label-d" x="670" y="233">FY28E</text><text id="period-label-e" x="900" y="233">FY30E</text>
+        </svg>
+
+        <div class="rv-table-wrap" id="table-view" hidden><table class="rv-table"><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
+
+        <div class="rx-legend" id="legend-covered"><span class="a">Fintech revenue</span><span class="b">TPV</span><span class="c">Fintech active users</span><span class="a forecast dcf-legend">Fintech revenue · DCF</span></div>
+        <div class="rx-legend" id="legend-mixed" hidden><span class="a">Fintech revenue</span><span class="b">TPV</span><span class="c">Credit portfolio</span><span class="a forecast dcf-legend" hidden>Fintech · DCF</span></div>
+        <div class="rx-legend" id="legend-uncovered" hidden><span class="a">TPV</span><span class="b">GMV</span><span class="c">Credit portfolio</span></div>
+
+        <section class="rx-model-band" id="dcf-band" hidden aria-label="Read-only DCF inputs">
+          <div class="rx-model-head"><div><strong id="dcf-band-title">DCF context added automatically</strong><span>Live DCF · revision 184 · read-only</span> <button class="tip" aria-label="Why these DCF items matched" data-tip="Matched ‘fintech business’ to Fintech revenue, growth, and margin using segment identity, metric definitions, issuer aliases, and period/unit compatibility—not display-name equality.">?</button></div><button class="k-btn k-btn-sm k-btn-quiet" id="inputs-toggle" aria-expanded="false">Show inputs</button></div>
+          <div id="inputs-detail" hidden>
+            <div class="rx-inputs" id="covered-inputs">
+              <div class="rx-input"><span>Fintech growth</span><strong>27.0% → 9.0%</strong><small>near term → terminal</small></div>
+              <div class="rx-input"><span>Fintech margin</span><strong>8.2% → 15.0%</strong><small>near term → terminal</small></div>
+              <div class="rx-input"><span>Starting point</span><strong>Q2 ’26 actual</strong><small>admitted observation</small></div>
+              <div class="rx-input"><span>Model revision</span><strong>184</strong><small>current · read-only</small></div>
+            </div>
+            <div class="rx-inputs" id="mixed-inputs" hidden>
+              <div class="rx-input"><span>Fintech growth</span><strong>27.0% → 9.0%</strong><small>near term → terminal</small></div>
+              <div class="rx-input"><span>Fintech margin</span><strong>8.2% → 15.0%</strong><small>near term → terminal</small></div>
+              <div class="rx-input"><span>Starting point</span><strong>Q2 ’26 actual</strong><small>admitted observation</small></div>
+              <div class="rx-input"><span>Not modeled here</span><strong>TPV · credit</strong><small>historical only</small></div>
+            </div>
+            <div class="rx-model-foot"><span>Explore can inspect these assumptions but cannot change model logic.</span><button class="k-btn k-btn-sm k-btn-quiet">Open live DCF ↗</button></div>
+          </div>
+        </section>
+
+        <div class="rx-note"><span id="analysis-note">◆ Segment presentation changed in Q4 ’25; the model begins from the admitted post-change anchor.</span><button class="k-btn k-btn-sm k-btn-quiet">Definition history</button></div>
+      </div>
+    </section>
+
+    <section class="rx-narrative" id="narrative-view" hidden aria-label="Narrative Q and A">
+      <div class="rx-context"><div><h2>Ask about the analysis</h2><p>The same conversation box, now answering in narrative form.</p></div></div>
+      <div class="rx-turn"><div class="rx-avatar">You</div><div><div class="rx-turn-label">Your question</div><p id="narrative-question">What matters most in this segment trajectory?</p></div></div>
+      <div class="rx-turn"><div class="rx-avatar rx-avatar-ai">E</div><div><div class="rx-turn-label">Explore</div><p id="narrative-answer"><strong>Fintech is taking more of the growth burden.</strong> Its reported revenue CAGR is ahead of Commerce, and the current DCF preserves that gap before both segments decelerate. The Q4 ’25 definition change is the main comparability caveat.</p><div class="rx-attachment"><div><strong id="attachment-title">Segment revenue trajectory</strong><br><span id="attachment-meta">2 metrics · DCF revision 184 available</span></div><button class="k-btn k-btn-sm k-btn-quiet" data-mode-jump="analysis">View analysis ↗</button></div></div></div>
+    </section>
+  </main>
+
+  <footer class="rx-compose-zone">
+    <div class="rx-compose-inner">
+      <div class="rx-compose-modes" role="tablist" aria-label="Question mode"><button class="rx-compose-mode" role="tab" aria-selected="false" data-mode="narrative">Ask</button><button class="rx-compose-mode" role="tab" aria-selected="true" data-mode="analysis">Analyze data</button></div>
+      <div class="rx-compose"><input id="follow-up" aria-label="Ask Explore" placeholder="Add a metric, change the period, or request a comparison…"><button class="k-btn k-btn-primary" id="submit-label">Analyze</button></div>
+      <div class="rx-followups" id="followups"></div>
+    </div>
+  </footer>
+</div>
+
+<div class="scrim" hidden></div>
+<aside class="drawer" id="snapshot" hidden aria-label="Save immutable snapshot">
+  <div class="drawer-head"><div><span class="k-pill">Immutable save</span><h2>Save this exploration</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="save-form"><label>Name<input id="snapshot-name" value="MELI segment trajectory · Aug 30"></label><div class="rx-drawer-summary"><div class="rx-drawer-row"><span>Analysis specification and observations</span><span>PINNED</span></div><div class="rx-drawer-row" id="snapshot-dcf"><span>DCF revision 184</span><span>PINNED</span></div><div class="rx-drawer-row"><span>Narrative answer, if present</span><span>PINNED</span></div></div><button class="k-btn k-btn-save">◆ Save immutable snapshot</button><p class="meta" id="snapshot-note">The snapshot keeps this exact DCF revision. “Edit as new” later creates a child without changing the saved version.</p></div>
+</aside>
+
+<script>
+const scenarios={
+  covered:{title:'“Tell me about the growth of the fintech business”',subtitle:'Explore ranked three reported metrics, then added plot-compatible DCF context automatically.',coverage:'Semantic DCF match · 1 forecast + 2 assumptions',chartTitle:'Top fintech growth indicators',chartSubtitle:'Indexed · Q2 ’25 = 100 · ranked by semantic relevance · values illustrative',chips:['Top 3 of 18 available'],note:'TPV and active users remain reported-only; only Fintech revenue is projected.',question:'Tell me about the growth of the fintech business?',answer:'<strong>Fintech growth is broad-based.</strong> Revenue has grown fastest among the three most relevant reported indicators, with TPV and active users confirming operating momentum. The current DCF—matched through the Fintech segment definition rather than a name equality—keeps revenue growth elevated before it decelerates.',attachment:'3 reported metrics · DCF revision 184 auto-included',analysisFollowups:['Why did these metrics rank highest?','Compare reported growth with the DCF','Show absolute values'],askFollowups:['What matters for the thesis?','Why does the DCF decelerate?','What could break this trend?'],periods:["Q2 ’25","Q3 ’25","Q4 ’25","Q1 ’26","Q2 ’26","FY27E","FY28E","FY29E","FY30E"],table:[['1 · Fintech revenue','100','123','151','185','224','252E','281E','310E','338E'],['2 · TPV','100','119','140','163','190','—','—','—','—'],['3 · Fintech active users','100','116','132','151','172','—','—','—','—']]},
+  mixed:{title:'Growth drivers in context',subtitle:'Explore added the one plot-compatible DCF series and left the other metrics reported-only.',coverage:'Semantic DCF match · 1 of 3 series',chartTitle:'Fintech revenue, TPV and credit portfolio',chartSubtitle:'Indexed · Q2 ’25 = 100 · values illustrative',chips:['Top 3 semantically ranked'],note:'TPV and credit portfolio remain reported-only. The DCF overlay applies only to Fintech revenue.',question:'Do the operating metrics support the Fintech revenue forecast?',answer:'<strong>Broadly, but not one-for-one.</strong> TPV and the credit portfolio are growing alongside Fintech revenue, while only revenue has a formal DCF projection. Treat the operating series as evidence around the forecast—not as model inputs.',attachment:'3 metrics · 1 linked to DCF revision 184',analysisFollowups:['Why is only revenue projected?','Normalize from Q2 ’25','Remove credit portfolio'],askFollowups:['Does TPV support the forecast?','What is not in the DCF?','Explain the mismatch risk'],periods:["Q2 ’25","Q3 ’25","Q4 ’25","Q1 ’26","Q2 ’26","FY27E","FY28E","FY29E","FY30E"],table:[['Fintech revenue','100','122','147','176','209','235E','264E','292E','318E'],['TPV','100','119','140','163','198','—','—','—','—'],['Credit portfolio','100','112','132','150','171','—','—','—','—']]},
+  uncovered:{title:'Marketplace operating momentum',subtitle:'A historical operating view with no semantically compatible DCF relationship.',coverage:'',chartTitle:'TPV, GMV and credit portfolio',chartSubtitle:'Indexed · Q2 ’24 = 100 · reported history only',chips:['Top 3 semantically ranked'],note:'All three series are reported operating metrics. No model lens is relevant to this view.',question:'What is the operating story in these metrics?',answer:'<strong>Payments are compounding faster than marketplace volume.</strong> TPV leads GMV on this indexed view, while the credit portfolio expands more steadily. This is a historical operating comparison; none of these series is projected in the current DCF.',attachment:'3 reported metrics · no DCF relationship',analysisFollowups:['Show year-over-year growth','Use absolute values','Add take rate'],askFollowups:['What explains the TPV gap?','Is credit growth accelerating?','Summarize the operating story'],periods:["Q2 ’24","Q3 ’24","Q4 ’24","Q1 ’25","Q2 ’25","Q3 ’25","Q4 ’25","Q1 ’26","Q2 ’26"],table:[['TPV','100','118','138','159','184','202','226','244','261'],['GMV','100','115','129','150','171','192','211','231','247'],['Credit portfolio','100','109','121','137','153','169','184','198','211']]}
+};
+let activeScenario='covered',activeMode='analysis',overlayOn=false;
+const byId=id=>document.getElementById(id),scenarioButtons=[...document.querySelectorAll('[data-scenario]')],modeButtons=[...document.querySelectorAll('[data-mode]')],follow=byId('follow-up');
+function setHidden(id,hidden){byId(id).toggleAttribute('hidden',hidden)}
+function renderFollowups(items){byId('followups').innerHTML=items.map(item=>`<button class="rx-followup">${item}</button>`).join('');document.querySelectorAll('.rx-followup').forEach(button=>button.addEventListener('click',()=>{follow.value=button.textContent.trim();follow.focus()}))}
+function setOverlay(on){const hasDcf=activeScenario!=='uncovered';overlayOn=on&&hasDcf;const toggle=byId('dcf-toggle');toggle.setAttribute('aria-pressed',String(overlayOn));toggle.textContent=overlayOn?'✓ DCF forecast shown':'＋ Show DCF forecast';document.querySelectorAll('.dcf-plot,.dcf-legend').forEach(layer=>layer.toggleAttribute('hidden',!overlayOn));byId('dcf-band').hidden=!hasDcf;byId('snapshot-dcf').hidden=!hasDcf;byId('snapshot-note').textContent=hasDcf?'The snapshot keeps this exact semantic mapping and DCF revision. Hiding the forecast line does not remove its provenance.':'This snapshot pins the reported observations and analysis state without DCF context.'}
+function renderTable(state){byId('table-head').innerHTML=`<tr><th>Metric</th>${state.periods.map(period=>`<th>${period}</th>`).join('')}</tr>`;byId('table-body').innerHTML=state.table.map(row=>`<tr>${row.map(cell=>`<td${cell.includes('E')?' class="rv-model"':''}>${cell}</td>`).join('')}</tr>`).join('')}
+function renderScenario(key){activeScenario=key;const state=scenarios[key];scenarioButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.scenario===key)));byId('analysis-title').textContent=state.title;byId('analysis-subtitle').textContent=state.subtitle;byId('coverage-label').textContent=state.coverage;byId('chart-title').textContent=state.chartTitle;byId('chart-subtitle').textContent=state.chartSubtitle;byId('metric-chips').innerHTML=state.chips.map(item=>`<span class="k-chip">${item}</span>`).join('');byId('analysis-note').textContent=state.note;byId('narrative-question').textContent=state.question;byId('narrative-answer').innerHTML=state.answer;byId('attachment-title').textContent=state.title;byId('attachment-meta').textContent=state.attachment;['covered','mixed','uncovered'].forEach(name=>{setHidden(`chart-${name}`,name!==key);setHidden(`legend-${name}`,name!==key)});const hasDcf=key!=='uncovered';byId('dcf-toggle').hidden=!hasDcf;byId('coverage-label').hidden=!hasDcf;setHidden('covered-inputs',key!=='covered');setHidden('mixed-inputs',key!=='mixed');byId('dcf-band-title').textContent=key==='mixed'?'DCF context added · linked series only':'DCF context added automatically';[0,2,4,6,8].map(index=>state.periods[index]).forEach((label,index)=>byId(`period-label-${String.fromCharCode(97+index)}`).textContent=label);renderTable(state);byId('table-view').hidden=true;document.querySelector('.rx-chart').hidden=false;byId('table-toggle').setAttribute('aria-pressed','false');byId('table-toggle').textContent='Table';setOverlay(hasDcf);renderFollowups(activeMode==='analysis'?state.analysisFollowups:state.askFollowups)}
+function setMode(mode){activeMode=mode;modeButtons.forEach(button=>button.setAttribute('aria-selected',String(button.dataset.mode===mode)));setHidden('analysis-view',mode!=='analysis');setHidden('narrative-view',mode!=='narrative');follow.placeholder=mode==='analysis'?'Add a metric, change the period, or request a comparison…':'Ask what this means for MELI, the thesis, or the evidence…';byId('submit-label').textContent=mode==='analysis'?'Analyze':'Ask';renderFollowups(mode==='analysis'?scenarios[activeScenario].analysisFollowups:scenarios[activeScenario].askFollowups)}
+scenarioButtons.forEach(button=>button.addEventListener('click',()=>renderScenario(button.dataset.scenario)));
+modeButtons.forEach(button=>button.addEventListener('click',()=>setMode(button.dataset.mode)));
+document.querySelectorAll('[data-mode-jump]').forEach(button=>button.addEventListener('click',()=>setMode(button.dataset.modeJump)));
+byId('dcf-toggle').addEventListener('click',()=>setOverlay(!overlayOn));
+byId('table-toggle').addEventListener('click',()=>{const show=byId('table-view').hidden;byId('table-view').hidden=!show;document.querySelector('.rx-chart').hidden=show;document.querySelectorAll('.rx-legend').forEach(legend=>legend.hidden=show||legend.id!==`legend-${activeScenario}`);byId('table-toggle').setAttribute('aria-pressed',String(show));byId('table-toggle').textContent=show?'Chart':'Table'});
+byId('inputs-toggle').addEventListener('click',()=>{const detail=byId('inputs-detail'),show=detail.hidden;detail.hidden=!show;byId('inputs-toggle').setAttribute('aria-expanded',String(show));byId('inputs-toggle').textContent=show?'Hide inputs':'Show inputs'});
+function submitCurrentFixture(){const query=follow.value.trim();if(!query)return;scenarios[activeScenario].question=query;scenarios[activeScenario].title=`“${query.replace(/[?]+$/,'')}”`;renderScenario(activeScenario);setMode(activeMode);follow.value=''}
+byId('submit-label').addEventListener('click',submitCurrentFixture);follow.addEventListener('keydown',event=>{if(event.key==='Enter')submitCurrentFixture()});
+const scrim=document.querySelector('.scrim'),drawer=byId('snapshot');document.querySelector('[data-open]').addEventListener('click',()=>{drawer.hidden=false;scrim.hidden=false});function closeDrawer(){drawer.hidden=true;scrim.hidden=true}document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',closeDrawer));scrim.addEventListener('click',closeDrawer);addEventListener('keydown',event=>{if(event.key==='Escape')closeDrawer()});
+renderScenario('covered');setMode('analysis');
+</script>
+</body>
+</html>
