@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 
 # Fallback escape hatch env var
 ALLOW_FORCED_FALLBACK_ENV_VAR = "LLM_ALLOW_FORCED_FALLBACK"
+EXPLICIT_MODEL_POLICY_ENV_VAR = "LLM_EXPLICIT_MODEL_POLICY"
+PRIMARY_TIER_MODEL_POLICY = "primary-tier"
 
 
 class InvalidLLMPurposeError(ValueError):
@@ -249,7 +251,13 @@ def resolve_model_and_backend(
         elif fam == CLAUDE:
             from llm.cli import PRIMARY_CODEX, primary_subscription_backend
 
-            if model is None and primary_subscription_backend() == PRIMARY_CODEX:
+            explicit_model_is_tier = (
+                os.environ.get(EXPLICIT_MODEL_POLICY_ENV_VAR, "").strip().lower()
+                == PRIMARY_TIER_MODEL_POLICY
+            )
+            if (model is None or explicit_model_is_tier) and (
+                primary_subscription_backend() == PRIMARY_CODEX
+            ):
                 resolved_backend = "codex"
             else:
                 resolved_backend = "claude"

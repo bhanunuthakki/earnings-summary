@@ -405,6 +405,11 @@ def _invocation_inputs(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Restrict to a single ticker (case-insensitive)")
+    parser.add_argument(
+        "--automatic",
+        action="store_true",
+        help="Treat a --ticker restriction as scheduler scope, not an owner-requested acquisition",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print plan without DB writes")
     parser.add_argument(
         "--include-ir-transcripts",
@@ -459,7 +464,7 @@ def main() -> int:
                 source_type=SourceType.IR_DOC,
                 document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
                 provider=TranscriptProvider.ISSUER_IR,
-                owner_requested=bool(args.ticker),
+                owner_requested=bool(args.ticker) and not args.automatic,
                 existing_artifact=False,
                 existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
                 source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,

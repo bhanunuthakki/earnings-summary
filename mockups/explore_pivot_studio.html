@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explore · Pivot Studio prototype</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <div class="brand"><span class="brand-mark">[•]</span> Counterread</div>
+    <div class="nav-group"><p class="nav-label">L1 · Portfolio intelligence</p><a class="nav-item" href="#"><span class="nav-icon">▦</span>Portfolio Cockpit</a><a class="nav-item" href="#"><span class="nav-icon">⌁</span>Performance</a></div>
+    <div class="nav-group"><p class="nav-label">L2 · Research engine</p><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Company Desk</a><a class="nav-item" href="#"><span class="nav-icon">≛</span>Evaluation</a><a class="nav-item" href="#"><span class="nav-icon">▤</span>Brief Library</a><a class="nav-item active" href="#"><span class="nav-icon">⌗</span>Explore</a></div>
+    <div class="nav-group"><p class="nav-label">L3 · Operations</p><a class="nav-item" href="#"><span class="nav-icon">◫</span>Decision Audit Log</a><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Operations</a></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="crumb">Research <span> / </span> <strong>Explore</strong></div><div class="top-meta"><span class="k-pill k-pill-ok">● Data current</span><span class="mono">MELI</span></div></header>
+    <div class="content">
+      <div class="page-head"><div><div class="concept-tag">Direction 02 · Pivot Studio</div><h1>Explore</h1><p>A semantic data engine for analysts who want to shape the dataset themselves.</p></div><div class="actions"><button class="k-btn k-btn-quiet">New view</button><button class="k-btn k-btn-quiet">Open saved</button><button class="k-btn k-btn-save" data-open="save">◆ Save view</button></div></div>
+
+      <section class="query-bar" aria-label="Semantic query">
+        <div class="query-orb">✦</div>
+        <input value="Show MELI's segments for the last 2 years, quarterly" aria-label="Ask Explore to shape the pivot">
+        <button class="k-btn k-btn-quiet" data-open="logic">Preview changes</button>
+        <button class="k-btn k-btn-primary" id="apply-question">Apply to pivot</button>
+      </section>
+      <div class="truth-strip"><span class="k-pill k-pill-accent">Semantic co-pilot</span><span>Asks populate the same governed rows, columns, filters, and measures you can edit directly.</span><span class="tip" tabindex="0" data-tip="The co-pilot proposes field selections. The deterministic query engine executes the result.">?</span></div>
+
+      <section class="card studio">
+        <aside class="field-rail">
+          <div class="rail-head"><div class="side-block-head"><h2 class="title">Fields</h2><span class="tip" tabindex="0" data-tip="Human labels come from the semantic layer. Source identifiers remain available only in definition details.">?</span></div><input class="rail-search" type="search" placeholder="Search 248 governed fields"></div>
+          <div class="field-group"><div class="label">Recommended for this question</div><button class="field"><span>Commerce revenue</span><span class="field-type">$</span></button><button class="field"><span>Fintech revenue</span><span class="field-type">$</span></button><button class="field"><span>Operating ecosystem</span><span class="field-type">ABC</span></button><button class="field"><span>Fiscal quarter</span><span class="field-type">DATE</span></button><button class="field"><span>Year-over-year growth</span><span class="field-type">%</span></button></div>
+          <div class="field-group"><div class="label">Company fundamentals</div><button class="field"><span>Net revenue</span><span class="field-type">$</span></button><button class="field"><span>Gross profit</span><span class="field-type">$</span></button><button class="field"><span>Operating income</span><span class="field-type">$</span></button><button class="field"><span>Free cash flow</span><span class="field-type">$</span></button><button class="field"><span>Accounts receivable</span><span class="field-type">$</span></button></div>
+          <div class="field-group"><div class="label">Marketplace & payments</div><button class="field"><span>Gross merchandise volume</span><span class="field-type">$</span></button><button class="field"><span>Total payment volume</span><span class="field-type">$</span></button><button class="field"><span>Credit portfolio</span><span class="field-type">$</span></button></div>
+        </aside>
+
+        <div class="studio-center">
+          <div class="shelves">
+            <div class="shelf"><span class="label">Columns</span><div class="shelf-body"><span class="shelf-pill">Fiscal quarter <span>⌄</span></span></div></div>
+            <div class="shelf"><span class="label">Rows</span><div class="shelf-body"><span class="shelf-pill">Operating ecosystem <span>⌄</span></span></div></div>
+            <div class="shelf"><span class="label">Measures</span><div class="shelf-body"><span class="shelf-pill measure">Reported revenue <span>⌄</span></span><span class="shelf-pill measure">Year-over-year growth <span>⌄</span></span></div></div>
+            <div class="shelf"><span class="label">Filters</span><div class="shelf-body"><span class="shelf-pill">Company = MELI <span>×</span></span><span class="shelf-pill">Last 8 quarters <span>×</span></span><span class="shelf-pill">Has observation <span>×</span></span><button class="k-btn k-btn-sm k-btn-quiet">＋ Add filter</button></div></div>
+          </div>
+          <div class="studio-viz">
+            <div class="side-block-head"><div><h2 class="title">Segment revenue pivot</h2><div class="meta">Illustrative values · USD billions · issuer-reported</div></div><div class="actions"><button class="k-btn k-btn-sm k-btn-quiet">▦ Table</button><button class="k-btn k-btn-sm k-btn-quiet">⌁ Chart</button><button class="k-btn k-btn-sm k-btn-quiet">Format</button></div></div>
+            <table class="pivot-grid"><thead><tr><th>Operating ecosystem</th><th>Q3 ’24</th><th>Q4 ’24</th><th>Q1 ’25</th><th>Q2 ’25</th><th>Q3 ’25</th><th>Q4 ’25 ◆</th><th>Q1 ’26</th><th>Q2 ’26</th></tr></thead><tbody><tr><td>Commerce</td><td>1.56</td><td>1.79</td><td>2.03</td><td>2.29</td><td>2.57</td><td class="selected">2.88</td><td>3.24</td><td>3.61</td></tr><tr><td>Fintech</td><td>0.83</td><td>1.02</td><td>1.24</td><td>1.45</td><td>1.68</td><td class="selected">1.98</td><td>2.33</td><td>2.72</td></tr><tr><td><strong>Total</strong></td><td><strong>2.39</strong></td><td><strong>2.81</strong></td><td><strong>3.27</strong></td><td><strong>3.74</strong></td><td><strong>4.25</strong></td><td class="selected"><strong>4.86</strong></td><td><strong>5.57</strong></td><td><strong>6.33</strong></td></tr><tr><td>YoY growth</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="ok">+77.8%</td><td class="ok">+73.0%</td><td class="ok">+70.3%</td><td class="ok">+69.3%</td></tr></tbody></table>
+            <div class="footnote"><span class="warn">◆</span><span>Presentation revised beginning Q4 ’25. Values remain as reported; this column is selected so the comparability inspector can explain the break.</span></div>
+          </div>
+        </div>
+
+        <aside class="inspector">
+          <div class="inspector-head"><div class="side-block-head"><h2 class="title">Inspector</h2><span class="k-pill k-pill-warn">1 note</span></div><div class="meta">Selection: Q4 ’25</div></div>
+          <div class="inspect-section"><div class="label">Cell context</div><div class="inspect-list"><div class="inspect-line"><span>Company</span><span>MELI</span></div><div class="inspect-line"><span>Period</span><span>FY25 Q4</span></div><div class="inspect-line"><span>Unit</span><span>USD B</span></div><div class="inspect-line"><span>Basis</span><span>reported</span></div><div class="inspect-line"><span>Coverage</span><span>complete</span></div></div></div>
+          <div class="inspect-section"><div class="label">Comparability</div><div class="change-card" style="margin-top:10px"><strong>Definition revised</strong><p class="meta">The issuer changed segment presentation this quarter. Explore has not normalized across the break.</p><button class="k-btn k-btn-sm k-btn-quiet" data-open="definition">Open definition history ↗</button></div></div>
+          <div class="inspect-section"><div class="label">Source</div><p class="soft">Q4 ’25 shareholder letter<br><span class="meta">Segment note · p. 18</span></p><button class="k-btn k-btn-sm k-btn-quiet">Open source ↗</button></div>
+          <div class="inspect-section"><div class="label">View status</div><div class="inspect-list"><div class="inspect-line"><span>Rows returned</span><span>24</span></div><div class="inspect-line"><span>Missing observations</span><span>0</span></div><div class="inspect-line"><span>Query time</span><span>18 ms</span></div></div></div>
+        </aside>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" hidden></div>
+<aside class="drawer" id="definition" hidden aria-label="Definition history"><div class="drawer-head"><div><span class="k-pill k-pill-warn">Comparability note</span><h2>Definition history</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><h3>Selected field</h3><p>Operating ecosystem revenue</p><div class="drawer-row"><span>Q3 ’24–Q3 ’25</span><span>Prior issuer presentation</span></div><div class="drawer-row"><span>Q4 ’25 onward</span><span>Revised issuer presentation</span></div><div class="drawer-row"><span>Resolver action</span><span class="warn">Preserve both definitions; show a visible series break</span></div><h3>Why this is a drawer</h3><p>This is dense provenance and comparability context. The page keeps the warning compact, while the drawer preserves source language, locators, and the full disposition.</p></aside>
+<aside class="drawer" id="logic" hidden aria-label="Proposed pivot changes"><div class="drawer-head"><div><span class="k-pill k-pill-accent">Semantic co-pilot</span><h2>Proposed pivot changes</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="drawer-row"><span>Add row</span><span>Operating ecosystem</span></div><div class="drawer-row"><span>Add column</span><span>Fiscal quarter</span></div><div class="drawer-row"><span>Add measures</span><span>Reported revenue; Year-over-year growth</span></div><div class="drawer-row"><span>Add filters</span><span>MELI; last 8 quarters; has observation</span></div><div class="drawer-row"><span>Flag</span><span class="warn">Definition change beginning Q4 ’25</span></div><button class="k-btn k-btn-primary" style="margin-top:18px">Apply proposed changes</button></aside>
+<aside class="drawer" id="save" hidden aria-label="Save view"><div class="drawer-head"><div><span class="k-pill" style="color:var(--violet)">Save</span><h2>Save this pivot view</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="save-form"><label>View name<input value="MELI segment revenue pivot"></label><label>Save to<select><option>Explore library</option><option>MELI company desk</option><option>Brief workspace</option></select></label><label>Refresh behavior<select><option>Use latest reported observations</option><option>Freeze this observation version</option></select></label><button class="k-btn k-btn-save">◆ Save view</button><p class="meta">The saved view keeps its shelves, field definitions, source manifest, and comparability rules.</p></div></aside>
+
+<script>
+  const scrim = document.querySelector('.scrim'); const drawers = [...document.querySelectorAll('.drawer')];
+  function closeAll(){drawers.forEach(d=>d.hidden=true);scrim.hidden=true;}
+  document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>{closeAll();document.getElementById(b.dataset.open).hidden=false;scrim.hidden=false;}));
+  document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',closeAll)); scrim.addEventListener('click',closeAll); addEventListener('keydown',e=>{if(e.key==='Escape')closeAll();});
+</script>
+</body>
+</html>
