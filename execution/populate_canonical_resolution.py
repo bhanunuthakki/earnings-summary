@@ -19,7 +19,6 @@ from provenance.immutable_artifact import (  # noqa: E402
     ImmutableArtifactConflictError,
     ImmutableArtifactSnapshot,
     assert_artifact_unchanged,
-    path_aliases_any,
     population_database_lock_resources,
     publish_text_no_clobber,
     read_stable_artifact,
@@ -40,6 +39,10 @@ from provenance.population_canonical_resolution import (  # noqa: E402
     verify_canonical_resolution_receipt,
     verify_canonical_resolution_receipt_current,
 )
+from provenance.population_cli_harness import (  # noqa: E402
+    parse_timezone_aware_datetime,
+    validate_protected_receipt_path,
+)
 from provenance.population_document_processing import (  # noqa: E402
     DocumentProcessingOperationReceipt,
     verify_document_processing_receipt,
@@ -55,13 +58,7 @@ CanonicalPhase = Literal["resolutions", "snapshots", "projections", "all"]
 
 
 def _datetime(value: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("must be an ISO-8601 datetime") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise argparse.ArgumentTypeError("datetime must include a timezone")
-    return parsed
+    return parse_timezone_aware_datetime(value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -210,21 +207,12 @@ def validate_receipt_path(
 ) -> Path:
     """Reject output aliases to the database, sidecars, or input receipts."""
 
-    for path in (receipt, database, *protected_receipts):
-        require_no_reparse_points(path)
-    destination = Path(os.path.abspath(receipt))
-    database_path = Path(os.path.abspath(database))
-    protected = {
-        database_path,
-        *(
-            Path(os.path.abspath(f"{database_path}{suffix}"))
-            for suffix in ("-wal", "-shm", "-journal")
-        ),
-        *(Path(os.path.abspath(path)) for path in protected_receipts),
-    }
-    if path_aliases_any(destination, protected):
-        raise ValueError("canonical receipt aliases a protected artifact")
-    return destination
+    return validate_protected_receipt_path(
+        receipt,
+        database=database,
+        protected_receipts=protected_receipts,
+        conflict_message="canonical receipt aliases a protected artifact",
+    )
 
 
 def load_canonical_resolution_receipt_artifact(
