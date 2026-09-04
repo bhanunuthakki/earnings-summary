@@ -21,7 +21,7 @@ from typing import cast
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-from alerts import AlertRow, list_alerts, list_queued_actions_for_alert
+from alerts import AlertRow, list_alerts, list_queued_actions_for_alerts
 from identity import DEFAULT_USER_ID
 from user_state.ledger import list_recent_entries
 
@@ -108,8 +108,13 @@ def export_cio_workbook(
         ],
         [6, 9, 10, 22, 11, 18, 18, 80],
     )
+    actions_by_alert = (
+        list_queued_actions_for_alerts([alert.id for alert in alerts], db_path=db_path)
+        if alerts
+        else {}
+    )
     for alert in alerts:
-        for action in list_queued_actions_for_alert(alert.id, db_path):
+        for action in actions_by_alert.get(alert.id, []):
             ws_actions.append(
                 [
                     action.id,
