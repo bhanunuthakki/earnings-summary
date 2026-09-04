@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import quality.roadmap_freeze as roadmap_freeze
+import quality.roadmap_freeze_inventory as roadmap_inventory
 from quality.roadmap_freeze import RoadmapFreeze, validate_freeze
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,7 +45,7 @@ def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
     assert {
         "execution/comments_server.py",
         "src/pipeline/portfolio_panel.py",
-    }.issubset(freeze.selected_loc_crossings)
+    }.issubset({row.path for row in freeze.selected_loc_crossings})
     assert len(freeze.selected_loc_crossings) == 56
     assert freeze.target_arithmetic.migration_builders_baseline == 172
     assert freeze.target_arithmetic.migration_builders_to_convert == 112
@@ -84,6 +87,33 @@ def test_validator_proves_cutset_and_allows_missing_historical_perf_receipt(
     assert freeze.performance_snapshot.paired is False
 
 
+def test_validator_rejects_forged_performance_when_historical_receipt_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["performance_snapshot"].update(
+        {
+            "revision": "f" * 40,
+            "process_wall_seconds": 500.0,
+            "paired": True,
+            "evidence_status": "pass",
+            "network_isolation": "proven",
+        }
+    )
+    payload["evidence"]["performance"].update(
+        {"sha256": "0" * 64, "scoped_commit": "f" * 40, "scope": "WORKTREE"}
+    )
+    original_is_file = Path.is_file
+
+    def pretend_historical_receipt_is_missing(path: Path) -> bool:
+        if path.resolve() == (ROOT / roadmap_freeze.PERFORMANCE_RECEIPT).resolve():
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", pretend_historical_receipt_is_missing)
+    _assert_rejected(tmp_path, payload)
+
+
 def test_validator_rejects_tampered_performance_path(tmp_path: Path) -> None:
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     payload["evidence"]["performance"]["path"] = "tampered-performance.json"
@@ -110,6 +140,46 @@ def test_validator_rejects_tampered_type_cluster(tmp_path: Path) -> None:
     _assert_rejected(tmp_path, payload)
 
 
+def test_validator_rejects_self_hashed_forged_type_cluster_membership(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["type_debt_clusters"][0]["source_zone"] = "forged"
+    payload["type_debt_clusters_sha256"] = hashlib.sha256(
+        json.dumps(payload["type_debt_clusters"], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    _assert_rejected(tmp_path, payload)
+
+
+def test_type_debt_membership_uses_tracked_authority_when_raw_receipt_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    static = roadmap_inventory.read_json(ROOT, roadmap_freeze.STATIC_RECEIPT)
+    diagnostics = cast(list[dict[str, object]], static["diagnostics"])
+    pyright = next(row for row in diagnostics if row.get("tool") == "pyright")
+    receipt_path = pyright.get("receipt_path")
+    assert isinstance(receipt_path, str)
+    raw_path = (ROOT / receipt_path).resolve()
+    original_is_file = Path.is_file
+
+    def hide_raw_pyright(path: Path) -> bool:
+        return False if path.resolve() == raw_path else original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", hide_raw_pyright)
+    totals, clusters = roadmap_inventory.type_debt(ROOT, static)
+    assert totals == roadmap_freeze.FROZEN_TYPE_DEBT_TOTALS
+    assert len(clusters) == 61
+
+
+def test_validator_rejects_changed_estimate_matrix_even_when_totals_reconcile(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["cleanup_slices"][0]["estimated_prs"] -= 6
+    payload["cleanup_slices"][0]["estimated_calendar_weeks"] -= 1
+    payload["estimate_totals"]["total_estimated_prs"] = 150
+    payload["estimate_totals"]["critical_path_calendar_weeks"] = 56
+    _assert_rejected(tmp_path, payload)
+
+
 def test_validator_rejects_tampered_scc_source_path(tmp_path: Path) -> None:
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     payload["scc_cut_edges"][0]["source_path"] = "tampered.py"
@@ -119,4 +189,33 @@ def test_validator_rejects_tampered_scc_source_path(tmp_path: Path) -> None:
 def test_validator_rejects_tampered_issue_train_mapping(tmp_path: Path) -> None:
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     payload["issue_train_matrix"]["BHA-104"] = "Train 8"
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_mutated_mandatory_loc_cap(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    crossings = cast(list[dict[str, object]], payload["selected_loc_crossings"])
+    root = next(row for row in crossings if row.get("path") == "execution/comments_server.py")
+    root["target_cap"] = 601
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_train_dependency_reordering(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    deps = payload["train_plan"][2]["depends_on"]
+    payload["train_plan"][2]["depends_on"] = list(reversed(deps))
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_budget_mapping_omission_and_overlap(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["budget_mappings"].pop()
+    payload["budget_mappings"].append(dict(payload["budget_mappings"][0]))
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_status_or_closure_drift(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["artifact_acceptance_status"] = "HOLD"
+    payload["bha115_closure"]["rejudge_required"] = False
     _assert_rejected(tmp_path, payload)
