@@ -63,8 +63,6 @@ class SourceAnalysisSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     baseline_cold_seconds: tuple[PositiveFloat, ...] = ()
     current_cold_seconds: tuple[PositiveFloat, ...] = ()
-    baseline_warm_seconds: tuple[PositiveFloat, ...] = ()
-    current_warm_seconds: tuple[PositiveFloat, ...] = ()
     baseline_warmup_seconds: tuple[PositiveFloat, ...] = ()
     current_warmup_seconds: tuple[PositiveFloat, ...] = ()
     paired_delta_seconds: tuple[float, ...] = ()
@@ -78,6 +76,8 @@ class SourceAnalysisSummary(BaseModel):
     warmup_count: NonNegativeInt = 0
     regression_over_10_percent: bool = False
     rss_disposition: Literal["per-invocation", "unavailable"] = "unavailable"
+    trusted_scanner_sha256: str | None = None
+    trusted_scanner_wrapper_sha256: str | None = None
 
 
 class CompanionMeasures(BaseModel):

@@ -66,6 +66,41 @@ def _semantic_hash(path: Path) -> tuple[str, str, tuple[str, ...]]:
                 values.append(f"{sheet.title}!{cell.coordinate}={value}")
                 if isinstance(cell.value, str) and cell.value.startswith("="):
                     formulas.append(f"{sheet.title}!{cell.coordinate}={cell.value}")
+    # Formula/value parity alone misses workbook-level behavior. Keep this
+    # metadata explicit and deterministic so defined names, calculation
+    # policy, and hidden sheets cannot drift while cell hashes still match.
+    defined_names: list[dict[str, object]] = []
+    collection = getattr(workbook, "defined_names", {})
+    candidates = collection.values() if hasattr(collection, "values") else ()
+    for defined_name in candidates:
+        attrs = (
+            "name",
+            "localSheetId",
+            "hidden",
+            "function",
+            "vbProcedure",
+            "xlm",
+            "functionGroupId",
+            "shortcutKey",
+            "publishToServer",
+            "workbookParameter",
+            "attr_text",
+        )
+        defined_names.append(
+            {attribute: repr(getattr(defined_name, attribute, None)) for attribute in attrs}
+        )
+    calculation = getattr(workbook, "calculation", None)
+    calculation_attrs = getattr(calculation, "__attrs__", ())
+    calc_settings = {
+        attribute: repr(getattr(calculation, attribute, None)) for attribute in calculation_attrs
+    }
+    metadata = {
+        "defined_names": sorted(defined_names, key=lambda item: repr(item)),
+        "calculation": calc_settings,
+        "sheet_states": [(sheet.title, sheet.sheet_state) for sheet in workbook.worksheets],
+        "active_sheet": getattr(workbook.active, "title", None),
+    }
+    values.append(f"__workbook_metadata__={json.dumps(metadata, sort_keys=True)}")
     return (
         hashlib.sha256("\n".join(values).encode()).hexdigest(),
         hashlib.sha256("\n".join(formulas).encode()).hexdigest(),

@@ -31,6 +31,14 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _sha256_file(path: Path) -> str | None:
+    """Hash one local artifact; unreadable files cannot satisfy identity."""
+    try:
+        return _sha256_bytes(path.read_bytes())
+    except OSError:
+        return None
+
+
 def _git(root: Path, *args: str) -> str | None:
     try:
         result = subprocess.run(
@@ -192,6 +200,7 @@ __all__ = [
     "_git",
     "_managed_command",
     "_sha256_bytes",
+    "_sha256_file",
     "_source_hash",
     "_timing",
     "_tree_hash",

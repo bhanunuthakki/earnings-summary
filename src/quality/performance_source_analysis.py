@@ -29,9 +29,20 @@ from .performance_support import (
     _git,
     _managed_command,
     _sha256_bytes,
+    _sha256_file,
     _source_hash,
     _timing,
     _tree_hash,
+)
+
+# The source-analysis cohort must use this collector-pinned scanner.  A
+# revision under test may contain a file with the same name, but it cannot
+# replace the scanner process used to produce the receipt.
+_TRUSTED_SCANNER_RELATIVE_PATH = Path("execution/analyze_code_duplicates.py")
+_TRUSTED_SCANNER_IMPLEMENTATION_RELATIVE_PATH = Path("src/quality/duplicates.py")
+_TRUSTED_SCANNER_WRAPPER_SHA256 = "a58155146ef2042cf01ef0073f7e7e4423306ff23accf6773cd3da43b323b7d9"
+_TRUSTED_SCANNER_IMPLEMENTATION_SHA256 = (
+    "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e"
 )
 
 
@@ -54,6 +65,15 @@ def paired_source_analysis(
     """
     reasons: list[str] = []
     identity_reasons: list[str] = []
+    trusted_root = Path(__file__).resolve().parents[2]
+    trusted_wrapper = trusted_root / _TRUSTED_SCANNER_RELATIVE_PATH
+    trusted_implementation = trusted_root / _TRUSTED_SCANNER_IMPLEMENTATION_RELATIVE_PATH
+    trusted_wrapper_sha256 = _sha256_file(trusted_wrapper)
+    trusted_implementation_sha256 = _sha256_file(trusted_implementation)
+    if trusted_wrapper_sha256 != _TRUSTED_SCANNER_WRAPPER_SHA256:
+        identity_reasons.append("trusted duplicate scanner wrapper identity mismatch")
+    if trusted_implementation_sha256 != _TRUSTED_SCANNER_IMPLEMENTATION_SHA256:
+        identity_reasons.append("trusted duplicate scanner implementation identity mismatch")
     expected_commits = {
         baseline_revision: _git(root, "rev-parse", baseline_revision),
         current_revision: _git(root, "rev-parse", current_revision),
@@ -115,23 +135,20 @@ def paired_source_analysis(
                         completed_round = True
                         continue
                 output_path = snapshot / ".tmp" / "quality" / "performance-duplicates.json"
-                command = cohort.declared_command.format(
-                    repo_root=str(root), revision=revision, output=str(output_path)
-                )
-                try:
-                    argv = shlex.split(command)
-                except ValueError as exc:
-                    reasons.append(f"invalid cohort command: {exc}")
-                    completed_round = True
-                    continue
-                try:
-                    revision_index = argv.index("--revision")
-                    argv[revision_index + 1] = revision
-                except (ValueError, IndexError):
-                    reasons.append("source analysis command has no revision argument")
-                    completed_round = True
-                    continue
-                argv = _managed_command(snapshot, argv)
+                # Run the trusted collector scanner against the immutable
+                # revision selector. Never import or execute a script from
+                # the revision-under-test (including ``snapshot``).
+                argv = [
+                    sys.executable,
+                    str(trusted_wrapper),
+                    "--repo-root",
+                    str(root),
+                    "--revision",
+                    revision,
+                    "--out",
+                    str(output_path),
+                ]
+                argv = _managed_command(trusted_root, argv)
                 started = time.perf_counter()
                 try:
                     completed = subprocess.run(
@@ -166,6 +183,10 @@ def paired_source_analysis(
                     ):
                         identity_reasons.append(
                             f"inventory identity mismatch for revision {revision}"
+                        )
+                    if inventory.get("scanner_hash") != _TRUSTED_SCANNER_IMPLEMENTATION_SHA256:
+                        identity_reasons.append(
+                            f"inventory scanner identity mismatch for revision {revision}"
                         )
                     if rows <= 0:
                         reasons.append(f"source analysis scanned no files for revision {revision}")
@@ -280,6 +301,8 @@ def paired_source_analysis(
             warmup_count=2,
             regression_over_10_percent=timing_regression,
             rss_disposition="unavailable",
+            trusted_scanner_sha256=trusted_implementation_sha256,
+            trusted_scanner_wrapper_sha256=trusted_wrapper_sha256,
         ),
     )
     aggregate = CausalEvidence(

@@ -66,7 +66,6 @@ __all__ = [
 # Keep these facade aliases stable: callers and tests use them as seams for
 # the public baseline adapter and source-analysis subprocess boundary.
 _paired_source_analysis = paired_source_analysis
-_held_evidence_receipt = held_evidence_receipt
 
 _ROUTE_NAMES: tuple[str, ...] = (
     "/healthz",
@@ -306,7 +305,7 @@ def capture_performance_evidence(
     """Capture one declared cohort; missing causal companions fail closed."""
     canonical_cohort = COHORT_REGISTRY[cohort.cohort]
     if cohort.cohort == "source_analysis" and cohort != canonical_cohort:
-        return _held_evidence_receipt(
+        return held_evidence_receipt(
             cohort,
             command=cohort.declared_command,
             provenance=provenance,
@@ -331,7 +330,7 @@ def capture_performance_evidence(
             provenance=provenance,
         )
     if cohort.cohort == "ci" and cohort == canonical_cohort:
-        return _held_evidence_receipt(
+        return held_evidence_receipt(
             cohort,
             command=cohort.declared_command,
             provenance=provenance,

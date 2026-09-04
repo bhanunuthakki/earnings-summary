@@ -204,33 +204,43 @@ def test_source_analysis_runs_real_paired_revisions(tmp_path: Path) -> None:
     assert len(receipt.baseline.hold_reasons) == len(set(receipt.baseline.hold_reasons))
 
 
-def test_source_analysis_rejects_inventory_with_unbound_commit(tmp_path: Path) -> None:
+def test_source_analysis_uses_collector_pinned_scanner_for_malicious_revision(
+    tmp_path: Path,
+) -> None:
     root, baseline, current = _source_analysis_fixture(tmp_path)
-    code = (
-        "import json,sys; from pathlib import Path; "
-        "out=Path(sys.argv[sys.argv.index('--out')+1]); out.parent.mkdir(parents=True,exist_ok=True); "
-        "out.write_text(json.dumps(dict(files_scanned=1, scoped_revision="
-        "sys.argv[sys.argv.index('--revision')+1], commit_hash='UNCOMMITTED')))"
+    scanner = root / "execution" / "analyze_code_duplicates.py"
+    scanner.write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[sys.argv.index('--out') + 1])\n"
+        "out.parent.mkdir(parents=True, exist_ok=True)\n"
+        "out.write_text(json.dumps({'files_scanned': 999, 'scoped_revision': "
+        "sys.argv[sys.argv.index('--revision') + 1], 'commit_hash': 'forged', "
+        "'scanner_hash': 'forged'}))\n",
+        encoding="utf-8",
     )
-    command = (
-        f"{shlex.join([sys.executable, '-c', code])} "
-        "--repo-root {repo_root} --revision {revision} --out {output}"
+    subprocess.run(["git", "-C", str(root), "add", str(scanner)], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "--quiet", "-m", "malicious scanner"], check=True
     )
-    cohort = FrozenPerformanceCohort(cohort="source_analysis", declared_command=command)
+    current = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+    ).strip()
     receipt = getattr(performance, "_paired_source_analysis")(
         root,
-        cohort,
+        COHORT_REGISTRY["source_analysis"],
         samples=7,
         provenance="mac_guidance",
         baseline_revision=baseline,
         current_revision=current,
-        timeout_seconds=10,
+        timeout_seconds=30,
         config_paths=None,
     )
-    assert receipt.paired_identity is False
-    assert receipt.baseline.status == "HOLD"
-    assert any("inventory identity mismatch" in reason for reason in receipt.baseline.hold_reasons)
-    assert len(receipt.baseline.hold_reasons) == len(set(receipt.baseline.hold_reasons))
+    assert receipt.paired_identity is True
+    assert all(run.rows != 999 for run in receipt.causal_runs)
+    assert receipt.baseline.source_analysis is not None
+    assert receipt.baseline.source_analysis.trusted_scanner_sha256
+    assert receipt.baseline.source_analysis.trusted_scanner_wrapper_sha256
 
 
 def test_public_source_analysis_rejects_noncanonical_command_without_execution(
@@ -373,3 +383,22 @@ def test_dcf_registry_runs_disposable_staged_workload() -> None:
         for event in events
         if "stage" in event
     )
+
+
+def test_dcf_semantic_hash_includes_defined_names(tmp_path: Path) -> None:
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.workbook.defined_name import DefinedName
+
+    from execution.benchmark_dcf_workload import _semantic_hash
+
+    workbook_path = tmp_path / "defined-name.xlsx"
+    workbook = Workbook()
+    workbook.defined_names.add(DefinedName("ForecastInput", attr_text="'Sheet'!$A$1"))
+    workbook.save(workbook_path)
+    before = _semantic_hash(workbook_path)
+    workbook = load_workbook(workbook_path)
+    workbook.defined_names["ForecastInput"].attr_text = "'Sheet'!$A$2"
+    workbook.save(workbook_path)
+    after = _semantic_hash(workbook_path)
+    assert before[0] != after[0]
+    assert before[1] == after[1]

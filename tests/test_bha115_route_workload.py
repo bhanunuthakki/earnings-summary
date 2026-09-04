@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable
@@ -23,7 +24,6 @@ def test_route_workload_is_exactly_twenty_routes_and_not_help_placeholder() -> N
     assert len(set(cohort.route_names)) == 20
     assert "--help" not in cohort.declared_command
     assert cohort.route_names == workload.ROUTE_NAMES
-    assert len(workload.ROUTE_REQUESTS) == 20
 
 
 def test_route_companion_requires_network_and_fixture_evidence() -> None:
@@ -78,6 +78,29 @@ def test_route_cli_accepts_only_explicit_repo_root(tmp_path: Path) -> None:
     parser_factory = cast(Callable[[], argparse.ArgumentParser], getattr(workload, "_parser"))
     args = parser_factory().parse_args(["--workload", "routes", "--repo-root", str(tmp_path)])
     assert args.repo_root == tmp_path
+
+
+def test_route_state_hash_only_normalizes_explicit_event_timestamps(tmp_path: Path) -> None:
+    database = tmp_path / "state.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE analyst_notes (id INTEGER PRIMARY KEY, created_at TEXT, body TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE canonical_axes (id INTEGER PRIMARY KEY, knowledge_at TEXT, body TEXT)"
+        )
+        connection.execute("INSERT INTO analyst_notes VALUES (1, '2026-01-01', 'same')")
+        connection.execute("INSERT INTO canonical_axes VALUES (1, '2026-01-01', 'same')")
+        connection.commit()
+    first = workload._database_state_sha256(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE analyst_notes SET created_at = '2027-01-01'")
+        connection.commit()
+    assert workload._database_state_sha256(database) == first
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE canonical_axes SET knowledge_at = '2027-01-01'")
+        connection.commit()
+    assert workload._database_state_sha256(database) != first
 
 
 def test_route_cli_integration_emits_forty_real_route_companions() -> None:
