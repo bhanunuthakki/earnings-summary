@@ -16,6 +16,7 @@ import io
 import json
 import subprocess
 import sys
+import tarfile
 import tokenize
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -185,11 +186,8 @@ def _run(repo_root: Path, *args: str) -> str:
     return result.stdout
 
 
-def _tracked_python_paths(repo_root: Path, revision: str) -> tuple[str, ...]:
-    if revision == "WORKTREE":
-        raw = _run(repo_root, "git", "ls-files", "--", "src", "execution")
-    else:
-        raw = _run(repo_root, "git", "ls-tree", "-r", "--name-only", revision, "src", "execution")
+def _tracked_python_paths(repo_root: Path) -> tuple[str, ...]:
+    raw = _run(repo_root, "git", "ls-files", "--", "src", "execution")
     paths = {
         line.strip()
         for line in raw.splitlines()
@@ -198,10 +196,25 @@ def _tracked_python_paths(repo_root: Path, revision: str) -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
-def _read_source(repo_root: Path, revision: str, path: str) -> str:
-    if revision == "WORKTREE":
-        return (repo_root / path).read_text(encoding="utf-8")
-    return _run(repo_root, "git", "show", f"{revision}:{path}")
+def _revision_sources(repo_root: Path, revision: str) -> dict[str, str]:
+    result = subprocess.run(
+        ["git", "archive", "--format=tar", revision, "src", "execution"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git archive failed (exit {result.returncode})")
+    sources: dict[str, str] = {}
+    with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
+        for member in archive.getmembers():
+            if not member.isfile() or not member.name.endswith(".py"):
+                continue
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                raise RuntimeError(f"git archive member is unreadable: {member.name}")
+            sources[member.name] = extracted.read().decode("utf-8")
+    return dict(sorted(sources.items()))
 
 
 def _module_name(path: str) -> str:
@@ -433,8 +446,11 @@ def analyze_sources(sources: dict[str, str]) -> ArchitectureMetrics:
 
 
 def build_architecture_receipt(repo_root: Path, revision: str) -> ArchitectureReceipt:
-    paths = _tracked_python_paths(repo_root, revision)
-    sources = {path: _read_source(repo_root, revision, path) for path in paths}
+    if revision == "WORKTREE":
+        paths = _tracked_python_paths(repo_root)
+        sources = {path: (repo_root / path).read_text(encoding="utf-8") for path in paths}
+    else:
+        sources = _revision_sources(repo_root, revision)
     source_hasher = hashlib.sha256()
     for path, source in sources.items():
         source_hasher.update(path.encode("utf-8"))

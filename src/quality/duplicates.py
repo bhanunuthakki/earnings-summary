@@ -6,11 +6,13 @@ import argparse
 import ast
 import copy
 import hashlib
+import io
 import json
 import platform
 import re
 import subprocess
 import sys
+import tarfile
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -201,37 +203,22 @@ def _source_items(repo_root: Path, revision: str) -> list[tuple[str, bytes]]:
             for path in tracked_python_files(repo_root)
         ]
     try:
-        listing = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repo_root),
-                "ls-tree",
-                "-r",
-                "--name-only",
-                revision,
-                "src",
-                "execution",
-            ],
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "archive", "--format=tar", revision, "src", "execution"],
             check=True,
             capture_output=True,
-            text=True,
-        ).stdout
-        paths = sorted(
-            path
-            for path in listing.splitlines()
-            if path.endswith(".py") and path.startswith(("src/", "execution/"))
         )
         items: list[tuple[str, bytes]] = []
-        for path in paths:
-            raw = subprocess.run(
-                ["git", "-C", str(repo_root), "show", f"{revision}:{path}"],
-                check=True,
-                capture_output=True,
-            ).stdout
-            items.append((path, raw))
-        return items
-    except (OSError, subprocess.CalledProcessError) as exc:
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
+            for member in archive.getmembers():
+                if not member.isfile() or not member.name.endswith(".py"):
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ValueError(f"git archive member is unreadable: {member.name}")
+                items.append((member.name, extracted.read()))
+        return sorted(items)
+    except (OSError, subprocess.CalledProcessError, tarfile.TarError) as exc:
         raise ValueError(f"cannot read scoped revision {revision}") from exc
 
 
