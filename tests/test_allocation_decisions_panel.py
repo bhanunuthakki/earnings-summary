@@ -30,6 +30,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
+import pipeline.allocation_decisions_panel as adp  # noqa: E402
 from advisor.position_review import attest_review_changed  # noqa: E402
 from attribution import ConvictionAlphaRow, SkillDecomposition  # noqa: E402
 from decision_calibration import CalibrationStats  # noqa: E402
@@ -37,12 +38,14 @@ from integrations.portfolio_tracker_client import (  # noqa: E402
     BetaStats,
     LivePortfolio,
     LivePosition,
+    PortfolioAnalytics,
     PositionAlpha,
     PositionAlphaRow,
 )
 from pipeline.allocation_decisions_panel import (  # noqa: E402
     COACH_CHANGED_TARGET,
     SizingAuditRow,
+    SQLiteConnectionRole,
     _coach_digest_section,
     _coach_mutes_section,
     _coach_pings_section,
@@ -1186,3 +1189,150 @@ def test_stated_conviction_join_still_renders_the_table() -> None:
     html = _skill_decomposition_section(_decomp(by_conviction=rows), None)
     assert "<th>Conviction</th>" in html
     assert "Conviction &rarr; outcome is locked" not in html
+
+
+# --------------------------------------------------------------------------- #
+# Pooled panel-local reads: one READ_ONLY conn for four sections
+# --------------------------------------------------------------------------- #
+
+
+def _make_pool_db(path: Path) -> Path:
+    con = sqlite3.connect(str(path))
+    try:
+        con.executescript(
+            "CREATE TABLE advisor_memos(id INTEGER PRIMARY KEY, user_id TEXT, kind TEXT,"
+            " ticker TEXT, context_json TEXT, created_at TEXT);"
+            "CREATE TABLE stance_scores(id INTEGER PRIMARY KEY, memo_id INTEGER,"
+            " user_id TEXT, verdict TEXT, created_at TEXT);"
+            "CREATE TABLE decisions(id INTEGER PRIMARY KEY, ticker TEXT,"
+            " recommendation_kind TEXT, decided_by TEXT, made_at TEXT, created_at TEXT);"
+            "CREATE TABLE coach_pings(id INTEGER PRIMARY KEY, class_ TEXT, key TEXT,"
+            " ticker TEXT, body TEXT, status TEXT, created_at TEXT, updated_at TEXT);"
+            "CREATE TABLE coach_mutes(class_ TEXT PRIMARY KEY, muted_at TEXT, reason TEXT);"
+            "CREATE TABLE v_decision_journal(decision_id INTEGER, ticker TEXT, decided_by TEXT,"
+            " recommendation_kind TEXT, made_at TEXT, linked_memo_id INTEGER,"
+            " linked_memo_kind TEXT, advice_before_memo_id INTEGER, advice_before_memo_kind TEXT,"
+            " guard_override_flag INTEGER, owner_attested_change INTEGER, coach_ping_class TEXT,"
+            " decision_nudge_id INTEGER, user_action_kind TEXT, outcome_label TEXT,"
+            " outcome_pct REAL, stance_verdict TEXT);"
+            "CREATE TABLE tracked_companies(ticker TEXT, name TEXT, list_type TEXT, archived_at TEXT);"
+        )
+        con.execute(
+            "INSERT INTO advisor_memos VALUES(1,'bhanu','position_review','NU',"
+            "'{\"verdict_source\":\"guard_override\"}','2026-06-01T00:00:00')"
+        )
+        con.execute("INSERT INTO stance_scores VALUES(1,1,'bhanu','correct','2026-06-02T00:00:00')")
+        con.execute(
+            "INSERT INTO coach_pings VALUES(1,'falsifier_breach','k1','NU','b','sent',"
+            "'2026-07-05T00:00:00','2026-07-05T00:00:00')"
+        )
+        con.execute("INSERT INTO coach_mutes VALUES('falsifier_breach','2026-07-02T00:00:00',NULL)")
+        con.execute(
+            "INSERT INTO v_decision_journal VALUES(1,'NU','owner','watch','2026-07-25',"
+            "NULL,NULL,NULL,NULL,0,0,NULL,NULL,NULL,NULL,NULL,NULL)"
+        )
+        con.execute(
+            "INSERT INTO v_decision_journal VALUES(2,'WIX','advisor','buy','2026-07-24',"
+            "NULL,NULL,NULL,NULL,0,0,NULL,NULL,NULL,NULL,NULL,NULL)"
+        )
+        con.execute("INSERT INTO tracked_companies VALUES('NU','Nu','portfolio',NULL)")
+        con.commit()
+    finally:
+        con.close()
+    return path
+
+
+def _assert_usable(con: sqlite3.Connection) -> None:
+    assert con.execute("SELECT 1").fetchone()[0] == 1
+
+
+def _assert_closed(con: sqlite3.Connection) -> None:
+    with pytest.raises(sqlite3.ProgrammingError):
+        con.execute("SELECT 1")
+
+
+def test_pool_owned_supplied_equivalence(tmp_path: Path) -> None:
+    db = _make_pool_db(tmp_path / "pool.db")
+    now = datetime(2026, 7, 15)
+    exp_q = adp._query_coach_pnl(db, user_id="bhanu", now=now)
+    exp_pnl = adp._coach_pnl_section(db, user_id="bhanu", now=now)
+    exp_pings = adp._coach_pings_section(db, now=datetime(2026, 7, 10))
+    exp_mutes = adp._coach_mutes_section(db)
+    exp_journal = adp._decision_journal_section(db)
+    con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
+    con.row_factory = sqlite3.Row
+    try:
+        assert adp._query_coach_pnl(db, user_id="bhanu", now=now, conn=con) == exp_q
+        _assert_usable(con)
+        assert adp._coach_pnl_section(db, user_id="bhanu", now=now, conn=con) == exp_pnl
+        assert adp._coach_pings_section(db, now=datetime(2026, 7, 10), conn=con) == exp_pings
+        assert adp._coach_mutes_section(db, conn=con) == exp_mutes
+        assert adp._decision_journal_section(db, conn=con) == exp_journal
+        _assert_usable(con)
+    finally:
+        con.close()
+    _assert_closed(con)
+
+
+def test_pool_thin_missing_tables(tmp_path: Path) -> None:
+    db = tmp_path / "thin.db"
+    sqlite3.connect(str(db)).close()
+    assert adp._query_coach_pnl(db, user_id="bhanu").reviews_run == 0
+    con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
+    con.row_factory = sqlite3.Row
+    try:
+        assert adp._query_coach_pnl(db, user_id="bhanu", conn=con).reviews_run == 0
+        assert "Reviews run: <b>0</b>" in adp._coach_pnl_section(db, user_id="bhanu", conn=con)
+        assert "No pings this month." in adp._coach_pings_section(db, conn=con)
+        assert "No active mutes." in adp._coach_mutes_section(db, conn=con)
+        assert "No Owner Decisions recorded yet." in adp._decision_journal_section(db, conn=con)
+        _assert_usable(con)
+    finally:
+        con.close()
+
+
+def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _make_pool_db(tmp_path / "render.db")
+    exp_pnl = adp._coach_pnl_section(db, user_id="bhanu")
+    exp_mutes = adp._coach_mutes_section(db)
+    exp_journal = adp._decision_journal_section(db)
+    conns: list[sqlite3.Connection] = []
+    orig = adp.connect_sqlite
+
+    def _record(path: Path, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        c = orig(path, role=role)
+        conns.append(c)
+        return c
+
+    monkeypatch.setattr(adp, "connect_sqlite", _record)
+
+    def _live(*a: object, **k: object) -> LivePortfolio:
+        for c in conns:
+            _assert_closed(c)
+        return LivePortfolio(available=False, api_url="http://x", error="down")
+
+    def _analytics(*a: object, **k: object) -> PortfolioAnalytics:
+        for c in conns:
+            _assert_closed(c)
+        return PortfolioAnalytics(
+            available=False,
+            api_url="http://x",
+            position_alpha=None,
+            exit_quality=None,
+            beta=None,
+        )
+
+    monkeypatch.setattr(adp, "fetch_live_portfolio", _live)
+    monkeypatch.setattr(adp, "fetch_portfolio_analytics", _analytics)
+    monkeypatch.setattr(adp, "build_calibration", lambda *a, **k: None)
+    monkeypatch.setattr(adp, "latest_dcf_runs", lambda *a, **k: {})
+    monkeypatch.setattr(adp, "latest_dcf_scenarios", lambda *a, **k: {})
+    monkeypatch.setattr(adp, "_scorecard_html", lambda *a, **k: "<!--sc-->")
+    monkeypatch.setattr(adp, "_redteam_pnl_html", lambda *a, **k: "<!--rt-->")
+    monkeypatch.setattr(adp, "_annual_letter_html", lambda *a, **k: "<!--al-->")
+    monkeypatch.setattr(adp, "_coach_digest_section", lambda *a, **k: "<!--dg-->")
+    html = adp.render_allocation_decisions_panel(db, user_id="bhanu")
+    assert len(conns) == 2
+    for c in conns:
+        _assert_closed(c)
+    assert exp_pnl in html and exp_mutes in html and exp_journal in html
