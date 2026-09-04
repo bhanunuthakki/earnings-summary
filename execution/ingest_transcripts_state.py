@@ -51,6 +51,7 @@ def _bind_state(ingester: _IngestTranscripts, state_root: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--ticker", help="Restrict ingestion to one ticker")
     parser.add_argument("--no-promote", action="store_true")
     args = parser.parse_args(argv)
 
@@ -62,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
         "--db",
         str(state_root / "data" / "portfolio.db"),
     ]
+    if args.ticker:
+        legacy_argv.extend(["--ticker", args.ticker.upper(), "--automatic"])
     if args.no_promote:
         legacy_argv.append("--no-promote")
     original_argv = sys.argv

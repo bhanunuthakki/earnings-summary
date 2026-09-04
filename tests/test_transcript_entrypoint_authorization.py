@@ -648,7 +648,15 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["ingest_transcripts.py", "--db", str(db_path), "--no-promote"],
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "ACME",
+            "--automatic",
+            "--no-promote",
+        ],
     )
     assert ingest.main() == 0
     assert ingest.main() == 0

@@ -1,7 +1,8 @@
 @echo off
 REM Daily 06:30 (30 min after the earnings calendar watcher) — drain brief_dirty
 REM queue, refresh DCFs, regenerate briefs. Pass --enable-llm so §8 + §9 populate
-REM via the Claude CLI; falls back to Gemini if the CLI fails.
+REM through the central purpose/role router. The scheduler wrapper currently selects
+REM Codex membership and disables silent cross-provider fallback.
 REM
 REM TIER-AWARENESS (added by the scalability investment):
 REM   By default, daily_fetch_and_brief.py now intersects the dirty queue with
