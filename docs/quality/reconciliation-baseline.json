@@ -1,0 +1,158 @@
+{
+  "schema_version": "bha-121.v4",
+  "status": "PASS",
+  "claims": [
+    {
+      "name": "executable module count",
+      "provisional_expected": 1291,
+      "observed": 1311,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "c6e036532471214b19da9f807b94ac004660cdebd456beea11583d39aea119c6",
+        "locator": "$.metrics.executable_modules"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "strongly connected component count",
+      "provisional_expected": 16,
+      "observed": 17,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "c6e036532471214b19da9f807b94ac004660cdebd456beea11583d39aea119c6",
+        "locator": "$.metrics.scc_count"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "maximum internal fan-out",
+      "provisional_expected": 156,
+      "observed": 156,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "c6e036532471214b19da9f807b94ac004660cdebd456beea11583d39aea119c6",
+        "locator": "$.metrics.max_internal_fan_out"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "exact duplicate groups",
+      "provisional_expected": 140,
+      "observed": 8,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/duplicates-ratchet.json",
+        "sha256": "ec3c1a87fcf51647cc92c3d73eb9383003f39323cfa720eb14842bddee9d0e9e",
+        "locator": "$.exact_totals.groups"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "near-miss duplicate groups",
+      "provisional_expected": null,
+      "observed": 166,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/duplicates-ratchet.json",
+        "sha256": "ec3c1a87fcf51647cc92c3d73eb9383003f39323cfa720eb14842bddee9d0e9e",
+        "locator": "$.near_miss_totals.groups"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "full local suite seconds",
+      "provisional_expected": 1046.92,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "note": "The reported 1046.92-second run has no retained typed timing receipt; the claim is rejected and cannot score."
+    },
+    {
+      "name": "test files with direct command.upgrade",
+      "provisional_expected": 172,
+      "observed": 172,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/test-db-patterns-baseline.json",
+        "sha256": "aa604221f3a5392311d13034f805586d9442748b37bb49ceecfae259ada558ba",
+        "locator": "$.database_builders[*].evidence contains call:command.upgrade"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "Ruff diagnostics",
+      "provisional_expected": 2,
+      "observed": 2,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/static-baseline.json",
+        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
+        "locator": "$.diagnostics[tool=ruff].count"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "Ruff format files",
+      "provisional_expected": 61,
+      "observed": 62,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/static-baseline.json",
+        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
+        "locator": "$.diagnostics[tool=ruff-format].count"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "strict Pyright diagnostics",
+      "provisional_expected": 27924,
+      "observed": 4374,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/static-baseline.json",
+        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
+        "locator": "$.diagnostics[tool=pyright].count"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "type-suppression directives",
+      "provisional_expected": 588,
+      "observed": 621,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/static-baseline.json",
+        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
+        "locator": "$.diagnostics[tool=source-ignore-comments].count"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "unreachable executable-script queue",
+      "provisional_expected": 85,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "note": "The provisional 85-script scan has no retained generator/receipt and is not equivalent to reachability unknown edges; it is rejected, not reused."
+    }
+  ],
+  "scored_claims": 10,
+  "rejected_claims": 2,
+  "source_hash": "fba2756a3264077fdcfedadf0e35a663ca7a16fc349de2de0a85e60f63d49afd",
+  "violations": []
+}
