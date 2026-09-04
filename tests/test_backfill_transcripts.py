@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -53,12 +54,13 @@ def test_run_ingest_uses_repo_root_for_cwd_and_script_path(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    rc = mod._run_ingest(repo_root, dry_run=False)
+    rc = mod._run_ingest(repo_root, "AAPL", dry_run=False)
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
     assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
     assert captured["cmd"][2] == str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py")
     assert captured["cmd"][captured["cmd"].index("--repo-root") + 1] == str(repo_root)
+    assert captured["cmd"][captured["cmd"].index("--ticker") + 1] == "AAPL"
     assert captured["cmd"][-1] == "--no-promote"
 
 
@@ -100,7 +102,7 @@ def test_run_ingest_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) ->
         raise AssertionError("subprocess.run must not be called in dry-run")
 
     monkeypatch.setattr(mod.subprocess, "run", boom)
-    assert mod._run_ingest(Path("/nonexistent"), dry_run=True) == 0
+    assert mod._run_ingest(Path("/nonexistent"), "AAPL", dry_run=True) == 0
 
 
 def test_run_extract_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,9 +123,33 @@ def test_commitment_extraction_is_limited_to_newly_ingested_tickers() -> None:
         mod.TickerBackfillResult("NVDA", 1, aggregator_misses=["Q2_2026"]),
     ]
 
-    assert mod._newly_ingested_tickers(results, ingest_rc=0) == ["AAPL"]
-    assert mod._newly_ingested_tickers(results, ingest_rc=None) == []
-    assert mod._newly_ingested_tickers(results, ingest_rc=1) == []
+    assert mod._newly_ingested_tickers(
+        results,
+        ingest_results=[{"ticker": "AAPL", "rc": 0}],
+    ) == ["AAPL"]
+    assert (
+        mod._newly_ingested_tickers(
+            results,
+            ingest_results=[{"ticker": "AAPL", "rc": 1}],
+        )
+        == []
+    )
+
+
+def test_commitment_extraction_continues_for_successful_tickers_after_peer_failure() -> None:
+    mod = _load_module()
+    results = [
+        mod.TickerBackfillResult("AAPL", 9, fetched=["Q2_2026"]),
+        mod.TickerBackfillResult("MSFT", 6, fetched=["Q2_2026"]),
+    ]
+
+    assert mod._newly_ingested_tickers(
+        results,
+        ingest_results=[
+            {"ticker": "AAPL", "rc": 0},
+            {"ticker": "MSFT", "rc": 2},
+        ],
+    ) == ["AAPL"]
 
 
 def test_no_new_fetches_produce_no_commitment_extraction_scope() -> None:
@@ -133,7 +159,58 @@ def test_no_new_fetches_produce_no_commitment_extraction_scope() -> None:
         mod.TickerBackfillResult("MSFT", 6, aggregator_misses=["Q2_2026"]),
     ]
 
-    assert mod._newly_ingested_tickers(results, ingest_rc=None) == []
+    assert mod._newly_ingested_tickers(results, ingest_results=[]) == []
+
+
+def test_unreceipted_local_file_is_reacquired_before_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_recent_fiscal_quarters(*_args: object) -> list[tuple[int, int]]:
+        return [(2026, 2)]
+
+    def fake_has_ingested_evidence(*_args: object) -> bool:
+        return False
+
+    def fake_fetch_qa(spec: object, **kwargs: object) -> SimpleNamespace:
+        calls.append((spec, kwargs))
+        return SimpleNamespace(status=mod.FetchQaStatus.ACQUIRED)
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", fake_recent_fiscal_quarters)
+    monkeypatch.setattr(mod, "_has_ingested_evidence", fake_has_ingested_evidence)
+    monkeypatch.setattr(mod, "fetch_qa", fake_fetch_qa)
+
+    result = mod._backfill_one(
+        "NU",
+        12,
+        1,
+        mod.date(2026, 9, 4),
+        False,
+        tmp_path / "portfolio.db",
+        False,
+    )
+
+    assert result.fetched == ["Q2_2026"]
+    assert len(calls) == 1
+
+
+def test_ingest_success_requires_exact_evidence_for_every_fetched_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    result = mod.TickerBackfillResult("NU", 12, fetched=["Q2_2026", "Q1_2026"])
+    seen: list[tuple[object, ...]] = []
+
+    def has_evidence(*args: object) -> bool:
+        seen.append(args)
+        return args[2] == 2
+
+    monkeypatch.setattr(mod, "_has_ingested_evidence", has_evidence)
+
+    assert mod._fetched_evidence_complete(result) is False
+    assert seen == [("NU", 2026, 2, 12), ("NU", 2026, 1, 12)]
 
 
 def test_ingest_child_failure_is_terminal() -> None:

@@ -7,6 +7,7 @@ This runbook is the single current repository authority for collision avoidance 
 - Timezone is `America/Los_Angeles`.
 - Protect 03:00–05:00 daily. A material interactive or multi-agent burst must finish before that window; space planned bursts at least 6–7 hours apart.
 - Register every new scheduled LLM leg in the table below in the same change. Verify the live scheduler against the checked-in task definition before relying on its time.
+- Every checked-in task wrapper delegates through `cron/run_python.bat`. That seam maps `SCHEDULED_LLM_PRIMARY_PROVIDER` (default `codex`) to the app router and disables cross-provider subscription fallback by default; changing providers must not require editing task definitions or purpose/model semantics.
 - Scheduled work degrades per item on transient membership-transport failure: persist an explicit deferred tally and retry next run. Setup failures and configured hard budget stops remain loud and nonzero.
 - Resume a quota-interrupted agent when its context remains valid; do not repeat completed work.
 

@@ -161,6 +161,7 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
 
 PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR = "LLM_PRIMARY_SUBSCRIPTION_BACKEND"
+SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR = "LLM_SUBSCRIPTION_FALLBACK_DISABLED"
 _PRIMARY_CODEX = "codex"
 _PRIMARY_CLAUDE = "claude"
 _CODEX_FAST_MODEL = "gpt-5.6-luna"
@@ -986,6 +987,16 @@ def _primary_subscription_backend() -> str:
     return primary_subscription_backend()
 
 
+def subscription_fallback_disabled() -> bool:
+    """Return whether provider-family fallback is forbidden for this process."""
+    return os.environ.get(SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _codex_model_for(claude_model: str) -> str:
     """Map the existing eval-gated Claude quality tier onto Codex's tier."""
     return _CODEX_MODEL_BY_CLAUDE_TIER.get(claude_model, _CODEX_DEFAULT_MODEL)
@@ -1697,7 +1708,7 @@ def call_llm(
             )
             return text
         except (OSError, RuntimeError, ValueError) as codex_error:
-            if backend == "codex":
+            if backend == "codex" or subscription_fallback_disabled():
                 raise
             from log_redact import redact
 
@@ -2036,6 +2047,18 @@ def stream_llm(
             "type": "error",
             "error": "Ask monthly budget reached — raise the cap or wait for the reset.",
         }
+        return
+
+    # Streaming is a presentation detail, not a provider-routing authority.
+    # Historically this function looked only at the purpose's Claude-family
+    # model pin and launched ``claude -p`` directly, bypassing the canonical
+    # subscription-provider seam used by ``call_llm``. Scheduled Ask work thus
+    # woke Claude even while the application was configured Codex-first. Codex
+    # currently exposes a buffered membership transport here, so preserve the
+    # event contract as one delta + one final event while honoring the same
+    # reversible provider switch as every other call path.
+    if primary_subscription_backend() == _PRIMARY_CODEX:
+        yield from _buffered_stream_answer(prompt, purpose=purpose, backend="codex")
         return
 
     if family_of(model) != _CLAUDE_FAMILY:
@@ -2417,6 +2440,8 @@ def call_llm_with_web(
             )
             return text
         except (OSError, RuntimeError, ValueError) as codex_error:
+            if subscription_fallback_disabled():
+                raise
             from log_redact import redact
 
             log.warning(
