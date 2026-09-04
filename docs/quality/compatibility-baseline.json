@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "8d079ec3d7f4253bc24d2056d068c7a4909a0d82",
-  "source_sha256": "56f59d927d398ed51fb846cc061a7aa5edc2a721fdd789baadd83bad4d621d62",
+  "current_revision": "a5868f6631fc52b634e4c001d6cb1b0056a496b5",
+  "source_sha256": "38a14410ef5cd4ab93afc35abea4c6a4114480ee8323aeb569edbcd31f011378",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -417,9 +417,9 @@
     },
     {
       "path": "execution/backfill_transcripts.py",
-      "current_sha256": "05201a5f5009af95c0c2ab106a8ed56749913a7e02ebd0eda0be4784c6cfee30",
+      "current_sha256": "c485fa79d80a854d36754604a6b5a16968a2d15cc2c98db3fa35e9b44f9d141e",
       "baseline_sha256": "05201a5f5009af95c0c2ab106a8ed56749913a7e02ebd0eda0be4784c6cfee30",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/backtest_prompt_candidate.py",
@@ -1479,15 +1479,15 @@
     },
     {
       "path": "execution/ingest_transcripts.py",
-      "current_sha256": "35caa566440f9b2e434d3bf29677dd8d371b922b17799f54593da296f6baaaa7",
+      "current_sha256": "b46da8a238aae98840b1df7f160552f6870506036893cad92b6e88863daab00e",
       "baseline_sha256": "35caa566440f9b2e434d3bf29677dd8d371b922b17799f54593da296f6baaaa7",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/ingest_transcripts_state.py",
-      "current_sha256": "589af7a0adf1793c0dce067a00d4068be1d6e6aade9365ab21e2be5a71a8be10",
+      "current_sha256": "04132124ecb2b0b684330d4cc8a64b02aa03ea24d095e0cfbb3bbc641b8943eb",
       "baseline_sha256": "589af7a0adf1793c0dce067a00d4068be1d6e6aade9365ab21e2be5a71a8be10",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/initialize_semantic_review.py",
@@ -1500,6 +1500,12 @@
       "current_sha256": "d775f8117ae13db0d4825dbee2b40943b6858ed7efe4d1c488897029aff67492",
       "baseline_sha256": "d775f8117ae13db0d4825dbee2b40943b6858ed7efe4d1c488897029aff67492",
       "status": "unchanged"
+    },
+    {
+      "path": "execution/inventory_function_lifecycle.py",
+      "current_sha256": "5f297b7b83469e4b3650ab68b826eaece739accc9e673516e6c26a161a9e225f",
+      "baseline_sha256": null,
+      "status": "added"
     },
     {
       "path": "execution/inventory_static_quality.py",
@@ -4203,7 +4209,7 @@
     },
     {
       "path": "src/integrations/portfolio_tracker_client.py",
-      "current_sha256": "2eefbbdcffa459e853e48b4aee89e6ba7c1ab4b6219c7946b6194510074929ad",
+      "current_sha256": "22acf11c9d9fd882d16271ea831a072704503b91336f8636675bdf717bd3d968",
       "baseline_sha256": "658d47e4f5909fd481d15a14757b5782ccdfbbdbb373a2515e56a011c2e7d648",
       "status": "changed"
     },
@@ -4431,9 +4437,9 @@
     },
     {
       "path": "src/llm/cli.py",
-      "current_sha256": "1db0c20217f969cdd54f5c8b79df32dbac3bfd50d8a9f6f6399652e99c7f2e8e",
+      "current_sha256": "b6dd1e00c4b5ba717247bb1811d844b83387bc9b88ed3fcc4091e511d4f73ad1",
       "baseline_sha256": "1db0c20217f969cdd54f5c8b79df32dbac3bfd50d8a9f6f6399652e99c7f2e8e",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "src/llm/codex_backend.py",
@@ -4569,9 +4575,9 @@
     },
     {
       "path": "src/llm/resolver.py",
-      "current_sha256": "0aeabc021a20a57cd7f9a6ebf5ebf6e2ca0ed972e0d51f1f7078222ce47d5a51",
+      "current_sha256": "7a9ef974dc0b8da7307b80abf5abfefd9da674b6c1c5c2de976ccfcb4e93dcad",
       "baseline_sha256": "0aeabc021a20a57cd7f9a6ebf5ebf6e2ca0ed972e0d51f1f7078222ce47d5a51",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "src/llm/structured.py",
@@ -5469,7 +5475,7 @@
     },
     {
       "path": "src/pipeline/portfolio_panel.py",
-      "current_sha256": "8a3e685fe49fb45a3cabf1d106a9edf6f54fb9a58f3a38aa7175496a23fda33e",
+      "current_sha256": "cbefa98860f7ba18a84855ee6fcd9942a79360f3f7c34aade73fa65eb9d2a0c0",
       "baseline_sha256": "24ca15507b551f95b5f0cc035da5add613d8b34adc6501590af038216386222f",
       "status": "changed"
     },
@@ -6386,8 +6392,14 @@
       "status": "added"
     },
     {
+      "path": "src/quality/function_lifecycle.py",
+      "current_sha256": "6fce6d57077f595448fd4d01d705d688ae97cf8b16bc458888869b504b097343",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
       "path": "src/quality/lifecycle.py",
-      "current_sha256": "d47f98ac86f8f54f0c7e2fc2187381666bf01cf0fb8d820a860e553934181147",
+      "current_sha256": "1502eb6612a6d7783395aa3d3be43c7c955df70fc54417acd0541a6a670dc7f4",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6435,25 +6447,25 @@
     },
     {
       "path": "src/quality/reachability.py",
-      "current_sha256": "6e4f5e66a58a02e5fc8790ca4bda5d48f9a1d25b24d05b3edf5f53d1e685a739",
+      "current_sha256": "7ab9de941072b890c1e20a1c666e5a298edfd1371c0e900f8b8f4769628c55ae",
       "baseline_sha256": null,
       "status": "added"
     },
     {
       "path": "src/quality/roadmap_freeze.py",
-      "current_sha256": "c80be3e4ce9851c5cdd2abf11f6ec72084d1926ee120c28aad9c5d84296a789a",
+      "current_sha256": "40652ad28e27b76926ceaa3a8854e467345c82796da918c8892bb735def0c2c0",
       "baseline_sha256": null,
       "status": "added"
     },
     {
       "path": "src/quality/roadmap_freeze_contract.py",
-      "current_sha256": "36ac7b1f23b53e072b4224346c47e757131cdfcd19db2dd1f7b9066d7ab23282",
+      "current_sha256": "a06bc319e1c206947357385ff4d635f7cf16fda019578df315a2689a5bd9b68e",
       "baseline_sha256": null,
       "status": "added"
     },
     {
       "path": "src/quality/roadmap_freeze_inventory.py",
-      "current_sha256": "65feb7c179f4b3215fd600704184bdcd701abd95dd4829c5ac9a7d45f7270fa8",
+      "current_sha256": "0a871c2f886fd3b651e662a9b33ab51e700e9350a2e0d075fe172aecd09caa9f",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6465,7 +6477,7 @@
     },
     {
       "path": "src/quality/static_quality.py",
-      "current_sha256": "5767d90ca2fccf5a51080cfe07d1d51ed6ac3480badca0e2986db3f4cad521e6",
+      "current_sha256": "2cd4750a62722d3baf2ea492fe42c41e966b1dc9e2a0f8349f33ba661eb96097",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -8115,7 +8127,7 @@
     }
   ],
   "golden_count": 24,
-  "entrypoint_count": 1331,
+  "entrypoint_count": 1333,
   "categories": [
     {
       "name": "flask_url_method_endpoint_map",

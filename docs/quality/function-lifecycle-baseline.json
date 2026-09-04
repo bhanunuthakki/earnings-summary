@@ -1,0 +1,2075 @@
+{
+  "candidate_symbols": [
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 215,
+      "fingerprint": "701561499a7ce3b6849011c5f8fd7fd3fb2d7761e0d12f31c6599b75cf52678a",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 200,
+      "loc": 16,
+      "path": "execution/refetch_aggregator_transcripts.py",
+      "qualified_name": "execution.refetch_aggregator_transcripts._existing_txt_document",
+      "source_hash": "de57b3d98df98664bdef4d16164f9849f2ec7cb85ce061cba04323275c4f5b51",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 228,
+      "fingerprint": "5c77aacac536d47fcdca772bfa4324352c1285b2eddb87a23c6e32af5e608208",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 218,
+      "loc": 11,
+      "path": "execution/refetch_aggregator_transcripts.py",
+      "qualified_name": "execution.refetch_aggregator_transcripts._segment_stats",
+      "source_hash": "8144aaeb00d79a23da80d27d86081d7a529a9e42f6638ab636f874ee15cb524c",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 175,
+      "fingerprint": "2d3bb2ddc42a8a09836ea79a3382ee0bf9f27c0a06c8c6a0a1cb6dd6f821a3a3",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 168,
+      "loc": 8,
+      "path": "execution/run_weekly_cleanup.py",
+      "qualified_name": "execution.run_weekly_cleanup._collect_by_age",
+      "source_hash": "1e5a7e0296f3795469dca8929bca3806443f2270edd685b348487e4a89c4380f",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 218,
+      "fingerprint": "39caf81cb44dd97b6102e939481b7352ebb7b7011c8d06e1125f891e96e6f492",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 216,
+      "loc": 3,
+      "path": "src/ask/claims.py",
+      "qualified_name": "src.ask.claims._inline_cites",
+      "source_hash": "6a0e012692e7e0ffc9618f7f62dc3eae8cf96db4ad7ff6b54019a2efb801df2f",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 225,
+      "fingerprint": "983b2db5425bda6c34bbe9e4a628f4c3b0c38872b7712e773b6cd494af9b6f45",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 208,
+      "loc": 18,
+      "path": "src/compute/segment_oi_10k.py",
+      "qualified_name": "src.compute.segment_oi_10k._parse_period_ends",
+      "source_hash": "15b61d3b55db0ac6eba2f3d54a1ec5192cbe2f2f705b986e863834307c343bfd",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 252,
+      "fingerprint": "6df1c12e344c80ae15a0a8d129402301d925be02322ed6c33a03a80ef6d74592",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 250,
+      "loc": 3,
+      "path": "src/dcf/country_risk.py",
+      "qualified_name": "src.dcf.country_risk._latest_geo_revenue",
+      "source_hash": "6579ab1cdcd48ce03522cd34c3088d23e0c4544e4bff6526e131db86ec654725",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 987,
+      "fingerprint": "ad423460c1dabb381a24c74da900ea110f16b060346597af7c75ffcb1eb7b195",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 986,
+      "loc": 2,
+      "path": "src/llm/cli.py",
+      "qualified_name": "src.llm.cli._primary_subscription_backend",
+      "source_hash": "4f8b669bc8197ffb56fe1a5f475709af003a72cd8fa6fe34b5078e26d69cc82f",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 489,
+      "fingerprint": "22542e84ea9d1c2b6dad6280354664b74e4ce4856e34354cc3ed0dc3e0863346",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 475,
+      "loc": 15,
+      "path": "src/pipeline/issuer_document_coverage.py",
+      "qualified_name": "src.pipeline.issuer_document_coverage._source_preference_sql",
+      "source_hash": "8b0c87ffb1d10087149140b5065ccc731871797e76da0af2637735bfcb4db997",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 228,
+      "fingerprint": "5c7b65548b7b266cd7a2f88052decd102ad1bb4ee5851322c29f6bde1be01b31",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 222,
+      "loc": 7,
+      "path": "src/pipeline/work_os_briefs.py",
+      "qualified_name": "src.pipeline.work_os_briefs._current_coverage_roles",
+      "source_hash": "b300ff528c232e54669361a62670489b5bfa90e2fd83aa808ba819ed0869839e",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 2345,
+      "fingerprint": "047829fd621a4f6b3c39504384d7118d1e82d1142727c3c8e274d9cc509448ae",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 2338,
+      "loc": 8,
+      "path": "src/provenance/population_document_processing.py",
+      "qualified_name": "src.provenance.population_document_processing._sha_rows",
+      "source_hash": "27897c6dd0825c825c102645ad037a8d41c45716a27cbcbb106f04b503510340",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 1933,
+      "fingerprint": "e2031d6b52535085ee5d09d7c8a13f3c7af650088df8835c0df00eb3179a5dd9",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 1921,
+      "loc": 13,
+      "path": "src/provenance/population_metric_ontology.py",
+      "qualified_name": "src.provenance.population_metric_ontology._earliest_clock",
+      "source_hash": "16541ec899f296c5a0450c1b023d59c9a9ccd1de075c0c49adfd7a0dd06ce858",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 303,
+      "fingerprint": "e7eec5a7cfc7400b1cb6f997a52a0ae68aafabeeefbeeef9c9d5ac1b60a8bdac",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 274,
+      "loc": 30,
+      "path": "src/report/sections/portfolio_position.py",
+      "qualified_name": "src.report.sections.portfolio_position._recent_transactions",
+      "source_hash": "de1aaf320e1c0daf770df231bfd0ef7b4557aeb57a61b5e4ed4e69833e903e77",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 335,
+      "fingerprint": "704cafec0b01c885268afec3efcac497779fa8cf73ecdbef3d1b51e7e98d0ae4",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 306,
+      "loc": 30,
+      "path": "src/report/sections/portfolio_position.py",
+      "qualified_name": "src.report.sections.portfolio_position._open_decisions",
+      "source_hash": "9609b5bd42d2c3346068db61e5ba4d95638194ad3bd9b4a3cc71e2b7f6239439",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 371,
+      "fingerprint": "4414bb9fd0215c6f462435cc59f65c17857f987496c594d22fc095ed6a551c47",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 338,
+      "loc": 34,
+      "path": "src/report/sections/portfolio_position.py",
+      "qualified_name": "src.report.sections.portfolio_position._closed_decisions",
+      "source_hash": "f4ecb2e118192a9d0847a71825796739126ab6a6eb1a7d1c771ced6584cc2e2a",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 596,
+      "fingerprint": "24a161d18d07784a26a99fbb38cbdc6fcc72942c7f1af89503e5dc1daff52f07",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 595,
+      "loc": 2,
+      "path": "src/report/sections/segments.py",
+      "qualified_name": "src.report.sections.segments._optional_millions",
+      "source_hash": "81759b6fd73b630afa5ad4b641a9e5ad10653777e2f3611ac3c5667d9a95a12c",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 406,
+      "fingerprint": "0bbfb49578c736b3378ba14be04e051d178e072d82175a0f0795149cf977f07e",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 385,
+      "loc": 22,
+      "path": "src/report/sections/thesis.py",
+      "qualified_name": "src.report.sections.thesis._kpi_definition_meta",
+      "source_hash": "878677cb18d3d9b98940604833e4b83208dfa64c3c55ded71d1867b27916df60",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 548,
+      "fingerprint": "02e5a978c2a0f3a61c34e091d969714dcc12ce5e71b09851a8a601f273ddd9b3",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 540,
+      "loc": 9,
+      "path": "src/runtime/job_runtime.py",
+      "qualified_name": "src.runtime.job_runtime._stale_lock",
+      "source_hash": "1f2c1b4fa7b05d3c0dd082dd08ddda064de1ad4c2bf88a2c1e91a961e5edcebc",
+      "visibility": "private"
+    },
+    {
+      "classification": "unreferenced-static-candidate",
+      "decorators": [],
+      "dynamic_hazards": [],
+      "end_line": 1633,
+      "fingerprint": "cdf5988eed65fc0271dec05833ef668ca503ef7936d53d15f272efa7d13785b5",
+      "inbound_static_ref_count": 0,
+      "inbound_static_refs": [],
+      "kind": "function",
+      "line": 1615,
+      "loc": 19,
+      "path": "src/search/heterogeneous_retrieval.py",
+      "qualified_name": "src.search.heterogeneous_retrieval._bundles_from_members",
+      "source_hash": "24a2ef52df82bfdddc63cd483ad9a81ee9d8fa764838ec2727a7be0c9a27e117",
+      "visibility": "private"
+    }
+  ],
+  "counts": {
+    "protected": 11724,
+    "referenced": 15765,
+    "unknown": 6205,
+    "unreferenced-static-candidate": 18
+  },
+  "files_failed": [],
+  "files_scanned": 2462,
+  "inventory_hash": "7f792bcce0bf230b805ebf821a9a37f8215587e511c528919cd6ca6d5183d7c1",
+  "parser_version": "python-ast-3.11-v2",
+  "revision": "a5868f6631fc52b634e4c001d6cb1b0056a496b5",
+  "schema_version": "bha-109.v1",
+  "status": "PASS",
+  "symbol_count": 33712,
+  "tracked_tree_hash": "cbcda8a2ddcef917a64208e2fce1be8e4ba0a6da7bd99b15ccd569ac9cb815fa",
+  "unknown_hazard_counts": {
+    "class-method-dispatch": 556,
+    "cli-entrypoint": 413,
+    "decorator:app.after_request": 2,
+    "decorator:app.errorhandler": 1,
+    "decorator:property": 35,
+    "decorator:pytest.fixture": 124,
+    "dunder-protocol": 140,
+    "dynamic:__import__": 5,
+    "dynamic:exec": 1,
+    "dynamic:getattr": 294,
+    "dynamic:locals": 1,
+    "dynamic:setattr": 1979,
+    "dynamic:unbounded-reflection-in-module": 1172,
+    "public-module-symbol": 3651,
+    "string-or-reflection-reference": 3049,
+    "test-fixture-or-helper": 2964
+  },
+  "unknown_symbols": [
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 337,
+      "fingerprint": "a3d973dc5ed6ecaea5a89baf6ba730f0fe5e409dc5d5f34012c845eb9ba8b415",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 327,
+      "loc": 11,
+      "path": ".github/scripts/ci_gate.py",
+      "qualified_name": ".github.scripts.ci_gate.main",
+      "source_hash": "f7ff0e4a5833ecac7967e13d45400779b1d7cff86a2a1105d0c878b2e04f8edc",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 90,
+      "fingerprint": "f4274cd9addad702fda4d4c34e8481addf8953c01f71124a3bba3e3e9a35596e",
+      "inbound_static_ref_count": 3,
+      "inbound_static_refs": [
+        "cron/backup_db.py:233",
+        "cron/backup_db.py:286",
+        "tests/test_backup_restore.py:611"
+      ],
+      "kind": "function",
+      "line": 81,
+      "loc": 10,
+      "path": "cron/backup_db.py",
+      "qualified_name": "cron.backup_db._consistent_snapshot",
+      "source_hash": "7cda88deef48122eb0735836db71b27d7615efeecd1d1d0f59a5871e09c7cc44",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 157,
+      "fingerprint": "2316c26efdcaf593a76a4fa9eac16fb8ff8db7cf533a82db447365762a35c006",
+      "inbound_static_ref_count": 4,
+      "inbound_static_refs": [
+        "cron/backup_db.py:196",
+        "execution/restore_drill.py:333",
+        "tests/test_backup_restore.py:164",
+        "tests/test_scheduled_singleflight.py:516"
+      ],
+      "kind": "function",
+      "line": 132,
+      "loc": 26,
+      "path": "cron/backup_db.py",
+      "qualified_name": "cron.backup_db._start_accounting",
+      "source_hash": "c04bb9aee2e236e8c612ca16cc3f33128e428bfa9d061b7e250e32129498d25f",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 183,
+      "fingerprint": "12c6017d73a34f8c666c8d53dda9550dd4eeb208e9a740484d1e23df4647c006",
+      "inbound_static_ref_count": 5,
+      "inbound_static_refs": [
+        "cron/backup_db.py:222",
+        "cron/backup_db.py:252",
+        "cron/backup_db.py:256",
+        "execution/restore_drill.py:353",
+        "execution/restore_drill.py:366"
+      ],
+      "kind": "function",
+      "line": 160,
+      "loc": 24,
+      "path": "cron/backup_db.py",
+      "qualified_name": "cron.backup_db._finish_accounting",
+      "source_hash": "9cb997af21292aa311fa01a3c2bd5532eadc4f711307a1a56f203bfbf1276b2c",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 325,
+      "fingerprint": "be981226f386c787004f53bf6c2abc24b532fe2f6090f0edaa964ed6357a254b",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 300,
+      "loc": 26,
+      "path": "cron/backup_db.py",
+      "qualified_name": "cron.backup_db.main",
+      "source_hash": "a8304c395ef9f5f7b5480fdd583f1e6b0697f3fadb5162302aafb8c46c2f95cc",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 71,
+      "fingerprint": "533d2c2b6b3a53619ad84f662e465528a566ee2bca06dbb91ff0335a02ead286",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 55,
+      "loc": 17,
+      "path": "cron/migrate_legacy_backups.py",
+      "qualified_name": "cron.migrate_legacy_backups.main",
+      "source_hash": "f73f387eb692774fa6e6b6715a97921d8efdfbd9cb50151f53581b615ca93543",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 249,
+      "fingerprint": "f707401a441cd4163a67424ff3002b4f3c2e9af2796e6e2608515f89147582f7",
+      "inbound_static_ref_count": 13,
+      "inbound_static_refs": [
+        "cron/migrate_legacy_backups.py:48",
+        "cron/restore_db.py:314",
+        "execution/restore_drill.py:183",
+        "tests/test_backup_restore.py:185",
+        "tests/test_backup_restore.py:208",
+        "tests/test_backup_restore.py:219",
+        "tests/test_backup_restore.py:229",
+        "tests/test_backup_restore.py:257"
+      ],
+      "kind": "function",
+      "line": 193,
+      "loc": 57,
+      "path": "cron/restore_db.py",
+      "qualified_name": "cron.restore_db.restore_snapshot",
+      "source_hash": "53c862a8dc7fb3ff23ca02b915d79d0981336bc717140fcac04b8d88384f598d",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 335,
+      "fingerprint": "e7ee1f057a00a6b437d4f879a3217c27b6b4424443e42c4ee714c7021c6bf90d",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 252,
+      "loc": 84,
+      "path": "cron/restore_db.py",
+      "qualified_name": "cron.restore_db.main",
+      "source_hash": "703eb6b0ca8f73b89e5db49ddc7f9596b810f3695b0993469d3b5e3f8bc84328",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 44,
+      "fingerprint": "ca48c8cc48d58aa811f52fc94dc2b49bfe9d54791b63b9a6ca62d5e70df88c67",
+      "inbound_static_ref_count": 20,
+      "inbound_static_refs": [
+        "execution/backup_file_gc.py:245",
+        "execution/backup_file_gc.py:253",
+        "execution/backup_file_gc.py:255",
+        "execution/backup_file_gc.py:272",
+        "execution/backup_file_gc.py:279",
+        "execution/collect_operations_runtime_observations.py:1103",
+        "execution/collect_operations_runtime_observations.py:1114",
+        "execution/collect_operations_runtime_observations.py:1245"
+      ],
+      "kind": "function",
+      "line": 40,
+      "loc": 5,
+      "path": "execution/_lib.py",
+      "qualified_name": "execution._lib.log_event",
+      "source_hash": "b491bf299c9209de3fb557ad3b1f4acd431aba9ecae8f4609955a6d316152d79",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 66,
+      "fingerprint": "b5f1cf2b459fdb21fa38607db9af9e8041e83315249d499b9c1fac12f431c54e",
+      "inbound_static_ref_count": 1,
+      "inbound_static_refs": [
+        "tests/test_execution_lib.py:18"
+      ],
+      "kind": "function",
+      "line": 47,
+      "loc": 20,
+      "path": "execution/_lib.py",
+      "qualified_name": "execution._lib.standard_parser",
+      "source_hash": "e69aa49510fa7b2a4cf91199ccedbc28b33f3817d0a49e258709e7168197ec27",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 87,
+      "fingerprint": "d6872f03972fbbbf1256c404760b446ceed557bf07015936a79e61c38aa63e62",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 29,
+      "loc": 59,
+      "path": "execution/activate_data_cutover.py",
+      "qualified_name": "execution.activate_data_cutover.main",
+      "source_hash": "aa70d29280e16dd145873c7f411c350aafe77a09ff5aeea4cf58bf06f12e380d",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 155,
+      "fingerprint": "e6ed05a1362599d5575ffb76cc39b40efc9bc9e49c89538cdb42f76b53813919",
+      "inbound_static_ref_count": 11,
+      "inbound_static_refs": [
+        "execution/analyze_filing_intelligence.py:222",
+        "src/compute/company_description.py:139",
+        "src/compute/platform_diagram.py:113",
+        "src/compute/segment_crosstabs_llm.py:250",
+        "src/compute/segment_definitions.py:105",
+        "src/compute/segment_quarterly_6k.py:353",
+        "tests/test_compute_segment_crosstabs_llm.py:531",
+        "tests/test_compute_segment_crosstabs_llm.py:559"
+      ],
+      "kind": "function",
+      "line": 139,
+      "loc": 17,
+      "path": "execution/analyze_filing_intelligence.py",
+      "qualified_name": "execution.analyze_filing_intelligence._extract_relevant_text",
+      "source_hash": "70ff2b4296af87dfa0c6e962947c7efc896c4c895221773d99d89107eea36958",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 302,
+      "fingerprint": "a1477743c6a69a667414e4dc754b4c412ca72bda716e3aeaf86343411f6ce888",
+      "inbound_static_ref_count": 2,
+      "inbound_static_refs": [
+        "execution/analyze_filing_intelligence.py:324",
+        "tests/test_legacy_llm_structured_boundaries.py:112"
+      ],
+      "kind": "function",
+      "line": 172,
+      "loc": 131,
+      "path": "execution/analyze_filing_intelligence.py",
+      "qualified_name": "execution.analyze_filing_intelligence.analyze_for_ticker",
+      "source_hash": "6c8ca78e5fd12e2770295bf9867e9b375a174f84309c4d78b219e4d4617ecd59",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 348,
+      "fingerprint": "1af65948b7898bc13845d65ff85309278d6010bf127fb74b47ad09f9bf8166ef",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 305,
+      "loc": 44,
+      "path": "execution/analyze_filing_intelligence.py",
+      "qualified_name": "execution.analyze_filing_intelligence.main",
+      "source_hash": "2451920754ac8e8be2064a0185142f37e7d14b298cf8969b5534a19ad7de3edc",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 196,
+      "fingerprint": "a005c40b4033ffaca6308895368f405561a896bac4b2f149d25d05e7578e6429",
+      "inbound_static_ref_count": 8,
+      "inbound_static_refs": [
+        "execution/analyze_timeseries.py:241",
+        "execution/build_artifacts.py:623",
+        "execution/build_investment_decision_card.py:112",
+        "execution/build_offline_artifact.py:331",
+        "execution/eval_peer_selection_models.py:328",
+        "src/pipeline/offline_build_boundary.py:282",
+        "tests/test_build_artifacts_offline.py:612",
+        "tests/test_request_scoped_report_db.py:177"
+      ],
+      "kind": "function",
+      "line": 134,
+      "loc": 63,
+      "path": "execution/analyze_timeseries.py",
+      "qualified_name": "execution.analyze_timeseries.build_report",
+      "source_hash": "111aabece1d0080570f9949f6d937467185eb92dc777f8884f44485b8ef3a29c",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 276,
+      "fingerprint": "c42bc26e1daf680aabd3029ffe4a96fd80964f663085c5da01c56369e24c6243",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 199,
+      "loc": 78,
+      "path": "execution/analyze_timeseries.py",
+      "qualified_name": "execution.analyze_timeseries.main",
+      "source_hash": "9622455efa3c98153677693e00fa84bf27cead9ef338235b4bfcb0e4ee466804",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 47,
+      "fingerprint": "09095a71d6426040806ae113eb2bd6c476a5ea36b264594002386d1d975f2b61",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 25,
+      "loc": 23,
+      "path": "execution/apply_issuer_fact_manifest.py",
+      "qualified_name": "execution.apply_issuer_fact_manifest.main",
+      "source_hash": "e23e4f8a2d3ed44831eae2575c5cfe1036f5ded2b1f40dbf4a3635b9a5925cb1",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 214,
+      "fingerprint": "4d7811489e1e2eb40790986ded214bf6725631d4de312c95b01a38a10b115d45",
+      "inbound_static_ref_count": 3,
+      "inbound_static_refs": [
+        "execution/apply_kpi_semantic_dispositions.py:394",
+        "execution/apply_kpi_semantic_dispositions.py:534",
+        "tests/test_kpi_semantic_dispositions.py:275"
+      ],
+      "kind": "function",
+      "line": 202,
+      "loc": 13,
+      "path": "execution/apply_kpi_semantic_dispositions.py",
+      "qualified_name": "execution.apply_kpi_semantic_dispositions.publish_disposition_receipt",
+      "source_hash": "ebd0c5d9659e5022323c46a71283578adc08a6fe01e4b2bea546b5e4ea8a2f21",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 549,
+      "fingerprint": "4df4b90538dd1aea4720923a20159880377dd1d3b00016f3ed912e8303bc9726",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 375,
+      "loc": 175,
+      "path": "execution/apply_kpi_semantic_dispositions.py",
+      "qualified_name": "execution.apply_kpi_semantic_dispositions.main",
+      "source_hash": "c5b82020591acf5adc470714d6c2324ca4b8f640db489142dedcd541ff921257",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 425,
+      "fingerprint": "f712f52da158dedcb7de76dcdee11d4129bbc86793ab65f9f12796d9c93a2000",
+      "inbound_static_ref_count": 6,
+      "inbound_static_refs": [
+        "execution/apply_kpi_semantic_refresh.py:1043",
+        "execution/apply_kpi_semantic_refresh.py:460",
+        "execution/apply_kpi_semantic_refresh.py:978",
+        "tests/test_kpi_semantic_refresh_executor.py:510",
+        "tests/test_kpi_semantic_refresh_executor.py:525",
+        "tests/test_kpi_semantic_refresh_executor.py:547"
+      ],
+      "kind": "function",
+      "line": 385,
+      "loc": 41,
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "qualified_name": "execution.apply_kpi_semantic_refresh._validate_external_evidence",
+      "source_hash": "a37089010e570e8df2557ce04d7464ad521cdbae23e6140f21732018c18bdbc7",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 587,
+      "fingerprint": "b894ad100cc4035df0ffdd8b6bfa8385a9a3e00f4c5d2681a378b20d28d8011d",
+      "inbound_static_ref_count": 18,
+      "inbound_static_refs": [
+        "execution/apply_kpi_semantic_refresh.py:651",
+        "execution/apply_kpi_semantic_refresh.py:794",
+        "tests/test_kpi_semantic_refresh_executor.py:634",
+        "tests/test_kpi_semantic_refresh_executor.py:638",
+        "tests/test_kpi_semantic_refresh_executor.py:641",
+        "tests/test_kpi_semantic_refresh_executor.py:644",
+        "tests/test_kpi_semantic_refresh_executor.py:649",
+        "tests/test_kpi_semantic_refresh_executor.py:652"
+      ],
+      "kind": "function",
+      "line": 463,
+      "loc": 125,
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "qualified_name": "execution.apply_kpi_semantic_refresh._validate_source_binding",
+      "source_hash": "63de6a5f7342dc31d6b8a7e1b7891733be76a005b3f95f524c3846214313ea59",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 663,
+      "fingerprint": "e05b70b3effc5762558eb3bf03027ecfd8595c422f11b8d7cd41b58b0d941433",
+      "inbound_static_ref_count": 13,
+      "inbound_static_refs": [
+        "execution/apply_kpi_semantic_refresh.py:1093",
+        "execution/apply_kpi_semantic_refresh.py:667",
+        "tests/test_kpi_semantic_refresh_executor.py:1476",
+        "tests/test_kpi_semantic_refresh_executor.py:1515",
+        "tests/test_kpi_semantic_refresh_executor.py:1537",
+        "tests/test_kpi_semantic_refresh_executor.py:1546",
+        "tests/test_kpi_semantic_refresh_executor.py:754",
+        "tests/test_kpi_semantic_refresh_executor.py:796"
+      ],
+      "kind": "function",
+      "line": 590,
+      "loc": 74,
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "qualified_name": "execution.apply_kpi_semantic_refresh._validate_entry",
+      "source_hash": "f759108c28e8403af716b535151f8e021f694ddff48f8f49ed4aaa0f3c9d0116",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 719,
+      "fingerprint": "86e691312a94c0890116a8dcae1ded0e83ea878bcc9c3bec4d4ba2064bc4f77a",
+      "inbound_static_ref_count": 4,
+      "inbound_static_refs": [
+        "execution/apply_kpi_semantic_refresh.py:1105",
+        "tests/test_kpi_semantic_refresh_executor.py:1032",
+        "tests/test_kpi_semantic_refresh_executor.py:1482",
+        "tests/test_kpi_semantic_refresh_executor.py:1552"
+      ],
+      "kind": "function",
+      "line": 670,
+      "loc": 50,
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "qualified_name": "execution.apply_kpi_semantic_refresh._apply_entry",
+      "source_hash": "e6b76b33f2b1178089146d90306f16692b9fd3ef65e1dff8190d5bcc07b37cba",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 734,
+      "fingerprint": "5894edcab2b56ead40dc3825fc38d3fc16d8d1b4b1ebb2c2e509ae88d92ad06b",
+      "inbound_static_ref_count": 2,
+      "inbound_static_refs": [
+        "execution/apply_kpi_semantic_refresh.py:1124",
+        "tests/test_kpi_semantic_refresh_executor.py:1051"
+      ],
+      "kind": "function",
+      "line": 722,
+      "loc": 13,
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "qualified_name": "execution.apply_kpi_semantic_refresh._require_canonical_result_heads",
+      "source_hash": "9bab6128d67cc4e9bb1f1a9b559ac0ac8a4015decb4ecc55300fbb4af9e8f8a8",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 833,
+      "fingerprint": "24fd30154ac69c8abf6810c4a5721503144edf88ed4bac69c5211d0d23b23489",
+      "inbound_static_ref_count": 4,
+      "inbound_static_refs": [
+        "execution/apply_kpi_semantic_refresh.py:847",
+        "execution/apply_kpi_semantic_refresh.py:873",
+        "tests/test_kpi_semantic_refresh_executor.py:1489",
+        "tests/test_kpi_semantic_refresh_executor.py:1559"
+      ],
+      "kind": "function",
+      "line": 737,
+      "loc": 97,
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "qualified_name": "execution.apply_kpi_semantic_refresh._validate_applied_entry_postcondition",
+      "source_hash": "d08cc61e82098fc27fb16de593ad22f1c014de900cc23c351bc6df9e44694b6b",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 1206,
+      "fingerprint": "b8b3818d28406bc905200540d542b391efec6016cd800a8dc9236ba8090a3cb6",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 906,
+      "loc": 301,
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "qualified_name": "execution.apply_kpi_semantic_refresh.main",
+      "source_hash": "5aa246d0a7a74cb84b7a0933e5ae87e99fb1f4556a656246ca64621b5b18265f",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 814,
+      "fingerprint": "e8b073dda4f9e1ad66c8e0c30e23cd7e990226df4988fef333b97eca72ebddba",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 737,
+      "loc": 78,
+      "path": "execution/apply_model_switches.py",
+      "qualified_name": "execution.apply_model_switches.main",
+      "source_hash": "b3a56eb97f38ff290a5a2e3d5126733b6e0b280bd3b566a01fe5182f7ba0a72f",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 137,
+      "fingerprint": "20ed0bda5036d661df847acffc244f09459819313596ae5de8aee300a1dc2157",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 79,
+      "loc": 59,
+      "path": "execution/approve_queued_action.py",
+      "qualified_name": "execution.approve_queued_action.main",
+      "source_hash": "0798b705e4db867eb6ea95b7e8ab4110e187724bd230ed5521349ce47a88fd78",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 51,
+      "fingerprint": "5b4f014f54f611b5b61488ad4be190b98b0e40bb377b53dde7efb407ae922304",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 22,
+      "loc": 30,
+      "path": "execution/approve_windows_review_pins.py",
+      "qualified_name": "execution.approve_windows_review_pins.main",
+      "source_hash": "c2e77606d3218da35cfc4102b482548f8385d10bdc59f65221f88f2558e2961a",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 249,
+      "fingerprint": "856e22d3061f5eff9963f749c7311588f260da383f4954fa24f3490156115e36",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 158,
+      "loc": 92,
+      "path": "execution/ask_latency_baseline.py",
+      "qualified_name": "execution.ask_latency_baseline.main",
+      "source_hash": "2b33d46406a1a5865b8feececf2fde96ba957a026a3ee8910f9cac5e74f81696",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 214,
+      "fingerprint": "fb26fab33a4f50181bb7a61c3deb1577f8f6afeba1a721ee345058d33040e8c9",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 180,
+      "loc": 35,
+      "path": "execution/attribute_source_cost.py",
+      "qualified_name": "execution.attribute_source_cost.main",
+      "source_hash": "9afd5b475aefb614188f066c1eacb6679d1e2cc228580810145bff74e9ca1ef1",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 45,
+      "fingerprint": "be1203c1377bcd69d2c12d977ae33fda5bc02897f01dae8b1dd6c7ad211e020b",
+      "inbound_static_ref_count": 30,
+      "inbound_static_refs": [
+        "execution/audit_ask_retrieval_cutover.py:154",
+        "execution/backfill_recorded_subject_bindings.py:53",
+        "execution/benchmark_data_infrastructure.py:113",
+        "execution/benchmark_performance_workload.py:146",
+        "execution/bootstrap_issuer_reporting_registry.py:106",
+        "execution/bootstrap_sec_former_ticker.py:150",
+        "execution/bootstrap_sec_fund_registry.py:175",
+        "execution/bootstrap_sec_historical_issuer.py:101"
+      ],
+      "kind": "function",
+      "line": 37,
+      "loc": 9,
+      "path": "execution/audit_ask_retrieval_cutover.py",
+      "qualified_name": "execution.audit_ask_retrieval_cutover._parser",
+      "source_hash": "b24ceb8d86e687cea1b3f32886a9061d46a24f52cf7426a8c7849882a68e989e",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 150,
+      "fingerprint": "7032f33487ecea7b70aeb8437db47ac73b04ad3140300992126790a2d29f15f6",
+      "inbound_static_ref_count": 1,
+      "inbound_static_refs": [
+        "execution/audit_ask_retrieval_cutover.py:179"
+      ],
+      "kind": "function",
+      "line": 142,
+      "loc": 9,
+      "path": "execution/audit_ask_retrieval_cutover.py",
+      "qualified_name": "execution.audit_ask_retrieval_cutover._verify_claim_audit_budget",
+      "source_hash": "7426ce282d30136f2bb056d926d92bbcb43a1caba7234da1ad76bfad747aa6b0",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 202,
+      "fingerprint": "7180d4918382b7d638be9331463721dbc6e437e7b32a65663a4a7d21789fe795",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 153,
+      "loc": 50,
+      "path": "execution/audit_ask_retrieval_cutover.py",
+      "qualified_name": "execution.audit_ask_retrieval_cutover.main",
+      "source_hash": "f568586ffc2872eddd0ccecd56173f0c46bb3e3df83cec13e4bf1cb0fd6ae237",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 65,
+      "fingerprint": "ffcb38e879091d6483dc307f964dd58281179aa966c6e5c6fb2b75cba380deab",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 31,
+      "loc": 35,
+      "path": "execution/audit_data_cutover_readiness.py",
+      "qualified_name": "execution.audit_data_cutover_readiness.main",
+      "source_hash": "1ce132b95f5b68e1cc389bfd64bebfaac902514f410cdd305f7618b8cec4b39d",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 115,
+      "fingerprint": "2f0ed11d2fd5e500bb0fab3a56a2a603317acca5f77990f73f04f53f61d1ec44",
+      "inbound_static_ref_count": 155,
+      "inbound_static_refs": [
+        "execution/audit_dcf_outliers.py:124",
+        "execution/audit_deleted_table_recovery.py:157",
+        "execution/reconcile_source_disagreements.py:112",
+        "execution/reconcile_source_disagreements.py:131",
+        "execution/reconcile_source_disagreements.py:141",
+        "execution/refresh_cache.py:1941",
+        "execution/refresh_cache.py:2564",
+        "instruction_tests/test_instruction_contracts.py:266"
+      ],
+      "kind": "function",
+      "line": 65,
+      "loc": 51,
+      "path": "execution/audit_dcf_outliers.py",
+      "qualified_name": "execution.audit_dcf_outliers.audit",
+      "source_hash": "56152f0840380125d707d2e5df4a2e7a08c197a1f0154c92a3b6476ddfe1c7d2",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 150,
+      "fingerprint": "b7255d696cd3d714d7bf226d1a1fb5c66a3cd7636ae461490475760a2de258b5",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 118,
+      "loc": 33,
+      "path": "execution/audit_dcf_outliers.py",
+      "qualified_name": "execution.audit_dcf_outliers.main",
+      "source_hash": "e506e5e2a4760e2b927da1cccfb9d61277743b755fd2598b9ad203feebf0b354",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 50,
+      "fingerprint": "fd0429677c8dc4e496c6626ae4fe763e7cdd396483220a0e2724ce31dd624721",
+      "inbound_static_ref_count": 175,
+      "inbound_static_refs": [
+        "execution/audit_deleted_table_recovery.py:133",
+        "execution/audit_transcript_evidence.py:156",
+        "execution/audit_transcript_evidence.py:168",
+        "execution/backup_restore_readiness_receipt.py:171",
+        "execution/backup_restore_readiness_receipt.py:218",
+        "execution/capture_test_ci_performance.py:249",
+        "execution/capture_test_ci_performance.py:252",
+        "execution/capture_test_ci_performance.py:253"
+      ],
+      "kind": "function",
+      "line": 45,
+      "loc": 6,
+      "path": "execution/audit_deleted_table_recovery.py",
+      "qualified_name": "execution.audit_deleted_table_recovery._sha256",
+      "source_hash": "5df70ab81c548baca24e012b8abeabff6e268aa43c80b29ced7f718ac5f9a26d",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 141,
+      "fingerprint": "60ed1fa5a2b3deb8b12e382c85fade66caa94fd631d87dabca9b654cfa4c9a91",
+      "inbound_static_ref_count": 155,
+      "inbound_static_refs": [
+        "execution/audit_dcf_outliers.py:124",
+        "execution/audit_deleted_table_recovery.py:157",
+        "execution/reconcile_source_disagreements.py:112",
+        "execution/reconcile_source_disagreements.py:131",
+        "execution/reconcile_source_disagreements.py:141",
+        "execution/refresh_cache.py:1941",
+        "execution/refresh_cache.py:2564",
+        "instruction_tests/test_instruction_contracts.py:266"
+      ],
+      "kind": "function",
+      "line": 57,
+      "loc": 85,
+      "path": "execution/audit_deleted_table_recovery.py",
+      "qualified_name": "execution.audit_deleted_table_recovery.audit",
+      "source_hash": "3acf3410b9c36d31e05a85bbc81911efe133ea542dddfe58bdd9f9d617dd0d69",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 163,
+      "fingerprint": "b3be989033368051e1462c0926c93d91c547a383696b40a604be0a23118c4fbd",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 144,
+      "loc": 20,
+      "path": "execution/audit_deleted_table_recovery.py",
+      "qualified_name": "execution.audit_deleted_table_recovery.main",
+      "source_hash": "59dbb3c5afc8a95a6b0056a7d9b6766f0a5d3a8de33ecf15a9d4e2a2af84f57e",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 99,
+      "fingerprint": "a118d08063e626e14f8a5f93027385a8b8f449939845fd4b78ac09f1d82d6a71",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 41,
+      "loc": 59,
+      "path": "execution/audit_evidence_integrity.py",
+      "qualified_name": "execution.audit_evidence_integrity.main",
+      "source_hash": "1b0dd7d62155c5eab86497fa267b40fb2c3754f4297773777042b43b60a31f78",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 115,
+      "fingerprint": "ac79e14d9493dcd8d67d23b2676c87c96ba86badb5100edb61e126ed9a9c30a5",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 45,
+      "loc": 71,
+      "path": "execution/audit_gc_recovery.py",
+      "qualified_name": "execution.audit_gc_recovery.main",
+      "source_hash": "97cdf522f18a28d7d355ef2090bb2fe113466d76194b638f43a603a7cc8da866",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 152,
+      "fingerprint": "de79b245283a0fe595b681d35d1b656359a5d3531bd30574189cd8f29813ceec",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 123,
+      "loc": 30,
+      "path": "execution/audit_kpi_semantics.py",
+      "qualified_name": "execution.audit_kpi_semantics.main",
+      "source_hash": "0b27a23d6509f81ed6385616f712def5f6f6c3080116d74fdcd5e41f7572a07f",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 194,
+      "fingerprint": "ec8a370c602c8e36b4d28dfcedaa2dea221e8ba6d1f8462d5a0af3d81359780c",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 120,
+      "loc": 75,
+      "path": "execution/audit_segment_coverage.py",
+      "qualified_name": "execution.audit_segment_coverage.main",
+      "source_hash": "684adbfd37fad494d8745803ed1be358f199f63116458a3c68845b82ecc00cf5",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 91,
+      "fingerprint": "570848ea781a14f05d1795b1ec3f7ce90ab16a2050af898b0b8e8688f1e2abd1",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 63,
+      "loc": 29,
+      "path": "execution/audit_segment_quarterly_coverage.py",
+      "qualified_name": "execution.audit_segment_quarterly_coverage.main",
+      "source_hash": "00dc82a0d7555299eb4d2278af427ca51d2b04d3ce1ffa75dcc815c38014b531",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 101,
+      "fingerprint": "0bc5263bd1d6de73854e296e7b42ddcb89037131ab25861dba192212631549f7",
+      "inbound_static_ref_count": 51,
+      "inbound_static_refs": [
+        "execution/audit_segment_quarterly_coverage.py:64",
+        "execution/build_artifacts.py:261",
+        "execution/build_earnings_calendar.py:62",
+        "execution/build_investment_decision_card.py:127",
+        "execution/build_offline_artifact.py:417",
+        "execution/build_saydo_pairs.py:53",
+        "execution/cleanup_condition_alerts.py:244",
+        "execution/cleanup_material_news_alerts.py:115"
+      ],
+      "kind": "function",
+      "line": 94,
+      "loc": 8,
+      "path": "execution/audit_segment_quarterly_coverage.py",
+      "qualified_name": "execution.audit_segment_quarterly_coverage._parse_args",
+      "source_hash": "4a1b015b89c05954c0c405abcf5c360e7706d85227bb7746c01633dfd45ca7f7",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 112,
+      "fingerprint": "e352ef65ec04f8a4583057c8c6300313a148fa2f1743da8db61cf1af96dec4dc",
+      "inbound_static_ref_count": 55,
+      "inbound_static_refs": [
+        "execution/audit_segment_quarterly_coverage.py:74",
+        "execution/backfill_earnings_surprises.py:191",
+        "execution/backfill_transcripts.py:482",
+        "execution/build_artifacts.py:263",
+        "execution/build_comparable_sets.py:135",
+        "execution/build_saydo_pairs.py:55",
+        "execution/compute_derived_metrics.py:179",
+        "execution/compute_derived_metrics.py:91"
+      ],
+      "kind": "function",
+      "line": 104,
+      "loc": 9,
+      "path": "execution/audit_segment_quarterly_coverage.py",
+      "qualified_name": "execution.audit_segment_quarterly_coverage._resolve_tickers",
+      "source_hash": "6e26d2023ed6602a107796bbf4fead0ca6055f392646eb58996209d205699404",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 44,
+      "fingerprint": "228fe40ab8be86dccdb3725af244fe0aee43256e047af1db278456840e02d31a",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 16,
+      "loc": 29,
+      "path": "execution/audit_test_db_patterns.py",
+      "qualified_name": "execution.audit_test_db_patterns.main",
+      "source_hash": "aeeb234164d46114dfff03edd3dc584e0722449256cb36ad53eae5adffe110d3",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 241,
+      "fingerprint": "bcf077ebd3a03285c807aad75f856a5cb5d080ef38f00bf66f166f7ccdd41428",
+      "inbound_static_ref_count": 16,
+      "inbound_static_refs": [
+        "execution/audit_thesis_episode_clone.py:260",
+        "execution/audit_thesis_episode_clone.py:278",
+        "execution/audit_thesis_episode_clone.py:285",
+        "execution/refresh_dcf.py:124",
+        "execution/refresh_dcf.py:226",
+        "src/dcf/provenance.py:68",
+        "src/pipeline/sec_delta_admission.py:61",
+        "src/provenance/image_ocr_extraction.py:294"
+      ],
+      "kind": "function",
+      "line": 236,
+      "loc": 6,
+      "path": "execution/audit_thesis_episode_clone.py",
+      "qualified_name": "execution.audit_thesis_episode_clone._sha256_file",
+      "source_hash": "f89ee9cbc51e12ad28c83513edc3f2887f1e956cb3847df7da3ffc999f7803b9",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 977,
+      "fingerprint": "a06ff14b7a56568a1a08cef162d246629a70c5f6b062f77fdf0e857a14d4902d",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 919,
+      "loc": 59,
+      "path": "execution/audit_thesis_episode_clone.py",
+      "qualified_name": "execution.audit_thesis_episode_clone.main",
+      "source_hash": "b4d7b79948bc12e71798b9bed422d35190ecd00284e1f1c7ce0c3208acdb6340",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 58,
+      "fingerprint": "48b836a97806f4d9b43a298feed185c2f92b6dab8489a305b586e3eed1e31ab5",
+      "inbound_static_ref_count": 175,
+      "inbound_static_refs": [
+        "execution/audit_deleted_table_recovery.py:133",
+        "execution/audit_transcript_evidence.py:156",
+        "execution/audit_transcript_evidence.py:168",
+        "execution/backup_restore_readiness_receipt.py:171",
+        "execution/backup_restore_readiness_receipt.py:218",
+        "execution/capture_test_ci_performance.py:249",
+        "execution/capture_test_ci_performance.py:252",
+        "execution/capture_test_ci_performance.py:253"
+      ],
+      "kind": "function",
+      "line": 57,
+      "loc": 2,
+      "path": "execution/audit_transcript_evidence.py",
+      "qualified_name": "execution.audit_transcript_evidence._sha256",
+      "source_hash": "54d4479a27aa936ddb2ec589b3cec8903dc498d599edbf8aa11eda9d42ea187c",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "dynamic:getattr"
+      ],
+      "end_line": 89,
+      "fingerprint": "51ea29c3af273834057cbbe7635710b5911821af041e15075b287d867e396226",
+      "inbound_static_ref_count": 3,
+      "inbound_static_refs": [
+        "execution/audit_transcript_evidence.py:101",
+        "execution/audit_transcript_evidence.py:134",
+        "execution/audit_transcript_evidence.py:98"
+      ],
+      "kind": "function",
+      "line": 61,
+      "loc": 29,
+      "path": "execution/audit_transcript_evidence.py",
+      "qualified_name": "execution.audit_transcript_evidence._safe_path",
+      "source_hash": "78ab4d565f58826d2b31e85195b0370fb6f75afe4a3c1954a5b3a83cef0d7a45",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 230,
+      "fingerprint": "0810c5aede3b939438e7b33ccaad222c4326441e4c6740bccedbb772658f70de",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 210,
+      "loc": 21,
+      "path": "execution/audit_transcript_evidence.py",
+      "qualified_name": "execution.audit_transcript_evidence.main",
+      "source_hash": "0b5484fccec48bac8bf370a77ee92117e72cd9b07cc2787367d6ee60b09d5d42",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "class-method-dispatch",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 50,
+      "fingerprint": "c499ef806e78ffc7544920d975bf6fc44ed2f37e6beecc56df5b59d775da12a9",
+      "inbound_static_ref_count": 612,
+      "inbound_static_refs": [
+        "execution/audit_segment_coverage.py:57",
+        "execution/backfill_analyst_notes.py:82",
+        "execution/backfill_ir_deck_locators.py:112",
+        "execution/backup_file_gc.py:197",
+        "execution/backup_file_gc.py:199",
+        "execution/build_bank_dcf.py:957",
+        "execution/build_redesigned_dcf.py:2199",
+        "execution/build_redesigned_dcf.py:2200"
+      ],
+      "kind": "method",
+      "line": 44,
+      "loc": 7,
+      "path": "execution/backfill_analyst_notes.py",
+      "qualified_name": "execution.backfill_analyst_notes.BackfillResult.add",
+      "source_hash": "8744810462a6ca2143e8ed598674961982d55260150de9c5ce58771ab4653a32",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 117,
+      "fingerprint": "e425a4a33bb23f3af36f9d82355cf15ee9e34a026afad85920e310116b6949e1",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 91,
+      "loc": 27,
+      "path": "execution/backfill_analyst_notes.py",
+      "qualified_name": "execution.backfill_analyst_notes.main",
+      "source_hash": "640026dd0333ed67a0c839e5e3538df24a7b4a91b9fb81693d9f753d733ca893",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 107,
+      "fingerprint": "8f7ea6156a698d487cde737613725553d231ef1f4088592136db26aac2627f29",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 48,
+      "loc": 60,
+      "path": "execution/backfill_confidence.py",
+      "qualified_name": "execution.backfill_confidence.main",
+      "source_hash": "213a7c8593df75236dc7cc8cb9ce47dd93a2e9a83a605b56715935035820bb08",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 116,
+      "fingerprint": "0c096e69d0554792997bb2937482ee5da3050c1def6a28e23da73cc8bb0a2b7e",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 105,
+      "loc": 12,
+      "path": "execution/backfill_decision_basis.py",
+      "qualified_name": "execution.backfill_decision_basis.main",
+      "source_hash": "34a993a8cb0c74e9deb208a02a1a305d972b5bd6222cdb69cb0582aa38195401",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 268,
+      "fingerprint": "bf81cf899aa22763445a5b6b1d6a581589326f75d3e849ac4a17741b4e6526b3",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 239,
+      "loc": 30,
+      "path": "execution/backfill_document_accessions.py",
+      "qualified_name": "execution.backfill_document_accessions.main",
+      "source_hash": "c9cfb25621680bf3e4317b21ff34ff222cfb38025fec3c409cb3a66556041ba9",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 72,
+      "fingerprint": "a706b425da59826e7a9974e89d16e7cb3751de05fa4d3f3c04bdac7fd2ac0106",
+      "inbound_static_ref_count": 6,
+      "inbound_static_refs": [
+        "execution/backfill_earnings_surprises.py:187",
+        "execution/backfill_transcripts.py:478",
+        "execution/fetch_fmp_historical_data.py:201",
+        "execution/ingest_earnings_surprises.py:392",
+        "execution/scan_ir_transcripts.py:369",
+        "tests/test_fetch_fmp_historical_retry.py:48"
+      ],
+      "kind": "function",
+      "line": 58,
+      "loc": 15,
+      "path": "execution/backfill_earnings_surprises.py",
+      "qualified_name": "execution.backfill_earnings_surprises._retarget_paths",
+      "source_hash": "81011f5688892da33c60305932c4e37522be78f3d2698561e5ea052fbb1bcce7",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 104,
+      "fingerprint": "8d41526838e52279fa74bc375b99ae3ce9040db90f34e48be0b0ca889e1cb278",
+      "inbound_static_ref_count": 55,
+      "inbound_static_refs": [
+        "execution/audit_segment_quarterly_coverage.py:74",
+        "execution/backfill_earnings_surprises.py:191",
+        "execution/backfill_transcripts.py:482",
+        "execution/build_artifacts.py:263",
+        "execution/build_comparable_sets.py:135",
+        "execution/build_saydo_pairs.py:55",
+        "execution/compute_derived_metrics.py:179",
+        "execution/compute_derived_metrics.py:91"
+      ],
+      "kind": "function",
+      "line": 86,
+      "loc": 19,
+      "path": "execution/backfill_earnings_surprises.py",
+      "qualified_name": "execution.backfill_earnings_surprises._resolve_tickers",
+      "source_hash": "79e4afe6165f5499cbdccf559046f778fd89724e9fca861fffa2951e97b8badc",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 161,
+      "fingerprint": "6c7d9f810edc8c27fa5f76e865e13c499a597fec733a5f47877dbb387ee278ff",
+      "inbound_static_ref_count": 8,
+      "inbound_static_refs": [
+        "execution/backfill_earnings_surprises.py:207",
+        "execution/backfill_insider_transactions.py:164",
+        "execution/backfill_transcripts.py:494",
+        "tests/test_backfill_earnings_surprises.py:206",
+        "tests/test_backfill_earnings_surprises.py:225",
+        "tests/test_backfill_earnings_surprises.py:246",
+        "tests/test_backfill_earnings_surprises.py:277",
+        "tests/test_backfill_transcripts.py:185"
+      ],
+      "kind": "function",
+      "line": 136,
+      "loc": 26,
+      "path": "execution/backfill_earnings_surprises.py",
+      "qualified_name": "execution.backfill_earnings_surprises._backfill_one",
+      "source_hash": "e969ecafa8050b604f4f183ed66e90e81efac5ec660cf80ee9c456311c17c7db",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 228,
+      "fingerprint": "46c01db47e895409998602d0b78c5809cd74d37c854eb5217597d307c50461ac",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 164,
+      "loc": 65,
+      "path": "execution/backfill_earnings_surprises.py",
+      "qualified_name": "execution.backfill_earnings_surprises.main",
+      "source_hash": "917fdae58144d62124e111f35c1c995262ea9076c04a41b1be57709155aee1ce",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 54,
+      "fingerprint": "4c103511b490e1713fa554a96f31f082970711ea9e7acf45660bd3212b6666e4",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 21,
+      "loc": 34,
+      "path": "execution/backfill_evidence_ledger.py",
+      "qualified_name": "execution.backfill_evidence_ledger.main",
+      "source_hash": "df5771bdcf518affe1cf02339bf78a229d5285f4e522516f19c31614ec591370",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 123,
+      "fingerprint": "d3bf549b3341d4013e39886968fc9dfe53cd5427e8113f54c6809135406b26b6",
+      "inbound_static_ref_count": 911,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:341",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 30,
+      "loc": 94,
+      "path": "execution/backfill_financial_fact_resolutions.py",
+      "qualified_name": "execution.backfill_financial_fact_resolutions.main",
+      "source_hash": "af27e50a74c015943e90e15e9a7bcb56c6ddef408d773d8d1431c650880f261a",
+      "visibility": "public"
+    }
+  ],
+  "unknown_total": 6205,
+  "violations": [],
+  "worktree_dirty": true
+}

@@ -1,7 +1,7 @@
 {
   "schema_version": "bha-120.v2",
   "repo_root": "/Applications/earnings-summary/.tmp/bha-103-worktree",
-  "tracked_python_files": 2756,
+  "tracked_python_files": 2761,
   "active": [
     ".github/scripts/ci_gate.py",
     "alembic/env.py",
@@ -239,6 +239,7 @@
     "execution/ingest_transcripts_state.py",
     "execution/initialize_semantic_review.py",
     "execution/intake_documents.py",
+    "execution/inventory_function_lifecycle.py",
     "execution/inventory_static_quality.py",
     "execution/judge_disclosure_materiality.py",
     "execution/land_session_notes.py",
@@ -1058,6 +1059,7 @@
     "src/quality/compatibility.py",
     "src/quality/dcf_benchmark_fixture.py",
     "src/quality/duplicates.py",
+    "src/quality/function_lifecycle.py",
     "src/quality/lifecycle.py",
     "src/quality/performance.py",
     "src/quality/performance_models.py",
@@ -1701,6 +1703,7 @@
     "tests/test_exit_quality_read.py",
     "tests/test_expected_earnings.py",
     "tests/test_expire_stale_research.py",
+    "tests/test_explore_mockup.py",
     "tests/test_explore_panel.py",
     "tests/test_export_book_cma.py",
     "tests/test_extractor_locator_coverage.py",
@@ -1767,6 +1770,7 @@
     "tests/test_full_brief_chrome.py",
     "tests/test_full_brief_editorial_hierarchy.py",
     "tests/test_fulltext_evidence_backfill.py",
+    "tests/test_function_lifecycle.py",
     "tests/test_gc_recovery.py",
     "tests/test_gc_restore.py",
     "tests/test_gemini_backend.py",
@@ -2225,6 +2229,7 @@
     "tests/test_scenario_reward.py",
     "tests/test_scenario_weights.py",
     "tests/test_schedule_pre_earnings_refresh.py",
+    "tests/test_scheduled_provider_policy.py",
     "tests/test_scheduled_singleflight.py",
     "tests/test_scheduler_manifest.py",
     "tests/test_schema_drift_detector.py",
@@ -2775,7 +2780,7 @@
       "version": "ruff 0.16.4",
       "exit_status": 1,
       "count": 2,
-      "receipt_path": ".tmp/static_quality/20d3f74aa4f7d3117e9d969f/ruff-check.json",
+      "receipt_path": ".tmp/static_quality/b97bb5f448bab71ee2df10b3/ruff-check.json",
       "diagnostics_by_directory": {
         "src/user_state": 2
       },
@@ -2796,7 +2801,7 @@
       "version": "ruff 0.16.4",
       "exit_status": 1,
       "count": 62,
-      "receipt_path": ".tmp/static_quality/20d3f74aa4f7d3117e9d969f/ruff-format.txt",
+      "receipt_path": ".tmp/static_quality/b97bb5f448bab71ee2df10b3/ruff-format.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {},
       "command_hash": "9df4538e64cb1f6d37a047b5ea78b18a3be5f5d4375ec875f2f6a313b997f5f9",
@@ -2806,12 +2811,14 @@
       "tool": "pyright",
       "command": [
         "/Applications/earnings-summary/.venv/bin/pyright",
+        "--pythonpath",
+        "/Applications/earnings-summary/.venv/bin/python",
         "--outputjson"
       ],
       "version": "pyright 1.1.411",
       "exit_status": 1,
-      "count": 4375,
-      "receipt_path": ".tmp/static_quality/20d3f74aa4f7d3117e9d969f/pyright.json",
+      "count": 4374,
+      "receipt_path": ".tmp/static_quality/b97bb5f448bab71ee2df10b3/pyright.json",
       "diagnostics_by_directory": {
         "alembic/versions_archived": 175,
         "execution": 1120,
@@ -2834,10 +2841,10 @@
         "src/synthesis/lenses": 33,
         "src/table_extractors": 6,
         "src/timeseries": 3,
-        "tests": 2293
+        "tests": 2292
       },
       "diagnostics_by_rule": {
-        "reportArgumentType": 269,
+        "reportArgumentType": 268,
         "reportAssignmentType": 5,
         "reportAttributeAccessIssue": 82,
         "reportCallIssue": 8,
@@ -2865,7 +2872,7 @@
         "reportUnusedImport": 4,
         "reportUnusedVariable": 2
       },
-      "command_hash": "429fe78ad685d0d93c74b94991a31dd22e65dc71fe2d3586a91a5b801fe63751",
+      "command_hash": "d61dca2a2ebc261d788c794ea63ee2c5a1ee7fe2135e6193427969ba4c3ee07c",
       "version_hash": "40c7560256cc8f524e955d3d620dae6e10b672651c9918bf032a9069babf086f"
     },
     {
@@ -2875,12 +2882,12 @@
       ],
       "version": "n/a",
       "exit_status": 0,
-      "count": 627,
-      "receipt_path": ".tmp/static_quality/20d3f74aa4f7d3117e9d969f/source-ignore-comments.txt",
+      "count": 608,
+      "receipt_path": ".tmp/static_quality/b97bb5f448bab71ee2df10b3/source-ignore-comments.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {
-        "# type: ignore": 263,
-        "# pyright: ignore": 364
+        "# type: ignore": 253,
+        "# pyright: ignore": 355
       },
       "command_hash": "a59001a2bdaaa50c7012c1ccbe4d0ace257f221b32a2d40e285a9a7c73a9288b",
       "version_hash": "a683c5c5349f6f7fb903ba8a9e7e55d0ba1b8f03579f95be83f4954c33e81098"
@@ -2943,7 +2950,7 @@
     "commands": [
       "/Applications/earnings-summary/.venv/bin/ruff check --output-format json .",
       "/Applications/earnings-summary/.venv/bin/ruff format --check .",
-      "/Applications/earnings-summary/.venv/bin/pyright --outputjson"
+      "/Applications/earnings-summary/.venv/bin/pyright --pythonpath /Applications/earnings-summary/.venv/bin/python --outputjson"
     ]
   },
   "retirement_candidates": [
@@ -2951,10 +2958,10 @@
   ],
   "status": "PASS",
   "violations": [],
-  "scoped_commit": "8d079ec3d7f4253bc24d2056d068c7a4909a0d82",
-  "source_hash": "6107cfe2a32a273a89131d4db5eba49506c06461bf35e1cbe29889169e2e5982",
+  "scoped_commit": "a5868f6631fc52b634e4c001d6cb1b0056a496b5",
+  "source_hash": "d21501cb4620730eac887204a7fb80ab24ef703a96966e35bad46458d8b101b7",
   "config_hash": "15aaf211f0d5d011d13e12d447c055098b09fd448f0d3b2e3244abd0c80bfbef",
-  "receipt_identity": "20d3f74aa4f7d3117e9d969f",
+  "receipt_identity": "b97bb5f448bab71ee2df10b3",
   "suppressions_by_file": {
     "evals/structural/test_provider_blind_evals.py": {
       "# type: ignore": 1,
@@ -3119,14 +3126,6 @@
     "src/pipeline/reader_tier_audit.py": {
       "# type: ignore": 1,
       "# pyright: ignore": 3
-    },
-    "src/quality/roadmap_reconciliation.py": {
-      "# type: ignore": 3,
-      "# pyright: ignore": 3
-    },
-    "src/quality/static_quality.py": {
-      "# type: ignore": 5,
-      "# pyright: ignore": 5
     },
     "src/report/renderers/workspace_data.py": {
       "# type: ignore": 1,
@@ -3420,10 +3419,6 @@
       "# type: ignore": 2,
       "# pyright: ignore": 0
     },
-    "tests/test_inventory_static_quality.py": {
-      "# type: ignore": 2,
-      "# pyright: ignore": 2
-    },
     "tests/test_ir_capture.py": {
       "# type: ignore": 0,
       "# pyright: ignore": 5
@@ -3574,7 +3569,7 @@
     },
     "tests/test_portfolio_tracker_client.py": {
       "# type: ignore": 0,
-      "# pyright: ignore": 18
+      "# pyright: ignore": 19
     },
     "tests/test_position_guard.py": {
       "# type: ignore": 0,

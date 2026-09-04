@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8d079ec3d7f4253bc24d2056d068c7a4909a0d82",
+  "scoped_commit": "a5868f6631fc52b634e4c001d6cb1b0056a496b5",
   "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
-  "source_sha256": "79b2713bc8a1ed4c0c1a109d4175e11ea83069a443d3d4a8d219d089e99b63f9",
+  "source_sha256": "d5b87cc992bf7427d64b8eaac2debc837f87bebb27427d32e2e40e50fd4302f1",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1331,
-    "total_noncomment_loc": 490619,
+    "executable_modules": 1333,
+    "total_noncomment_loc": 491856,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -33,7 +33,7 @@
     "largest_scc": 25,
     "composition_root_loc": {
       "execution/comments_server.py": 5011,
-      "src/pipeline/portfolio_panel.py": 3328
+      "src/pipeline/portfolio_panel.py": 3348
     },
     "composition_root_fan_out": {
       "execution/comments_server.py": 156,
@@ -766,9 +766,9 @@
         "path": "execution/backfill_transcripts.py",
         "module": "execution.backfill_transcripts",
         "lines": {
-          "physical": 539,
-          "nonblank": 480,
-          "noncomment": 472
+          "physical": 575,
+          "nonblank": 514,
+          "noncomment": 506
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -3517,9 +3517,9 @@
         "path": "execution/ingest_transcripts.py",
         "module": "execution.ingest_transcripts",
         "lines": {
-          "physical": 762,
-          "nonblank": 705,
-          "noncomment": 705
+          "physical": 767,
+          "nonblank": 710,
+          "noncomment": 710
         },
         "internal_fan_out": 12,
         "responsibilities": [
@@ -3534,9 +3534,9 @@
         "path": "execution/ingest_transcripts_state.py",
         "module": "execution.ingest_transcripts_state",
         "lines": {
-          "physical": 76,
-          "nonblank": 60,
-          "noncomment": 60
+          "physical": 79,
+          "nonblank": 63,
+          "noncomment": 63
         },
         "internal_fan_out": 0,
         "responsibilities": [],
@@ -3570,6 +3570,19 @@
         ],
         "public_functions": 3,
         "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "execution/inventory_function_lifecycle.py",
+        "module": "execution.inventory_function_lifecycle",
+        "lines": {
+          "physical": 14,
+          "nonblank": 9,
+          "noncomment": 9
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [],
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
       },
       {
         "path": "execution/inventory_static_quality.py",
@@ -10451,9 +10464,9 @@
         "path": "src/integrations/portfolio_tracker_client.py",
         "module": "integrations.portfolio_tracker_client",
         "lines": {
-          "physical": 3382,
-          "nonblank": 3070,
-          "noncomment": 2930
+          "physical": 3402,
+          "nonblank": 3090,
+          "noncomment": 2950
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -11046,17 +11059,17 @@
         "path": "src/llm/cli.py",
         "module": "llm.cli",
         "lines": {
-          "physical": 2643,
-          "nonblank": 2467,
-          "noncomment": 1749
+          "physical": 2668,
+          "nonblank": 2489,
+          "noncomment": 1763
         },
         "internal_fan_out": 16,
         "responsibilities": [
           "network",
           "process"
         ],
-        "public_functions": 5,
-        "fully_annotated_public_functions": 5
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/llm/codex_backend.py",
@@ -11388,9 +11401,9 @@
         "path": "src/llm/resolver.py",
         "module": "llm.resolver",
         "lines": {
-          "physical": 274,
-          "nonblank": 228,
-          "noncomment": 219
+          "physical": 282,
+          "nonblank": 236,
+          "noncomment": 227
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -13608,9 +13621,9 @@
         "path": "src/pipeline/portfolio_panel.py",
         "module": "pipeline.portfolio_panel",
         "lines": {
-          "physical": 3762,
-          "nonblank": 3483,
-          "noncomment": 3328
+          "physical": 3782,
+          "nonblank": 3503,
+          "noncomment": 3348
         },
         "internal_fan_out": 27,
         "responsibilities": [
@@ -15988,12 +16001,29 @@
         "fully_annotated_public_functions": 4
       },
       {
+        "path": "src/quality/function_lifecycle.py",
+        "module": "quality.function_lifecycle",
+        "lines": {
+          "physical": 608,
+          "nonblank": 538,
+          "noncomment": 530
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "filesystem",
+          "network",
+          "process"
+        ],
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
+      },
+      {
         "path": "src/quality/lifecycle.py",
         "module": "quality.lifecycle",
         "lines": {
-          "physical": 1328,
-          "nonblank": 1218,
-          "noncomment": 1214
+          "physical": 1337,
+          "nonblank": 1225,
+          "noncomment": 1221
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -16118,9 +16148,9 @@
         "path": "src/quality/reachability.py",
         "module": "quality.reachability",
         "lines": {
-          "physical": 1019,
-          "nonblank": 958,
-          "noncomment": 955
+          "physical": 1020,
+          "nonblank": 959,
+          "noncomment": 953
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -16135,25 +16165,25 @@
         "path": "src/quality/roadmap_freeze.py",
         "module": "quality.roadmap_freeze",
         "lines": {
-          "physical": 667,
-          "nonblank": 654,
-          "noncomment": 648
+          "physical": 754,
+          "nonblank": 738,
+          "noncomment": 729
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/quality/roadmap_freeze_contract.py",
         "module": "quality.roadmap_freeze_contract",
         "lines": {
-          "physical": 514,
-          "nonblank": 470,
-          "noncomment": 462
+          "physical": 683,
+          "nonblank": 623,
+          "noncomment": 615
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -16166,18 +16196,18 @@
         "path": "src/quality/roadmap_freeze_inventory.py",
         "module": "quality.roadmap_freeze_inventory",
         "lines": {
-          "physical": 654,
-          "nonblank": 607,
-          "noncomment": 599
+          "physical": 999,
+          "nonblank": 929,
+          "noncomment": 921
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 6,
         "responsibilities": [
           "filesystem",
           "network",
           "process"
         ],
-        "public_functions": 0,
-        "fully_annotated_public_functions": 0
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/quality/roadmap_reconciliation.py",
@@ -16199,9 +16229,9 @@
         "path": "src/quality/static_quality.py",
         "module": "quality.static_quality",
         "lines": {
-          "physical": 396,
-          "nonblank": 359,
-          "noncomment": 358
+          "physical": 436,
+          "nonblank": 392,
+          "noncomment": 391
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -16209,8 +16239,8 @@
           "network",
           "process"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/quality/test_ci_pairing.py",

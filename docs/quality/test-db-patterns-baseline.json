@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "8d079ec3d7f4253bc24d2056d068c7a4909a0d82",
+  "scoped_commit": "a5868f6631fc52b634e4c001d6cb1b0056a496b5",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "c1163a4cbff3e386aa51ba2448d7a1eedffab937ab86ce32c8af6aaabf9a4c47",
+  "source_sha256": "ebe2c9fc10f225aa68f48e0e5681554243d220f34fc98b1b84e3c3bb355864c4",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",
@@ -361,6 +361,7 @@
     "tests/test_exit_quality_read.py",
     "tests/test_expected_earnings.py",
     "tests/test_expire_stale_research.py",
+    "tests/test_explore_mockup.py",
     "tests/test_explore_panel.py",
     "tests/test_export_book_cma.py",
     "tests/test_extractor_locator_coverage.py",
@@ -427,6 +428,7 @@
     "tests/test_full_brief_chrome.py",
     "tests/test_full_brief_editorial_hierarchy.py",
     "tests/test_fulltext_evidence_backfill.py",
+    "tests/test_function_lifecycle.py",
     "tests/test_gc_recovery.py",
     "tests/test_gc_restore.py",
     "tests/test_gemini_backend.py",
@@ -885,6 +887,7 @@
     "tests/test_scenario_reward.py",
     "tests/test_scenario_weights.py",
     "tests/test_schedule_pre_earnings_refresh.py",
+    "tests/test_scheduled_provider_policy.py",
     "tests/test_scheduled_singleflight.py",
     "tests/test_scheduler_manifest.py",
     "tests/test_schema_drift_detector.py",
@@ -7255,19 +7258,25 @@
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 161,
+      "line": 185,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 196,
+      "line": 238,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 235,
+      "line": 273,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 312,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
@@ -8485,7 +8494,7 @@
     },
     {
       "path": "tests/test_portfolio_tracker_client.py",
-      "line": 2214,
+      "line": 2240,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
