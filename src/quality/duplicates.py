@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import zlib
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -26,10 +27,8 @@ MIN_BODY_LINES = 15
 PARSER_VERSION = "python-ast-normalized-v1"
 NEAR_MISS_RATIO = 0.85
 MAX_STDOUT_BYTES = 100_000
-_MINHASH_PRIME = (1 << 61) - 1
-_MINHASH_COEFFICIENTS: tuple[tuple[int, int], ...] = tuple(
-    (2 * index + 1, 104_729 * index + 17) for index in range(16)
-)
+MAX_SHINGLE_POSTINGS = 64
+CANDIDATE_SHINGLES = 12
 
 
 class StrictModel(BaseModel):
@@ -237,20 +236,17 @@ def _totals(groups: list[DuplicateGroup]) -> DuplicateTotals:
 
 def _ast_shingle_counts(normalized: str) -> Counter[int]:
     tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|[^\s]", normalized)
-    raw_shingles = ["|".join(tokens[index : index + 5]) for index in range(max(1, len(tokens) - 4))]
-    return Counter(
-        int.from_bytes(hashlib.blake2b(value.encode("utf-8"), digest_size=8).digest(), "big")
-        for value in raw_shingles
-    )
-
-
-def _minhash_signature(shingles: set[int]) -> tuple[int, ...]:
-    if not shingles:
-        return (0,) * len(_MINHASH_COEFFICIENTS)
-    return tuple(
-        min((coefficient * value + offset) % _MINHASH_PRIME for value in shingles)
-        for coefficient, offset in _MINHASH_COEFFICIENTS
-    )
+    token_ids = [zlib.crc32(token.encode("utf-8")) for token in tokens]
+    if len(token_ids) < 5:
+        token_ids.extend([0] * (5 - len(token_ids)))
+    counts: Counter[int] = Counter()
+    mask = (1 << 64) - 1
+    for index in range(len(token_ids) - 4):
+        value = 0
+        for token_id in token_ids[index : index + 5]:
+            value = ((value * 1_000_003) ^ token_id) & mask
+        counts[value] += 1
+    return counts
 
 
 def build_inventory(
@@ -280,46 +276,52 @@ def build_inventory(
         by_hash.setdefault(item[0].normalized_hash, []).append(item)
     exact_groups = [_group("exact", items, 1.0) for items in by_hash.values() if len(items) > 1]
     # Compare unique normalized bodies, not every member of an exact clone
-    # group. Four deterministic MinHash bands over AST-type shingles keep early
-    # edits discoverable without the repository-wide quadratic pair explosion.
+    # group. A bounded rare-shingle inverted index keeps early edits visible
+    # without the repository-wide quadratic pair explosion.
     unique: list[tuple[str, list[tuple[FunctionRecord, str]]]] = sorted(by_hash.items())
-    shingles_by_index: list[set[int]] = []
     shingle_counts_by_index: list[Counter[int]] = []
-    band_buckets: dict[tuple[int, tuple[int, ...]], list[int]] = {}
+    postings: dict[int, list[int]] = {}
     for index, (_digest, items) in enumerate(unique):
         counts = _ast_shingle_counts(items[0][1])
-        shingles = set(counts)
-        shingles_by_index.append(shingles)
         shingle_counts_by_index.append(counts)
-        signature = _minhash_signature(shingles)
-        for band in range(4):
-            start = band * 4
-            key = (band, signature[start : start + 4])
-            band_buckets.setdefault(key, []).append(index)
-    candidates: set[tuple[int, int]] = set()
-    for indexes in band_buckets.values():
-        for offset, left in enumerate(indexes):
-            candidates.update((left, right) for right in indexes[offset + 1 :])
+        for shingle in counts:
+            postings.setdefault(shingle, []).append(index)
     near: list[DuplicateGroup] = []
-    for left_index, right_index in sorted(candidates):
-        left_items = unique[left_index][1]
-        right_items = unique[right_index][1]
-        left = left_items[0]
-        right = right_items[0]
-        size_ratio = min(left[0].ast_nodes, right[0].ast_nodes) / max(
-            left[0].ast_nodes, right[0].ast_nodes
+    for left_index, left_counts in enumerate(shingle_counts_by_index):
+        rare = sorted(
+            (
+                shingle
+                for shingle in left_counts
+                if 1 < len(postings[shingle]) <= MAX_SHINGLE_POSTINGS
+            ),
+            key=lambda shingle: (len(postings[shingle]), shingle),
+        )[:CANDIDATE_SHINGLES]
+        right_indexes = sorted(
+            {
+                right_index
+                for shingle in rare
+                for right_index in postings[shingle]
+                if right_index > left_index
+            }
         )
-        if size_ratio < 0.7:
-            continue
-        left_counts = shingle_counts_by_index[left_index]
-        right_counts = shingle_counts_by_index[right_index]
-        keys = left_counts.keys() | right_counts.keys()
-        intersection_size = sum(min(left_counts[key], right_counts[key]) for key in keys)
-        union_size = sum(max(left_counts[key], right_counts[key]) for key in keys)
-        similarity = intersection_size / union_size if union_size else 1.0
-        if similarity < NEAR_MISS_RATIO:
-            continue
-        near.append(_group("near", [*left_items, *right_items], similarity))
+        left_total = left_counts.total()
+        for right_index in right_indexes:
+            right_counts = shingle_counts_by_index[right_index]
+            right_total = right_counts.total()
+            if min(left_total, right_total) / max(left_total, right_total) < NEAR_MISS_RATIO:
+                continue
+            intersection_size = (left_counts & right_counts).total()
+            union_size = left_total + right_total - intersection_size
+            similarity = intersection_size / union_size if union_size else 1.0
+            if similarity < NEAR_MISS_RATIO:
+                continue
+            near.append(
+                _group(
+                    "near",
+                    [*unique[left_index][1], *unique[right_index][1]],
+                    similarity,
+                )
+            )
     exact_groups.sort(key=lambda g: g.group_id)
     near.sort(key=lambda g: g.group_id)
     return DuplicateInventory(
@@ -341,7 +343,7 @@ def build_inventory(
             "normalization": "identifiers, argument names, function names, and comments only",
             "semantic_preservation": "literals, operations, exception flow, SQL, and call targets remain exact",
             "duplicated_loc": "sum of participating function body-line spans per group",
-            "near_miss": "normalized AST token 5-shingle Jaccard similarity >=0.85 after deterministic MinHash candidate indexing",
+            "near_miss": "normalized AST token 5-shingle weighted-Jaccard similarity >=0.85 after bounded rare-shingle indexing",
         },
         parse_errors=sorted(errors),
     )
