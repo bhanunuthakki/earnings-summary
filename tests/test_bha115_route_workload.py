@@ -14,6 +14,7 @@ import pytest
 
 from execution import benchmark_performance_workload as workload
 from quality.performance import COHORT_REGISTRY, CausalRunEnvelope, RouteCausalCompanion
+from quality.performance_state import database_state_sha256
 
 
 def test_route_workload_is_exactly_twenty_routes_and_not_help_placeholder() -> None:
@@ -92,15 +93,15 @@ def test_route_state_hash_only_normalizes_explicit_event_timestamps(tmp_path: Pa
         connection.execute("INSERT INTO analyst_notes VALUES (1, '2026-01-01', 'same')")
         connection.execute("INSERT INTO canonical_axes VALUES (1, '2026-01-01', 'same')")
         connection.commit()
-    first = workload._database_state_sha256(database)
+    first = database_state_sha256(database)
     with sqlite3.connect(database) as connection:
         connection.execute("UPDATE analyst_notes SET created_at = '2027-01-01'")
         connection.commit()
-    assert workload._database_state_sha256(database) == first
+    assert database_state_sha256(database) == first
     with sqlite3.connect(database) as connection:
         connection.execute("UPDATE canonical_axes SET knowledge_at = '2027-01-01'")
         connection.commit()
-    assert workload._database_state_sha256(database) != first
+    assert database_state_sha256(database) != first
 
 
 def test_route_cli_integration_emits_forty_real_route_companions() -> None:

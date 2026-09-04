@@ -33,8 +33,6 @@ from quality.performance import (
 )
 from quality.performance_state import database_state_sha256
 
-_database_state_sha256 = database_state_sha256
-
 ROUTE_FIXTURE_IDENTITY = "localhost-unauthenticated-fixture-v1"
 ROUTE_NAMES: tuple[str, ...] = (
     "/healthz",
@@ -337,7 +335,7 @@ def _routes(root: Path) -> tuple[int, str, int, tuple[RouteCausalCompanion, ...]
         fixture_repo_template = temp_root / "fixture-repo-template"
         shutil.copytree(fixture_repo, fixture_repo_template)
         fixture_sha256 = hashlib.sha256(fixture_template.read_bytes()).hexdigest()
-        fixture_state_sha256 = _database_state_sha256(fixture_template)
+        fixture_state_sha256 = database_state_sha256(fixture_template)
         counts = {"sql": 0, "connections": 0}
         external_attempts = 0
         external_hold_seconds = 0.0
@@ -460,7 +458,7 @@ def _routes(root: Path) -> tuple[int, str, int, tuple[RouteCausalCompanion, ...]
                             raise RuntimeError(
                                 f"route fixture copy hash mismatch: {phase} {route_name}"
                             )
-                        if _database_state_sha256(database) != fixture_state_sha256:
+                        if database_state_sha256(database) != fixture_state_sha256:
                             raise RuntimeError(
                                 f"route fixture state mismatch: {phase} {route_name}"
                             )
@@ -509,7 +507,7 @@ def _routes(root: Path) -> tuple[int, str, int, tuple[RouteCausalCompanion, ...]
                         route_sql_statements = counts["sql"] - before_sql
                         route_connection_count = counts["connections"] - before_connections
                         checkpoint_database(database)
-                        state_sha256 = _database_state_sha256(database)
+                        state_sha256 = database_state_sha256(database)
                         body = response.get_data()
                         route_trap_events = trap_events[route_trap_event_count:]
                         route_external_attempt_count = external_attempts - route_external_attempts

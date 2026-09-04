@@ -27,7 +27,6 @@ from quality.performance import CausalRunEnvelope, RouteCausalCompanion  # noqa:
 # downstream benchmark helpers while the implementation lives in one module.
 ROUTE_FIXTURE_IDENTITY = _performance_routes.ROUTE_FIXTURE_IDENTITY
 ROUTE_NAMES = _performance_routes.ROUTE_NAMES
-_database_state_sha256 = _performance_routes.database_state_sha256
 _route_request = _performance_routes.route_request
 _routes = _performance_routes.routes
 _seed_route_fixture = _performance_routes.seed_route_fixture
