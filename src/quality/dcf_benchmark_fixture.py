@@ -194,7 +194,7 @@ def write_fixture(repo: Path, ticker: str, *, migration_root: Path) -> DcfFixtur
                     period_end=period_end,
                     fiscal_period_type=FiscalPeriodType(str(latest["period"])),
                     line_item=line_item,
-                    value=Decimal(str(value)),
+                    value=Decimal(str(latest[source_field])),
                     currency=Currency.USD,
                     unit=Unit.ACTUAL,
                     source_doc_id=balance_doc_id,
@@ -203,14 +203,17 @@ def write_fixture(repo: Path, ticker: str, *, migration_root: Path) -> DcfFixtur
                         section="balance_sheet_quarterly",
                         row_label=line_item,
                         column_header=str(latest["date"]),
-                        json_path=f"[{len(bal) - 1}].{line_item}",
-                        cell_value_as_extracted=str(value),
+                        json_path=f"[{len(bal) - 1}].{source_field}",
+                        cell_value_as_extracted=str(latest[source_field]),
                     ),
                 )
-                for line_item, value in (
-                    ("cash_and_short_term_investments", latest["cashAndShortTermInvestments"]),
-                    ("total_debt", latest["totalDebt"]),
-                    ("finance_lease_liability", 0),
+                for line_item, source_field in (
+                    (
+                        "cash_and_short_term_investments",
+                        "cashAndShortTermInvestments",
+                    ),
+                    ("total_debt", "totalDebt"),
+                    ("finance_lease_liability", "financeLeaseLiability"),
                 )
             ],
             extracted_by="fmp_fixture",

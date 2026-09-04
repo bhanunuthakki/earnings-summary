@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+  "scoped_commit": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
   "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
-  "source_sha256": "644f3d6d918ee6eeea6261a81d8c808b96ebb84cf442f13c2b6ecc854c51dae2",
+  "source_sha256": "892581836f0ffbd329a6510a7e2bf3a2e2cac0886447e8356ee83bb955d5ac41",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1333,
-    "total_noncomment_loc": 491870,
+    "total_noncomment_loc": 491873,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -15972,9 +15972,9 @@
         "path": "src/quality/dcf_benchmark_fixture.py",
         "module": "quality.dcf_benchmark_fixture",
         "lines": {
-          "physical": 226,
-          "nonblank": 213,
-          "noncomment": 206
+          "physical": 229,
+          "nonblank": 216,
+          "noncomment": 209
         },
         "internal_fan_out": 5,
         "responsibilities": [

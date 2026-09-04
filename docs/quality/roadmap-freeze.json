@@ -6,14 +6,14 @@
   "evidence": {
     "architecture": {
       "path": "docs/quality/architecture-ratchet.json",
-      "sha256": "612b9db9e8fe66a2dadb66f1b7b142994a815a7764190e9af21d81f1d5e2ac64",
-      "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+      "sha256": "804476f76de6588bfc4bf40926b9f8e232786407757ed8d70d9dad32db430fad",
+      "scoped_commit": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
       "scope": "COMMIT"
     },
     "static": {
       "path": "docs/quality/static-baseline.json",
-      "sha256": "71cb1439d093c094ed1ffddd258f94bbc1c63b0bb3b1a56a4eeacce18e188727",
-      "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+      "sha256": "fd540daa7e1eeda3a30fc71fc436f137c826b41eb5c3bf64911a6dec0b0ae164",
+      "scoped_commit": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
       "scope": "COMMIT"
     },
     "test_db": {
@@ -24,25 +24,25 @@
     },
     "duplicate": {
       "path": "docs/quality/duplicates-ratchet.json",
-      "sha256": "eb5453e5493e6ef5270e540c60807659cf5cca65ec2b456262ddc2edacf7e66d",
-      "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+      "sha256": "b3df57e9b9a8f31acb44091081954b9d270721d240f16acff9c0f9b77c3f753b",
+      "scoped_commit": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
       "scope": "COMMIT"
     },
     "lifecycle": {
       "path": "docs/quality/lifecycle-baseline.json",
-      "sha256": "6ab48761acf91f14bdae06cac393ebf677d9a0e2b1c10bcb3c10b5ae7e1979e9",
-      "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+      "sha256": "df202403db2b30ca43131a42ab6477485533309be453233240a75de0d1005c37",
+      "scoped_commit": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
       "scope": "WORKTREE"
     },
     "function_lifecycle": {
       "path": "docs/quality/function-lifecycle-baseline.json",
-      "sha256": "e19713746464614613a9720a7756eb9bf9b2109286e4d5f34756580d73859c2d",
-      "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+      "sha256": "dbab4d9fea922d27262e994fafd7482acc538c2dda349462f2fb4f18ed1a63bf",
+      "scoped_commit": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
       "scope": "WORKTREE"
     },
     "reconciliation": {
       "path": "docs/quality/reconciliation-baseline.json",
-      "sha256": "703e89be243ec0dec6517d89bb3bbf164d58ccf60f3909f8c0a67792219ccd93",
+      "sha256": "46b23647863f350ce2c10ae98d7c436e3425b5c46990359275d33cce64e9a0b4",
       "scoped_commit": "WORKTREE",
       "scope": "WORKTREE"
     },
@@ -61,12 +61,12 @@
   },
   "function_lifecycle": {
     "path": "docs/quality/function-lifecycle-baseline.json",
-    "sha256": "e19713746464614613a9720a7756eb9bf9b2109286e4d5f34756580d73859c2d",
+    "sha256": "dbab4d9fea922d27262e994fafd7482acc538c2dda349462f2fb4f18ed1a63bf",
     "schema_version": "bha-109.v1",
     "parser_version": "python-ast-3.11-v2",
     "status": "PASS",
-    "tracked_tree_hash": "b6dcbdfedfae0e3ee866d884e4c4a64ddffca81809f746eec2ead8707eefe274",
-    "inventory_hash": "7a61dd4e4b19800a12aa401e98c0babd03d29fb9624466fdcf70ee13930961ca",
+    "tracked_tree_hash": "bbb0fb60279aeacc6334bca63ad56f8a35deb070ee1e4ad642197b24a97c742a",
+    "inventory_hash": "c945f24828da9c175b99749b211a63ba5deb322e017d588c56963bfe65113f3e",
     "files_scanned": 2462,
     "symbol_count": 33712,
     "candidate_count": 18,
@@ -100,24 +100,24 @@
   },
   "reconciliation": {
     "path": "docs/quality/reconciliation-baseline.json",
-    "sha256": "703e89be243ec0dec6517d89bb3bbf164d58ccf60f3909f8c0a67792219ccd93",
+    "sha256": "46b23647863f350ce2c10ae98d7c436e3425b5c46990359275d33cce64e9a0b4",
     "status": "PASS",
     "claims_count": 96,
     "scored_claims": 30,
     "rejected_claims": 66,
-    "source_hash": "271ee857961abf7eefdb0a5514b46579facbaf259f4d487a9bd89f1a9a0a5832",
+    "source_hash": "a92e6d045d0bd2380cd65f351ccdc37cb252c6576657667bd701513363afd1f6",
     "claim_manifest_sha256": "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089",
-    "claim_content_sha256": "1d6d4f66e91b7d5fe19738f2bc6c21a41fe914bb45daca0f7fe719654ab7e546",
+    "claim_content_sha256": "26f9606b923fa438d154a7f42af4b3ece8ddf46dd96b91e2b118d0fc6d91b3db",
     "roadmap_source_sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
     "violations": []
   },
   "reachability": {
-    "graph_sha256": "94856583712e976453f00619268702904ba36b53ace4bdc5fb459215d39d4116",
+    "graph_sha256": "0db15d25086c7b9043fd27e9f9387186681c1932a54f31824625fc8dfffb4526",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "version": "1.1.0",
       "python": ">=3.11",
-      "source_sha256": "948cb65f4dc78bf8c1bb5593ec1abd312d5b0acbf2842653ee0b34b4d268f1bd",
+      "source_sha256": "99dd9fd0a815c10450da640517cb25e6b738d7b60bd3fa09a78b5f753e615727",
       "dispositions_sha256": "a29a609cd50da8e9c02350733b95b6faafcd7f8b37c2892dfff297eeaf0a6836"
     },
     "lifecycle_status": "PASS",
@@ -128,7 +128,7 @@
   },
   "architecture_metrics": {
     "executable_modules": 1333,
-    "total_noncomment_loc": 491870,
+    "total_noncomment_loc": 491873,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -146,10 +146,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "alerts.store",
-      "target": "compute.thesis_episode_attention",
-      "source_path": "src/alerts/store.py",
-      "target_path": "src/compute/thesis_episode_attention.py",
+      "source": "allocation.candidate_fit",
+      "target": "positioning.target",
+      "source_path": "src/allocation/candidate_fit.py",
+      "target_path": "src/positioning/target.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -157,6 +157,13 @@
       "target": "onmymind.respond",
       "source_path": "src/capture/triage.py",
       "target_path": "src/onmymind/respond.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "compute.thesis_episode_attention",
+      "target": "alerts.store",
+      "source_path": "src/compute/thesis_episode_attention.py",
+      "target_path": "src/alerts/store.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -202,6 +209,41 @@
       "rationale": "feedback_arc_set"
     },
     {
+      "source": "llm",
+      "target": "llm.openrouter_backend",
+      "source_path": "src/llm/__init__.py",
+      "target_path": "src/llm/openrouter_backend.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.cli",
+      "target": "llm.gemini_backend",
+      "source_path": "src/llm/cli.py",
+      "target_path": "src/llm/gemini_backend.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.cli",
+      "target": "llm.openrouter_backend",
+      "source_path": "src/llm/cli.py",
+      "target_path": "src/llm/openrouter_backend.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.cli",
+      "target": "llm_client",
+      "source_path": "src/llm/cli.py",
+      "target_path": "src/llm_client.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.fallback",
+      "target": "llm.gemini_backend",
+      "source_path": "src/llm/fallback.py",
+      "target_path": "src/llm/gemini_backend.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
       "source": "llm.gemini_backend",
       "target": "llm",
       "source_path": "src/llm/gemini_backend.py",
@@ -209,31 +251,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "llm.gemini_backend",
-      "target": "llm.cli",
-      "source_path": "src/llm/gemini_backend.py",
-      "target_path": "src/llm/cli.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "llm.ledger",
-      "target": "llm.fallback",
-      "source_path": "src/llm/ledger.py",
-      "target_path": "src/llm/fallback.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "llm.openrouter_backend",
-      "target": "llm",
-      "source_path": "src/llm/openrouter_backend.py",
-      "target_path": "src/llm/__init__.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "llm.openrouter_backend",
-      "target": "llm.cli",
-      "source_path": "src/llm/openrouter_backend.py",
-      "target_path": "src/llm/cli.py",
+      "source": "llm.prompt_ab",
+      "target": "llm.structured",
+      "source_path": "src/llm/prompt_ab.py",
+      "target_path": "src/llm/structured.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -244,31 +265,17 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "llm.structured",
-      "target": "llm.cli",
-      "source_path": "src/llm/structured.py",
-      "target_path": "src/llm/cli.py",
+      "source": "pipeline.issuer_fact_manifest",
+      "target": "pipeline.issuer_document_coverage",
+      "source_path": "src/pipeline/issuer_fact_manifest.py",
+      "target_path": "src/pipeline/issuer_document_coverage.py",
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "llm_client",
-      "target": "llm.cli",
-      "source_path": "src/llm_client.py",
-      "target_path": "src/llm/cli.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "pipeline.issuer_document_coverage",
-      "target": "pipeline.issuer_fact_manifest",
-      "source_path": "src/pipeline/issuer_document_coverage.py",
-      "target_path": "src/pipeline/issuer_fact_manifest.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "pipeline.locators",
-      "target": "pipeline.kpi_persistence",
-      "source_path": "src/pipeline/locators.py",
-      "target_path": "src/pipeline/kpi_persistence.py",
+      "source": "pipeline.kpi_persistence",
+      "target": "pipeline.locators",
+      "source_path": "src/pipeline/kpi_persistence.py",
+      "target_path": "src/pipeline/locators.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -279,10 +286,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "positioning.target",
-      "target": "allocation.candidate_fit",
-      "source_path": "src/positioning/target.py",
-      "target_path": "src/allocation/candidate_fit.py",
+      "source": "pipeline.sec_xbrl",
+      "target": "provenance.sec_companyfacts_fact_matcher",
+      "source_path": "src/pipeline/sec_xbrl.py",
+      "target_path": "src/provenance/sec_companyfacts_fact_matcher.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -290,13 +297,6 @@
       "target": "search.corpus_builder",
       "source_path": "src/provenance/search_index_lineage.py",
       "target_path": "src/search/corpus_builder.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "provenance.sec_companyfacts_fact_matcher",
-      "target": "pipeline.sec_xbrl",
-      "source_path": "src/provenance/sec_companyfacts_fact_matcher.py",
-      "target_path": "src/pipeline/sec_xbrl.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -314,10 +314,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "research.capacity_moments",
-      "target": "research.governor",
-      "source_path": "src/research/capacity_moments.py",
-      "target_path": "src/research/governor.py",
+      "source": "research.governor",
+      "target": "research.capacity_moments",
+      "source_path": "src/research/governor.py",
+      "target_path": "src/research/capacity_moments.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -328,10 +328,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "search.grounded",
-      "target": "search.corpus_builder",
-      "source_path": "src/search/grounded.py",
-      "target_path": "src/search/corpus_builder.py",
+      "source": "search.corpus_builder",
+      "target": "search.grounded",
+      "source_path": "src/search/corpus_builder.py",
+      "target_path": "src/search/grounded.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -342,10 +342,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "timeseries.primitives",
-      "target": "timeseries.loaders",
-      "source_path": "src/timeseries/primitives.py",
-      "target_path": "src/timeseries/loaders.py",
+      "source": "timeseries.loaders",
+      "target": "timeseries.primitives",
+      "source_path": "src/timeseries/loaders.py",
+      "target_path": "src/timeseries/primitives.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -5573,7 +5573,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "alerts.store->compute.thesis_episode_attention",
+      "item_id": "allocation.candidate_fit->positioning.target",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-02",
       "units": 1,
@@ -5597,7 +5597,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "dashboard.inbox_rank->dashboard.inbox",
+      "item_id": "compute.thesis_episode_attention->alerts.store",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-04",
       "units": 1,
@@ -5609,7 +5609,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "db->db_paths",
+      "item_id": "dashboard.inbox_rank->dashboard.inbox",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-05",
       "units": 1,
@@ -5621,7 +5621,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "etf_sources.vanguard->etf_sources.issuer_registry",
+      "item_id": "db->db_paths",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-06",
       "units": 1,
@@ -5633,7 +5633,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "evals.harness->evals",
+      "item_id": "etf_sources.vanguard->etf_sources.issuer_registry",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-07",
       "units": 1,
@@ -5645,7 +5645,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "evals.harness->evals.store",
+      "item_id": "evals.harness->evals",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-08",
       "units": 1,
@@ -5657,7 +5657,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "ir_pipeline.discover.generic->ir_pipeline.discover",
+      "item_id": "evals.harness->evals.store",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-09",
       "units": 1,
@@ -5669,7 +5669,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.gemini_backend->llm",
+      "item_id": "ir_pipeline.discover.generic->ir_pipeline.discover",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-10",
       "units": 1,
@@ -5681,7 +5681,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.gemini_backend->llm.cli",
+      "item_id": "llm->llm.openrouter_backend",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-11",
       "units": 1,
@@ -5693,7 +5693,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.ledger->llm.fallback",
+      "item_id": "llm.cli->llm.gemini_backend",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-12",
       "units": 1,
@@ -5705,7 +5705,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.openrouter_backend->llm",
+      "item_id": "llm.cli->llm.openrouter_backend",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-13",
       "units": 1,
@@ -5717,7 +5717,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.openrouter_backend->llm.cli",
+      "item_id": "llm.cli->llm_client",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-14",
       "units": 1,
@@ -5729,7 +5729,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.resolver->llm.cli",
+      "item_id": "llm.fallback->llm.gemini_backend",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-15",
       "units": 1,
@@ -5741,7 +5741,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.structured->llm.cli",
+      "item_id": "llm.gemini_backend->llm",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-16",
       "units": 1,
@@ -5753,7 +5753,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm_client->llm.cli",
+      "item_id": "llm.prompt_ab->llm.structured",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-17",
       "units": 1,
@@ -5765,7 +5765,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "pipeline.issuer_document_coverage->pipeline.issuer_fact_manifest",
+      "item_id": "llm.resolver->llm.cli",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-18",
       "units": 1,
@@ -5777,7 +5777,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "pipeline.locators->pipeline.kpi_persistence",
+      "item_id": "pipeline.issuer_fact_manifest->pipeline.issuer_document_coverage",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-19",
       "units": 1,
@@ -5789,7 +5789,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "pipeline.research_cockpit->etf_score_cache",
+      "item_id": "pipeline.kpi_persistence->pipeline.locators",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-20",
       "units": 1,
@@ -5801,7 +5801,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "positioning.target->allocation.candidate_fit",
+      "item_id": "pipeline.research_cockpit->etf_score_cache",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-21",
       "units": 1,
@@ -5813,7 +5813,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "provenance.search_index_lineage->search.corpus_builder",
+      "item_id": "pipeline.sec_xbrl->provenance.sec_companyfacts_fact_matcher",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-22",
       "units": 1,
@@ -5825,7 +5825,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "provenance.sec_companyfacts_fact_matcher->pipeline.sec_xbrl",
+      "item_id": "provenance.search_index_lineage->search.corpus_builder",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-23",
       "units": 1,
@@ -5861,7 +5861,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "research.capacity_moments->research.governor",
+      "item_id": "research.governor->research.capacity_moments",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-26",
       "units": 1,
@@ -5885,7 +5885,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "search.grounded->search.corpus_builder",
+      "item_id": "search.corpus_builder->search.grounded",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-28",
       "units": 1,
@@ -5909,7 +5909,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "timeseries.primitives->timeseries.loaders",
+      "item_id": "timeseries.loaders->timeseries.primitives",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-30",
       "units": 1,
