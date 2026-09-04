@@ -25,6 +25,9 @@ RECONCILIATION_RECEIPT = "docs/quality/reconciliation-baseline.json"
 FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256 = (
     "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089"
 )
+FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256 = (
+    "945b4b7fb91aa1afb6b2f44e0b22d28975e30a369e48a41275ce34a4e5afe4c3"
+)
 FROZEN_RECONCILIATION_ROADMAP_SHA256 = (
     "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"
 )
@@ -128,6 +131,7 @@ class ReconciliationSnapshot(StrictModel):
     rejected_claims: int = Field(ge=0)
     source_hash: str
     claim_manifest_sha256: str
+    claim_content_sha256: str
     roadmap_source_sha256: str
     violations: tuple[str, ...]
 
@@ -139,6 +143,8 @@ class ReconciliationSnapshot(StrictModel):
             raise ValueError("reconciliation receipt must be a clean PASS")
         if self.claim_manifest_sha256 != FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256:
             raise ValueError("reconciliation claim manifest drifted")
+        if self.claim_content_sha256 != FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256:
+            raise ValueError("reconciliation claim content drifted")
         if self.roadmap_source_sha256 != FROZEN_RECONCILIATION_ROADMAP_SHA256:
             raise ValueError("reconciliation roadmap source drifted")
         return self

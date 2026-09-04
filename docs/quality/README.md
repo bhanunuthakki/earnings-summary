@@ -12,25 +12,29 @@ Scanner and source hashes inside each receipt make definition drift explicit.
 
 Current evidence at the Train 0 instrumentation baseline:
 
-- 1,331 executable modules and 490,619 non-comment lines.
+- 1,333 executable modules and 491,798 non-comment lines.
 - 91 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
 - 17 import cycles spanning 80 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.
 - 168 near-miss groups covering 11,889 body lines.
-- 2 whole-tree Ruff findings, 62 format findings, 4,200 active strict-Pyright
+- 2 whole-tree Ruff findings, 62 format findings, 4,199 active strict-Pyright
   diagnostics, 175 separately retained archived-migration diagnostics, and
-  627 suppression directives. The typed static receipt is `PASS`: every
+  608 suppression directives. The typed static receipt is `PASS`: every
   configured source root is included and immutable archived migrations remain
   a separately reported denominator.
-- 692 database-builder occurrences across 1,114 tracked test files are
+- 692 database-builder occurrences across 1,117 tracked test files are
   classified with zero violations or unclassified cases.
 - The operational graph has no parse failures, unresolved targets, stale
   dispositions, or unknown production edges. The remaining 90 unknown edges
   are confined to tests and instruction tests and remain visible in the raw
   graph.
-- The lifecycle receipt classifies all 834 candidates with zero omissions,
+- The lifecycle receipt classifies all 835 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
-  UI-reachable, 230 internal-delegate, and 270 time-bounded dormant entries.
+  UI-reachable, 230 internal-delegate, and 271 time-bounded dormant entries.
+- The function-lifecycle receipt validates as `PASS` for 33,699 symbols:
+  11,720 protected, 15,761 referenced, 6,200 unknown, and 18 conservative
+  unreferenced-static candidates. Candidates are review inputs, not deletion
+  authority.
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced
   or corrected by typed generators and 66 are explicitly rejected from scoring
   for lack of an admissible generator.
@@ -46,6 +50,7 @@ python execution/analyze_code_duplicates.py --revision WORKTREE --out docs/quali
 python execution/capture_compatibility_evidence.py --baseline 09d35d1a2785ff7e6a218031eb43952781be3a93 --out docs/quality/compatibility-baseline.json
 python execution/inventory_static_quality.py --output docs/quality/static-baseline.json
 python execution/audit_test_db_patterns.py --output docs/quality/test-db-patterns-baseline.json
+python execution/inventory_function_lifecycle.py --output docs/quality/function-lifecycle-baseline.json
 python execution/build_operational_reachability.py --output .tmp/quality/reachability-check.json
 python execution/classify_operational_lifecycle.py --output docs/quality/lifecycle-baseline.json
 python execution/reconcile_quality_baseline.py --output docs/quality/reconciliation-baseline.json

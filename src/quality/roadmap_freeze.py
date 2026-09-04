@@ -87,9 +87,6 @@ from .roadmap_freeze_inventory import (
     function_lifecycle as _function_lifecycle,
 )
 from .roadmap_freeze_inventory import (
-    git_commit as _git_commit,
-)
-from .roadmap_freeze_inventory import (
     order_score as _order_score,
 )
 from .roadmap_freeze_inventory import (
@@ -183,6 +180,29 @@ __all__ = (
 _LEGACY_PRIVATE_EXPORTS = (_builder_semantic_score, _order_score)
 
 
+def evidence_ref(root: Path, path: str, receipt: dict[str, object]) -> EvidenceRef:
+    """Describe receipt provenance without promoting dirty evidence to COMMIT."""
+    revision = receipt.get("revision")
+    scoped_commit = receipt.get("scoped_commit")
+    commit_hash = receipt.get("commit_hash")
+    source_commit = next(
+        (
+            value
+            for value in (scoped_commit, commit_hash, revision)
+            if isinstance(value, str) and value != "WORKTREE"
+        ),
+        "WORKTREE",
+    )
+    worktree_dirty = receipt.get("worktree_dirty") is True
+    commit_scoped = source_commit != "WORKTREE" and not worktree_dirty
+    return EvidenceRef(
+        path=path,
+        sha256=_sha256(root / path),
+        scoped_commit=source_commit,
+        scope="COMMIT" if commit_scoped else "WORKTREE",
+    )
+
+
 def build_freeze(root: Path) -> RoadmapFreeze:
     root = root.resolve()
     architecture, edges = _architecture_edges(root)
@@ -219,25 +239,7 @@ def build_freeze(root: Path) -> RoadmapFreeze:
     evidence: dict[str, EvidenceRef] = {}
     for key, path in receipts.items():
         receipt = _read_json(root, path)
-        revision = receipt.get("revision")
-        scoped_commit = receipt.get("scoped_commit")
-        if not isinstance(scoped_commit, str):
-            commit_hash = receipt.get("commit_hash")
-            scoped_commit = (
-                commit_hash
-                if isinstance(commit_hash, str)
-                else revision
-                if isinstance(revision, str)
-                else _git_commit(root)
-            )
-        evidence[key] = EvidenceRef(
-            path=path,
-            sha256=_sha256(root / path),
-            scoped_commit=scoped_commit,
-            scope=(
-                "COMMIT" if isinstance(revision, str) and revision != "WORKTREE" else "WORKTREE"
-            ),
-        )
+        evidence[key] = evidence_ref(root, path, receipt)
     metrics = architecture.metrics
     upgrade_builders = _upgrade_builder_rows(test_db)
     builders = len(upgrade_builders)
@@ -581,6 +583,9 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
         evidence_path = root / evidence.path
         if not evidence_path.is_file() or _sha256(evidence_path) != evidence.sha256:
             raise ValueError(f"checked evidence is missing or changed: {evidence.path}")
+        receipt = _read_json(root, evidence.path)
+        if evidence != evidence_ref(root, evidence.path, receipt):
+            raise ValueError(f"checked evidence provenance drifted: {evidence.path}")
     _validate_performance_snapshot(root, freeze)
 
     lifecycle = _read_json(root, LIFECYCLE_RECEIPT)

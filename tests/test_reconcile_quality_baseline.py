@@ -5,13 +5,15 @@ import shutil
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, cast
 
+import pytest
 from pydantic import BaseModel
 
 from src.quality.architecture import ArchitectureReceipt
 from src.quality.duplicates import DuplicateInventory
 from src.quality.reachability import ReachabilityGraph, build_graph
+from src.quality.roadmap_freeze_inventory import reconciliation_snapshot
 from src.quality.roadmap_reconciliation import CurrentReceipts, reconcile
 from src.quality.static_quality import StaticQualityInventory
 from src.quality.test_db_patterns import TestDbAudit as DbAuditReceipt
@@ -86,6 +88,12 @@ def _hold(value: dict[str, object]) -> None:
 
 def _wrong_source_hash(value: dict[str, object]) -> None:
     value["source_hash"] = "0" * 64
+
+
+def _tamper_claim_note(value: dict[str, object]) -> None:
+    claims = cast(list[object], value["claims"])
+    first_claim = cast(dict[str, object], claims[0])
+    first_claim["note"] = "tampered claim note"
 
 
 def test_unsupported_claims_are_rejected_without_blocking_pass(tmp_path: Path) -> None:
@@ -204,6 +212,27 @@ def test_reconciliation_hash_is_deterministic(tmp_path: Path) -> None:
         reconcile(tmp_path, current_receipts=current).source_hash
         == reconcile(tmp_path, current_receipts=current).source_hash
     )
+
+
+def test_reconciliation_snapshot_rejects_tampered_claim_content(tmp_path: Path) -> None:
+    current = _seed(tmp_path)
+    # Force the generated fixture through the clean-receipt branch so this
+    # regression remains focused even when the checked-in source receipts are
+    # intentionally held by another quality change in the worktree.
+    receipt = reconcile(tmp_path, current_receipts=current).model_copy(
+        update={"status": "PASS", "violations": ()}
+    )
+    (tmp_path / "docs/quality/reconciliation-baseline.json").write_text(
+        receipt.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    _rewrite(
+        tmp_path,
+        "reconciliation-baseline.json",
+        _tamper_claim_note,
+    )
+
+    with pytest.raises(ValueError, match="claim content"):
+        reconciliation_snapshot(tmp_path)
 
 
 def test_roadmap_omission_or_tampering_holds_and_is_unscored(tmp_path: Path) -> None:

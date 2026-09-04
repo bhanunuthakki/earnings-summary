@@ -17,6 +17,37 @@ ARTIFACT = ROOT / "docs/quality/roadmap-freeze.json"
 TYPE_IGNORE_KEY = "# type: ignore"
 
 
+@pytest.mark.parametrize(
+    ("receipt", "expected_commit", "expected_scope"),
+    (
+        (
+            {"revision": "a" * 40, "worktree_dirty": True},
+            "a" * 40,
+            "WORKTREE",
+        ),
+        (
+            {"revision": "a" * 40, "worktree_dirty": False},
+            "a" * 40,
+            "COMMIT",
+        ),
+        ({}, "WORKTREE", "WORKTREE"),
+    ),
+)
+def test_evidence_ref_preserves_worktree_provenance(
+    tmp_path: Path,
+    receipt: dict[str, object],
+    expected_commit: str,
+    expected_scope: str,
+) -> None:
+    path = "receipt.json"
+    (tmp_path / path).write_text(json.dumps(receipt), encoding="utf-8")
+
+    evidence = roadmap_freeze.evidence_ref(tmp_path, path, receipt)
+
+    assert evidence.scoped_commit == expected_commit
+    assert evidence.scope == expected_scope
+
+
 def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
     freeze = RoadmapFreeze.model_validate_json(ARTIFACT.read_text(encoding="utf-8"))
 

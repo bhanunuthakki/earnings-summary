@@ -20,6 +20,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 PARSER_VERSION = "1.1.0"
+# Parser provenance is compared as part of the semantic lifecycle receipt.
+# Record the supported interpreter contract rather than the runtime's patch or
+# minor version, which would make equivalent receipts stale across clean clones.
+PARSER_PYTHON = ">=3.11"
 _MAX_STDOUT_BYTES = 100_000
 EdgeKind = Literal[
     "import",
@@ -949,7 +953,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
         parser={
             "name": "ast+xml+literal-scanner",
             "version": PARSER_VERSION,
-            "python": sys.version.split()[0],
+            "python": PARSER_PYTHON,
             "source_sha256": hashlib.sha256(
                 "".join(f"{key}:{source_hashes[key]}\n" for key in sorted(source_hashes)).encode()
             ).hexdigest(),

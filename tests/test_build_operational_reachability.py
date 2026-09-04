@@ -326,6 +326,20 @@ def test_malformed_sources_are_diagnostics_and_deterministic(tmp_path: Path) -> 
     assert first["stats"]["diagnostics"] == 2
 
 
+def test_parser_provenance_is_stable_across_supported_python_runtimes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, "execution/main.py", "VALUE = 1\n")
+
+    monkeypatch.setattr(reachability.sys, "version", "3.11.9 (main, clean clone)")
+    first = build_graph(tmp_path)
+    monkeypatch.setattr(reachability.sys, "version", "3.14.7 (main, clean clone)")
+    second = build_graph(tmp_path)
+
+    assert first.parser == second.parser
+    assert first.parser["python"] == ">=3.11"
+
+
 def test_import_index_distinguishes_project_external_and_unresolved(tmp_path: Path) -> None:
     _write(
         tmp_path,

@@ -25,6 +25,7 @@ from .roadmap_freeze_contract import (
     BUILDER_RETAIN_QUOTAS,
     FROZEN_PERFORMANCE,
     FROZEN_PERFORMANCE_RECEIPT_SHA256,
+    FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256,
     FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256,
     FROZEN_RECONCILIATION_ROADMAP_SHA256,
     FROZEN_TYPE_DEBT_AUTHORITY_SHA256,
@@ -48,6 +49,7 @@ from .roadmap_freeze_contract import (
     SuppressionRetirement,
     TypeDebtCluster,
 )
+from .roadmap_reconciliation import Claim, ReconciliationReceipt
 
 
 def _sha256(path: Path) -> str:
@@ -112,6 +114,30 @@ def _graph_sha256(graph: ReachabilityGraph) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _reconciliation_claim_content_sha256(claims: tuple[Claim, ...]) -> str:
+    """Hash stable claim meaning while excluding checkout-specific provenance."""
+    rows = []
+    for claim in claims:
+        evidence = claim.evidence
+        provisional_evidence = claim.provisional_evidence
+        rows.append(
+            {
+                "name": claim.name,
+                "provisional_expected": claim.provisional_expected,
+                "observed": claim.observed,
+                "verdict": claim.verdict,
+                "scored_eligible": claim.scored_eligible,
+                "evidence_locator": evidence.locator if evidence is not None else None,
+                "provisional_evidence_locator": provisional_evidence.locator
+                if provisional_evidence is not None
+                else None,
+                "note": claim.note,
+            }
+        )
+    payload = json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
 def reachability_evidence(root: Path, lifecycle: dict[str, object]) -> ReachabilityEvidence:
     """Rebuild reachability and bind lifecycle provenance without an ignored file."""
     graph = build_graph(root)
@@ -165,8 +191,6 @@ def reconciliation_snapshot(root: Path) -> ReconciliationSnapshot:
     claims remain admissible on a clean clone because their typed claim shape,
     eligibility, counts, and available source hashes are checked here.
     """
-    from .roadmap_reconciliation import ReconciliationReceipt
-
     receipt = ReconciliationReceipt.model_validate_json(
         (root / RECONCILIATION_RECEIPT).read_text(encoding="utf-8")
     )
@@ -174,6 +198,9 @@ def reconciliation_snapshot(root: Path) -> ReconciliationSnapshot:
         raise ValueError("reconciliation receipt must be a clean PASS")
     if receipt.claim_manifest_sha256 != FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256:
         raise ValueError("reconciliation claim manifest is stale")
+    claim_content_sha256 = _reconciliation_claim_content_sha256(receipt.claims)
+    if claim_content_sha256 != FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256:
+        raise ValueError("reconciliation claim content is stale")
     if receipt.roadmap_source.sha256 != FROZEN_RECONCILIATION_ROADMAP_SHA256:
         raise ValueError("reconciliation roadmap source is stale")
     names = [claim.name for claim in receipt.claims]
@@ -237,6 +264,7 @@ def reconciliation_snapshot(root: Path) -> ReconciliationSnapshot:
         rejected_claims=receipt.rejected_claims,
         source_hash=receipt.source_hash,
         claim_manifest_sha256=receipt.claim_manifest_sha256,
+        claim_content_sha256=claim_content_sha256,
         roadmap_source_sha256=receipt.roadmap_source.sha256,
         violations=receipt.violations,
     )
