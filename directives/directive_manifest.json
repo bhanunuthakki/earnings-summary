@@ -15,7 +15,6 @@
     "cio_advisor_governance_2026_06.md": {"class": "history", "summary": "Cross-repository CIO advisor decision record."},
     "claude_session_bridge.md": {"class": "canonical", "summary": "Deep-session bridge state and persistence boundary.", "authority_domains": ["session_bridge"]},
     "close_the_loops_2026_06.md": {"class": "history", "summary": "Completed goal-loop program record."},
-    "code_quality_score.md": {"class": "history", "summary": "Frozen deterministic 9+ code-quality scoring evidence."},
     "concepts_spine_decision.md": {"class": "history", "summary": "Concept-spine defer decision record."},
     "cross_asset_data_model.md": {"class": "draft", "summary": "Cross-asset model scoping and phased proposal."},
     "data_fixes.md": {"class": "runbook", "summary": "Single-ticker data-correction intake log.", "governed_by": ["data_provenance.md"]},
