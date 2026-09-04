@@ -1,0 +1,2820 @@
+{
+  "schema_version": "bha-122.v1",
+  "status": "HOLD",
+  "evidence": {
+    "architecture": {
+      "path": "docs/quality/architecture-ratchet.json",
+      "sha256": "1ed7eac2f657db15616179a422469cf7aa3a435de615e2e3b53926854ed1ae39",
+      "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+      "scope": "WORKTREE"
+    },
+    "static": {
+      "path": "docs/quality/static-baseline.json",
+      "sha256": "9a02978c2c8f0b98ca46d1c65858bdc86b336ecf64627c5534683399c5443150",
+      "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+      "scope": "WORKTREE"
+    },
+    "test_db": {
+      "path": "docs/quality/test-db-patterns-baseline.json",
+      "sha256": "060099acae5143db7c89c59f94e52f7ec9cf80d5da6fc1eabab7137b749ab21d",
+      "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+      "scope": "WORKTREE"
+    },
+    "duplicate": {
+      "path": "docs/quality/duplicates-ratchet.json",
+      "sha256": "a3337c2f066a01372ff2dcbbef18d8738310b9f2cf91b4e63adb9b3b490ce935",
+      "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+      "scope": "WORKTREE"
+    },
+    "lifecycle": {
+      "path": "docs/quality/lifecycle-baseline.json",
+      "sha256": "26ee8ce8d90bb6252507fc0d1c6e953e9ee714d0f8cce1e6fb171f99b08ea1e7",
+      "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+      "scope": "COMMIT"
+    },
+    "performance": {
+      "path": ".tmp/quality/test-ci-performance/full-suite-8c7dc0c3/receipt.json",
+      "sha256": "72e2629b68cb70fb40d01321c425aa5db7dbd74cc28ae831b614b90590a3c7a8",
+      "scoped_commit": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
+      "scope": "COMMIT"
+    }
+  },
+  "architecture_metrics": {
+    "executable_modules": 1318,
+    "total_noncomment_loc": 486931,
+    "modules_over_1000_loc": 91,
+    "modules_over_2000_loc": 19,
+    "modules_at_least_3000_loc": 4,
+    "max_internal_fan_out": 156,
+    "scc_count": 17,
+    "scc_module_count": 80,
+    "largest_scc": 25
+  },
+  "scc_cut_edges": [
+    {
+      "source": "advisor.context",
+      "target": "pipeline.allocation_decisions_panel",
+      "source_path": "src/advisor/context.py",
+      "target_path": "src/pipeline/allocation_decisions_panel.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "alerts.store",
+      "target": "compute.thesis_episode_attention",
+      "source_path": "src/alerts/store.py",
+      "target_path": "src/compute/thesis_episode_attention.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "allocation.candidate_fit",
+      "target": "positioning.target",
+      "source_path": "src/allocation/candidate_fit.py",
+      "target_path": "src/positioning/target.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "capture.triage",
+      "target": "onmymind.respond",
+      "source_path": "src/capture/triage.py",
+      "target_path": "src/onmymind/respond.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "dashboard.inbox_rank",
+      "target": "dashboard.inbox",
+      "source_path": "src/dashboard/inbox_rank.py",
+      "target_path": "src/dashboard/inbox.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "db_paths",
+      "target": "db",
+      "source_path": "src/db_paths.py",
+      "target_path": "src/db.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "etf_sources.issuer_registry",
+      "target": "etf_sources.vanguard",
+      "source_path": "src/etf_sources/issuer_registry.py",
+      "target_path": "src/etf_sources/vanguard.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "evals.harness",
+      "target": "evals",
+      "source_path": "src/evals/harness.py",
+      "target_path": "src/evals/__init__.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "evals.harness",
+      "target": "evals.store",
+      "source_path": "src/evals/harness.py",
+      "target_path": "src/evals/store.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "ir_pipeline.discover",
+      "target": "ir_pipeline.discover.generic",
+      "source_path": "src/ir_pipeline/discover/__init__.py",
+      "target_path": "src/ir_pipeline/discover/generic.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.cli",
+      "target": "llm.gemini_backend",
+      "source_path": "src/llm/cli.py",
+      "target_path": "src/llm/gemini_backend.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.cli",
+      "target": "llm.openrouter_backend",
+      "source_path": "src/llm/cli.py",
+      "target_path": "src/llm/openrouter_backend.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.cli",
+      "target": "llm.prompt_ab",
+      "source_path": "src/llm/cli.py",
+      "target_path": "src/llm/prompt_ab.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.cli",
+      "target": "llm_client",
+      "source_path": "src/llm/cli.py",
+      "target_path": "src/llm_client.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.gemini_backend",
+      "target": "llm",
+      "source_path": "src/llm/gemini_backend.py",
+      "target_path": "src/llm/__init__.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.ledger",
+      "target": "llm.fallback",
+      "source_path": "src/llm/ledger.py",
+      "target_path": "src/llm/fallback.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.openrouter_backend",
+      "target": "llm",
+      "source_path": "src/llm/openrouter_backend.py",
+      "target_path": "src/llm/__init__.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.resolver",
+      "target": "llm.cli",
+      "source_path": "src/llm/resolver.py",
+      "target_path": "src/llm/cli.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "pipeline.issuer_document_coverage",
+      "target": "provenance.source_coverage",
+      "source_path": "src/pipeline/issuer_document_coverage.py",
+      "target_path": "src/provenance/source_coverage.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "pipeline.issuer_fact_manifest",
+      "target": "pipeline.issuer_document_coverage",
+      "source_path": "src/pipeline/issuer_fact_manifest.py",
+      "target_path": "src/pipeline/issuer_document_coverage.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "pipeline.kpi_persistence",
+      "target": "pipeline.locators",
+      "source_path": "src/pipeline/kpi_persistence.py",
+      "target_path": "src/pipeline/locators.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "pipeline.research_cockpit",
+      "target": "etf_score_cache",
+      "source_path": "src/pipeline/research_cockpit.py",
+      "target_path": "src/etf_score_cache.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "pipeline.transcript_acquisition",
+      "target": "pipeline.source_policy",
+      "source_path": "src/pipeline/transcript_acquisition.py",
+      "target_path": "src/pipeline/source_policy.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "provenance.search_index_lineage",
+      "target": "search.corpus_builder",
+      "source_path": "src/provenance/search_index_lineage.py",
+      "target_path": "src/search/corpus_builder.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "provenance.sec_companyfacts_fact_matcher",
+      "target": "pipeline.sec_xbrl",
+      "source_path": "src/provenance/sec_companyfacts_fact_matcher.py",
+      "target_path": "src/pipeline/sec_xbrl.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "research.calibration_moments",
+      "target": "research.governor",
+      "source_path": "src/research/calibration_moments.py",
+      "target_path": "src/research/governor.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "research.capacity_moments",
+      "target": "research.governor",
+      "source_path": "src/research/capacity_moments.py",
+      "target_path": "src/research/governor.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "runtime.job_runtime",
+      "target": "operations",
+      "source_path": "src/runtime/job_runtime.py",
+      "target_path": "src/operations/__init__.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "search.grounded",
+      "target": "search.corpus_builder",
+      "source_path": "src/search/grounded.py",
+      "target_path": "src/search/corpus_builder.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "timeseries.primitives",
+      "target": "timeseries.loaders",
+      "source_path": "src/timeseries/primitives.py",
+      "target_path": "src/timeseries/loaders.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "user_state.notes",
+      "target": "comments",
+      "source_path": "src/user_state/notes.py",
+      "target_path": "src/comments.py",
+      "rationale": "feedback_arc_set"
+    }
+  ],
+  "performance_snapshot": {
+    "schema_version": "test-ci-performance/v2",
+    "revision": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
+    "source_sha256": "a4181b2effa3387fa1918e2e1f3d817e1dbca311f30f68f6035237240cb75675",
+    "cohort_sha256": "bd2a31afb89053f0bd13bbd6514274beefb24e90425cac9f73669385ec348156",
+    "process_wall_seconds": 952.1505841249891,
+    "paired": false,
+    "evidence_status": "hold",
+    "network_isolation": "requested-not-proven"
+  },
+  "large_modules": [
+    {
+      "path": "src/calibration_coach.py",
+      "noncomment_loc": 1015
+    },
+    {
+      "path": "src/provenance/source_coverage_reconcile.py",
+      "noncomment_loc": 1038
+    },
+    {
+      "path": "src/research/investment_decision_card.py",
+      "noncomment_loc": 1051
+    },
+    {
+      "path": "execution/discover_ir_documents_all.py",
+      "noncomment_loc": 1053
+    },
+    {
+      "path": "src/runtime/portfolio_tracker.py",
+      "noncomment_loc": 1088
+    },
+    {
+      "path": "src/compute/metrics_engine/io.py",
+      "noncomment_loc": 1092
+    },
+    {
+      "path": "src/ask/exchange_store.py",
+      "noncomment_loc": 1094
+    },
+    {
+      "path": "src/decision_extractor.py",
+      "noncomment_loc": 1095
+    },
+    {
+      "path": "src/transcripts/longitudinal.py",
+      "noncomment_loc": 1118
+    },
+    {
+      "path": "execution/apply_kpi_semantic_refresh.py",
+      "noncomment_loc": 1128
+    },
+    {
+      "path": "src/filings/metric_lifecycle.py",
+      "noncomment_loc": 1131
+    },
+    {
+      "path": "src/provenance/data_backbone_rehearsal.py",
+      "noncomment_loc": 1138
+    },
+    {
+      "path": "src/advisor/senior_partner_brief.py",
+      "noncomment_loc": 1142
+    },
+    {
+      "path": "src/provenance/issuer_registry.py",
+      "noncomment_loc": 1152
+    },
+    {
+      "path": "src/ir_uploads.py",
+      "noncomment_loc": 1164
+    },
+    {
+      "path": "src/runtime/job_runtime.py",
+      "noncomment_loc": 1164
+    },
+    {
+      "path": "src/provenance/legacy_canonical_parity.py",
+      "noncomment_loc": 1170
+    },
+    {
+      "path": "src/provenance/population_research_snapshots.py",
+      "noncomment_loc": 1170
+    },
+    {
+      "path": "src/provenance/population_completeness.py",
+      "noncomment_loc": 1172
+    },
+    {
+      "path": "src/report/offline_artifact.py",
+      "noncomment_loc": 1180
+    },
+    {
+      "path": "src/decision_conditions.py",
+      "noncomment_loc": 1190
+    },
+    {
+      "path": "src/compute/thesis_evaluator.py",
+      "noncomment_loc": 1192
+    },
+    {
+      "path": "src/ui/design_registry.py",
+      "noncomment_loc": 1201
+    },
+    {
+      "path": "src/integrations/portfolio_tracker_v1.py",
+      "noncomment_loc": 1209
+    },
+    {
+      "path": "src/quality/lifecycle.py",
+      "noncomment_loc": 1214
+    },
+    {
+      "path": "src/provenance/image_ocr_extraction.py",
+      "noncomment_loc": 1221
+    },
+    {
+      "path": "src/provenance/sec_companyfacts_fact_matcher.py",
+      "noncomment_loc": 1222
+    },
+    {
+      "path": "src/provenance/population_retrieval_runtime.py",
+      "noncomment_loc": 1231
+    },
+    {
+      "path": "src/search/local_vector.py",
+      "noncomment_loc": 1244
+    },
+    {
+      "path": "execution/sync_sec_filing_inventory.py",
+      "noncomment_loc": 1253
+    },
+    {
+      "path": "src/dcf/redesign.py",
+      "noncomment_loc": 1264
+    },
+    {
+      "path": "execution/collect_operations_runtime_observations.py",
+      "noncomment_loc": 1265
+    },
+    {
+      "path": "src/filings/inline_xbrl_processor.py",
+      "noncomment_loc": 1295
+    },
+    {
+      "path": "src/pipeline/work_os_copilot.py",
+      "noncomment_loc": 1297
+    },
+    {
+      "path": "src/ir_pipeline/evidence_capture.py",
+      "noncomment_loc": 1310
+    },
+    {
+      "path": "src/compute/kpi_extract_summaries.py",
+      "noncomment_loc": 1313
+    },
+    {
+      "path": "src/ask/audit_store.py",
+      "noncomment_loc": 1316
+    },
+    {
+      "path": "src/pipeline/research_cockpit.py",
+      "noncomment_loc": 1329
+    },
+    {
+      "path": "src/compute/fmp_derived_kpis.py",
+      "noncomment_loc": 1336
+    },
+    {
+      "path": "src/provenance/foreign_issuer_bootstrap.py",
+      "noncomment_loc": 1352
+    },
+    {
+      "path": "src/ui/controls.py",
+      "noncomment_loc": 1353
+    },
+    {
+      "path": "src/evals/golden_classifiers.py",
+      "noncomment_loc": 1361
+    },
+    {
+      "path": "src/provenance/ocr_extraction.py",
+      "noncomment_loc": 1365
+    },
+    {
+      "path": "src/pipeline/operations_panel.py",
+      "noncomment_loc": 1378
+    },
+    {
+      "path": "src/provenance/canonical_fact_resolution.py",
+      "noncomment_loc": 1394
+    },
+    {
+      "path": "src/ask/sealed_retrieval.py",
+      "noncomment_loc": 1409
+    },
+    {
+      "path": "src/pipeline/ticker_command_center.py",
+      "noncomment_loc": 1424
+    },
+    {
+      "path": "src/ask/grounding.py",
+      "noncomment_loc": 1434
+    },
+    {
+      "path": "src/ir_pipeline/approved_ir_observation_capture.py",
+      "noncomment_loc": 1468
+    },
+    {
+      "path": "src/provenance/financial_fact_resolution.py",
+      "noncomment_loc": 1494
+    },
+    {
+      "path": "src/timeseries/loaders.py",
+      "noncomment_loc": 1511
+    },
+    {
+      "path": "execution/verify_design_conformance.py",
+      "noncomment_loc": 1519
+    },
+    {
+      "path": "execution/save_fmp_data.py",
+      "noncomment_loc": 1543
+    },
+    {
+      "path": "src/pipeline/managed_ir_sources.py",
+      "noncomment_loc": 1578
+    },
+    {
+      "path": "src/search/corpus_builder.py",
+      "noncomment_loc": 1580
+    },
+    {
+      "path": "src/provenance/fulltext_backfill.py",
+      "noncomment_loc": 1608
+    },
+    {
+      "path": "execution/db_gc.py",
+      "noncomment_loc": 1609
+    },
+    {
+      "path": "src/pipeline/sec_xbrl.py",
+      "noncomment_loc": 1614
+    },
+    {
+      "path": "execution/process_report_comments.py",
+      "noncomment_loc": 1641
+    },
+    {
+      "path": "src/ask/engine.py",
+      "noncomment_loc": 1655
+    },
+    {
+      "path": "src/provenance/population_source_facts.py",
+      "noncomment_loc": 1668
+    },
+    {
+      "path": "src/provenance/metric_ontology.py",
+      "noncomment_loc": 1673
+    },
+    {
+      "path": "src/advisor/position_review.py",
+      "noncomment_loc": 1674
+    },
+    {
+      "path": "src/llm/cli.py",
+      "noncomment_loc": 1749
+    },
+    {
+      "path": "execution/refresh_dcf.py",
+      "noncomment_loc": 1754
+    },
+    {
+      "path": "src/search/heterogeneous_retrieval.py",
+      "noncomment_loc": 1756
+    },
+    {
+      "path": "src/provenance/population_canonical_resolution.py",
+      "noncomment_loc": 1776
+    },
+    {
+      "path": "src/pipeline/fmp_recovery.py",
+      "noncomment_loc": 1809
+    },
+    {
+      "path": "src/pipeline/allocation_decisions_panel.py",
+      "noncomment_loc": 1827
+    },
+    {
+      "path": "execution/build_redesigned_dcf.py",
+      "noncomment_loc": 1965
+    },
+    {
+      "path": "src/search/canonical_fact_projection.py",
+      "noncomment_loc": 1981
+    },
+    {
+      "path": "src/search/fact_projection.py",
+      "noncomment_loc": 1999
+    },
+    {
+      "path": "src/provenance/fact_plane_v2.py",
+      "noncomment_loc": 2079
+    },
+    {
+      "path": "src/llm_client.py",
+      "noncomment_loc": 2085
+    },
+    {
+      "path": "src/pipeline/ledger_panel.py",
+      "noncomment_loc": 2109
+    },
+    {
+      "path": "src/report/renderers/workspace_styles.py",
+      "noncomment_loc": 2117
+    },
+    {
+      "path": "src/provenance/document_processing_evidence.py",
+      "noncomment_loc": 2160
+    },
+    {
+      "path": "src/provenance/data_infrastructure_benchmark.py",
+      "noncomment_loc": 2220
+    },
+    {
+      "path": "src/provenance/population_document_processing.py",
+      "noncomment_loc": 2238
+    },
+    {
+      "path": "src/provenance/research_snapshot.py",
+      "noncomment_loc": 2304
+    },
+    {
+      "path": "execution/refresh_cache.py",
+      "noncomment_loc": 2442
+    },
+    {
+      "path": "src/pipeline/peeks.py",
+      "noncomment_loc": 2460
+    },
+    {
+      "path": "src/provenance/population_metric_ontology.py",
+      "noncomment_loc": 2622
+    },
+    {
+      "path": "src/ui/conformance_scan.py",
+      "noncomment_loc": 2812
+    },
+    {
+      "path": "src/provenance/gc_recovery.py",
+      "noncomment_loc": 2860
+    },
+    {
+      "path": "src/integrations/portfolio_tracker_client.py",
+      "noncomment_loc": 2930
+    },
+    {
+      "path": "src/provenance/issuer_registry_bootstrap.py",
+      "noncomment_loc": 2995
+    },
+    {
+      "path": "src/pipeline/work_os_shell.py",
+      "noncomment_loc": 3122
+    },
+    {
+      "path": "src/pipeline/portfolio_panel.py",
+      "noncomment_loc": 3328
+    },
+    {
+      "path": "execution/comments_server.py",
+      "noncomment_loc": 5011
+    },
+    {
+      "path": "src/provenance/integrity_audit.py",
+      "noncomment_loc": 6100
+    }
+  ],
+  "selected_loc_crossings": [
+    "execution/comments_server.py",
+    "src/pipeline/portfolio_panel.py",
+    "src/calibration_coach.py",
+    "src/provenance/source_coverage_reconcile.py",
+    "src/research/investment_decision_card.py",
+    "execution/discover_ir_documents_all.py",
+    "src/runtime/portfolio_tracker.py",
+    "src/compute/metrics_engine/io.py",
+    "src/ask/exchange_store.py",
+    "src/decision_extractor.py",
+    "src/transcripts/longitudinal.py",
+    "execution/apply_kpi_semantic_refresh.py",
+    "src/filings/metric_lifecycle.py",
+    "src/provenance/data_backbone_rehearsal.py",
+    "src/advisor/senior_partner_brief.py",
+    "src/provenance/issuer_registry.py",
+    "src/ir_uploads.py",
+    "src/runtime/job_runtime.py",
+    "src/provenance/legacy_canonical_parity.py",
+    "src/provenance/population_research_snapshots.py",
+    "src/provenance/population_completeness.py",
+    "src/report/offline_artifact.py",
+    "src/decision_conditions.py",
+    "src/compute/thesis_evaluator.py",
+    "src/ui/design_registry.py",
+    "src/integrations/portfolio_tracker_v1.py",
+    "src/quality/lifecycle.py",
+    "src/provenance/image_ocr_extraction.py",
+    "src/provenance/sec_companyfacts_fact_matcher.py",
+    "src/provenance/population_retrieval_runtime.py",
+    "src/search/local_vector.py",
+    "execution/sync_sec_filing_inventory.py",
+    "src/dcf/redesign.py",
+    "execution/collect_operations_runtime_observations.py",
+    "src/filings/inline_xbrl_processor.py",
+    "src/pipeline/work_os_copilot.py",
+    "src/ir_pipeline/evidence_capture.py",
+    "src/compute/kpi_extract_summaries.py",
+    "src/ask/audit_store.py",
+    "src/pipeline/research_cockpit.py",
+    "src/compute/fmp_derived_kpis.py",
+    "src/provenance/foreign_issuer_bootstrap.py",
+    "src/ui/controls.py",
+    "src/evals/golden_classifiers.py",
+    "src/provenance/ocr_extraction.py",
+    "src/pipeline/operations_panel.py",
+    "src/provenance/canonical_fact_resolution.py",
+    "src/ask/sealed_retrieval.py",
+    "src/pipeline/ticker_command_center.py",
+    "src/ask/grounding.py",
+    "src/ir_pipeline/approved_ir_observation_capture.py",
+    "src/provenance/financial_fact_resolution.py",
+    "src/timeseries/loaders.py",
+    "execution/verify_design_conformance.py",
+    "execution/save_fmp_data.py",
+    "src/pipeline/managed_ir_sources.py"
+  ],
+  "migration_builder_dispositions": [
+    {
+      "path": "tests/_signals_fixtures.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/conftest.py",
+      "taxonomy": "archived-graph",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_advisor_memos.py",
+      "taxonomy": "archived-graph",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_decision_process_quality.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_disclosure_thesis_materiality.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_fact_overrides.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_financial_facts_supersedes_index.py",
+      "taxonomy": "custom-bootstrap",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 custom-bootstrap representatives; convert 0 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_news_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_owner_decision_extension.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_pass_decision_source.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_personal_cio_migrations.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_provenance_freshness.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_qualitative_conditions.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_reader_perf_indexes.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_signals_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_alembic_standup_messages.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_allocation_decisions_panel.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_analyst_notes.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_architecture_migrations.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ask_answer_pin.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ask_exchange_store_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_auto_reconcile.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_canonical_fact_projection.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_canonical_fact_projection_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_canonical_fact_resolution.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_canonical_fact_resolution_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_capacity_moments.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_cio_export_and_ledger_routes.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_coach_reply.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_cockpit_fundamentals.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_companyfacts_match_gated_capture.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_consequence_receipts_routes.py",
+      "taxonomy": "archived-graph",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_data_infrastructure_migration_chain.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_dcf_live_write.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_dcf_sanity_gate.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_dcf_sync_and_coverage.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_dcf_tweak.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_decision_feed.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_decisions_advice_link_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_discovery.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_document_processing_evidence.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_document_processing_evidence_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_embedding_candidate_governance_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_embedding_runtime_binding_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_etf_sources.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_evidence_backfill.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_evidence_integrity_audit.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_evidence_ledger.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_evidence_links.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_expected_earnings.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_explore_panel.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_anchor_lookup_index_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_cutover_performance_indexes.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_observation_match_proofs.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_plane_v2.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_plane_v2_hardening_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_plane_v2_integrity_audit.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_plane_v2_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_search_projection.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fact_selection.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fetch_fmp_news.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_filing_xbrl_extraction_disposition_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_filing_xbrl_extraction_ledger.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_filing_xbrl_fact_adapter.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_financial_fact_resolution_cutover.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_foreign_issuer_registry_bootstrap.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_fulltext_evidence_backfill.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_governor.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_grounded_ask_retrieval.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_grounded_search_foundation.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_heterogeneous_retrieval.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_image_ocr_extraction_governance.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_inbox_schema_drift.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_integrity_audit_performance_indexes.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_investment_decision_card_budget_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ir_authority.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ir_authority_capture.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ir_evidence_capture.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ir_home_authority.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ir_source_inventory.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_issuer_registry_bootstrap.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_issuer_reporting_registry.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_journal_links.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ledger_packet.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_legacy_document_evidence_bindings.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_legacy_fact_evidence_matches.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_llm_evals.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_llm_evals_rubric.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_llm_postprocess.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_locator_schema.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_metric_ontology.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_metric_ontology_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0069_brief_provenance.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0071_check_constraints.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0072_reporting_cadence.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0073_tenant_identity.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0076_over_under_check.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0113_definition_origin.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0140_advisor_memos_position_review_kind.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0142_alerts_dismiss_reason.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0147_red_team_items.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0160_metrics_engine_schema.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0165_segment_quarterly_provenance.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0168_segment_quarterly_coverage.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "retain_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0170_comparable_sets.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0178_comp_set_metrics_locator.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0181_fact_overrides_locator.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0208_0209_transcripts_source_unique.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_migration_0214_evidence_selection_lifecycle.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_news_fallback_and_dispatch.py",
+      "taxonomy": "archived-graph",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_news_pipeline_repair.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_news_store.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_observation_resolution.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_ocr_extraction_governance.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_open_loops.py",
+      "taxonomy": "archived-graph",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_owner_falsifier_conditions.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_owner_profile_packet.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_owner_profile_store.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_pdf_table_evidence_backfill.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_pledge.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_population_canonical_resolution.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_population_completeness.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_population_metric_ontology.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_portfolio_risk_snapshot.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_position_review_graded_record.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_position_review_integration.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_positioning_store.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_post_earnings_readout_budget_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_prune_misscaled_capture_facts.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_recalibrate_investor_weights.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_redteam_engine.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_reporting_entity_registry.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_research_cockpit.py",
+      "taxonomy": "archived-graph",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_research_routes.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_research_snapshot.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_research_snapshot_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_research_universe_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_resolve_manager_ciks.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_risk_factors.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_risk_snapshot_history.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_risk_snapshot_provenance.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_search_corpus_builder.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_sec_companyfacts_binding_backfill.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_sec_companyfacts_capture.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_sec_fund_registry_bootstrap.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_sec_historical_issuer_bootstrap.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_sec_native_capture.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_seed_decisions_backfill.py",
+      "taxonomy": "archived-graph",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_seed_kpi_registry.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_seed_reconcile.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_semantic_disposition.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_senior_partner_brief_budget_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_session_distill.py",
+      "taxonomy": "archived-graph",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 1 archived-graph representatives; convert 7 remaining setup builders"
+    },
+    {
+      "path": "tests/test_signals_quality.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_since_last.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_socratic.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_calls_routes.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_coverage.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_coverage_reconcile.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_definition_identity_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_expectation_lifecycle.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_fact_publication_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_fact_repository.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_fact_stream.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_fact_stream_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_source_inventory_seals.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_stance_scoring.py",
+      "taxonomy": "direct-historical",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 direct-historical representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_structured_fact_search_projection_migration.py",
+      "taxonomy": "direct-downgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 58 direct-downgrade representatives; convert 24 remaining setup builders"
+    },
+    {
+      "path": "tests/test_tenant_identity_consistency.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_thesis_status_view.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_viewspec_nl.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    },
+    {
+      "path": "tests/test_weekly_packet_profile_facts.py",
+      "taxonomy": "seeded-upgrade",
+      "disposition": "convert_candidate",
+      "owner": "Bhanu Nuthakki",
+      "selection_basis": "taxonomy-quota: retain 0 seeded-upgrade representatives; convert 57 remaining setup builders"
+    }
+  ],
+  "retained_type_debt": {
+    "total": 4200,
+    "archived": 175,
+    "all": 4375
+  },
+  "type_debt_clusters": [
+    {
+      "source_zone": "execution",
+      "rule": "reportArgumentType",
+      "count": 77,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 11.55,
+      "suggested_slice_count": 1,
+      "file_count": 10,
+      "files_sha256": "78cd5e2e96bc463ae81d3c0c515893295d0c046c80e43ef3f11985bce02847ee",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportAttributeAccessIssue",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "872dfb5491cc53c15402eb2396cceb4e3543d126a552b33cb10fcb3ed0a74486",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportCallIssue",
+      "count": 5,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.75,
+      "suggested_slice_count": 1,
+      "file_count": 3,
+      "files_sha256": "098df4b3232774e3a90b6d6b0e253e8288b91d7a8c5aefe1a00901279a1406f0",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportGeneralTypeIssues",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "3216bc44d7d959eb95f44f85689bfcee56a1002debc140435f5fde42ff20295e",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportIndexIssue",
+      "count": 3,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.45,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "f0a632024ab50f09d32612174e4975ed22995579e74ad0a702e6594b24dd0e38",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportMissingImports",
+      "count": 2,
+      "ownership_lane": "typing-annotations",
+      "risk": "high",
+      "estimated_hours": 0.24,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "ece1399eaac47443bffcdcd229756a4f503c7063c8194110b7964dead04cdf18",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportMissingParameterType",
+      "count": 74,
+      "ownership_lane": "typing-annotations",
+      "risk": "high",
+      "estimated_hours": 8.88,
+      "suggested_slice_count": 1,
+      "file_count": 7,
+      "files_sha256": "f4f382ff235f31f003e34b4f703288054d19f194eecece1478e18b9dc387019c",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportMissingTypeArgument",
+      "count": 14,
+      "ownership_lane": "typing-annotations",
+      "risk": "high",
+      "estimated_hours": 1.68,
+      "suggested_slice_count": 1,
+      "file_count": 5,
+      "files_sha256": "a1e6c3b0216e12c758ecdeb469d3fc742b1aef666d3cadd41a2819c80eaf26a5",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportOperatorIssue",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "34973c3060cafd19db747ad371157f6defaf1ccc0b569834d5d81687d485fc78",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportOptionalMemberAccess",
+      "count": 43,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 6.45,
+      "suggested_slice_count": 1,
+      "file_count": 5,
+      "files_sha256": "32fd20309036da276baf9de877a876a68facda55b0de07f27ec31f2980afef7a",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportOptionalOperand",
+      "count": 3,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.45,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "34973c3060cafd19db747ad371157f6defaf1ccc0b569834d5d81687d485fc78",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportOptionalSubscript",
+      "count": 21,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 3.15,
+      "suggested_slice_count": 1,
+      "file_count": 5,
+      "files_sha256": "32fd20309036da276baf9de877a876a68facda55b0de07f27ec31f2980afef7a",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportPrivateUsage",
+      "count": 11,
+      "ownership_lane": "api-boundaries",
+      "risk": "high",
+      "estimated_hours": 1.1,
+      "suggested_slice_count": 1,
+      "file_count": 3,
+      "files_sha256": "b57efe8eb9d5ea2b22b63b431d74193f674cb3388cf98dcf89eed80e21d9f609",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportReturnType",
+      "count": 3,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.45,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "34973c3060cafd19db747ad371157f6defaf1ccc0b569834d5d81687d485fc78",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportUnknownArgumentType",
+      "count": 379,
+      "ownership_lane": "typing-unknowns",
+      "risk": "high",
+      "estimated_hours": 30.32,
+      "suggested_slice_count": 4,
+      "file_count": 19,
+      "files_sha256": "809e8bd218df9354532185f1b2749cbb49d5583dfc604075fef525e8ea78abb3",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportUnknownLambdaType",
+      "count": 37,
+      "ownership_lane": "typing-unknowns",
+      "risk": "high",
+      "estimated_hours": 2.96,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "40679413bc10c50279ab8e7009d041ae101d3e8d6de6079b529f598e2ebc76d8",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportUnknownParameterType",
+      "count": 94,
+      "ownership_lane": "typing-unknowns",
+      "risk": "high",
+      "estimated_hours": 7.52,
+      "suggested_slice_count": 1,
+      "file_count": 10,
+      "files_sha256": "60e4a49422a09dd955e1d81d733d19c9235680df5e28cd6a923b7b3d95c8b8c8",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportUnknownVariableType",
+      "count": 346,
+      "ownership_lane": "typing-unknowns",
+      "risk": "high",
+      "estimated_hours": 27.68,
+      "suggested_slice_count": 4,
+      "file_count": 20,
+      "files_sha256": "f5d431c7e5d7c09e09859e439d4a6af98cdcb5bd68036a921fab244f3d792b38",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportUnnecessaryCast",
+      "count": 2,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.3,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "47d0ee6dbedc2d1879147e9a8ccb935d4be343da64774ac5a04d11f88c8863a6",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportUnnecessaryComparison",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "high",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "34973c3060cafd19db747ad371157f6defaf1ccc0b569834d5d81687d485fc78",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "execution",
+      "rule": "reportUnusedVariable",
+      "count": 2,
+      "ownership_lane": "dead-code",
+      "risk": "high",
+      "estimated_hours": 0.12,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "68698db90aaf36a2087d933230c45a6bead7f0a1f916300c3700582349de3cda",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "instruction_tests",
+      "rule": "reportUnknownVariableType",
+      "count": 2,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 0.16,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "6f3533dbb54ed450b62eea66b05b4561ee7e920d9657f3231a33aa3679cc1b18",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportArgumentType",
+      "count": 43,
+      "ownership_lane": "contract-typing",
+      "risk": "critical",
+      "estimated_hours": 6.45,
+      "suggested_slice_count": 1,
+      "file_count": 12,
+      "files_sha256": "f0ddcc12f363b0175436bced086ba99894992fcfe6fe5953351b2cc3199585ed",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportAttributeAccessIssue",
+      "count": 21,
+      "ownership_lane": "contract-typing",
+      "risk": "critical",
+      "estimated_hours": 3.15,
+      "suggested_slice_count": 1,
+      "file_count": 4,
+      "files_sha256": "d440ef7477aac2afe83f9c0f320c2d6bf7a36b375a646543404372df97ebf04b",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportCallIssue",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "0c5ef9b6f7365985b83c83ef3158f08017bfc6f079a576c523b32a221df18a11",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportDeprecated",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "258f51b71892e73da09e8cdf1e770333bbe0bd25d793d1892420d8c568e6e379",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportIndexIssue",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "7ec6f66a5e872ff33b4b3b9922b1f8ed67e83b4e16acca788706e75f32599d3b",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportMissingImports",
+      "count": 3,
+      "ownership_lane": "typing-annotations",
+      "risk": "medium",
+      "estimated_hours": 0.36,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "b6db7195f72fdaabee49dddac5bc9f6c8baff91ef3db680b674ba92a9c704f11",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportMissingParameterType",
+      "count": 22,
+      "ownership_lane": "typing-annotations",
+      "risk": "medium",
+      "estimated_hours": 2.64,
+      "suggested_slice_count": 1,
+      "file_count": 4,
+      "files_sha256": "55e33130b51c00adb0d55aebf69d22a736451089997bca6a3204a82972bc1eeb",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportMissingTypeArgument",
+      "count": 26,
+      "ownership_lane": "typing-annotations",
+      "risk": "medium",
+      "estimated_hours": 3.12,
+      "suggested_slice_count": 1,
+      "file_count": 4,
+      "files_sha256": "48ab5c12229bbab54158ed4d46c8b941a9256b8253f67cc97c427cc395c7f5c3",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportPrivateUsage",
+      "count": 18,
+      "ownership_lane": "api-boundaries",
+      "risk": "medium",
+      "estimated_hours": 1.8,
+      "suggested_slice_count": 1,
+      "file_count": 7,
+      "files_sha256": "07d3e9c7d07c04bf5269ce69072b2604f8482a116e68760ed4184a8cc0f8bed8",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportReturnType",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "df1b9a09ff71ef2e95c4b8521cbc8e0ae7a8eca1671722e6437394e2f53cbf27",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportUnknownArgumentType",
+      "count": 227,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 18.16,
+      "suggested_slice_count": 3,
+      "file_count": 27,
+      "files_sha256": "b43c1a8d45d582aeccbbac6fbf4a6bedd603a06c98d1e6ef5c62351f67a445a9",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportUnknownLambdaType",
+      "count": 8,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 0.64,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "584a3de629e7c9a1a1090e2d0af137bbb10339621f3a2013d910f2a6369aa1f4",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportUnknownParameterType",
+      "count": 61,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 4.88,
+      "suggested_slice_count": 1,
+      "file_count": 7,
+      "files_sha256": "5e3fed8738690632ac06c4419687925ea9f3dfc486ff67c796a380257d98f9f1",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportUnknownVariableType",
+      "count": 340,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 27.2,
+      "suggested_slice_count": 4,
+      "file_count": 38,
+      "files_sha256": "2e1621af0110b2a0f507f2faa9298ac65ba67f4867e9f8206896673764fbbdc3",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportUnnecessaryCast",
+      "count": 3,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.45,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "e1437d81904649194ab54e8259bc0fe63b447ec7d20ccb26d740ef6fa2f80f60",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportUnnecessaryIsInstance",
+      "count": 8,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 1.2,
+      "suggested_slice_count": 1,
+      "file_count": 4,
+      "files_sha256": "9ca16c4f3248d20c50fec5d598b72348caa9833da563bf62089a77945e83b502",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "src",
+      "rule": "reportUnusedImport",
+      "count": 1,
+      "ownership_lane": "dead-code",
+      "risk": "medium",
+      "estimated_hours": 0.06,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "4e00e610e352ef50c1e347cabed062b253d65455e46bef367d0fce062ec138c4",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportArgumentType",
+      "count": 140,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 21.0,
+      "suggested_slice_count": 2,
+      "file_count": 38,
+      "files_sha256": "31cef961b8df7834480efef4ae81b8f0bd97d3ee147335315d2cd18736c36b63",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportAttributeAccessIssue",
+      "count": 20,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 3.0,
+      "suggested_slice_count": 1,
+      "file_count": 7,
+      "files_sha256": "0e6effcbe718b24721c141f64480de61e8872968a880f46e3f2eb47cb26d5dc3",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportCallIssue",
+      "count": 2,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.3,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "2283864183e1097bbe97d703052945ee8f845b96881314bf25f4e79fe3c6e38b",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportDeprecated",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "847c724827944b6bd2a172333e8daf78731795afe34d5717d6d9875eb6865b19",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportGeneralTypeIssues",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "07eccf2b05da7311543a0c0944eb9846e3cfb6eea05542d4c0d61933ba2c2c80",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportIndexIssue",
+      "count": 6,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.9,
+      "suggested_slice_count": 1,
+      "file_count": 4,
+      "files_sha256": "0c3e4270ae4d6953a6b3740a81151394b3f17fe2589902d427de2ffedcb4fbff",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportInvalidTypeForm",
+      "count": 2,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.3,
+      "suggested_slice_count": 1,
+      "file_count": 2,
+      "files_sha256": "1c224c9ab2bd1e06e38bf027749b07a2fe2feb86bbd9a53448c50fa6f5bd1c37",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportMissingParameterType",
+      "count": 219,
+      "ownership_lane": "typing-annotations",
+      "risk": "medium",
+      "estimated_hours": 26.28,
+      "suggested_slice_count": 3,
+      "file_count": 33,
+      "files_sha256": "9c27f1a021427632169b6f400e8802f5710cb66e7d5900cdafcea288e0621b14",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportMissingTypeArgument",
+      "count": 1,
+      "ownership_lane": "typing-annotations",
+      "risk": "medium",
+      "estimated_hours": 0.12,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "8e2f7ab3bcca201cfd035882b3de3a9c111702e76aa0e4e9f01f6f7ae4d87018",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportOperatorIssue",
+      "count": 7,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 1.05,
+      "suggested_slice_count": 1,
+      "file_count": 6,
+      "files_sha256": "7c161e4c43e9e2512427caf87c8287368eb4a296a386cc8b9abb198514012e4f",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportOptionalMemberAccess",
+      "count": 20,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 3.0,
+      "suggested_slice_count": 1,
+      "file_count": 5,
+      "files_sha256": "1bc7d29589075bd3ad3d877662802679f09b7aca090a6bc1a79b63373bd86105",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportOptionalOperand",
+      "count": 3,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.45,
+      "suggested_slice_count": 1,
+      "file_count": 3,
+      "files_sha256": "895e2cb8731cf42e10d69c9a08fd376f6ba491adb98164feb1ff4314ab24efae",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportPossiblyUnboundVariable",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "32998c2baca1d0cf81d56312e2fcf7fe0da491772883b9e96f8d4ff406702ad1",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportPrivateUsage",
+      "count": 254,
+      "ownership_lane": "api-boundaries",
+      "risk": "medium",
+      "estimated_hours": 25.4,
+      "suggested_slice_count": 3,
+      "file_count": 86,
+      "files_sha256": "31b68eed956cf900668c2c742909dbbb950c78330fa9804c85ba5b10fa3d55e6",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportReturnType",
+      "count": 3,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.45,
+      "suggested_slice_count": 1,
+      "file_count": 3,
+      "files_sha256": "5667b0dd0b6cc13b6a7e22ed23eb46e24cf0638d1afccc1b2abcbf5a62de416d",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportUnknownArgumentType",
+      "count": 539,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 43.12,
+      "suggested_slice_count": 6,
+      "file_count": 87,
+      "files_sha256": "2f4a8f7016a33ed1fdd7fd2e1a615b4beccaf029e52a392391692e4739698c00",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportUnknownLambdaType",
+      "count": 622,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 49.76,
+      "suggested_slice_count": 7,
+      "file_count": 65,
+      "files_sha256": "6f247444e49a324597d404fb8fa6e87a4a83d71c07f22f3178c3a4e945dc4017",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportUnknownParameterType",
+      "count": 224,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 17.92,
+      "suggested_slice_count": 3,
+      "file_count": 37,
+      "files_sha256": "5eb27f9ba1ac2bcd5633aefb1a2404f9ffbb9b6a0df0c308dc91103b14997c61",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportUnknownVariableType",
+      "count": 220,
+      "ownership_lane": "typing-unknowns",
+      "risk": "medium",
+      "estimated_hours": 17.6,
+      "suggested_slice_count": 3,
+      "file_count": 39,
+      "files_sha256": "b0e80545747ebd926d5a750fffe2312f3b6a0705bb654e5a8220cb6f7f0838bf",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportUnnecessaryCast",
+      "count": 4,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.6,
+      "suggested_slice_count": 1,
+      "file_count": 3,
+      "files_sha256": "c78d22f63123790d34171e12357f17cd4d9e976d53176d74e421aac8102896de",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportUnnecessaryIsInstance",
+      "count": 1,
+      "ownership_lane": "contract-typing",
+      "risk": "medium",
+      "estimated_hours": 0.15,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "972d8c9dbd7f28969c91b7cdb7e5ef71ef9725d5aa39a1db6649cc7a781ae9fd",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    },
+    {
+      "source_zone": "tests",
+      "rule": "reportUnusedImport",
+      "count": 3,
+      "ownership_lane": "dead-code",
+      "risk": "medium",
+      "estimated_hours": 0.18,
+      "suggested_slice_count": 1,
+      "file_count": 1,
+      "files_sha256": "fd040557b2ee5a7d2717f06b3c56c11b8c328a4e34fe85e5d5d9a3f74abd9109",
+      "evidence_sha256": "bef4859fc0981070b1f948cd1c0f36e7e1a0cbf1a9db18663a845b3cc120b5d1"
+    }
+  ],
+  "type_debt_clusters_sha256": "6785672f42a8883db1761c4b37ff6cc5b0a938e38d1fc4320ae237ecd57114ed",
+  "issue_train_matrix": {
+    "BHA-104": "Train 1",
+    "BHA-105": "Train 2",
+    "BHA-106": "Train 3",
+    "BHA-107": "Train 4",
+    "BHA-108": "Train 5",
+    "BHA-109": "Train 6",
+    "BHA-110": "Train 7",
+    "BHA-111": "Train 8"
+  },
+  "cleanup_slices": [
+    {
+      "key": "migration-test-ci",
+      "train": "Train 1",
+      "issue": "BHA-104",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "test-performance",
+      "scope": "112 actual command.upgrade test builders plus full-suite CI pairing",
+      "ownership_lane": "test-harness",
+      "risk": "high",
+      "units": 112,
+      "estimated_hours": 56.0,
+      "estimated_prs": 22,
+      "estimated_calendar_weeks": 7.0,
+      "acceptance": "actual upgrade-builder cohort is <=60 and paired CI evidence meets the benchmark contract"
+    },
+    {
+      "key": "active-type-debt",
+      "train": "Train 2",
+      "issue": "BHA-105",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "typed-contracts",
+      "scope": "non-archived strict-Pyright clusters",
+      "ownership_lane": "typed-contracts",
+      "risk": "high",
+      "units": 4200,
+      "estimated_hours": 387.55,
+      "estimated_prs": 20,
+      "estimated_calendar_weeks": 8.0,
+      "acceptance": "active diagnostics decline without adding ignores or weakening strictness"
+    },
+    {
+      "key": "integrity-audit",
+      "train": "Train 3",
+      "issue": "BHA-106",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "integrity-boundaries",
+      "scope": "integrity-audit responsibilities and typed evidence paths",
+      "ownership_lane": "integrity-audit",
+      "risk": "critical",
+      "units": 1,
+      "estimated_hours": 120.0,
+      "estimated_prs": 9,
+      "estimated_calendar_weeks": 5.0,
+      "acceptance": "integrity audit is split into typed, independently testable responsibilities"
+    },
+    {
+      "key": "duplicate-authorities",
+      "train": "Train 4",
+      "issue": "BHA-107",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "maintainability",
+      "scope": "exact clone groups and duplicate authority consolidation",
+      "ownership_lane": "shared-primitives",
+      "risk": "medium",
+      "units": 8,
+      "estimated_hours": 80.0,
+      "estimated_prs": 11,
+      "estimated_calendar_weeks": 6.0,
+      "acceptance": "duplicate receipt is <=1 group / <=3 functions / <=67 LOC"
+    },
+    {
+      "key": "architecture-boundaries",
+      "train": "Train 5",
+      "issue": "BHA-108",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "architecture-boundaries",
+      "scope": "request pooling, composition roots, module shape, and 31-edge SCC cut",
+      "ownership_lane": "architecture-boundaries",
+      "risk": "critical",
+      "units": 31,
+      "estimated_hours": 180.0,
+      "estimated_prs": 68,
+      "estimated_calendar_weeks": 16.0,
+      "acceptance": "request paths use one connection, composition roots meet caps, and SCC target is met"
+    },
+    {
+      "key": "lifecycle-pruning",
+      "train": "Train 6",
+      "issue": "BHA-109",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "cleanup",
+      "scope": "dormant/dead operational candidates after reachability review",
+      "ownership_lane": "lifecycle-pruning",
+      "risk": "high",
+      "units": 268,
+      "estimated_hours": 120.0,
+      "estimated_prs": 12,
+      "estimated_calendar_weeks": 6.0,
+      "acceptance": "only dispositioned, unreachable code is removed and lifecycle receipt remains complete"
+    },
+    {
+      "key": "final-static-zero",
+      "train": "Train 7",
+      "issue": "BHA-110",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "static-quality",
+      "scope": "active Ruff, format, Pyright, and suppression retirement",
+      "ownership_lane": "static-quality",
+      "risk": "high",
+      "units": 4200,
+      "estimated_hours": 80.0,
+      "estimated_prs": 12,
+      "estimated_calendar_weeks": 6.0,
+      "acceptance": "active static diagnostics and unauthorized suppressions reach zero"
+    },
+    {
+      "key": "quality-closure",
+      "train": "Train 8",
+      "issue": "BHA-111",
+      "owner": "Bhanu Nuthakki",
+      "parallel_group": "closure",
+      "scope": "reconstruction, reconciliation, owner acceptance, and final score receipt",
+      "ownership_lane": "quality-closure",
+      "risk": "medium",
+      "units": 1,
+      "estimated_hours": 60.0,
+      "estimated_prs": 2,
+      "estimated_calendar_weeks": 3.0,
+      "acceptance": "all hard gates and reconstruction checks pass with owner-accepted receipts"
+    }
+  ],
+  "estimate_totals": {
+    "total_estimated_hours": 1083.55,
+    "total_estimated_prs": 156,
+    "critical_path_calendar_weeks": 57.0
+  },
+  "target_arithmetic": {
+    "loc_baseline_over_1000": 91,
+    "loc_target_over_1000": 35,
+    "loc_required_reduction": 56,
+    "mandatory_loc_roots": {
+      "execution/comments_server.py": 5011,
+      "src/pipeline/portfolio_panel.py": 3328
+    },
+    "scc_baseline": 17,
+    "scc_target": 3,
+    "scc_cut_edges": 31,
+    "duplicate_groups_baseline": 8,
+    "duplicate_groups_target": 1,
+    "duplicate_groups_to_remove": 7,
+    "duplicate_functions_baseline": 19,
+    "duplicate_functions_target": 3,
+    "duplicate_functions_to_remove": 16,
+    "duplicate_loc_baseline": 337,
+    "duplicate_loc_target": 67,
+    "duplicate_loc_to_remove": 270,
+    "migration_builders_baseline": 172,
+    "migration_builders_target": 60,
+    "migration_builders_to_convert": 112,
+    "full_suite_wall_seconds": 952.1505841249891,
+    "full_suite_target_seconds": 510.0,
+    "full_suite_gap_seconds": 442.151
+  },
+  "hold_reasons": [
+    "full-suite evidence is a single unpaired run; >=7 paired cold/warm runs and network isolation are not yet proven",
+    "type-debt burn-down and composition-root split feasibility lack ownership-confirmed execution receipts"
+  ]
+}

@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
+  "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "23f02037157ee450cd509980be677055bf2264e33a9799cba7c8ec3807756d13",
+  "source_sha256": "a56ef0a9cff43cc2450466180b7ea022743a4b07dbdaeddb26a1ca87ba894061",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",
@@ -858,6 +858,7 @@
     "tests/test_risk_snapshot_history.py",
     "tests/test_risk_snapshot_provenance.py",
     "tests/test_risk_snapshot_refresh.py",
+    "tests/test_roadmap_freeze.py",
     "tests/test_row_validation.py",
     "tests/test_run_calibration_grading.py",
     "tests/test_run_calibration_scorecard.py",

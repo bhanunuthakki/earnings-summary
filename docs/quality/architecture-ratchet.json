@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
-  "scanner_sha256": "bce415f8a6c1270f4eb767c2ce0af0b10dd0250014b3437853a665d60663b975",
-  "source_sha256": "4eb79c9a0932e23e86cae548dd4131f81287703747c52f4e21bb83df9202bd71",
+  "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+  "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
+  "source_sha256": "15c577475ac1aed15117acc80cd8bf81c844d602fd078ed35d80edef75cbffe4",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1316,
-    "total_noncomment_loc": 485885,
+    "executable_modules": 1318,
+    "total_noncomment_loc": 486931,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -3132,6 +3132,21 @@
         ],
         "public_functions": 5,
         "fully_annotated_public_functions": 5
+      },
+      {
+        "path": "execution/freeze_quality_roadmap.py",
+        "module": "execution.freeze_quality_roadmap",
+        "lines": {
+          "physical": 41,
+          "nonblank": 33,
+          "noncomment": 33
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [
+          "filesystem"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "execution/gc_restore.py",
@@ -15830,9 +15845,9 @@
         "path": "src/quality/architecture.py",
         "module": "quality.architecture",
         "lines": {
-          "physical": 685,
-          "nonblank": 606,
-          "noncomment": 606
+          "physical": 708,
+          "nonblank": 626,
+          "noncomment": 626
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -15840,8 +15855,8 @@
           "network",
           "process"
         ],
-        "public_functions": 6,
-        "fully_annotated_public_functions": 6
+        "public_functions": 7,
+        "fully_annotated_public_functions": 7
       },
       {
         "path": "src/quality/compatibility.py",
@@ -15935,6 +15950,23 @@
           "noncomment": 955
         },
         "internal_fan_out": 0,
+        "responsibilities": [
+          "filesystem",
+          "network",
+          "process"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "src/quality/roadmap_freeze.py",
+        "module": "quality.roadmap_freeze",
+        "lines": {
+          "physical": 1057,
+          "nonblank": 993,
+          "noncomment": 993
+        },
+        "internal_fan_out": 1,
         "responsibilities": [
           "filesystem",
           "network",

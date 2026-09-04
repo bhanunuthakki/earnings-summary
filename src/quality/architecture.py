@@ -280,6 +280,29 @@ def _resolve_imports(
     return targets
 
 
+def resolved_import_edges(repo_root: Path) -> tuple[tuple[str, str], ...]:
+    """Return the deduplicated current-tree AST import edges.
+
+    This is the public companion to the architecture receipt's fan-out and
+    SCC metrics.  Consumers that need edge identity (for example, a cleanup
+    cut set) must use this same resolver rather than duplicating import logic.
+    """
+    paths = _tracked_python_paths(repo_root)
+    module_paths = {_module_name(path): path for path in paths}
+    known_modules = set(module_paths)
+    edges: set[tuple[str, str]] = set()
+    for path in paths:
+        module = _module_name(path)
+        tree = ast.parse((repo_root / path).read_text(encoding="utf-8"), filename=path)
+        edges.update(
+            (module, target)
+            for target in _resolve_imports(
+                tree, module, path.endswith("/__init__.py"), known_modules
+            )
+        )
+    return tuple(sorted(edges))
+
+
 def _responsibilities(tree: ast.Module) -> tuple[str, ...]:
     flags: set[str] = set()
     for node in ast.walk(tree):

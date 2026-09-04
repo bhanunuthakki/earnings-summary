@@ -1,7 +1,7 @@
 {
   "schema_version": "bha-120.v2",
   "repo_root": "/Applications/earnings-summary/.tmp/bha-103-worktree",
-  "tracked_python_files": 2738,
+  "tracked_python_files": 2741,
   "active": [
     ".github/scripts/ci_gate.py",
     "alembic/env.py",
@@ -210,6 +210,7 @@
     "execution/fix_kpi_series.py",
     "execution/fmp_backpop.py",
     "execution/format_changed.py",
+    "execution/freeze_quality_roadmap.py",
     "execution/gc_restore.py",
     "execution/generate_ask_retrieval_production_scopes.py",
     "execution/generate_cron_artifacts.py",
@@ -1055,6 +1056,7 @@
     "src/quality/performance.py",
     "src/quality/pytest_performance_plugin.py",
     "src/quality/reachability.py",
+    "src/quality/roadmap_freeze.py",
     "src/quality/roadmap_reconciliation.py",
     "src/quality/static_quality.py",
     "src/quality/test_ci_pairing.py",
@@ -2183,6 +2185,7 @@
     "tests/test_risk_snapshot_history.py",
     "tests/test_risk_snapshot_provenance.py",
     "tests/test_risk_snapshot_refresh.py",
+    "tests/test_roadmap_freeze.py",
     "tests/test_row_validation.py",
     "tests/test_run_calibration_grading.py",
     "tests/test_run_calibration_scorecard.py",
@@ -2757,7 +2760,7 @@
       "version": "ruff 0.16.4",
       "exit_status": 1,
       "count": 2,
-      "receipt_path": ".tmp/static_quality/621d2add06da4266940c3d88/ruff-check.json",
+      "receipt_path": ".tmp/static_quality/b4fa1195805d2d38024e817d/ruff-check.json",
       "diagnostics_by_directory": {
         "src/user_state": 2
       },
@@ -2778,7 +2781,7 @@
       "version": "ruff 0.16.4",
       "exit_status": 1,
       "count": 62,
-      "receipt_path": ".tmp/static_quality/621d2add06da4266940c3d88/ruff-format.txt",
+      "receipt_path": ".tmp/static_quality/b4fa1195805d2d38024e817d/ruff-format.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {},
       "command_hash": "9df4538e64cb1f6d37a047b5ea78b18a3be5f5d4375ec875f2f6a313b997f5f9",
@@ -2793,7 +2796,7 @@
       "version": "pyright 1.1.411",
       "exit_status": 1,
       "count": 4375,
-      "receipt_path": ".tmp/static_quality/621d2add06da4266940c3d88/pyright.json",
+      "receipt_path": ".tmp/static_quality/b4fa1195805d2d38024e817d/pyright.json",
       "diagnostics_by_directory": {
         "alembic/versions_archived": 175,
         "execution": 1120,
@@ -2858,7 +2861,7 @@
       "version": "n/a",
       "exit_status": 0,
       "count": 627,
-      "receipt_path": ".tmp/static_quality/621d2add06da4266940c3d88/source-ignore-comments.txt",
+      "receipt_path": ".tmp/static_quality/b4fa1195805d2d38024e817d/source-ignore-comments.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {
         "# type: ignore": 263,
@@ -2933,10 +2936,10 @@
   ],
   "status": "PASS",
   "violations": [],
-  "scoped_commit": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
-  "source_hash": "2875793f05ba74152d35ceb73e442e533b7d7aa07e9194674f5351ce5cdbf027",
+  "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+  "source_hash": "66f41634ef168ef6004b1f7967d4b27988c76ef4d7dd0a9a6847fe4e77ac1116",
   "config_hash": "15aaf211f0d5d011d13e12d447c055098b09fd448f0d3b2e3244abd0c80bfbef",
-  "receipt_identity": "621d2add06da4266940c3d88",
+  "receipt_identity": "b4fa1195805d2d38024e817d",
   "suppressions_by_file": {
     "evals/structural/test_provider_blind_evals.py": {
       "# type: ignore": 1,

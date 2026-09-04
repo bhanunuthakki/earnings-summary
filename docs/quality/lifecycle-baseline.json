@@ -13493,6 +13493,33 @@
       "retirement_evidence": []
     },
     {
+      "path": "execution/freeze_quality_roadmap.py",
+      "line": 17,
+      "kind": "python_module",
+      "identifier": "execution/freeze_quality_roadmap.py",
+      "evidence": "parser = argparse.ArgumentParser(description=__doc__)",
+      "fingerprint": "010f578279140b45c24666fb787e2250aef8f5c930828bf3a2935398bf93cc4c",
+      "disposition": "dormant-until",
+      "classification_basis": "time_bounded_owner_review",
+      "rationale": "Unlinked operation is retained but dormant under the BHA-119 owner mandate until explicit activation or review.",
+      "targets": [
+        "execution/freeze_quality_roadmap.py"
+      ],
+      "methods": [],
+      "endpoint": null,
+      "owner_evidence": null,
+      "invocation_evidence": null,
+      "incoming_edge": null,
+      "sealed_completion_evidence": null,
+      "tombstone_consumer": null,
+      "tombstone_expiry": null,
+      "dormant_owner": "linear:BHA-119",
+      "dormant_activation": "explicit-owner-invocation-or-registration",
+      "dormant_review": "2026-12-03",
+      "dormant_policy_evidence": "policy:docs/quality/lifecycle-dormant-policy.json#04a1cb3132f2122e706be2920360d248d1c0d455db605da26e5b7167ca09f9e7",
+      "retirement_evidence": []
+    },
+    {
       "path": "execution/gc_restore.py",
       "line": 457,
       "kind": "python_module",
@@ -21599,11 +21626,11 @@
     },
     {
       "path": "src/quality/architecture.py",
-      "line": 633,
+      "line": 656,
       "kind": "python_module",
       "identifier": "src/quality/architecture.py",
       "evidence": "parser = argparse.ArgumentParser(description=__doc__)",
-      "fingerprint": "fc9f7cf1202ba130cb0beeb91ad1d99c75bba499e68dfca5c0d321dbad339de4",
+      "fingerprint": "eab32d7f7c70d773aac9bc445619c87d11bbf2a218a7d0a710a1603e26305c67",
       "disposition": "internal-delegate",
       "classification_basis": "typed_incoming_edge",
       "rationale": "A verified typed edge retains this internal delegate.",
@@ -22987,11 +23014,11 @@
     "internal-delegate": 223,
     "one-shot-completed": 0,
     "compatibility-tombstone": 0,
-    "dormant-until": 267,
+    "dormant-until": 268,
     "retire": 0
   },
   "surface_counts": {
-    "python_module": 416,
+    "python_module": 417,
     "flask_route": 181,
     "scheduled_task": 46,
     "wrapper": 60,
@@ -22999,20 +23026,20 @@
     "reconstruction": 56,
     "registry": 63
   },
-  "tracked_tree_hash": "5f5cba6041abdca18d51e828848c2dbabbee60444f51b528efb25dab22d30d38",
-  "revision": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
+  "tracked_tree_hash": "a190787f2d9915328111aecfbb1d1f905ec4b1060e5f4d83ee0ee17af3734aef",
+  "revision": "75866b898b290c81c9f4c6160c8d2a515c657725",
   "worktree_dirty": true,
-  "reachability_graph_hash": "76838e84d917b3085c68d9ab44d5cd8627dc2a1bed039e4dd6646a4caf459065",
+  "reachability_graph_hash": "b2043c2ea8fc1bc73c398ff3a1c51db2997367ca7e8a371020562d6032f14798",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.1.0",
     "python": "3.14.7",
-    "source_sha256": "5aaeb9e3555a30cda386302a66b2099b6da7bc24858d380b97af8a893655eb97",
+    "source_sha256": "d29819e0e9ec9aa9366550623f442e9c2b25efac263e73fe9cca8a17c06363bf",
     "dispositions_sha256": "5b15cccc2c70a74d96ec511349cf7e7c859e25425073fc6ed5bfb018437f2a59"
   },
   "coverage": {
-    "candidates": 824,
-    "inventoried": 824,
+    "candidates": 825,
+    "inventoried": 825,
     "omissions": 0,
     "extras": 0,
     "duplicates": 0
