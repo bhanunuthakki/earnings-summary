@@ -39,6 +39,26 @@ logs/
 !/mockups/harvey_sidebar_flow.html
 !/mockups/performance_risk_mockup.html
 !/mockups/portfolio_copilot_mockup.html
+!/mockups/explore_concepts.css
+!/mockups/explore_metric_catalog.js
+!/mockups/explore_hybrid_2_workbench_interactive.html
+!/mockups/explore_hybrid_2_analysis_sheet.html
+!/mockups/explore_hybrid_2_fullscreen_workbench.html
+!/mockups/explore_hybrid_1_conversational_pivot.html
+!/mockups/explore_hybrid_3_metric_story.html
+!/mockups/explore_guided_demo.html
+!/mockups/explore_analysis_notebook.html
+!/mockups/explore_pivot_studio.html
+!/mockups/explore_query_canvas.html
+!/mockups/explore_readonly_dcf.css
+!/mockups/explore_readonly_dcf_1_peek.html
+!/mockups/explore_readonly_dcf_2_modes.html
+!/mockups/explore_readonly_dcf_3_overlay.html
+!/mockups/explore_readonly_dcf_3_rich.html
+!/mockups/explore_emergent_1_artifact.html
+!/mockups/explore_emergent_2_spotlight.html
+!/mockups/explore_emergent_3_trail.html
+!/mockups/explore_dcf_linking_proposal.md
 /HOW_TO_USE_REPORTS.html
 /directives/self_host*.md
 

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Explore · Guided end-to-end demo</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+  <link rel="stylesheet" href="explore_readonly_dcf.css">
+  <style>
+    /* Isolated approval prototype. It does not read or write production state. */
+    html,body{height:100%}
+    [hidden]{display:none!important}
+    .gd-app{min-height:100dvh;background:var(--bg)}
+    .gd-demo{min-height:40px;display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 16px;border-bottom:1px solid var(--border);background:var(--paper);overflow:auto}
+    .gd-demo-label{color:var(--muted);font-size:var(--fs-caption);font-weight:700;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+    .gd-demo-steps{display:inline-flex;gap:3px;min-width:max-content}
+    .gd-demo-step{min-height:28px;padding:4px 10px;border:1px solid transparent;border-radius:var(--radius);background:transparent;color:var(--muted);cursor:pointer;font-weight:650}
+    .gd-demo-step[aria-pressed="true"]{border-color:var(--border-2);background:var(--surface);color:var(--fg)}
+    .gd-screen[hidden]{display:none}
+    .gd-head{min-height:62px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;padding:9px 20px;border-bottom:1px solid var(--border);background:var(--surface)}
+    .gd-head-title{text-align:center;min-width:0}
+    .gd-head-title h1{margin:0;font-size:var(--fs-title)}
+    .gd-head-title p{margin:3px 0 0;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+    .gd-main{width:min(1040px,calc(100% - 36px));margin:0 auto;padding:26px 0 150px}
+    .gd-main-narrow{width:min(820px,calc(100% - 36px))}
+    .gd-home{padding-top:76px}
+    .gd-home h1{margin:0;text-align:center;font-size:28px}
+    .gd-home-intro{margin:8px 0 24px;text-align:center;color:var(--muted)}
+    .gd-query{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;padding:9px 9px 9px 14px;border:1px solid var(--border-2);border-radius:var(--radius-card);background:var(--surface);box-shadow:0 12px 36px rgba(0,0,0,.24)}
+    .gd-query input{width:100%;border:0;background:transparent;font-size:var(--fs-title)}
+    .gd-query input:focus-visible{outline:0}
+    .gd-examples{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:14px}
+    .gd-question{min-height:54px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);background:transparent;color:var(--fg-soft);cursor:pointer;text-align:left}
+    .gd-question:hover,.gd-question:focus-visible{border-color:var(--border-2);background:var(--paper)}
+    .gd-question small{display:block;margin-top:3px;color:var(--muted)}
+    .gd-recent{display:flex;align-items:center;gap:10px;margin-top:26px;padding-top:14px;border-top:1px solid var(--border);color:var(--muted);font-size:var(--fs-caption)}
+    .gd-turn{display:grid;grid-template-columns:30px minmax(0,1fr);gap:12px;padding:13px 0}
+    .gd-turn+.gd-turn{border-top:1px solid var(--border)}
+    .gd-avatar{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--border-2);border-radius:var(--radius-full);color:var(--muted);font-size:var(--fs-caption);font-weight:750}
+    .gd-avatar-ai{border-color:color-mix(in srgb,var(--accent) 44%,transparent);background:var(--accent-soft);color:var(--accent)}
+    .gd-turn-label{min-height:30px;display:flex;align-items:center;color:var(--muted);font-size:var(--fs-caption);font-weight:650}
+    .gd-turn p{margin:4px 0 0;color:var(--fg-soft);font-size:15px;line-height:1.65}
+    .gd-turn strong{color:var(--fg)}
+    .gd-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-top:14px;border-block:1px solid var(--border)}
+    .gd-metric{padding:12px;border-right:1px solid var(--border)}
+    .gd-metric:last-child{border-right:0}
+    .gd-metric span,.gd-metric small{display:block;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-metric strong{display:block;margin:4px 0;font:700 18px var(--mono)}
+    .gd-answer-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:13px}
+    .gd-auto{display:flex;align-items:center;gap:7px;margin-top:12px;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-auto strong{color:var(--accent)}
+    .gd-compose-zone{position:fixed;inset:auto 0 0;z-index:12;min-height:126px;border-top:1px solid var(--border);background:color-mix(in srgb,var(--bg) 96%,transparent);backdrop-filter:blur(16px)}
+    .gd-compose-inner{width:min(820px,calc(100% - 40px));margin:11px auto 0}
+    .gd-compose-labels{display:flex;gap:12px;margin:0 0 5px 4px;color:var(--muted);font-size:var(--fs-caption);font-weight:700}
+    .gd-compose-labels .active{color:var(--fg);border-bottom:2px solid var(--accent)}
+    .gd-compose{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;padding:8px 8px 8px 13px;border:1px solid var(--border-2);border-radius:var(--radius-card);background:var(--surface)}
+    .gd-compose input{width:100%;border:0;background:transparent}
+    .gd-compose input:focus-visible{outline:0}
+    .gd-followups{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px}
+    .gd-followup{padding:2px 0;border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:var(--fs-caption)}
+    .gd-followup:hover,.gd-followup:focus-visible{color:var(--accent)}
+    .gd-work-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:12px}
+    .gd-work-head h2{margin:0;font-size:var(--fs-display)}
+    .gd-work-head p{margin:4px 0 0;color:var(--muted)}
+    .gd-work-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+    .gd-result{border-block:1px solid var(--border)}
+    .gd-result-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:12px 0 4px}
+    .gd-result-head h3{margin:0;font-size:var(--fs-title)}
+    .gd-result-head p{margin:3px 0 0;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-chart{display:block;width:100%;height:270px}
+    .gd-chart .grid{stroke:var(--border)}
+    .gd-chart .actual-a,.gd-chart .actual-b,.gd-chart .actual-c,.gd-chart .forecast{fill:none;stroke-width:2.5}
+    .gd-chart .actual-a,.gd-chart .forecast{stroke:var(--accent)}
+    .gd-chart .actual-b{stroke:var(--violet)}
+    .gd-chart .actual-c{stroke:var(--warn)}
+    .gd-chart .forecast{stroke-dasharray:7 6}
+    .gd-chart .divider{stroke:var(--border-2);stroke-dasharray:4 4}
+    .gd-chart text{fill:var(--muted);font:11px var(--sans)}
+    .gd-chart .value{font:10px var(--mono);text-anchor:middle}
+    .gd-chart .value-a{fill:var(--accent)}
+    .gd-chart .value-b{fill:var(--violet)}
+    .gd-chart .value-c{fill:var(--warn)}
+    .gd-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:4px 0 11px;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-legend span::before{content:"";display:inline-block;width:10px;height:2px;margin-right:6px;vertical-align:3px;background:currentColor}
+    .gd-legend .a{color:var(--accent)}.gd-legend .b{color:var(--violet)}.gd-legend .c{color:var(--warn)}
+    .gd-legend .forecast::before{background:repeating-linear-gradient(90deg,currentColor 0 4px,transparent 4px 7px)}
+    .gd-dcf{margin:2px 0 10px;border-block:1px solid var(--border)}
+    .gd-dcf-head{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .gd-dcf-head strong{font-size:var(--fs-caption)}
+    .gd-dcf-head span{margin-left:7px;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-inputs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--border)}
+    .gd-input{padding:10px 12px;border-right:1px solid var(--border)}
+    .gd-input:last-child{border-right:0}
+    .gd-input span,.gd-input small{display:block;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-input strong{display:block;margin:3px 0;font-family:var(--mono)}
+    .gd-dcf-foot,.gd-note{min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-dcf-foot{border-top:1px solid var(--border)}
+    .gd-table-wrap{overflow:auto;padding:10px 0}
+    .gd-table{width:100%;min-width:930px;border-collapse:collapse}
+    .gd-table th,.gd-table td{padding:8px 9px;border:1px solid var(--border);text-align:right;font-family:var(--mono);white-space:nowrap}
+    .gd-table th{background:var(--paper);color:var(--muted);font:600 var(--fs-caption) var(--sans)}
+    .gd-table th:first-child,.gd-table td:first-child{text-align:left;font-family:var(--sans)}
+    .gd-projection{color:var(--accent)}
+    .gd-dcf-main{width:min(980px,calc(100% - 36px));margin:0 auto;padding:24px 0 60px}
+    .gd-model-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--border)}
+    .gd-model-banner h2{margin:0;font-size:var(--fs-display)}
+    .gd-model-grid{width:100%;margin-top:16px;border-collapse:collapse}
+    .gd-model-grid th,.gd-model-grid td{padding:10px;border:1px solid var(--border);text-align:right}
+    .gd-model-grid th{background:var(--paper);color:var(--muted);font-size:var(--fs-caption)}
+    .gd-model-grid th:first-child,.gd-model-grid td:first-child{text-align:left}
+    .gd-model-grid input{width:92px;text-align:right;font-family:var(--mono)}
+    .gd-model-note{margin-top:13px;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-drawer-section{padding:14px 0;border-bottom:1px solid var(--border)}
+    .gd-drawer-section:last-child{border-bottom:0}
+    .gd-drawer-section h3{margin:0 0 8px;font-size:var(--fs-title)}
+    .gd-history-row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+    .gd-history-row:last-child{border-bottom:0}
+    .gd-history-row>span:first-child{color:var(--muted);font:var(--fs-caption) var(--mono)}
+    .gd-history-row p{margin:3px 0 0;color:var(--muted);font-size:var(--fs-caption)}
+    .gd-source-link{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border:0;border-bottom:1px solid var(--border);background:transparent;text-align:left;cursor:pointer}
+    .gd-source-link span{color:var(--muted);font-size:var(--fs-caption)}
+    .gd-source-excerpt{padding:12px;border-left:2px solid var(--accent);background:var(--accent-soft);color:var(--fg-soft)}
+    .gd-success{min-height:38px;color:var(--ok);font-weight:700}
+    .gd-toast{position:fixed;z-index:60;right:20px;bottom:145px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--ok) 45%,transparent);border-radius:var(--radius);background:var(--surface);color:var(--ok);box-shadow:var(--shadow-pop)}
+    @media(max-width:820px){
+      .gd-head{grid-template-columns:1fr auto}.gd-head-title{grid-column:1/-1;grid-row:2;text-align:left}.gd-home{padding-top:36px}.gd-examples{grid-template-columns:1fr}.gd-metrics,.gd-inputs{grid-template-columns:repeat(2,minmax(0,1fr))}.gd-metric:nth-child(2),.gd-input:nth-child(2){border-right:0}.gd-metric:nth-child(-n+2),.gd-input:nth-child(-n+2){border-bottom:1px solid var(--border)}.gd-work-head{display:block}.gd-work-actions{justify-content:flex-start;margin-top:12px}.gd-chart{height:235px}.gd-compose input,.gd-query input{font-size:16px}.drawer{width:94vw}
+    }
+  </style>
+</head>
+<body>
+<div class="gd-app">
+  <div class="gd-demo" aria-label="Guided prototype navigation"><span class="gd-demo-label">Demo path</span><div class="gd-demo-steps"><button class="gd-demo-step" aria-pressed="true" data-jump="home">1 · Explore</button><button class="gd-demo-step" aria-pressed="false" data-jump="answer">2 · Answer</button><button class="gd-demo-step" aria-pressed="false" data-jump="work">3 · Work with data</button><button class="gd-demo-step" aria-pressed="false" data-jump="definition">4 · Definition</button><button class="gd-demo-step" aria-pressed="false" data-jump="save">5 · Save</button><button class="gd-demo-step" aria-pressed="false" data-jump="dcf">6 · Open DCF</button></div></div>
+
+  <section class="gd-screen" id="screen-home">
+    <header class="gd-head"><div></div><div class="gd-head-title"><h1>Explore</h1><p>Ask across reported facts, research, and models</p></div><div></div></header>
+    <main class="gd-main gd-main-narrow gd-home"><h1>What do you want to understand?</h1><p class="gd-home-intro">Ask naturally. Explore chooses a narrative answer or a governed analytical view.</p><div class="gd-query"><input id="home-query" aria-label="Ask Explore" value="Tell me about the growth of MELI’s fintech business"><button class="k-btn k-btn-primary" id="home-ask">Ask</button></div><div class="gd-examples">
+      <button class="gd-question" data-question="fintech">Tell me about Fintech growth<small>Rank operating metrics and include relevant DCF context</small></button>
+      <button class="gd-question" data-question="dcf">Why does the DCF forecast decelerate?<small>Explain the model using reported evidence</small></button>
+      <button class="gd-question" data-question="definition">What changed in the Q4 ’25 segment presentation?<small>Trace the definition and source history</small></button>
+      <button class="gd-question" data-question="compare">Which Fintech indicator is growing fastest?<small>Compare the top semantically relevant metrics</small></button>
+    </div><div class="gd-recent"><strong>Recent</strong><span>MELI segment economics · saved snapshot</span><span>NU credit growth · living analysis</span></div></main>
+  </section>
+
+  <section class="gd-screen" id="screen-answer" hidden>
+    <header class="gd-head"><button class="k-btn k-btn-quiet" data-nav="home">← Explore</button><div class="gd-head-title"><h1>MELI · Explore answer</h1><p id="answer-head-subtitle">Fintech growth</p></div><div class="gd-head-actions"><button class="k-btn k-btn-quiet" data-open="brief">Add to brief</button><button class="k-btn k-btn-save" data-open="save">◆ Save</button></div></header>
+    <main class="gd-main gd-main-narrow"><div class="gd-turn"><div class="gd-avatar">You</div><div><div class="gd-turn-label">Your question</div><p id="answer-question">Tell me about the growth of MELI’s fintech business</p></div></div><div class="gd-turn"><div class="gd-avatar gd-avatar-ai">E</div><div><div class="gd-turn-label">Explore</div><p id="answer-copy"><strong>Fintech growth is broad-based.</strong> Revenue has grown fastest among the three most relevant reported indicators, while TPV and active users confirm the operating momentum. The current DCF keeps revenue growth elevated before it decelerates.</p><div class="gd-metrics"><div class="gd-metric"><span id="metric-a-label">Fintech revenue</span><strong id="metric-a-value">+124%</strong><small id="metric-a-note">Q2 ’25 → Q2 ’26 · indexed</small></div><div class="gd-metric"><span id="metric-b-label">Total payment volume</span><strong id="metric-b-value">+90%</strong><small id="metric-b-note">same period</small></div><div class="gd-metric"><span id="metric-c-label">Fintech active users</span><strong id="metric-c-value">+72%</strong><small id="metric-c-note">same period</small></div></div><div class="gd-auto"><strong>✓ DCF context included</strong><span>1 forecast series · 2 related assumptions · revision 184</span><button class="tip" aria-label="Why DCF context was included" data-tip="The query mapped to the Fintech segment. Explore found a plot-compatible Fintech revenue forecast and related growth and margin assumptions after checking scope, units, periods, and definition lineage.">?</button></div><div class="gd-answer-actions"><button class="k-btn k-btn-primary" data-nav="work">Work with data ↗</button><button class="k-btn k-btn-quiet" data-open="definition">Definition history</button><button class="k-btn k-btn-quiet" data-open="sources">Sources</button></div></div></div></main>
+    <footer class="gd-compose-zone"><div class="gd-compose-inner"><div class="gd-compose-labels"><span class="active">Ask</span><span>Analyze data</span></div><div class="gd-compose"><input id="answer-followup" aria-label="Ask a follow-up" placeholder="Ask what this means for MELI, the thesis, or the evidence…"><button class="k-btn k-btn-primary" id="answer-ask">Ask</button></div><div class="gd-followups"><button class="gd-followup" data-question="dcf">Why does the DCF decelerate?</button><button class="gd-followup" data-question="definition">What changed in Q4 ’25?</button><button class="gd-followup" data-question="compare">Which indicator leads?</button></div></div></footer>
+  </section>
+
+  <section class="gd-screen" id="screen-work" hidden>
+    <header class="gd-head"><button class="k-btn k-btn-quiet" data-nav="answer">← Back to answer</button><div class="gd-head-title"><h1>Work with data</h1><p id="work-head-question">Tell me about the growth of MELI’s fintech business</p></div><div class="gd-head-actions"><button class="k-btn k-btn-save" data-open="save">◆ Save snapshot</button></div></header>
+    <main class="gd-main"><div class="gd-work-head"><div><h2>Top Fintech growth indicators</h2><p>Top three reported metrics by semantic relevance · DCF added automatically where compatible</p></div><div class="gd-work-actions"><span class="k-chip k-chip-accent">DCF revision 184</span><button class="k-btn k-btn-quiet" id="view-toggle" aria-pressed="false">Table</button></div></div><section class="gd-result"><div class="gd-result-head"><div><h3>Reported momentum and model trajectory</h3><p>Indexed · Q2 ’25 = 100 · illustrative prototype values</p></div><span class="k-chip">Top 3 of 18 available</span></div>
+      <svg class="gd-chart" id="work-chart" viewBox="0 0 980 270" role="img" aria-label="Fintech growth chart with data labels and DCF projection"><line class="grid" x1="50" y1="218" x2="950" y2="218"/><line class="grid" x1="50" y1="140" x2="950" y2="140"/><line class="grid" x1="50" y1="62" x2="950" y2="62"/><polyline class="actual-a" points="70,208 165,182 260,152 355,120 450,88"/><polyline class="actual-b" points="70,208 165,191 260,171 355,149 450,123"/><polyline class="actual-c" points="70,208 165,196 260,183 355,167 450,151"/><line class="divider" x1="450" y1="34" x2="450" y2="218"/><text x="462" y="47">DCF · revision 184 · semantic match</text><polyline class="forecast" points="450,88 570,72 690,58 810,47 930,39"/><g><text class="value" x="70" y="202">100</text><text class="value value-a" x="165" y="174">123</text><text class="value value-a" x="260" y="144">151</text><text class="value value-a" x="355" y="112">185</text><text class="value value-a" x="450" y="80">224</text><text class="value value-b" x="165" y="208">119</text><text class="value value-b" x="260" y="164">140</text><text class="value value-b" x="355" y="142">163</text><text class="value value-b" x="450" y="116">190</text><text class="value value-c" x="165" y="189">116</text><text class="value value-c" x="260" y="200">132</text><text class="value value-c" x="355" y="184">151</text><text class="value value-c" x="450" y="168">172</text><text class="value value-a" x="570" y="65">252E</text><text class="value value-a" x="690" y="51">281E</text><text class="value value-a" x="810" y="40">310E</text><text class="value value-a" x="930" y="32">338E</text></g><text x="58" y="245">Q2 ’25</text><text x="300" y="245">Q4 ’25</text><text x="430" y="245">Q2 ’26</text><text x="670" y="245">FY28E</text><text x="900" y="245">FY30E</text></svg>
+      <div class="gd-table-wrap" id="work-table" hidden><table class="gd-table"><thead><tr><th>Metric</th><th>Q2 ’25</th><th>Q3 ’25</th><th>Q4 ’25</th><th>Q1 ’26</th><th>Q2 ’26</th><th>FY27E</th><th>FY28E</th><th>FY29E</th><th>FY30E</th></tr></thead><tbody><tr><td>1 · Fintech revenue</td><td>100</td><td>123</td><td>151</td><td>185</td><td>224</td><td class="gd-projection">252E</td><td class="gd-projection">281E</td><td class="gd-projection">310E</td><td class="gd-projection">338E</td></tr><tr><td>2 · TPV</td><td>100</td><td>119</td><td>140</td><td>163</td><td>190</td><td>—</td><td>—</td><td>—</td><td>—</td></tr><tr><td>3 · Fintech active users</td><td>100</td><td>116</td><td>132</td><td>151</td><td>172</td><td>—</td><td>—</td><td>—</td><td>—</td></tr></tbody></table></div>
+      <div class="gd-legend" id="work-legend"><span class="a">Fintech revenue</span><span class="b">TPV</span><span class="c">Fintech active users</span><span class="a forecast">Fintech revenue · DCF</span></div><section class="gd-dcf"><div class="gd-dcf-head"><div><strong>DCF context added automatically</strong><span>Read-only here · revision 184</span></div><button class="k-btn k-btn-sm k-btn-quiet" id="dcf-input-toggle" aria-expanded="false">Show inputs</button></div><div id="dcf-inputs" hidden><div class="gd-inputs"><div class="gd-input"><span>Fintech growth</span><strong>27.0% → 9.0%</strong><small>near term → terminal</small></div><div class="gd-input"><span>Fintech margin</span><strong>8.2% → 15.0%</strong><small>near term → terminal</small></div><div class="gd-input"><span>Starting point</span><strong>Q2 ’26 actual</strong><small>admitted observation</small></div><div class="gd-input"><span>Model revision</span><strong>184</strong><small>current</small></div></div><div class="gd-dcf-foot"><span>Explore cannot change these assumptions.</span><button class="k-btn k-btn-sm k-btn-quiet" data-nav="dcf">Open live DCF ↗</button></div></div></section><div class="gd-note"><span>◆ Segment presentation changed in Q4 ’25. Values remain issuer-reported across the break.</span><button class="k-btn k-btn-sm k-btn-quiet" data-open="definition">Definition history</button></div></section></main>
+    <footer class="gd-compose-zone"><div class="gd-compose-inner"><div class="gd-compose-labels"><span>Ask</span><span class="active">Analyze data</span></div><div class="gd-compose"><input id="work-followup" aria-label="Change this analysis" placeholder="Add a metric, change the period, or request a comparison…"><button class="k-btn k-btn-primary" id="work-analyze">Analyze</button></div><div class="gd-followups"><button class="gd-followup" data-open="definition">Explain the definition change</button><button class="gd-followup" id="show-absolute">Show absolute values</button><button class="gd-followup" data-open="save">Save this state</button></div></div></footer>
+  </section>
+
+  <section class="gd-screen" id="screen-dcf" hidden>
+    <header class="gd-head"><button class="k-btn k-btn-quiet" data-nav="work">← Back to analysis</button><div class="gd-head-title"><h1>MELI DCF</h1><p>Live model · revision 184</p></div><div class="gd-head-actions"><button class="k-btn k-btn-primary" id="model-save">Save as revision 185</button></div></header>
+    <main class="gd-dcf-main"><div class="gd-model-banner"><div><h2>Fintech operating assumptions</h2><p class="meta">Modeling happens here. Explore remains read-only.</p></div><span class="k-pill k-pill-warn">Unsaved model draft</span></div><table class="gd-model-grid"><thead><tr><th>Line item</th><th>FY27E</th><th>FY28E</th><th>FY29E</th><th>FY30E</th></tr></thead><tbody><tr><td>Fintech revenue growth</td><td><input value="27.0%"></td><td><input value="20.0%"></td><td><input value="14.0%"></td><td><input value="9.0%"></td></tr><tr><td>Fintech operating margin</td><td><input value="8.2%"></td><td><input value="10.5%"></td><td><input value="13.0%"></td><td><input value="15.0%"></td></tr><tr><td>Fintech revenue index</td><td class="mono">252</td><td class="mono">281</td><td class="mono">310</td><td class="mono">338</td></tr></tbody></table><p class="gd-model-note">Returning to Explore preserves revision 184 until this draft is explicitly saved. A saved revision becomes available to new analyses; existing immutable snapshots remain pinned.</p></main>
+  </section>
+</div>
+
+<div class="scrim" hidden></div>
+<aside class="drawer" id="definition" hidden aria-label="Definition history"><div class="drawer-head"><div><span class="k-pill k-pill-warn">Comparability</span><h2>Fintech revenue definition</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="gd-drawer-section"><h3>What changed</h3><p>MELI revised its segment presentation beginning Q4 ’25. The canonical Fintech revenue identity remains stable, while the issuer-specific definition and allocation changed.</p><div class="gd-history-row"><span>Q3 ’24–Q3 ’25</span><div><strong>Prior issuer presentation</strong><p>Earlier Commerce and Fintech allocation.</p></div></div><div class="gd-history-row"><span>Q4 ’25 onward</span><div><strong>Revised issuer presentation</strong><p>Selected revenue streams use the revised segment allocation.</p></div></div><div class="gd-history-row"><span>Disposition</span><div><strong class="warn">Comparable with caution</strong><p>No silent normalization or fabricated continuous series.</p></div></div></div><div class="gd-drawer-section"><h3>Source trail</h3><button class="gd-source-link" data-open="source"><div><strong>Q4 ’25 shareholder letter</strong><br><span>Segment note · p. 18 · immutable document version</span></div><span>Open excerpt →</span></button><button class="gd-source-link" data-open="source"><div><strong>Q4 ’25 earnings call</strong><br><span>CFO remarks · 00:17:42</span></div><span>Open excerpt →</span></button></div><div class="gd-drawer-section"><h3>Why this appears</h3><p class="meta">The selected plotted observations reference different effective definition revisions. Explore carries that break into the chart, table, narrative, DCF binding, and snapshot.</p></div></aside>
+
+<aside class="drawer" id="source" hidden aria-label="Source excerpt"><div class="drawer-head"><div><button class="k-btn k-btn-sm k-btn-quiet" data-open="definition">← Definition history</button><h2>Source excerpt</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="gd-drawer-section"><span class="k-pill">Illustrative provenance</span><h3>Q4 ’25 shareholder letter</h3><div class="drawer-row"><span>Document</span><span>Immutable version · captured Feb 24, 2026</span></div><div class="drawer-row"><span>Locator</span><span>Segment note · p. 18</span></div><div class="drawer-row"><span>Observation</span><span>Definition revision effective Q4 ’25</span></div></div><div class="gd-drawer-section"><div class="gd-source-excerpt">Management’s segment note describes a revised allocation of selected revenue streams between the Commerce and Fintech presentation.</div><p class="meta">Prototype paraphrase—not live issuer text.</p></div><button class="k-btn k-btn-primary" id="source-open">Open document at page 18 ↗</button></aside>
+
+<aside class="drawer" id="sources" hidden aria-label="Source manifest"><div class="drawer-head"><div><span class="k-pill k-pill-ok">Coverage complete</span><h2>Source manifest</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="gd-drawer-section"><div class="drawer-row"><span>Reported observations</span><span>15 admitted · 0 missing</span></div><div class="drawer-row"><span>DCF model</span><span>Revision 184 · current</span></div><div class="drawer-row"><span>Definition revisions</span><span>2 effective issuer definitions</span></div></div><button class="gd-source-link" data-open="source"><div><strong>Latest shareholder letter</strong><br><span>Q2 ’26 · segment table · p. 14</span></div><span>Open →</span></button><button class="gd-source-link" data-open="definition"><div><strong>Definition change evidence</strong><br><span>Q4 ’25 · segment note · p. 18</span></div><span>Open →</span></button></aside>
+
+<aside class="drawer" id="save" hidden aria-label="Save immutable snapshot"><div class="drawer-head"><div><span class="k-pill">Immutable save</span><h2>Save this exploration</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="save-form"><label>Name<input value="MELI Fintech growth · guided analysis"></label><div class="gd-drawer-section"><div class="drawer-row"><span>Question and metric ranking</span><span>PINNED</span></div><div class="drawer-row"><span>15 reported observations</span><span>PINNED</span></div><div class="drawer-row"><span>Definition revisions and sources</span><span>PINNED</span></div><div class="drawer-row"><span>DCF revision 184</span><span>PINNED</span></div></div><button class="k-btn k-btn-save" id="confirm-save">◆ Save immutable snapshot</button><div class="gd-success" id="save-success" aria-live="polite"></div><p class="meta">“Edit as new” creates a child. This saved version never changes when data or the live DCF updates.</p></div></aside>
+
+<aside class="drawer" id="brief" hidden aria-label="Add to brief"><div class="drawer-head"><div><span class="k-pill">Brief workspace</span><h2>Add this analysis</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="save-form"><label>Destination<select><option>MELI earnings preview · Draft</option><option>MELI thesis update · Draft</option></select></label><label>Insert as<select><option>Analysis block · chart + finding</option><option>Finding only</option><option>Data table</option></select></label><button class="k-btn k-btn-primary" id="confirm-brief">Add to brief</button><div class="gd-success" id="brief-success" aria-live="polite"></div><p class="meta">The brief receives a reference to the immutable Explore snapshot, not a mutable copy of the live analysis.</p></div></aside>
+
+<div class="gd-toast" id="toast" hidden aria-live="polite"></div>
+<script>
+const questions={
+  fintech:{label:'Fintech growth',question:'Tell me about the growth of MELI’s fintech business',copy:'<strong>Fintech growth is broad-based.</strong> Revenue has grown fastest among the three most relevant reported indicators, while TPV and active users confirm the operating momentum. The current DCF keeps revenue growth elevated before it decelerates.',metrics:[['Fintech revenue','+124%','Q2 ’25 → Q2 ’26 · indexed'],['Total payment volume','+90%','same period'],['Fintech active users','+72%','same period']]},
+  dcf:{label:'DCF deceleration',question:'Why does the DCF forecast Fintech growth decelerating?',copy:'<strong>The model treats current growth as above steady state.</strong> Reported revenue and TPV support elevated near-term growth, but the DCF fades Fintech revenue growth from 27% to 9% as scale and competition normalize. Margin expands from 8.2% to 15.0%.',metrics:[['Near-term growth','27.0%','DCF revision 184'],['Terminal growth','9.0%','FY30E assumption'],['Fintech margin','15.0%','terminal assumption']]},
+  definition:{label:'Definition change',question:'What changed in MELI’s Q4 ’25 segment presentation?',copy:'<strong>The issuer changed how selected revenue streams are allocated between its segment presentation.</strong> Explore preserves the reported values on both sides and marks the series as comparable with caution rather than silently normalizing it.',metrics:[['Prior definition','Through Q3 ’25','issuer presentation'],['Revised definition','From Q4 ’25','effective-dated'],['Disposition','Caution','no silent splice']]},
+  compare:{label:'Indicator comparison',question:'Which Fintech indicator is growing fastest?',copy:'<strong>Fintech revenue leads the selected operating indicators.</strong> Its indexed growth is ahead of TPV and active users, while all three point in the same direction. The DCF projects revenue only; the other two remain reported evidence around the model.',metrics:[['Fintech revenue','+124%','reported index'],['Total payment volume','+90%','reported index'],['Active users','+72%','reported index']]}
+};
+let activeQuestion='fintech',activeScreen='home',returnScreen='answer';
+const screens=[...document.querySelectorAll('.gd-screen')],demoSteps=[...document.querySelectorAll('[data-jump]')],scrim=document.querySelector('.scrim'),drawers=[...document.querySelectorAll('.drawer')],toast=document.getElementById('toast');
+function showScreen(name){activeScreen=name;screens.forEach(screen=>screen.hidden=screen.id!==`screen-${name}`);demoSteps.forEach(step=>step.setAttribute('aria-pressed',String(step.dataset.jump===name)));closeDrawers()}
+function renderQuestion(key){activeQuestion=key;const state=questions[key];document.getElementById('answer-head-subtitle').textContent=state.label;document.getElementById('answer-question').textContent=state.question;document.getElementById('answer-copy').innerHTML=state.copy;document.getElementById('work-head-question').textContent=state.question;state.metrics.forEach((metric,index)=>{const suffix=String.fromCharCode(97+index);document.getElementById(`metric-${suffix}-label`).textContent=metric[0];document.getElementById(`metric-${suffix}-value`).textContent=metric[1];document.getElementById(`metric-${suffix}-note`).textContent=metric[2]});showScreen('answer')}
+function closeDrawers(){drawers.forEach(drawer=>drawer.hidden=true);scrim.hidden=true;demoSteps.forEach(step=>step.setAttribute('aria-pressed',String(step.dataset.jump===activeScreen)))}
+function openDrawer(id){drawers.forEach(drawer=>drawer.hidden=drawer.id!==id);document.getElementById(id).hidden=false;scrim.hidden=false;demoSteps.forEach(step=>step.setAttribute('aria-pressed',String(step.dataset.jump===id)))}
+function showToast(message){toast.textContent=message;toast.hidden=false;setTimeout(()=>{toast.hidden=true},2200)}
+document.querySelectorAll('[data-question]').forEach(button=>button.addEventListener('click',()=>renderQuestion(button.dataset.question)));
+document.getElementById('home-ask').addEventListener('click',()=>{questions.fintech.question=document.getElementById('home-query').value.trim()||questions.fintech.question;renderQuestion('fintech')});
+document.getElementById('home-query').addEventListener('keydown',event=>{if(event.key==='Enter')document.getElementById('home-ask').click()});
+document.querySelectorAll('[data-nav]').forEach(button=>button.addEventListener('click',()=>showScreen(button.dataset.nav)));
+document.querySelectorAll('[data-open]').forEach(button=>button.addEventListener('click',()=>{returnScreen=activeScreen;openDrawer(button.dataset.open)}));
+document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',closeDrawers));scrim.addEventListener('click',closeDrawers);addEventListener('keydown',event=>{if(event.key==='Escape')closeDrawers()});
+demoSteps.forEach(step=>step.addEventListener('click',()=>{const target=step.dataset.jump;if(target==='definition'||target==='save'){if(activeScreen==='home')renderQuestion('fintech');openDrawer(target)}else if(target==='answer'){renderQuestion(activeQuestion)}else showScreen(target)}));
+document.getElementById('answer-ask').addEventListener('click',()=>{const query=document.getElementById('answer-followup').value.trim();if(query){questions[activeQuestion].question=query;renderQuestion(activeQuestion);document.getElementById('answer-followup').value=''}});
+document.getElementById('view-toggle').addEventListener('click',event=>{const table=document.getElementById('work-table'),chart=document.getElementById('work-chart'),legend=document.getElementById('work-legend'),show=table.hidden;table.hidden=!show;chart.hidden=show;legend.hidden=show;event.currentTarget.textContent=show?'Chart':'Table';event.currentTarget.setAttribute('aria-pressed',String(show))});
+document.getElementById('dcf-input-toggle').addEventListener('click',event=>{const inputs=document.getElementById('dcf-inputs'),show=inputs.hidden;inputs.hidden=!show;event.currentTarget.textContent=show?'Hide inputs':'Show inputs';event.currentTarget.setAttribute('aria-expanded',String(show))});
+document.getElementById('show-absolute').addEventListener('click',event=>{event.currentTarget.textContent='✓ Absolute values shown';showToast('Analysis updated; query and DCF mapping preserved')});
+document.getElementById('work-analyze').addEventListener('click',()=>{const input=document.getElementById('work-followup'),query=input.value.trim();if(query){document.getElementById('work-head-question').textContent=query;input.value='';showToast('Analysis updated; back returns to the originating answer')}});
+document.getElementById('confirm-save').addEventListener('click',()=>{document.getElementById('save-success').textContent='✓ Snapshot saved to Explore library';showToast('Immutable snapshot saved')});
+document.getElementById('confirm-brief').addEventListener('click',()=>{document.getElementById('brief-success').textContent='✓ Added to MELI earnings preview';showToast('Analysis added to draft brief')});
+document.getElementById('model-save').addEventListener('click',event=>{event.currentTarget.textContent='✓ Revision 185 saved';showToast('DCF revision 185 saved; Explore snapshot remains on 184')});
+document.getElementById('source-open').addEventListener('click',()=>showToast('Would open the immutable source document at page 18'));
+showScreen('home');
+</script>
+</body>
+</html>

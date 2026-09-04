@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explore · Metric story prototype</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+  <style>
+    /* Prototype-only composition. Production must recompose an approved direction
+       through the registered Counterread family master and overlay contract. */
+    .story-content { max-width: 1180px; padding-top: 22px; }
+    .story-head { width: min(100%, 920px); margin: 0 auto 20px; display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
+    .story-head h1 { margin: 0; font-size: var(--fs-display); }
+    .story-head p { margin: 4px 0 0; color: var(--muted); }
+    .story-thread { width: min(100%, 920px); margin: 0 auto; }
+    .story-turn { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; padding: 11px 0; }
+    .story-turn + .story-turn { border-top: 1px solid var(--border); }
+    .turn-who { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-full); background: var(--paper); color: var(--muted); font: 700 var(--fs-caption) var(--mono); }
+    .turn-who.answer { background: var(--accent-soft); color: var(--accent); }
+    .turn-copy { min-width: 0; padding-top: 4px; }
+    .turn-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--fg-soft); }
+    .turn-summary strong { font-weight: 600; }
+    .turn-summary button { flex: 0 0 auto; }
+    .story-active { margin: 8px 0 14px 40px; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--radius-card); overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.2); }
+    .active-head { min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); }
+    .active-head strong { margin-right: auto; }
+    .finding-copy { padding: 17px 18px 11px; font-size: var(--fs-title); line-height: 1.58; color: var(--fg-soft); }
+    .finding-copy strong { color: var(--fg); }
+    .finding-copy .number { color: var(--ok); font: 700 16px var(--mono); }
+    .metric-artifact { margin: 2px 18px 14px; border-top: 1px solid var(--border); }
+    .metric-toolbar { min-height: 43px; display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+    .metric-toolbar .label { margin-right: auto; }
+    .metric-table-wrap { overflow-x: auto; }
+    .metric-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    .metric-table th, .metric-table td { padding: 9px 10px; border-top: 1px solid var(--border); text-align: right; white-space: nowrap; }
+    .metric-table th { color: var(--muted); font-size: var(--fs-caption); font-weight: 600; }
+    .metric-table th:first-child, .metric-table td:first-child { padding-left: 0; text-align: left; font-family: var(--sans); }
+    .metric-table td { font-family: var(--mono); }
+    .metric-table td:first-child { color: var(--fg-soft); }
+    .metric-table .winner { color: var(--ok); }
+    .metric-table .change { color: var(--warn); cursor: pointer; }
+    .artifact-note { min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--fs-caption); }
+    .artifact-note button { margin-left: auto; }
+    .story-next { margin-left: 40px; padding-top: 4px; }
+    .story-compose { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 11px 12px; border: 1px solid var(--border-2); border-radius: var(--radius-card); background: var(--surface); box-shadow: 0 12px 30px rgba(0,0,0,.22); }
+    .story-compose input { width: 100%; border: 0; background: transparent; font-size: var(--fs-title); }
+    .story-compose input:focus-visible { outline: 0; }
+    .followups { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 10px 2px 0; color: var(--muted); font-size: var(--fs-caption); }
+    .followup { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+    .followup:hover { color: var(--accent); }
+    .builder-intro { margin: 16px 0 7px; color: var(--fg-soft); }
+    .builder-shelf { min-height: 51px; display: grid; grid-template-columns: 78px minmax(0,1fr); align-items: start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .builder-shelf > .label { padding-top: 7px; }
+    .builder-items { display: flex; flex-wrap: wrap; gap: 7px; }
+    .builder-pill { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 9px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+    .builder-pill.measure { background: color-mix(in srgb, var(--violet) 14%, transparent); color: var(--violet); }
+    .builder-add { min-height: 32px; }
+    .metric-choice { width: 100%; display: grid; grid-template-columns: 26px minmax(0,1fr) auto; gap: 9px; align-items: center; padding: 9px 7px; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg); text-align: left; cursor: pointer; }
+    .metric-choice:hover { background: var(--paper); }
+    .metric-choice .rank { color: var(--muted); font: var(--fs-caption) var(--mono); }
+    .metric-choice small { color: var(--muted); }
+    .drawer-callout { padding: 10px 12px; margin: 14px 0 2px; border-left: 2px solid var(--warn); background: color-mix(in srgb, var(--warn) 7%, transparent); color: var(--fg-soft); }
+    .source-item { padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .source-item strong { display: block; margin-bottom: 3px; }
+    .source-item p { margin: 0; }
+    .save-state { min-height: 21px; color: var(--ok); font-size: var(--fs-caption); }
+    @media (max-width: 760px) {
+      .story-head { align-items: flex-start; }
+      .story-head .actions { flex-wrap: wrap; justify-content: flex-end; }
+      .story-active, .story-next { margin-left: 0; }
+      .active-head { flex-wrap: wrap; }
+      .story-compose { grid-template-columns: auto minmax(0,1fr); }
+      .story-compose .k-btn-primary { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <div class="brand"><span class="brand-mark">[•]</span> Counterread</div>
+    <div class="nav-group"><p class="nav-label">L1 · Portfolio intelligence</p><a class="nav-item" href="#"><span class="nav-icon">▦</span>Portfolio Cockpit</a><a class="nav-item" href="#"><span class="nav-icon">⌁</span>Performance</a></div>
+    <div class="nav-group"><p class="nav-label">L2 · Research engine</p><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Company Desk</a><a class="nav-item" href="#"><span class="nav-icon">≛</span>Evaluation</a><a class="nav-item" href="#"><span class="nav-icon">▤</span>Brief Library</a><a class="nav-item active" href="#"><span class="nav-icon">⌗</span>Explore</a></div>
+    <div class="nav-group"><p class="nav-label">L3 · Operations</p><a class="nav-item" href="#"><span class="nav-icon">◫</span>Decision Audit Log</a><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Operations</a></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="crumb">Research / <strong>Explore</strong></div><div class="top-meta"><span class="k-pill">Draft inquiry</span><span class="mono">MELI</span></div></header>
+    <div class="content story-content">
+      <div class="story-head">
+        <div><div class="concept-tag">Hybrid 03 · Metric story</div><h1>MELI segment economics</h1><p>Ask, inspect the numbers, then follow the evidence.</p></div>
+        <div class="actions"><button class="k-btn k-btn-quiet" data-open="sources">Sources</button><button class="k-btn k-btn-save" data-open="save">◆ Save story</button></div>
+      </div>
+
+      <section class="story-thread" aria-label="Research conversation">
+        <article class="story-turn">
+          <span class="turn-who">YOU</span>
+          <div class="turn-copy"><div class="turn-summary"><strong>What are MELI’s operating segments?</strong><button class="k-btn k-btn-sm k-btn-quiet" data-open="prior">Reopen</button></div><div class="meta">Answered from 8 issuer-reported quarters · Commerce and Fintech</div></div>
+        </article>
+        <article class="story-turn">
+          <span class="turn-who">YOU</span>
+          <div class="turn-copy"><div class="turn-summary"><strong>Which is growing faster, and is the mix shifting?</strong><span class="k-pill k-pill-accent">Active</span></div></div>
+        </article>
+
+        <article class="story-active" aria-label="Active answer">
+          <div class="active-head">
+            <span class="turn-who answer">✦</span>
+            <strong>Fintech is gaining share</strong>
+            <span class="tip" tabindex="0" data-tip="This is the compact answer. Open Shape data to inspect or change the generated pivot.">?</span>
+            <button class="k-btn k-btn-sm k-btn-quiet" data-open="shape">Shape data</button>
+          </div>
+          <div class="finding-copy">
+            Fintech grew faster over the selected period—an illustrative <span class="number">29.8%</span> two-year CAGR versus <span class="mono">24.1%</span> for Commerce—and reached <strong>43.0% of segment revenue</strong> in Q2 ’26, up from 34.7% in Q3 ’24.
+          </div>
+          <div class="metric-artifact">
+            <div class="metric-toolbar">
+              <span class="label">Generated metric view · illustrative USD billions</span>
+              <button class="k-btn k-btn-sm k-btn-quiet" data-open="metrics">＋ Metrics</button>
+              <button class="k-btn k-btn-sm k-btn-quiet" data-open="shape">Pivot</button>
+            </div>
+            <div class="metric-table-wrap">
+              <table class="metric-table">
+                <thead><tr><th>Metric</th><th>Q3 ’24</th><th>Q2 ’25</th><th>Q4 ’25</th><th>Q2 ’26</th><th>2Y CAGR</th></tr></thead>
+                <tbody>
+                  <tr><td>Commerce revenue</td><td>1.56</td><td>2.29</td><td class="change" data-open="definition" role="button" tabindex="0" aria-label="Open Commerce revenue definition history">2.88 ◆</td><td>3.61</td><td>24.1%</td></tr>
+                  <tr><td>Fintech revenue</td><td>0.83</td><td>1.45</td><td class="change" data-open="definition" role="button" tabindex="0" aria-label="Open Fintech revenue definition history">1.98 ◆</td><td>2.72</td><td class="winner">29.8%</td></tr>
+                  <tr><td>Fintech share</td><td>34.7%</td><td>38.8%</td><td class="change" data-open="definition" role="button" tabindex="0" aria-label="Open Fintech share definition history">40.7% ◆</td><td class="winner">43.0%</td><td>+8.3 pts</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="artifact-note"><span class="warn">◆</span><span>Segment presentation changed in Q4 ’25. Raw reported values are preserved.</span><button class="e-door" data-open="definition">Definition history</button></div>
+          </div>
+        </article>
+
+        <div class="story-next">
+          <div class="story-compose">
+            <div class="query-orb">✦</div>
+            <input id="next-question" value="Does faster Fintech growth improve consolidated margins?" aria-label="Ask a follow-up question">
+            <button class="k-btn k-btn-primary" id="ask-next">Ask follow-up</button>
+          </div>
+          <div class="followups"><span>Try</span><button class="followup" data-question="Compare segment growth with operating margin">Operating margin relationship</button><span>·</span><button class="followup" data-question="Show Fintech share of growth by quarter">Contribution by quarter</button><span>·</span><button class="followup" data-question="Where are observations missing?">Missing observations</button></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" hidden></div>
+
+<aside class="drawer" id="shape" hidden aria-label="Shape active metric view">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent">Active answer</span><h2>Shape the metric view</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p class="builder-intro">The question generated this governed pivot. Edit any shelf and the narrative finding will recompute from the same view.</p>
+  <div class="builder-shelf"><span class="label">Columns</span><div class="builder-items"><span class="builder-pill">Fiscal quarter ⌄</span></div></div>
+  <div class="builder-shelf"><span class="label">Rows</span><div class="builder-items"><span class="builder-pill">Operating segment ⌄</span></div></div>
+  <div class="builder-shelf"><span class="label">Measures</span><div class="builder-items"><span class="builder-pill measure">Reported revenue ⌄</span><span class="builder-pill measure">Revenue share ⌄</span><span class="builder-pill measure">2-year CAGR ⌄</span><button class="k-btn k-btn-sm k-btn-quiet builder-add" data-open="metrics">＋ Add</button></div></div>
+  <div class="builder-shelf"><span class="label">Filters</span><div class="builder-items"><span class="builder-pill">Company = MELI ×</span><span class="builder-pill">Last 8 complete quarters ×</span><span class="builder-pill">Has observation ×</span><button class="k-btn k-btn-sm k-btn-quiet builder-add">＋ Add</button></div></div>
+  <div class="drawer-callout"><strong>1 definition break preserved.</strong><br><span class="meta">Explore will not normalize across the Q4 ’25 presentation change.</span></div>
+  <div class="actions"><button class="k-btn k-btn-primary" id="update-view">Update answer</button><button class="k-btn k-btn-quiet" data-close>Cancel</button></div>
+</aside>
+
+<aside class="drawer" id="metrics" hidden aria-label="Add metrics">
+  <div class="drawer-head"><div><span class="k-pill">Semantic fields</span><h2>Add a metric</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p>Ranked for the active question, not alphabetically. Hover <span class="tip" tabindex="0" data-tip="Ranking considers the question, company disclosures, current pivot, and metric coverage.">?</span></p>
+  <button class="metric-choice"><span class="rank">01</span><span>Operating margin<br><small>Closest relationship to profitability</small></span><span class="k-chip k-chip-accent">92%</span></button>
+  <button class="metric-choice"><span class="rank">02</span><span>Fintech revenue growth<br><small>Direct segment momentum</small></span><span class="k-chip k-chip-accent">89%</span></button>
+  <button class="metric-choice"><span class="rank">03</span><span>Credit portfolio<br><small>Driver of Fintech economics</small></span><span class="k-chip">78%</span></button>
+  <button class="metric-choice"><span class="rank">04</span><span>Free cash flow<br><small>Consolidated cash conversion</small></span><span class="k-chip">64%</span></button>
+  <div class="drawer-callout"><strong>Coverage-aware suggestion.</strong><br><span class="meta">Net interest margin was omitted because only 3 of 8 selected quarters contain a comparable observation.</span></div>
+</aside>
+
+<aside class="drawer" id="definition" hidden aria-label="Definition history">
+  <div class="drawer-head"><div><span class="k-pill k-pill-warn">Comparability</span><h2>Segment definition history</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p>MELI revised its segment presentation beginning Q4 ’25. Explore preserves the issuer’s raw values on both sides of the break and carries this limitation with the answer.</p>
+  <div class="drawer-row"><span>Q3 ’24–Q3 ’25</span><span>Prior Commerce and Fintech presentation</span></div>
+  <div class="drawer-row"><span>Q4 ’25 onward</span><span>Revised segment allocation</span></div>
+  <div class="drawer-row"><span>Disposition</span><span class="warn">Comparable with caution; no silent normalization</span></div>
+  <div class="drawer-row"><span>Source</span><span>Q4 ’25 shareholder letter · segment note · p. 18</span></div>
+  <button class="k-btn k-btn-quiet">Open source page ↗</button>
+</aside>
+
+<aside class="drawer" id="sources" hidden aria-label="Source manifest">
+  <div class="drawer-head"><div><span class="k-pill k-pill-ok">● Coverage complete</span><h2>Source manifest</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="source-item"><strong>Q2 ’26 shareholder letter</strong><p>Segment revenue table · p. 14 · 2 observations</p></div>
+  <div class="source-item"><strong>Q1 ’26 earnings release</strong><p>Segment note · p. 11 · 2 observations</p></div>
+  <div class="source-item"><strong>Six prior issuer filings</strong><p>12 observations · immutable source versions retained</p></div>
+  <div class="drawer-row"><span>Expected</span><span class="mono">16 observations</span></div><div class="drawer-row"><span>Admitted</span><span class="mono ok">16 observations</span></div><div class="drawer-row"><span>Missing</span><span class="mono">0</span></div>
+</aside>
+
+<aside class="drawer" id="prior" hidden aria-label="Prior answer">
+  <div class="drawer-head"><div><span class="k-pill">Prior exchange</span><h2>What are MELI’s operating segments?</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p>MELI reports two operating ecosystems in the selected source set: <strong>Commerce</strong> and <strong>Fintech</strong>. Explore mapped the closest issuer-reported revenue metrics and selected the latest eight complete fiscal quarters.</p>
+  <div class="drawer-row"><span>Metrics</span><span>Commerce revenue; Fintech revenue</span></div><div class="drawer-row"><span>Window</span><span>Q3 ’24–Q2 ’26</span></div><div class="drawer-row"><span>Coverage</span><span class="ok">Complete</span></div>
+  <button class="k-btn k-btn-primary">Make this exchange active</button>
+</aside>
+
+<aside class="drawer" id="save" hidden aria-label="Save metric story">
+  <div class="drawer-head"><div><span class="k-pill" data-save-label>Unsaved</span><h2>Save this metric story</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="save-form"><label>Name<input value="MELI segment economics"></label><label>Save to<select><option>Explore library</option><option>MELI company desk</option><option>Brief workspace</option></select></label><label>Refresh behavior<select><option>Use latest admitted observations</option><option>Freeze this observation version</option></select></label><button class="k-btn k-btn-save" id="confirm-save">◆ Save story</button><div class="save-state" id="save-state" aria-live="polite"></div><p class="meta">Saves the conversation, metric shelves, source manifest, missing-data rules, and definition notes together.</p></div>
+</aside>
+
+<script>
+  const scrim = document.querySelector('.scrim');
+  const drawers = [...document.querySelectorAll('.drawer')];
+  const nextQuestion = document.getElementById('next-question');
+  function closeAll() { drawers.forEach(drawer => drawer.hidden = true); scrim.hidden = true; }
+  function openDrawer(id) { closeAll(); document.getElementById(id).hidden = false; scrim.hidden = false; }
+  document.addEventListener('click', event => {
+    const opener = event.target.closest('[data-open]');
+    if (opener) openDrawer(opener.dataset.open);
+    if (event.target.closest('[data-close]')) closeAll();
+  });
+  document.addEventListener('keydown', event => {
+    const opener = event.target.closest('[data-open]');
+    if (opener && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openDrawer(opener.dataset.open); }
+  });
+  scrim.addEventListener('click', closeAll);
+  addEventListener('keydown', event => { if (event.key === 'Escape') closeAll(); });
+  document.querySelectorAll('[data-question]').forEach(button => button.addEventListener('click', () => { nextQuestion.value = button.dataset.question; nextQuestion.focus(); }));
+  document.getElementById('ask-next').addEventListener('click', () => { nextQuestion.value = 'Question queued — the next answer will emerge here'; });
+  document.getElementById('update-view').addEventListener('click', closeAll);
+  document.getElementById('confirm-save').addEventListener('click', () => {
+    document.getElementById('save-state').textContent = 'Saved just now';
+    document.querySelector('[data-save-label]').textContent = 'Saved';
+  });
+</script>
+</body>
+</html>
