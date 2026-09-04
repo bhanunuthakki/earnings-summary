@@ -382,13 +382,16 @@ class _CardsInput:
     refs: list[str]
 
 
-def _gather_cards(db_path: Path, *, now: datetime) -> _CardsInput:
-    conn = _ro_conn(db_path)
-    if conn is None:
+def _gather_cards(
+    db_path: Path, *, now: datetime, conn: sqlite3.Connection | None = None
+) -> _CardsInput:
+    owned = conn is None
+    live = conn if conn is not None else _ro_conn(db_path)
+    if live is None:
         return _CardsInput([], [])
     cutoff = (now - timedelta(days=_CARD_FRESH_DAYS)).isoformat()
     try:
-        rows = conn.execute(
+        rows = live.execute(
             """
             SELECT la.id AS artifact_id, la.ticker AS ticker, la.generated_at AS generated_at,
                    la.content_json AS content_json
@@ -404,7 +407,8 @@ def _gather_cards(db_path: Path, *, now: datetime) -> _CardsInput:
     except sqlite3.Error:
         return _CardsInput([], [])
     finally:
-        conn.close()
+        if owned:
+            live.close()
     lines: list[str] = []
     refs: list[str] = []
     for r in rows:
@@ -433,13 +437,16 @@ class _PacketInput:
     refs: list[str]
 
 
-def _gather_packet_items(db_path: Path, *, now: datetime) -> _PacketInput:
-    conn = _ro_conn(db_path)
-    if conn is None:
+def _gather_packet_items(
+    db_path: Path, *, now: datetime, conn: sqlite3.Connection | None = None
+) -> _PacketInput:
+    owned = conn is None
+    live = conn if conn is not None else _ro_conn(db_path)
+    if live is None:
         return _PacketInput([], [])
     iso_year, iso_week, _ = now.isocalendar()
     try:
-        rows = conn.execute(
+        rows = live.execute(
             """
             SELECT wi.id AS item_id, wi.item_kind AS item_kind, wi.ticker AS ticker,
                    wi.title AS title
@@ -453,7 +460,8 @@ def _gather_packet_items(db_path: Path, *, now: datetime) -> _PacketInput:
     except sqlite3.Error:
         return _PacketInput([], [])
     finally:
-        conn.close()
+        if owned:
+            live.close()
     lines: list[str] = []
     refs: list[str] = []
     for r in rows:
@@ -502,17 +510,20 @@ class _PriorDecisionInput:
     ref: str | None
 
 
-def _gather_prior_decision(db_path: Path) -> _PriorDecisionInput:
-    conn = _ro_conn(db_path)
-    if conn is None:
+def _gather_prior_decision(
+    db_path: Path, *, conn: sqlite3.Connection | None = None
+) -> _PriorDecisionInput:
+    owned = conn is None
+    live = conn if conn is not None else _ro_conn(db_path)
+    if live is None:
         return _PriorDecisionInput(None, None)
     try:
-        present = conn.execute(
+        present = live.execute(
             "SELECT name FROM sqlite_master WHERE type='view' AND name='v_decision_journal'"
         ).fetchone()
         if present is None:
             return _PriorDecisionInput(None, None)
-        row = conn.execute(
+        row = live.execute(
             """
             SELECT decision_id, ticker, recommendation_kind, made_at, falsifier
             FROM v_decision_journal
@@ -523,7 +534,8 @@ def _gather_prior_decision(db_path: Path) -> _PriorDecisionInput:
     except sqlite3.Error:
         return _PriorDecisionInput(None, None)
     finally:
-        conn.close()
+        if owned:
+            live.close()
     if row is None:
         return _PriorDecisionInput(None, None)
     ref = f"decision:{int(row['decision_id'])}"
@@ -562,14 +574,17 @@ def _gather_anchors(repo_root: Path) -> str:
     return spotlight(block, source="worldview_owner_profile_anchors")
 
 
-def _earnings_cluster_count(db_path: Path, *, now: datetime) -> int:
-    conn = _ro_conn(db_path)
-    if conn is None:
+def _earnings_cluster_count(
+    db_path: Path, *, now: datetime, conn: sqlite3.Connection | None = None
+) -> int:
+    owned = conn is None
+    live = conn if conn is not None else _ro_conn(db_path)
+    if live is None:
         return 0
     window_end = (now + timedelta(days=_ACTIVE_WEEK_WINDOW_DAYS)).date().isoformat()
     window_start = now.date().isoformat()
     try:
-        row = conn.execute(
+        row = live.execute(
             """
             SELECT COUNT(DISTINCT e.ticker) FROM expected_earnings e
             JOIN tracked_companies tc ON UPPER(tc.ticker) = UPPER(e.ticker)
@@ -582,16 +597,20 @@ def _earnings_cluster_count(db_path: Path, *, now: datetime) -> int:
     except sqlite3.Error:
         return 0
     finally:
-        conn.close()
+        if owned:
+            live.close()
 
 
-def _portfolio_shift_count(db_path: Path, *, now: datetime) -> int:
-    conn = _ro_conn(db_path)
-    if conn is None:
+def _portfolio_shift_count(
+    db_path: Path, *, now: datetime, conn: sqlite3.Connection | None = None
+) -> int:
+    owned = conn is None
+    live = conn if conn is not None else _ro_conn(db_path)
+    if live is None:
         return 0
     cutoff = (now - timedelta(days=_ACTIVE_WEEK_WINDOW_DAYS)).isoformat()
     try:
-        row = conn.execute(
+        row = live.execute(
             """
             SELECT COUNT(*) FROM decisions
             WHERE decided_by = 'owner' AND created_at >= ?
@@ -603,28 +622,51 @@ def _portfolio_shift_count(db_path: Path, *, now: datetime) -> int:
     except sqlite3.Error:
         return 0
     finally:
-        conn.close()
+        if owned:
+            live.close()
 
 
 def _detect_active_week(
-    db_path: Path, *, now: datetime, fresh_card_count: int
+    db_path: Path,
+    *,
+    now: datetime,
+    fresh_card_count: int,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[bool, list[str]]:
     """PRD §9.1: "an active week increases visible context, not ping
     frequency" — earnings cluster / active new-position evaluation / a
     portfolio shift, all deterministic over a rolling 7-day window."""
-    reasons: list[str] = []
-    earnings_n = _earnings_cluster_count(db_path, now=now)
-    if earnings_n >= _EARNINGS_CLUSTER_MIN:
-        reasons.append(f"earnings cluster: {earnings_n} portfolio names report within 7 days")
-    if fresh_card_count >= _FRESH_CARD_ACTIVE_MIN:
-        reasons.append(
-            f"active new-position evaluation: {fresh_card_count} fresh Investment Decision "
-            "Cards in the last 14 days"
-        )
-    shift_n = _portfolio_shift_count(db_path, now=now)
-    if shift_n >= 1:
-        reasons.append(f"portfolio shift: {shift_n} owner-executed decision(s) in the last 7 days")
-    return bool(reasons), reasons
+    owned = conn is None
+    live = conn if conn is not None else _ro_conn(db_path)
+    if live is None:
+        reasons: list[str] = []
+        if fresh_card_count >= _FRESH_CARD_ACTIVE_MIN:
+            reasons.append(
+                f"active new-position evaluation: {fresh_card_count} fresh Investment Decision "
+                "Cards in the last 14 days"
+            )
+        return bool(reasons), reasons
+    try:
+        active_reasons: list[str] = []
+        earnings_n = _earnings_cluster_count(db_path, now=now, conn=live)
+        if earnings_n >= _EARNINGS_CLUSTER_MIN:
+            active_reasons.append(
+                f"earnings cluster: {earnings_n} portfolio names report within 7 days"
+            )
+        if fresh_card_count >= _FRESH_CARD_ACTIVE_MIN:
+            active_reasons.append(
+                f"active new-position evaluation: {fresh_card_count} fresh Investment Decision "
+                "Cards in the last 14 days"
+            )
+        shift_n = _portfolio_shift_count(db_path, now=now, conn=live)
+        if shift_n >= 1:
+            active_reasons.append(
+                f"portfolio shift: {shift_n} owner-executed decision(s) in the last 7 days"
+            )
+        return bool(active_reasons), active_reasons
+    finally:
+        if owned:
+            live.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,20 +692,30 @@ class _Inputs:
 
 def _gather_inputs(db_path: Path, repo_root: Path, *, now: datetime) -> _Inputs:
     iso_year, iso_week, _ = now.isocalendar()
+    shared = _ro_conn(db_path)
+    if shared is None:
+        cards = _CardsInput([], [])
+        packet = _PacketInput([], [])
+        prior_decision = _PriorDecisionInput(None, None)
+        is_active_week = False
+        active_week_reasons: list[str] = []
+    else:
+        try:
+            cards = _gather_cards(db_path, now=now, conn=shared)
+            packet = _gather_packet_items(db_path, now=now, conn=shared)
+            prior_decision = _gather_prior_decision(db_path, conn=shared)
+            fresh_card_count = sum(1 for line in cards.lines if "(fresh," in line)
+            is_active_week, active_week_reasons = _detect_active_week(
+                db_path, now=now, fresh_card_count=fresh_card_count, conn=shared
+            )
+        finally:
+            shared.close()
     recommendation = _gather_recommendation(db_path)
     risk = _gather_risk(db_path)
     wealth = _gather_wealth(db_path)
-    cards = _gather_cards(db_path, now=now)
-    packet = _gather_packet_items(db_path, now=now)
     routed = _gather_routed_moments(db_path)
-    prior_decision = _gather_prior_decision(db_path)
     proposals = _gather_proposals(db_path)
     anchors_block = _gather_anchors(repo_root)
-
-    fresh_card_count = sum(1 for line in cards.lines if "(fresh," in line)
-    is_active_week, active_week_reasons = _detect_active_week(
-        db_path, now=now, fresh_card_count=fresh_card_count
-    )
 
     allowed_refs: set[str] = set()
     for candidate in (recommendation.ref, risk.ref, wealth.ref, prior_decision.ref):
