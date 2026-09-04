@@ -1,7 +1,7 @@
 {
   "schema_version": "bha-120.v1",
   "repo_root": "/Applications/earnings-summary/.tmp/bha-103-worktree",
-  "tracked_python_files": 2731,
+  "tracked_python_files": 2738,
   "active": [
     ".github/scripts/ci_gate.py",
     "alembic/env.py",
@@ -104,6 +104,7 @@
     "execution/capture_performance_baseline.py",
     "execution/capture_performance_evidence.py",
     "execution/capture_poller.py",
+    "execution/capture_test_ci_performance.py",
     "execution/categorize_ir_uploads.py",
     "execution/check_comp_set_drift.py",
     "execution/check_competitor_s1.py",
@@ -125,6 +126,7 @@
     "execution/comments_server_panel_cache.py",
     "execution/comments_server_settings_routes.py",
     "execution/compare_backends.py",
+    "execution/compare_test_ci_performance.py",
     "execution/compose_senior_partner_brief.py",
     "execution/compute_derived_metrics.py",
     "execution/compute_macro_sensitivities.py",
@@ -1051,9 +1053,12 @@
     "src/quality/duplicates.py",
     "src/quality/lifecycle.py",
     "src/quality/performance.py",
+    "src/quality/pytest_performance_plugin.py",
     "src/quality/reachability.py",
     "src/quality/roadmap_reconciliation.py",
     "src/quality/static_quality.py",
+    "src/quality/test_ci_pairing.py",
+    "src/quality/test_ci_performance.py",
     "src/quality/test_db_patterns.py",
     "src/readme_receipt.py",
     "src/readme_updater.py",
@@ -2323,6 +2328,8 @@
     "tests/test_tenet_accountability.py",
     "tests/test_tenet_distill.py",
     "tests/test_tenets.py",
+    "tests/test_test_ci_pairing.py",
+    "tests/test_test_ci_performance.py",
     "tests/test_test_harness_isolation.py",
     "tests/test_theme_synth.py",
     "tests/test_thesis_artifact.py",
@@ -2750,7 +2757,7 @@
       "version": "ruff 0.16.4",
       "exit_status": 1,
       "count": 2,
-      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/c87e06d555e682416b8e5fab/ruff-check.json",
+      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/1af340bb586931ba973d1e7f/ruff-check.json",
       "diagnostics_by_directory": {
         "/Applications/earnings-summary/.tmp/bha-103-worktree/src/user_state": 2
       },
@@ -2771,7 +2778,7 @@
       "version": "ruff 0.16.4",
       "exit_status": 1,
       "count": 62,
-      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/c87e06d555e682416b8e5fab/ruff-format.txt",
+      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/1af340bb586931ba973d1e7f/ruff-format.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {},
       "command_hash": "9df4538e64cb1f6d37a047b5ea78b18a3be5f5d4375ec875f2f6a313b997f5f9",
@@ -2785,8 +2792,8 @@
       ],
       "version": "pyright 1.1.411",
       "exit_status": 1,
-      "count": 4374,
-      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/c87e06d555e682416b8e5fab/pyright.json",
+      "count": 4377,
+      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/1af340bb586931ba973d1e7f/pyright.json",
       "diagnostics_by_directory": {
         "/Applications/earnings-summary/.tmp/bha-103-worktree/alembic/versions_archived": 175,
         "/Applications/earnings-summary/.tmp/bha-103-worktree/execution": 1120,
@@ -2809,10 +2816,10 @@
         "/Applications/earnings-summary/.tmp/bha-103-worktree/src/synthesis/lenses": 33,
         "/Applications/earnings-summary/.tmp/bha-103-worktree/src/table_extractors": 6,
         "/Applications/earnings-summary/.tmp/bha-103-worktree/src/timeseries": 3,
-        "/Applications/earnings-summary/.tmp/bha-103-worktree/tests": 2292
+        "/Applications/earnings-summary/.tmp/bha-103-worktree/tests": 2295
       },
       "diagnostics_by_rule": {
-        "reportArgumentType": 268,
+        "reportArgumentType": 269,
         "reportAssignmentType": 5,
         "reportAttributeAccessIssue": 82,
         "reportCallIssue": 8,
@@ -2828,7 +2835,7 @@
         "reportOptionalOperand": 6,
         "reportOptionalSubscript": 21,
         "reportPossiblyUnboundVariable": 1,
-        "reportPrivateUsage": 283,
+        "reportPrivateUsage": 285,
         "reportReturnType": 12,
         "reportUnknownArgumentType": 1219,
         "reportUnknownLambdaType": 669,
@@ -2850,12 +2857,12 @@
       ],
       "version": "n/a",
       "exit_status": 0,
-      "count": 621,
-      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/c87e06d555e682416b8e5fab/source-ignore-comments.txt",
+      "count": 627,
+      "receipt_path": "/Applications/earnings-summary/.tmp/bha-103-worktree/.tmp/static_quality/1af340bb586931ba973d1e7f/source-ignore-comments.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {
-        "# type: ignore": 260,
-        "# pyright: ignore": 361
+        "# type: ignore": 263,
+        "# pyright: ignore": 364
       },
       "command_hash": "a59001a2bdaaa50c7012c1ccbe4d0ace257f221b32a2d40e285a9a7c73a9288b",
       "version_hash": "a683c5c5349f6f7fb903ba8a9e7e55d0ba1b8f03579f95be83f4954c33e81098"
@@ -2926,10 +2933,10 @@
   ],
   "status": "PASS",
   "violations": [],
-  "scoped_commit": "df79d43ba74ddd069efb3b042170fc466752f94d",
-  "source_hash": "79c51b4ad74a9c326a25051e4af581d2d74f117b93df1d16e2a2370d5516dcb7",
+  "scoped_commit": "e206b42405ad37101ed1cbb891073155d127cbf3",
+  "source_hash": "ba9715075f958b1b19b6c9cc5a81c5c2be3746e8e7061558b80c263e1092d296",
   "config_hash": "15aaf211f0d5d011d13e12d447c055098b09fd448f0d3b2e3244abd0c80bfbef",
-  "receipt_identity": "c87e06d555e682416b8e5fab",
+  "receipt_identity": "1af340bb586931ba973d1e7f",
   "suppressions_by_file": {
     "evals/structural/test_provider_blind_evals.py": {
       "# type: ignore": 1,
@@ -3093,6 +3100,10 @@
     },
     "src/pipeline/reader_tier_audit.py": {
       "# type: ignore": 1,
+      "# pyright: ignore": 3
+    },
+    "src/quality/roadmap_reconciliation.py": {
+      "# type: ignore": 3,
       "# pyright: ignore": 3
     },
     "src/quality/static_quality.py": {

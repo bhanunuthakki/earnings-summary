@@ -1,45 +1,298 @@
 {
-  "schema_version": "bha-121.v4",
+  "schema_version": "bha-121.v5",
   "status": "PASS",
   "claims": [
     {
-      "name": "executable module count",
+      "name": "production module count",
       "provisional_expected": 1291,
-      "observed": 1311,
+      "observed": 1316,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "c6e036532471214b19da9f807b94ac004660cdebd456beea11583d39aea119c6",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
         "locator": "$.metrics.executable_modules"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 16"
       },
       "note": "Fresh typed generator corrects the provisional value."
     },
     {
-      "name": "strongly connected component count",
+      "name": "production noncomment LOC",
+      "provisional_expected": 554615,
+      "observed": 485760,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.total_noncomment_loc"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 16"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "maximum internal fan-out",
+      "provisional_expected": null,
+      "observed": 156,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.max_internal_fan_out"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 26"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "modules >=1,000 LOC",
+      "provisional_expected": 119,
+      "observed": 91,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.modules_over_1000_loc"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 17"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "modules >=2,000 LOC",
+      "provisional_expected": 26,
+      "observed": 19,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.modules_over_2000_loc"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 17"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "modules >=3,000 LOC",
+      "provisional_expected": 7,
+      "observed": 4,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.modules_at_least_3000_loc"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 17"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "module LOC p95",
+      "provisional_expected": 1411,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 17"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "integrity_audit LOC",
+      "provisional_expected": 6337,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 19"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "integrity_audit functions",
+      "provisional_expected": 77,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 19"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "integrity_audit SQL sites",
+      "provisional_expected": 59,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 19"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "comments_server LOC",
+      "provisional_expected": 5824,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 20"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "comments_server functions",
+      "provisional_expected": 184,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 20"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "comments_server routes",
+      "provisional_expected": 124,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 20"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "comments_server imports",
+      "provisional_expected": 89,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 20"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "SCC internal edges",
+      "provisional_expected": 4725,
+      "observed": 4942,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.definitions.internal_edges"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 26"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "SCC count",
       "provisional_expected": 16,
       "observed": 17,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "c6e036532471214b19da9f807b94ac004660cdebd456beea11583d39aea119c6",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
         "locator": "$.metrics.scc_count"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 26"
       },
       "note": "Fresh typed generator corrects the provisional value."
     },
     {
-      "name": "maximum internal fan-out",
-      "provisional_expected": 156,
-      "observed": 156,
-      "verdict": "verified",
+      "name": "SCC modules",
+      "provisional_expected": 77,
+      "observed": 80,
+      "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "c6e036532471214b19da9f807b94ac004660cdebd456beea11583d39aea119c6",
-        "locator": "$.metrics.max_internal_fan_out"
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.scc_module_count"
       },
-      "note": "Fresh typed generator reproduces the provisional value."
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 26"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "largest SCC",
+      "provisional_expected": 24,
+      "observed": 25,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.largest_scc"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 26"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
     },
     {
       "name": "exact duplicate groups",
@@ -49,8 +302,31 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "ec3c1a87fcf51647cc92c3d73eb9383003f39323cfa720eb14842bddee9d0e9e",
+        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
         "locator": "$.exact_totals.groups"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "exact duplicate functions",
+      "provisional_expected": 397,
+      "observed": 19,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/duplicates-ratchet.json",
+        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "locator": "$.exact_totals.participating_functions"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
       },
       "note": "Fresh typed generator corrects the provisional value."
     },
@@ -62,32 +338,107 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "ec3c1a87fcf51647cc92c3d73eb9383003f39323cfa720eb14842bddee9d0e9e",
+        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
         "locator": "$.near_miss_totals.groups"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
       },
       "note": "Fresh typed generator reproduces the provisional value."
     },
     {
-      "name": "full local suite seconds",
+      "name": "near-miss duplicated LOC",
+      "provisional_expected": null,
+      "observed": 11772,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/duplicates-ratchet.json",
+        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "locator": "$.near_miss_totals.duplicated_loc"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "exact duplicated LOC",
+      "provisional_expected": null,
+      "observed": 337,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/duplicates-ratchet.json",
+        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "locator": "$.exact_totals.duplicated_loc"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "duplicate coverage",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "passed tests",
+      "provisional_expected": 14043,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "skipped tests",
+      "provisional_expected": 62,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "full suite seconds",
       "provisional_expected": 1046.92,
       "observed": null,
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "note": "The reported 1046.92-second run has no retained typed timing receipt; the claim is rejected and cannot score."
-    },
-    {
-      "name": "test files with direct command.upgrade",
-      "provisional_expected": 172,
-      "observed": 172,
-      "verdict": "verified",
-      "scored_eligible": true,
-      "evidence": {
-        "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "aa604221f3a5392311d13034f805586d9442748b37bb49ceecfae259ada558ba",
-        "locator": "$.database_builders[*].evidence contains call:command.upgrade"
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
       },
-      "note": "Fresh typed generator reproduces the provisional value."
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
     },
     {
       "name": "Ruff diagnostics",
@@ -97,8 +448,13 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
+        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
         "locator": "$.diagnostics[tool=ruff].count"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
       },
       "note": "Fresh typed generator reproduces the provisional value."
     },
@@ -110,49 +466,1031 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
+        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
         "locator": "$.diagnostics[tool=ruff-format].count"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
       },
       "note": "Fresh typed generator corrects the provisional value."
     },
     {
       "name": "strict Pyright diagnostics",
       "provisional_expected": 27924,
-      "observed": 4374,
+      "observed": 4377,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
+        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
         "locator": "$.diagnostics[tool=pyright].count"
       },
-      "note": "Fresh typed generator corrects the provisional value."
-    },
-    {
-      "name": "type-suppression directives",
-      "provisional_expected": 588,
-      "observed": 621,
-      "verdict": "corrected",
-      "scored_eligible": true,
-      "evidence": {
-        "path": "docs/quality/static-baseline.json",
-        "sha256": "5065b3d1a2578a4c056d15994ce55fbebb812bb2d7f2e10c03c48d89ce9da066",
-        "locator": "$.diagnostics[tool=source-ignore-comments].count"
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
       },
       "note": "Fresh typed generator corrects the provisional value."
     },
     {
-      "name": "unreachable executable-script queue",
+      "name": "Pyright omitted files",
+      "provisional_expected": 312,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 30"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "type ignore directives",
+      "provisional_expected": 253,
+      "observed": 263,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/static-baseline.json",
+        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "locator": "$.suppressions_by_file[# type: ignore]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 30"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "pyright ignore directives",
+      "provisional_expected": 335,
+      "observed": 364,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/static-baseline.json",
+        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "locator": "$.suppressions_by_file[# pyright: ignore]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 30"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "suppression files",
+      "provisional_expected": 207,
+      "observed": 211,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/static-baseline.json",
+        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "locator": "$.suppressions_by_file"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 30"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "test files",
+      "provisional_expected": 1092,
+      "observed": 1111,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/test-db-patterns-baseline.json",
+        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "locator": "$.tracked_test_files"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "test files with direct command.upgrade",
+      "provisional_expected": 172,
+      "observed": 172,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/test-db-patterns-baseline.json",
+        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "locator": "$.database_builders[*].evidence contains call:command.upgrade"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "migrated_db files",
+      "provisional_expected": 146,
+      "observed": 136,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/test-db-patterns-baseline.json",
+        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "locator": "$.database_builders[*].evidence contains call:migrated_db"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "hand-written DDL files",
+      "provisional_expected": 550,
+      "observed": 548,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/test-db-patterns-baseline.json",
+        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "locator": "$.database_builders[*].evidence contains sql:"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "Fresh typed generator corrects the provisional value."
+    },
+    {
+      "name": "direct migration seconds",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "cached template milliseconds",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "CSS census seconds",
+      "provisional_expected": 44.83,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 32"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "architecture/UI group seconds",
+      "provisional_expected": 76.47,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 32"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "emitter AST parses",
+      "provisional_expected": 6454,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 32"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "emitter AST walks",
+      "provisional_expected": 32450000,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 32"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "emitter calls",
+      "provisional_expected": 517700000,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 32"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "integrity query families",
+      "provisional_expected": 6,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 33"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "renderer db_path-only count",
+      "provisional_expected": 48,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 34"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "connect_sqlite sites",
+      "provisional_expected": 76,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 34"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "connect_sqlite files",
+      "provisional_expected": 42,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 34"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "executable entrypoints",
+      "provisional_expected": 375,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 35"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Flask endpoints",
+      "provisional_expected": 181,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 35"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "scheduled tasks",
+      "provisional_expected": 46,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 35"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "wrappers",
+      "provisional_expected": 47,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 35"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "managed services",
+      "provisional_expected": 2,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 35"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "reconstruction entrypoints",
+      "provisional_expected": 29,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 35"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "unreachable scripts",
       "provisional_expected": 85,
       "observed": null,
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "note": "The provisional 85-script scan has no retained generator/receipt and is not equivalent to reachability unknown edges; it is rejected, not reused."
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 36"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "unreachable queue LOC",
+      "provisional_expected": 14291,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 36"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Muse elegance grade",
+      "provisional_expected": 6,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 15"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Muse maintainability grade",
+      "provisional_expected": 5,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 15"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Muse runtime efficiency grade",
+      "provisional_expected": 6,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 15"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Muse cleanup readiness grade",
+      "provisional_expected": 6,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 15"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Muse overall grade",
+      "provisional_expected": 6,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 15"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "portfolio_panel LOC",
+      "provisional_expected": 3602,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 21"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "portfolio_panel functions",
+      "provisional_expected": 92,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 21"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "work_os_shell LOC",
+      "provisional_expected": 3308,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 22"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "issuer_registry_bootstrap LOC",
+      "provisional_expected": 3159,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 23"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "gc_recovery LOC",
+      "provisional_expected": 3125,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 24"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "conformance_scan LOC",
+      "provisional_expected": 3098,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 25"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "largest SCC second size",
+      "provisional_expected": 16,
+      "observed": 16,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.strongly_connected_components[1]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 26"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "duplicate logging configurators",
+      "provisional_expected": 11,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "duplicate file hashes",
+      "provisional_expected": 12,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "duplicate savepoint helpers",
+      "provisional_expected": 6,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "duplicate Form 10-K locators",
+      "provisional_expected": 4,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 27"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "canonical_json definitions",
+      "provisional_expected": 46,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 28"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "_db_time definitions",
+      "provisional_expected": 11,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 28"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "file-hash definitions",
+      "provisional_expected": 9,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 28"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "full suite minutes",
+      "provisional_expected": 17,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "full suite display seconds",
+      "provisional_expected": 26,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "immutable migration formatted files",
+      "provisional_expected": 50,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "documented Pyright diagnostics",
+      "provisional_expected": 3070,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Sol Pyright diagnostics",
+      "provisional_expected": 3271,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "Pyright files scanned",
+      "provisional_expected": 2380,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 29"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "migration replay lower bound",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "migration replay upper bound",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 31"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "emitter AST walks M",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 32"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "emitter calls M",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 32"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "comments_server root routes",
+      "provisional_expected": null,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 20"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "build_redesigned_dcf correction LOC",
+      "provisional_expected": 2369,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 40"
+      },
+      "note": "No admissible typed generator receipt exists for this roadmap fact."
+    },
+    {
+      "name": "direct-builder ratchet correction",
+      "provisional_expected": 172,
+      "observed": 172,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/test-db-patterns-baseline.json",
+        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "locator": "$.database_builders[*].evidence contains call:command.upgrade"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 43"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "theme_synth live-edge correction",
+      "provisional_expected": true,
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": ".tmp/quality/reachability-check.json",
+        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "locator": "$.edges[target=src/synthesis/theme_synth.py]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 41"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "filings.boilerplate_classify live-edge correction",
+      "provisional_expected": true,
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": ".tmp/quality/reachability-check.json",
+        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "locator": "$.edges[target=src/filings/boilerplate_classify.py]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 41"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "filings.cross_sectional_detrend live-edge correction",
+      "provisional_expected": true,
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": ".tmp/quality/reachability-check.json",
+        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "locator": "$.edges[target=src/filings/cross_sectional_detrend.py]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 41"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "ask.turn_cache live-edge correction",
+      "provisional_expected": true,
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": ".tmp/quality/reachability-check.json",
+        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "locator": "$.edges[target=src/ask/turn_cache.py]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 41"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "etf_sources.vanguard live-edge correction",
+      "provisional_expected": true,
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": ".tmp/quality/reachability-check.json",
+        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "locator": "$.edges[target=src/etf_sources/vanguard.py]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 41"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "refetch_aggregator absence correction",
+      "provisional_expected": true,
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.modules[path=execution/refetch_aggregator.py]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 42"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
+    },
+    {
+      "name": "refetch_aggregator_transcripts existence correction",
+      "provisional_expected": true,
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "docs/quality/architecture-ratchet.json",
+        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "locator": "$.metrics.modules[path=execution/refetch_aggregator_transcripts.py]"
+      },
+      "provisional_evidence": {
+        "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+        "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+        "locator": "line 42"
+      },
+      "note": "Fresh typed generator reproduces the provisional value."
     }
   ],
-  "scored_claims": 10,
-  "rejected_claims": 2,
-  "source_hash": "fba2756a3264077fdcfedadf0e35a663ca7a16fc349de2de0a85e60f63d49afd",
+  "scored_claims": 34,
+  "rejected_claims": 62,
+  "source_hash": "66786da6e040a9a1a54d37068264f8b13c29b4e8285a00a317a827de2aeeb909",
+  "roadmap_source": {
+    "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
+    "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
+    "locator": "baseline section"
+  },
+  "claim_manifest_sha256": "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089",
   "violations": []
 }

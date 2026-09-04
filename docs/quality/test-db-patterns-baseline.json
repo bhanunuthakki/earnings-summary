@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "df79d43ba74ddd069efb3b042170fc466752f94d",
+  "scoped_commit": "e206b42405ad37101ed1cbb891073155d127cbf3",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "f0289c5fe00d747fead91b13cb27ed24d84237a846db1136df16e38204f410c0",
+  "source_sha256": "4880d3cc41f006651c7309af3544f747a7b101f46dcd3cf0faff260d8c009ade",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",
@@ -1003,6 +1003,8 @@
     "tests/test_tenet_accountability.py",
     "tests/test_tenet_distill.py",
     "tests/test_tenets.py",
+    "tests/test_test_ci_pairing.py",
+    "tests/test_test_ci_performance.py",
     "tests/test_test_harness_isolation.py",
     "tests/test_theme_synth.py",
     "tests/test_thesis_artifact.py",
@@ -6871,7 +6873,7 @@
   "findings": [
     {
       "path": "tests/conftest.py",
-      "line": 354,
+      "line": 356,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
