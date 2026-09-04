@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from pipeline.sec_fpi_ingest import (
     resolve_cik,
     strip_html,
 )
+from provenance.evidence_backfill import ensure_legacy_document_evidence
 
 
 def test_resolve_cik() -> None:
@@ -152,85 +154,97 @@ def test_fetch_fpi_exhibit_image_only_guard() -> None:
 
 
 def test_persist_fpi_facts_idempotency(migrated_db: Callable[..., Path], tmp_path: Path) -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    db_path = migrated_db(tmp_path / "test_fpi_persist.db")
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-
-    # Setup test document
-    import hashlib
-
+    repo_root = tmp_path / "repo"
+    doc_dir = repo_root / "data" / "historical" / "sec"
+    doc_dir.mkdir(parents=True, exist_ok=True)
     doc_content = b"<html><body>test content for evidence anchoring</body></html>"
-    doc_file = project_root / "data" / "historical" / "sec" / "test_wix_doc.html"
-    doc_file.parent.mkdir(parents=True, exist_ok=True)
+    doc_file = doc_dir / "test_wix_doc.html"
     doc_file.write_bytes(doc_content)
     doc_sha = hashlib.sha256(doc_content).hexdigest()
 
-    cur = conn.execute(
-        """
-        INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, http_code, raw_bytes_size)
-        VALUES ('WIX', 'sec_xbrl', 'sec_6k', 'data/historical/sec/test_wix_doc.html', ?, '2026-08-04', 'ok', 200, ?)
-        """,
-        (doc_sha, len(doc_content)),
-    )
-    assert cur.lastrowid is not None
-    doc_id = int(cur.lastrowid)
+    db_path = migrated_db(tmp_path / "test_fpi_persist.db")
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, http_code, raw_bytes_size)
+            VALUES ('WIX', 'sec_xbrl', 'sec_6k', 'data/historical/sec/test_wix_doc.html', ?, '2026-08-04', 'ok', 200, ?)
+            """,
+            (doc_sha, len(doc_content)),
+        )
+        assert cur.lastrowid is not None
+        doc_id = int(cur.lastrowid)
 
-    from provenance.evidence_backfill import ensure_legacy_document_evidence
+        ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=doc_id)
 
-    ensure_legacy_document_evidence(conn, repo_root=project_root, document_id=doc_id)
+        stored = conn.execute(
+            "SELECT sha256, file_path FROM documents WHERE id = ?", (doc_id,)
+        ).fetchone()
+        assert stored is not None
+        assert stored["sha256"] == doc_sha
+        assert stored["file_path"] == "data/historical/sec/test_wix_doc.html"
+        anchored = repo_root / stored["file_path"]
+        assert anchored.is_file()
+        assert anchored.read_bytes() == doc_content
 
-    dt = datetime(2026, 6, 30, tzinfo=UTC)
-    financial_facts = {
-        "revenue": (Decimal("563058000"), "USD", "Table: Revenue = 563,058"),
-        "operating_income": (Decimal("55120000"), "USD", "Table: Operating income = 55,120"),
-    }
-    kpis: list[tuple[str, Decimal, Unit, Currency | None, str]] = [
-        ("bookings", Decimal("569100000"), Unit.ACTUAL, Currency.USD, "Total bookings: $569.1M"),
-        ("free_cash_flow_margin", Decimal("10.8"), Unit.PERCENT, None, "FCF margin: 10.8%"),
-    ]
+        dt = datetime(2026, 6, 30, tzinfo=UTC)
+        financial_facts = {
+            "revenue": (Decimal("563058000"), "USD", "Table: Revenue = 563,058"),
+            "operating_income": (Decimal("55120000"), "USD", "Table: Operating income = 55,120"),
+        }
+        kpis: list[tuple[str, Decimal, Unit, Currency | None, str]] = [
+            (
+                "bookings",
+                Decimal("569100000"),
+                Unit.ACTUAL,
+                Currency.USD,
+                "Total bookings: $569.1M",
+            ),
+            ("free_cash_flow_margin", Decimal("10.8"), Unit.PERCENT, None, "FCF margin: 10.8%"),
+        ]
 
-    # First insertion
-    ff_n1, kpi_n1 = persist_fpi_facts(
-        conn,
-        ticker="WIX",
-        period_end=dt,
-        fiscal_period_type="Q2",
-        doc_id=doc_id,
-        financial_facts=financial_facts,
-        kpis=kpis,
-        force=False,
-    )
-    conn.commit()
-    assert ff_n1 == 2
-    assert kpi_n1 == 2
+        # First insertion
+        ff_n1, kpi_n1 = persist_fpi_facts(
+            conn,
+            ticker="WIX",
+            period_end=dt,
+            fiscal_period_type="Q2",
+            doc_id=doc_id,
+            financial_facts=financial_facts,
+            kpis=kpis,
+            force=False,
+        )
+        conn.commit()
+        assert ff_n1 == 2
+        assert kpi_n1 == 2
 
-    # Second insertion with force=True (clean transactional update)
-    ff_n2, kpi_n2 = persist_fpi_facts(
-        conn,
-        ticker="WIX",
-        period_end=dt,
-        fiscal_period_type="Q2",
-        doc_id=doc_id,
-        financial_facts=financial_facts,
-        kpis=kpis,
-        force=True,
-    )
-    conn.commit()
-    assert ff_n2 == 2
-    assert kpi_n2 == 2
+        # Second insertion with force=True (clean transactional update)
+        ff_n2, kpi_n2 = persist_fpi_facts(
+            conn,
+            ticker="WIX",
+            period_end=dt,
+            fiscal_period_type="Q2",
+            doc_id=doc_id,
+            financial_facts=financial_facts,
+            kpis=kpis,
+            force=True,
+        )
+        conn.commit()
+        assert ff_n2 == 2
+        assert kpi_n2 == 2
 
-    # Verify no fact duplication occurred
-    count_ff = conn.execute(
-        "SELECT COUNT(*) FROM financial_facts WHERE ticker = 'WIX' AND period_end = ? AND fiscal_period_type = 'Q2'",
-        (dt,),
-    ).fetchone()[0]
-    assert count_ff == 2
+        # Verify no fact duplication occurred
+        count_ff = conn.execute(
+            "SELECT COUNT(*) FROM financial_facts WHERE ticker = 'WIX' AND period_end = ? AND fiscal_period_type = 'Q2'",
+            (dt,),
+        ).fetchone()[0]
+        assert count_ff == 2
 
-    count_kpi = conn.execute(
-        "SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'WIX' AND period_end = ? AND fiscal_period_type = 'Q2'",
-        (dt,),
-    ).fetchone()[0]
-    assert count_kpi == 2
-
-    conn.close()
+        count_kpi = conn.execute(
+            "SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'WIX' AND period_end = ? AND fiscal_period_type = 'Q2'",
+            (dt,),
+        ).fetchone()[0]
+        assert count_kpi == 2
+    finally:
+        conn.close()
