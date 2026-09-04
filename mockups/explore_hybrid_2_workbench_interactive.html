@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explore · Interactive full-screen workbench</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+  <style>
+    /* Isolated approval prototype. It never reads or writes live application state. */
+    html,body{height:100%;overflow:hidden}
+    [hidden]{display:none!important}
+    .wb-app{height:100dvh;display:grid;grid-template-rows:66px minmax(0,1fr) 108px;background:var(--bg)}
+    .wb-head{display:grid;grid-template-columns:minmax(210px,1fr) minmax(360px,1.5fr) minmax(280px,1fr);align-items:center;gap:16px;padding:0 18px;border-bottom:1px solid var(--border);background:var(--surface)}
+    .wb-back{justify-self:start}
+    .wb-title{min-width:0;text-align:center}
+    .wb-title h1{margin:0;overflow:hidden;font-size:var(--fs-title);text-overflow:ellipsis;white-space:nowrap}
+    .wb-title p{margin:3px 0 0;overflow:hidden;color:var(--muted);font-size:var(--fs-caption);text-overflow:ellipsis;white-space:nowrap}
+    .wb-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+    .wb-body{min-height:0;display:grid;grid-template-columns:230px minmax(560px,1fr) 286px}
+    .wb-fields,.wb-inspector{min-height:0;overflow:auto;background:color-mix(in srgb,var(--surface) 84%,black)}
+    .wb-fields{border-right:1px solid var(--border)}
+    .wb-inspector{border-left:1px solid var(--border)}
+    .wb-panel-head{padding:14px;border-bottom:1px solid var(--border)}
+    .wb-panel-head h2{margin:0;font-size:var(--fs-title)}
+    .wb-panel-head p{margin:4px 0 0;color:var(--muted);font-size:var(--fs-caption);line-height:1.45}
+    .wb-search{width:100%;margin-top:10px}
+    .wb-field-group{padding:12px 9px 4px}
+    .wb-field-wrap{position:relative;margin-top:3px;border-radius:var(--radius)}
+    .wb-field{width:100%;display:flex;flex-direction:column;gap:3px;padding:6px 28px 6px 8px;border:0;border-radius:var(--radius);background:transparent;color:var(--fg-soft);text-align:left;cursor:pointer}
+    .wb-field-row1{display:flex;align-items:center;gap:7px;min-width:0}
+    .wb-field-label{font-size:12px;font-weight:600;color:var(--fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+    .wb-field:hover .wb-field-label{color:var(--fg)}
+    .wb-field.is-used .wb-field-label{color:var(--accent)}
+    .wb-field-row2{display:flex;align-items:center;gap:5px;padding-left:21px;font-size:10px;color:var(--muted)}
+    .wb-field:hover,.wb-field:focus-visible{background:var(--paper)}
+    .wb-field.is-used{background:var(--accent-soft)}
+    .wb-field-info{position:absolute;top:6px;right:6px;width:22px;height:22px;padding:0;border:0;border-radius:var(--radius-full);background:transparent;color:var(--muted);cursor:pointer;opacity:0;transition:opacity .15s ease}
+    .wb-field-wrap:hover .wb-field-info,.wb-field-wrap:focus-within .wb-field-info,.wb-field-info:focus-visible{opacity:1;background:var(--paper);color:var(--accent)}
+    .wb-field-info:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+    @media(hover:none),(max-width:1024px){.wb-field-info{opacity:.85;background:var(--paper)}}
+    .wb-rank{color:var(--muted);font:var(--fs-caption) var(--mono);width:14px;flex-shrink:0}
+    .wb-category-tabs{display:flex;gap:4px;margin-top:9px;overflow-x:auto;scrollbar-width:none}
+    .wb-category-tabs::-webkit-scrollbar{display:none}
+    .wb-category-tab{padding:3px 8px;border:1px solid var(--border);border-radius:var(--radius-full);font-size:10px;font-weight:600;color:var(--muted);background:transparent;cursor:pointer;white-space:nowrap}
+    .wb-category-tab:hover{color:var(--fg);border-color:var(--border-2);background:var(--paper)}
+    .wb-category-tab.active{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+    .wb-badge-admitted{display:inline-block;padding:1px 5px;border-radius:var(--radius-full);background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok);font-size:9px;font-weight:700}
+    .wb-table th.break-th{border-bottom:2px solid var(--warn);color:var(--warn);background:color-mix(in srgb,var(--warn) 6%,var(--paper))}
+    .wb-break-tag{display:inline-block;margin-left:4px;padding:1px 5px;border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);border-radius:var(--radius-full);background:color-mix(in srgb,var(--warn) 15%,transparent);color:var(--warn);font-size:9px;font-weight:700;vertical-align:1px;cursor:pointer}
+    .wb-break-tag:hover{background:color-mix(in srgb,var(--warn) 30%,transparent)}
+    .wb-break-footnote-marker{color:var(--warn);font-size:10px;font-weight:600;margin-left:3px}
+    .wb-legend-break{width:100%;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:6px 10px;margin-top:8px;border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:var(--radius);background:color-mix(in srgb,var(--warn) 8%,transparent);color:var(--warn);font-size:var(--fs-caption)}
+    .wb-legend-break button{padding:0;border:0;border-bottom:1px dotted currentColor;background:transparent;color:inherit;cursor:pointer;font:inherit;font-weight:600}
+    .wb-selected-field{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:0;border-radius:var(--radius);background:color-mix(in srgb,var(--violet) 14%,transparent);color:var(--violet);font-size:var(--fs-caption);font-weight:650}
+    .wb-selected-field .wb-selected-info{padding:0 3px;border:0;background:transparent;color:inherit;cursor:pointer;font-size:11px;opacity:.8}
+    .wb-selected-field .wb-selected-info:hover,.wb-selected-field .wb-selected-info:focus-visible{opacity:1;text-decoration:underline}
+    .wb-selected-field .wb-selected-remove{padding:0 3px;border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;font-weight:700}
+    .wb-workspace{min-width:0;min-height:0;overflow:auto}
+    .wb-intent{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:9px;min-height:50px;padding:7px 14px;border-bottom:1px solid var(--border)}
+    .wb-intent>span,.wb-intent>.k-btn{margin-top:2px}
+    .wb-intent-field{position:relative;min-width:0}
+    .wb-intent input{width:100%}
+    .wb-suggestions{position:absolute;z-index:18;top:calc(100% + 5px);left:0;right:0;max-height:250px;overflow:auto;padding:5px;border:1px solid var(--border-2);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-pop)}
+    .wb-suggestion{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px;border:0;border-radius:var(--radius);background:transparent;color:var(--fg-soft);text-align:left;cursor:pointer}
+    .wb-suggestion:hover,.wb-suggestion:focus-visible{background:var(--paper)}
+    .wb-suggestion small{color:var(--muted)}
+    .wb-shape{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 14px;border-bottom:1px solid var(--border)}
+    .wb-shape-label{margin-right:3px;color:var(--muted);font-size:var(--fs-caption);font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+    .wb-chip{min-height:27px;padding:4px 8px;border:0;border-radius:var(--radius);background:var(--accent-soft);color:var(--accent);cursor:pointer;font-size:var(--fs-caption);font-weight:650}
+    .wb-chip.measure{background:color-mix(in srgb,var(--violet) 14%,transparent);color:var(--violet)}
+    .wb-builder{padding:8px 14px 12px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--surface) 88%,black)}
+    .wb-builder-row{display:grid;grid-template-columns:84px minmax(0,1fr);align-items:start;gap:10px;min-height:42px;padding:5px 0;border-bottom:1px solid var(--border)}
+    .wb-builder-row:last-of-type{border-bottom:0}
+    .wb-builder-label{padding-top:8px;color:var(--muted);font-size:var(--fs-caption);font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+    .wb-builder-control{position:relative;display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+    .wb-builder-control input{min-width:170px;flex:1}
+    .wb-builder-actions{display:flex;align-items:center;gap:8px;padding-top:9px}
+    .wb-selected-field{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border:0;border-radius:var(--radius);background:color-mix(in srgb,var(--violet) 14%,transparent);color:var(--violet);cursor:pointer;font-size:var(--fs-caption);font-weight:650}
+    .wb-definition-link{padding:0;border:0;border-bottom:1px dotted currentColor;background:transparent;color:inherit;cursor:pointer;font:inherit;text-align:left}
+    .wb-inspector-definition{padding:0;border:0;border-bottom:1px dotted var(--border-2);background:transparent;color:var(--muted);cursor:pointer;text-align:left}
+    .wb-result-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:15px 16px 9px}
+    .wb-result-head h2{margin:0;font-size:var(--fs-title)}
+    .wb-result-head p{margin:3px 0 0;color:var(--muted);font-size:var(--fs-caption)}
+    .wb-result-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+    .wb-view[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+    .wb-table-wrap{padding:0 16px 18px;overflow:auto}
+    .wb-table{width:100%;min-width:760px;border-collapse:collapse}
+    .wb-table th,.wb-table td{padding:9px 10px;border:1px solid var(--border);text-align:right;font-family:var(--mono);white-space:nowrap}
+    .wb-table th{background:var(--paper);color:var(--muted);font:600 var(--fs-caption) var(--sans)}
+    .wb-table th:first-child,.wb-table td:first-child{text-align:left;font-family:var(--sans)}
+    .wb-table tbody tr{cursor:pointer}
+    .wb-table tbody tr:hover td{background:var(--paper)}
+    .wb-table tbody tr.is-selected td{background:var(--accent-soft)}
+    .wb-table .forecast{color:var(--accent);background:color-mix(in srgb,var(--accent) 5%,transparent)}
+    .wb-table .break{color:var(--warn)}
+    .wb-table .derived{color:var(--muted)}
+    .wb-metric{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .wb-model-tag{padding:2px 6px;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);border-radius:var(--radius-full);color:var(--accent);font-size:10px;font-weight:700}
+    .wb-chart-wrap{padding:0 16px 16px}
+    .wb-chart{display:block;width:100%;height:310px;border-block:1px solid var(--border)}
+    .wb-chart .grid{stroke:var(--border)}
+    .wb-chart .divider{stroke:var(--border-2);stroke-dasharray:4 4}
+    .wb-chart .series{fill:none;stroke-width:2.4}
+    .wb-chart .forecast-line{stroke-dasharray:7 6}
+    .wb-chart text{fill:var(--muted);font:10px var(--sans)}
+    .wb-chart .value{text-anchor:middle;font:9px var(--mono)}
+    .wb-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:8px 0 0;color:var(--muted);font-size:var(--fs-caption)}
+    .wb-legend button{padding:0;border:0;border-bottom:1px dotted currentColor;background:transparent;color:inherit;cursor:pointer;font:inherit}
+    .wb-legend button::before{content:"";display:inline-block;width:11px;height:2px;margin-right:6px;vertical-align:3px;background:currentColor}
+    .wb-footnote{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 16px;padding:7px 0;border-top:1px solid var(--border);color:var(--muted);font-size:var(--fs-caption)}
+    .wb-inspect-section{padding:14px;border-bottom:1px solid var(--border)}
+    .wb-inspect-section h3{margin:0 0 9px;font-size:var(--fs-title)}
+    .wb-inspect-row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;color:var(--fg-soft)}
+    .wb-inspect-row span:last-child{color:var(--muted);font:var(--fs-caption) var(--mono);text-align:right}
+    .wb-note{padding:9px;border:1px solid color-mix(in srgb,var(--warn) 42%,transparent);border-radius:var(--radius);background:color-mix(in srgb,var(--warn) 7%,transparent);color:var(--fg-soft)}
+    .wb-note p{margin:5px 0 0;color:var(--muted);font-size:var(--fs-caption)}
+    .wb-empty-model{color:var(--muted);font-size:var(--fs-caption);line-height:1.5}
+    .wb-compose-zone{border-top:1px solid var(--border);background:var(--bg)}
+    .wb-compose-inner{width:min(820px,calc(100% - 40px));margin:12px auto 0}
+    .wb-compose{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;padding:8px 8px 8px 13px;border:1px solid var(--border-2);border-radius:var(--radius-card);background:var(--surface)}
+    .wb-compose input{width:100%;border:0;background:transparent;font-size:var(--fs-body)}
+    .wb-compose input:focus-visible{outline:0}
+    .wb-followups{display:flex;flex-wrap:wrap;gap:12px;margin-top:6px}
+    .wb-followup{padding:3px 0;border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:var(--fs-caption)}
+    .wb-followup:hover,.wb-followup:focus-visible{color:var(--accent)}
+    .wb-drawer-copy{color:var(--fg-soft);line-height:1.55}
+    .wb-form{display:grid;gap:13px;margin-top:14px}
+    .wb-form label{display:grid;gap:5px;color:var(--muted)}
+    .wb-form select,.wb-form input{width:100%}
+    .wb-success{min-height:30px;color:var(--ok);font-weight:700}
+    .wb-source{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--fg-soft);text-align:left;cursor:pointer}
+    .wb-toast{position:fixed;z-index:70;right:20px;bottom:128px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--ok) 45%,transparent);border-radius:var(--radius);background:var(--surface);color:var(--ok);box-shadow:var(--shadow-pop)}
+    @media(max-width:1180px){.wb-body{grid-template-columns:220px minmax(540px,1fr)}.wb-inspector{display:none}}
+    @media(max-width:820px){html,body{overflow:auto}.wb-app{min-height:100dvh;height:auto;grid-template-rows:auto minmax(620px,1fr) 122px}.wb-head{grid-template-columns:1fr auto;min-height:76px;padding:8px 12px}.wb-title{grid-column:1/-1;grid-row:2;text-align:left}.wb-head-actions .k-pill,.wb-head-actions [data-open="sources"]{display:none}.wb-body{grid-template-columns:1fr}.wb-fields{display:none}.wb-intent{grid-template-columns:auto minmax(0,1fr)}.wb-intent .k-btn{grid-column:2}.wb-builder-row{grid-template-columns:1fr}.wb-builder-label{padding-top:2px}.wb-result-head{display:block}.wb-result-actions{justify-content:flex-start;margin-top:10px}.drawer{width:94vw}}
+  </style>
+</head>
+<body>
+<div class="wb-app">
+  <header class="wb-head">
+    <a class="k-btn k-btn-quiet wb-back" href="explore_hybrid_2_analysis_sheet.html">← Back to answer</a>
+    <div class="wb-title"><h1 id="page-title">MELI segment growth</h1><p id="page-subtitle">Full-page analytical workspace · changes here shape the analysis, never the DCF</p></div>
+    <div class="wb-head-actions"><span class="k-pill k-pill-accent">Illustrative data</span><button class="k-btn k-btn-quiet" data-open="sources">Sources</button><button class="k-btn k-btn-save" data-open="save">◆ Save analysis</button></div>
+  </header>
+
+  <div class="wb-body">
+    <aside class="wb-fields" aria-label="Available fields">
+      <div class="wb-panel-head"><h2>Fields</h2><p>Recommended first. Search spans every governed company-data series.</p><input class="wb-search" id="field-search" type="search" placeholder="Search all company data…" aria-label="Find a metric" autocomplete="off"><div class="wb-category-tabs" id="category-tabs" role="tablist" aria-label="Domain categories"><button class="wb-category-tab active" data-category="all" role="tab" aria-selected="true">All</button><button class="wb-category-tab" data-category="statements" role="tab" aria-selected="false">Statements</button><button class="wb-category-tab" data-category="kpis" role="tab" aria-selected="false">KPIs</button><button class="wb-category-tab" data-category="workforce" role="tab" aria-selected="false">Workforce</button></div></div>
+      <div class="wb-field-group"><span class="label">Best matches</span><div id="field-list"></div></div>
+      <div class="wb-field-group"><span class="label">Dimensions</span><button class="wb-field is-used" data-toggle-builder><span class="wb-rank">D</span><span>Fiscal quarter</span><span class="wb-match">Used</span></button><button class="wb-field" data-toggle-builder><span class="wb-rank">D</span><span>Geography</span><span class="wb-match">+</span></button><button class="wb-field" data-toggle-builder><span class="wb-rank">D</span><span>Reporting basis</span><span class="wb-match">+</span></button></div>
+    </aside>
+
+    <main class="wb-workspace">
+      <div class="wb-intent"><span class="query-orb">✦</span><div class="wb-intent-field"><input id="analysis-intent" value="Compare MELI Commerce and Fintech revenue for the last 8 complete quarters" aria-label="Analysis intent" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="intent-suggestions"><div class="wb-suggestions" id="intent-suggestions" hidden></div></div><button class="k-btn k-btn-primary" id="update-analysis">Update</button></div>
+      <div class="wb-shape" aria-label="Analysis shape"><span class="wb-shape-label">Shape</span><button class="wb-chip" data-toggle-builder id="column-chip" aria-expanded="false">Columns · Fiscal quarter</button><button class="wb-chip measure" data-toggle-builder id="row-chip" aria-expanded="false">Rows · 2 metrics</button><button class="wb-chip" data-toggle-builder id="compare-chip" aria-expanded="false">Compare · YoY and CAGR</button><button class="wb-chip" data-toggle-builder id="filter-chip" aria-expanded="false">Filter · 8 complete periods</button></div>
+      <section class="wb-builder" id="inline-builder" hidden aria-label="Edit analysis shape">
+        <div class="wb-builder-row"><span class="wb-builder-label">Columns</span><div class="wb-builder-control"><input id="builder-columns" value="Fiscal quarter" aria-label="Search columns" role="combobox" aria-expanded="false" autocomplete="off"><div class="wb-suggestions" id="builder-columns-menu" hidden></div></div></div>
+        <div class="wb-builder-row"><span class="wb-builder-label">Rows</span><div class="wb-builder-control" id="builder-row-control"><span id="builder-selected-fields"></span><input id="builder-rows" placeholder="Search all metrics to add…" aria-label="Search row metrics" role="combobox" aria-expanded="false" autocomplete="off"><div class="wb-suggestions" id="builder-rows-menu" hidden></div></div></div>
+        <div class="wb-builder-row"><span class="wb-builder-label">Compare</span><div class="wb-builder-control"><input id="builder-compare" value="YoY and CAGR" aria-label="Search comparisons" role="combobox" aria-expanded="false" autocomplete="off"><div class="wb-suggestions" id="builder-compare-menu" hidden></div></div></div>
+        <div class="wb-builder-row"><span class="wb-builder-label">Filters</span><div class="wb-builder-control"><input id="builder-filters" value="Last 8 complete periods" aria-label="Search filters" role="combobox" aria-expanded="false" autocomplete="off"><div class="wb-suggestions" id="builder-filters-menu" hidden></div></div></div>
+        <div class="wb-builder-actions"><button class="k-btn k-btn-primary" id="apply-inline-builder">Apply analysis shape</button><button class="k-btn k-btn-quiet" id="close-inline-builder">Done</button><span class="meta">Free-search fields resolve against the same governed catalog as the left rail.</span></div>
+      </section>
+      <div class="wb-result-head"><div><h2 id="result-title">Quarterly segment revenue</h2><p id="result-subtitle">USD millions · issuer reported · illustrative values</p></div><div class="wb-result-actions"><button class="k-btn k-btn-sm k-btn-quiet wb-view" data-view="table" aria-pressed="true">Table</button><button class="k-btn k-btn-sm k-btn-quiet wb-view" data-view="chart" aria-pressed="false">Chart</button><button class="k-btn k-btn-sm k-btn-quiet" id="dcf-overlay">DCF overlay · on</button></div></div>
+      <div class="wb-table-wrap" id="table-view"><table class="wb-table"><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
+      <div class="wb-chart-wrap" id="chart-view" hidden><svg class="wb-chart" id="chart" viewBox="0 0 900 310" role="img" aria-label="Interactive analysis chart"></svg><div class="wb-legend" id="chart-legend"></div></div>
+      <div class="wb-footnote" id="definition-note"><span id="definition-note-text">⚠️ <strong>Accounting presentation break at Q4 ’25:</strong> MELI reclassified shipping platform fees and advertising allocations between Commerce and Fintech (Shareholder Letter Q4 ’25, Note 3). Pre-break (Q3 ’24–Q3 ’25) and Post-break (Q4 ’25–Q2 ’26) are not directly comparable without pro-forma reconciliation. Continuous CAGR across this boundary is non-continuous.</span><button class="k-btn k-btn-sm k-btn-quiet" id="definition-history-button" data-definition="commerce">Definition history &amp; lineage ↗</button></div>
+    </main>
+
+    <aside class="wb-inspector" aria-label="Selected metric details">
+      <div class="wb-panel-head"><h2>Selected metric</h2><button class="wb-inspector-definition" id="selected-summary">Commerce revenue · Q2 ’26</button></div>
+      <div class="wb-inspect-section"><h3>Observation</h3><div class="wb-inspect-row"><span>Latest reported</span><span id="inspect-value">$3,422M</span></div><div class="wb-inspect-row"><span>Period</span><span id="inspect-period">Q2 ’26</span></div><div class="wb-inspect-row"><span>Basis</span><span id="inspect-basis">Issuer reported</span></div><div class="wb-inspect-row"><span>Coverage</span><span id="inspect-coverage">8 / 8</span></div></div>
+      <div class="wb-inspect-section" id="dcf-inspector"><h3>DCF context · read-only</h3><div id="dcf-inspector-body"></div></div>
+      <div class="wb-inspect-section" id="compare-inspector"><h3>Comparability</h3><div class="wb-note"><strong>Definition revised Q4 ’25</strong><p>The series is shown with a visible break and no silent normalization.</p></div><button class="k-btn k-btn-sm k-btn-quiet" id="inspector-definition-button" style="margin-top:9px">Open definition ↗</button></div>
+      <div class="wb-inspect-section"><button class="k-btn k-btn-quiet" data-open="sources">View provenance ↗</button></div>
+    </aside>
+  </div>
+
+  <footer class="wb-compose-zone"><div class="wb-compose-inner"><div class="wb-compose"><input id="follow-up" aria-label="Change the analysis" placeholder="Add a metric, change the period, or request a comparison…"><button class="k-btn k-btn-primary" id="ask-analysis">Analyze</button></div><div class="wb-followups" aria-label="Suggested analysis changes"><button class="wb-followup" data-preset="payments">Compare TPV, GMV, and active users</button><button class="wb-followup" data-preset="credit">Analyze credit growth and quality</button><button class="wb-followup" data-preset="segments">Return to segment revenue</button></div></div></footer>
+</div>
+
+<div class="scrim" hidden></div>
+
+<aside class="drawer" id="shape" hidden aria-label="Edit analysis shape">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent">Analysis shape</span><h2>Rows, columns, and comparison</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="wb-form"><label>Columns<select id="shape-columns"><option>Fiscal quarter</option><option>Fiscal year</option></select></label><label>Window<select id="shape-window"><option value="8">Last 8 complete periods</option><option value="4">Last 4 complete periods</option></select></label><label>Comparison<select id="shape-compare"><option>YoY and CAGR</option><option>Sequential growth</option><option>Indexed to first period</option></select></label><button class="k-btn k-btn-primary" id="apply-shape">Apply shape</button><p class="meta">Field identity and units remain governed; this changes only the analytical view.</p></div>
+</aside>
+
+<aside class="drawer" id="filters" hidden aria-label="Edit filters">
+  <div class="drawer-head"><div><span class="k-pill">Filters</span><h2>Filter this analysis</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="wb-form"><label>Company<select><option>MELI · MercadoLibre</option></select></label><label>Period completeness<select id="filter-complete"><option>Complete periods only</option><option>Include partial periods</option></select></label><label>Reporting basis<select><option>Issuer reported</option><option>Issuer reported + calculations</option></select></label><label>Geography<select><option>Consolidated</option><option>Brazil</option><option>Mexico</option><option>Argentina</option></select></label><button class="k-btn k-btn-primary" id="apply-filters">Apply filters</button></div>
+</aside>
+
+<aside class="drawer" id="dcf" hidden aria-label="Read-only DCF inputs">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent">Read-only model context</span><h2>DCF inputs behind this overlay</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p class="wb-drawer-copy">Explore can display compatible forecast series and explain the semantic mapping. Model inputs remain owned and editable only inside the DCF.</p>
+  <div id="dcf-drawer-rows"></div>
+  <div class="drawer-row"><span>Model revision</span><span>184 · pinned for this analysis</span></div><div class="drawer-row"><span>Explore permissions</span><span>View and overlay only</span></div>
+  <button class="k-btn k-btn-quiet" id="hide-dcf-from-drawer" style="margin-top:14px">Hide overlay in this analysis</button>
+</aside>
+
+<aside class="drawer" id="definition" hidden aria-label="Metric definition and analysis details">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent" id="work-definition-category">Metric definition</span><h2 id="work-definition-title">Commerce revenue</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <h3>Canonical definition</h3><p class="wb-drawer-copy" id="work-definition-canonical"></p>
+  <h3>Issuer-specific scope</h3><p class="wb-drawer-copy" id="work-definition-issuer"></p>
+  <div class="drawer-row"><span>Unit</span><span id="work-definition-unit"></span></div><div class="drawer-row"><span>Period</span><span id="work-definition-period"></span></div><div class="drawer-row"><span>Basis</span><span id="work-definition-basis"></span></div><div class="drawer-row"><span>Primary source</span><span id="work-definition-source"></span></div><div class="drawer-row"><span>DCF relationship</span><span id="work-definition-dcf"></span></div>
+  <h3>Current analysis detail</h3><div class="drawer-row"><span>Selected observation</span><span id="work-definition-observation"></span></div><div class="drawer-row"><span>Visible treatment</span><span id="work-definition-treatment"></span></div><div class="drawer-row"><span>Comparability</span><span id="work-definition-comparability"></span></div>
+  <button class="wb-source" data-source="shareholder"><span>Open the primary source locator</span><span>→</span></button>
+</aside>
+
+<aside class="drawer" id="sources" hidden aria-label="Sources and provenance">
+  <div class="drawer-head"><div><span class="k-pill k-pill-ok">Current</span><h2>Analysis provenance</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p class="wb-drawer-copy">Every displayed cell carries its metric identity, period, unit, definition revision, observation version, and source locator. Prototype values are illustrative.</p>
+  <div class="drawer-row"><span>Reported observations</span><span id="source-count">16 selected · 16 complete</span></div><div class="drawer-row"><span>Primary documents</span><span id="source-docs">8 shareholder letters</span></div><div class="drawer-row"><span>Definition revisions</span><span id="source-definitions">2 effective versions</span></div><div class="drawer-row"><span>DCF projection</span><span id="source-dcf">Revision 184 · semantic binding</span></div>
+  <button class="wb-source" data-source="manifest"><span>Open complete source manifest</span><span>→</span></button>
+</aside>
+
+<aside class="drawer" id="save" hidden aria-label="Save analysis">
+  <div class="drawer-head"><div><span class="k-pill">Save</span><h2>Save this workbench state</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="wb-form"><label>Name<input id="save-name" value="MELI segment growth"></label><label>Save as<select id="save-mode"><option>Living analysis · refresh observations</option><option>Immutable snapshot · freeze versions</option></select></label><label>Destination<select><option>Explore library</option><option>MELI Company Desk</option><option>Draft brief</option></select></label><button class="k-btn k-btn-save" id="confirm-save">◆ Save analysis</button><div class="wb-success" id="save-success" aria-live="polite"></div><p class="meta">The saved state includes the question, selected fields, shape, filters, definition dispositions, source manifest, and the referenced DCF revision when present.</p></div>
+</aside>
+
+<div class="wb-toast" id="toast" hidden aria-live="polite"></div>
+
+<script src="explore_metric_catalog.js"></script>
+<script>
+const palettes=['var(--accent)','var(--violet)','var(--warn)','var(--ok)'];
+const metricDefinitions=window.EXPLORE_METRIC_DEFINITIONS,metricCatalog=window.EXPLORE_METRIC_CATALOG;
+const intentOptions=[
+  ['Compare Commerce and Fintech revenue','Segment revenue · includes compatible DCF overlay'],
+  ['Compare TPV, GMV, and active users','Marketplace & payments · reported KPIs'],
+  ['Analyze credit portfolio growth and NPL trends','Credit & risk · reported KPIs'],
+  ['Show operating cash flow and capital expenditures','Cash flow statement · no DCF overlay'],
+  ['Show employee headcount over the last 8 quarters','Workforce & operations · management indicator'],
+  ['Show cash, inventory, and lease liabilities','Balance sheet · reported facts']
+];
+const presets={
+  segments:{label:'MELI segment growth',query:'Compare MELI Commerce and Fintech revenue for the last 8 complete quarters',title:'Quarterly segment revenue',subtitle:'USD millions · issuer reported · illustrative values',unit:'USD M',columns:['Q3 ’24','Q4 ’24','Q1 ’25','Q2 ’25','Q3 ’25','Q4 ’25','Q1 ’26','Q2 ’26','FY27E','FY28E'],actualCount:8,definition:true,rows:[
+    {id:'commerce',label:'Commerce revenue',values:[2214,2358,2496,2641,2817,3012,3174,3422,3833,4364],display:'currency',compare:'24.1%',dcf:true,match:'99%'},
+    {id:'fintech',label:'Fintech revenue',values:[1687,1821,1992,2183,2394,2640,2886,3161,3825,4512],display:'currency',compare:'29.8%',dcf:true,match:'98%'},
+    {id:'share',label:'Fintech revenue share',values:[43.3,43.6,44.4,45.2,45.9,46.7,47.6,48.0,49.9,50.8],display:'percent',compare:'+7.5 pts',dcf:false,derived:true,match:'92%'}],
+    defaults:['commerce','fintech'],dcf:{revision:'184',items:[['Commerce revenue growth','24.0% → 14.0%'],['Fintech revenue growth','29.0% → 18.0%'],['Forecast horizon','FY27E–FY28E']]}
+  },
+  payments:{label:'MELI payments indicators',query:'Compare TPV, GMV, and Fintech active users for the last 8 complete quarters',title:'Payments and marketplace operating indicators',subtitle:'Indexed · Q3 ’24 = 100 · issuer reported · illustrative values',unit:'Index',columns:['Q3 ’24','Q4 ’24','Q1 ’25','Q2 ’25','Q3 ’25','Q4 ’25','Q1 ’26','Q2 ’26'],actualCount:8,definition:false,rows:[
+    {id:'tpv',label:'Total payment volume',values:[100,108,117,126,139,151,165,181],display:'number',compare:'25.7%',dcf:false,match:'99%'},
+    {id:'gmv',label:'Gross merchandise volume',values:[100,106,113,121,130,139,149,161],display:'number',compare:'19.6%',dcf:false,match:'96%'},
+    {id:'users',label:'Fintech active users',values:[100,109,119,131,144,158,174,192],display:'number',compare:'27.5%',dcf:false,match:'93%'}],defaults:['tpv','gmv','users'],dcf:null
+  },
+  credit:{label:'MELI credit analysis',query:'Analyze MELI credit portfolio growth and asset quality over the last 8 complete quarters',title:'Credit growth and quality',subtitle:'Issuer reported · mixed units · illustrative values',unit:'Mixed',columns:['Q3 ’24','Q4 ’24','Q1 ’25','Q2 ’25','Q3 ’25','Q4 ’25','Q1 ’26','Q2 ’26'],actualCount:8,definition:false,rows:[
+    {id:'portfolio',label:'Credit portfolio',values:[3.9,4.2,4.7,5.1,5.8,6.5,7.2,8.1],display:'billions',compare:'27.7%',dcf:false,match:'99%'},
+    {id:'originations',label:'Credit originations',values:[2.1,2.3,2.5,2.8,3.1,3.5,3.9,4.4],display:'billions',compare:'28.1%',dcf:false,match:'95%'},
+    {id:'npl',label:'15–90 day NPL ratio',values:[7.8,7.5,7.3,7.1,6.9,6.8,6.6,6.5],display:'percent',compare:'−1.3 pts',dcf:false,match:'97%'}],defaults:['portfolio','npl'],dcf:null
+  }
+};
+const basePresetKeys=['segments','payments','credit'];
+let presetKey='segments',selectedIds=[...presets.segments.defaults],selectedMetric='commerce',view='table',windowSize=8,dcfVisible=true,selectedCategory='all',toastTimer;
+const q=(selector,root=document)=>root.querySelector(selector),qa=(selector,root=document)=>[...root.querySelectorAll(selector)];
+const scrim=q('.scrim'),drawers=qa('.drawer');
+function showToast(message){clearTimeout(toastTimer);q('#toast').textContent=message;q('#toast').hidden=false;toastTimer=setTimeout(()=>q('#toast').hidden=true,2400)}
+function closeDrawers(){drawers.forEach(drawer=>drawer.hidden=true);scrim.hidden=true}
+function openDrawer(id){drawers.forEach(drawer=>drawer.hidden=drawer.id!==id);q(`#${id}`).hidden=false;scrim.hidden=false}
+function formatValue(value,type){if(!Number.isFinite(value))return '—';if(type==='currency')return `$${Math.round(value).toLocaleString()}M`;if(type==='billions')return `$${value.toFixed(1)}B`;if(type==='percent')return `${value.toFixed(1)}%`;return Number.isInteger(value)?value.toLocaleString():String(value)}
+function activePreset(){return presets[presetKey]}
+function catalogItem(id){return metricCatalog.find(item=>item.id===id)}
+function sourceRow(id){for(const key of basePresetKeys){const row=presets[key].rows.find(item=>item.id===id);if(row)return {...row}}const item=catalogItem(id),definition=metricDefinitions[id];return item&&definition?{id,label:definition.label,values:[...item.values],display:item.display,compare:item.compare,dcf:false,match:'100%'}:null}
+function selectedDcfRows(){return selectedIds.map(id=>activePreset().rows.find(row=>row.id===id)).filter(row=>row&&row.dcf)}
+function hasCompatibleDcf(){return Boolean(activePreset().dcf&&selectedDcfRows().length)}
+function visibleColumns(){const preset=activePreset(),actualStart=Math.max(0,preset.actualCount-windowSize),actual=preset.columns.slice(actualStart,preset.actualCount);return dcfVisible&&hasCompatibleDcf()?[...actual,...preset.columns.slice(preset.actualCount)]:actual}
+function visibleIndexes(){const preset=activePreset(),start=Math.max(0,preset.actualCount-windowSize),indexes=[];for(let i=start;i<preset.actualCount;i++)indexes.push(i);if(dcfVisible&&hasCompatibleDcf())for(let i=preset.actualCount;i<preset.columns.length;i++)indexes.push(i);return indexes}
+function recompose(ids,query='Build a custom company-data analysis'){const rows=[...new Set(ids)].map(sourceRow).filter(Boolean),hasDcf=rows.some(row=>row.dcf),hasBreak=rows.some(row=>['commerce','fintech'].includes(row.id));presets.custom={label:rows.length===1?rows[0].label:'Custom company-data analysis',query,title:rows.length===1?rows[0].label:'Cross-catalog company-data analysis',subtitle:'Governed company data · illustrative values',unit:'Mixed',columns:hasDcf?[...presets.segments.columns]:presets.segments.columns.slice(0,8),actualCount:8,definition:hasBreak,rows,defaults:rows.map(row=>row.id),dcf:hasDcf?presets.segments.dcf:null};presetKey='custom';selectedIds=rows.map(row=>row.id);selectedMetric=selectedIds[0];dcfVisible=hasDcf;renderAll()}
+function catalogMatches(search){const term=search.trim().toLowerCase();const ranked=metricCatalog.map((item,index)=>{const definition=metricDefinitions[item.id];const catLower=item.category.toLowerCase();if(selectedCategory==='statements'&&!(catLower.includes('income')||catLower.includes('balance')||catLower.includes('cash flow')||catLower.includes('revenue')))return null;if(selectedCategory==='kpis'&&!(catLower.includes('marketplace')||catLower.includes('payments')||catLower.includes('credit')||catLower.includes('kpi')||item.id==='share'))return null;if(selectedCategory==='workforce'&&!(catLower.includes('workforce')||catLower.includes('operations')||catLower.includes('logistics')||catLower.includes('headcount')))return null;const haystack=`${definition.label} ${item.category} ${item.aliases}`.toLowerCase(),selected=selectedIds.includes(item.id),current=activePreset().rows.some(row=>row.id===item.id);let score=selected?110:current?90:50-index;if(term){if(definition.label.toLowerCase().startsWith(term))score+=80;if(haystack.includes(term))score+=45;else score=-1}return {...item,definition,score}}).filter(Boolean).filter(item=>item.score>=0).sort((a,b)=>b.score-a.score);return ranked.slice(0,term?12:9)}
+function bindDefinitionButtons(root=document){qa('[data-definition]',root).forEach(button=>{if(button.dataset.definitionBound)return;button.dataset.definitionBound='true';button.addEventListener('click',event=>{event.stopPropagation();event.preventDefault();const metricId=button.dataset.definition||selectedMetric;selectedMetric=metricId;openDefinition(metricId)})})}
+function renderFields(){const matches=catalogMatches(q('#field-search').value);q('#field-list').innerHTML=matches.map((item,index)=>{const isUsed=selectedIds.includes(item.id);return `<div class="wb-field-wrap"><button class="wb-field ${isUsed?'is-used':''}" data-field="${item.id}" title="${item.definition.label} · ${item.category}"><div class="wb-field-row1"><span class="wb-rank">${String(index+1).padStart(2,'0')}</span><span class="wb-field-label">${item.definition.label}</span></div><div class="wb-field-row2"><span>${isUsed?'Used in analysis':item.category}</span><span class="wb-badge-admitted">Admitted</span></div></button><button class="wb-field-info" data-definition="${item.id}" aria-label="Define ${item.definition.label}" title="Open definition">?</button></div>`}).join('')||'<p class="meta" style="padding:8px">No matching governed field in this category.</p>';qa('[data-field]',q('#field-list')).forEach(button=>button.addEventListener('click',()=>selectCatalogField(button.dataset.field)));bindDefinitionButtons(q('#field-list'))}
+function selectCatalogField(id){if(activePreset().rows.some(row=>row.id===id)){toggleField(id);return}recompose([...selectedIds,id],`Compare ${[...selectedIds,id].map(metricId=>metricDefinitions[metricId].label).join(', ')}`);showToast('Metric added from the governed company-data catalog')}
+function toggleField(id){if(selectedIds.includes(id)){if(selectedIds.length===1){showToast('Keep at least one metric in the analysis');return}selectedIds=selectedIds.filter(item=>item!==id);if(selectedMetric===id)selectedMetric=selectedIds[0]}else selectedIds.push(id);renderAll();showToast(selectedIds.includes(id)?'Metric added to the analysis':'Metric removed from the analysis')}
+function renderTable(){const preset=activePreset(),indexes=visibleIndexes(),columns=visibleColumns();q('#table-head').innerHTML=`<tr><th>Metric</th>${columns.map((column,i)=>{const isForecast=indexes[i]>=preset.actualCount;const isBreak=preset.definition&&indexes[i]===5;return `<th class="${isForecast?'forecast':''}${isBreak?' break-th':''}">${column}${isBreak?' <button class="wb-break-tag" data-definition="commerce" title="MELI Q4 ’25 accounting presentation break. Discontinuous across this boundary.">BREAK ⚠️</button>':''}</th>`}).join('')}<th>2Y comparison</th></tr>`;q('#table-body').innerHTML=selectedIds.map(id=>{const row=preset.rows.find(item=>item.id===id);const isBreakRow=preset.definition&&['commerce','fintech'].includes(id);return `<tr data-row="${id}" class="${selectedMetric===id?'is-selected':''}"><td><div class="wb-metric"><button class="wb-definition-link" data-definition="${id}">${row.label}</button>${row.dcf?'<span class="wb-model-tag">DCF</span>':''}</div></td>${indexes.map(index=>{const isForecast=index>=preset.actualCount;const isBreak=preset.definition&&index===5&&['commerce','fintech'].includes(id);return `<td class="${isForecast?'forecast ':''}${isBreak?'break ':''}${row.derived?'derived':''}" ${isBreak?'title="Accounting break Q4 ’25: reclassified segment reporting"':''}>${formatValue(row.values[index],row.display)}${isBreak?' <span style="font-size:9px">◆</span>':''}</td>`}).join('')}<td class="${row.derived?'derived':''}">${isBreakRow?`${row.compare}* <span class="wb-break-footnote-marker" title="Non-comparable: spans Q4 ’25 presentation change. Requires pro-forma adjustment.">(spans break*)</span>`:row.compare}</td></tr>`}).join('');qa('[data-row]',q('#table-body')).forEach(row=>row.addEventListener('click',()=>{selectedMetric=row.dataset.row;renderTable();renderInspector()}));bindDefinitionButtons(q('#table-head'));bindDefinitionButtons(q('#table-body'))}
+function renderChart(){const preset=activePreset(),indexes=visibleIndexes(),rows=selectedIds.map(id=>preset.rows.find(row=>row.id===id)),values=rows.flatMap(row=>indexes.map(index=>row.values[index])).filter(Number.isFinite),min=Math.min(...values),max=Math.max(...values),left=55,right=855,top=34,bottom=250,span=Math.max(1,max-min),step=indexes.length>1?(right-left)/(indexes.length-1):0;let svg='<line class="grid" x1="55" y1="250" x2="855" y2="250"/><line class="grid" x1="55" y1="142" x2="855" y2="142"/><line class="grid" x1="55" y1="34" x2="855" y2="34"/>';const hasBreak=preset.definition&&rows.some(r=>['commerce','fintech'].includes(r.id));if(hasBreak){const actualStart=Math.max(0,preset.actualCount-windowSize);const breakColIndex=5-actualStart;if(breakColIndex>0&&breakColIndex<indexes.length){const breakX=left+step*breakColIndex;svg+=`<line class="break-line" x1="${breakX}" y1="20" x2="${breakX}" y2="252" stroke="var(--warn)" stroke-dasharray="4 3" stroke-width="1.6"/>`;svg+=`<g class="wb-chart-break-tag" data-definition="commerce" style="cursor:pointer"><rect x="${breakX-68}" y="8" width="136" height="18" rx="4" fill="#241e12" stroke="var(--warn)" stroke-width="1"/><text x="${breakX}" y="20" fill="var(--warn)" font-size="9" font-weight="700" text-anchor="middle">⚠️ Presentation Break (Q4 ’25)</text></g>`}}if(dcfVisible&&hasCompatibleDcf()){const dividerX=left+step*(preset.actualCount-Math.max(0,preset.actualCount-windowSize)-.5);svg+=`<line class="divider" x1="${dividerX}" y1="24" x2="${dividerX}" y2="262"/><text x="${dividerX+7}" y="34">DCF revision ${preset.dcf.revision}</text>`}rows.forEach((row,rowIndex)=>{const color=palettes[rowIndex%palettes.length];const points=indexes.map((index,i)=>{const value=row.values[index];if(!Number.isFinite(value))return null;const y=bottom-((value-min)/span)*(bottom-top);return [left+step*i,y,index]}).filter(Boolean);const actual=points.filter(point=>point[2]<preset.actualCount);const forecast=points.filter(point=>point[2]>=preset.actualCount);const isBreakSeries=preset.definition&&['commerce','fintech'].includes(row.id);if(actual.length){if(isBreakSeries){const preBreak=actual.filter(p=>p[2]<5);const postBreak=actual.filter(p=>p[2]>=5);if(preBreak.length)svg+=`<polyline class="series" stroke="${color}" points="${preBreak.map(p=>`${p[0]},${p[1]}`).join(' ')}"/>`;if(preBreak.length&&postBreak.length){svg+=`<line x1="${preBreak.at(-1)[0]}" y1="${preBreak.at(-1)[1]}" x2="${postBreak[0][0]}" y2="${postBreak[0][1]}" stroke="${color}" stroke-dasharray="3 3" stroke-width="1.8" opacity="0.6"/>`}if(postBreak.length)svg+=`<polyline class="series" stroke="${color}" points="${postBreak.map(p=>`${p[0]},${p[1]}`).join(' ')}"/>`}else{svg+=`<polyline class="series" stroke="${color}" points="${actual.map(point=>`${point[0]},${point[1]}`).join(' ')}"/>`}}if(forecast.length&&actual.length){svg+=`<polyline class="series forecast-line" stroke="${color}" points="${[actual.at(-1),...forecast].map(point=>`${point[0]},${point[1]}`).join(' ')}"/>`}const yOffset=rowIndex%2===0?-8:16;points.forEach(point=>{const isBreakPoint=isBreakSeries&&point[2]===5;svg+=`<text class="value" fill="${isBreakPoint?'var(--warn)':color}" font-weight="${isBreakPoint?'700':'400'}" x="${point[0]}" y="${point[1]+yOffset}">${row.display==='currency'?Math.round(row.values[point[2]]):row.values[point[2]]}${isBreakPoint?'◆':''}</text>`})});visibleColumns().forEach((column,index)=>{if(index===0||index===visibleColumns().length-1||index%2===0){svg+=`<text x="${left+step*index}" y="278" text-anchor="middle">${column}</text>`}});q('#chart').innerHTML=svg;let legendHtml=rows.map((row,index)=>`<button data-definition="${row.id}" style="color:${palettes[index%palettes.length]}">${row.label}${row.dcf&&dcfVisible?' · actual + DCF':''}</button>`).join('');if(hasBreak){legendHtml+=`<div class="wb-legend-break"><span>⚠️ <strong>Q4 ’25 Presentation Break:</strong> Reclassified segment reporting. Dotted connector indicates discontinuous series boundary.</span><button class="wb-definition-link" data-definition="commerce">Comparability details ↗</button></div>`}q('#chart-legend').innerHTML=legendHtml;bindDefinitionButtons(q('#chart'));bindDefinitionButtons(q('#chart-legend'))}
+function renderInspector(){const preset=activePreset(),row=preset.rows.find(item=>item.id===selectedMetric)||preset.rows[0],latestIndex=preset.actualCount-1,definition=metricDefinitions[row.id];q('#selected-summary').textContent=`${row.label} · ${preset.columns[latestIndex]}`;q('#selected-summary').dataset.definition=row.id;q('#inspect-value').textContent=formatValue(row.values[latestIndex],row.display);q('#inspect-period').textContent=preset.columns[latestIndex];q('#inspect-basis').textContent=definition.basis;q('#inspect-coverage').textContent=`${Math.min(windowSize,preset.actualCount)} / ${Math.min(windowSize,preset.actualCount)}`;const isBreakMetric=preset.definition&&['commerce','fintech'].includes(row.id);q('#compare-inspector').hidden=!isBreakMetric;if(isBreakMetric){q('#compare-inspector').innerHTML=`<h3>Comparability · Accounting Break</h3><div class="wb-note" style="border-color:color-mix(in srgb,var(--warn) 60%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)"><strong style="color:var(--warn)">⚠️ Discontinuous at Q4 ’25</strong><p style="margin:4px 0 6px;color:var(--fg-soft);font-size:11px;line-height:1.4">MELI reclassified shipping platform fees and retail media advertising effective Q4 ’25 (Shareholder Letter Q4 ’25, Note 3 Segment Reporting, p. 8). Pre-break (Q3 ’24–Q3 ’25) and Post-break (Q4 ’25–Q2 ’26) are not directly comparable without pro-forma reconciliation.</p><div style="font-size:10px;color:var(--muted);display:grid;gap:3px"><div>• <strong>Primary locator:</strong> doc:meli-2025-q4-p8 (Note 3)</div><div>• <strong>Governed policy:</strong> Never normalize away a break to force continuity</div><div>• <strong>2Y CAGR status:</strong> Non-continuous across boundary</div></div></div><button class="k-btn k-btn-sm k-btn-quiet" id="inspector-definition-button" data-definition="${row.id}" style="margin-top:9px;width:100%">Open full definition & lineage ↗</button>`}if(row.dcf&&preset.dcf){q('#dcf-inspector-body').innerHTML=`<div class="wb-inspect-row"><span>Status</span><span>Semantically mapped</span></div><div class="wb-inspect-row"><span>Revision</span><span>${preset.dcf.revision}</span></div><div class="wb-inspect-row"><span>Permission</span><span>View only</span></div><button class="k-btn k-btn-sm k-btn-quiet" data-open="dcf">View DCF inputs ↗</button>`;q('#dcf-inspector-body [data-open]').addEventListener('click',()=>openDrawer('dcf'))}else{q('#dcf-inspector-body').innerHTML='<div class="wb-empty-model" style="padding:8px;background:var(--paper);border-radius:var(--radius);border:1px solid var(--border)"><strong style="display:block;color:var(--fg-soft);margin-bottom:3px">No DCF overlay for this metric</strong><p style="margin:0;color:var(--muted);font-size:11px;line-height:1.4">This metric is not part of the active DCF model (Revision 184). Explore enforces strict one-directional projection: valuation forecasts are read-only and Explore contains zero model mutation handlers.</p></div>'}bindDefinitionButtons(q('.wb-inspector'))}
+function renderDcf(){const preset=activePreset(),button=q('#dcf-overlay'),compatible=hasCompatibleDcf(),observationCount=selectedIds.length*Math.min(windowSize,preset.actualCount);button.hidden=!compatible;q('#source-count').textContent=`${observationCount} selected · ${observationCount} complete`;q('#source-docs').textContent=`${Math.min(windowSize,preset.actualCount)} primary-period packages`;q('#source-definitions').textContent=preset.definition?'2 effective versions':'1 effective version';if(compatible){button.textContent=dcfVisible?'DCF overlay · on':'Show DCF overlay';q('#dcf-drawer-rows').innerHTML=preset.dcf.items.map(item=>`<div class="drawer-row"><span>${item[0]}</span><span>${item[1]}</span></div>`).join('');q('#source-dcf').textContent=`Revision ${preset.dcf.revision} · semantic binding`}else q('#source-dcf').textContent='No compatible model series';q('#definition-note').hidden=!preset.definition}
+function openDefinition(metricId){const definition=metricDefinitions[metricId],preset=activePreset(),row=preset.rows.find(item=>item.id===metricId)||sourceRow(metricId),latestIndex=Math.min(preset.actualCount-1,(row?.values?.length||1)-1);if(!definition||!row)return;q('#work-definition-category').textContent=definition.category;q('#work-definition-title').textContent=definition.label;q('#work-definition-canonical').textContent=definition.canonical;q('#work-definition-issuer').textContent=definition.issuer;q('#work-definition-unit').textContent=definition.unit;q('#work-definition-period').textContent=definition.period;q('#work-definition-basis').textContent=definition.basis;q('#work-definition-source').textContent=definition.source;q('#work-definition-dcf').textContent=definition.dcf;q('#work-definition-observation').textContent=`${preset.columns[Math.min(latestIndex,preset.columns.length-1)]} · ${formatValue(row.values[latestIndex],row.display)}`;q('#work-definition-treatment').textContent=row.dcf&&dcfVisible?'Reported actuals + read-only DCF forecast':definition.basis.startsWith('Calculated')?'Calculated series with admitted inputs':'Reported observations only';q('#work-definition-comparability').innerHTML=definition.comparability?`<strong style="color:var(--warn)">⚠️ Accounting Presentation Break:</strong> ${definition.comparability}`:'Single effective definition across the selected window';openDrawer('definition')}
+function persistState(){try{sessionStorage.setItem('exploreWorkbenchState',JSON.stringify({presetKey,selectedIds,selectedMetric,view,windowSize,dcfVisible}))}catch(error){}}
+function renderBuilderSelection(){q('#builder-selected-fields').innerHTML=selectedIds.map(id=>`<span class="wb-selected-field"><span class="wb-selected-name">${metricDefinitions[id].label}</span><button class="wb-selected-info" data-definition="${id}" title="Define ${metricDefinitions[id].label}">ⓘ</button><button class="wb-selected-remove" data-remove-builder="${id}" title="Remove ${metricDefinitions[id].label}">×</button></span>`).join('');qa('[data-remove-builder]',q('#builder-selected-fields')).forEach(button=>button.addEventListener('click',()=>{if(selectedIds.length===1){showToast('Keep at least one metric in the analysis');return}recompose(selectedIds.filter(id=>id!==button.dataset.removeBuilder),activePreset().query);renderBuilderSelection()}));bindDefinitionButtons(q('#builder-selected-fields'))}
+function renderAll(){const preset=activePreset();q('#page-title').textContent=preset.label;q('#analysis-intent').value=preset.query;q('#result-title').textContent=preset.title;q('#result-subtitle').textContent=preset.subtitle;q('#row-chip').textContent=`Rows · ${selectedIds.length} metric${selectedIds.length===1?'':'s'}`;q('#filter-chip').textContent=`Filter · ${Math.min(windowSize,preset.actualCount)} complete periods`;q('#save-name').value=preset.label;renderFields();renderTable();renderChart();renderInspector();renderDcf();renderBuilderSelection();persistState()}
+function applyPreset(key){presetKey=key;const preset=activePreset();selectedIds=[...preset.defaults];selectedMetric=selectedIds[0];dcfVisible=Boolean(preset.dcf);windowSize=8;q('#builder-filters').value='Last 8 complete periods';renderAll();showToast(preset.dcf?'Analysis updated · compatible DCF forecast added automatically':'Analysis updated · no compatible DCF series, so no overlay is shown')}
+function applyCatalogSet(ids,query){windowSize=8;q('#builder-filters').value='Last 8 complete periods';recompose(ids,query);showToast(hasCompatibleDcf()?'Analysis updated · compatible DCF forecast added automatically':'Analysis updated · no compatible DCF series, so no overlay is shown')}
+function applyIntent(value){q('#field-search').value='';qa('.wb-suggestions').forEach(menu=>menu.hidden=true);const text=value.toLowerCase();if(/cash flow|operating cash|capex|capital expenditure/.test(text))applyCatalogSet(['ocf','capex'],value);else if(/cash.*inventory|balance sheet|lease liabilit/.test(text))applyCatalogSet(['cash','inventory','leases'],value);else if(/headcount|employee|workforce/.test(text))applyCatalogSet(['headcount'],value);else if(/advertis|shipping|logistics/.test(text)){const match=/advertis/.test(text)?'ads':'shipping';applyCatalogSet([match],value)}else if(/credit|npl|portfolio|originations/.test(text))applyPreset('credit');else if(/tpv|gmv|active user|payment/.test(text))applyPreset('payments');else{const exact=catalogMatches(text).find(item=>item.score>80);if(exact&&!/commerce|fintech|segment|revenue/.test(text))applyCatalogSet([exact.id],value);else applyPreset('segments')}}
+function showMenu(menu,items,onSelect){menu.innerHTML=items.map((item,index)=>`<button class="wb-suggestion" data-menu-index="${index}"><span>${item[0]}</span><small>${item[1]||''}</small></button>`).join('');menu.hidden=!items.length;qa('[data-menu-index]',menu).forEach(button=>button.addEventListener('click',()=>{onSelect(items[Number(button.dataset.menuIndex)][0],items[Number(button.dataset.menuIndex)]);menu.hidden=true}))}
+function filterOptions(options,value){const term=value.trim().toLowerCase();return options.filter(option=>!term||`${option[0]} ${option[1]||''}`.toLowerCase().includes(term)).slice(0,8)}
+function wireCombo(input,menu,options,onSelect){const update=()=>{showMenu(menu,filterOptions(typeof options==='function'?options():options,input.value),(value,item)=>{input.value=value;input.setAttribute('aria-expanded','false');onSelect(value,item)});input.setAttribute('aria-expanded',String(!menu.hidden))};input.addEventListener('input',update);input.addEventListener('focus',update);input.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();const first=q('[data-menu-index]',menu);if(first)first.click();else onSelect(input.value,[input.value,''])}})}
+function toggleBuilder(){const builder=q('#inline-builder');builder.hidden=!builder.hidden;qa('[data-toggle-builder]').forEach(button=>button.setAttribute('aria-expanded',String(!builder.hidden)));if(!builder.hidden){renderBuilderSelection();q('#builder-rows').focus()}}
+qa('[data-open]').forEach(button=>button.addEventListener('click',()=>openDrawer(button.dataset.open)));qa('[data-close]').forEach(button=>button.addEventListener('click',closeDrawers));scrim.addEventListener('click',closeDrawers);
+addEventListener('keydown',event=>{if(event.key==='Escape'){closeDrawers();q('#inline-builder').hidden=true;qa('.wb-suggestions').forEach(menu=>menu.hidden=true)}});addEventListener('click',event=>{if(!event.target.closest('.wb-intent-field,.wb-builder-control'))qa('.wb-suggestions').forEach(menu=>menu.hidden=true)});
+q('#field-search').addEventListener('input',renderFields);
+qa('.wb-category-tab').forEach(tab=>tab.addEventListener('click',()=>{qa('.wb-category-tab').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false')});tab.classList.add('active');tab.setAttribute('aria-selected','true');selectedCategory=tab.dataset.category;renderFields()}));
+q('#update-analysis').addEventListener('click',()=>applyIntent(q('#analysis-intent').value));
+wireCombo(q('#analysis-intent'),q('#intent-suggestions'),intentOptions,(value)=>applyIntent(value));
+qa('[data-toggle-builder]').forEach(button=>button.addEventListener('click',toggleBuilder));q('#close-inline-builder').addEventListener('click',()=>{q('#inline-builder').hidden=true;qa('[data-toggle-builder]').forEach(button=>button.setAttribute('aria-expanded','false'))});
+wireCombo(q('#builder-columns'),q('#builder-columns-menu'),[['Fiscal quarter','Duration series'],['Reporting date','Point-in-time series'],['Fiscal year','Annual view']],()=>{});
+wireCombo(q('#builder-compare'),q('#builder-compare-menu'),[['YoY and CAGR','Growth comparison'],['Sequential growth','Quarter-over-quarter'],['Indexed to first period','Normalize mixed units']],()=>{});
+wireCombo(q('#builder-filters'),q('#builder-filters-menu'),[['Last 8 complete periods','Default'],['Last 4 complete periods','Compact'],['Complete periods only','Exclude partials'],['Consolidated scope','Issuer-wide']],()=>{});
+wireCombo(q('#builder-rows'),q('#builder-rows-menu'),()=>catalogMatches(q('#builder-rows').value).map(item=>[item.definition.label,item.category,item.id]),(value,item)=>{const match=metricCatalog.find(entry=>entry.id===item[2])||metricCatalog.find(entry=>metricDefinitions[entry.id].label===value);if(match&&!selectedIds.includes(match.id)){recompose([...selectedIds,match.id],activePreset().query);q('#inline-builder').hidden=false;qa('[data-toggle-builder]').forEach(button=>button.setAttribute('aria-expanded','true'));q('#builder-rows').value='';renderBuilderSelection()}});
+q('#apply-inline-builder').addEventListener('click',()=>{windowSize=/4/.test(q('#builder-filters').value)?4:8;q('#column-chip').textContent=`Columns · ${q('#builder-columns').value}`;q('#compare-chip').textContent=`Compare · ${q('#builder-compare').value}`;renderAll();q('#filter-chip').textContent=`Filter · ${q('#builder-filters').value}`;q('#inline-builder').hidden=true;qa('[data-toggle-builder]').forEach(button=>button.setAttribute('aria-expanded','false'));showToast('Analysis shape applied')});
+qa('[data-view]').forEach(button=>button.addEventListener('click',()=>{view=button.dataset.view;qa('[data-view]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));q('#table-view').hidden=view!=='table';q('#chart-view').hidden=view!=='chart';persistState()}));
+q('#dcf-overlay').addEventListener('click',()=>{dcfVisible=!dcfVisible;renderAll();showToast(dcfVisible?'DCF forecast restored':'DCF forecast hidden from this analysis')});q('#hide-dcf-from-drawer').addEventListener('click',()=>{dcfVisible=false;closeDrawers();renderAll();showToast('DCF forecast hidden from this analysis')});
+q('#definition-history-button').addEventListener('click',()=>openDefinition(selectedMetric));q('#inspector-definition-button').addEventListener('click',()=>openDefinition(selectedMetric));
+q('#ask-analysis').addEventListener('click',()=>{const input=q('#follow-up');if(!input.value.trim()){input.focus();return}applyIntent(input.value);input.value=''});q('#follow-up').addEventListener('keydown',event=>{if(event.key==='Enter')q('#ask-analysis').click()});qa('[data-preset]').forEach(button=>button.addEventListener('click',()=>applyPreset(button.dataset.preset)));
+q('#confirm-save').addEventListener('click',()=>{q('#save-success').textContent=`✓ Saved as ${q('#save-mode').value.startsWith('Immutable')?'an immutable snapshot':'a living analysis'}`;showToast('Analysis saved')});qa('[data-source]').forEach(button=>button.addEventListener('click',()=>showToast(button.dataset.source==='manifest'?'Source manifest opened in prototype':'Source locator opened in prototype')));
+const carriedIntent=new URLSearchParams(location.search).get('intent');let savedState=null;try{savedState=sessionStorage.getItem('exploreWorkbenchState')}catch(error){}
+if(carriedIntent){applyIntent(carriedIntent)}else if(savedState){try{const saved=JSON.parse(savedState);if(saved.presetKey==='custom')recompose(saved.selectedIds,'Restored custom company-data analysis');else if(presets[saved.presetKey]){presetKey=saved.presetKey;selectedIds=saved.selectedIds.filter(id=>presets[presetKey].rows.some(row=>row.id===id));selectedMetric=selectedIds.includes(saved.selectedMetric)?saved.selectedMetric:selectedIds[0];view=saved.view==='chart'?'chart':'table';windowSize=saved.windowSize===4?4:8;dcfVisible=Boolean(saved.dcfVisible&&presets[presetKey].dcf)}}catch(error){}renderAll();qa('[data-view]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.view===view)));q('#table-view').hidden=view!=='table';q('#chart-view').hidden=view!=='chart'}else renderAll();
+</script>
+</body>
+</html>

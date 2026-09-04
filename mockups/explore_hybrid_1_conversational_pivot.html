@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explore · Conversational pivot</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+  <style>
+    /* Prototype-only composition. Production must use the registered family master. */
+    .cp-content { max-width: 1180px; min-height: calc(100vh - var(--header-height)); padding-top: 24px; }
+    .cp-head { max-width: 980px; margin: 0 auto 26px; display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; }
+    .cp-head h1 { margin: 0; font-size: var(--fs-display); }
+    .cp-head p { margin: 5px 0 0; color: var(--muted); }
+    .cp-thread { max-width: 980px; margin: 0 auto; }
+    .cp-collapsed { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 12px; min-height: 54px; padding: 8px 4px; border-top: 1px solid var(--border); color: var(--fg-soft); }
+    .cp-turn { width: 27px; height: 27px; display: grid; place-items: center; border: 1px solid var(--border-2); border-radius: var(--radius-full); color: var(--muted); font: var(--fs-caption) var(--mono); }
+    .cp-summary strong { display: block; color: var(--fg); font-weight: 600; }
+    .cp-summary span { display: block; margin-top: 2px; color: var(--muted); font-size: var(--fs-caption); }
+    .cp-active { margin: 6px 0 0; padding: 0 0 22px 46px; position: relative; }
+    .cp-active::before { content: "02"; position: absolute; left: 3px; top: 2px; width: 27px; height: 27px; display: grid; place-items: center; border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); font: var(--fs-caption) var(--mono); }
+    .cp-user { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 2px 0 15px; }
+    .cp-user h2 { margin: 3px 0 0; font-size: var(--fs-title); font-weight: 650; }
+    .cp-user .tip::after, .cp-ribbon .tip::after { left: auto; right: 0; transform: none; }
+    .cp-answer { overflow: hidden; border: 1px solid var(--border-2); border-radius: var(--radius-card); background: color-mix(in srgb, var(--surface) 90%, transparent); }
+    .cp-answer-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 17px 18px 15px; }
+    .cp-answer-top p { max-width: 720px; margin: 0; color: var(--fg-soft); font-size: var(--fs-title); line-height: 1.55; }
+    .cp-answer-top strong { color: var(--fg); }
+    .cp-answer-top .mono { color: var(--ok); }
+    .cp-mode { display: flex; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--paper); }
+    .cp-mode button { min-height: 25px; padding: 3px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: var(--fs-caption); cursor: pointer; }
+    .cp-mode button[aria-pressed="true"] { background: var(--paper-2); color: var(--fg); }
+    .cp-ribbon { display: flex; align-items: center; gap: 6px; min-height: 42px; padding: 7px 12px; border-block: 1px solid var(--border); background: color-mix(in srgb, var(--paper) 54%, transparent); overflow-x: auto; }
+    .cp-ribbon-label { flex: 0 0 auto; margin-right: 2px; color: var(--muted); font-size: var(--fs-caption); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .cp-clause { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface); color: var(--fg-soft); font-size: var(--fs-caption); }
+    .cp-clause b { color: var(--muted); font-weight: 600; }
+    .cp-edit { flex: 0 0 auto; margin-left: auto; }
+    .cp-view { padding: 14px 16px 4px; overflow-x: auto; }
+    .cp-viz-head { min-width: 760px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+    .cp-viz-head h3 { margin: 0; font-size: var(--fs-title); }
+    .cp-viz-head p { margin: 3px 0 0; color: var(--muted); font-size: var(--fs-caption); }
+    .cp-table { min-width: 760px; width: 100%; border-collapse: collapse; }
+    .cp-table th, .cp-table td { min-width: 84px; padding: 9px 10px; border: 1px solid var(--border); text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .cp-table th { background: var(--paper); color: var(--muted); font-family: var(--sans); font-size: var(--fs-caption); font-weight: 600; }
+    .cp-table th:first-child, .cp-table td:first-child { min-width: 150px; position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; font-family: var(--sans); }
+    .cp-table th:first-child { background: var(--paper); }
+    .cp-table .cp-break { background: color-mix(in srgb, var(--warn) 8%, transparent); color: var(--warn); }
+    .cp-table .cp-missing { color: var(--muted); }
+    .cp-chart { min-width: 760px; width: 100%; height: 230px; display: none; }
+    .cp-chart .grid { stroke: var(--border); }
+    .cp-chart .line-a { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+    .cp-chart .line-b { fill: none; stroke: var(--violet); stroke-width: 2.5; }
+    .cp-chart .break-line { stroke: var(--warn); stroke-dasharray: 5 5; }
+    .cp-chart text { fill: var(--muted); font: 11px var(--sans); }
+    .cp-notes { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 16px 12px; color: var(--muted); font-size: var(--fs-caption); }
+    .cp-note-door { padding: 2px 0; border: 0; background: transparent; color: var(--warn); cursor: pointer; }
+    .cp-note-door:hover { text-decoration: underline; }
+    .cp-next { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; margin: 20px 0 0 46px; padding: 9px 10px; border: 1px solid var(--border-2); border-radius: var(--radius-card); background: var(--surface); }
+    .cp-next input { width: 100%; border: 0; background: transparent; }
+    .cp-next input:focus-visible { outline: 0; }
+    .cp-suggestions { margin: 9px 0 0 46px; display: flex; gap: 7px; flex-wrap: wrap; }
+    .cp-suggestions button { cursor: pointer; }
+    .cp-drawer-section { padding: 16px 0; border-bottom: 1px solid var(--border); }
+    .cp-drawer-section:last-of-type { border-bottom: 0; }
+    .cp-shelf { display: grid; grid-template-columns: 78px minmax(0,1fr); gap: 10px; align-items: start; padding: 8px 0; }
+    .cp-shelf-body { display: flex; flex-wrap: wrap; gap: 7px; }
+    .cp-field { display: inline-flex; gap: 7px; align-items: center; padding: 6px 9px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+    .cp-field.measure { background: color-mix(in srgb, var(--violet) 14%, transparent); color: var(--violet); }
+    .cp-ranked { display: grid; gap: 3px; margin-top: 9px; }
+    .cp-ranked button { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; gap: 8px; align-items: center; width: 100%; padding: 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg-soft); text-align: left; cursor: pointer; }
+    .cp-ranked button:hover { background: var(--paper); }
+    .cp-ranked .mono { color: var(--muted); font-size: var(--fs-caption); }
+    .cp-ranked small { color: var(--muted); }
+    .cp-empty { padding: 18px; color: var(--muted); }
+    .cp-save-label { color: var(--violet); }
+    @media (max-width: 820px) {
+      .cp-head { align-items: flex-start; }
+      .cp-head .k-btn-quiet { display: none; }
+      .cp-active { padding-left: 0; }
+      .cp-active::before { display: none; }
+      .cp-next, .cp-suggestions { margin-left: 0; }
+      .cp-answer-top { display: block; }
+      .cp-mode { width: max-content; margin-top: 12px; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <div class="brand"><span class="brand-mark">[•]</span> Counterread</div>
+    <div class="nav-group"><p class="nav-label">L1 · Portfolio intelligence</p><a class="nav-item" href="#"><span class="nav-icon">▦</span>Portfolio Cockpit</a><a class="nav-item" href="#"><span class="nav-icon">⌁</span>Performance</a></div>
+    <div class="nav-group"><p class="nav-label">L2 · Research engine</p><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Company Desk</a><a class="nav-item" href="#"><span class="nav-icon">≛</span>Evaluation</a><a class="nav-item" href="#"><span class="nav-icon">▤</span>Brief Library</a><a class="nav-item active" href="#"><span class="nav-icon">⌗</span>Explore</a></div>
+    <div class="nav-group"><p class="nav-label">L3 · Operations</p><a class="nav-item" href="#"><span class="nav-icon">◫</span>Decision Audit Log</a><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Operations</a></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar"><div class="crumb">Research <span> / </span> <strong>Explore</strong></div><div class="top-meta"><span class="k-pill">Draft analysis</span><span class="mono">MELI</span></div></header>
+    <div class="content cp-content">
+      <div class="cp-head">
+        <div><div class="concept-tag">Hybrid 01 · Conversational pivot</div><h1>MELI segment economics</h1><p>A question-led analysis with the full pivot engine one layer underneath.</p></div>
+        <div class="actions"><button class="k-btn k-btn-quiet" data-open="sources">Sources</button><button class="k-btn k-btn-save" data-open="save">◆ Save analysis</button></div>
+      </div>
+
+      <section class="cp-thread" aria-label="Analysis conversation">
+        <article class="cp-collapsed">
+          <span class="cp-turn">01</span>
+          <div class="cp-summary"><strong>What are MELI’s operating segments?</strong><span>Commerce and Fintech · 2 issuer-defined segments · 8 quarters loaded</span></div>
+          <button class="k-btn k-btn-sm k-btn-quiet" data-open="first-turn">Reopen</button>
+        </article>
+
+        <article class="cp-active">
+          <div class="cp-user">
+            <div><span class="label">Active question</span><h2>Which segment is growing faster, and how has the mix shifted?</h2></div>
+            <span class="tip" tabindex="0" data-tip="Only the active exchange expands. Prior answers collapse into one-line research context.">?</span>
+          </div>
+
+          <div class="cp-answer">
+            <div class="cp-answer-top">
+              <p><strong>Fintech is growing faster and gaining mix.</strong> On illustrative reported values, its two-year CAGR is <span class="mono">29.8%</span> versus <span class="mono">24.1%</span> for Commerce, lifting Fintech from 34.7% to 43.0% of combined segment revenue.</p>
+              <div class="cp-mode" aria-label="Result view"><button type="button" aria-pressed="true" data-view="table">Pivot</button><button type="button" aria-pressed="false" data-view="chart">Trend</button></div>
+            </div>
+
+            <div class="cp-ribbon" aria-label="Current pivot shape">
+              <span class="cp-ribbon-label">Analysis shape</span>
+              <span class="cp-clause"><b>Rows</b> Segment</span>
+              <span class="cp-clause"><b>Columns</b> Fiscal quarter</span>
+              <span class="cp-clause"><b>Measures</b> Revenue · YoY · Mix</span>
+              <span class="cp-clause"><b>Filters</b> MELI · 8 quarters · reported</span>
+              <button class="k-btn k-btn-sm k-btn-quiet cp-edit" data-open="shape">Edit pivot</button>
+              <span class="tip" tabindex="0" data-tip="The semantic question generated these governed fields. Open Edit pivot to inspect or change them directly.">?</span>
+            </div>
+
+            <div class="cp-view">
+              <div class="cp-viz-head">
+                <div><h3>Segment revenue and mix</h3><p>Illustrative prototype values · USD billions · issuer reported</p></div>
+                <span class="k-pill k-pill-ok">● 23 / 24 observations</span>
+              </div>
+              <table class="cp-table" id="pivot-view">
+                <thead><tr><th>Metric</th><th>Q3 ’24</th><th>Q4 ’24</th><th>Q1 ’25</th><th>Q2 ’25</th><th>Q3 ’25</th><th class="cp-break">Q4 ’25 ◆</th><th>Q1 ’26</th><th>Q2 ’26</th></tr></thead>
+                <tbody>
+                  <tr><td>Commerce revenue</td><td>1.56</td><td>1.79</td><td>2.03</td><td>2.29</td><td>2.57</td><td class="cp-break">2.88</td><td>3.24</td><td>3.61</td></tr>
+                  <tr><td>Fintech revenue</td><td>0.83</td><td>1.02</td><td>1.24</td><td>1.45</td><td>1.68</td><td class="cp-break">1.98</td><td>2.33</td><td>2.72</td></tr>
+                  <tr><td>Fintech mix</td><td>34.7%</td><td>36.3%</td><td>37.9%</td><td>38.8%</td><td>39.5%</td><td class="cp-break">40.7%</td><td class="cp-missing">—†</td><td>43.0%</td></tr>
+                </tbody>
+              </table>
+              <svg class="cp-chart" id="chart-view" viewBox="0 0 900 230" role="img" aria-label="Illustrative quarterly segment revenue trend">
+                <line class="grid" x1="52" y1="185" x2="870" y2="185"/><line class="grid" x1="52" y1="120" x2="870" y2="120"/><line class="grid" x1="52" y1="55" x2="870" y2="55"/>
+                <polyline class="line-a" points="65,157 175,146 285,132 395,118 505,104 615,89 725,73 850,54"/>
+                <polyline class="line-b" points="65,180 175,174 285,165 395,155 505,145 615,134 725,120 850,104"/>
+                <line class="break-line" x1="560" y1="28" x2="560" y2="185"/><text x="570" y="43">definition revised</text>
+                <text x="53" y="211">Q3 ’24</text><text x="272" y="211">Q1 ’25</text><text x="492" y="211">Q3 ’25</text><text x="712" y="211">Q1 ’26</text>
+              </svg>
+            </div>
+
+            <div class="cp-notes">
+              <span class="k-pill k-pill-accent">Calculated answer</span>
+              <button class="cp-note-door" data-open="definition">◆ Definition changed in Q4 ’25</button>
+              <button class="cp-note-door" data-open="missing">† One missing mix observation omitted</button>
+              <button class="k-btn k-btn-sm k-btn-quiet" data-open="calculation">Inspect calculation</button>
+            </div>
+          </div>
+        </article>
+
+        <div class="cp-next">
+          <span class="query-orb">✦</span>
+          <input id="follow-up" aria-label="Ask a follow-up" placeholder="Ask a follow-up, add a metric, or compare another company…">
+          <button class="k-btn k-btn-primary" id="ask-next">Ask</button>
+        </div>
+        <div class="cp-suggestions" aria-label="Suggested follow-ups">
+          <button class="k-chip">Which segment drives margin?</button>
+          <button class="k-chip">Add TPV and GMV</button>
+          <button class="k-chip">Compare with NU</button>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" hidden></div>
+
+<aside class="drawer" id="shape" hidden aria-label="Edit pivot">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent">Active exchange</span><h2>Edit pivot</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p>Inspect or change the analytical structure inferred from the question. Human labels are shown; source identifiers stay in metric definitions.</p>
+  <div class="cp-drawer-section">
+    <div class="cp-shelf"><span class="label">Rows</span><div class="cp-shelf-body"><span class="cp-field">Operating segment ⌄</span></div></div>
+    <div class="cp-shelf"><span class="label">Columns</span><div class="cp-shelf-body"><span class="cp-field">Fiscal quarter ⌄</span></div></div>
+    <div class="cp-shelf"><span class="label">Measures</span><div class="cp-shelf-body"><span class="cp-field measure">Reported revenue ⌄</span><span class="cp-field measure">Year-over-year growth ⌄</span><span class="cp-field measure">Share of segments ⌄</span></div></div>
+    <div class="cp-shelf"><span class="label">Filters</span><div class="cp-shelf-body"><span class="cp-field">Company = MELI ×</span><span class="cp-field">Last 8 quarters ×</span><span class="cp-field">Reported basis ×</span></div></div>
+  </div>
+  <div class="cp-drawer-section"><div class="side-block-head"><div><h3 class="title">Recommended next metrics</h3><div class="meta">Ranked for this question, not alphabetically</div></div><span class="tip" tabindex="0" data-tip="Ranking considers semantic relevance, issuer materiality, coverage, and comparability.">?</span></div>
+    <div class="cp-ranked"><button><span class="mono">01</span><span>Segment contribution to growth</span><small>96% match ＋</small></button><button><span class="mono">02</span><span>Operating margin relationship</span><small>91% match ＋</small></button><button><span class="mono">03</span><span>Total payment volume</span><small>86% match ＋</small></button><button><span class="mono">04</span><span>Gross merchandise volume</span><small>82% match ＋</small></button></div>
+  </div>
+  <button class="k-btn k-btn-primary" data-close>Update answer</button>
+</aside>
+
+<aside class="drawer" id="definition" hidden aria-label="Definition history">
+  <div class="drawer-head"><div><span class="k-pill k-pill-warn">Comparability note</span><h2>Segment definition changed</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p>Illustrative prototype note: MELI revised its segment presentation beginning Q4 ’25. Explore preserves the reported series and marks the break instead of silently normalizing it.</p>
+  <div class="drawer-row"><span>Prior basis</span><span>Issuer presentation through Q3 ’25</span></div><div class="drawer-row"><span>Current basis</span><span>Revised issuer presentation from Q4 ’25</span></div><div class="drawer-row"><span>Disposition</span><span class="warn">Comparable with caution</span></div><div class="drawer-row"><span>Source locator</span><span>Q4 ’25 shareholder letter · segment note · p. 18</span></div>
+</aside>
+
+<aside class="drawer" id="missing" hidden aria-label="Missing data handling">
+  <div class="drawer-head"><div><span class="k-pill">Coverage note</span><h2>One observation is unavailable</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p>Q1 ’26 Fintech mix is not directly available in the illustrative dataset. Explore omitted it from calculations rather than interpolating or treating it as zero.</p>
+  <div class="drawer-row"><span>Affected field</span><span>Fintech share of combined segment revenue</span></div><div class="drawer-row"><span>Period</span><span>FY26 Q1</span></div><div class="drawer-row"><span>Calculation effect</span><span>2-year CAGR uses reported revenue and is unaffected</span></div><div class="drawer-row"><span>View coverage</span><span>23 of 24 observations</span></div>
+</aside>
+
+<aside class="drawer" id="calculation" hidden aria-label="Calculation details">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent">Deterministic calculation</span><h2>Growth and mix comparison</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="drawer-row"><span>Commerce CAGR</span><span class="mono">24.1%</span></div><div class="drawer-row"><span>Fintech CAGR</span><span class="mono ok">29.8%</span></div><div class="drawer-row"><span>Growth difference</span><span class="mono ok">+5.7 pts</span></div><div class="drawer-row"><span>Mix change</span><span class="mono ok">+8.3 pts</span></div><p>The answer is deterministic arithmetic over the selected governed observations. It remains attached to the comparability and coverage notes above.</p>
+</aside>
+
+<aside class="drawer" id="sources" hidden aria-label="Source manifest">
+  <div class="drawer-head"><div><span class="k-pill k-pill-ok">● Sources current</span><h2>Source manifest</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="drawer-row"><span>Latest</span><span>Q2 ’26 shareholder letter · 3 observations</span></div><div class="drawer-row"><span>Prior</span><span>Q1 ’26 earnings release · 2 observations</span></div><div class="drawer-row"><span>History</span><span>6 issuer filings · 18 observations</span></div><div class="drawer-row"><span>Context</span><span>Company MELI · quarterly · USD billions · reported basis</span></div>
+</aside>
+
+<aside class="drawer" id="first-turn" hidden aria-label="First answer">
+  <div class="drawer-head"><div><span class="k-pill">Exchange 01</span><h2>What are MELI’s operating segments?</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <p>The issuer reports two operating ecosystems: Commerce and Fintech. Explore selected their reported revenue metrics because they are the closest governed measures with complete quarterly coverage.</p><div class="drawer-row"><span>Metrics</span><span>Commerce revenue; Fintech revenue</span></div><div class="drawer-row"><span>Coverage</span><span class="ok">16 / 16 observations</span></div><div class="drawer-row"><span>Window</span><span>8 complete fiscal quarters</span></div>
+</aside>
+
+<aside class="drawer" id="save" hidden aria-label="Save analysis">
+  <div class="drawer-head"><div><span class="k-pill cp-save-label">Save</span><h2>Save this analysis</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="save-form"><label>Name<input value="MELI segment economics"></label><label>Destination<select><option>Explore library</option><option>MELI company desk</option><option>Draft brief</option></select></label><label>Mode<select><option>Living analysis · refresh on open</option><option>Snapshot · freeze observations</option></select></label><button class="k-btn k-btn-save">◆ Save analysis</button><p class="meta">Saving preserves the conversation, pivot shape, calculations, definition notes, missing-data dispositions, and source manifest.</p></div>
+</aside>
+
+<script>
+  const scrim = document.querySelector('.scrim');
+  const drawers = [...document.querySelectorAll('.drawer')];
+  function closeAll() { drawers.forEach(drawer => { drawer.hidden = true; }); scrim.hidden = true; }
+  document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', () => {
+    closeAll();
+    document.getElementById(button.dataset.open).hidden = false;
+    scrim.hidden = false;
+  }));
+  document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', closeAll));
+  scrim.addEventListener('click', closeAll);
+  addEventListener('keydown', event => { if (event.key === 'Escape') closeAll(); });
+
+  const pivot = document.getElementById('pivot-view');
+  const chart = document.getElementById('chart-view');
+  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('[data-view]').forEach(option => option.setAttribute('aria-pressed', String(option === button)));
+    const showChart = button.dataset.view === 'chart';
+    pivot.style.display = showChart ? 'none' : 'table';
+    chart.style.display = showChart ? 'block' : 'none';
+  }));
+
+  const followUp = document.getElementById('follow-up');
+  document.querySelectorAll('.cp-suggestions .k-chip').forEach(button => button.addEventListener('click', () => {
+    followUp.value = button.textContent.trim();
+    followUp.focus();
+  }));
+  document.getElementById('ask-next').addEventListener('click', () => {
+    if (!followUp.value.trim()) { followUp.focus(); return; }
+    followUp.value = '';
+    followUp.placeholder = 'Prototype: follow-up queued as the next active exchange';
+  });
+</script>
+</body>
+</html>

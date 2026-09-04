@@ -7,13 +7,12 @@ enter transcript collection.
   1. Compute the last N (default and maximum 5) fiscal-quarter end dates that have already
      passed, using `tracked_companies.fiscal_year_end` to map fiscal-quarter
      index → calendar quarter end.
-  2. For each period with no exact DB/path/SHA evidence receipt, ingest an
-     existing local file or invoke
-     `fetch_qa_transcript.fetch_qa()` to pull the Q&A segment from the free
-     aggregator chain (roic.ai → stockanalysis.com → tickertrends.io).
-  3. After all per-ticker fetches, invoke `execution/ingest_transcripts.py`
-     once to register every new file into `transcripts` + `transcript_segments`
-     (idempotent on sha256).
+  2. For each period with no exact DB/path/SHA evidence receipt, invoke
+     `fetch_qa_transcript.fetch_qa()` to reacquire or replay an authorized Q&A
+     artifact. Unreceipted local files never bypass source authorization.
+  3. After acquisition, invoke `execution/ingest_transcripts.py` separately
+     for each ticker with a new artifact. A quarantined peer ticker cannot
+     block the rest of the portfolio batch (ingest remains idempotent on sha256).
   4. For each ticker with at least one transcript row, invoke
      `execution/extract_commitments_from_transcript.py --auto --ticker X` to
      extract forward-looking management commitments from any transcripts that
@@ -152,11 +151,6 @@ def _qlabel(year: int, quarter: int) -> str:
     return f"Q{quarter}_{year}"
 
 
-def _local_transcript_file_exists(ticker: str, year: int, quarter: int) -> bool:
-    name = f"{ticker}_Q{quarter}_{year}.txt"
-    return (_RAW_DIR / name).exists() or (_PROCESSED_DIR / name).exists()
-
-
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -234,9 +228,6 @@ def _backfill_one(
         label = _qlabel(y, q)
         if _has_ingested_evidence(ticker, y, q, fye_month):
             result.skipped_existing.append(label)
-            continue
-        if _local_transcript_file_exists(ticker, y, q):
-            result.fetched.append(f"{label} [pending_ingest]")
             continue
         if dry_run:
             result.aggregator_misses.append(f"{label} [dry-run]")
@@ -333,20 +324,27 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
     ]
 
 
-def _run_ingest(repo_root: Path, dry_run: bool) -> int:
-    """Run execution/ingest_transcripts.py to pick up newly-fetched files.
+def _run_ingest(repo_root: Path, ticker: str, dry_run: bool) -> int:
+    """Ingest newly fetched files for one ticker.
 
     Runs the current code checkout's state adapter while keeping mutable
-    transcript files and the database under ``repo_root``.
+    transcript files and the database under ``repo_root``. Per-ticker
+    isolation prevents an unrelated quarantined artifact from blocking the
+    rest of the scheduled portfolio batch.
     """
     if dry_run:
-        print("  [dry-run] would invoke ingest_transcripts.py", file=sys.stderr)
+        print(
+            f"  [dry-run] would invoke ingest_transcripts.py --ticker {ticker}",
+            file=sys.stderr,
+        )
         return 0
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py"),
         "--repo-root",
         str(repo_root),
+        "--ticker",
+        ticker,
         "--no-promote",
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
@@ -388,7 +386,7 @@ def _ticker_has_transcripts(ticker: str) -> bool:
 
 
 def _newly_ingested_tickers(
-    results: list[TickerBackfillResult], ingest_rc: int | None
+    results: list[TickerBackfillResult], ingest_results: list[dict[str, object]]
 ) -> list[str]:
     """Return tickers whose newly fetched transcripts were ingested successfully.
 
@@ -396,9 +394,33 @@ def _newly_ingested_tickers(
     rebuild.  Restricting the LLM phase to this run's new inputs keeps the job
     bounded and prevents overlap with the 02:15 scan and 03:00 protected window.
     """
-    if ingest_rc != 0:
-        return []
-    return [result.ticker for result in results if result.fetched]
+    successful = {str(item["ticker"]) for item in ingest_results if item.get("rc") == 0}
+    return [result.ticker for result in results if result.fetched and result.ticker in successful]
+
+
+def _fetched_evidence_complete(result: TickerBackfillResult) -> bool:
+    """Require every acquired period to have its exact DB/path/SHA receipt."""
+    if not result.fetched:
+        return False
+    for label in result.fetched:
+        try:
+            quarter_token, year_token = label.split("_", 1)
+            quarter = int(quarter_token.removeprefix("Q"))
+            year = int(year_token)
+        except ValueError:
+            return False
+        if not _has_ingested_evidence(result.ticker, year, quarter, result.fye_month):
+            return False
+    return True
+
+
+def _first_nonzero_ingest_rc(ingest_results: list[dict[str, object]]) -> int:
+    """Return the first typed nonzero ingest result, or zero."""
+    for item in ingest_results:
+        rc = item.get("rc")
+        if isinstance(rc, int) and rc != 0:
+            return rc
+    return 0
 
 
 def _terminal_exit_code(
@@ -490,9 +512,22 @@ def main() -> int:
 
     any_fetched = any(r.fetched for r in per_ticker)
     ingest_rc: int | None = None
+    ingest_results: list[dict[str, object]] = []
     if any_fetched and not args.skip_ingest:
-        print("[backfill_transcripts] running ingest_transcripts.py", file=sys.stderr)
-        ingest_rc = _run_ingest(repo_root, args.dry_run)
+        print("[backfill_transcripts] running per-ticker transcript ingest", file=sys.stderr)
+        for result in per_ticker:
+            if not result.fetched:
+                continue
+            rc = _run_ingest(repo_root, result.ticker, args.dry_run)
+            if rc == 0 and not args.dry_run and not _fetched_evidence_complete(result):
+                print(
+                    f"[backfill_transcripts] {result.ticker}: ingest returned 0 without "
+                    "exact DB/path/SHA evidence",
+                    file=sys.stderr,
+                )
+                rc = 1
+            ingest_results.append({"ticker": result.ticker, "rc": rc})
+        ingest_rc = _first_nonzero_ingest_rc(ingest_results)
     elif args.skip_ingest:
         print("[backfill_transcripts] --skip-ingest set; skipping ingest", file=sys.stderr)
     else:
@@ -503,7 +538,7 @@ def main() -> int:
     # handled idempotently when first acquired, not rescanned every morning.
     extract_results: list[dict[str, object]] = []
     if not args.skip_extract and not args.dry_run:
-        for ticker in _newly_ingested_tickers(per_ticker, ingest_rc):
+        for ticker in _newly_ingested_tickers(per_ticker, ingest_results):
             if not _ticker_has_transcripts(ticker):
                 continue
             print(f"[backfill_transcripts] extracting commitments for {ticker}", file=sys.stderr)
@@ -519,6 +554,7 @@ def main() -> int:
         "dry_run": args.dry_run,
         "per_ticker": [asdict(r) for r in per_ticker],
         "ingest_rc": ingest_rc,
+        "ingest_results": ingest_results,
         "extract_results": extract_results,
         "totals": {
             "fetched": sum(len(r.fetched) for r in per_ticker),

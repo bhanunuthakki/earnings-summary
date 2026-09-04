@@ -144,6 +144,8 @@ class _Proc:
 def test_streaming_ask_is_tool_free_even_when_override_requests_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
+
     def fake_model_for(_purpose: str) -> str:
         return cli.DEFAULT_MODEL
 

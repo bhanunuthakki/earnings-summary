@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explore · Query Canvas prototype</title>
+  <link rel="stylesheet" href="explore_concepts.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <div class="brand"><span class="brand-mark">[•]</span> Counterread</div>
+    <div class="nav-group"><p class="nav-label">L1 · Portfolio intelligence</p><a class="nav-item" href="#"><span class="nav-icon">▦</span>Portfolio Cockpit</a><a class="nav-item" href="#"><span class="nav-icon">⌁</span>Performance</a></div>
+    <div class="nav-group"><p class="nav-label">L2 · Research engine</p><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Company Desk</a><a class="nav-item" href="#"><span class="nav-icon">≛</span>Evaluation</a><a class="nav-item" href="#"><span class="nav-icon">▤</span>Brief Library</a><a class="nav-item active" href="#"><span class="nav-icon">⌗</span>Explore</a></div>
+    <div class="nav-group"><p class="nav-label">L3 · Operations</p><a class="nav-item" href="#"><span class="nav-icon">◫</span>Decision Audit Log</a><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Operations</a></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="crumb">Research <span> / </span> <strong>Explore</strong></div><div class="top-meta"><span class="k-pill k-pill-ok">● Data current</span><span class="mono">MELI</span></div></header>
+    <div class="content">
+      <div class="page-head"><div><div class="concept-tag">Direction 01 · Query Canvas</div><h1>Explore</h1><p>Ask a financial question, then work directly with the governed query it creates.</p></div><div class="actions"><button class="k-btn k-btn-quiet">Saved analyses <span class="mono">12</span></button><button class="k-btn k-btn-save" data-open="save">◆ Save analysis</button></div></div>
+
+      <section class="query-bar" aria-label="Semantic query">
+        <div class="query-orb">✦</div>
+        <input value="What are MELI's segments, and how have they grown?" aria-label="Ask Explore">
+        <button class="k-btn k-btn-quiet" data-open="logic">View logic</button>
+        <button class="k-btn k-btn-primary">Run analysis</button>
+      </section>
+      <div class="truth-strip"><span class="k-pill k-pill-accent">Proposed query</span><span>Illustrative values for interaction review</span><span>·</span><span>Closest governed metrics selected automatically</span><span class="tip" tabindex="0" data-tip="Explore converts the question into a typed query. It never runs model-written SQL.">?</span></div>
+
+      <div class="canvas-grid">
+        <section class="card canvas-main">
+          <div class="plan-band"><span class="label">Generated query</span><span class="k-chip k-chip-accent">MELI</span><span class="k-chip">Quarterly · 8 periods</span><span class="k-chip">Reported revenue</span><span class="k-chip">Segments</span><span class="k-chip k-chip-warn">1 definition change</span><span class="tip" tabindex="0" data-tip="Brief guidance stays on hover. Click a definition-change marker for the full source history.">?</span></div>
+          <div class="viz-head"><div><h2 class="title">Revenue by operating ecosystem</h2><p>Quarterly reported values · missing observations omitted</p></div><div class="actions"><button class="k-btn k-btn-sm k-btn-quiet">Table</button><button class="k-btn k-btn-sm k-btn-quiet">Chart options</button><button class="k-btn k-btn-sm k-btn-quiet" data-open="definition">Definition notes ↗</button></div></div>
+          <div class="chart-wrap">
+            <div class="legend"><span style="color:var(--accent)">Commerce</span><span style="color:var(--violet)">Fintech</span></div>
+            <svg class="chart" viewBox="0 0 900 290" role="img" aria-label="Illustrative quarterly segment revenue line chart">
+              <line class="grid" x1="58" y1="34" x2="875" y2="34"/><line class="grid" x1="58" y1="92" x2="875" y2="92"/><line class="grid" x1="58" y1="150" x2="875" y2="150"/><line class="grid" x1="58" y1="208" x2="875" y2="208"/><line class="grid" x1="58" y1="252" x2="875" y2="252"/>
+              <text x="12" y="38">$4B</text><text x="12" y="96">$3B</text><text x="12" y="154">$2B</text><text x="12" y="212">$1B</text>
+              <polyline class="line-a" points="72,197 184,183 296,168 408,151 520,130 632,110 744,85 856,58"/>
+              <polyline class="line-b" points="72,231 184,220 296,207 408,194 520,176 632,158 744,133 856,108"/>
+              <g class="dot-a"><circle cx="72" cy="197" r="4"/><circle cx="184" cy="183" r="4"/><circle cx="296" cy="168" r="4"/><circle cx="408" cy="151" r="4"/><circle cx="520" cy="130" r="4"/><circle cx="632" cy="110" r="4"/><circle cx="744" cy="85" r="4"/><circle cx="856" cy="58" r="4"/></g>
+              <g class="dot-b"><circle cx="72" cy="231" r="4"/><circle cx="184" cy="220" r="4"/><circle cx="296" cy="207" r="4"/><circle cx="408" cy="194" r="4"/><circle cx="520" cy="176" r="4"/><circle cx="632" cy="158" r="4"/><circle cx="744" cy="133" r="4"/><circle cx="856" cy="108" r="4"/></g>
+              <line class="break-line" x1="575" y1="26" x2="575" y2="252"/><text x="584" y="43" fill="var(--warn)">definition revised</text>
+              <text x="58" y="276">Q3 ’24</text><text x="170" y="276">Q4 ’24</text><text x="282" y="276">Q1 ’25</text><text x="394" y="276">Q2 ’25</text><text x="506" y="276">Q3 ’25</text><text x="618" y="276">Q4 ’25</text><text x="730" y="276">Q1 ’26</text><text x="842" y="276">Q2 ’26</text>
+            </svg>
+          </div>
+          <table class="results-table"><thead><tr><th>Series</th><th>Latest</th><th>YoY</th><th>2-year CAGR</th><th>Coverage</th></tr></thead><tbody><tr><td>Commerce revenue</td><td class="mono">$3.61B</td><td class="mono ok">+28.4%</td><td class="mono">+24.1%</td><td><span class="k-pill k-pill-ok">8 / 8</span></td></tr><tr><td>Fintech revenue</td><td class="mono">$2.72B</td><td class="mono ok">+33.7%</td><td class="mono">+29.8%</td><td><span class="k-pill k-pill-ok">8 / 8</span></td></tr></tbody></table>
+          <div class="footnote"><span class="warn">◆</span><span>Q4 ’25: segment presentation changed. The chart preserves the issuer’s reported series; click <button class="k-btn k-btn-sm k-btn-quiet" data-open="definition">definition notes</button> for the exact source wording and comparability disposition.</span></div>
+        </section>
+
+        <aside class="side-stack">
+          <section class="card side-block"><div class="side-block-head"><h2 class="title">Selected metrics</h2><span class="tip" tabindex="0" data-tip="Ranked by relevance to your question and issuer materiality—not alphabetically.">?</span></div><div class="metric-rank"><button class="metric-row active"><span class="rank">01</span><span class="metric-name">Commerce revenue</span><span class="metric-kind">$</span></button><button class="metric-row active"><span class="rank">02</span><span class="metric-name">Fintech revenue</span><span class="metric-kind">$</span></button><button class="metric-row"><span class="rank">03</span><span class="metric-name">Total payment volume</span><span class="metric-kind">$</span></button><button class="metric-row"><span class="rank">04</span><span class="metric-name">Gross merchandise volume</span><span class="metric-kind">$</span></button><button class="metric-row"><span class="rank">05</span><span class="metric-name">Credit portfolio</span><span class="metric-kind">$</span></button></div><button class="k-btn k-btn-quiet" style="width:100%;margin-top:10px">Browse semantic catalog</button></section>
+          <section class="card side-block"><div class="side-block-head"><h2 class="title">Query shape</h2><span class="k-pill k-pill-accent">Auto-generated</span></div><div class="inspect-list"><div class="inspect-line"><span>Companies</span><span>MELI</span></div><div class="inspect-line"><span>Cadence</span><span>quarterly</span></div><div class="inspect-line"><span>Window</span><span>8 periods</span></div><div class="inspect-line"><span>Transform</span><span>reported</span></div><div class="inspect-line"><span>Missing values</span><span>omit + flag</span></div></div><button class="k-btn k-btn-sm k-btn-quiet" data-open="logic" style="margin-top:12px">Edit query logic</button></section>
+          <section class="card side-block"><div class="side-block-head"><h2 class="title">Next questions</h2></div><div class="metric-rank"><button class="metric-row"><span>↳</span><span class="metric-name">Which segment drives margin?</span><span>＋</span></button><button class="metric-row"><span>↳</span><span class="metric-name">Compare growth with NU</span><span>＋</span></button></div></section>
+        </aside>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" hidden></div>
+<aside class="drawer" id="definition" hidden aria-label="Definition notes"><div class="drawer-head"><div><span class="k-pill k-pill-warn">Comparability note</span><h2>Segment definition history</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><h3>What changed</h3><p>Illustrative prototype copy: management revised the presentation of ecosystem revenue beginning Q4 ’25. The resolver keeps both reported definitions and does not splice them into a silently continuous series.</p><div class="drawer-row"><span>Before Q4 ’25</span><span>Commerce and Fintech as previously presented</span></div><div class="drawer-row"><span>From Q4 ’25</span><span>Revised allocation of selected revenue streams</span></div><div class="drawer-row"><span>Disposition</span><span class="warn">Comparable with caution · source wording preserved</span></div><h3>Source trail</h3><p><a href="#" class="soft">Q4 ’25 shareholder letter · Segment note, p. 18 ↗</a></p><p><a href="#" class="soft">Q4 ’25 earnings call · CFO remarks, 00:17:42 ↗</a></p></aside>
+<aside class="drawer" id="logic" hidden aria-label="Query logic"><div class="drawer-head"><div><span class="k-pill k-pill-accent">Semantic query</span><h2>How Explore interpreted this</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><h3>Intent</h3><p>Show the issuer’s current operating segments and their reported revenue growth over a useful quarterly lookback.</p><div class="drawer-row"><span>Metric resolver</span><span>Issuer materiality + semantic match + observation coverage</span></div><div class="drawer-row"><span>Window</span><span>2 years quarterly; incomplete periods omitted and disclosed</span></div><div class="drawer-row"><span>Comparability</span><span>Definition revisions retained as visible breaks</span></div></aside>
+<aside class="drawer" id="save" hidden aria-label="Save analysis"><div class="drawer-head"><div><span class="k-pill" style="color:var(--violet)">Save</span><h2>Save this analysis</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div><div class="save-form"><label>Analysis name<input value="MELI segment growth — 2 year quarterly"></label><label>Destination<select><option>Explore library</option><option>MELI company desk</option><option>Decision memo</option></select></label><label><span>Refresh behavior</span><select><option>Re-run on open with latest reported facts</option><option>Freeze this observation version</option></select></label><button class="k-btn k-btn-save">◆ Save analysis</button><p class="meta">Saving creates a reusable analysis with this query, chart, footnotes, and source manifest. It does not change underlying facts.</p></div></aside>
+
+<script>
+  const scrim = document.querySelector('.scrim');
+  const drawers = [...document.querySelectorAll('.drawer')];
+  function closeAll(){ drawers.forEach(d => d.hidden = true); scrim.hidden = true; }
+  document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeAll(); document.getElementById(b.dataset.open).hidden = false; scrim.hidden = false; }));
+  document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeAll));
+  scrim.addEventListener('click', closeAll);
+  addEventListener('keydown', e => { if(e.key === 'Escape') closeAll(); });
+</script>
+</body>
+</html>
