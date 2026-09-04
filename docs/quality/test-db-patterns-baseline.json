@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+  "scoped_commit": "8d079ec3d7f4253bc24d2056d068c7a4909a0d82",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "a56ef0a9cff43cc2450466180b7ea022743a4b07dbdaeddb26a1ca87ba894061",
+  "source_sha256": "c1163a4cbff3e386aa51ba2448d7a1eedffab937ab86ce32c8af6aaabf9a4c47",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",
@@ -113,6 +113,7 @@
     "tests/test_bear_provenance.py",
     "tests/test_behavior_distill.py",
     "tests/test_benchmark_sqlite_runtime.py",
+    "tests/test_bha115_route_workload.py",
     "tests/test_bha92_report_design.py",
     "tests/test_boilerplate_classify.py",
     "tests/test_book_risk.py",
@@ -172,6 +173,7 @@
     "tests/test_cockpit_fundamentals.py",
     "tests/test_code_artifact.py",
     "tests/test_codex_primary_routing.py",
+    "tests/test_collect_paired_ci_performance.py",
     "tests/test_comment_processor_hardstop.py",
     "tests/test_comment_taxonomy.py",
     "tests/test_comments_process_endpoint.py",
@@ -1785,6 +1787,13 @@
       "taxonomy": "performance-volume",
       "evidence": [
         "call:migrated_db"
+      ]
+    },
+    {
+      "path": "tests/test_bha115_route_workload.py",
+      "taxonomy": "custom-bootstrap",
+      "evidence": [
+        "sql:create table"
       ]
     },
     {
@@ -6864,7 +6873,7 @@
   "counts_by_taxonomy": {
     "archived-graph": 36,
     "cached-current-head": 61,
-    "custom-bootstrap": 27,
+    "custom-bootstrap": 28,
     "direct-downgrade": 102,
     "direct-historical": 24,
     "hand-DDL-unit-schema": 348,

@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "75866b898b290c81c9f4c6160c8d2a515c657725",
+  "scoped_commit": "8d079ec3d7f4253bc24d2056d068c7a4909a0d82",
   "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
-  "source_sha256": "15c577475ac1aed15117acc80cd8bf81c844d602fd078ed35d80edef75cbffe4",
+  "source_sha256": "79b2713bc8a1ed4c0c1a109d4175e11ea83069a443d3d4a8d219d089e99b63f9",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1318,
-    "total_noncomment_loc": 486931,
+    "executable_modules": 1331,
+    "total_noncomment_loc": 490619,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -841,6 +841,38 @@
         "fully_annotated_public_functions": 1
       },
       {
+        "path": "execution/benchmark_dcf_workload.py",
+        "module": "execution.benchmark_dcf_workload",
+        "lines": {
+          "physical": 231,
+          "nonblank": 206,
+          "noncomment": 203
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "filesystem",
+          "process"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "execution/benchmark_performance_workload.py",
+        "module": "execution.benchmark_performance_workload",
+        "lines": {
+          "physical": 210,
+          "nonblank": 182,
+          "noncomment": 180
+        },
+        "internal_fan_out": 5,
+        "responsibilities": [
+          "database",
+          "process"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
         "path": "execution/benchmark_sqlite_runtime.py",
         "module": "execution.benchmark_sqlite_runtime",
         "lines": {
@@ -1434,9 +1466,9 @@
         "path": "execution/capture_performance_baseline.py",
         "module": "execution.capture_performance_baseline",
         "lines": {
-          "physical": 50,
-          "nonblank": 42,
-          "noncomment": 42
+          "physical": 41,
+          "nonblank": 33,
+          "noncomment": 33
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -1480,15 +1512,29 @@
         "path": "execution/capture_test_ci_performance.py",
         "module": "execution.capture_test_ci_performance",
         "lines": {
-          "physical": 177,
-          "nonblank": 162,
-          "noncomment": 162
+          "physical": 403,
+          "nonblank": 370,
+          "noncomment": 365
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem",
+          "network",
           "process"
         ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "execution/capture_test_ci_performance_fixture.py",
+        "module": "execution.capture_test_ci_performance_fixture",
+        "lines": {
+          "physical": 106,
+          "nonblank": 97,
+          "noncomment": 97
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
       },
@@ -1643,6 +1689,23 @@
         ],
         "public_functions": 12,
         "fully_annotated_public_functions": 12
+      },
+      {
+        "path": "execution/collect_paired_ci_performance.py",
+        "module": "execution.collect_paired_ci_performance",
+        "lines": {
+          "physical": 585,
+          "nonblank": 552,
+          "noncomment": 548
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "filesystem",
+          "network",
+          "process"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "execution/comments_server.py",
@@ -1821,9 +1884,9 @@
         "path": "execution/compare_test_ci_performance.py",
         "module": "execution.compare_test_ci_performance",
         "lines": {
-          "physical": 46,
-          "nonblank": 34,
-          "noncomment": 34
+          "physical": 54,
+          "nonblank": 41,
+          "noncomment": 41
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -15859,6 +15922,23 @@
         "fully_annotated_public_functions": 7
       },
       {
+        "path": "src/quality/ci_collection.py",
+        "module": "quality.ci_collection",
+        "lines": {
+          "physical": 245,
+          "nonblank": 222,
+          "noncomment": 218
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "filesystem",
+          "network",
+          "process"
+        ],
+        "public_functions": 7,
+        "fully_annotated_public_functions": 7
+      },
+      {
         "path": "src/quality/compatibility.py",
         "module": "quality.compatibility",
         "lines": {
@@ -15871,6 +15951,22 @@
           "filesystem",
           "network",
           "process"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/quality/dcf_benchmark_fixture.py",
+        "module": "quality.dcf_benchmark_fixture",
+        "lines": {
+          "physical": 212,
+          "nonblank": 199,
+          "noncomment": 193
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "database",
+          "filesystem"
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -15912,18 +16008,95 @@
         "path": "src/quality/performance.py",
         "module": "quality.performance",
         "lines": {
-          "physical": 797,
-          "nonblank": 737,
-          "noncomment": 730
+          "physical": 504,
+          "nonblank": 489,
+          "noncomment": 487
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 3,
+        "responsibilities": [
+          "process"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "src/quality/performance_models.py",
+        "module": "quality.performance_models",
+        "lines": {
+          "physical": 245,
+          "nonblank": 211,
+          "noncomment": 211
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/quality/performance_routes.py",
+        "module": "quality.performance_routes",
+        "lines": {
+          "physical": 587,
+          "nonblank": 556,
+          "noncomment": 554
+        },
+        "internal_fan_out": 13,
+        "responsibilities": [
+          "database",
+          "filesystem",
+          "network"
+        ],
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
+      },
+      {
+        "path": "src/quality/performance_source_analysis.py",
+        "module": "quality.performance_source_analysis",
+        "lines": {
+          "physical": 338,
+          "nonblank": 329,
+          "noncomment": 320
+        },
+        "internal_fan_out": 2,
         "responsibilities": [
           "filesystem",
           "network",
           "process"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/quality/performance_state.py",
+        "module": "quality.performance_state",
+        "lines": {
+          "physical": 83,
+          "nonblank": 76,
+          "noncomment": 76
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/quality/performance_support.py",
+        "module": "quality.performance_support",
+        "lines": {
+          "physical": 208,
+          "nonblank": 180,
+          "noncomment": 180
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "filesystem",
+          "process"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "src/quality/pytest_performance_plugin.py",
@@ -15962,18 +16135,49 @@
         "path": "src/quality/roadmap_freeze.py",
         "module": "quality.roadmap_freeze",
         "lines": {
-          "physical": 1057,
-          "nonblank": 993,
-          "noncomment": 993
+          "physical": 667,
+          "nonblank": 654,
+          "noncomment": 648
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "filesystem",
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "src/quality/roadmap_freeze_contract.py",
+        "module": "quality.roadmap_freeze_contract",
+        "lines": {
+          "physical": 514,
+          "nonblank": 470,
+          "noncomment": 462
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
+      },
+      {
+        "path": "src/quality/roadmap_freeze_inventory.py",
+        "module": "quality.roadmap_freeze_inventory",
+        "lines": {
+          "physical": 654,
+          "nonblank": 607,
+          "noncomment": 599
+        },
+        "internal_fan_out": 2,
         "responsibilities": [
           "filesystem",
           "network",
           "process"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
       },
       {
         "path": "src/quality/roadmap_reconciliation.py",
@@ -16012,24 +16216,25 @@
         "path": "src/quality/test_ci_pairing.py",
         "module": "quality.test_ci_pairing",
         "lines": {
-          "physical": 282,
-          "nonblank": 248,
-          "noncomment": 246
+          "physical": 522,
+          "nonblank": 482,
+          "noncomment": 478
         },
         "internal_fan_out": 1,
         "responsibilities": [
-          "filesystem"
+          "filesystem",
+          "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/quality/test_ci_performance.py",
         "module": "quality.test_ci_performance",
         "lines": {
-          "physical": 347,
-          "nonblank": 302,
-          "noncomment": 302
+          "physical": 349,
+          "nonblank": 304,
+          "noncomment": 304
         },
         "internal_fan_out": 0,
         "responsibilities": [

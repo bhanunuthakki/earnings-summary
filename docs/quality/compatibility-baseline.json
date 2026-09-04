@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "9cec19394f394d2342edcc9f820a56de38c1d6a0",
-  "source_sha256": "d75854489b563d5865b9b6e831f639a59f45260dc0949ea0bddccb795bfa4392",
+  "current_revision": "8d079ec3d7f4253bc24d2056d068c7a4909a0d82",
+  "source_sha256": "56f59d927d398ed51fb846cc061a7aa5edc2a721fdd789baadd83bad4d621d62",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -446,6 +446,18 @@
       "status": "unchanged"
     },
     {
+      "path": "execution/benchmark_dcf_workload.py",
+      "current_sha256": "1c6ef5c8c506e018a33bbcd9bab8d34ad97a9c6ece0cbc3818f74c1ce4961f33",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "execution/benchmark_performance_workload.py",
+      "current_sha256": "c6bf53eaed4fb6f38f7070c08f5ddaa22eea2a9cae2e57ea567411a967e67fa1",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
       "path": "execution/benchmark_sqlite_runtime.py",
       "current_sha256": "122c450d519c38c44acbcbee4af903a6206ff82261e0730627ed025953aec4b3",
       "baseline_sha256": "122c450d519c38c44acbcbee4af903a6206ff82261e0730627ed025953aec4b3",
@@ -675,7 +687,13 @@
     },
     {
       "path": "execution/capture_performance_baseline.py",
-      "current_sha256": "b7c0894780243d2941a607dd0e0a024c8026e5c8fa49ef4d8bae8aef2f3adecf",
+      "current_sha256": "cb5a07590bf75154ac4a6361d0dfa9c8827029df46c82307759020648ee2044b",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "execution/capture_performance_evidence.py",
+      "current_sha256": "baa939d16b1c863e42a03c74a1fbb7dc66f899f1daeb451b7c8b4fa6f4afbc13",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -684,6 +702,18 @@
       "current_sha256": "3f09fa7e97533d6eebf688ede318fafc891077571df15b0b6972b1671fa7a492",
       "baseline_sha256": "3f09fa7e97533d6eebf688ede318fafc891077571df15b0b6972b1671fa7a492",
       "status": "unchanged"
+    },
+    {
+      "path": "execution/capture_test_ci_performance.py",
+      "current_sha256": "05e702e42222d67b4ebcf758d48718c5c0199511ba70a03c71aa3221bbdf92f7",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "execution/capture_test_ci_performance_fixture.py",
+      "current_sha256": "5615c3ac251c61361cb0e01e003d252caff2a8877f9e4bc3699802d1836321e8",
+      "baseline_sha256": null,
+      "status": "added"
     },
     {
       "path": "execution/categorize_ir_uploads.py",
@@ -716,6 +746,12 @@
       "status": "unchanged"
     },
     {
+      "path": "execution/classify_operational_lifecycle.py",
+      "current_sha256": "d942ff42bcbc71800039774d91a49fad8549b045ee97692167b672106d5f2e1c",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
       "path": "execution/cleanup_condition_alerts.py",
       "current_sha256": "e4a0a30a978df844e947419301a3eef4f927718d2fd8e5ce5f8b5a3cafd2172e",
       "baseline_sha256": "e4a0a30a978df844e947419301a3eef4f927718d2fd8e5ce5f8b5a3cafd2172e",
@@ -738,6 +774,12 @@
       "current_sha256": "0ae75c9e2eff6418643a5e64171421a324afce99771b58ca9aaea4ac2dc59761",
       "baseline_sha256": "0ae75c9e2eff6418643a5e64171421a324afce99771b58ca9aaea4ac2dc59761",
       "status": "unchanged"
+    },
+    {
+      "path": "execution/collect_paired_ci_performance.py",
+      "current_sha256": "2fcaec29e54d27c93b2c75ec3298f6ae55a668fc9fa68dc2be0c18d3a4d3d89c",
+      "baseline_sha256": null,
+      "status": "added"
     },
     {
       "path": "execution/comments_server.py",
@@ -804,6 +846,12 @@
       "current_sha256": "bc6954145a1832c0d301a5aa3479d699d040c9156b50bdb0dee488babe3be404",
       "baseline_sha256": "bc6954145a1832c0d301a5aa3479d699d040c9156b50bdb0dee488babe3be404",
       "status": "unchanged"
+    },
+    {
+      "path": "execution/compare_test_ci_performance.py",
+      "current_sha256": "0aa347f958bd8d23a174ddb59b086d3ef4a09be947f0dccfdd808921dd0b85d8",
+      "baseline_sha256": null,
+      "status": "added"
     },
     {
       "path": "execution/compose_senior_partner_brief.py",
@@ -1304,6 +1352,12 @@
       "status": "unchanged"
     },
     {
+      "path": "execution/freeze_quality_roadmap.py",
+      "current_sha256": "dd1528a64fdea5e1b718f1a371ade6018cc51a557812e2068ee1b2cb246f61bd",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
       "path": "execution/gc_restore.py",
       "current_sha256": "2886de011c559daaedd4d9cbdd206121ea83931485cc1355cb6677cfc65b3ae6",
       "baseline_sha256": "2886de011c559daaedd4d9cbdd206121ea83931485cc1355cb6677cfc65b3ae6",
@@ -1740,6 +1794,12 @@
       "current_sha256": "d62e1e318183e1ae4e5bc15924af6ed7e74baf51b51676d91a01366cce1a0755",
       "baseline_sha256": "d62e1e318183e1ae4e5bc15924af6ed7e74baf51b51676d91a01366cce1a0755",
       "status": "unchanged"
+    },
+    {
+      "path": "execution/reconcile_quality_baseline.py",
+      "current_sha256": "40f57bdc5e6f24ae4a6d5619288f2868ea1b4afbd5fb604f7c54ebc1d19e5224",
+      "baseline_sha256": null,
+      "status": "added"
     },
     {
       "path": "execution/reconcile_report_artifacts.py",
@@ -6297,7 +6357,13 @@
     },
     {
       "path": "src/quality/architecture.py",
-      "current_sha256": "bce415f8a6c1270f4eb767c2ce0af0b10dd0250014b3437853a665d60663b975",
+      "current_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/ci_collection.py",
+      "current_sha256": "455944b6580d43cf0b979499f170f329fee05c1b31a2005b4be4750ede4df287",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6308,26 +6374,110 @@
       "status": "added"
     },
     {
+      "path": "src/quality/dcf_benchmark_fixture.py",
+      "current_sha256": "c451dec93606778b3016dfd4fbe64a2b35f201d4c679978fe26de523aa153347",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
       "path": "src/quality/duplicates.py",
       "current_sha256": "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e",
       "baseline_sha256": null,
       "status": "added"
     },
     {
+      "path": "src/quality/lifecycle.py",
+      "current_sha256": "d47f98ac86f8f54f0c7e2fc2187381666bf01cf0fb8d820a860e553934181147",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
       "path": "src/quality/performance.py",
-      "current_sha256": "388cc81fc5333c086ebf6b142e5b0886eb954ddbdd49de4d709b7e4e9ec05dc2",
+      "current_sha256": "9e76aae2cf66e90dda80533d178350d961a78f76f86b29b1b9c195d7722aa065",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/performance_models.py",
+      "current_sha256": "471c6ea063dae072b8033b397ae92969ed1115a54ae28cf811f0ecdcb310c3c0",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/performance_routes.py",
+      "current_sha256": "02f9bf37b985742609a222601d5541549ad22d908fd7c0a9be914e179b1d3924",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/performance_source_analysis.py",
+      "current_sha256": "583a34fcc78ee17830032de5dcc5402c5a2d298b74a5a3d30755c5532215a3a6",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/performance_state.py",
+      "current_sha256": "946cfbd0d5e53d123b574975947e4ac8c7bdf480d5fbf6176fddffa57cbd5cc5",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/performance_support.py",
+      "current_sha256": "40ae8987c76e7483b0366bb57b0592a9f81eb04d9d105d9abe8142f91c244aee",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/pytest_performance_plugin.py",
+      "current_sha256": "315baf1056d4d6d587d5d2eaaf2bdd2df124e46798eea68430a5957ff0b4a1d1",
       "baseline_sha256": null,
       "status": "added"
     },
     {
       "path": "src/quality/reachability.py",
-      "current_sha256": "fb7200ff669f73efdef8277f49c6a54f05aae2a334cad7fe682455f52bef023d",
+      "current_sha256": "6e4f5e66a58a02e5fc8790ca4bda5d48f9a1d25b24d05b3edf5f53d1e685a739",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/roadmap_freeze.py",
+      "current_sha256": "c80be3e4ce9851c5cdd2abf11f6ec72084d1926ee120c28aad9c5d84296a789a",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/roadmap_freeze_contract.py",
+      "current_sha256": "36ac7b1f23b53e072b4224346c47e757131cdfcd19db2dd1f7b9066d7ab23282",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/roadmap_freeze_inventory.py",
+      "current_sha256": "65feb7c179f4b3215fd600704184bdcd701abd95dd4829c5ac9a7d45f7270fa8",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/roadmap_reconciliation.py",
+      "current_sha256": "3a5222aa7e5d96d6b0b22bfc67d0fcb459cee9d5dcc58b918e11828d515b1964",
       "baseline_sha256": null,
       "status": "added"
     },
     {
       "path": "src/quality/static_quality.py",
-      "current_sha256": "00ed6240774ecb95c214f99453da1cc650828c6c3169d1973a243a1a4784c60b",
+      "current_sha256": "5767d90ca2fccf5a51080cfe07d1d51ed6ac3480badca0e2986db3f4cad521e6",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/test_ci_pairing.py",
+      "current_sha256": "b4ad6336f2c703fad0a27fd4dbd893886c273388fd0ad397ae071d8e9aae5fcf",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "src/quality/test_ci_performance.py",
+      "current_sha256": "b38ddc7fd64a5beec78a3c11cf7e894bd3e4ea40cb025767e3ffae46ca5a02ee",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -7965,7 +8115,7 @@
     }
   ],
   "golden_count": 24,
-  "entrypoint_count": 1306,
+  "entrypoint_count": 1331,
   "categories": [
     {
       "name": "flask_url_method_endpoint_map",
@@ -11089,6 +11239,7 @@
       "reason": "all required evidence conditions present",
       "artifacts": [
         "execution/audit_dcf_outliers.py",
+        "execution/benchmark_dcf_workload.py",
         "execution/build_all_redesigned_dcf.py",
         "execution/build_bank_dcf.py",
         "execution/build_meli_platform_dcf.py",
@@ -11134,6 +11285,7 @@
       ],
       "implementation_artifacts": [
         "execution/audit_dcf_outliers.py",
+        "execution/benchmark_dcf_workload.py",
         "execution/build_all_redesigned_dcf.py",
         "execution/build_bank_dcf.py",
         "execution/build_meli_platform_dcf.py",
@@ -11179,8 +11331,88 @@
         "tests/test_reprice_dcf.py",
         "tests/test_specialized_dcf_live_price.py"
       ],
-      "artifact_sha256": "085ef71200b734a5f6cb6a2d4588c15cea4d630501b16b9b744112057a753d89",
+      "artifact_sha256": "5948649e48274065dfa9dd7704815a22b6deb8715222b862c0f7da51f1724b77",
       "extracted": [
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "\"formula-audit\", formulas"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "# Formula/value parity alone misses workbook-level behavior. Keep this"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "actual, formulas, actual_sheets = workbook_semantic_hash(workbook_path)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "def formulas() -> None:"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "formula_sha256=state[\"formula_sha256\"],"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "formulas.append(f\"{sheet.title}!{cell.coordinate}={cell.value}\")"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "formulas: list[str] = []"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "hashlib.sha256(\"\\n\".join(formulas).encode()).hexdigest(),"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "if (actual, formulas, actual_sheets) != ("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "second_semantic, second_formula, second_sheets = workbook_semantic_hash(workbook_path)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "semantic_hash, formula_hash, sheets = workbook_semantic_hash(workbook_path)"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "semantic_parity = (second_semantic, second_formula, second_sheets) == ("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "stage_timings[\"formula-audit\"], stage_rss[\"formula-audit\"] = _stage("
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "state[\"formula_sha256\"] = formula_hash"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "state[\"formula_sha256\"],"
+        },
+        {
+          "kind": "dcf_contract",
+          "identifier": "execution/benchmark_dcf_workload.py",
+          "value": "state[\"formula_sha256\"],"
+        },
         {
           "kind": "dcf_contract",
           "identifier": "execution/build_bank_dcf.py",

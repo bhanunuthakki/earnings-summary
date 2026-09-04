@@ -12,26 +12,31 @@ Scanner and source hashes inside each receipt make definition drift explicit.
 
 Current evidence at the Train 0 instrumentation baseline:
 
-- 1,316 executable modules and 485,879 non-comment lines.
+- 1,331 executable modules and 490,619 non-comment lines.
 - 91 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
 - 17 import cycles spanning 80 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.
-- 166 near-miss groups covering 11,772 body lines.
-- 2 whole-tree Ruff findings, 63 format findings, 4,377 active strict-Pyright
-  diagnostics, and 627 suppression directives. The typed static receipt is
-  `PASS`: every configured source root is included and immutable archived
-  migrations remain a separately reported denominator.
-- 691 database-building test files classified with zero unclassified cases.
+- 168 near-miss groups covering 11,889 body lines.
+- 2 whole-tree Ruff findings, 62 format findings, 4,200 active strict-Pyright
+  diagnostics, 175 separately retained archived-migration diagnostics, and
+  627 suppression directives. The typed static receipt is `PASS`: every
+  configured source root is included and immutable archived migrations remain
+  a separately reported denominator.
+- 692 database-builder occurrences across 1,114 tracked test files are
+  classified with zero violations or unclassified cases.
 - The operational graph has no parse failures, unresolved targets, stale
-  dispositions, or unknown production edges. The remaining 85 unknown edges
+  dispositions, or unknown production edges. The remaining 90 unknown edges
   are confined to tests and instruction tests and remain visible in the raw
   graph.
-- The lifecycle receipt classifies all 825 candidates with zero omissions,
+- The lifecycle receipt classifies all 834 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
-  UI-reachable, 223 internal-delegate, and 268 time-bounded dormant entries.
+  UI-reachable, 230 internal-delegate, and 270 time-bounded dormant entries.
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced
   or corrected by typed generators and 66 are explicitly rejected from scoring
   for lack of an admissible generator.
+- The roadmap-freeze artifact itself validates as `PASS`; program feasibility
+  remains `HOLD` because the 952-second full-suite observation is still a
+  single unpaired run without independent Windows cache/network attestation.
 
 Reproduce the receipts from the repository root:
 
@@ -44,6 +49,8 @@ python execution/audit_test_db_patterns.py --output docs/quality/test-db-pattern
 python execution/build_operational_reachability.py --output .tmp/quality/reachability-check.json
 python execution/classify_operational_lifecycle.py --output docs/quality/lifecycle-baseline.json
 python execution/reconcile_quality_baseline.py --output docs/quality/reconciliation-baseline.json
+python execution/freeze_quality_roadmap.py --output docs/quality/roadmap-freeze.json
+python execution/freeze_quality_roadmap.py --validate docs/quality/roadmap-freeze.json
 ```
 
 The raw reachability graph is deliberately generated under `.tmp/` because it
