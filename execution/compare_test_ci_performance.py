@@ -7,7 +7,13 @@ import json
 import sys
 from pathlib import Path
 
-from src.quality.test_ci_pairing import evaluate_test_ci_pair, write_pairing_receipt
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.quality.test_ci_pairing import (  # noqa: E402
+    evaluate_test_ci_pair,
+    write_pairing_receipt,
+)
 
 
 def _parser() -> argparse.ArgumentParser:

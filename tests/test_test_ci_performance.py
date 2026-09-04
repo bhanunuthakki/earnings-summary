@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -223,3 +224,18 @@ def test_missing_fragment_or_configuration_is_invalid(tmp_path: Path) -> None:
     assert "no valid worker evidence" in reasons
     assert "configuration identities are missing" in reasons
     assert "source identity is unavailable" in reasons
+
+
+@pytest.mark.parametrize(
+    "script",
+    ["execution/capture_test_ci_performance.py", "execution/compare_test_ci_performance.py"],
+)
+def test_performance_entrypoints_load_when_run_directly(script: str) -> None:
+    result = subprocess.run(
+        [sys.executable, script, "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

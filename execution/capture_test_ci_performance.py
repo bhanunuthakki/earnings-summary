@@ -15,7 +15,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from src.quality.test_ci_performance import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.quality.test_ci_performance import (  # noqa: E402
     FrozenTestCohort,
     WorkerEvidence,
     receipt_from_fragments,
@@ -25,7 +28,7 @@ from src.quality.test_ci_performance import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--repo-root", default=PROJECT_ROOT)
     parser.add_argument("--cohort", choices=("full-suite", "ci-shard"), required=True)
     parser.add_argument("--source-shard", type=int)
     parser.add_argument("--source-shards", type=int, default=8)
