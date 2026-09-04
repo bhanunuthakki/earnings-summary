@@ -167,7 +167,9 @@ def _files(root: Path) -> list[Path]:
     return sorted(
         path
         for path in paths
-        if path.is_file() and not any(part in _SKIP for part in path.relative_to(root).parts)
+        if path.is_file()
+        and path.relative_to(root).as_posix() != "docs/quality/lifecycle-baseline.json"
+        and not any(part in _SKIP for part in path.relative_to(root).parts)
     )
 
 
@@ -791,6 +793,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                     "registry",
                     "explicit registry module/string",
                     "medium",
+                    text.count("\n", 0, match.start()) + 1,
                 )
         elif suffix == ".xml":
             try:
@@ -826,6 +829,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                             "reconstruction",
                             "manifest path",
                             "high",
+                            text.count("\n", 0, match.start()) + 1,
                         )
             if kind == "directive" and (active_directives is None or rel in active_directives):
                 for match in re.finditer(r"(?:execution/|src/)[\w./-]+", text):
