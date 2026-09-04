@@ -340,6 +340,33 @@ def test_parser_provenance_is_stable_across_supported_python_runtimes(
     assert first.parser["python"] == ">=3.11"
 
 
+def test_quality_evidence_does_not_change_graph_source_hash(tmp_path: Path) -> None:
+    _write(tmp_path, "execution/main.py", "VALUE = 1\n")
+    baseline = build_graph(tmp_path)
+
+    _write(tmp_path, "docs/quality/roadmap-freeze.json", '{"status": "frozen"}\n')
+    _write(
+        tmp_path,
+        "docs/quality/type-debt-membership-authority.json",
+        '{"members": ["src/quality/reachability.py"]}\n',
+    )
+    evidence = build_graph(tmp_path)
+
+    assert evidence.parser["source_sha256"] == baseline.parser["source_sha256"]
+    assert evidence.stats["files"] == baseline.stats["files"]
+    assert not any(node.id.startswith("docs/quality/") for node in evidence.nodes)
+
+    _write(tmp_path, "docs/quality/roadmap-freeze.json", '{"status": "updated"}\n')
+    _write(
+        tmp_path,
+        "docs/quality/type-debt-membership-authority.json",
+        '{"members": ["src/quality/reachability.py", "src/quality/tokens.py"]}\n',
+    )
+    changed_evidence = build_graph(tmp_path)
+
+    assert changed_evidence.parser["source_sha256"] == baseline.parser["source_sha256"]
+
+
 def test_import_index_distinguishes_project_external_and_unresolved(tmp_path: Path) -> None:
     _write(
         tmp_path,

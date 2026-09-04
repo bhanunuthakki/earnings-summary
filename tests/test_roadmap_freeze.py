@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +12,7 @@ import pytest
 
 import quality.roadmap_freeze as roadmap_freeze
 import quality.roadmap_freeze_inventory as roadmap_inventory
+import quality.static_quality as static_quality
 from quality.roadmap_freeze import RoadmapFreeze, validate_freeze
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -478,3 +481,53 @@ def test_validator_rejects_static_quality_denominator_drift(tmp_path: Path) -> N
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     payload["target_arithmetic"]["static_quality_baseline"] += 1
     _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize("field", ("source_hash", "config_hash"))
+def test_validator_rejects_stale_static_scanner_input_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    static = json.loads((ROOT / roadmap_freeze.STATIC_RECEIPT).read_text(encoding="utf-8"))
+    current = (static["source_hash"], static["config_hash"])
+    stale = ("0" * 64, current[1]) if field == "source_hash" else (current[0], "0" * 64)
+
+    def stale_hashes(_root: Path) -> tuple[str, str]:
+        return stale
+
+    monkeypatch.setattr(roadmap_freeze, "_scanner_input_hashes", stale_hashes)
+
+    _assert_rejected(tmp_path, payload)
+
+
+def test_static_scanner_input_hashes_cover_migrations_and_config_without_tools(
+    tmp_path: Path,
+) -> None:
+    files = (
+        "src/app.py",
+        "alembic/versions/0001_initial_schema.py",
+        "alembic/versions_archived/0000_baseline.py",
+    )
+    for path in files:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"# {path}\n", encoding="utf-8")
+    config = tmp_path / "pyproject.toml"
+    config.write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
+
+    def run(command: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
+        calls.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0, "\n".join(files), "")
+
+    first_source, first_config = static_quality.scanner_input_hashes(tmp_path, run)
+    (tmp_path / files[1]).write_text("# changed migration\n", encoding="utf-8")
+    second_source, second_config = static_quality.scanner_input_hashes(tmp_path, run)
+    config.write_text("[tool.ruff]\nline-length = 120\n", encoding="utf-8")
+    third_source, third_config = static_quality.scanner_input_hashes(tmp_path, run)
+
+    assert first_source != second_source
+    assert first_config == second_config
+    assert second_source == third_source
+    assert second_config != third_config
+    assert calls == [("git", "ls-files", "--", "*.py")] * 3

@@ -113,6 +113,30 @@ def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _scanner_input_hashes(root: Path, files: Sequence[str], config_text: str) -> tuple[str, str]:
+    source_hash = _sha("\n".join(f"{p}\0{(root / p).read_bytes().hex()}" for p in files))
+    return source_hash, _sha(config_text)
+
+
+def scanner_input_hashes(repo_root: Path, runner: CommandRunner = _run) -> tuple[str, str]:
+    """Return the source/config hashes that identify a static-quality scan.
+
+    This intentionally performs only the cheap input discovery and hashing
+    portion of :func:`inventory`; it never invokes Ruff or Pyright.  Keep the
+    calculation shared so validation cannot silently diverge from receipt
+    generation (notably for historical migration Python files).
+    """
+    root = repo_root.resolve()
+    files = _tracked(root, runner)
+    try:
+        config_text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        config_text = ""
+    except OSError as exc:
+        raise InventoryFailure(f"unable to read pyproject.toml: {exc}") from exc
+    return _scanner_input_hashes(root, files, config_text)
+
+
 def _executable(name: str) -> str:
     candidate = Path(sys.executable).with_name(name)
     return str(candidate) if candidate.is_file() else name
@@ -214,8 +238,7 @@ def inventory(
         config = cast(dict[str, object], tomllib.loads(config_text)) if config_text else {}
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise InventoryFailure(f"malformed pyproject.toml: {exc}") from exc
-    source_hash = _sha("\n".join(f"{p}\0{(root / p).read_bytes().hex()}" for p in files))
-    config_hash = _sha(config_text)
+    source_hash, config_hash = _scanner_input_hashes(root, files, config_text)
     specs = [
         ("ruff", [_executable("ruff"), "check", "--output-format", "json", "."], "ruff-check.json"),
         ("ruff", [_executable("ruff"), "format", "--check", "."], "ruff-format.txt"),

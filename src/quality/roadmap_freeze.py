@@ -125,6 +125,7 @@ from .roadmap_freeze_inventory import (
 from .roadmap_freeze_inventory import (
     validate_performance_snapshot as _validate_performance_snapshot,
 )
+from .static_quality import scanner_input_hashes as _scanner_input_hashes
 
 __all__ = (
     "ARCHITECTURE_RECEIPT",
@@ -638,6 +639,11 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
             raise ValueError("SCC cut path attribution drifted from architecture receipt")
 
     static = _read_json(root, STATIC_RECEIPT)
+    source_hash, config_hash = _scanner_input_hashes(root)
+    if static.get("source_hash") != source_hash:
+        raise ValueError("static receipt source hash is stale; regenerate it first")
+    if static.get("config_hash") != config_hash:
+        raise ValueError("static receipt config hash is stale; regenerate it first")
     expected_static_total, expected_static_components = _static_quality(static)
     if freeze.target_arithmetic.static_quality_baseline != expected_static_total:
         raise ValueError("static-quality baseline arithmetic drifted from static receipt")
