@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -56,6 +57,44 @@ def test_inventory_partitions_tracked_python_and_counts_diagnostics(tmp_path: Pa
     assert result.diagnostics[1].count == 1
     assert result.diagnostics[2].count == 1
     assert result.diagnostics[-1].diagnostics_by_rule["# type: ignore"] == 5
+    assert result.diagnostics[0].receipt_path.startswith(".tmp/static_quality/")
+    assert result.diagnostics[0].diagnostics_by_directory == {"src": 1}
+
+
+def test_absolute_diagnostic_paths_are_checkout_portable(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    def run(command: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
+        if command[:3] == ["git", "ls-files", "--"]:
+            return subprocess.CompletedProcess(command, 0, "src/app.py\n", "")
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, "head\n", "")
+        if command[-1:] == ["--version"]:
+            return subprocess.CompletedProcess(command, 0, "tool 1\n", "")
+        if str(command[0]).endswith("ruff") and "format" not in command:
+            payload = json.dumps(
+                [
+                    {"filename": str(root / "src/app.py"), "code": "F401"},
+                    {"filename": "C:\\checkout\\src\\app.py", "code": "F401"},
+                    {"filename": "../outside.py", "code": "F401"},
+                    {"filename": "", "code": "F401"},
+                ]
+            )
+            return subprocess.CompletedProcess(command, 1, payload, "")
+        if str(command[0]).endswith("ruff"):
+            return subprocess.CompletedProcess(command, 0, "", "")
+        payload = json.dumps({"generalDiagnostics": [{"file": str(root / "src/app.py")}]})
+        return subprocess.CompletedProcess(command, 1, payload, "")
+
+    result = inventory(tmp_path, run)
+    assert result.diagnostics[0].diagnostics_by_directory == {
+        ".": 1,
+        "<external>": 2,
+        "src": 1,
+    }
+    assert result.diagnostics[2].diagnostics_by_directory == {"src": 1}
+    assert all(not item.receipt_path.startswith(str(tmp_path)) for item in result.diagnostics)
 
 
 def test_inventory_fails_when_tracked_file_is_missing(tmp_path: Path) -> None:

@@ -225,6 +225,7 @@ def _require_current_iso_date(value: str, *, field: str) -> None:
 
 
 _PYTHON_ROOTS = ("execution/", "cron/", "scripts/", ".github/scripts/")
+_SOURCE_ROOT = "src/"
 _WRAPPER_SUFFIXES = (".bat", ".cmd", ".ps1", ".sh")
 _CLI_TEXT = re.compile(r"if\s+__name__\s*==|ArgumentParser\s*\(|typer\.", re.MULTILINE)
 _ROUTE_TEXT = re.compile(
@@ -325,10 +326,42 @@ def _first_cli_line(text: str) -> int | None:
     return text.count("\n", 0, match.start()) + 1 if match else None
 
 
+def _has_main_guard(text: str) -> bool:
+    """Return whether a module exposes a Python ``-m``/script entrypoint."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        # Keep malformed source in the candidate universe so parse failures do
+        # not disappear from the lifecycle receipt.
+        return bool(re.search(r"if\s+__name__\s*==\s*['\"]__main__['\"]", text))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+            continue
+        comparison = node.test
+        if len(comparison.ops) != 1 or not isinstance(comparison.ops[0], ast.Eq):
+            continue
+        if len(comparison.comparators) != 1:
+            continue
+        left, right = comparison.left, comparison.comparators[0]
+        if (
+            isinstance(left, ast.Name)
+            and left.id == "__name__"
+            and isinstance(right, ast.Constant)
+            and right.value == "__main__"
+        ) or (
+            isinstance(right, ast.Name)
+            and right.id == "__name__"
+            and isinstance(left, ast.Constant)
+            and left.value == "__main__"
+        ):
+            return True
+    return False
+
+
 def _is_python_candidate(path: str, text: str) -> bool:
     if not path.endswith(".py") or not path.startswith(_PYTHON_ROOTS):
-        return False
-    return path.startswith("execution/") or _first_cli_line(text) is not None
+        return path.startswith(_SOURCE_ROOT) and path.endswith(".py") and _has_main_guard(text)
+    return True
 
 
 def _is_wrapper(path: str) -> bool:

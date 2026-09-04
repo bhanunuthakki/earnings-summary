@@ -21,6 +21,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from runtime.python_process import ensure_managed_python_argv
+
 ReceiptStatus = Literal["PASS", "HOLD", "FAIL"]
 CohortName = Literal["integrity", "migrations", "route_cold_warm", "dcf", "source_analysis", "ci"]
 
@@ -144,15 +146,15 @@ _ROUTE_NAMES: tuple[str, ...] = (
 
 
 _COHORT_COMMANDS: dict[CohortName, str] = {
-    "integrity": f"{sys.executable} execution/verify_reconstruction_inventory.py --json",
-    "migrations": f"{sys.executable} execution/validate_directive_manifest.py",
-    "route_cold_warm": f"{sys.executable} execution/comments_server.py --help",
-    "dcf": f"{sys.executable} execution/build_redesigned_dcf.py --help",
+    "integrity": "python execution/verify_reconstruction_inventory.py --json",
+    "migrations": "python execution/validate_directive_manifest.py",
+    "route_cold_warm": "python execution/comments_server.py --help",
+    "dcf": "python execution/build_redesigned_dcf.py --help",
     "source_analysis": (
-        f"{sys.executable} execution/analyze_code_duplicates.py "
+        "python execution/analyze_code_duplicates.py "
         "--repo-root {repo_root} --revision WORKTREE --out {output}"
     ),
-    "ci": f"{sys.executable} execution/format_changed.py --help",
+    "ci": "python execution/format_changed.py --help",
 }
 
 
@@ -342,6 +344,7 @@ def _paired_source_analysis(
                     reasons.append(f"invalid cohort command: {exc}")
                     completed_round = True
                     continue
+                argv = _managed_command(snapshot, argv)
                 rss_before = 0
                 try:
                     import resource
@@ -475,6 +478,19 @@ def _bootstrap_median(samples: list[float]) -> tuple[float, float] | None:
     return estimates[25], estimates[974]
 
 
+def _managed_command(repo_root: Path, argv: list[str]) -> list[str]:
+    """Run repository Python scripts through the verified runtime bootstrap.
+
+    Cohort declarations use the portable ``python`` spelling so they remain
+    stable evidence labels. Resolve that spelling only at launch, then let the
+    canonical managed-argv helper wrap repository scripts in the SQLite
+    bootstrap. Inline probes and external commands remain untouched.
+    """
+    if argv and Path(argv[0]).name.lower() in {"python", "python3", "python.exe"}:
+        argv[0] = sys.executable
+    return ensure_managed_python_argv(repo_root, argv)
+
+
 def capture_performance_baseline(
     repo_root: str | Path,
     command: str,
@@ -506,6 +522,7 @@ def capture_performance_baseline(
         reasons.append(f"invalid command: {exc}")
     if not argv:
         reasons.append("benchmark command is empty")
+    argv = _managed_command(root, argv)
     if samples < 1:
         reasons.append("sample count must be positive")
     if samples < 7:

@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "e206b42405ad37101ed1cbb891073155d127cbf3",
-  "source_hash": "14461d7e9dbe11817db0bbb0ce67f87ed30797ee8da2f5d0333893dcc85f076c",
+  "commit_hash": "9feb008529c4c3dcdaf942c253805e47a6c069d0",
+  "source_hash": "a3ea1928799d4eb326061403440de3a7763cd7ff68bb70c90de3254556678419",
   "scanner_hash": "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -11,7 +11,7 @@
     "min_body_lines": 15
   },
   "files_scanned": 1316,
-  "functions_scanned": 14139,
+  "functions_scanned": 14144,
   "exact_groups": [
     {
       "group_id": "exact-008cef8bb5653e6d",

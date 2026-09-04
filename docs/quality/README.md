@@ -12,25 +12,25 @@ Scanner and source hashes inside each receipt make definition drift explicit.
 
 Current evidence at the Train 0 instrumentation baseline:
 
-- 1,316 executable modules and 485,760 non-comment lines.
+- 1,316 executable modules and 485,879 non-comment lines.
 - 91 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
 - 17 import cycles spanning 80 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.
 - 166 near-miss groups covering 11,772 body lines.
-- 2 whole-tree Ruff findings, 62 format findings, 4,377 active strict-Pyright
+- 2 whole-tree Ruff findings, 63 format findings, 4,377 active strict-Pyright
   diagnostics, and 627 suppression directives. The typed static receipt is
   `PASS`: every configured source root is included and immutable archived
   migrations remain a separately reported denominator.
 - 691 database-building test files classified with zero unclassified cases.
 - The operational graph has no parse failures, unresolved targets, stale
-  dispositions, or unknown production edges. The remaining 84 unknown edges
+  dispositions, or unknown production edges. The remaining 85 unknown edges
   are confined to tests and instruction tests and remain visible in the raw
   graph.
-- The lifecycle receipt classifies all 818 candidates with zero omissions,
+- The lifecycle receipt classifies all 824 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
-  UI-reachable, 175 internal-delegate, and 309 time-bounded dormant entries.
-- The roadmap reconciliation receipt covers 96 named claims: 34 are reproduced
-  or corrected by typed generators and 62 are explicitly rejected from scoring
+  UI-reachable, 187 internal-delegate, and 303 time-bounded dormant entries.
+- The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced
+  or corrected by typed generators and 66 are explicitly rejected from scoring
   for lack of an admissible generator.
 
 Reproduce the receipts from the repository root:

@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "e206b42405ad37101ed1cbb891073155d127cbf3",
+  "scoped_commit": "9feb008529c4c3dcdaf942c253805e47a6c069d0",
   "scanner_sha256": "bce415f8a6c1270f4eb767c2ce0af0b10dd0250014b3437853a665d60663b975",
-  "source_sha256": "14461d7e9dbe11817db0bbb0ce67f87ed30797ee8da2f5d0333893dcc85f076c",
+  "source_sha256": "a3ea1928799d4eb326061403440de3a7763cd7ff68bb70c90de3254556678419",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1316,
-    "total_noncomment_loc": 485760,
+    "total_noncomment_loc": 485877,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -1480,9 +1480,9 @@
         "path": "execution/capture_test_ci_performance.py",
         "module": "execution.capture_test_ci_performance",
         "lines": {
-          "physical": 167,
-          "nonblank": 153,
-          "noncomment": 153
+          "physical": 177,
+          "nonblank": 162,
+          "noncomment": 162
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -1821,9 +1821,9 @@
         "path": "execution/compare_test_ci_performance.py",
         "module": "execution.compare_test_ci_performance",
         "lines": {
-          "physical": 40,
-          "nonblank": 29,
-          "noncomment": 29
+          "physical": 46,
+          "nonblank": 34,
+          "noncomment": 34
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -15880,9 +15880,9 @@
         "path": "src/quality/lifecycle.py",
         "module": "quality.lifecycle",
         "lines": {
-          "physical": 1295,
-          "nonblank": 1187,
-          "noncomment": 1185
+          "physical": 1328,
+          "nonblank": 1218,
+          "noncomment": 1214
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -15897,11 +15897,11 @@
         "path": "src/quality/performance.py",
         "module": "quality.performance",
         "lines": {
-          "physical": 780,
-          "nonblank": 724,
-          "noncomment": 717
+          "physical": 797,
+          "nonblank": 737,
+          "noncomment": 730
         },
-        "internal_fan_out": 0,
+        "internal_fan_out": 1,
         "responsibilities": [
           "filesystem",
           "network",
@@ -15930,9 +15930,9 @@
         "path": "src/quality/reachability.py",
         "module": "quality.reachability",
         "lines": {
-          "physical": 959,
-          "nonblank": 902,
-          "noncomment": 902
+          "physical": 1008,
+          "nonblank": 947,
+          "noncomment": 947
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -15947,9 +15947,9 @@
         "path": "src/quality/roadmap_reconciliation.py",
         "module": "quality.roadmap_reconciliation",
         "lines": {
-          "physical": 970,
-          "nonblank": 916,
-          "noncomment": 916
+          "physical": 974,
+          "nonblank": 920,
+          "noncomment": 920
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -15963,9 +15963,9 @@
         "path": "src/quality/static_quality.py",
         "module": "quality.static_quality",
         "lines": {
-          "physical": 382,
-          "nonblank": 347,
-          "noncomment": 346
+          "physical": 396,
+          "nonblank": 359,
+          "noncomment": 358
         },
         "internal_fan_out": 0,
         "responsibilities": [

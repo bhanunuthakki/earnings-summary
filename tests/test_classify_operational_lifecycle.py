@@ -90,6 +90,38 @@ def test_fixture_relative_python_candidate_coverage(tmp_path: Path) -> None:
     assert report.status == "PASS"
 
 
+def test_src_python_candidates_require_a_main_guard(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo / "src/compute/ir_narrative.py", "if __name__ == '__main__':\n    main()\n")
+    _write(
+        repo / "src/library_with_parser.py",
+        "# if __name__ == '__main__':\nimport argparse\nparser = argparse.ArgumentParser()\n",
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    _refresh_graph(repo)
+
+    report = build_inventory(repo)
+    python_paths = {entry.path for entry in report.entries if entry.kind == "python_module"}
+    assert "src/compute/ir_narrative.py" in python_paths
+    assert "src/library_with_parser.py" not in python_paths
+    assert report.status == "PASS"
+
+
+def test_python_candidate_omission_is_not_masked_by_materialization(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(
+        repo / "src/compute/ir_narrative.py",
+        "# lifecycle: dormant\nif __name__ == '__main__':\n    main()\n",
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    _refresh_graph(repo)
+    report = build_inventory(repo)
+    assert report.status == "HOLD"
+    assert (
+        "src/compute/ir_narrative.py:python_module:src/compute/ir_narrative.py" in report.omissions
+    )
+
+
 def test_routes_exclude_tests_and_capture_rule_method_endpoint(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo / "execution/server.py", "@app.get(\n    '/health'\n)\ndef health(): ...\n")

@@ -366,12 +366,45 @@ def _line_fingerprint(root: Path, path: str, line: int) -> str | None:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _repo_file_target(root: Path, value: str) -> str | None:
+    """Return a canonical repo-relative file target, rejecting prose/escapes."""
+    normalized = value.replace("\\", "/")
+    candidate = Path(normalized)
+    if (
+        not normalized
+        or candidate.is_absolute()
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+    ):
+        return None
+    resolved_root = root.resolve()
+    resolved = (resolved_root / candidate).resolve()
+    if not resolved.is_relative_to(resolved_root) or not resolved.is_file():
+        return None
+    canonical = resolved.relative_to(resolved_root).as_posix()
+    return canonical if canonical == normalized else None
+
+
+def _reviewed_targets(root: Path, entry: DispositionEntry) -> tuple[str, ...] | None:
+    """Validate targets for dispositions that claim an internal Python edge."""
+    if entry.disposition not in {"internal_target", "internal_python_target"}:
+        return ()
+    values = entry.targets or ((entry.target,) if entry.target else ())
+    if not values or any(_repo_file_target(root, value) is None for value in values):
+        return None
+    canonical_targets: list[str] = []
+    for value in values:
+        canonical = _repo_file_target(root, value)
+        assert canonical is not None
+        canonical_targets.append(canonical)
+    return tuple(canonical_targets)
+
+
 def _apply_reviewed_dispositions(
     root: Path,
     edges: list[GraphEdge],
 ) -> tuple[list[GraphEdge], list[Diagnostic], dict[str, str]]:
     """Resolve reviewed dynamic edges while failing closed on stale evidence."""
-    manifests: dict[tuple[str, int, EdgeKind], tuple[DispositionEntry, str]] = {}
+    manifests: dict[tuple[str, int, EdgeKind], tuple[DispositionEntry, str, tuple[str, ...]]] = {}
     diagnostics: list[Diagnostic] = []
     hashes: dict[str, str] = {}
     for manifest_rel, edge_kind in _DISPOSITION_MANIFESTS:
@@ -394,6 +427,19 @@ def _apply_reviewed_dispositions(
         entries = (*manifest.entries, *manifest.edges)
         for entry in entries:
             key = (entry.path, entry.line, edge_kind)
+            reviewed_targets = _reviewed_targets(root, entry)
+            if reviewed_targets is None:
+                diagnostics.append(
+                    Diagnostic(
+                        path=entry.path,
+                        message=(
+                            f"reachability {entry.disposition} disposition requires exact "
+                            f"existing repository file targets at line {entry.line}"
+                        ),
+                        kind="unknown",
+                    )
+                )
+                continue
             actual = _line_fingerprint(root, entry.path, entry.line)
             if actual != entry.fingerprint:
                 diagnostics.append(
@@ -419,14 +465,14 @@ def _apply_reviewed_dispositions(
                     )
                 )
                 continue
-            manifests[key] = (entry, manifest_rel)
+            manifests[key] = (entry, manifest_rel, reviewed_targets)
 
     raw_keys = {
         (edge.source, edge.line, edge.kind)
         for edge in edges
         if edge.unknown and edge.line is not None
     }
-    for key, (_entry, manifest_rel) in manifests.items():
+    for key, (_entry, manifest_rel, _reviewed_targets_value) in manifests.items():
         if key not in raw_keys:
             path, line, edge_kind = key
             diagnostics.append(
@@ -448,11 +494,14 @@ def _apply_reviewed_dispositions(
         if not edge.unknown or matched is None or matched[0].disposition == "unresolved":
             reviewed.append(edge)
             continue
-        entry, manifest_rel = matched
+        entry, manifest_rel, reviewed_targets = matched
+        target_values = (
+            reviewed_targets or entry.targets or ((entry.target,) if entry.target else ())
+        )
         reviewed.append(
             edge.model_copy(
                 update={
-                    "target": ", ".join(entry.targets) or entry.target or edge.target,
+                    "target": ", ".join(target_values) or edge.target,
                     "evidence": (
                         f"{edge.evidence}; reviewed as {entry.disposition} in "
                         f"{manifest_rel}: {entry.evidence}"

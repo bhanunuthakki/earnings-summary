@@ -16,7 +16,7 @@ import sys
 import tomllib
 from collections import Counter
 from collections.abc import Callable, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -42,7 +42,7 @@ class DiagnosticSummary(BaseModel):
 
 class StaticQualityInventory(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: str = "bha-120.v1"
+    schema_version: str = "bha-120.v2"
     repo_root: str
     tracked_python_files: int
     active: list[str]
@@ -121,19 +121,33 @@ def _json_diagnostics(raw: str, tool: str) -> list[dict[str, object]]:
     return cast(list[dict[str, object]], rows)
 
 
+def _portable_diagnostic_path(root: Path, value: object) -> PurePosixPath:
+    normalized = str(value or "").replace("\\", "/")
+    if not normalized:
+        return PurePosixPath("<unknown>")
+    root_text = root.resolve().as_posix().rstrip("/")
+    if normalized.startswith(root_text + "/"):
+        normalized = normalized[len(root_text) + 1 :]
+    candidate = PurePosixPath(normalized)
+    if candidate.is_absolute() or re.match(r"^[A-Za-z]:/", normalized) or ".." in candidate.parts:
+        return PurePosixPath("<external>") / (candidate.name or "<unknown>")
+    return candidate
+
+
 def _summary(
     tool: str,
     command: list[str],
     result: subprocess.CompletedProcess[str],
     version: str,
     receipt: Path,
+    root: Path,
 ) -> DiagnosticSummary:
     rows = _json_diagnostics(result.stdout, tool) if tool in {"ruff", "pyright"} else []
     by_dir: Counter[str] = Counter()
     by_rule: Counter[str] = Counter()
     for row in rows:
-        filename = str(row.get("filename", row.get("file", ""))).replace("\\", "/")
-        by_dir[str(Path(filename).parent)] += 1
+        diagnostic_path = _portable_diagnostic_path(root, row.get("filename", row.get("file", "")))
+        by_dir[diagnostic_path.parent.as_posix()] += 1
         rule = row.get("code", row.get("rule", "unknown"))
         by_rule[str(rule)] += 1
     return DiagnosticSummary(
@@ -142,7 +156,7 @@ def _summary(
         version=version,
         exit_status=result.returncode,
         count=len(rows),
-        receipt_path=str(receipt),
+        receipt_path=receipt.relative_to(root).as_posix(),
         diagnostics_by_directory=dict(sorted(by_dir.items())),
         diagnostics_by_rule=dict(sorted(by_rule.items())),
         command_hash=_sha("\0".join(command)),
@@ -230,13 +244,13 @@ def inventory(
                     version=version,
                     exit_status=result.returncode,
                     count=count,
-                    receipt_path=str(receipt),
+                    receipt_path=receipt.relative_to(root).as_posix(),
                     command_hash=_sha("\0".join(command)),
                     version_hash=_sha(version),
                 )
             )
         else:
-            diagnostics.append(_summary(tool, command, result, version, receipt))
+            diagnostics.append(_summary(tool, command, result, version, receipt, root))
     text_blob = "\n".join((root / p).read_text(encoding="utf-8", errors="replace") for p in files)
     type_ignores = text_blob.count("# type: ignore")
     pyright_ignores = text_blob.count("# pyright: ignore")
@@ -260,7 +274,7 @@ def inventory(
             version="n/a",
             exit_status=0,
             count=type_ignores + pyright_ignores,
-            receipt_path=str(ignore_receipt),
+            receipt_path=ignore_receipt.relative_to(root).as_posix(),
             diagnostics_by_rule={
                 "# type: ignore": type_ignores,
                 "# pyright: ignore": pyright_ignores,

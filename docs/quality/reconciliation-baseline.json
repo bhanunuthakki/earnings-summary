@@ -1,5 +1,5 @@
 {
-  "schema_version": "bha-121.v5",
+  "schema_version": "bha-121.v6",
   "status": "PASS",
   "claims": [
     {
@@ -10,7 +10,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.executable_modules"
       },
       "provisional_evidence": {
@@ -23,12 +23,12 @@
     {
       "name": "production noncomment LOC",
       "provisional_expected": 554615,
-      "observed": 485760,
+      "observed": 485877,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.total_noncomment_loc"
       },
       "provisional_evidence": {
@@ -42,11 +42,11 @@
       "name": "maximum internal fan-out",
       "provisional_expected": null,
       "observed": 156,
-      "verdict": "verified",
-      "scored_eligible": true,
+      "verdict": "rejected",
+      "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.max_internal_fan_out"
       },
       "provisional_evidence": {
@@ -54,7 +54,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 26"
       },
-      "note": "Fresh typed generator reproduces the provisional value."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "modules >=1,000 LOC",
@@ -64,7 +64,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.modules_over_1000_loc"
       },
       "provisional_evidence": {
@@ -82,7 +82,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.modules_over_2000_loc"
       },
       "provisional_evidence": {
@@ -100,7 +100,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.modules_at_least_3000_loc"
       },
       "provisional_evidence": {
@@ -225,12 +225,12 @@
     {
       "name": "SCC internal edges",
       "provisional_expected": 4725,
-      "observed": 4942,
+      "observed": 4943,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.definitions.internal_edges"
       },
       "provisional_evidence": {
@@ -248,7 +248,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.scc_count"
       },
       "provisional_evidence": {
@@ -266,7 +266,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.scc_module_count"
       },
       "provisional_evidence": {
@@ -284,7 +284,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.largest_scc"
       },
       "provisional_evidence": {
@@ -302,7 +302,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "sha256": "f6a630466c5d3908d98896c39994fd3aa24a88e0b339898eade64d1f48381007",
         "locator": "$.exact_totals.groups"
       },
       "provisional_evidence": {
@@ -320,7 +320,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "sha256": "f6a630466c5d3908d98896c39994fd3aa24a88e0b339898eade64d1f48381007",
         "locator": "$.exact_totals.participating_functions"
       },
       "provisional_evidence": {
@@ -334,11 +334,11 @@
       "name": "near-miss duplicate groups",
       "provisional_expected": null,
       "observed": 166,
-      "verdict": "verified",
-      "scored_eligible": true,
+      "verdict": "rejected",
+      "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "sha256": "f6a630466c5d3908d98896c39994fd3aa24a88e0b339898eade64d1f48381007",
         "locator": "$.near_miss_totals.groups"
       },
       "provisional_evidence": {
@@ -346,17 +346,17 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 27"
       },
-      "note": "Fresh typed generator reproduces the provisional value."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "near-miss duplicated LOC",
       "provisional_expected": null,
       "observed": 11772,
-      "verdict": "verified",
-      "scored_eligible": true,
+      "verdict": "rejected",
+      "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "sha256": "f6a630466c5d3908d98896c39994fd3aa24a88e0b339898eade64d1f48381007",
         "locator": "$.near_miss_totals.duplicated_loc"
       },
       "provisional_evidence": {
@@ -364,17 +364,17 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 27"
       },
-      "note": "Fresh typed generator reproduces the provisional value."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "exact duplicated LOC",
       "provisional_expected": null,
       "observed": 337,
-      "verdict": "verified",
-      "scored_eligible": true,
+      "verdict": "rejected",
+      "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "115d1309276ebc916670cfa8d75f191788377af6d9828ee710d36cc55be1f9b9",
+        "sha256": "f6a630466c5d3908d98896c39994fd3aa24a88e0b339898eade64d1f48381007",
         "locator": "$.exact_totals.duplicated_loc"
       },
       "provisional_evidence": {
@@ -382,7 +382,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 27"
       },
-      "note": "Fresh typed generator reproduces the provisional value."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "duplicate coverage",
@@ -396,7 +396,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 27"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "passed tests",
@@ -448,7 +448,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "sha256": "1a9ee025c927353402d479aeba6162fc5376d3ac0c6643571a2d389e1e0f94dc",
         "locator": "$.diagnostics[tool=ruff].count"
       },
       "provisional_evidence": {
@@ -466,7 +466,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "sha256": "1a9ee025c927353402d479aeba6162fc5376d3ac0c6643571a2d389e1e0f94dc",
         "locator": "$.diagnostics[tool=ruff-format].count"
       },
       "provisional_evidence": {
@@ -479,12 +479,12 @@
     {
       "name": "strict Pyright diagnostics",
       "provisional_expected": 27924,
-      "observed": 4377,
+      "observed": 4375,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "sha256": "1a9ee025c927353402d479aeba6162fc5376d3ac0c6643571a2d389e1e0f94dc",
         "locator": "$.diagnostics[tool=pyright].count"
       },
       "provisional_evidence": {
@@ -516,7 +516,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "sha256": "1a9ee025c927353402d479aeba6162fc5376d3ac0c6643571a2d389e1e0f94dc",
         "locator": "$.suppressions_by_file[# type: ignore]"
       },
       "provisional_evidence": {
@@ -534,7 +534,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "sha256": "1a9ee025c927353402d479aeba6162fc5376d3ac0c6643571a2d389e1e0f94dc",
         "locator": "$.suppressions_by_file[# pyright: ignore]"
       },
       "provisional_evidence": {
@@ -552,7 +552,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "fc1335b1a501ee9e441970f8e0f0fd18c48f16ac7d7fe985bf6c3e2b0e87a37f",
+        "sha256": "1a9ee025c927353402d479aeba6162fc5376d3ac0c6643571a2d389e1e0f94dc",
         "locator": "$.suppressions_by_file"
       },
       "provisional_evidence": {
@@ -570,7 +570,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "sha256": "41521161ee86909da44225c69031c27295e881003d9826b1219a55eecb2bcac6",
         "locator": "$.tracked_test_files"
       },
       "provisional_evidence": {
@@ -588,7 +588,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "sha256": "41521161ee86909da44225c69031c27295e881003d9826b1219a55eecb2bcac6",
         "locator": "$.database_builders[*].evidence contains call:command.upgrade"
       },
       "provisional_evidence": {
@@ -606,7 +606,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "sha256": "41521161ee86909da44225c69031c27295e881003d9826b1219a55eecb2bcac6",
         "locator": "$.database_builders[*].evidence contains call:migrated_db"
       },
       "provisional_evidence": {
@@ -624,7 +624,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "sha256": "41521161ee86909da44225c69031c27295e881003d9826b1219a55eecb2bcac6",
         "locator": "$.database_builders[*].evidence contains sql:"
       },
       "provisional_evidence": {
@@ -646,7 +646,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 31"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "cached template milliseconds",
@@ -660,7 +660,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 31"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "CSS census seconds",
@@ -1062,7 +1062,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.strongly_connected_components[1]"
       },
       "provisional_evidence": {
@@ -1266,7 +1266,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 31"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "migration replay upper bound",
@@ -1280,7 +1280,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 31"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "emitter AST walks M",
@@ -1294,7 +1294,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 32"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "emitter calls M",
@@ -1308,7 +1308,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 32"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "comments_server root routes",
@@ -1322,7 +1322,7 @@
         "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
         "locator": "line 20"
       },
-      "note": "No admissible typed generator receipt exists for this roadmap fact."
+      "note": "The provisional roadmap does not state a value for this derived metric."
     },
     {
       "name": "build_redesigned_dcf correction LOC",
@@ -1346,7 +1346,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "dcdf6d1b32fb301499538fecee7f0aacdb617523104b165a9e1e0d5e303c3390",
+        "sha256": "41521161ee86909da44225c69031c27295e881003d9826b1219a55eecb2bcac6",
         "locator": "$.database_builders[*].evidence contains call:command.upgrade"
       },
       "provisional_evidence": {
@@ -1364,7 +1364,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "sha256": "4001cb021a02e16f7afe0fbab307b51afa92defb7bfdac869ede63003f865a94",
         "locator": "$.edges[target=src/synthesis/theme_synth.py]"
       },
       "provisional_evidence": {
@@ -1382,7 +1382,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "sha256": "4001cb021a02e16f7afe0fbab307b51afa92defb7bfdac869ede63003f865a94",
         "locator": "$.edges[target=src/filings/boilerplate_classify.py]"
       },
       "provisional_evidence": {
@@ -1400,7 +1400,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "sha256": "4001cb021a02e16f7afe0fbab307b51afa92defb7bfdac869ede63003f865a94",
         "locator": "$.edges[target=src/filings/cross_sectional_detrend.py]"
       },
       "provisional_evidence": {
@@ -1418,7 +1418,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "sha256": "4001cb021a02e16f7afe0fbab307b51afa92defb7bfdac869ede63003f865a94",
         "locator": "$.edges[target=src/ask/turn_cache.py]"
       },
       "provisional_evidence": {
@@ -1436,7 +1436,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "74ff3ad9201cd83bbcd468d66d0b0d7584f5c21184fe4d73ce5ede746140d389",
+        "sha256": "4001cb021a02e16f7afe0fbab307b51afa92defb7bfdac869ede63003f865a94",
         "locator": "$.edges[target=src/etf_sources/vanguard.py]"
       },
       "provisional_evidence": {
@@ -1454,7 +1454,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.modules[path=execution/refetch_aggregator.py]"
       },
       "provisional_evidence": {
@@ -1472,7 +1472,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "30b3bb760170167afb97bfe125afdb0fa8ecf81fe408efb44870781e7b8770d0",
+        "sha256": "97659296a6df4e685909c746c1701413fc104a3e84937ad4af42257ca9bed5fa",
         "locator": "$.metrics.modules[path=execution/refetch_aggregator_transcripts.py]"
       },
       "provisional_evidence": {
@@ -1483,9 +1483,9 @@
       "note": "Fresh typed generator reproduces the provisional value."
     }
   ],
-  "scored_claims": 34,
-  "rejected_claims": 62,
-  "source_hash": "66786da6e040a9a1a54d37068264f8b13c29b4e8285a00a317a827de2aeeb909",
+  "scored_claims": 30,
+  "rejected_claims": 66,
+  "source_hash": "0260f026decc44678ac49aa1ac827e54cb4c1390cc33d0ea6a5eb27080a0270d",
   "roadmap_source": {
     "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
     "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",

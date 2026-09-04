@@ -23,6 +23,7 @@ Then lower ``_MAX_DIRECT_CHAIN_BUILDERS`` by however many you converted.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -30,7 +31,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 #: Files that still replay migrations in their own fixture. Ratchet DOWN only.
 #: Raising this number means a new test just bought the suite another
 #: multi-minute fixture — convert it to ``migrated_db`` instead.
-_MAX_DIRECT_CHAIN_BUILDERS = 172
+_MAX_DIRECT_CHAIN_BUILDERS = 170
 
 
 def _direct_chain_builders() -> list[str]:
@@ -40,7 +41,18 @@ def _direct_chain_builders() -> list[str]:
             text = path.read_text(encoding="utf-8")
         except OSError:  # pragma: no cover - unreadable file is not this guard's job
             continue
-        if "command.upgrade" in text:
+        try:
+            tree = ast.parse(text, filename=path.name)
+        except SyntaxError:  # pragma: no cover - malformed tests fail elsewhere
+            continue
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "upgrade"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "command"
+            for node in ast.walk(tree)
+        ):
             hits.append(path.name)
     return hits
 

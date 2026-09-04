@@ -44,7 +44,7 @@ class Claim(BaseModel):
 
 class ReconciliationReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: str = "bha-121.v5"
+    schema_version: str = "bha-121.v6"
     status: Literal["PASS", "HOLD"]
     claims: tuple[Claim, ...]
     scored_claims: int
@@ -705,7 +705,7 @@ def reconcile(
         current.static,
         ignored_identity_fields={"scoped_commit"},
         status=lambda receipt: (
-            receipt.schema_version == "bha-120.v1"
+            receipt.schema_version == "bha-120.v2"
             and receipt.status == "PASS"
             and not receipt.violations
             and sorted(item.tool for item in receipt.diagnostics)
@@ -766,7 +766,11 @@ def reconcile(
         observed = fact.extractor(current) if source is not None and source.admitted else None
         if not roadmap_admitted:
             observed = None
-        if observed is None:
+        if expected is None:
+            verdict = "rejected"
+            eligible = False
+            note = "The provisional roadmap does not state a value for this derived metric."
+        elif observed is None:
             verdict: Verdict = "rejected"
             eligible = False
             if not roadmap_admitted:
@@ -776,7 +780,7 @@ def reconcile(
             else:
                 note = "No admissible typed generator receipt exists for this roadmap fact."
         else:
-            verdict = "verified" if expected is None or observed == expected else "corrected"
+            verdict = "verified" if observed == expected else "corrected"
             eligible = True
             note = (
                 "Fresh typed generator reproduces the provisional value."

@@ -103,11 +103,18 @@ def main() -> int:
         {
             "TEST_CI_PERFORMANCE_FRAGMENT_DIR": str(attempt_dir),
             "TEST_CI_PERFORMANCE_CACHE_STATE": args.cache_state,
-            "EARNINGS_SUMMARY_DB_PATH": str(attempt_dir / "disposable.db"),
             "NO_NETWORK": "1",
         }
     )
-    for name in ("FMP_API_KEY", "SEC_USER_AGENT", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+    for name in (
+        "EARNINGS_SUMMARY_DB_PATH",
+        "_EARNINGS_SUMMARY_PYTEST_ORIGINAL_DB_PATH",
+        "EARNINGS_SUMMARY_ENV_FILE",
+        "FMP_API_KEY",
+        "SEC_USER_AGENT",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
         env.pop(name, None)
     command = [
         sys.executable,

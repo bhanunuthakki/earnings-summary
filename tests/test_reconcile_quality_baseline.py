@@ -24,10 +24,16 @@ def _load(name: str, model: type[Receipt]) -> Receipt:
 
 
 def _seed(tmp_path: Path, *, omit: str | None = None) -> CurrentReceipts:
+    static = _load("static-baseline.json", StaticQualityInventory)
+    # The checked-in fixture may predate the current static-receipt schema;
+    # tests exercise reconciliation semantics, not the repository receipt's
+    # historical version.
+    if static.schema_version != "bha-120.v2":
+        static = static.model_copy(update={"schema_version": "bha-120.v2"})
     receipts = CurrentReceipts(
         architecture=_load("architecture-ratchet.json", ArchitectureReceipt),
         duplicates=_load("duplicates-ratchet.json", DuplicateInventory),
-        static=_load("static-baseline.json", StaticQualityInventory),
+        static=static,
         test_db=_load("test-db-patterns-baseline.json", DbAuditReceipt),
         reachability=ReachabilityGraph.model_validate_json(
             (PROJECT_ROOT / ".tmp/quality/reachability-check.json").read_bytes()
@@ -106,6 +112,15 @@ def test_unsupported_claims_are_rejected_without_blocking_pass(tmp_path: Path) -
         and claim.provisional_evidence.locator != "line 0"
         for claim in result.claims
     )
+    for name in (
+        "maximum internal fan-out",
+        "near-miss duplicate groups",
+        "near-miss duplicated LOC",
+        "exact duplicated LOC",
+    ):
+        claim = next(item for item in result.claims if item.name == name)
+        assert claim.verdict == "rejected"
+        assert claim.scored_eligible is False
 
 
 def test_typed_current_receipts_correct_stale_provisional_values(tmp_path: Path) -> None:

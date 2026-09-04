@@ -20,11 +20,11 @@
   "counts": {
     "unknown_process_edges": 73,
     "dispositions": {
-      "internal_python_target": 46,
-      "closed_command_set": 7,
+      "internal_python_target": 44,
+      "closed_command_set": 8,
       "external_process": 17,
       "runtime_registry": 1,
-      "operator_supplied_process": 2
+      "operator_supplied_process": 3
     },
     "omissions": 0
   },
@@ -43,7 +43,7 @@
       "line": 46,
       "fingerprint": "f9142a01b8d64c758af76bce674aca14cb5e4d600136d68830bdec17ccc136fb",
       "disposition": "internal_python_target",
-      "target": "execution/seed_decisions.py",
+      "target": "execution/grade_decisions.py",
       "command_family": "managed Python child",
       "evidence": "The argv is assembled from a fixed managed-Python prefix and checked-in seed script path."
     },
@@ -52,7 +52,7 @@
       "line": 352,
       "fingerprint": "4d6073c5a598b432eb9ea9ae58caf5f376b218ccb15036807d4cab349d8bf25a",
       "disposition": "internal_python_target",
-      "target": "repo_root",
+      "target": "execution/ingest_transcripts_state.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -61,7 +61,7 @@
       "line": 376,
       "fingerprint": "78fc02c7fa27de1bb135b1cb0fe9aaffbdb14bfde82f70f48ab5c45921773a41",
       "disposition": "internal_python_target",
-      "target": "repo_root",
+      "target": "execution/extract_commitments_from_transcript.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -79,7 +79,10 @@
       "line": 58,
       "fingerprint": "5bca6b727d29bc41a8b442aa625360b6c1d5fe67d84c35f0333da0ee10873d2a",
       "disposition": "internal_python_target",
-      "target": "execution/build_redesigned_dcf.py and sibling DCF builders",
+      "targets": [
+        "execution/dcf_opus_assumptions.py",
+        "execution/build_redesigned_dcf.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -88,14 +91,14 @@
       "line": 116,
       "fingerprint": "91d736633d876d837f92502f4c17cd34481f09d23521072b0c2500127facadb1",
       "disposition": "internal_python_target",
-      "target": "ticker-specific extractor commands",
+      "target": "execution/extract_nvo_patent_timeline_state.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 54,
-      "fingerprint": "7e165a521ad5964cca084cf320f4a1ac452f5ea2606bf807f0611ba9ad85ffd5",
+      "line": 57,
+      "fingerprint": "b6922846ff7b007a7664c80688a361c79b0edaf01128fa0f4f1b6be349c61eb2",
       "disposition": "internal_python_target",
       "target": ".github/scripts/ci_gate.py",
       "command_family": "managed Python child",
@@ -103,8 +106,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 132,
-      "fingerprint": "942442623967678eb1db070f465271c769c2138d9f85a266116f6cf6e23cc120",
+      "line": 142,
+      "fingerprint": "1ce27d8d7d4d482017eef0dc5a25098b740577c740c94395dfe069082bd37bfa",
       "disposition": "closed_command_set",
       "target": "pytest over the frozen cohort",
       "command_family": "schema-validated pytest argv",
@@ -133,7 +136,10 @@
       "line": 254,
       "fingerprint": "24029d263abf3b0a53f8e863b9230d41f7ef6c97b712f312c70dd3c01064ebb2",
       "disposition": "internal_python_target",
-      "target": "IR discovery child commands",
+      "targets": [
+        "execution/discover_ir_documents.py",
+        "execution/fetch_ir_documents.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -169,7 +175,7 @@
       "line": 188,
       "fingerprint": "67580e75e44f71728d372eaa02e700f50f9c25eb37bc534d047cec7442f77dbc",
       "disposition": "internal_python_target",
-      "target": "cmd",
+      "target": "execution/save_fmp_data.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -178,7 +184,7 @@
       "line": 205,
       "fingerprint": "f83fac470b81ba9da8d9b21d7f53faf9b6d2e25c2b149139099e20a7a6f5905e",
       "disposition": "internal_python_target",
-      "target": "cmd",
+      "target": "execution/extract_facts.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -223,7 +229,12 @@
       "line": 313,
       "fingerprint": "4c945c86df06434faf6a72e89edb97e37f77e1b97390fb3c1d3b6cc8186b9e15",
       "disposition": "internal_python_target",
-      "target": "onboarding stage commands",
+      "targets": [
+        "execution/onboard_ticker.py",
+        "execution/run_thesis_evaluator.py",
+        "execution/refresh_dcf.py",
+        "execution/extract_commitments_from_transcript.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -232,7 +243,7 @@
       "line": 382,
       "fingerprint": "8046ecaeeae3ce0e3331abae1f88c2d13d3e8e8b8fb09bde9e2f6a33ad2243a8",
       "disposition": "internal_python_target",
-      "target": "PROJECT_ROOT",
+      "target": "execution/save_fmp_data.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -241,7 +252,7 @@
       "line": 398,
       "fingerprint": "7b78ac97da0998a1a8fa1f75466b37e147d123925ee0da5d7e3ecaa89dddbd5d",
       "disposition": "internal_python_target",
-      "target": "PROJECT_ROOT",
+      "target": "execution/backfill_transcripts.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -268,7 +279,7 @@
       "line": 535,
       "fingerprint": "60d385c5c4acc72f33ee16054fb4e10866deae3291f04303de02157cb8d61959",
       "disposition": "internal_python_target",
-      "target": "ETF role-synthesis builder",
+      "target": "execution/build_etf_workup.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -277,7 +288,12 @@
       "line": 742,
       "fingerprint": "9c41af9ff0a5b8f1bfc62c0b298d2c19eabb66969309d73c97a21ee0941083c6",
       "disposition": "internal_python_target",
-      "target": "report-comment processing stages",
+      "targets": [
+        "execution/seed_kpi_definitions.py",
+        "execution/extract_kpis_from_summaries.py",
+        "execution/run_thesis_evaluator.py",
+        "execution/build_artifacts.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -286,7 +302,7 @@
       "line": 2098,
       "fingerprint": "269121a247c0556de673897b8d49e0468f8b4c0796915365541aee02c36bcf19",
       "disposition": "internal_python_target",
-      "target": "fixed earnings-hints script",
+      "target": "execution/schedule_pre_earnings_refresh.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -295,7 +311,7 @@
       "line": 2428,
       "fingerprint": "ba546aa3bf714e55535e97a79c18f29256552f8d855ff1c3eaaaf6810c7e0487",
       "disposition": "internal_python_target",
-      "target": "cmd",
+      "target": "execution/save_fmp_data.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -304,7 +320,7 @@
       "line": 2699,
       "fingerprint": "4b50a55ffc06baad7b38075aa4a58d3a4ac9573bf117a7e8b1e2c7398c90e3ee",
       "disposition": "internal_python_target",
-      "target": "forwarded",
+      "target": "execution/refresh_cache.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -358,7 +374,7 @@
       "line": 885,
       "fingerprint": "3467d2b8cc8f91b1f42ac49a123e72c6653b0869557de0b5eef1127672b2b6a7",
       "disposition": "internal_python_target",
-      "target": "<dynamic process entrypoint>",
+      "target": "execution/build_redesigned_dcf.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -367,7 +383,13 @@
       "line": 308,
       "fingerprint": "79d1a4a08dfcf1da1b4a987948f5ac169f2b7cdc295c58935c54e5146bc2e1bd",
       "disposition": "internal_python_target",
-      "target": "<dynamic process entrypoint>",
+      "targets": [
+        "execution/build_artifacts.py",
+        "execution/extract_company_description.py",
+        "execution/analyze_filing_intelligence.py",
+        "execution/build_saydo_pairs.py",
+        "execution/build_investment_decision_card.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -376,7 +398,17 @@
       "line": 265,
       "fingerprint": "714a0f2d45cb2810b915f6b9493ac7b925f5ce8ba7f82b666fc1f0fd42bbb996",
       "disposition": "internal_python_target",
-      "target": "argv",
+      "targets": [
+        "execution/fetch_fmp_historical_data.py",
+        "execution/backfill_transcripts.py",
+        "execution/process_ir_documents_state.py",
+        "execution/fetch_news.py",
+        "execution/extract_kpis_from_summaries.py",
+        "execution/build_saydo_pairs.py",
+        "execution/build_artifacts.py",
+        "execution/refresh_dcf.py",
+        "execution/run_thesis_evaluator.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -385,7 +417,7 @@
       "line": 277,
       "fingerprint": "e67cba5c8603b00615de3f7e304673950c35b7e035b61508d6b7624cd69899a7",
       "disposition": "internal_python_target",
-      "target": "argv",
+      "target": "execution/refresh_ir_kpis.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -394,7 +426,7 @@
       "line": 47,
       "fingerprint": "1e0a5895d8e5570dcca4fc7dda42b394274d10afbd08184ec9e3b979627909cc",
       "disposition": "internal_python_target",
-      "target": "<dynamic process entrypoint>",
+      "target": "execution/build_artifacts.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -403,7 +435,7 @@
       "line": 214,
       "fingerprint": "b1522e5f4a1a74ad0fee7bef3cda5a8e7b410c0190f276ffadafbc2af3ec871f",
       "disposition": "internal_python_target",
-      "target": "command",
+      "target": "execution/upgrade_database.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -411,8 +443,8 @@
       "path": "execution/rehearse_data_backbone.py",
       "line": 267,
       "fingerprint": "5afb41e932b86b7a7ede586d51b1ca3310401b77a7845185dfd19b455be2c6d4",
-      "disposition": "internal_python_target",
-      "target": "<dynamic process entrypoint>",
+      "disposition": "closed_command_set",
+      "target": "generated offline replay runner",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -421,7 +453,14 @@
       "line": 209,
       "fingerprint": "7877688fcd35fdd87fd70a2b753b238b407fa3682557ef4e9d8dcacfb45e0f00",
       "disposition": "internal_python_target",
-      "target": "argv",
+      "targets": [
+        "execution/prune_llm_capture.py",
+        "execution/grade_predictions.py",
+        "execution/grade_decisions.py",
+        "execution/grade_bear_cases.py",
+        "execution/run_llm_evals.py",
+        "execution/run_behavior_distill.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -430,7 +469,28 @@
       "line": 366,
       "fingerprint": "56c75dd7250f2e5d4810e35daf72c6d7308120ed962e492fff67d0da1a03fb18",
       "disposition": "internal_python_target",
-      "target": "<dynamic process entrypoint>",
+      "targets": [
+        "execution/validate_environment.py",
+        "execution/fetch_news.py",
+        "execution/sync_list_type_from_holdings.py",
+        "execution/record_decisions.py",
+        "execution/sync_position_lifecycle.py",
+        "execution/reconcile_decision_actions.py",
+        "execution/refresh_cockpit_fundamentals.py",
+        "execution/compute_derived_metrics.py",
+        "execution/reprice_dcf.py",
+        "execution/refresh_candidate_fit.py",
+        "execution/fetch_factor_proxies.py",
+        "execution/refresh_position_guard.py",
+        "execution/refresh_portfolio_risk_snapshot.py",
+        "execution/refresh_wealth_context_snapshot.py",
+        "execution/run_triggers.py",
+        "execution/run_standup.py",
+        "execution/generate_pre_earnings_briefs.py",
+        "execution/generate_post_earnings_readouts.py",
+        "execution/build_alert_feed.py",
+        "execution/run_validation_engine.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -439,7 +499,10 @@
       "line": 211,
       "fingerprint": "bf02ad57d81a7c18e7aa8cf45522771db2d7f5fb771e3bdf2ae237224fbe7ea1",
       "disposition": "internal_python_target",
-      "target": "<dynamic process entrypoint>",
+      "targets": [
+        "execution/build_artifacts.py",
+        "execution/extract_company_description.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -448,7 +511,11 @@
       "line": 228,
       "fingerprint": "00eb54b48b8951264cf055057daa8046a12e61e1fe32a623aaad6d5670a7210e",
       "disposition": "internal_python_target",
-      "target": "argv",
+      "targets": [
+        "execution/refresh_dirty_artifacts.py",
+        "execution/run_lens.py",
+        "execution/build_analytical_dashboard.py"
+      ],
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -457,7 +524,7 @@
       "line": 335,
       "fingerprint": "91311c87a2bc383f868ff2a951ab815534f1f0d35af1b3e3b76e9fb2fe1c8537",
       "disposition": "internal_python_target",
-      "target": "repo_root",
+      "target": "execution/ingest_transcripts.py",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -465,8 +532,8 @@
       "path": "execution/sqlite_bootstrap.py",
       "line": 90,
       "fingerprint": "4f77fbfb907f915eb608291bccd9d6e7a0b38d893cba1140e9eb375bd64cb1bb",
-      "disposition": "internal_python_target",
-      "target": "<dynamic process entrypoint>",
+      "disposition": "operator_supplied_process",
+      "target": "operator-supplied Python target",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
     },
@@ -589,8 +656,8 @@
     },
     {
       "path": "src/quality/performance.py",
-      "line": 354,
-      "fingerprint": "61b3c25e2488df54479a5e56d1806548ca52a5669759412199f098c48cc17af0",
+      "line": 357,
+      "fingerprint": "6f109b0dec2dd284be09ece7c83f8e456a78bcb591142a939ef418045326e0fb",
       "disposition": "closed_command_set",
       "target": "frozen benchmark cohort command",
       "command_family": "schema-validated benchmark argv",

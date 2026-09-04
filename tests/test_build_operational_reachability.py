@@ -60,8 +60,9 @@ def test_literal_getattr_and_non_python_process_are_not_unknown(tmp_path: Path) 
 def test_literal_targets_cannot_escape_repository(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside.py"
     outside.write_text("VALUE = 1\n", encoding="utf-8")
-    assert reachability._literal_target(tmp_path, "../outside.py", {}) is None
-    assert reachability._literal_target(tmp_path, str(outside), {}) is None
+    literal_target = getattr(reachability, "_literal_target")
+    assert literal_target(tmp_path, "../outside.py", {}) is None
+    assert literal_target(tmp_path, str(outside), {}) is None
 
 
 def test_unrelated_run_and_call_methods_are_not_process_edges(tmp_path: Path) -> None:
@@ -181,6 +182,72 @@ def test_unresolved_reviewed_disposition_remains_unknown(tmp_path: Path) -> None
     graph = build_graph(tmp_path)
     assert len(graph.unknown_edges) == 1
     assert graph.unknown_edges[0].reviewed_disposition is None
+
+
+def test_internal_process_review_requires_existing_repo_file_and_keeps_target(
+    tmp_path: Path,
+) -> None:
+    source_line = "subprocess.run(command)"
+    _write(tmp_path, "execution/main.py", "import subprocess\n" + source_line + "\n")
+    _write(tmp_path, "execution/child.py", "VALUE = 1\n")
+    _write(
+        tmp_path,
+        "docs/quality/reachability-process-dispositions.json",
+        json.dumps(
+            {
+                "schema_version": "reachability-process-dispositions/v1",
+                "edges": [
+                    {
+                        "path": "execution/main.py",
+                        "line": 2,
+                        "fingerprint": _fingerprint("execution/main.py", 2, source_line),
+                        "disposition": "internal_python_target",
+                        "target": "execution/child.py",
+                        "evidence": "fixed child entrypoint",
+                    }
+                ],
+            }
+        ),
+    )
+
+    graph = build_graph(tmp_path)
+    reviewed = next(edge for edge in graph.edges if edge.kind == "unknown")
+    assert reviewed.target == "execution/child.py"
+    assert reviewed.reviewed_disposition == "internal_python_target"
+    assert not graph.unknown_edges
+    assert graph.hold is False
+
+
+def test_internal_process_review_rejects_prose_target(tmp_path: Path) -> None:
+    source_line = "subprocess.run(command)"
+    _write(tmp_path, "execution/main.py", "import subprocess\n" + source_line + "\n")
+    _write(
+        tmp_path,
+        "docs/quality/reachability-process-dispositions.json",
+        json.dumps(
+            {
+                "schema_version": "reachability-process-dispositions/v1",
+                "edges": [
+                    {
+                        "path": "execution/main.py",
+                        "line": 2,
+                        "fingerprint": _fingerprint("execution/main.py", 2, source_line),
+                        "disposition": "internal_python_target",
+                        "target": "IR discovery child commands",
+                        "evidence": "not an exact target",
+                    }
+                ],
+            }
+        ),
+    )
+
+    graph = build_graph(tmp_path)
+    assert graph.hold is True
+    assert len(graph.unknown_edges) == 1
+    assert any(
+        "requires exact existing repository file targets" in item.message
+        for item in graph.diagnostics
+    )
 
 
 def test_only_current_directives_create_authority_edges(tmp_path: Path) -> None:
