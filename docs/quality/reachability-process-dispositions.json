@@ -11,16 +11,17 @@
   "scope": {
     "source_roots": [
       "src/",
-      "execution/"
+      "execution/",
+      "scripts/"
     ],
     "evidence": "subprocess/runpy expression",
-    "current_production_keys": 69
+    "current_production_keys": 73
   },
   "counts": {
-    "unknown_process_edges": 69,
+    "unknown_process_edges": 73,
     "dispositions": {
-      "internal_python_target": 44,
-      "closed_command_set": 5,
+      "internal_python_target": 46,
+      "closed_command_set": 7,
       "external_process": 17,
       "runtime_registry": 1,
       "operator_supplied_process": 2
@@ -90,6 +91,24 @@
       "target": "ticker-specific extractor commands",
       "command_family": "managed Python child",
       "evidence": "Fixed repository Python target assembled through a managed interpreter or typed local stage registry."
+    },
+    {
+      "path": "execution/capture_test_ci_performance.py",
+      "line": 54,
+      "fingerprint": "7e165a521ad5964cca084cf320f4a1ac452f5ea2606bf807f0611ba9ad85ffd5",
+      "disposition": "internal_python_target",
+      "target": ".github/scripts/ci_gate.py",
+      "command_family": "managed Python child",
+      "evidence": "The subprocess argv is a fixed checked-in shard selector invoked with the current managed interpreter."
+    },
+    {
+      "path": "execution/capture_test_ci_performance.py",
+      "line": 132,
+      "fingerprint": "942442623967678eb1db070f465271c769c2138d9f85a266116f6cf6e23cc120",
+      "disposition": "closed_command_set",
+      "target": "pytest over the frozen cohort",
+      "command_family": "schema-validated pytest argv",
+      "evidence": "The command is assembled from the managed interpreter, fixed pytest flags, and the canonical frozen test-file cohort."
     },
     {
       "path": "execution/collect_operations_runtime_observations.py",
@@ -461,6 +480,15 @@
       "evidence": "Environment variable supplies the executable path directly; subprocess invokes it without a shell."
     },
     {
+      "path": "scripts/check_design_sync.py",
+      "line": 87,
+      "fingerprint": "c479d698ed8dbc5fc0ca74223f6645c357760080e75980a3e316efbb6da5d99a",
+      "disposition": "internal_python_target",
+      "target": "execution/verify_design_conformance.py",
+      "command_family": "managed Python child",
+      "evidence": "The subprocess argv is a fixed checked-in verifier invoked with the current managed interpreter."
+    },
+    {
       "path": "src/db.py",
       "line": 616,
       "fingerprint": "86534bee40a11dd1e8798252b767f8fe31676a16c4ca384af27113803b70df53",
@@ -558,6 +586,15 @@
       "target": "external executable family",
       "command_family": "validated external executable family",
       "evidence": "Call site and helper identify a finite external executable family."
+    },
+    {
+      "path": "src/quality/performance.py",
+      "line": 354,
+      "fingerprint": "61b3c25e2488df54479a5e56d1806548ca52a5669759412199f098c48cc17af0",
+      "disposition": "closed_command_set",
+      "target": "frozen benchmark cohort command",
+      "command_family": "schema-validated benchmark argv",
+      "evidence": "The executed argv is loaded from the frozen performance cohort and validated before invocation."
     },
     {
       "path": "src/provenance/ocr_extraction.py",

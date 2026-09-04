@@ -333,3 +333,11 @@ def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     assert "pip-audit -r requirements-design.lock" in workflow
     assert "cyclonedx-py requirements requirements-design.lock" in workflow
     assert "always() && hashFiles('sbom-*.cdx.json')" in workflow
+
+
+def test_ci_performance_receipts_are_uploaded_without_becoming_a_gate() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "Upload raw test CI performance evidence" in workflow
+    assert "name: test-ci-performance-${{ matrix.label }}" in workflow
+    assert "if: ${{ always() }}" in workflow
+    assert "evidence_status" not in workflow

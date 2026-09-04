@@ -196,7 +196,22 @@ jobs:
           # which test caused it (this is what made the 2026-07-31 shard-6 kills
           # undiagnosable). The slowest-test table costs nothing and makes the
           # next occurrence attributable.
-          pytest -q -n 2 --dist=loadfile --durations=25 "${selected[@]}"
+          python execution/capture_test_ci_performance.py \
+            --cohort ci-shard \
+            --source-shard '${{ matrix.source_shard }}' \
+            --source-shards 8 \
+            --split-count '${{ matrix.split_count }}' \
+            --split-part '${{ matrix.split_part }}' \
+            --cache-state unknown \
+            --fragments-dir ".tmp/quality/test-ci-performance/${{ matrix.label }}" \
+            --receipt ".tmp/quality/test-ci-performance/${{ matrix.label }}/receipt.json"
+      - name: Upload raw test CI performance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-ci-performance-${{ matrix.label }}
+          path: .tmp/quality/test-ci-performance/**
+          if-no-files-found: ignore
 
   design:
     name: Design Sync

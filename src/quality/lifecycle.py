@@ -14,22 +14,27 @@ import json
 import re
 import subprocess
 from collections.abc import Iterable
+from datetime import date
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, TypedDict
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from .reachability import GraphEdge, ReachabilityGraph, build_graph
 
-SCHEMA_VERSION = "bha-119.v3"
+SCHEMA_VERSION = "bha-119.v5"
 MAX_STDOUT_BYTES = 100_000
 
 Disposition = Literal[
-    "scheduled/service",
-    "interactive/manual",
-    "internal/library",
-    "one-shot migration/backfill",
-    "tombstone/dormant_candidate",
+    "scheduled",
+    "service",
+    "ui-reachable",
+    "manual-supported",
+    "internal-delegate",
+    "dormant-until",
+    "one-shot-completed",
+    "compatibility-tombstone",
+    "retire",
 ]
 Surface = Literal[
     "python_module",
@@ -67,10 +72,85 @@ class LifecycleEntry(BaseModel):
     targets: tuple[str, ...] = ()
     methods: tuple[str, ...] = ()
     endpoint: str | None = None
+    # These are deliberately explicit rather than inferred from names.  The
+    # fields form the portable receipt consumed by the quality ratchet.
+    owner_evidence: str | None = None
+    invocation_evidence: str | None = None
+    incoming_edge: str | None = None
+    sealed_completion_evidence: str | None = None
+    tombstone_consumer: str | None = None
+    tombstone_expiry: str | None = None
+    dormant_owner: str | None = None
+    dormant_activation: str | None = None
+    dormant_review: str | None = None
+    dormant_policy_evidence: str | None = None
+    retirement_evidence: tuple[str, ...] = ()
 
     @property
     def key(self) -> CandidateKey:
         return CandidateKey(self.path, self.kind, self.identifier)
+
+    @model_validator(mode="after")
+    def validate_disposition_evidence(self) -> LifecycleEntry:
+        if self.disposition == "manual-supported" and (
+            not self.owner_evidence
+            or not self.owner_evidence.startswith(("canonical:", "runbook:"))
+            or not self.invocation_evidence
+        ):
+            raise ValueError(
+                "manual-supported requires canonical/runbook owner and invocation evidence"
+            )
+        if self.disposition == "internal-delegate" and not self.incoming_edge:
+            raise ValueError("internal-delegate requires incoming typed edge evidence")
+        if self.disposition == "one-shot-completed" and (
+            not self.sealed_completion_evidence
+            or not self.sealed_completion_evidence.startswith("sealed:")
+        ):
+            raise ValueError("one-shot-completed requires sealed completion evidence")
+        if self.disposition == "compatibility-tombstone":
+            if not self.tombstone_consumer or not self.tombstone_expiry:
+                raise ValueError("compatibility-tombstone requires consumer and expiry")
+            _require_current_iso_date(self.tombstone_expiry, field="tombstone_expiry")
+        if self.disposition == "dormant-until" and not all(
+            (
+                self.dormant_owner,
+                self.dormant_activation,
+                self.dormant_review,
+                self.dormant_policy_evidence,
+            )
+        ):
+            raise ValueError(
+                "dormant-until requires owner, activation, review, and policy evidence"
+            )
+        if self.disposition == "dormant-until":
+            assert self.dormant_review is not None
+            _require_current_iso_date(self.dormant_review, field="dormant_review")
+        if self.disposition == "retire":
+            required = {
+                "no-incoming-runtime-edges",
+                "no-route-or-ui-surface",
+                "no-scheduler-or-service-owner",
+                "no-registry-or-reconstruction-contract",
+                "behavioral-suite-pass",
+            }
+            observed = {item.split(":", 1)[0] for item in self.retirement_evidence}
+            if not required.issubset(observed):
+                raise ValueError("retire requires all five deletion-proof evidence classes")
+        return self
+
+
+class _LifecycleFields(TypedDict, total=False):
+    owner_evidence: str | None
+    invocation_evidence: str | None
+    incoming_edge: str | None
+    sealed_completion_evidence: str | None
+    tombstone_consumer: str | None
+    tombstone_expiry: str | None
+    dormant_owner: str | None
+    dormant_activation: str | None
+    dormant_review: str | None
+    dormant_policy_evidence: str | None
+    retirement_evidence: tuple[str, ...]
 
 
 class LifecycleInventory(BaseModel):
@@ -105,6 +185,41 @@ class ScheduledTaskManifest(BaseModel):
 
     version: int
     tasks: tuple[ScheduledTaskRecord, ...]
+
+
+class DormantPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["bha-119.dormant-policy/v1"]
+    owner_evidence: str
+    authorization_evidence: str
+    activation_evidence: str
+    review_on: str
+    path_prefixes: tuple[str, ...]
+    exact_paths: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_policy(self) -> DormantPolicy:
+        if not self.owner_evidence.startswith("linear:"):
+            raise ValueError("dormant policy owner must be a Linear issue")
+        if not self.authorization_evidence.strip() or not self.activation_evidence.strip():
+            raise ValueError("dormant policy requires authorization and activation evidence")
+        _require_current_iso_date(self.review_on, field="review_on")
+        if not self.path_prefixes and not self.exact_paths:
+            raise ValueError("dormant policy scope is empty")
+        return self
+
+    def covers(self, path: str) -> bool:
+        return path in self.exact_paths or path.startswith(self.path_prefixes)
+
+
+def _require_current_iso_date(value: str, *, field: str) -> None:
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO date") from exc
+    if parsed < date.today():
+        raise ValueError(f"{field} is expired")
 
 
 _PYTHON_ROOTS = ("execution/", "cron/", "scripts/", ".github/scripts/")
@@ -250,6 +365,19 @@ def _load_task_manifest(root: Path) -> ScheduledTaskManifest:
         raise LifecycleError(f"invalid scheduled-task manifest: {exc}") from exc
 
 
+def _load_dormant_policy(root: Path) -> tuple[DormantPolicy, str]:
+    relative = "docs/quality/lifecycle-dormant-policy.json"
+    path = root / relative
+    if not path.is_file():
+        raise LifecycleError("dormant lifecycle policy is missing")
+    try:
+        raw = path.read_bytes()
+        policy = DormantPolicy.model_validate_json(raw)
+    except (OSError, ValidationError, ValueError) as exc:
+        raise LifecycleError(f"invalid dormant lifecycle policy: {exc}") from exc
+    return policy, f"policy:{relative}#{hashlib.sha256(raw).hexdigest()}"
+
+
 def _literal(node: ast.expr) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
@@ -307,7 +435,7 @@ def _route_entries(root: Path, path: str, text: str, violations: list[str]) -> l
                     identifier=identifier,
                     evidence=evidence,
                     fingerprint=_fingerprint(path, decorator.lineno, evidence),
-                    disposition="interactive/manual",
+                    disposition="ui-reachable",
                     classification_basis="production_route",
                     rationale="Literal production Flask route exposed through an HTTP decorator.",
                     targets=(rule,),
@@ -351,7 +479,7 @@ def _managed_service_entries(
                 identifier=name,
                 evidence=evidence,
                 fingerprint=_fingerprint(path, node.lineno, evidence),
-                disposition="scheduled/service",
+                disposition="service",
                 classification_basis="managed_service_registry",
                 rationale="Canonical ManagedService declaration owns this runtime service.",
                 targets=_SERVICE_TARGETS.get(name, (name,)),
@@ -423,11 +551,18 @@ def _registry_symbols(text: str, path: str) -> tuple[str, ...]:
     return tuple(sorted(symbols))
 
 
-def _registry_entry(root: Path, path: str) -> LifecycleEntry:
+def _registry_entry(
+    root: Path,
+    path: str,
+    dormant_policy: DormantPolicy,
+    dormant_policy_evidence: str,
+    incoming_edge: str | None = None,
+) -> LifecycleEntry:
     text = _read_text(root / path)
     lines = text.splitlines()
     line = next((index for index, value in enumerate(lines, 1) if value.strip()), 1)
     evidence = _source_line(root, path, line)
+    active = incoming_edge is not None
     return LifecycleEntry(
         path=path,
         line=line,
@@ -435,41 +570,70 @@ def _registry_entry(root: Path, path: str) -> LifecycleEntry:
         identifier=path,
         evidence=evidence,
         fingerprint=_fingerprint(path, line, evidence),
-        disposition="internal/library",
-        classification_basis="canonical_registry_authority",
-        rationale="Explicitly catalogued production registry authority with live public symbols.",
+        disposition="internal-delegate" if active else "dormant-until",
+        classification_basis=("typed_incoming_edge" if active else "time_bounded_owner_review"),
+        rationale=(
+            "A verified typed edge retains this catalogued registry authority."
+            if active
+            else "Unreferenced registry authority is retained for owner review, not claimed live."
+        ),
         targets=_registry_symbols(text, path),
+        incoming_edge=incoming_edge,
+        dormant_owner=None if active else dormant_policy.owner_evidence,
+        dormant_activation=None if active else dormant_policy.activation_evidence,
+        dormant_review=None if active else dormant_policy.review_on,
+        dormant_policy_evidence=None if active else dormant_policy_evidence,
     )
 
 
-def _python_disposition(path: str, text: str, scheduled: set[str]) -> Disposition:
-    if _first_cli_line(text) is None:
-        return "internal/library"
+def _python_disposition(
+    path: str,
+    text: str,
+    scheduled: set[str],
+    service_targets: set[str],
+    incoming_edge: str | None,
+) -> Disposition:
+    if path in service_targets:
+        return "service"
     if path in scheduled:
-        return "scheduled/service"
-    if "lifecycle: dormant" in text.lower() or "lifecycle: tombstone" in text.lower():
-        return "tombstone/dormant_candidate"
+        return "scheduled"
+    if re.search(r"lifecycle:\s*tombstone\b", text, re.IGNORECASE):
+        return "compatibility-tombstone"
+    if re.search(r"lifecycle:\s*dormant\b", text, re.IGNORECASE):
+        return "dormant-until"
     tokens = set(re.split(r"[^a-z0-9]+", path.lower()))
-    if tokens & _ONE_SHOT_TOKENS:
-        return "one-shot migration/backfill"
-    return "interactive/manual"
+    if tokens & _ONE_SHOT_TOKENS and re.search(r"lifecycle:\s*completion=sealed:", text, re.I):
+        return "one-shot-completed"
+    if re.search(r"lifecycle:\s*owner=(?:canonical|runbook):\S+", text, re.I) and re.search(
+        r"lifecycle:\s*invocation=\S+", text, re.I
+    ):
+        return "manual-supported"
+    if incoming_edge is not None:
+        return "internal-delegate"
+    return "dormant-until"
 
 
-def _python_rationale(path: str, text: str, scheduled: set[str]) -> tuple[str, str]:
-    disposition = _python_disposition(path, text, scheduled)
-    if disposition == "internal/library":
-        return "no_cli_surface", "Execution support module has no top-level CLI marker."
-    if disposition == "scheduled/service":
+def _python_rationale(disposition: Disposition, text: str) -> tuple[str, str]:
+    if disposition == "internal-delegate":
+        return "typed_incoming_edge", "A verified typed edge retains this internal delegate."
+    if disposition == "service":
+        return "managed_service_target", "The managed-service registry launches this entrypoint."
+    if disposition == "scheduled":
         return (
             "scheduled_wrapper_reference",
             "A canonical cron/task wrapper launches this entrypoint.",
         )
-    if disposition == "tombstone/dormant_candidate":
+    if disposition in {"compatibility-tombstone", "dormant-until"}:
+        if disposition == "dormant-until" and "lifecycle: dormant" not in text.lower():
+            return (
+                "time_bounded_owner_review",
+                "Unlinked operation is retained but dormant under the BHA-119 owner mandate until explicit activation or review.",
+            )
         return (
             "explicit_lifecycle_annotation",
-            "Source contains an explicit dormant/tombstone lifecycle annotation.",
+            f"Source contains an explicit {disposition} lifecycle annotation.",
         )
-    if disposition == "one-shot migration/backfill":
+    if disposition == "one-shot-completed":
         return (
             "one_shot_operation_name",
             "Executable name identifies a migration, backfill, bootstrap, seed, or population operation.",
@@ -478,6 +642,122 @@ def _python_rationale(path: str, text: str, scheduled: set[str]) -> tuple[str, s
         "unlinked_cli_surface",
         "Top-level CLI has no scheduler or managed-service linkage and remains operator-invoked.",
     )
+
+
+_EVIDENCE = re.compile(
+    r"(?im)^\s*#\s*lifecycle:\s*(owner|invocation|completion|consumer|expiry|activation|review)\s*=\s*(\S+)\s*$"
+)
+
+
+def _lifecycle_evidence(text: str) -> dict[str, str]:
+    """Read only explicit, line-oriented lifecycle receipts from source."""
+    return {key: value for key, value in _EVIDENCE.findall(text)}
+
+
+def _owned_file(root: Path, relative: str, *, evidence: str) -> Path:
+    candidate = Path(relative)
+    if candidate.is_absolute():
+        raise LifecycleError(f"{evidence} path must be repository-relative: {relative}")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / candidate).resolve()
+    if not resolved.is_relative_to(resolved_root) or not resolved.is_file():
+        raise LifecycleError(f"{evidence} is not a repository file: {relative}")
+    return resolved
+
+
+def _validate_directive_owner(root: Path, owner: str) -> None:
+    owner_class, owner_path = owner.split(":", 1)
+    _owned_file(root, owner_path, evidence="manual lifecycle owner")
+    manifest_path = root / "directives/directive_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entry = manifest["directives"][owner_path]
+        actual_class = entry["class"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise LifecycleError(
+            f"manual lifecycle owner is absent from directive manifest: {owner_path}"
+        ) from exc
+    if actual_class != owner_class:
+        raise LifecycleError(
+            f"manual lifecycle owner class mismatch: expected {owner_class}, found {actual_class}"
+        )
+
+
+def lifecycle_evidence_fields(
+    *,
+    path: str,
+    text: str,
+    disposition: Disposition,
+    incoming_edge: str | None = None,
+    root: Path | None = None,
+    dormant_policy: DormantPolicy | None = None,
+    dormant_policy_evidence: str | None = None,
+) -> _LifecycleFields:
+    values = _lifecycle_evidence(text)
+    owner = values.get("owner")
+    invocation = values.get("invocation")
+    completion = values.get("completion")
+    if disposition == "manual-supported" and (
+        not owner or not owner.startswith(("canonical:", "runbook:")) or not invocation
+    ):
+        raise LifecycleError(
+            f"manual lifecycle requires canonical/runbook owner and invocation evidence: {path}"
+        )
+    if owner and root is not None and owner.startswith(("canonical:", "runbook:")):
+        _validate_directive_owner(root, owner)
+    if disposition == "internal-delegate" and incoming_edge is None:
+        raise LifecycleError(f"internal lifecycle requires a verified incoming typed edge: {path}")
+    if disposition == "one-shot-completed" and (
+        not completion or not completion.startswith("sealed:")
+    ):
+        raise LifecycleError(f"one-shot lifecycle requires sealed completion evidence: {path}")
+    if completion and root is not None and completion.startswith("sealed:"):
+        receipt_path = completion.split(":", 1)[1]
+        _owned_file(root, receipt_path, evidence="one-shot sealed completion receipt")
+    if disposition == "compatibility-tombstone" and (
+        not values.get("consumer") or not values.get("expiry")
+    ):
+        raise LifecycleError(f"tombstone lifecycle requires consumer and expiry evidence: {path}")
+    if disposition == "compatibility-tombstone":
+        if values["consumer"].lower() in {"none", "unknown", "n/a"}:
+            raise LifecycleError(f"tombstone lifecycle requires a named consumer: {path}")
+        try:
+            _require_current_iso_date(values["expiry"], field="expiry")
+        except ValueError as exc:
+            raise LifecycleError(f"invalid tombstone lifecycle evidence for {path}: {exc}") from exc
+    if disposition == "dormant-until" and not all(
+        values.get(key) for key in ("owner", "activation", "review")
+    ):
+        if "lifecycle: dormant" in text.lower():
+            raise LifecycleError(
+                f"dormant lifecycle requires owner, activation, and review evidence: {path}"
+            )
+        if dormant_policy is None or not dormant_policy.covers(path):
+            raise LifecycleError(f"dormant lifecycle lacks explicit policy coverage: {path}")
+        values.update(
+            owner=dormant_policy.owner_evidence,
+            activation=dormant_policy.activation_evidence,
+            review=dormant_policy.review_on,
+        )
+    elif disposition == "dormant-until":
+        dormant_policy_evidence = f"source:{path}"
+    if disposition == "dormant-until":
+        try:
+            _require_current_iso_date(values["review"], field="review")
+        except ValueError as exc:
+            raise LifecycleError(f"invalid dormant lifecycle evidence for {path}: {exc}") from exc
+    return {
+        "owner_evidence": owner,
+        "invocation_evidence": invocation,
+        "incoming_edge": incoming_edge,
+        "sealed_completion_evidence": completion,
+        "tombstone_consumer": values.get("consumer"),
+        "tombstone_expiry": values.get("expiry"),
+        "dormant_owner": values.get("owner"),
+        "dormant_activation": values.get("activation"),
+        "dormant_review": values.get("review"),
+        "dormant_policy_evidence": dormant_policy_evidence,
+    }
 
 
 def _graph_entry(root: Path, edge: GraphEdge) -> LifecycleEntry:
@@ -492,11 +772,33 @@ def _graph_entry(root: Path, edge: GraphEdge) -> LifecycleEntry:
         identifier=f"{edge.target}@{edge.line}",
         evidence=evidence,
         fingerprint=_fingerprint(edge.source, edge.line, evidence),
-        disposition="internal/library",
+        disposition="internal-delegate",
         classification_basis="typed_reachability_edge",
-        rationale=f"Typed {kind} edge retains this operational dependency.",
+        rationale=f"Typed {edge.kind} edge retains this operational dependency.",
         targets=(edge.target,),
+        incoming_edge=f"{edge.source}:{edge.line}:{edge.kind}",
     )
+
+
+_NON_RUNTIME_EDGE_SOURCES = ("tests/", "instruction_tests/", "docs/", "directives/")
+
+
+def _runtime_incoming_edge(graph: ReachabilityGraph, path: str) -> str | None:
+    edge = next(
+        (
+            candidate
+            for candidate in graph.edges
+            if candidate.target.replace("\\", "/") == path
+            and candidate.line is not None
+            and candidate.kind not in {"unknown", "directive", "reconstruction"}
+            and not candidate.unknown
+            and not candidate.source.startswith(_NON_RUNTIME_EDGE_SOURCES)
+        ),
+        None,
+    )
+    if edge is None:
+        return None
+    return f"{edge.source}:{edge.line}:{edge.kind}"
 
 
 def _expected_candidates(
@@ -570,8 +872,11 @@ def _expected_candidates(
             for match in re.finditer(r"name\s*=\s*['\"]([^'\"]+)['\"]", text):
                 expected.add(CandidateKey(path, "service", match.group(1)))
     for edge in graph.edges:
-        if edge.kind == "reconstruction":
-            expected.add(CandidateKey(edge.source, "reconstruction", f"{edge.target}@{edge.line}"))
+        if edge.kind in {"reconstruction", "registry"} and not edge.unknown:
+            edge_surface: Surface = (
+                "reconstruction" if edge.kind == "reconstruction" else "registry"
+            )
+            expected.add(CandidateKey(edge.source, edge_surface, f"{edge.target}@{edge.line}"))
     discovered_registries = {
         path
         for path in paths
@@ -641,12 +946,19 @@ def build_inventory(root: Path) -> LifecycleInventory:
     paths = _worktree_paths(root)
     graph, graph_path = _load_graph(root)
     task_manifest = _load_task_manifest(root)
+    dormant_policy, dormant_policy_evidence = _load_dormant_policy(root)
     task_by_xml = {task.xml: task for task in task_manifest.tasks}
     duplicate_task_names = len(task_manifest.tasks) - len(
         {task.task_name for task in task_manifest.tasks}
     )
     duplicate_task_xml = len(task_manifest.tasks) - len(task_by_xml)
     expected, violations = _expected_candidates(root, paths, graph, task_by_xml)
+    operational_prefixes = ("src/", "execution/", "cron/", "scripts/", ".github/")
+    for diagnostic in graph.diagnostics:
+        if diagnostic.path.startswith(operational_prefixes):
+            violations.append(
+                f"operational reachability {diagnostic.kind}: {diagnostic.path}: {diagnostic.message}"
+            )
     xml_files = {Path(path).name for path in paths if path.endswith(".task.xml")}
     manifest_xml = set(task_by_xml)
     if orphan_xml := sorted(xml_files - manifest_xml):
@@ -690,7 +1002,22 @@ def build_inventory(root: Path) -> LifecycleInventory:
         if _is_python_candidate(path, text):
             line = _first_cli_line(text) or 1
             evidence = _source_line(root, path, line)
-            basis, rationale = _python_rationale(path, text, scheduled)
+            incoming = _runtime_incoming_edge(graph, path)
+            disposition = _python_disposition(path, text, scheduled, service_targets, incoming)
+            basis, rationale = _python_rationale(disposition, text)
+            try:
+                lifecycle_fields = lifecycle_evidence_fields(
+                    path=path,
+                    text=text,
+                    disposition=disposition,
+                    incoming_edge=incoming,
+                    root=root,
+                    dormant_policy=dormant_policy,
+                    dormant_policy_evidence=dormant_policy_evidence,
+                )
+            except LifecycleError as exc:
+                violations.append(str(exc))
+                continue
             entries.append(
                 LifecycleEntry(
                     path=path,
@@ -699,10 +1026,11 @@ def build_inventory(root: Path) -> LifecycleInventory:
                     identifier=path,
                     evidence=evidence,
                     fingerprint=_fingerprint(path, line, evidence),
-                    disposition=_python_disposition(path, text, scheduled),
+                    disposition=disposition,
                     classification_basis=basis,
                     rationale=rationale,
                     targets=(path,),
+                    **lifecycle_fields,
                 )
             )
         if path.endswith(".py") and path.startswith(("src/", "execution/", "cron/", "scripts/")):
@@ -721,7 +1049,7 @@ def build_inventory(root: Path) -> LifecycleInventory:
                     identifier=identifier,
                     evidence=evidence,
                     fingerprint=_fingerprint(path, 1, evidence),
-                    disposition="scheduled/service",
+                    disposition="scheduled",
                     classification_basis="scheduled_task_manifest",
                     rationale="Canonical task manifest and matching XML declare this scheduled task.",
                     targets=targets,
@@ -731,9 +1059,9 @@ def build_inventory(root: Path) -> LifecycleInventory:
             lines = text.splitlines()
             evidence = lines[0].strip() if lines else path
             disposition: Disposition = (
-                "scheduled/service"
+                "scheduled"
                 if path in scheduled_wrappers or path.startswith(".github/workflows/")
-                else "interactive/manual"
+                else "dormant-until"
             )
             entries.append(
                 LifecycleEntry(
@@ -746,13 +1074,25 @@ def build_inventory(root: Path) -> LifecycleInventory:
                     disposition=disposition,
                     classification_basis=(
                         "scheduler_owned_wrapper"
-                        if disposition == "scheduled/service"
+                        if disposition == "scheduled"
                         else "operator_wrapper"
                     ),
                     rationale=(
                         "Cron or CI owns this executable wrapper."
-                        if disposition == "scheduled/service"
+                        if disposition == "scheduled"
                         else "Executable wrapper is not linked from the canonical task scheduler."
+                    ),
+                    dormant_owner=(
+                        None if disposition == "scheduled" else dormant_policy.owner_evidence
+                    ),
+                    dormant_activation=(
+                        None if disposition == "scheduled" else dormant_policy.activation_evidence
+                    ),
+                    dormant_review=(
+                        None if disposition == "scheduled" else dormant_policy.review_on
+                    ),
+                    dormant_policy_evidence=(
+                        None if disposition == "scheduled" else dormant_policy_evidence
                     ),
                 )
             )
@@ -767,7 +1107,7 @@ def build_inventory(root: Path) -> LifecycleInventory:
                     identifier=path,
                     evidence=evidence,
                     fingerprint=_fingerprint(path, 1, evidence),
-                    disposition="scheduled/service",
+                    disposition="service",
                     classification_basis="service_unit_file",
                     rationale="Service unit file declares a continuously managed operation.",
                     targets=(path,),
@@ -777,7 +1117,7 @@ def build_inventory(root: Path) -> LifecycleInventory:
             entries.extend(_managed_service_entries(root, path, text, violations))
 
     for edge in graph.edges:
-        if edge.kind == "reconstruction":
+        if edge.kind in {"reconstruction", "registry"} and not edge.unknown:
             try:
                 entries.append(_graph_entry(root, edge))
             except LifecycleError as exc:
@@ -785,7 +1125,16 @@ def build_inventory(root: Path) -> LifecycleInventory:
     for path in REGISTRY_AUTHORITIES:
         if path in paths:
             try:
-                entries.append(_registry_entry(root, path))
+                incoming = _runtime_incoming_edge(graph, path)
+                entries.append(
+                    _registry_entry(
+                        root,
+                        path,
+                        dormant_policy,
+                        dormant_policy_evidence,
+                        incoming,
+                    )
+                )
             except LifecycleError as exc:
                 violations.append(str(exc))
 
@@ -804,11 +1153,15 @@ def build_inventory(root: Path) -> LifecycleInventory:
         violations.append("no lifecycle evidence discovered")
 
     disposition_names = (
-        "scheduled/service",
-        "interactive/manual",
-        "internal/library",
-        "one-shot migration/backfill",
-        "tombstone/dormant_candidate",
+        "scheduled",
+        "service",
+        "ui-reachable",
+        "manual-supported",
+        "internal-delegate",
+        "one-shot-completed",
+        "compatibility-tombstone",
+        "dormant-until",
+        "retire",
     )
     surface_names = (
         "python_module",

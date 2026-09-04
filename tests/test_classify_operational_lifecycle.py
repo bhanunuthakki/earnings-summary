@@ -12,6 +12,7 @@ from src.quality.lifecycle import (
     REGISTRY_AUTHORITIES,
     LifecycleError,
     build_inventory,
+    lifecycle_evidence_fields,
     validate_inventory,
 )
 from src.quality.reachability import build_graph
@@ -36,6 +37,20 @@ def _repo(tmp_path: Path, *, with_graph: bool = True) -> Path:
     _write(tmp_path / "execution/entry.py", "if __name__ == '__main__':\n    print('manual')\n")
     _write(tmp_path / "execution/helper.py", "VALUE = 1\n")
     _write(tmp_path / "cron/task_manifest.json", '{"version": 1, "tasks": []}\n')
+    _write(
+        tmp_path / "docs/quality/lifecycle-dormant-policy.json",
+        json.dumps(
+            {
+                "schema_version": "bha-119.dormant-policy/v1",
+                "owner_evidence": "linear:BHA-119",
+                "authorization_evidence": "Owner-authorized lifecycle review.",
+                "activation_evidence": "explicit-owner-invocation-or-registration",
+                "review_on": "2026-12-03",
+                "path_prefixes": ["execution/", "src/", "cron/", "scripts/", ".github/"],
+                "exact_paths": ["Makefile"],
+            }
+        ),
+    )
     for registry in REGISTRY_AUTHORITIES:
         _write(tmp_path / registry, "PUBLIC_REGISTRY_SURFACE = ()\n")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
@@ -62,8 +77,8 @@ def test_fixture_relative_python_candidate_coverage(tmp_path: Path) -> None:
     report = build_inventory(_repo(tmp_path))
     python = [entry for entry in report.entries if entry.kind == "python_module"]
     assert {(entry.path, entry.disposition) for entry in python} == {
-        ("execution/entry.py", "interactive/manual"),
-        ("execution/helper.py", "internal/library"),
+        ("execution/entry.py", "dormant-until"),
+        ("execution/helper.py", "dormant-until"),
     }
     assert report.coverage == {
         "candidates": 28,
@@ -148,9 +163,12 @@ def test_task_wrapper_service_reconstruction_registry_surfaces(tmp_path: Path) -
     task = next(entry for entry in report.entries if entry.kind == "scheduled_task")
     assert task.identifier == "\\earnings-summary\\daily"
     assert task.targets == ("cron/run_daily.bat",)
+    assert task.disposition == "scheduled"
+    service_units = [entry for entry in report.entries if entry.kind == "service"]
+    assert all(entry.disposition == "service" for entry in service_units)
     by_path = {entry.path: entry for entry in report.entries if entry.kind == "python_module"}
-    assert by_path["execution/comments_server.py"].disposition == "scheduled/service"
-    assert by_path["execution/capture_poller.py"].disposition == "scheduled/service"
+    assert by_path["execution/comments_server.py"].disposition == "service"
+    assert by_path["execution/capture_poller.py"].disposition == "service"
 
 
 def test_missing_or_malformed_graph_fails_closed(tmp_path: Path) -> None:
@@ -194,3 +212,117 @@ def test_lifecycle_output_is_deterministic(tmp_path: Path) -> None:
     first = build_inventory(repo).model_dump(mode="json", exclude={"worktree_dirty"})
     second = build_inventory(repo).model_dump(mode="json", exclude={"worktree_dirty"})
     assert first == second
+
+
+def test_manual_classification_requires_canonical_owner_and_invocation() -> None:
+    with pytest.raises(LifecycleError, match="canonical/runbook owner and invocation"):
+        lifecycle_evidence_fields(
+            path="execution/manual.py",
+            text="if __name__ == '__main__': pass\n",
+            disposition="manual-supported",
+        )
+    with pytest.raises(LifecycleError, match="canonical/runbook owner and invocation"):
+        lifecycle_evidence_fields(
+            path="execution/manual.py",
+            text="# lifecycle: owner=comment\n# lifecycle: invocation=python execution/manual.py\n",
+            disposition="manual-supported",
+        )
+
+
+def test_internal_and_one_shot_classifications_fail_closed() -> None:
+    with pytest.raises(LifecycleError, match="verified incoming typed edge"):
+        lifecycle_evidence_fields(
+            path="src/helper.py", text="VALUE = 1\n", disposition="internal-delegate"
+        )
+    with pytest.raises(LifecycleError, match="sealed completion"):
+        lifecycle_evidence_fields(
+            path="execution/migrate_data.py",
+            text="if __name__ == '__main__': pass\n",
+            disposition="one-shot-completed",
+        )
+    evidence = lifecycle_evidence_fields(
+        path="execution/migrate_data.py",
+        text="# lifecycle: completion=sealed:receipt.json\n",
+        disposition="one-shot-completed",
+    )
+    assert evidence.get("sealed_completion_evidence") == "sealed:receipt.json"
+
+
+def test_tombstone_and_dormant_require_distinct_lifecycle_receipts() -> None:
+    with pytest.raises(LifecycleError, match="consumer and expiry"):
+        lifecycle_evidence_fields(
+            path="execution/old.py",
+            text="# lifecycle: tombstone\n",
+            disposition="compatibility-tombstone",
+        )
+    with pytest.raises(LifecycleError, match="owner, activation, and review"):
+        lifecycle_evidence_fields(
+            path="execution/parked.py",
+            text="# lifecycle: dormant\n# lifecycle: owner=canonical:directives/old.md\n",
+            disposition="dormant-until",
+        )
+    tombstone = lifecycle_evidence_fields(
+        path="execution/old.py",
+        text="# lifecycle: tombstone\n# lifecycle: consumer=legacy-adapter\n# lifecycle: expiry=2026-12-31\n",
+        disposition="compatibility-tombstone",
+    )
+    dormant = lifecycle_evidence_fields(
+        path="execution/parked.py",
+        text="# lifecycle: dormant\n# lifecycle: owner=canonical:directives/old.md\n"
+        "# lifecycle: activation=owner-approval\n# lifecycle: review=2026-12-31\n",
+        disposition="dormant-until",
+    )
+    assert tombstone.get("tombstone_consumer") == "legacy-adapter"
+    assert tombstone.get("dormant_owner") is None
+    assert dormant.get("dormant_activation") == "owner-approval"
+    assert dormant.get("tombstone_expiry") is None
+
+
+def test_expired_lifecycle_deadlines_fail_closed() -> None:
+    with pytest.raises(LifecycleError, match="expiry is expired"):
+        lifecycle_evidence_fields(
+            path="execution/old.py",
+            text="# lifecycle: tombstone\n# lifecycle: consumer=legacy-adapter\n# lifecycle: expiry=2020-01-01\n",
+            disposition="compatibility-tombstone",
+        )
+    with pytest.raises(LifecycleError, match="review is expired"):
+        lifecycle_evidence_fields(
+            path="execution/parked.py",
+            text="# lifecycle: dormant\n# lifecycle: owner=linear:BHA-119\n"
+            "# lifecycle: activation=owner-approval\n# lifecycle: review=2020-01-01\n",
+            disposition="dormant-until",
+        )
+
+
+def test_missing_dormant_policy_and_unknown_operational_edge_fail_closed(
+    tmp_path: Path,
+) -> None:
+    missing = _repo(tmp_path / "missing-policy")
+    (missing / "docs/quality/lifecycle-dormant-policy.json").unlink()
+    subprocess.run(["git", "add", "-u"], cwd=missing, check=True)
+    _refresh_graph(missing)
+    with pytest.raises(LifecycleError, match="policy is missing"):
+        build_inventory(missing)
+
+    unknown = _repo(tmp_path / "unknown-edge")
+    _write(
+        unknown / "scripts/probe.py",
+        "import subprocess\n\ndef run(command):\n    return subprocess.run(command)\n",
+    )
+    subprocess.run(["git", "add", "."], cwd=unknown, check=True)
+    _refresh_graph(unknown)
+    report = build_inventory(unknown)
+    assert report.status == "HOLD"
+    assert any("operational reachability unknown" in item for item in report.violations)
+
+
+def test_test_only_import_does_not_establish_runtime_reachability(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo / "tests/test_only.py", "from execution import entry\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    _refresh_graph(repo)
+    report = build_inventory(repo)
+    entry = next(item for item in report.entries if item.path == "execution/entry.py")
+    assert entry.disposition == "dormant-until"
+    assert entry.incoming_edge is None
+    assert entry.dormant_policy_evidence is not None

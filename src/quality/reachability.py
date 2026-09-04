@@ -159,7 +159,18 @@ _DISPOSITION_MANIFESTS: tuple[tuple[str, EdgeKind], ...] = (
 def _files(root: Path) -> list[Path]:
     try:
         listed = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            capture_output=True,
+            check=True,
         )
         paths = [root / p for p in listed.stdout.decode().split("\0") if p]
     except (OSError, subprocess.SubprocessError):

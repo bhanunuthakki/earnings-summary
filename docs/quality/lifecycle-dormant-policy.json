@@ -1,0 +1,17 @@
+{
+  "schema_version": "bha-119.dormant-policy/v1",
+  "owner_evidence": "linear:BHA-119",
+  "authorization_evidence": "Owner mandate recorded in BHA-119 permits evidence-led simplification and pruning with minimal user-facing feature loss; unlinked surfaces remain dormant until individually activated or reviewed.",
+  "activation_evidence": "explicit-owner-invocation-or-registration",
+  "review_on": "2026-12-03",
+  "path_prefixes": [
+    ".github/",
+    "cron/",
+    "execution/",
+    "scripts/",
+    "src/"
+  ],
+  "exact_paths": [
+    "Makefile"
+  ]
+}
