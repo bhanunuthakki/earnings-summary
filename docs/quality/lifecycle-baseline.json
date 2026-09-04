@@ -13211,15 +13211,15 @@
     "reconstruction": 56,
     "registry": 26
   },
-  "tracked_tree_hash": "3b9f8bfe63bf28ae2193a397ab6fec93014ea8d39a5227b0c58fd1b8505e7bfe",
-  "revision": "df79d43ba74ddd069efb3b042170fc466752f94d",
-  "worktree_dirty": true,
-  "reachability_graph_hash": "d56d9c774a1cb3a709d5398b72d1bfa0c5e04f7c2a0355b1adac9d353e4f70b2",
+  "tracked_tree_hash": "087bd6754bfa59b022c8b2224276346c9bc62d92c5c3ff3a306203a532e3148b",
+  "revision": "4ae54540d1facdb8b5deb7e874bf977f0ab8efc9",
+  "worktree_dirty": false,
+  "reachability_graph_hash": "a62dfd69e80949d96e26a66da836b0194478063c93ce3d0e020a2dec2ddd05c9",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.1.0",
     "python": "3.14.7",
-    "source_sha256": "3fe5b494d27ba2d149f86c13a90a3ab8861b76f10140de0c36df88fc67b18eb2",
+    "source_sha256": "19863f131ef0272e5d432525be2754370d05a54f23d90539c04ea759bfc2b68c",
     "dispositions_sha256": "ab8d79c8f54700546ae878b4a6e30d1d7ff6e088bf0a2cfbb4a62ea1bfa801d9"
   },
   "coverage": {
