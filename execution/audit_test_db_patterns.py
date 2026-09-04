@@ -16,10 +16,14 @@ from quality.test_db_patterns import audit_test_db_patterns  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     report = audit_test_db_patterns(args.root)
-    payload = report.model_dump_json(indent=2)
-    if len(payload.encode()) > 100_000:
+    payload = report.model_dump_json(indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(payload, encoding="utf-8")
+    elif len(payload.encode()) > 100_000:
         receipt = (
             args.root.resolve() / ".tmp" / "quality" / f"test-db-{report.source_sha256[:24]}.json"
         )
