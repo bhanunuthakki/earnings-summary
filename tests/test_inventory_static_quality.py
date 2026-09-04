@@ -15,7 +15,9 @@ def test_inventory_partitions_tracked_python_and_counts_diagnostics(tmp_path: Pa
     paths = [
         "src/app.py",
         "alembic/versions/0001_initial_schema.py",
+        "alembic/versions_archived/0000_baseline.py",
         "execution/build_redesigned_dcf.py",
+        "scratch/retire_me.py",
     ]
     for name in paths:
         target = tmp_path / name
@@ -44,12 +46,16 @@ def test_inventory_partitions_tracked_python_and_counts_diagnostics(tmp_path: Pa
 
     result = inventory(tmp_path, run, exception_paths=["execution/build_redesigned_dcf.py"])
     assert result.active == ["src/app.py"]
-    assert result.immutable_historical_migration == ["alembic/versions/0001_initial_schema.py"]
+    assert result.immutable_historical_migration == [
+        "alembic/versions/0001_initial_schema.py",
+        "alembic/versions_archived/0000_baseline.py",
+    ]
     assert result.generated_declarative_exception == ["execution/build_redesigned_dcf.py"]
+    assert result.retirement_candidates == ["scratch/retire_me.py"]
     assert result.diagnostics[0].count == 1
     assert result.diagnostics[1].count == 1
     assert result.diagnostics[2].count == 1
-    assert result.diagnostics[-1].diagnostics_by_rule["# type: ignore"] == 3
+    assert result.diagnostics[-1].diagnostics_by_rule["# type: ignore"] == 5
 
 
 def test_inventory_fails_when_tracked_file_is_missing(tmp_path: Path) -> None:

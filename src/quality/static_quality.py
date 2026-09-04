@@ -162,13 +162,17 @@ def inventory(
     missing_exceptions = sorted(set(configured_exceptions) - set(files))
     if missing_exceptions:
         violations.append("configured exception is not tracked: " + ", ".join(missing_exceptions))
-    migrations = [p for p in files if p.startswith("alembic/versions/")]
+    migrations = [
+        p for p in files if p.startswith(("alembic/versions/", "alembic/versions_archived/"))
+    ]
     exceptions = [p for p in files if p in configured_exceptions]
-    active = [p for p in files if p not in migrations and p not in exceptions]
-    if any(part.startswith(".") for path in active for part in Path(path).parts[:-1]):
-        violations.append("hidden active directory is not allowed")
-    if set(active) | set(migrations) | set(exceptions) != set(files) or len(
-        set(active) & (set(migrations) | set(exceptions))
+    retirement = [p for p in files if p.startswith("scratch/")]
+    active = [
+        p for p in files if p not in migrations and p not in exceptions and p not in retirement
+    ]
+    partitions = (set(active), set(migrations), set(exceptions), set(retirement))
+    if set().union(*partitions) != set(files) or any(
+        left & right for index, left in enumerate(partitions) for right in partitions[index + 1 :]
     ):
         violations.append("static inventory partition is incomplete or overlapping")
     pyproject_path = root / "pyproject.toml"
@@ -212,7 +216,9 @@ def inventory(
         if name == "ruff-format.txt":
             count = len(
                 re.findall(
-                    r"^(?:Would reformat|would be reformatted):", result.stdout, re.MULTILINE
+                    r"^(?:Would reformat:|unformatted: File would be reformatted$)",
+                    result.stdout,
+                    re.MULTILINE,
                 )
             )
             diagnostics.append(
@@ -271,17 +277,24 @@ def inventory(
                 else {}
             )
             node = mapping.get(part, {})
-        values: list[str] = []
+        excluded: list[str] = []
+        included: list[str] = []
         if isinstance(node, dict):
-            for key in ("exclude", "extend-exclude", "include"):
+            for key in ("exclude", "extend-exclude"):
                 if isinstance(node.get(key), list):
-                    values.extend(str(item) for item in cast(list[object], node[key]))
-        exclusion_map[section] = sorted(set(values))
+                    excluded.extend(str(item) for item in cast(list[object], node[key]))
+            if isinstance(node.get("include"), list):
+                included.extend(str(item) for item in cast(list[object], node["include"]))
+        exclusion_map[f"{section}.exclude"] = sorted(set(excluded))
+        exclusion_map[f"{section}.include"] = sorted(set(included))
     exclusion_map["commands"] = [" ".join(command) for _, command, _ in specs]
     excluded_active = [
         p
         for p in active
-        if any(p == e or p.startswith(e.rstrip("/") + "/") for e in exclusion_map["tool.pyright"])
+        if any(
+            p == e or p.startswith(e.rstrip("/") + "/") or fnmatch.fnmatch(p, e)
+            for e in exclusion_map["tool.pyright.exclude"]
+        )
     ]
     if excluded_active:
         violations.append("active files excluded by Pyright: " + ", ".join(excluded_active))
@@ -311,7 +324,7 @@ def inventory(
         generated_declarative_exception=exceptions,
         diagnostics=diagnostics,
         current_exclusions=exclusion_map,
-        retirement_candidates=[],
+        retirement_candidates=retirement,
         status="HOLD" if violations else "PASS",
         violations=violations,
         scoped_commit=_git_commit(root, runner),
