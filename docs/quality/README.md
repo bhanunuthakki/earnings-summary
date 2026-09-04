@@ -12,7 +12,7 @@ Scanner and source hashes inside each receipt make definition drift explicit.
 
 Current evidence at the Train 0 instrumentation baseline:
 
-- 1,333 executable modules and 491,835 non-comment lines.
+- 1,333 executable modules and 491,856 non-comment lines.
 - 91 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
 - 17 import cycles spanning 80 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.
@@ -31,8 +31,8 @@ Current evidence at the Train 0 instrumentation baseline:
 - The lifecycle receipt classifies all 835 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
   UI-reachable, 230 internal-delegate, and 271 time-bounded dormant entries.
-- The function-lifecycle receipt validates as `PASS` for 33,705 symbols:
-  11,722 protected, 15,763 referenced, 6,202 unknown, and 18 conservative
+- The function-lifecycle receipt validates as `PASS` for 33,712 symbols:
+  11,724 protected, 15,765 referenced, 6,205 unknown, and 18 conservative
   unreferenced-static candidates. Candidates are review inputs, not deletion
   authority.
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced
