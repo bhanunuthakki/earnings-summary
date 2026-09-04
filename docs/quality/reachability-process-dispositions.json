@@ -8,7 +8,7 @@
       "version": "1.1.0",
       "python": "3.14.7"
     },
-    "source_sha256": "b7d9c6e647da6c52e092e8512c397ba5fe545282e9f824eac72d347e1b6b084d"
+    "source_sha256": "fde61900194b3d67f11fdf66a11fc9fe1a8866d4973786a821aa932142171ac4"
   },
   "scope": {
     "source_roots": [
@@ -51,8 +51,8 @@
     },
     {
       "path": "execution/backfill_transcripts.py",
-      "line": 352,
-      "fingerprint": "4d6073c5a598b432eb9ea9ae58caf5f376b218ccb15036807d4cab349d8bf25a",
+      "line": 350,
+      "fingerprint": "15038dfc6a67ff8745ef12e59d6c7c903d1e6bdfcd52cc782e8b70bd5f035e72",
       "disposition": "internal_python_target",
       "target": "execution/ingest_transcripts_state.py",
       "command_family": "managed Python child",
@@ -60,8 +60,8 @@
     },
     {
       "path": "execution/backfill_transcripts.py",
-      "line": 376,
-      "fingerprint": "78fc02c7fa27de1bb135b1cb0fe9aaffbdb14bfde82f70f48ab5c45921773a41",
+      "line": 374,
+      "fingerprint": "21f9cadc4245afd4cafe5a05a28fcdadff8011449a89c87dee0e3e22323c3fb6",
       "disposition": "internal_python_target",
       "target": "execution/extract_commitments_from_transcript.py",
       "command_family": "managed Python child",
@@ -604,8 +604,8 @@
     },
     {
       "path": "src/llm/cli.py",
-      "line": 1292,
-      "fingerprint": "f27dbd0bb6e1fef0c4e59b34ec297489557bcc7e9aecf2f91e902d5ed557c17c",
+      "line": 1303,
+      "fingerprint": "e3b7bd537d9a813d2e0c7e76030f6a2a04335dfd38e83cbf77ce0fe2ba20040b",
       "disposition": "external_process",
       "target": "external executable family",
       "command_family": "validated external executable family",
@@ -613,8 +613,8 @@
     },
     {
       "path": "src/llm/cli.py",
-      "line": 2072,
-      "fingerprint": "d9b8110abc0bf76e333362fb6c795f6a6a3ec3452e9ada8ee8a668e3c2e2d83f",
+      "line": 2095,
+      "fingerprint": "c4a61881958b936db88aeaddf5f0b4b4eef8be852978fc8e3699997e58efebb4",
       "disposition": "external_process",
       "target": "external executable family",
       "command_family": "validated external executable family",
@@ -622,8 +622,8 @@
     },
     {
       "path": "src/llm/cli.py",
-      "line": 2520,
-      "fingerprint": "b0f7eea0bfb9364aab5c6d2da4792c68fe2a6eb5e437f96317b22d74d4deb89e",
+      "line": 2545,
+      "fingerprint": "419fc3e344668befb2c7861737c694663d09fd4e8f5fd4f12b7ff66642595cb0",
       "disposition": "external_process",
       "target": "external executable family",
       "command_family": "validated external executable family",
