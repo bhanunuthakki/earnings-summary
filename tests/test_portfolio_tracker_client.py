@@ -1461,6 +1461,32 @@ def test_nonpositive_dietz_reason_is_a_supported_unavailable_state() -> None:
     assert "nonpositive Modified Dietz denominator" in html
 
 
+def test_current_provider_reconciliation_reasons_render_without_contract_rejection() -> None:
+    payload = deepcopy(_PERFORMANCE)
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = [
+        "external_flow_provenance_current_decision_unresolved",
+        "partial_account_valuation_end_date",
+        "portfolio_account_universe_coverage_incomplete",
+    ]
+    payload["points"] = []
+    payload["net_external_cashflow_in"] = None
+    payload["equation_receipt"] = None
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    html = render_portfolio_analytics_sections(
+        PortfolioAnalytics(available=True, api_url="http://tracker.test", performance=parsed)
+    )
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue is None
+    assert parsed.calculation_reason_codes == payload["calculation_reason_codes"]
+    assert "cash-flow provenance decision unresolved" in html
+    assert "end-date account valuation coverage is incomplete" in html
+    assert "portfolio account-universe valuation coverage incomplete" in html
+    assert "supported calculation contract" not in html
+
+
 def test_available_position_data_never_substitutes_for_unavailable_performance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
