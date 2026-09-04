@@ -172,7 +172,7 @@ def _db_path_findings(path: str, tree: ast.AST) -> list[PatternFinding]:
                     path=path,
                     line=node.lineno,
                     kind="explicit_fixture",
-                    evidence=expression,
+                    evidence="temporary fixture path expression",
                 )
             )
         elif any(marker in expression for marker in ("PROJECT_ROOT", "Path.cwd()", "__file__")):
@@ -212,7 +212,7 @@ def _db_path_findings(path: str, tree: ast.AST) -> list[PatternFinding]:
                     path=path,
                     line=node.lineno,
                     kind="forbidden_checkout_default",
-                    evidence=ast.unparse(node),
+                    evidence=f"checkout-default database passed to {name}",
                 )
             )
     return findings
