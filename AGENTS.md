@@ -8,7 +8,7 @@ Loads on top of the global `AGENTS.md`. This file adds only earnings-summary fac
 
 - The always-on production-shaped host is Windows: `es-dashboard` owns loopback `127.0.0.1:7421`, and the Portfolio Tracker API owns loopback `127.0.0.1:8000`. The dashboard reaches the tracker on that same Windows host.
 - The production database authority is configured outside this repository. A checkout-local database is never a live, fallback, replica, or roster authority and must not exist. Treat one as an invalid local artifact: do not inspect it for product facts, migrate it, seed it, or make code pass against it.
-- Mac development and tests must name an explicit disposable migrated database under a test/temp root. A Mac task that needs live roster or production facts must coordinate Windows access and use the canonical Windows database read-only or an explicitly approved provenance-bearing snapshot/export. It must never silently create the checkout-default database.
+- Mac development and tests must name an explicit disposable migrated database under a test/temp root. A Mac task that needs live roster or production facts must coordinate Windows access and use the canonical Windows database read-only or an explicitly approved provenance-bearing snapshot/export (restore via `python cron/restore_db.py --latest --to .tmp/portfolio_local.db` and set `EARNINGS_SUMMARY_DB_PATH=.tmp/portfolio_local.db`). It must never silently create the checkout-default database.
 - A Mac browser must open the exact private HTTPS origin printed by live `tailscale serve status` on Windows. Mac `127.0.0.1:7421`, a remembered Windows computer name, a raw Tailnet IP, or the DNS name from `tailscale status` is not a substitute.
 - Expose only the dashboard through Tailscale Serve. Keep both backends loopback-only; do not expose port 8000 separately and never use Funnel.
 - After a Windows or Tailscale rename, run the documented Serve reset/reapply flow, set `COMMENTS_SERVER_CORS_WHITELIST` to that exact new HTTPS origin, restart `es-dashboard`, then prove Windows-local dashboard/tracker health and Mac-to-Windows dashboard hydration.
@@ -25,6 +25,7 @@ Identification, acquisition, parsing, storage, resolution, and surfacing of comp
 - Preserve novel and one-off management observations with speaker, source locator, raw label/value, period/scope, and recurring/promotion status even when they are not admitted to the recurring KPI database.
 - Every consumer—reports, time series, thesis evaluation, alerts, models, transcripts, and earnings readouts—uses the same provenance-aware fact resolver. User-facing outputs persist a complete source/context manifest or claim-level citations and distinguish reported fact, management claim, consensus estimate, calculation, and analyst inference.
 - A pipeline or UI may claim `decision-grade` only when source authority, completeness, semantic admission, reader parity, and reconstruction checks all pass. Otherwise report the precise degraded state and missing evidence.
+- Never substitute generic web search for company-reported data, earnings updates, or thesis thresholds. Query local `micro_thesis/holdings/<TICKER>.json`, the restored database, and `transcripts/` (or `cron/fetch_transcripts.py`) as the primary authorities.
 
 ## Authority map
 

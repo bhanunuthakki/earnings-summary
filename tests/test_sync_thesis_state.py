@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
@@ -204,3 +206,22 @@ def test_ticker_audit_reports_missing_row_only_when_file_exists(tmp_path: Path) 
 def test_setup_documents_fresh_install_thesis_bootstrap() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     assert "python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply" in readme
+
+
+def test_sync_thesis_state_default_db_honors_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custom_db = tmp_path / "custom.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(custom_db))
+    captured_db: list[str] = []
+
+    def _fake_open_db(db_path: str | Path) -> sqlite3.Connection:
+        captured_db.append(str(db_path))
+        return _conn()
+
+    monkeypatch.setattr(sync, "open_db", _fake_open_db)
+    monkeypatch.setattr(sync, "_HOLDINGS_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["sync_thesis_state.py", "--ticker", "NONE"])
+    rc = sync.main()
+    assert rc == 0
+    assert captured_db == [str(custom_db.resolve())]

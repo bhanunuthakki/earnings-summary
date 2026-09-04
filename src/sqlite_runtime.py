@@ -51,8 +51,10 @@ def reject_forbidden_mac_checkout_database(path: str | os.PathLike[str]) -> None
         return
     if _is_forbidden_mac_checkout_database(path):
         raise RuntimeError(
-            "Mac checkout database is prohibited; use an explicit disposable test database "
-            "or approved provenance-bearing export of the canonical Windows database"
+            "Mac checkout database is prohibited. Restore the latest snapshot with: "
+            "'python cron/restore_db.py --latest --to .tmp/portfolio_local.db' "
+            "and set EARNINGS_SUMMARY_DB_PATH=.tmp/portfolio_local.db, "
+            "or use an explicit disposable test database."
         )
 
 

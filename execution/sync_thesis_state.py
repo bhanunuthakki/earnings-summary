@@ -40,6 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.thesis_evaluator import refresh_thesis_mirror  # noqa: E402
+from db_paths import configured_db_path  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
@@ -193,7 +194,7 @@ def _record_to_dict(rec: DriftRecord) -> dict[str, object]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
+    ap.add_argument("--db", default=str(configured_db_path(PROJECT_ROOT)))
     ap.add_argument("--holdings-dir", default=str(_HOLDINGS_DIR), type=Path)
     ap.add_argument("--ticker", default=None, help="Audit/sync a single ticker")
     ap.add_argument(
