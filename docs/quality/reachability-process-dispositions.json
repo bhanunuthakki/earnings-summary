@@ -17,13 +17,13 @@
       "scripts/"
     ],
     "evidence": "subprocess/runpy expression",
-    "current_production_keys": 77
+    "current_production_keys": 79
   },
   "counts": {
-    "unknown_process_edges": 77,
+    "unknown_process_edges": 79,
     "dispositions": {
-      "internal_python_target": 47,
-      "closed_command_set": 7,
+      "internal_python_target": 48,
+      "closed_command_set": 8,
       "external_process": 17,
       "runtime_registry": 1,
       "operator_supplied_process": 5
@@ -99,8 +99,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 57,
-      "fingerprint": "b6922846ff7b007a7664c80688a361c79b0edaf01128fa0f4f1b6be349c61eb2",
+      "line": 219,
+      "fingerprint": "97abcee1eb494642406de046bdbd5de5cbafe7c06dcc4d853ce27bc64032c9d9",
       "disposition": "internal_python_target",
       "target": ".github/scripts/ci_gate.py",
       "command_family": "managed Python child",
@@ -108,8 +108,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 142,
-      "fingerprint": "1ce27d8d7d4d482017eef0dc5a25098b740577c740c94395dfe069082bd37bfa",
+      "line": 344,
+      "fingerprint": "705042ab66c8abc6738deb9c1ac78194944d41bbab66752dbaa1db63fa7d005f",
       "disposition": "closed_command_set",
       "target": "pytest over the frozen cohort",
       "command_family": "schema-validated pytest argv",
@@ -748,8 +748,8 @@
     },
     {
       "path": "execution/benchmark_dcf_workload.py",
-      "line": 106,
-      "fingerprint": "0ddd14d4882261a5904a6090b8a9417e9df72a2651f16ef2da2c902c87f62744",
+      "line": 148,
+      "fingerprint": "2fa294790ae51bc46fd158988dbf60dde369cf5a922d2494378f5a73b2492701",
       "disposition": "internal_python_target",
       "target": "execution/build_redesigned_dcf.py",
       "command_family": "managed Python child",
@@ -757,8 +757,8 @@
     },
     {
       "path": "execution/collect_paired_ci_performance.py",
-      "line": 350,
-      "fingerprint": "51a81b4610d96bcc44a13f3e2d15862d62fd35c1c1c4497ddb426a0fbda63ccd",
+      "line": 470,
+      "fingerprint": "728a7b35a3a6522bb03408f87be8f37fd9a6339b74d5720800fd72a454a08d7e",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "managed Python child",
@@ -766,8 +766,8 @@
     },
     {
       "path": "src/quality/performance.py",
-      "line": 187,
-      "fingerprint": "ee7f2cf628d95756b848a3f8cb44d2715f89e4efb4151f0c9ab7e28cc928cee4",
+      "line": 186,
+      "fingerprint": "67ac4c9cf48955b8a2bdcd144199682182416bcc945a5e73aaea07ceedc91453",
       "disposition": "operator_supplied_process",
       "target": "operator-supplied benchmark argv",
       "command_family": "operator command boundary",
@@ -775,8 +775,8 @@
     },
     {
       "path": "src/quality/performance.py",
-      "line": 227,
-      "fingerprint": "0715981bbfe8beab02d527faf1a722f747455d781abae8cca9cf77964dd6f3b7",
+      "line": 226,
+      "fingerprint": "adea333b3ceba17393a930a4bbe9e729164e94c9f051a26daf8fa852655d59ba",
       "disposition": "operator_supplied_process",
       "target": "operator-supplied benchmark argv",
       "command_family": "operator command boundary",
@@ -784,12 +784,30 @@
     },
     {
       "path": "src/quality/performance_source_analysis.py",
-      "line": 137,
-      "fingerprint": "770989e9192c45d0de7a81876d669b138b7917c4e4c5c1b347a1347bcf07489c",
+      "line": 163,
+      "fingerprint": "fad154c02124ec331e43e4369aed19aa6c363507b3352fe5aa6d10ba3f0e689a",
       "disposition": "internal_python_target",
       "target": "execution/analyze_code_duplicates.py",
       "command_family": "managed Python child",
       "evidence": "The source-analysis cohort command is frozen in COHORT_REGISTRY, requires the checked-in analyze_code_duplicates.py target, and runs only inside immutable revision snapshots through the managed interpreter."
+    },
+    {
+      "path": "src/quality/ci_collection.py",
+      "line": 130,
+      "fingerprint": "4099290e0de6460437d5874943edaada8c805c716ec829768764eec2b55aeb44",
+      "disposition": "closed_command_set",
+      "target": "collector Python runtime identity probe",
+      "command_family": "closed interpreter probe",
+      "evidence": "The collector invokes a fixed -I inline runtime-identity probe using the already validated collector interpreter; its output is schema-checked and cannot select a process entrypoint."
+    },
+    {
+      "path": "src/quality/ci_collection.py",
+      "line": 197,
+      "fingerprint": "72e9a333101a0296362fb377538d992c8fdc11dcb86a67194a26914d9dbbbc83",
+      "disposition": "internal_python_target",
+      "target": ".github/scripts/ci_gate.py",
+      "command_family": "managed Python child",
+      "evidence": "The collector invokes the checked-in CI selector through the managed interpreter, with the selector path and argv assembled from typed collection state and its immutable revision population."
     }
   ],
   "residual_unresolved": "0 current edges remain unresolved.",
