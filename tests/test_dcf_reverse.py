@@ -10,9 +10,16 @@ clamped bound.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
+import pytest
+
 from dcf import redesign, reverse
+
+bisect_fn: Callable[[Callable[[float], float | None], float, float, float], float | None] = getattr(
+    reverse, "_bisect"
+)
 
 _BASE = redesign.RedesignInputs(
     segments=("Cloud", "Devices"),
@@ -164,3 +171,70 @@ def test_defaults_to_workbook_price() -> None:
     assert pi is not None
     assert pi.price == 50.0
     assert pi.base_value_per_share > 0
+
+
+# --------------------------------------------------------------------------- #
+# 7. Bisection adapter: parity with the archetype-neutral monotonic solver
+# --------------------------------------------------------------------------- #
+def test_bisect_increasing_root() -> None:
+    root = bisect_fn(lambda x: 2.0 * x, 14.0, 0.0, 10.0)
+    assert root is not None
+    assert root == pytest.approx(7.0)
+
+
+def test_bisect_decreasing_root() -> None:
+    root = bisect_fn(lambda x: -2.0 * x + 20.0, 6.0, 0.0, 10.0)
+    assert root is not None
+    assert root == pytest.approx(7.0)
+
+
+def test_bisect_endpoint_targets_stay_at_bounds() -> None:
+    lo_root = bisect_fn(lambda x: x, 0.0, 0.0, 10.0)
+    hi_root = bisect_fn(lambda x: x, 10.0, 0.0, 10.0)
+    assert lo_root is not None
+    assert hi_root is not None
+    assert abs(lo_root - 0.0) <= 1e-4
+    assert abs(hi_root - 10.0) <= 1e-4
+    dec_lo = bisect_fn(lambda x: -1.0 * x, 0.0, 0.0, 10.0)
+    dec_hi = bisect_fn(lambda x: -1.0 * x, -10.0, 0.0, 10.0)
+    assert dec_lo is not None and dec_hi is not None
+    assert abs(dec_lo - 0.0) <= 1e-4
+    assert abs(dec_hi - 10.0) <= 1e-4
+
+
+def test_bisect_unreachable_target_returns_none() -> None:
+    assert bisect_fn(lambda x: x, 20.0, 0.0, 10.0) is None
+    assert bisect_fn(lambda x: -1.0 * x, 5.0, 0.0, 10.0) is None
+
+
+def test_bisect_invalid_bound_returns_none() -> None:
+    assert bisect_fn(lambda x: None, 5.0, 0.0, 10.0) is None
+
+    def _raises(x: float) -> float | None:
+        raise ValueError("unvaluable bound")
+
+    assert bisect_fn(_raises, 5.0, 0.0, 10.0) is None
+
+
+def test_bisect_invalid_interior_returns_none() -> None:
+    def _hole(x: float) -> float | None:
+        if 4.0 < x < 6.0:
+            return None
+        return x
+
+    # First midpoint (5.0) falls in the hole, so the search is unavailable.
+    assert bisect_fn(_hole, 5.0, 0.0, 10.0) is None
+
+    def _raises_inside(x: float) -> float | None:
+        if 4.0 < x < 6.0:
+            raise ArithmeticError("unvaluable interior")
+        return x
+
+    assert bisect_fn(_raises_inside, 5.0, 0.0, 10.0) is None
+
+
+def test_bisect_converges_within_tolerance() -> None:
+    root = bisect_fn(lambda x: x**3, 27.0, 0.0, 10.0)
+    assert root is not None
+    assert root == pytest.approx(3.0, rel=1e-6)
+    assert abs(root**3 - 27.0) <= 1e-6 * max(abs(27.0), 1.0)
