@@ -29,6 +29,7 @@ EdgeKind = Literal[
     "registry",
     "getattr",
     "python_entrypoint",
+    "external_process",
     "route",
     "rendered_js",
     "schedule",
@@ -203,6 +204,18 @@ def _process_target(call: ast.Call, fn: str) -> tuple[str | None, bool]:
         literal = _literal_string(first)
         return literal, literal is None
     if isinstance(first, (ast.List, ast.Tuple)):
+        first_literal = _literal_string(first.elts[0]) if first.elts else None
+        if first_literal is not None and Path(
+            first_literal.replace("\\", "/")
+        ).name.lower() not in {
+            "python",
+            "python3",
+            "python.exe",
+            "python3.exe",
+            "py",
+            "py.exe",
+        }:
+            return None, False
         values = [_literal_string(item) for item in first.elts]
         if any(value is None for value in values):
             return None, True
@@ -502,6 +515,22 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                             not bool(attribute),
                         )
                     elif fn in {"run", "call", "check_call", "check_output", "Popen", "run_path"}:
+                        source_lines = text.splitlines()
+                        source_line = (
+                            source_lines[item.lineno - 1]
+                            if item.lineno <= len(source_lines)
+                            else ""
+                        )
+                        if "reachability: external-process" in source_line:
+                            add(
+                                rel,
+                                "<declared external process>",
+                                "external_process",
+                                "reviewed external-process annotation",
+                                "medium",
+                                item.lineno,
+                            )
+                            continue
                         process_target, dynamic = _process_target(item, fn)
                         normalized = None
                         if process_target:

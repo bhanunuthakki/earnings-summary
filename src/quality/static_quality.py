@@ -68,7 +68,9 @@ InventoryFailure = InventoryError
 
 
 def _run(args: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=root, text=True, capture_output=True, check=False)
+    return subprocess.run(  # reachability: external-process
+        args, cwd=root, text=True, capture_output=True, check=False
+    )
 
 
 def _tracked(root: Path, runner: CommandRunner) -> list[str]:

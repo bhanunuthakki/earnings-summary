@@ -198,7 +198,7 @@ def capture_performance_baseline(
     for run_number in range((max(samples, 0) + 1) if argv else 0):
         started = time.perf_counter()
         try:
-            completed = subprocess.run(
+            completed = subprocess.run(  # reachability: external-process
                 argv,
                 cwd=root,
                 capture_output=True,

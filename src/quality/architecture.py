@@ -174,7 +174,7 @@ HARD_GATES: tuple[str, ...] = (
 
 
 def _run(repo_root: Path, *args: str) -> str:
-    result = subprocess.run(
+    result = subprocess.run(  # reachability: external-process
         args,
         cwd=repo_root,
         check=False,

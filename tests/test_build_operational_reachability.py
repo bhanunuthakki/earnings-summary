@@ -56,6 +56,17 @@ def test_literal_getattr_and_non_python_process_are_not_unknown(tmp_path: Path) 
     assert not graph.unknown_edges
 
 
+def test_reviewed_dynamic_external_process_is_not_unknown(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "execution/main.py",
+        "import subprocess\nsubprocess.run(argv)  # reachability: external-process\n",
+    )
+    graph = build_graph(tmp_path)
+    assert any(edge.kind == "external_process" for edge in graph.edges)
+    assert not graph.unknown_edges
+
+
 def test_only_current_directives_create_authority_edges(tmp_path: Path) -> None:
     _write(tmp_path, "execution/live.py", "VALUE = 1\n")
     _write(tmp_path, "execution/old.py", "VALUE = 1\n")
@@ -122,8 +133,7 @@ def test_namespace_package_root_import_resolves(tmp_path: Path) -> None:
     _write(tmp_path, "tests/test_tool.py", "import scripts\n")
     graph = build_graph(tmp_path)
     assert any(
-        edge.source == "tests/test_tool.py" and edge.target == "scripts/"
-        for edge in graph.edges
+        edge.source == "tests/test_tool.py" and edge.target == "scripts/" for edge in graph.edges
     )
     assert any(node.id == "scripts/" and node.kind == "package" for node in graph.nodes)
     assert not graph.unresolved
