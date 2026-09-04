@@ -527,6 +527,18 @@ def render_allocation_decisions_panel(
         analytics.position_alpha, conviction_by_ticker=_conviction_by_ticker(audit)
     )
     n_graded = calibration.graded if calibration is not None else 0
+    # Pooled local-only sections share one READ_ONLY connection. Opened after
+    # tracker/calibration work so no connection is held across the tracker
+    # fetches; closed before digest/redteam/annual sections which own theirs.
+    pooled = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    pooled.row_factory = sqlite3.Row
+    try:
+        coach_pnl_html = _coach_pnl_section(db_path, user_id=user_id, conn=pooled)
+        coach_pings_html = _coach_pings_section(db_path, conn=pooled)
+        coach_mutes_html = _coach_mutes_section(db_path, conn=pooled)
+        decision_journal_html = _decision_journal_section(db_path, conn=pooled)
+    finally:
+        pooled.close()
     return compose_decisions_page(
         audit,
         timeline,
@@ -536,13 +548,13 @@ def render_allocation_decisions_panel(
         attribution=attribution,
         scorecard_html=_scorecard_html(db_path, n_graded=n_graded),
         beta=analytics.beta,
-        coach_pnl_html=_coach_pnl_section(db_path, user_id=user_id),
-        coach_pings_html=_coach_pings_section(db_path),
-        coach_mutes_html=_coach_mutes_section(db_path),
+        coach_pnl_html=coach_pnl_html,
+        coach_pings_html=coach_pings_html,
+        coach_mutes_html=coach_mutes_html,
         coach_digest_html=_coach_digest_section(db_path),
         redteam_pnl_html=_redteam_pnl_html(db_path, user_id=user_id),
         annual_letter_html=_annual_letter_html(db_path),
-        decision_journal_html=_decision_journal_section(db_path),
+        decision_journal_html=decision_journal_html,
     )
 
 
@@ -672,7 +684,13 @@ def _memo_context(raw: object) -> dict[str, object]:
     return cast("dict[str, object]", parsed) if isinstance(parsed, dict) else {}
 
 
-def _query_coach_pnl(db_path: Path, *, user_id: str, now: datetime | None = None) -> CoachPnl:
+def _query_coach_pnl(
+    db_path: Path,
+    *,
+    user_id: str,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> CoachPnl:
     """Read-only aggregate over advisor_memos (+ stance_scores, + decisions for
     the change heuristic). Every query degrades to zero on a missing/partial
     table — a thin DB must never 500 the panel (REQ-7's all-zero state IS the
@@ -689,11 +707,14 @@ def _query_coach_pnl(db_path: Path, *, user_id: str, now: datetime | None = None
     from advisor.position_review import AGENT_SOURCE, OWNER_ATTESTED_KEY, REVIEW_SOURCE_KEY
 
     now = now or datetime.now()
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    conn.row_factory = sqlite3.Row
+    owned = conn is None
+    db_conn = (
+        conn if conn is not None else connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    )
+    db_conn.row_factory = sqlite3.Row
     try:
         raw_rows = _safe_rows(
-            conn,
+            db_conn,
             "SELECT id, ticker, context_json, created_at FROM advisor_memos "
             "WHERE user_id = ? AND kind = 'position_review'",
             (user_id,),
@@ -720,7 +741,7 @@ def _query_coach_pnl(db_path: Path, *, user_id: str, now: datetime | None = None
             marks = ",".join("?" for _ in review_rows)
             ids = [int(r["id"]) for r in review_rows]
             score_rows = _safe_rows(
-                conn,
+                db_conn,
                 f"SELECT memo_id, verdict FROM stance_scores WHERE memo_id IN ({marks}) "
                 "ORDER BY memo_id, created_at DESC, id DESC",
                 tuple(ids),
@@ -732,10 +753,11 @@ def _query_coach_pnl(db_path: Path, *, user_id: str, now: datetime | None = None
             graded_right = sum(1 for v in latest_by_memo.values() if v == "correct")
 
         changed, candidate = _coach_change_tally(
-            conn, review_rows, guard_ids, attested_ids, now=now
+            db_conn, review_rows, guard_ids, attested_ids, now=now
         )
     finally:
-        conn.close()
+        if owned:
+            db_conn.close()
     return CoachPnl(
         reviews_run=reviews_run,
         guard_fired=guard_fired,
@@ -809,14 +831,18 @@ def _coach_change_tally(
 
 
 def _coach_pnl_section(
-    db_path: Path, *, user_id: str = DEFAULT_USER_ID, now: datetime | None = None
+    db_path: Path,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """The Coach P&L block (REQ-7) — mounted beside the coach's-read scorecard.
     Never raises: a missing advisor_memos/stance_scores/decisions table (a
     hand-DDL test fixture, or a DB stamped pre-0077) degrades every count to
     zero, which IS the honest all-zero line, not a swallowed error."""
     try:
-        pnl = _query_coach_pnl(db_path, user_id=user_id, now=now)
+        pnl = _query_coach_pnl(db_path, user_id=user_id, now=now, conn=conn)
     except sqlite3.OperationalError:
         pnl = CoachPnl(
             reviews_run=0,
@@ -906,22 +932,31 @@ def _month_bounds_iso(now: datetime | None = None) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def _coach_pings_section(db_path: Path, *, now: datetime | None = None) -> str:
+def _coach_pings_section(
+    db_path: Path,
+    *,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """ "Coach pings (this month)" — the first production renderer of
     coach_pings. One dense line per ping: class, ticker, status, date. Never
     raises: coach_pings is a 0131+ table, absent on any DB stamped before it."""
     start_iso, end_iso = _month_bounds_iso(now)
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    conn.row_factory = sqlite3.Row
+    owned = conn is None
+    db_conn = (
+        conn if conn is not None else connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    )
+    db_conn.row_factory = sqlite3.Row
     try:
         rows = _safe_rows(
-            conn,
+            db_conn,
             "SELECT class_, ticker, status, created_at FROM coach_pings "
             "WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC",
             (start_iso, end_iso),
         )
     finally:
-        conn.close()
+        if owned:
+            db_conn.close()
     head = (
         '<section class="panel"><h2>Coach pings (this month)</h2>'
         '<p class="sub">Every initiation moment the governor considered this month — '
@@ -945,17 +980,22 @@ def _ping_line(r: sqlite3.Row) -> str:
     )
 
 
-def _coach_mutes_section(db_path: Path) -> str:
+def _coach_mutes_section(db_path: Path, *, conn: sqlite3.Connection | None = None) -> str:
     """ "Active mutes" — coach_mutes rows with an inline Unmute button (REQ-12:
     visible AND reversible). Empty state is one muted line, not absent."""
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    conn.row_factory = sqlite3.Row
+    owned = conn is None
+    db_conn = (
+        conn if conn is not None else connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    )
+    db_conn.row_factory = sqlite3.Row
     try:
         rows = _safe_rows(
-            conn, "SELECT class_, muted_at, reason FROM coach_mutes ORDER BY muted_at DESC"
+            db_conn,
+            "SELECT class_, muted_at, reason FROM coach_mutes ORDER BY muted_at DESC",
         )
     finally:
-        conn.close()
+        if owned:
+            db_conn.close()
     head = (
         '<section class="panel cpnl-mutes"><h2>Active mutes</h2>'
         '<p class="sub">A class the owner dismissed three times in a row mutes itself until '
@@ -1050,17 +1090,25 @@ _OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn
 _DECISION_JOURNAL_LIMIT = 30
 
 
-def _decision_journal_section(db_path: Path, *, limit: int = _DECISION_JOURNAL_LIMIT) -> str:
+def _decision_journal_section(
+    db_path: Path,
+    *,
+    limit: int = _DECISION_JOURNAL_LIMIT,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Owner-first journal over ``v_decision_journal``.
 
     Advisor-authored legacy rows remain preserved in the view and are counted,
     but they never appear as Owner Decisions by default.
     """
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    conn.row_factory = sqlite3.Row
+    owned = conn is None
+    db_conn = (
+        conn if conn is not None else connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    )
+    db_conn.row_factory = sqlite3.Row
     try:
         rows = _safe_rows(
-            conn,
+            db_conn,
             "SELECT decision_id, ticker, decided_by, recommendation_kind, made_at, "
             "linked_memo_id, linked_memo_kind, advice_before_memo_id, advice_before_memo_kind, "
             "guard_override_flag, owner_attested_change, coach_ping_class, decision_nudge_id, "
@@ -1070,12 +1118,13 @@ def _decision_journal_section(db_path: Path, *, limit: int = _DECISION_JOURNAL_L
             (limit,),
         )
         advisor_count_rows = _safe_rows(
-            conn,
+            db_conn,
             "SELECT COUNT(*) AS n FROM v_decision_journal "
             "WHERE COALESCE(decided_by, 'advisor') <> 'owner'",
         )
     finally:
-        conn.close()
+        if owned:
+            db_conn.close()
     advisor_count = int(advisor_count_rows[0]["n"]) if advisor_count_rows else 0
     head = (
         '<section class="panel"><h2>Owner Decision journal</h2>'
@@ -1386,8 +1435,6 @@ def _audit_row(r: SizingAuditRow) -> str:
     )
     return main + editor
 
-
-_OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn"}
 
 # How many trailing periods the trend curve renders (older ones roll off the
 # left so the recent trajectory stays legible).

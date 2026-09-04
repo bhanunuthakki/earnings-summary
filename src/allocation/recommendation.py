@@ -34,8 +34,6 @@ no eligible security the frontier is the retain-cash plan alone.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 import sqlite3
 from collections.abc import Mapping, Sequence
@@ -46,6 +44,7 @@ from typing import Literal
 
 from allocation.candidate_fit import CandidateFit
 from allocation.concentration import TRIM_ASSESSMENT_THRESHOLD_PCT, ZONE_BOUNDS, classify_zone
+from allocation.digest import allocation_payload_sha
 from allocation.eligibility import DecisionReadyAssessment, assess_universe
 from allocation.model import NextDollarModel, build_next_dollar_model
 from integrations.portfolio_tracker_client import fetch_live_portfolio
@@ -129,11 +128,6 @@ def format_allocation_citation(alloc: PlanAllocation) -> str:
     fallback on an otherwise-valid LLM response)."""
     zone = alloc.zone or "unclassified"
     return f"{alloc.ticker}: ${alloc.dollars:,.2f} -> {alloc.resulting_weight_pct:.2f}% of book (zone={zone})"
-
-
-def _sha(payload: object) -> str:
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
@@ -514,7 +508,7 @@ def build_frontier(
             plans=tuple(plans),
             ineligible=ineligible,
             eligible_tickers=eligible_tickers,
-            input_sha=_sha(payload),
+            input_sha=allocation_payload_sha(payload),
             source_freshness=source_freshness,
             degraded=tuple(all_degraded),
         )

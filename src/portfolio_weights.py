@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -35,7 +37,9 @@ if TYPE_CHECKING:
     from integrations.portfolio_tracker_client import LivePortfolio
 
 __all__ = [
+    "MaterializedWeightSnapshot",
     "materialize_weights",
+    "read_materialized_weight_snapshot",
     "read_materialized_weights",
     "read_materialized_weights_as_of",
     "weights_from_portfolio",
@@ -43,6 +47,12 @@ __all__ = [
 
 # data/portfolio_weights.json, repo-root relative (the data/ disk-cache home).
 _CACHE_REL: tuple[str, ...] = ("data", "portfolio_weights.json")
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedWeightSnapshot:
+    computed_at: datetime
+    weights: dict[str, float]
 
 
 def _cache_path(repo_root: Path) -> Path:
@@ -88,6 +98,49 @@ def materialize_weights(repo_root: Path, portfolio: LivePortfolio) -> int:
             os.unlink(tmp)
         raise
     return len(weights)
+
+
+def read_materialized_weight_snapshot(repo_root: Path) -> MaterializedWeightSnapshot | None:
+    """Read one complete, validated snapshot for decision-support consumers.
+
+    The rendering helpers below intentionally degrade malformed caches to an
+    empty mapping. Economic simulations must instead distinguish a legitimate
+    empty portfolio from an unreadable or internally invalid snapshot.
+    """
+    try:
+        payload = json.loads(_cache_path(repo_root).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    typed_payload = cast("dict[str, object]", payload)
+    stamp = typed_payload.get("computed_at")
+    raw_weights = typed_payload.get("weights")
+    if not isinstance(stamp, str) or not isinstance(raw_weights, dict):
+        return None
+    try:
+        computed_at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if computed_at.tzinfo is None:
+        computed_at = computed_at.replace(tzinfo=UTC)
+    else:
+        computed_at = computed_at.astimezone(UTC)
+
+    weights: dict[str, float] = {}
+    for ticker, value in cast("dict[str, object]", raw_weights).items():
+        if (
+            not ticker.strip()
+            or ticker != ticker.strip()
+            or not isinstance(value, (int, float))
+            or isinstance(value, bool)
+        ):
+            return None
+        weight = float(value)
+        if not math.isfinite(weight) or not 0.0 <= weight <= 1.0:
+            return None
+        weights[ticker.upper()] = weight
+    return MaterializedWeightSnapshot(computed_at=computed_at, weights=weights)
 
 
 def read_materialized_weights(repo_root: Path) -> dict[str, float]:

@@ -102,13 +102,6 @@ def _drop_headline_news(rows: list[SignalRow]) -> list[SignalRow]:
     ]
 
 
-# signal_type → (display label, .k-pill tone class). Categories stay QUIET on a
-# dashboard (bare .k-pill, neutral --paper fill): accent is reserved for
-# interactive/selected/unread/status, not a decorative category tint. Only the
-# An unmapped type falls back to its raw signal_type label.
-_TYPE_PILL: dict[str, tuple[str, str]] = {}
-
-
 def render_diet_panel(db_path: Path, *, today: date | None = None) -> str:
     """The Diet tab fragment: the ingest stream + the forward agenda + the
     disclosed fast-follow note. Pure read over the `signals` substrate; a
@@ -499,48 +492,6 @@ def _book_marker_html(list_type: str) -> str:
     if not marker:
         return ""
     return f' <span class="k-chip k-chip-mono" title="{escape(marker[1])}">{marker[0]}</span>'
-
-
-def _linked_title(r: SignalRow) -> str:
-    title = escape(r.title)
-    if r.url:
-        return f'<a href="{escape(r.url, quote=True)}" target="_blank" rel="noopener">{title}</a>'
-    return title
-
-
-def _stream_row(r: SignalRow, list_type: str = "") -> str:
-    label, tone = _TYPE_PILL.get(r.signal_type, (r.signal_type, ""))
-    pill_cls = f"k-pill {tone}".strip()
-    type_cell = f'<span class="{pill_cls}">{escape(label)}</span>'
-    title = escape(r.title)
-    sig_cell = (
-        f'<a href="{escape(r.url, quote=True)}" target="_blank" rel="noopener">{title}</a>'
-        if r.url
-        else title
-    )
-    firm = f'<span class="diet-firm">{escape(r.firm)}</span>' if r.firm else "—"
-    marker = _BOOK_MARKER.get(list_type)
-    marker_html = (
-        f' <span class="k-chip k-chip-mono" title="{escape(marker[1])}">{marker[0]}</span>'
-        if marker
-        else ""
-    )
-    data = (
-        lg.data_text(f"{r.ticker} {r.title} {r.firm or ''} {label} {list_type}")
-        + lg.data_text_key("when", r.published_at[:10])
-        + lg.data_text_key("name", r.ticker)
-        + lg.data_text_key("type", label)
-        + lg.data_text_key("source", r.firm or "")
-    )
-    return (
-        f"<tr{data}>"
-        f'<td class="diet-when">{escape(r.published_at[:10])}</td>'
-        f"<td>{ticker_label(r.ticker)}{marker_html}</td>"
-        f"<td>{type_cell}</td>"
-        f'<td class="diet-sig">{sig_cell}</td>'
-        f"<td>{firm}</td>"
-        "</tr>"
-    )
 
 
 def _agenda_section(rows: list[SignalRow], today: date, *, unavailable: bool = False) -> str:

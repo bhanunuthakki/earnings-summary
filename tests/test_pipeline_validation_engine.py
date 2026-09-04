@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for src/pipeline/validation_engine.py — range, magnitude_jump, source_disagreement."""
 
 from __future__ import annotations
@@ -91,7 +92,7 @@ def conn() -> sqlite3.Connection:
     return c
 
 
-def _doc(conn, ticker: str, source_type: str = "fmp") -> int:
+def _doc(conn: sqlite3.Connection, ticker: str, source_type: str = "fmp") -> int:
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
         "fetched_at, fetch_status, raw_bytes_size) VALUES (?, ?, 'x', 'p', ?, ?, 'ok', 1)",
@@ -101,7 +102,7 @@ def _doc(conn, ticker: str, source_type: str = "fmp") -> int:
 
 
 def _ff(
-    conn,
+    conn: sqlite3.Connection,
     *,
     ticker: str,
     line_item: str,
@@ -120,7 +121,7 @@ def _ff(
 
 
 def _kpi(
-    conn,
+    conn: sqlite3.Connection,
     *,
     ticker: str,
     name: str,
@@ -182,6 +183,30 @@ def test_range_check_fires_on_negative_total_assets(conn: sqlite3.Connection) ->
     assert dict(issue)["rule"] == ValidationRule.PLAUSIBLE_RANGE.value
 
 
+def test_financial_range_query_fetches_only_bounded_items(conn: sqlite3.Connection) -> None:
+    doc_id = _doc(conn, "X")
+    _ff(
+        conn,
+        ticker="X",
+        line_item="revenue",
+        value=100,
+        period_end=datetime(2024, 12, 31),
+        source_doc_id=doc_id,
+    )
+    _ff(
+        conn,
+        ticker="X",
+        line_item="total_assets",
+        value=200,
+        period_end=datetime(2024, 12, 31),
+        source_doc_id=doc_id,
+    )
+
+    outcome = _check_financial_fact_ranges(conn, run_id="r1", ticker="X")
+
+    assert outcome.rows_examined == 1
+
+
 def test_kpi_range_check_fires_on_out_of_band_percent(conn: sqlite3.Connection) -> None:
     """Op margin > 1000% should fire (FNV's 5258% case)."""
     doc_id = _doc(conn, "FNV")
@@ -196,6 +221,32 @@ def test_kpi_range_check_fires_on_out_of_band_percent(conn: sqlite3.Connection) 
     )
     outcome = _check_kpi_fact_ranges(conn, run_id="r1", ticker="FNV")
     assert outcome.issues_inserted == 1
+
+
+def test_kpi_range_query_fetches_only_bounded_units(conn: sqlite3.Connection) -> None:
+    doc_id = _doc(conn, "FNV")
+    _kpi(
+        conn,
+        ticker="FNV",
+        name="NarrativeScore",
+        unit="text",
+        value=1,
+        period_end=datetime(2024, 12, 31),
+        source_doc_id=doc_id,
+    )
+    _kpi(
+        conn,
+        ticker="FNV",
+        name="OpMargin",
+        unit=Unit.PERCENT.value,
+        value=50,
+        period_end=datetime(2024, 12, 31),
+        source_doc_id=doc_id,
+    )
+
+    outcome = _check_kpi_fact_ranges(conn, run_id="r1", ticker="FNV")
+
+    assert outcome.rows_examined == 1
 
 
 def test_magnitude_jump_fires_on_5x_sequential(conn: sqlite3.Connection) -> None:

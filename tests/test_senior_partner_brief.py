@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for src/advisor/senior_partner_brief.py — the P2.2 governed
 composition pipeline (PRD §9.1).
 
@@ -574,3 +575,220 @@ def test_render_markdown_five_distinct_sections() -> None:
         assert heading in rendered
     # Empty sections carry a distinct "nothing" phrase, not one repeated blob.
     assert rendered.count("(nothing material this week)") <= 1
+
+
+# --------------------------------------------------------------------------- #
+# Shared direct-SQL connection behavior
+# --------------------------------------------------------------------------- #
+
+
+def _seed_direct_sql_tables(db_path: Path) -> None:
+    conn: sqlite3.Connection = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tracked_companies "
+            "(ticker TEXT PRIMARY KEY, list_type TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS weekly_packet_runs "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "iso_year INTEGER NOT NULL, iso_week INTEGER NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS weekly_packet_items "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, "
+            "item_kind TEXT NOT NULL, ticker TEXT, title TEXT NOT NULL, "
+            "verdict TEXT, order_index INTEGER NOT NULL DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS expected_earnings "
+            "(ticker TEXT NOT NULL, expected_date TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS _decision_journal_base "
+            "(decision_id INTEGER PRIMARY KEY, ticker TEXT, "
+            "recommendation_kind TEXT NOT NULL, made_at TEXT NOT NULL, "
+            "falsifier TEXT, decided_by TEXT NOT NULL, "
+            "advice_preceded INTEGER NOT NULL, process_quality TEXT)"
+        )
+        conn.execute(
+            "CREATE VIEW IF NOT EXISTS v_decision_journal AS SELECT "
+            "decision_id, ticker, recommendation_kind, made_at, falsifier, "
+            "decided_by, advice_preceded, process_quality "
+            "FROM _decision_journal_base"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, list_type) VALUES "
+            "('AAA', 'evaluation'), ('BBB', 'evaluation'), "
+            "('NVO', 'portfolio'), ('NU', 'portfolio')"
+        )
+        conn.execute(
+            "INSERT INTO llm_artifacts "
+            "(ticker, scope, purpose, content_json, input_sha256, generated_at, "
+            "superseded_by_id) VALUES "
+            "('AAA', 'ticker', 'investment_decision_card', "
+            "'{\"suggested_disposition\":\"buy\"}', 'sha-card-aaa', "
+            "'2026-07-19T09:00:00', NULL)"
+        )
+        conn.execute(
+            "INSERT INTO llm_artifacts "
+            "(ticker, scope, purpose, content_json, input_sha256, generated_at, "
+            "superseded_by_id) VALUES "
+            "('BBB', 'ticker', 'investment_decision_card', "
+            "'{\"suggested_disposition\":\"watch\"}', 'sha-card-bbb', "
+            "'2026-07-18T09:00:00', NULL)"
+        )
+        iso_year: int
+        iso_week: int
+        iso_year, iso_week, _ = _NOW.isocalendar()
+        cur: sqlite3.Cursor = conn.execute(
+            "INSERT INTO weekly_packet_runs (iso_year, iso_week) VALUES (?, ?)",
+            (iso_year, iso_week),
+        )
+        run_id: int = int(cur.lastrowid or 0)
+        conn.execute(
+            "INSERT INTO weekly_packet_items "
+            "(run_id, item_kind, ticker, title, verdict, order_index) VALUES "
+            "(?, 'news', 'NVO', 'stub packet item', NULL, 0)",
+            (run_id,),
+        )
+        conn.execute(
+            "INSERT INTO expected_earnings (ticker, expected_date) VALUES "
+            "('NVO', '2026-07-22'), ('NU', '2026-07-23')"
+        )
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, "
+            "created_at) VALUES ('NU', 'trim', 'owner', '2026-07-18T09:00:00')"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO _decision_journal_base "
+            "(decision_id, ticker, recommendation_kind, made_at, falsifier, "
+            "decided_by, advice_preceded, process_quality) VALUES "
+            "(9001, 'NVO', 'trim', '2026-07-19T09:00:00', "
+            "'price drops 20%', 'owner', 1, NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("populated", [True, False])
+def test_direct_helpers_shared_connection_matches_owned(tmp_path: Path, populated: bool) -> None:
+    db_path: Path = _make_db(tmp_path)
+    if populated:
+        _seed_direct_sql_tables(db_path)
+    shared: sqlite3.Connection = sqlite3.connect(str(db_path))
+    shared.row_factory = sqlite3.Row
+    try:
+        cards_owned: spb._CardsInput = spb._gather_cards(db_path, now=_NOW)
+        cards_shared: spb._CardsInput = spb._gather_cards(db_path, now=_NOW, conn=shared)
+        assert cards_owned == cards_shared
+        packet_owned: spb._PacketInput = spb._gather_packet_items(db_path, now=_NOW)
+        packet_shared: spb._PacketInput = spb._gather_packet_items(db_path, now=_NOW, conn=shared)
+        assert packet_owned == packet_shared
+        prior_owned: spb._PriorDecisionInput = spb._gather_prior_decision(db_path)
+        prior_shared: spb._PriorDecisionInput = spb._gather_prior_decision(db_path, conn=shared)
+        assert prior_owned == prior_shared
+        earnings_owned: int = spb._earnings_cluster_count(db_path, now=_NOW)
+        earnings_shared: int = spb._earnings_cluster_count(db_path, now=_NOW, conn=shared)
+        assert earnings_owned == earnings_shared
+        shift_owned: int = spb._portfolio_shift_count(db_path, now=_NOW)
+        shift_shared: int = spb._portfolio_shift_count(db_path, now=_NOW, conn=shared)
+        assert shift_owned == shift_shared
+        fresh_count: int = sum(1 for line in cards_owned.lines if "(fresh," in line)
+        active_owned: tuple[bool, list[str]] = spb._detect_active_week(
+            db_path, now=_NOW, fresh_card_count=fresh_count
+        )
+        active_shared: tuple[bool, list[str]] = spb._detect_active_week(
+            db_path, now=_NOW, fresh_card_count=fresh_count, conn=shared
+        )
+        assert active_owned == active_shared
+        probe: sqlite3.Row | None = shared.execute("SELECT 1 AS one").fetchone()
+        assert probe is not None and int(probe["one"]) == 1
+        if populated:
+            assert len(cards_owned.lines) == 2
+            assert all("(fresh," in line for line in cards_owned.lines)
+            assert len(packet_owned.lines) == 1
+            assert prior_owned.line is not None
+            assert prior_owned.ref == "decision:9001"
+            assert earnings_owned == 2
+            assert shift_owned == 1
+            assert active_owned[0] is True
+        else:
+            assert cards_owned.lines == []
+            assert cards_owned.refs == []
+            assert packet_owned.lines == []
+            assert prior_owned.line is None
+            assert earnings_owned == 0
+            assert shift_owned == 0
+            assert active_owned == (False, [])
+    finally:
+        shared.close()
+
+
+def test_gather_inputs_uses_single_shared_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path: Path = _make_db(tmp_path)
+    _seed_direct_sql_tables(db_path)
+
+    def _stub_recommendation(db_path_arg: Path) -> spb._RecommendationInput:
+        return spb._RecommendationInput("[rec:stub] stub", "rec:stub")
+
+    def _stub_risk(db_path_arg: Path) -> spb._RiskInput:
+        return spb._RiskInput("[risk:stub] stub", "risk:stub")
+
+    def _stub_wealth(db_path_arg: Path) -> spb._WealthInput:
+        return spb._WealthInput("[wealth:stub] stub", "wealth:stub")
+
+    def _stub_routed(db_path_arg: Path) -> list[spb._RoutedMomentLine]:
+        return [
+            spb._RoutedMomentLine(
+                ping_id=1,
+                class_="profile_drift",
+                ticker=None,
+                ref="coach_ping:1",
+                line="[coach_ping:1] profile_drift",
+            )
+        ]
+
+    def _stub_proposals(db_path_arg: Path) -> list[str]:
+        return ["[research_proposal:7] stub proposal"]
+
+    def _stub_anchors(repo_root_arg: Path) -> str:
+        return "stub anchors"
+
+    monkeypatch.setattr(spb, "_gather_recommendation", _stub_recommendation)
+    monkeypatch.setattr(spb, "_gather_risk", _stub_risk)
+    monkeypatch.setattr(spb, "_gather_wealth", _stub_wealth)
+    monkeypatch.setattr(spb, "_gather_routed_moments", _stub_routed)
+    monkeypatch.setattr(spb, "_gather_proposals", _stub_proposals)
+    monkeypatch.setattr(spb, "_gather_anchors", _stub_anchors)
+
+    real_ro_conn = spb._ro_conn
+    opened: list[sqlite3.Connection] = []
+
+    def _counting_ro(db_path_arg: Path) -> sqlite3.Connection | None:
+        conn = real_ro_conn(db_path_arg)
+        if conn is not None:
+            opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(spb, "_ro_conn", _counting_ro)
+    inputs: spb._Inputs = spb._gather_inputs(db_path, tmp_path, now=_NOW)
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[0].execute("SELECT 1")
+    assert inputs.recommendation.ref == "rec:stub"
+    assert inputs.risk.ref == "risk:stub"
+    assert inputs.wealth.ref == "wealth:stub"
+    assert len(inputs.cards.lines) == 2
+    assert len(inputs.packet.lines) == 1
+    assert inputs.prior_decision.ref == "decision:9001"
+    assert inputs.prior_decision.line is not None
+    assert inputs.is_active_week is True
+    assert inputs.active_week_reasons != []
+    assert "rec:stub" in inputs.allowed_refs
+    assert "coach_ping:1" in inputs.allowed_refs
+    assert "research_proposal:7" in inputs.allowed_refs
+    assert any(ref.startswith("decision:") for ref in inputs.allowed_refs)

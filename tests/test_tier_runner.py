@@ -227,7 +227,7 @@ def test_weekly_cadence_p2_threshold_7d(repo_root: Path, now: datetime) -> None:
         "P2",
         last_built_at=fifteen_days,
     )
-    # Within 30d → skipped on weekly cadence (even though 15d > daily's 7d).
+    # Past the seven-day weekly service interval → due.
     assert "ABNB" in tickers_due_for_refresh(repo_root, "weekly", now=now)
 
 
@@ -266,8 +266,7 @@ def test_lens_regen_due_when_no_artifact(repo_root: Path, now: datetime) -> None
 
 
 def test_lens_regen_skipped_when_recent(repo_root: Path, now: datetime) -> None:
-    """P2 ticker with a fresh lens (3d old) → skipped on weekly cadence
-    (P2 weekly threshold is 30d)."""
+    """P2 ticker with a fresh lens (3d old) → within the 7d weekly interval."""
     fresh = (now - timedelta(hours=1)).isoformat(timespec="seconds")
     _seed_ticker(
         repo_root / "data" / "portfolio.db",

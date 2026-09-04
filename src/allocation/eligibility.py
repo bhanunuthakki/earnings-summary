@@ -39,7 +39,6 @@ answer for an eligibility GATE: "unknown" must never read as "eligible").
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -50,6 +49,7 @@ from typing import Literal, cast
 from pydantic import ValidationError
 
 from allocation.candidate_fit import CandidateFit
+from allocation.digest import allocation_payload_sha
 from compute.thesis_evaluator import HoldingsSpec, load_holdings_spec
 from dcf.latest import LatestDcfRow, latest_dcf_row
 from models.companies import ListType
@@ -155,11 +155,6 @@ class DecisionReadyAssessment:
 # --------------------------------------------------------------------------- #
 # Small shared helpers
 # --------------------------------------------------------------------------- #
-
-
-def _sha(payload: object) -> str:
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
@@ -496,7 +491,7 @@ def cash_assessment(*, now: datetime | None = None) -> DecisionReadyAssessment:
         hypothesis_origin="missing",
         portfolio_fit_status="cash",
         checks=checks,
-        input_sha=_sha(payload),
+        input_sha=allocation_payload_sha(payload),
     )
 
 
@@ -606,7 +601,7 @@ def assess_eligibility(
         hypothesis_origin=hypothesis_origin,
         portfolio_fit_status=portfolio_fit_status,
         checks=checks,
-        input_sha=_sha(payload),
+        input_sha=allocation_payload_sha(payload),
     )
 
 

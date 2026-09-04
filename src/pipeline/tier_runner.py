@@ -31,9 +31,9 @@ Cadence rule (per tier, applied uniformly to either refresh or lens regen):
                         P3: due if last_event > 30d ago
     cadence='weekly'    P1: due if last_event > 7d ago
                         P2: due if last_event > 7d ago
-                        P3: due if last_event > 90d ago     (quarterly)
+                        P3: due if last_event > 30d ago
     cadence='monthly'   P1: due if last_event > 30d ago
-                        P2: due if last_event > 90d ago
+                        P2: due if last_event > 30d ago
                         P3: due if last_event > 30d ago
 
 "daily / weekly / monthly" here names *which cron tick* is calling. The

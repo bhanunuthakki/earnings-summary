@@ -109,8 +109,10 @@ def _held_operating_companies(
     the equity-type allowlist and non-cash-equivalents. ETFs/funds/options/cash
     never appear here, so they can never be promoted.
     """
+    allowed_types = tuple(sorted(EQUITY_SECURITY_TYPES))
+    type_placeholders = ",".join("?" for _ in allowed_types)
     rows = tracker_conn.execute(
-        """
+        f"""
         WITH latest AS (
             SELECT hs.account_id, hs.security_id, hs.quantity, hs.institution_value,
                    ROW_NUMBER() OVER (
@@ -119,27 +121,24 @@ def _held_operating_companies(
                    ) AS rn
             FROM holdings_snapshots hs
         )
-        SELECT UPPER(s.ticker)                       AS ticker,
-               SUM(COALESCE(l.institution_value, 0)) AS mv,
-               MAX(LOWER(COALESCE(s.type, '')))      AS sec_type,
-               MAX(COALESCE(s.is_cash_equivalent, 0)) AS cash_eq
+        SELECT UPPER(s.ticker)                        AS ticker,
+               SUM(COALESCE(l.institution_value, 0)) AS mv
         FROM latest l
         JOIN securities s ON s.security_id = l.security_id
         WHERE l.rn = 1
           AND l.quantity > 0
           AND s.ticker IS NOT NULL
           AND TRIM(s.ticker) <> ''
+          AND COALESCE(s.is_cash_equivalent, 0) = 0
+          AND LOWER(COALESCE(s.type, '')) IN ({type_placeholders})
         GROUP BY UPPER(s.ticker)
-        """
+        """,  # nosec B608 -- placeholders only; the SQL shape is module-owned
+        allowed_types,
     ).fetchall()
     held: dict[str, float] = {}
     for r in rows:
         mv = float(r["mv"] or 0.0)
         if mv <= min_value:
-            continue
-        if int(r["cash_eq"] or 0) == 1:
-            continue
-        if str(r["sec_type"] or "") not in EQUITY_SECURITY_TYPES:
             continue
         held[str(r["ticker"])] = mv
     return held

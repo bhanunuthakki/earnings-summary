@@ -51,6 +51,7 @@ from dcf.redesign import (
     apply_scenario,
     value,
 )
+from dcf.reverse_valuation import solve_monotonic
 
 # Bisection bounds for each lever — deliberately wide (the point is to reveal an
 # implied assumption even when it is aggressive), but finite so an unreachable
@@ -65,8 +66,6 @@ _TERM_G_LO = -0.05
 _TERM_G_HI = 0.10  # further clamped below WACC per name (perpetuity requires g < WACC)
 
 _CAGR_YEARS = 5  # "5-year revenue CAGR" — the decision-relevant horizon
-_MAX_ITER = 80  # bisection depth; 2**-80 is far past float precision
-_REL_TOL = 1e-6  # |value - price| <= _REL_TOL * price ends the search early
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,31 +150,31 @@ def _bisect(
     evaluated at a bound. Handles both increasing and decreasing ``f`` by reading
     the sign at the endpoints; ``value()`` is increasing in every lever here, but
     the bracket check is what actually gates correctness, not the assumed slope.
+
+    Compatibility-preserving adapter onto
+    ``dcf.reverse_valuation.solve_monotonic`` (the archetype-neutral solver).
+    Ordinary outputs, bounds, tolerance and iteration depth are preserved —
+    the neutral solver uses the same ``1e-6`` / ``80`` values. ``solved``
+    maps to the midpoint, both
+    ``unreachable`` and ``unavailable`` map to ``None``.
+
+    Deliberate edge-case resolutions (all honest-``None``, never clamped):
+    non-finite target/bounds or ``lo >= hi`` → ``None`` (unavailable);
+    non-finite or missing endpoint value → ``None`` (unavailable, same as the
+    old bound-``None``); interior missing/non-finite/unvaluable point →
+    ``None`` (unavailable, same as the old interior-``None``); a callback
+    raising ``RedesignError``/``ArithmeticError``/``ValueError`` → ``None``
+    (unavailable rather than propagating); maximum iterations still returns
+    the converged midpoint as ``solved``.
     """
-    flo = f(lo)
-    fhi = f(hi)
-    if flo is None or fhi is None:
-        return None
-    # Target must sit between the endpoint values (inclusive), else it is
-    # unreachable inside the bounds — return None rather than a clamped bound.
-    if not (min(flo, fhi) <= target <= max(flo, fhi)):
-        return None
-    increasing = fhi >= flo
-    a, b = lo, hi
-    for _ in range(_MAX_ITER):
-        mid = 0.5 * (a + b)
-        fmid = f(mid)
-        if fmid is None:
+    def _value_at(x: float) -> float | None:
+        try:
+            return f(x)
+        except RedesignError:
             return None
-        if abs(fmid - target) <= _REL_TOL * max(abs(target), 1.0):
-            return mid
-        below = fmid < target
-        # Move the bound that keeps the target bracketed.
-        if below == increasing:
-            a = mid
-        else:
-            b = mid
-    return 0.5 * (a + b)
+
+    result = solve_monotonic(_value_at, target, lo, hi)
+    return result.implied_value if result.status == "solved" else None
 
 
 def _repriced_by_growth(inp: RedesignInputs, delta: float) -> float | None:

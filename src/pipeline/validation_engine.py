@@ -116,11 +116,16 @@ def _check_financial_fact_ranges(
     conn: sqlite3.Connection, *, run_id: str, ticker: str | None
 ) -> CheckOutcome:
     """Insert PLAUSIBLE_RANGE issues for financial_facts whose value falls outside its bound."""
-    sql = "SELECT id, ticker, line_item, value, source_doc_id FROM financial_facts"
-    params: tuple[str, ...] = ()
+    bounded_items = tuple(_FINANCIAL_FACT_RANGES)
+    placeholders = ",".join("?" for _ in bounded_items)
+    sql = (
+        "SELECT id, ticker, line_item, value, source_doc_id FROM financial_facts "
+        f"WHERE line_item IN ({placeholders})"
+    )
+    params: tuple[str, ...] = bounded_items
     if ticker is not None:
-        sql += " WHERE ticker = ?"
-        params = (ticker.upper(),)
+        sql += " AND ticker = ?"
+        params = (*params, ticker.upper())
     cur = conn.execute(sql, params)
     rows = cur.fetchall()
     inserted = 0
@@ -165,12 +170,13 @@ def _check_kpi_fact_ranges(
     """Insert PLAUSIBLE_RANGE issues for kpi_facts whose value falls outside the unit-specific bound."""
     sql = (
         "SELECT kf.id, kf.ticker, kf.value, kf.unit, kf.source_doc_id, kd.name "
-        "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id"
+        "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+        f"WHERE kf.unit IN ({','.join('?' for _ in _KPI_RANGES)})"
     )
-    params: tuple[str, ...] = ()
+    params: tuple[str, ...] = tuple(unit.value for unit in _KPI_RANGES)
     if ticker is not None:
-        sql += " WHERE kf.ticker = ?"
-        params = (ticker.upper(),)
+        sql += " AND kf.ticker = ?"
+        params = (*params, ticker.upper())
     cur = conn.execute(sql, params)
     rows = cur.fetchall()
     inserted = 0

@@ -2039,14 +2039,23 @@ def create_app(
         """Generation 3 pre-trade portfolio impact simulator."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from simulate_trade_impact import SimulateTradeRequest, simulate_trade_impact
+        from simulate_trade_impact import (
+            SimulateTradeRequest,
+            SimulationDataUnavailableError,
+            simulate_trade_impact,
+        )
 
         raw = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
             simulation = SimulateTradeRequest.model_validate(raw)
         except ValidationError as exc:
             return ({"error": str(exc)}, 400)
-        result = simulate_trade_impact(repo_root, simulation)
+        try:
+            result = simulate_trade_impact(repo_root, simulation)
+        except SimulationDataUnavailableError as exc:
+            return ({"error": str(exc)}, 503)
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
         response = app.json.response(result.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response

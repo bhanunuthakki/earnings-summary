@@ -664,10 +664,9 @@ def _ts_signals_md(
 def _themes_cache_key(payload: list[dict[str, object]], ts_signals_md: str = "") -> str:
     """Hash of the LLM input — invalidates cache on any source change.
 
-    Sums periods + prepared/qa boolean availability + the first 64 chars
-    of each side. Keeping it light keeps the hash stable against
-    re-extraction noise while still flipping when a new quarter lands or
-    a transcript gets re-fetched.
+    Hashes the complete prepared and Q&A inputs. Transcript re-extraction can
+    change analysis-relevant text anywhere in the body, so prefix sampling is
+    not a safe cache identity.
 
     ``ts_signals_md`` is folded in as the full block text so a refresh of
     the timeseries_signals table (different narratives / severities)
@@ -685,10 +684,10 @@ def _themes_cache_key(payload: list[dict[str, object]], ts_signals_md: str = "")
         h.update(str(len(qa) if isinstance(qa, str) else 0).encode("utf-8"))
         h.update(b"\x00")
         if isinstance(prepared, str):
-            h.update(prepared[:64].encode("utf-8", errors="ignore"))
+            h.update(prepared.encode("utf-8", errors="ignore"))
         h.update(b"\x00")
         if isinstance(qa, str):
-            h.update(qa[:64].encode("utf-8", errors="ignore"))
+            h.update(qa.encode("utf-8", errors="ignore"))
         h.update(b"\xff")
     h.update(b"|TS|")
     h.update(ts_signals_md.encode("utf-8", errors="ignore"))

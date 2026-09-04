@@ -29,7 +29,7 @@ import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from llm_client import JSON_FENCE_RE, VALUATION_MULTIPLE_CHOICES, generate_valuation_basis
 
@@ -50,7 +50,7 @@ class ValuationBasisResult:
     current_value: float | None = None
     current_value_display: str | None = None
     current_period_end: str | None = None  # ISO date
-    history: list[ValuationHistPoint] = field(default_factory=list)
+    history: list[ValuationHistPoint] = field(default_factory=list[ValuationHistPoint])
     historical_min: float | None = None
     historical_max: float | None = None
     historical_median: float | None = None
@@ -104,7 +104,7 @@ def _coerce_multiple_payload(raw: str) -> dict[str, object] | None:
     if cleaned.startswith("```"):
         cleaned = JSON_FENCE_RE.sub("", cleaned).strip()
     try:
-        decoded = json.loads(cleaned)
+        decoded: object = json.loads(cleaned)
     except json.JSONDecodeError:
         return None
     if not isinstance(decoded, dict):
@@ -165,10 +165,12 @@ def extract_for_ticker(
     ).hexdigest()
 
     if not refresh and cache_path.exists():
-        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        decoded_cache: object = json.loads(cache_path.read_text(encoding="utf-8"))
+        if not isinstance(decoded_cache, dict):
+            raise ValueError("expected JSON object for valuation_basis cache")
+        cached = cast("dict[str, Any]", decoded_cache)
         if cached.get("cache_sha256") == inputs_sha:
-            cached.pop("history", None)
-            hist_raw = json.loads(cache_path.read_text(encoding="utf-8")).get("history") or []
+            hist_raw: Any = cached.pop("history", None) or []
             history = [ValuationHistPoint(**h) for h in hist_raw]
             return ValuationBasisResult(**cached, history=history)
 
@@ -254,8 +256,11 @@ def load(repo_root: Path, ticker: str) -> ValuationBasisResult | None:
     path = _cache_path(repo_root, ticker)
     if not path.exists():
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    history_raw = payload.pop("history", []) or []
+    decoded_load: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(decoded_load, dict):
+        raise ValueError("expected JSON object for valuation_basis cache")
+    payload = cast("dict[str, Any]", decoded_load)
+    history_raw: Any = payload.pop("history", []) or []
     history = [ValuationHistPoint(**h) for h in history_raw]
     return ValuationBasisResult(**payload, history=history)
 
@@ -280,12 +285,13 @@ def _load_quarterly(repo_root: Path, ticker: str, filename: str) -> list[dict[st
     if not path.exists():
         return []
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        decoded: object = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return []
-    if not isinstance(raw, list):
+    if not isinstance(decoded, list):
         return []
-    rows = [cast("dict[str, object]", r) for r in raw if isinstance(r, dict)]
+    raw_list = cast("list[Any]", decoded)
+    rows = [cast("dict[str, object]", r) for r in raw_list if isinstance(r, dict)]
     rows.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
     return rows
 
@@ -303,9 +309,12 @@ def _load_multiple_override(repo_root: Path, ticker: str) -> str | None:
     if not path.exists():
         return None
     try:
-        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+        decoded: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(decoded, dict):
+        return None
+    payload = cast("dict[str, object]", decoded)
     v = payload.get("valuation_multiple_override")
     if isinstance(v, str) and v.strip() in VALUATION_MULTIPLE_CHOICES:
         return v.strip()
@@ -317,9 +326,12 @@ def _load_thesis(repo_root: Path, ticker: str) -> str:
     if not path.exists():
         return ""
     try:
-        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+        decoded: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return ""
+    if not isinstance(decoded, dict):
+        return ""
+    payload = cast("dict[str, object]", decoded)
     for key in ("thesis", "thesis_full", "thesis_one_liner"):
         v = payload.get(key)
         if isinstance(v, str) and v.strip():
@@ -333,14 +345,16 @@ def _load_sector_industry(repo_root: Path, ticker: str) -> tuple[str | None, str
     if not path.exists():
         return (None, None)
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        decoded: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return (None, None)
-    if isinstance(raw, list):
-        raw = raw[0] if raw else {}
-    if not isinstance(raw, dict):
+    candidate: object = decoded
+    if isinstance(candidate, list):
+        items = cast("list[Any]", candidate)
+        candidate = items[0] if items else {}
+    if not isinstance(candidate, dict):
         return (None, None)
-    r = cast("dict[str, object]", raw)
+    r = cast("dict[str, object]", candidate)
     sector = r.get("sector")
     industry = r.get("industry")
     return (
