@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -142,3 +143,23 @@ def test_cli_has_no_caller_selected_workload_or_sidecar() -> None:
                 "python -c 'print(\"fake\")'",
             ]
         )
+
+
+def test_source_analysis_runs_real_paired_revisions() -> None:
+    baseline = subprocess.check_output(["git", "rev-parse", "HEAD~1"], text=True).strip()
+    current = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    receipt = capture_performance_evidence(
+        Path.cwd(),
+        COHORT_REGISTRY["source_analysis"],
+        samples=7,
+        provenance="mac_guidance",
+        baseline_revision=baseline,
+        current_revision=current,
+        timeout_seconds=30,
+    )
+    assert receipt.baseline.status == "PASS"
+    assert receipt.paired_identity is True
+    assert len(receipt.causal_runs) == 14
+    assert {run.revision for run in receipt.causal_runs} == {baseline, current}
+    assert all(run.stage == "source-analysis" for run in receipt.causal_runs)
+    assert all(sample.label == "cold" for sample in receipt.baseline.timing_samples)

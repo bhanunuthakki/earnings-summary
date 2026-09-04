@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
 import os
 import platform
 import random
@@ -10,6 +12,8 @@ import shlex
 import statistics
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -144,7 +148,10 @@ _COHORT_COMMANDS: dict[CohortName, str] = {
     "migrations": f"{sys.executable} execution/validate_directive_manifest.py",
     "route_cold_warm": f"{sys.executable} execution/comments_server.py --help",
     "dcf": f"{sys.executable} execution/build_redesigned_dcf.py --help",
-    "source_analysis": f"{sys.executable} execution/analyze_code_duplicates.py --help",
+    "source_analysis": (
+        f"{sys.executable} execution/analyze_code_duplicates.py "
+        "--repo-root {repo_root} --revision WORKTREE --out {output}"
+    ),
     "ci": f"{sys.executable} execution/format_changed.py --help",
 }
 
@@ -239,6 +246,224 @@ def _int_measure(measures: Mapping[str, float | int | None] | None, key: str) ->
     if isinstance(value, (int, float)):
         return int(value)
     return None
+
+
+def _archive_revision(root: Path, revision: str, destination: Path) -> None:
+    """Materialize a tracked revision without changing the caller's checkout."""
+    completed = subprocess.run(
+        ["git", "-C", str(root), "archive", "--format=tar", revision],
+        capture_output=True,
+        check=True,
+    )
+    with tarfile.open(fileobj=io.BytesIO(completed.stdout), mode="r:") as archive:
+        for member in archive.getmembers():
+            target = (destination / member.name).resolve()
+            if destination.resolve() not in target.parents:
+                raise ValueError("git archive contained an unsafe path")
+            archive.extract(member, destination)
+
+
+def _child_peak_rss(before: int) -> int:
+    try:
+        import resource
+    except ImportError:
+        return 0
+    current = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    if platform.system() != "Darwin":
+        current *= 1024
+    return max(0, current - before)
+
+
+def _paired_source_analysis(
+    root: Path,
+    cohort: FrozenPerformanceCohort,
+    *,
+    baseline_revision: str,
+    current_revision: str,
+    samples: int,
+    timeout_seconds: float,
+    config_paths: list[str] | None,
+    provenance: Literal["mac_guidance", "approved_windows_production_shaped"],
+) -> PerformanceEvidenceReceipt:
+    """Run the real duplicate inventory in isolated snapshots at both refs."""
+    reasons: list[str] = []
+    if samples < 7:
+        reasons.append("at least 7 measured repeats are required")
+    count = min(max(samples, 0), 21)
+    runs: list[CausalRunEnvelope] = []
+    durations: list[float] = []
+    revision_durations: dict[str, list[float]] = {
+        baseline_revision: [],
+        current_revision: [],
+    }
+    outputs: list[bytes] = []
+    exit_codes: list[int] = []
+    with tempfile.TemporaryDirectory(prefix="performance-paired-") as temp_name:
+        temp_root = Path(temp_name)
+        for round_number in range(21):
+            completed_round = True
+            stability_by_revision: dict[str, bool] = {}
+            for revision in (baseline_revision, current_revision):
+                revision_samples = revision_durations[revision]
+                stable = False
+                if len(revision_samples) >= 7:
+                    revision_median = statistics.median(revision_samples)
+                    revision_mad = statistics.median(
+                        abs(value - revision_median) for value in revision_samples
+                    )
+                    stable = revision_mad <= revision_median * 0.05
+                stability_by_revision[revision] = stable
+            any_unstable = any(
+                len(revision_durations[revision]) >= 7 and not stable
+                for revision, stable in stability_by_revision.items()
+            )
+            for revision in (baseline_revision, current_revision):
+                if round_number >= count and not any_unstable and stability_by_revision[revision]:
+                    continue
+                completed_round = False
+                snapshot = temp_root / revision.replace("/", "_")
+                if not snapshot.exists():
+                    snapshot.mkdir()
+                    try:
+                        _archive_revision(root, revision, snapshot)
+                    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                        reasons.append(
+                            f"cannot materialize revision {revision}: {type(exc).__name__}"
+                        )
+                        completed_round = True
+                        continue
+                output_path = snapshot / ".tmp" / "quality" / "performance-duplicates.json"
+                command = cohort.declared_command.format(
+                    repo_root=str(snapshot), revision=revision, output=str(output_path)
+                )
+                try:
+                    argv = shlex.split(command)
+                except ValueError as exc:
+                    reasons.append(f"invalid cohort command: {exc}")
+                    completed_round = True
+                    continue
+                rss_before = 0
+                try:
+                    import resource
+
+                    rss_before = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+                except ImportError:
+                    reasons.append("child RSS measurement unavailable")
+                started = time.perf_counter()
+                try:
+                    completed = subprocess.run(
+                        argv,
+                        cwd=snapshot,
+                        capture_output=True,
+                        timeout=timeout_seconds,
+                        check=False,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    reasons.append(f"paired benchmark failed: {type(exc).__name__}")
+                    completed_round = True
+                    continue
+                elapsed = time.perf_counter() - started
+                durations.append(elapsed)
+                revision_durations[revision].append(elapsed)
+                exit_codes.append(completed.returncode)
+                outputs.append(completed.stdout + completed.stderr)
+                if completed.returncode not in (0, 2) or not output_path.is_file():
+                    reasons.append("source analysis command produced no valid inventory")
+                    completed_round = True
+                    continue
+                try:
+                    inventory = json.loads(output_path.read_text(encoding="utf-8"))
+                    rows = int(inventory["files_scanned"])
+                    if completed.returncode == 2:
+                        reasons.append("source analysis reported parse errors")
+                except (OSError, ValueError, KeyError, TypeError):
+                    reasons.append("source analysis inventory is malformed")
+                    completed_round = True
+                    continue
+                runs.append(
+                    CausalRunEnvelope(
+                        sql_statements=0,
+                        rows=rows,
+                        elapsed_seconds=elapsed,
+                        peak_rss_bytes=_child_peak_rss(rss_before),
+                        alembic_revision=None,
+                        query_plan_sha256=None,
+                        connection_role="none",
+                        stage="source-analysis",
+                        revision=revision,
+                    )
+                )
+            if reasons and len(runs) < count * 2:
+                break
+            if completed_round:
+                break
+    timing_samples = [TimingSample(label="cold", elapsed_seconds=value) for value in durations]
+    median = statistics.median(durations) if durations else None
+    mad = statistics.median(abs(value - median) for value in durations) if median else None
+    if any(len(values) < count for values in revision_durations.values()):
+        reasons.append("paired baseline/current samples are incomplete")
+    for revision, values in revision_durations.items():
+        if len(values) >= 7:
+            revision_median = statistics.median(values)
+            revision_mad = statistics.median(abs(value - revision_median) for value in values)
+            if revision_mad > revision_median * 0.05:
+                reasons.append(f"timing samples remain unstable for revision {revision}")
+    if provenance == "approved_windows_production_shaped" and sys.platform != "win32":
+        reasons.append("approved Windows production-shaped evidence requires Windows host")
+    receipt = PerformanceReceipt(
+        benchmark_command=cohort.declared_command,
+        command_argv=shlex.split(cohort.declared_command),
+        revision=current_revision,
+        source_sha256=_source_hash(root),
+        config_sha256=_tree_hash(root, config_paths or ["pyproject.toml", "requirements.lock"]),
+        timing=_timing(durations),
+        environment=_environment(),
+        status="HOLD" if reasons else "PASS",
+        hold=bool(reasons),
+        hold_reasons=reasons,
+        exit_codes=exit_codes,
+        output_sha256=_sha256_bytes(b"".join(outputs)) if outputs else None,
+        output_bytes=sum(len(output) for output in outputs),
+        output=b"".join(outputs)[:12000].decode("utf-8", errors="replace"),
+        warmup_seconds=None,
+        timing_samples=timing_samples,
+        median_seconds=median,
+        mad_seconds=mad,
+        bootstrap_ci_95=_bootstrap_median(durations),
+        stability_verdict="stable"
+        if mad is not None and median and mad <= median * 0.05
+        else "unstable",
+        adaptive_verdict="eligible" if not reasons else "hold",
+        companion_measures=CompanionMeasures(
+            sql_statements=0,
+            rows=int(statistics.median([run.rows for run in runs])) if runs else None,
+            elapsed_seconds=median,
+            peak_rss_bytes=int(statistics.median([run.peak_rss_bytes for run in runs]))
+            if runs
+            else None,
+        ),
+        provenance=provenance,
+        causal_runs=runs,
+    )
+    aggregate = CausalEvidence(
+        sql_statements=0,
+        rows=receipt.companion_measures.rows,
+        elapsed_seconds=median,
+        peak_rss_bytes=receipt.companion_measures.peak_rss_bytes,
+        alembic_revision=None,
+        query_plan_sha256=None,
+        connection_role="none",
+        stage="source-analysis",
+    )
+    return PerformanceEvidenceReceipt(
+        cohort=cohort,
+        baseline=receipt,
+        causal_evidence=aggregate,
+        causal_runs=tuple(runs),
+        baseline_revision=baseline_revision,
+        current_revision=current_revision,
+        paired_identity=not reasons,
+    )
 
 
 def _bootstrap_median(samples: list[float]) -> tuple[float, float] | None:
@@ -440,6 +665,22 @@ def capture_performance_evidence(
     current_revision: str | None = None,
 ) -> PerformanceEvidenceReceipt:
     """Capture one declared cohort; missing causal companions fail closed."""
+    if (
+        cohort.cohort == "source_analysis"
+        and baseline_revision is not None
+        and current_revision is not None
+        and provenance is not None
+    ):
+        return _paired_source_analysis(
+            Path(repo_root).resolve(),
+            cohort,
+            baseline_revision=baseline_revision,
+            current_revision=current_revision,
+            samples=samples,
+            timeout_seconds=timeout_seconds,
+            config_paths=config_paths,
+            provenance=provenance,
+        )
     reasons: list[str] = []
     # This adapter can execute one checkout only.  Revision labels emitted by a
     # child process are claims, not proof that the same cohort ran at both
