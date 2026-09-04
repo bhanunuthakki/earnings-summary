@@ -29,12 +29,14 @@ from .roadmap_freeze_contract import (
     FROZEN_PERFORMANCE_RECEIPT_SHA256,
     FROZEN_TYPE_DEBT_AUTHORITY_SHA256,
     FROZEN_TYPE_DEBT_TOTALS,
+    FUNCTION_LIFECYCLE_RECEIPT,
     LIFECYCLE_RECEIPT,
     LOC_TARGET_CAPS,
     MANDATORY_LOC_ROOTS,
     PERFORMANCE_RECEIPT,
     PROGRAM_ISSUE_TRAIN,
     PROGRAM_OWNER,
+    RECONCILIATION_RECEIPT,
     SCHEMA_VERSION,
     STATIC_RECEIPT,
     TEST_DB_RECEIPT,
@@ -47,9 +49,12 @@ from .roadmap_freeze_contract import (
     CleanupSlice,
     EstimateTotals,
     EvidenceRef,
+    FunctionLifecycleSnapshot,
     LargeModule,
     LocCrossing,
     PerformanceSnapshot,
+    ReachabilityEvidence,
+    ReconciliationSnapshot,
     RoadmapFreeze,
     SccCut,
     StrictModel,
@@ -79,13 +84,22 @@ from .roadmap_freeze_inventory import (
     feedback_arc_cut as _feedback_arc_cut,
 )
 from .roadmap_freeze_inventory import (
+    function_lifecycle as _function_lifecycle,
+)
+from .roadmap_freeze_inventory import (
     git_commit as _git_commit,
 )
 from .roadmap_freeze_inventory import (
     order_score as _order_score,
 )
 from .roadmap_freeze_inventory import (
+    reachability as _reachability,
+)
+from .roadmap_freeze_inventory import (
     read_json as _read_json,
+)
+from .roadmap_freeze_inventory import (
+    reconciliation as _reconciliation,
 )
 from .roadmap_freeze_inventory import (
     sccs as _sccs,
@@ -95,6 +109,12 @@ from .roadmap_freeze_inventory import (
 )
 from .roadmap_freeze_inventory import (
     sha256 as _sha256,
+)
+from .roadmap_freeze_inventory import (
+    static_quality as _static_quality,
+)
+from .roadmap_freeze_inventory import (
+    suppression_retirement as _suppression_retirement,
 )
 from .roadmap_freeze_inventory import (
     tracked_type_debt_authority as _tracked_type_debt_authority,
@@ -123,12 +143,14 @@ __all__ = (
     "FROZEN_PERFORMANCE_RECEIPT_SHA256",
     "FROZEN_TYPE_DEBT_AUTHORITY_SHA256",
     "FROZEN_TYPE_DEBT_TOTALS",
+    "FUNCTION_LIFECYCLE_RECEIPT",
     "LIFECYCLE_RECEIPT",
     "LOC_TARGET_CAPS",
     "MANDATORY_LOC_ROOTS",
     "PERFORMANCE_RECEIPT",
     "PROGRAM_ISSUE_TRAIN",
     "PROGRAM_OWNER",
+    "RECONCILIATION_RECEIPT",
     "SCHEMA_VERSION",
     "STATIC_RECEIPT",
     "TEST_DB_RECEIPT",
@@ -141,9 +163,12 @@ __all__ = (
     "CleanupSlice",
     "EstimateTotals",
     "EvidenceRef",
+    "FunctionLifecycleSnapshot",
     "LargeModule",
     "LocCrossing",
     "PerformanceSnapshot",
+    "ReachabilityEvidence",
+    "ReconciliationSnapshot",
     "RoadmapFreeze",
     "SccCut",
     "StrictModel",
@@ -173,14 +198,21 @@ def build_freeze(root: Path) -> RoadmapFreeze:
     test_db = _read_json(root, TEST_DB_RECEIPT)
     duplicate = _read_json(root, DUPLICATE_RECEIPT)
     lifecycle = _read_json(root, LIFECYCLE_RECEIPT)
+    function_lifecycle = _function_lifecycle(root)
     performance = _read_json(root, PERFORMANCE_RECEIPT)
     debt_totals, clusters = _type_debt(root, static)
+    suppression = _suppression_retirement(static)
+    static_total, _static_components = _static_quality(static)
+    reconciliation = _reconciliation(root)
+    reachability = _reachability(root, lifecycle)
     receipts = {
         "architecture": ARCHITECTURE_RECEIPT,
         "static": STATIC_RECEIPT,
         "test_db": TEST_DB_RECEIPT,
         "duplicate": DUPLICATE_RECEIPT,
         "lifecycle": LIFECYCLE_RECEIPT,
+        "function_lifecycle": FUNCTION_LIFECYCLE_RECEIPT,
+        "reconciliation": RECONCILIATION_RECEIPT,
         "performance": PERFORMANCE_RECEIPT,
         "type_debt_authority": TYPE_DEBT_AUTHORITY_PATH,
     }
@@ -267,6 +299,7 @@ def build_freeze(root: Path) -> RoadmapFreeze:
         migration_builders_baseline=builders,
         migration_builders_target=60,
         migration_builders_to_convert=max(0, builders - 60),
+        static_quality_baseline=static_total,
         full_suite_wall_seconds=wall,
         full_suite_target_seconds=510.0,
         full_suite_gap_seconds=round(wall - 510.0, 3),
@@ -361,6 +394,7 @@ def build_freeze(root: Path) -> RoadmapFreeze:
             estimated_prs=12,
             estimated_calendar_weeks=6.0,
             acceptance="only dispositioned, unreachable code is removed and lifecycle receipt remains complete",
+            candidate_count=function_lifecycle.candidate_count,
         ),
         CleanupSlice(
             key="final-static-zero",
@@ -371,7 +405,7 @@ def build_freeze(root: Path) -> RoadmapFreeze:
             scope="active Ruff, format, Pyright, and suppression retirement",
             ownership_lane="static-quality",
             risk="high",
-            units=4200,
+            units=static_total,
             estimated_hours=80.0,
             estimated_prs=12,
             estimated_calendar_weeks=6.0,
@@ -425,12 +459,23 @@ def build_freeze(root: Path) -> RoadmapFreeze:
         for row in builder_dispositions
         if row.disposition == "retain_candidate"
     )
-    budget_mappings = _budget_mappings(cuts, selected_crossings, clusters, builder_dispositions)
+    budget_mappings = _budget_mappings(
+        cuts,
+        selected_crossings,
+        clusters,
+        builder_dispositions,
+        suppression,
+        function_lifecycle,
+        (static_total, _static_components),
+    )
     return RoadmapFreeze(
         status="HOLD",
         artifact_acceptance_status="PASS",
         program_feasibility_status="HOLD",
         evidence=evidence,
+        function_lifecycle=function_lifecycle,
+        reconciliation=reconciliation,
+        reachability=reachability,
         architecture_metrics={
             "executable_modules": metrics.executable_modules,
             "total_noncomment_loc": metrics.total_noncomment_loc,
@@ -468,6 +513,7 @@ def build_freeze(root: Path) -> RoadmapFreeze:
         retained_type_debt=debt_totals,
         type_debt_clusters=tuple(clusters),
         type_debt_clusters_sha256=cluster_hash,
+        suppression_retirement=suppression,
         issue_train_matrix=PROGRAM_ISSUE_TRAIN,
         train_plan=_train_plan(),
         cleanup_slices=slices,
@@ -499,6 +545,8 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
         "test_db",
         "duplicate",
         "lifecycle",
+        "function_lifecycle",
+        "reconciliation",
         "performance",
         "type_debt_authority",
     }
@@ -510,6 +558,8 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
         "test_db",
         "duplicate",
         "lifecycle",
+        "function_lifecycle",
+        "reconciliation",
         "type_debt_authority",
     ):
         evidence = freeze.evidence[key]
@@ -519,6 +569,8 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
             "test_db": TEST_DB_RECEIPT,
             "duplicate": DUPLICATE_RECEIPT,
             "lifecycle": LIFECYCLE_RECEIPT,
+            "function_lifecycle": FUNCTION_LIFECYCLE_RECEIPT,
+            "reconciliation": RECONCILIATION_RECEIPT,
             "type_debt_authority": TYPE_DEBT_AUTHORITY_PATH,
         }[key]
         if evidence.path != expected_path:
@@ -527,6 +579,17 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
         if not evidence_path.is_file() or _sha256(evidence_path) != evidence.sha256:
             raise ValueError(f"checked evidence is missing or changed: {evidence.path}")
     _validate_performance_snapshot(root, freeze)
+
+    lifecycle = _read_json(root, LIFECYCLE_RECEIPT)
+    expected_function_lifecycle = _function_lifecycle(root)
+    if freeze.function_lifecycle != expected_function_lifecycle:
+        raise ValueError("function lifecycle evidence drifted from the current source tree")
+    expected_reconciliation = _reconciliation(root)
+    if freeze.reconciliation != expected_reconciliation:
+        raise ValueError("reconciliation evidence drifted from the current receipt")
+    expected_reachability = _reachability(root, lifecycle)
+    if freeze.reachability != expected_reachability:
+        raise ValueError("reachability evidence drifted from the current graph or lifecycle")
 
     architecture, edges = _architecture_edges(root)
     cut = {(edge.source, edge.target) for edge in freeze.scc_cut_edges}
@@ -567,6 +630,12 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
             raise ValueError("SCC cut path attribution drifted from architecture receipt")
 
     static = _read_json(root, STATIC_RECEIPT)
+    expected_static_total, expected_static_components = _static_quality(static)
+    if freeze.target_arithmetic.static_quality_baseline != expected_static_total:
+        raise ValueError("static-quality baseline arithmetic drifted from static receipt")
+    expected_suppression = _suppression_retirement(static)
+    if freeze.suppression_retirement != expected_suppression:
+        raise ValueError("suppression-retirement baseline drifted from static evidence")
     diagnostics = static.get("diagnostics", [])
     pyright_rows = (
         [
@@ -651,10 +720,12 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
         expected_crossings,
         current_clusters,
         expected_dispositions,
+        expected_suppression,
+        expected_function_lifecycle,
+        (expected_static_total, expected_static_components),
     )
     if freeze.budget_mappings != expected_mappings:
         raise ValueError("budget mappings do not match the measured roadmap items")
-    lifecycle = _read_json(root, LIFECYCLE_RECEIPT)
     lifecycle_counts = lifecycle.get("counts")
     typed_lifecycle_counts = (
         cast(dict[str, object], lifecycle_counts) if isinstance(lifecycle_counts, dict) else {}
@@ -664,4 +735,6 @@ def validate_freeze(root: Path, path: Path) -> RoadmapFreeze:
     dormant_slice = next(slice_ for slice_ in freeze.cleanup_slices if slice_.issue == "BHA-109")
     if not isinstance(dormant, int) or dormant_slice.units != dormant:
         raise ValueError("pruning slice is not bound to the current lifecycle receipt")
+    if dormant_slice.candidate_count != expected_function_lifecycle.candidate_count:
+        raise ValueError("pruning slice candidate count is not bound to function lifecycle receipt")
     return freeze

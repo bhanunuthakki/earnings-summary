@@ -20,6 +20,14 @@ STATIC_RECEIPT = "docs/quality/static-baseline.json"
 TEST_DB_RECEIPT = "docs/quality/test-db-patterns-baseline.json"
 DUPLICATE_RECEIPT = "docs/quality/duplicates-ratchet.json"
 LIFECYCLE_RECEIPT = "docs/quality/lifecycle-baseline.json"
+FUNCTION_LIFECYCLE_RECEIPT = "docs/quality/function-lifecycle-baseline.json"
+RECONCILIATION_RECEIPT = "docs/quality/reconciliation-baseline.json"
+FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256 = (
+    "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089"
+)
+FROZEN_RECONCILIATION_ROADMAP_SHA256 = (
+    "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"
+)
 PERFORMANCE_RECEIPT = ".tmp/quality/test-ci-performance/full-suite-8c7dc0c3/receipt.json"
 EXPECTED_SCC_CUTS = 31
 MANDATORY_LOC_ROOTS = (
@@ -53,12 +61,12 @@ LOC_TARGET_CAPS = {
     "src/pipeline/portfolio_panel.py": 200,
 }
 TYPE_DEBT_AUTHORITY_PATH = "docs/quality/type-debt-membership-authority.json"
-TYPE_DEBT_AUTHORITY_SHA256 = "a2bcb12efb5e4ed2bcbcd953c5b32c5db0a13c4d68ad883a8c910736e18d7b56"
+TYPE_DEBT_AUTHORITY_SHA256 = "348f31dbffa65a3abe20397df2c3a8edea633c14a88157c22955044fedcbf6b0"
 TYPE_DEBT_EVIDENCE_ALGORITHM = "pyright-generalDiagnostics/v1"
 FROZEN_TYPE_DEBT_AUTHORITY_SHA256 = (
-    "137ef2464d159a3cd032cc3fc6ce28f6ec01c679200d6991465fc37b4a353e70"
+    "36c76e08424a3c7d63d180150165afca72d1c17c7beecef81dc5e720780c2e2a"
 )
-FROZEN_TYPE_DEBT_TOTALS = {"total": 4200, "archived": 175, "all": 4375}
+FROZEN_TYPE_DEBT_TOTALS = {"total": 4199, "archived": 175, "all": 4374}
 
 # Train 0 froze one specific performance run.  The receipt is intentionally
 # under .tmp and may be absent on a fresh checkout, so its absence cannot turn
@@ -109,6 +117,91 @@ class EvidenceRef(StrictModel):
     scope: Literal["WORKTREE", "COMMIT"]
 
 
+class ReconciliationSnapshot(StrictModel):
+    """Hash-bound summary of the reconciliation receipt consumed by Train 0."""
+
+    path: str
+    sha256: str
+    status: Literal["PASS", "HOLD"]
+    claims_count: int = Field(ge=0)
+    scored_claims: int = Field(ge=0)
+    rejected_claims: int = Field(ge=0)
+    source_hash: str
+    claim_manifest_sha256: str
+    roadmap_source_sha256: str
+    violations: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def counts_match(self) -> ReconciliationSnapshot:
+        if self.claims_count != self.scored_claims + self.rejected_claims:
+            raise ValueError("reconciliation claim counts do not reconcile")
+        if self.status != "PASS" or self.violations:
+            raise ValueError("reconciliation receipt must be a clean PASS")
+        if self.claim_manifest_sha256 != FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256:
+            raise ValueError("reconciliation claim manifest drifted")
+        if self.roadmap_source_sha256 != FROZEN_RECONCILIATION_ROADMAP_SHA256:
+            raise ValueError("reconciliation roadmap source drifted")
+        return self
+
+
+class FunctionLifecycleSnapshot(StrictModel):
+    """Hash-bound compact receipt for the function-level lifecycle scan."""
+
+    path: str
+    sha256: str
+    schema_version: Literal["bha-109.v1"]
+    parser_version: str
+    status: Literal["PASS"]
+    tracked_tree_hash: str
+    inventory_hash: str
+    files_scanned: int = Field(ge=0)
+    symbol_count: int = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+    unknown_total: int = Field(ge=0)
+    counts: dict[str, int]
+    unknown_hazard_counts: dict[str, int]
+    files_failed: tuple[str, ...]
+    violations: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def scan_succeeded(self) -> FunctionLifecycleSnapshot:
+        if self.files_failed or self.violations:
+            raise ValueError("function lifecycle scan must be a clean PASS")
+        if any(value < 0 for value in self.counts.values()) or any(
+            value < 0 for value in self.unknown_hazard_counts.values()
+        ):
+            raise ValueError("function lifecycle counts must be non-negative")
+        if sum(self.counts.values()) != self.symbol_count:
+            raise ValueError("function lifecycle classification counts do not reconcile")
+        if self.candidate_count != self.counts.get("unreferenced-static-candidate", 0):
+            raise ValueError("function lifecycle candidate count does not reconcile")
+        if self.unknown_total != self.counts.get("unknown", 0):
+            raise ValueError("function lifecycle unknown count does not reconcile")
+        return self
+
+
+class ReachabilityEvidence(StrictModel):
+    """Fresh graph proof that binds lifecycle provenance without .tmp state."""
+
+    graph_sha256: str
+    parser: dict[str, str]
+    lifecycle_status: Literal["PASS", "HOLD"]
+    lifecycle_violations: tuple[str, ...]
+    unknown_edges: int = Field(ge=0)
+    production_unknown_edges: int = Field(ge=0)
+    stale_disposition_diagnostics: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def no_production_unknowns(self) -> ReachabilityEvidence:
+        if self.lifecycle_status != "PASS" or self.lifecycle_violations:
+            raise ValueError("lifecycle reachability receipt must be a clean PASS")
+        if self.production_unknown_edges:
+            raise ValueError("production reachability cannot retain unknown edges")
+        if self.stale_disposition_diagnostics:
+            raise ValueError("reachability dispositions cannot be stale")
+        return self
+
+
 class SccCut(StrictModel):
     source: str
     target: str
@@ -128,6 +221,22 @@ class TypeDebtCluster(StrictModel):
     file_count: int = Field(ge=0)
     files_sha256: str
     evidence_sha256: str
+
+
+class SuppressionRetirement(StrictModel):
+    """Typed source-suppression baseline with a frozen zero target."""
+
+    baseline: int = Field(ge=0)
+    target: Literal[0] = 0
+    source_rule_counts: dict[str, int]
+
+    @model_validator(mode="after")
+    def counts_match_baseline(self) -> SuppressionRetirement:
+        if any(count < 0 for count in self.source_rule_counts.values()):
+            raise ValueError("suppression rule counts must be non-negative")
+        if sum(self.source_rule_counts.values()) != self.baseline:
+            raise ValueError("suppression rule counts do not equal the baseline")
+        return self
 
 
 class LargeModule(StrictModel):
@@ -172,13 +281,22 @@ class TrainPlan(StrictModel):
 
 
 class BudgetMapping(StrictModel):
-    item_kind: Literal["scc_cut", "loc_crossing", "type_cluster", "builder", "slice_anchor"]
+    item_kind: Literal[
+        "scc_cut",
+        "loc_crossing",
+        "type_cluster",
+        "builder",
+        "slice_anchor",
+        "suppression",
+        "static_quality",
+    ]
     item_id: str
     slice_key: str
     work_package: str
     units: int = Field(gt=0)
     estimated_prs: int = Field(ge=0)
     evidence: tuple[str, ...]
+    candidate_count: int = Field(default=0, ge=0)
 
 
 class BHA115Closure(StrictModel):
@@ -202,6 +320,7 @@ class CleanupSlice(StrictModel):
     estimated_prs: int = Field(ge=0)
     estimated_calendar_weeks: float = Field(ge=0)
     acceptance: str
+    candidate_count: int = Field(default=0, ge=0)
 
 
 class EstimateTotals(StrictModel):
@@ -241,6 +360,7 @@ class TargetArithmetic(StrictModel):
     migration_builders_baseline: int
     migration_builders_target: int
     migration_builders_to_convert: int
+    static_quality_baseline: int
     full_suite_wall_seconds: float
     full_suite_target_seconds: float
     full_suite_gap_seconds: float
@@ -277,6 +397,9 @@ class RoadmapFreeze(StrictModel):
     artifact_acceptance_status: Literal["PASS", "HOLD"]
     program_feasibility_status: Literal["PASS", "HOLD"]
     evidence: dict[str, EvidenceRef]
+    function_lifecycle: FunctionLifecycleSnapshot
+    reconciliation: ReconciliationSnapshot
+    reachability: ReachabilityEvidence
     architecture_metrics: dict[str, int]
     scc_cut_edges: tuple[SccCut, ...]
     performance_snapshot: PerformanceSnapshot
@@ -287,6 +410,7 @@ class RoadmapFreeze(StrictModel):
     retained_type_debt: dict[str, int]
     type_debt_clusters: tuple[TypeDebtCluster, ...]
     type_debt_clusters_sha256: str
+    suppression_retirement: SuppressionRetirement
     issue_train_matrix: dict[str, str]
     train_plan: tuple[TrainPlan, ...]
     cleanup_slices: tuple[CleanupSlice, ...]
@@ -318,6 +442,24 @@ class RoadmapFreeze(StrictModel):
             != self.retained_type_debt["total"]
         ):
             raise ValueError("type-debt cluster counts do not equal retained total")
+        if self.suppression_retirement.target != 0:
+            raise ValueError("suppression retirement target must remain zero")
+        lifecycle_slice = next(
+            (slice_ for slice_ in self.cleanup_slices if slice_.issue == "BHA-109"), None
+        )
+        if (
+            lifecycle_slice is None
+            or lifecycle_slice.candidate_count != self.function_lifecycle.candidate_count
+        ):
+            raise ValueError("BHA-109 candidate count is not bound to function lifecycle evidence")
+        lifecycle_mappings = [
+            row for row in self.budget_mappings if row.slice_key == "lifecycle-pruning"
+        ]
+        if (
+            sum(row.candidate_count for row in lifecycle_mappings)
+            != self.function_lifecycle.candidate_count
+        ):
+            raise ValueError("BHA-109 budget mapping candidate count is not bound")
         if self.status == "PASS" and self.hold_reasons:
             raise ValueError("PASS freeze cannot retain hold reasons")
         if self.status == "HOLD" and not self.hold_reasons:
@@ -437,6 +579,8 @@ class RoadmapFreeze(StrictModel):
             "type_cluster": 61,
             "builder": 172,
             "slice_anchor": 5,
+            "suppression": 1,
+            "static_quality": 3,
         }:
             raise ValueError("budget mappings do not cover the complete measured inventory")
         if (
@@ -444,6 +588,25 @@ class RoadmapFreeze(StrictModel):
             != self.estimate_totals.total_estimated_prs
         ):
             raise ValueError("bottom-up budget mappings do not sum to PR estimate")
+        static_mappings = [row for row in self.budget_mappings if row.item_kind == "static_quality"]
+        suppression_mappings = [
+            row for row in self.budget_mappings if row.item_kind == "suppression"
+        ]
+        if len(static_mappings) != 3 or len(suppression_mappings) != 1:
+            raise ValueError("static-quality mappings are incomplete")
+        if (
+            sum(row.units for row in (*static_mappings, *suppression_mappings))
+            != self.target_arithmetic.static_quality_baseline
+        ):
+            raise ValueError("static-quality mapping does not bind to target arithmetic")
+        static_slice = next(
+            (slice_ for slice_ in self.cleanup_slices if slice_.key == "final-static-zero"), None
+        )
+        if (
+            static_slice is None
+            or static_slice.units != self.target_arithmetic.static_quality_baseline
+        ):
+            raise ValueError("final-static-zero units do not bind to static evidence")
         mapped_prs: dict[str, int] = defaultdict(int)
         for row in self.budget_mappings:
             mapped_prs[row.slice_key] += row.estimated_prs

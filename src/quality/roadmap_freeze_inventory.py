@@ -13,27 +13,39 @@ import random
 import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from .architecture import ArchitectureReceipt, build_architecture_receipt, resolved_import_edges
+from .function_lifecycle import FunctionLifecycleInventory, build_inventory, load_inventory
+from .lifecycle import LifecycleInventory
+from .lifecycle import build_inventory as build_lifecycle_inventory
+from .reachability import ReachabilityGraph, build_graph
 from .roadmap_freeze_contract import (
     BUILDER_CONVERT_QUOTAS,
     BUILDER_RETAIN_QUOTAS,
     FROZEN_PERFORMANCE,
     FROZEN_PERFORMANCE_RECEIPT_SHA256,
+    FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256,
+    FROZEN_RECONCILIATION_ROADMAP_SHA256,
     FROZEN_TYPE_DEBT_AUTHORITY_SHA256,
     FROZEN_TYPE_DEBT_TOTALS,
+    FUNCTION_LIFECYCLE_RECEIPT,
     LOC_TARGET_CAPS,
     PERFORMANCE_RECEIPT,
     PROGRAM_OWNER,
+    RECONCILIATION_RECEIPT,
     TYPE_DEBT_AUTHORITY_PATH,
     TYPE_DEBT_AUTHORITY_SHA256,
     TYPE_DEBT_EVIDENCE_ALGORITHM,
     BudgetMapping,
     BuilderDisposition,
+    FunctionLifecycleSnapshot,
     LargeModule,
     LocCrossing,
+    ReachabilityEvidence,
+    ReconciliationSnapshot,
     RoadmapFreeze,
+    SuppressionRetirement,
     TypeDebtCluster,
 )
 
@@ -89,6 +101,203 @@ def _read_json(root: Path, path: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"evidence receipt is not an object: {path}")
     return cast(dict[str, object], value)
+
+
+_PRODUCTION_PATH_PREFIXES = ("src/", "execution/", "cron/", "scripts/", ".github/")
+
+
+def _graph_sha256(graph: ReachabilityGraph) -> str:
+    """Hash the exact CLI serialization, while keeping the graph in memory."""
+    payload = graph.model_dump_json(indent=2) + "\n"
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def reachability_evidence(root: Path, lifecycle: dict[str, object]) -> ReachabilityEvidence:
+    """Rebuild reachability and bind lifecycle provenance without an ignored file."""
+    graph = build_graph(root)
+    graph_hash = _graph_sha256(graph)
+    persisted_lifecycle = LifecycleInventory.model_validate(lifecycle)
+    current_lifecycle = build_lifecycle_inventory(root, allow_missing_graph=True)
+    volatile = {"revision", "worktree_dirty"}
+    if persisted_lifecycle.model_dump(
+        mode="json", exclude=volatile
+    ) != current_lifecycle.model_dump(mode="json", exclude=volatile):
+        raise ValueError("lifecycle receipt is stale relative to the current source tree")
+    lifecycle_hash = lifecycle.get("reachability_graph_hash")
+    if lifecycle_hash != graph_hash:
+        raise ValueError("lifecycle reachability graph hash is stale")
+    graph_parser = lifecycle.get("graph_parser")
+    if graph_parser != graph.parser:
+        raise ValueError("lifecycle reachability parser provenance is stale")
+    status_raw = lifecycle.get("status")
+    if status_raw not in {"PASS", "HOLD"}:
+        raise ValueError("lifecycle receipt has an invalid status")
+    status = cast(Literal["PASS", "HOLD"], status_raw)
+    raw_violations = lifecycle.get("violations", [])
+    violations = (
+        tuple(str(item) for item in cast(list[object], raw_violations))
+        if isinstance(raw_violations, list)
+        else ()
+    )
+    unknown_edges = tuple(graph.unknown_edges)
+    production_unknown = sum(
+        edge.source.startswith(_PRODUCTION_PATH_PREFIXES) for edge in unknown_edges
+    )
+    stale_disposition_diagnostics = sum(
+        diagnostic.kind == "unknown" and "stale reachability disposition" in diagnostic.message
+        for diagnostic in graph.diagnostics
+    )
+    return ReachabilityEvidence(
+        graph_sha256=graph_hash,
+        parser=graph.parser,
+        lifecycle_status=status,
+        lifecycle_violations=violations,
+        unknown_edges=len(unknown_edges),
+        production_unknown_edges=production_unknown,
+        stale_disposition_diagnostics=stale_disposition_diagnostics,
+    )
+
+
+def reconciliation_snapshot(root: Path) -> ReconciliationSnapshot:
+    """Parse and admit the complete claim-level reconciliation receipt.
+
+    The receipt's source generators may include an ignored reachability file;
+    claims remain admissible on a clean clone because their typed claim shape,
+    eligibility, counts, and available source hashes are checked here.
+    """
+    from .roadmap_reconciliation import ReconciliationReceipt
+
+    receipt = ReconciliationReceipt.model_validate_json(
+        (root / RECONCILIATION_RECEIPT).read_text(encoding="utf-8")
+    )
+    if receipt.status != "PASS" or receipt.violations:
+        raise ValueError("reconciliation receipt must be a clean PASS")
+    if receipt.claim_manifest_sha256 != FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256:
+        raise ValueError("reconciliation claim manifest is stale")
+    if receipt.roadmap_source.sha256 != FROZEN_RECONCILIATION_ROADMAP_SHA256:
+        raise ValueError("reconciliation roadmap source is stale")
+    names = [claim.name for claim in receipt.claims]
+    if len(names) != len(set(names)):
+        raise ValueError("reconciliation claims are duplicated")
+    scored = sum(claim.scored_eligible for claim in receipt.claims)
+    rejected = sum(claim.verdict == "rejected" for claim in receipt.claims)
+    if (receipt.scored_claims, receipt.rejected_claims) != (scored, rejected):
+        raise ValueError("reconciliation claim totals do not match claim-level evidence")
+    graph = build_graph(root)
+    source_hashes = {
+        path: _sha256(root / path)
+        for path in (
+            "docs/quality/architecture-ratchet.json",
+            "docs/quality/duplicates-ratchet.json",
+            "docs/quality/static-baseline.json",
+            "docs/quality/test-db-patterns-baseline.json",
+        )
+    }
+    source_hashes[".tmp/quality/reachability-check.json"] = _graph_sha256(graph)
+    digest = hashlib.sha256()
+    for source_path in (
+        "docs/quality/architecture-ratchet.json",
+        "docs/quality/duplicates-ratchet.json",
+        "docs/quality/static-baseline.json",
+        "docs/quality/test-db-patterns-baseline.json",
+        ".tmp/quality/reachability-check.json",
+    ):
+        digest.update(source_path.encode())
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(source_hashes[source_path]))
+    digest.update(b"roadmap\0")
+    digest.update(bytes.fromhex(FROZEN_RECONCILIATION_ROADMAP_SHA256))
+    if receipt.source_hash != digest.hexdigest():
+        raise ValueError("reconciliation source hash is stale")
+
+    for claim in receipt.claims:
+        eligible_shape = (
+            claim.verdict in {"verified", "corrected"}
+            and claim.observed is not None
+            and claim.evidence is not None
+            and claim.provisional_evidence is not None
+        )
+        if claim.scored_eligible != eligible_shape:
+            raise ValueError(f"reconciliation claim eligibility is inconsistent: {claim.name}")
+        if claim.evidence is not None:
+            expected_hash = source_hashes.get(claim.evidence.path)
+            if expected_hash is None or claim.evidence.sha256 != expected_hash:
+                raise ValueError(f"reconciliation evidence hash changed: {claim.evidence.path}")
+        if (
+            claim.provisional_evidence is not None
+            and claim.provisional_evidence.sha256 != FROZEN_RECONCILIATION_ROADMAP_SHA256
+        ):
+            raise ValueError("reconciliation provisional roadmap evidence changed")
+    return ReconciliationSnapshot(
+        path=RECONCILIATION_RECEIPT,
+        sha256=_sha256(root / RECONCILIATION_RECEIPT),
+        status=receipt.status,
+        claims_count=len(receipt.claims),
+        scored_claims=receipt.scored_claims,
+        rejected_claims=receipt.rejected_claims,
+        source_hash=receipt.source_hash,
+        claim_manifest_sha256=receipt.claim_manifest_sha256,
+        roadmap_source_sha256=receipt.roadmap_source.sha256,
+        violations=receipt.violations,
+    )
+
+
+def _stable_function_lifecycle_fields(
+    inventory: FunctionLifecycleInventory,
+) -> tuple[object, ...]:
+    """Return receipt fields whose identity is independent of commit finalization."""
+    return (
+        inventory.schema_version,
+        inventory.parser_version,
+        inventory.status,
+        inventory.tracked_tree_hash,
+        inventory.inventory_hash,
+        inventory.files_scanned,
+        inventory.symbol_count,
+        len(inventory.candidate_symbols),
+        inventory.unknown_total,
+        inventory.counts,
+        inventory.unknown_hazard_counts,
+        inventory.files_failed,
+        inventory.violations,
+        inventory.candidate_symbols,
+        inventory.unknown_symbols,
+    )
+
+
+def function_lifecycle_snapshot(root: Path) -> FunctionLifecycleSnapshot:
+    """Validate the tracked compact receipt against a fresh in-memory scan.
+
+    ``revision`` and ``worktree_dirty`` are source-generation metadata.  They
+    are intentionally not compared: adding the tracked receipt necessarily
+    changes the final commit, and a clean clone has a different dirty bit.
+    """
+    receipt_path = root / FUNCTION_LIFECYCLE_RECEIPT
+    persisted = load_inventory(receipt_path)
+    current = build_inventory(root)
+    if persisted.status != "PASS" or persisted.files_failed or persisted.violations:
+        raise ValueError("function lifecycle receipt does not record a successful scan")
+    if current.status != "PASS" or current.files_failed or current.violations:
+        raise ValueError("fresh function lifecycle scan did not succeed")
+    if _stable_function_lifecycle_fields(persisted) != _stable_function_lifecycle_fields(current):
+        raise ValueError("function lifecycle receipt is stale relative to the current source tree")
+    return FunctionLifecycleSnapshot(
+        path=FUNCTION_LIFECYCLE_RECEIPT,
+        sha256=_sha256(receipt_path),
+        schema_version=persisted.schema_version,
+        parser_version=persisted.parser_version,
+        status="PASS",
+        tracked_tree_hash=persisted.tracked_tree_hash,
+        inventory_hash=persisted.inventory_hash,
+        files_scanned=persisted.files_scanned,
+        symbol_count=persisted.symbol_count,
+        candidate_count=len(persisted.candidate_symbols),
+        unknown_total=persisted.unknown_total,
+        counts=persisted.counts,
+        unknown_hazard_counts=persisted.unknown_hazard_counts,
+        files_failed=persisted.files_failed,
+        violations=persisted.violations,
+    )
 
 
 def _tracked_type_debt_authority(root: Path) -> tuple[dict[str, int], list[TypeDebtCluster]]:
@@ -370,6 +579,72 @@ def _type_debt(
     return {"total": retained, "archived": archived, "all": retained + archived}, clusters
 
 
+def _suppression_retirement(static: dict[str, object]) -> SuppressionRetirement:
+    """Derive the source-ignore-comments baseline from the static receipt."""
+    raw_diagnostics = static.get("diagnostics", [])
+    diagnostics = cast(list[object], raw_diagnostics) if isinstance(raw_diagnostics, list) else []
+    source = next(
+        (
+            cast(dict[str, object], row)
+            for row in diagnostics
+            if isinstance(row, dict) and row.get("tool") == "source-ignore-comments"
+        ),
+        None,
+    )
+    if source is None or not isinstance(source.get("count"), int):
+        raise ValueError("static receipt lacks source-ignore-comments suppression baseline")
+    raw_rules = source.get("diagnostics_by_rule")
+    if not isinstance(raw_rules, dict):
+        raise ValueError("static receipt lacks typed suppression rule counts")
+    typed_rules = cast(dict[str, object], raw_rules)
+    if not all(isinstance(value, int) for value in typed_rules.values()):
+        raise ValueError("static receipt lacks typed suppression rule counts")
+    rule_counts: dict[str, int] = {}
+    for key, value in typed_rules.items():
+        if not isinstance(value, int):
+            raise ValueError("static receipt lacks typed suppression rule counts")
+        rule_counts[str(key)] = value
+    count = source["count"]
+    assert isinstance(count, int)
+    return SuppressionRetirement(
+        baseline=count,
+        source_rule_counts=rule_counts,
+    )
+
+
+def static_quality_total(static: dict[str, object]) -> tuple[int, dict[str, int]]:
+    """Derive the final-static-zero denominator from every typed static tool."""
+    raw_diagnostics = static.get("diagnostics", [])
+    diagnostics = cast(list[object], raw_diagnostics) if isinstance(raw_diagnostics, list) else []
+    rows = [cast(dict[str, object], row) for row in diagnostics if isinstance(row, dict)]
+
+    def count(tool: str) -> int:
+        row = next((item for item in rows if item.get("tool") == tool), None)
+        value = row.get("count") if row is not None else None
+        if not isinstance(value, int) or value < 0:
+            raise ValueError(f"static receipt lacks non-negative {tool} count")
+        return value
+
+    pyright = next((item for item in rows if item.get("tool") == "pyright"), None)
+    if pyright is None or not isinstance(pyright.get("diagnostics_by_directory"), dict):
+        raise ValueError("static receipt lacks typed Pyright directory counts")
+    directories = cast(dict[str, object], pyright["diagnostics_by_directory"])
+    archived = sum(
+        value
+        for key, value in directories.items()
+        if key.startswith("alembic/versions_archived") and isinstance(value, int)
+    )
+    components = {
+        "pyright-active": count("pyright") - archived,
+        "ruff": count("ruff"),
+        "ruff-format": count("ruff-format"),
+        "source-ignore-comments": count("source-ignore-comments"),
+    }
+    if components["pyright-active"] < 0:
+        raise ValueError("archived Pyright diagnostics exceed the total")
+    return sum(components.values()), components
+
+
 def _duplicate_totals(receipt: dict[str, object]) -> tuple[int, int, int]:
     raw = receipt.get("exact_totals")
     if not isinstance(raw, dict):
@@ -506,6 +781,9 @@ def _budget_mappings(
     crossings: tuple[LocCrossing, ...],
     clusters: list[TypeDebtCluster],
     builders: tuple[BuilderDisposition, ...],
+    suppression: SuppressionRetirement | None = None,
+    function_lifecycle: FunctionLifecycleSnapshot | None = None,
+    static_total: tuple[int, dict[str, int]] | None = None,
 ) -> tuple[BudgetMapping, ...]:
     """Allocate every measured item into the approved bottom-up PR matrix."""
     mappings: list[BudgetMapping] = []
@@ -629,8 +907,42 @@ def _budget_mappings(
                 units=1,
                 estimated_prs=prs,
                 evidence=(f"approved-estimate-matrix:{slice_key}",),
+                candidate_count=(
+                    function_lifecycle.candidate_count
+                    if slice_key == "lifecycle-pruning" and function_lifecycle is not None
+                    else 0
+                ),
             )
         )
+    if suppression is not None:
+        mappings.append(
+            BudgetMapping(
+                item_kind="suppression",
+                item_id="source-ignore-comments",
+                slice_key="final-static-zero",
+                work_package="suppression-retirement",
+                units=suppression.baseline,
+                estimated_prs=0,
+                evidence=tuple(
+                    f"source-ignore-comments:{rule}={count}"
+                    for rule, count in sorted(suppression.source_rule_counts.items())
+                ),
+            )
+        )
+    if static_total is not None:
+        _total, components = static_total
+        for name in ("pyright-active", "ruff", "ruff-format"):
+            mappings.append(
+                BudgetMapping(
+                    item_kind="static_quality",
+                    item_id=name,
+                    slice_key="final-static-zero",
+                    work_package=f"static-quality-{name}",
+                    units=components[name],
+                    estimated_prs=0,
+                    evidence=(f"{name}={components[name]}",),
+                )
+            )
     return tuple(mappings)
 
 
@@ -645,10 +957,15 @@ feedback_arc_cut = _feedback_arc_cut
 git_commit = _git_commit
 order_score = _order_score
 read_json = _read_json
+reconciliation = reconciliation_snapshot
+reachability = reachability_evidence
+function_lifecycle = function_lifecycle_snapshot
 sccs = _sccs
 selected_crossings = _selected_crossings
 sha256 = _sha256
 tracked_type_debt_authority = _tracked_type_debt_authority
 type_debt = _type_debt
+static_quality = static_quality_total
+suppression_retirement = _suppression_retirement
 upgrade_builder_rows = _upgrade_builder_rows
 validate_performance_snapshot = _validate_performance_snapshot

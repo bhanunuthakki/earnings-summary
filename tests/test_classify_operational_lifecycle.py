@@ -209,8 +209,10 @@ def test_task_wrapper_service_reconstruction_registry_surfaces(tmp_path: Path) -
 
 
 def test_missing_or_malformed_graph_fails_closed(tmp_path: Path) -> None:
+    missing = _repo(tmp_path / "missing", with_graph=False)
     with pytest.raises(LifecycleError, match="graph is missing"):
-        build_inventory(_repo(tmp_path / "missing", with_graph=False))
+        build_inventory(missing)
+    assert build_inventory(missing, allow_missing_graph=True).status == "PASS"
     bad = _repo(tmp_path / "bad", with_graph=False)
     _write(bad / ".tmp/quality/reachability-check.json", json.dumps(["bad"]))
     with pytest.raises(LifecycleError, match="invalid typed"):

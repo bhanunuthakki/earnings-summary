@@ -64,6 +64,22 @@ def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
     assert dispositions["archived-graph", "retain_candidate"] == 1
     assert dispositions["custom-bootstrap", "retain_candidate"] == 1
     assert {slice_.issue for slice_ in freeze.cleanup_slices} == set(freeze.issue_train_matrix)
+    assert freeze.suppression_retirement.baseline == 628
+    assert freeze.suppression_retirement.target == 0
+    assert freeze.suppression_retirement.source_rule_counts == {
+        "# type: ignore": 263,
+        "# pyright: ignore": 365,
+    }
+    assert freeze.function_lifecycle.candidate_count > 0
+    assert freeze.target_arithmetic.static_quality_baseline == 4891
+    lifecycle_slice = next(row for row in freeze.cleanup_slices if row.issue == "BHA-109")
+    assert lifecycle_slice.candidate_count == freeze.function_lifecycle.candidate_count
+    lifecycle_mapping = next(
+        row for row in freeze.budget_mappings if row.item_id == "anchor:lifecycle-pruning"
+    )
+    assert lifecycle_mapping.candidate_count == freeze.function_lifecycle.candidate_count
+    assert lifecycle_mapping.units == 1
+    assert any(row.item_kind == "suppression" for row in freeze.budget_mappings)
 
 
 def test_validator_proves_cutset_and_allows_missing_historical_perf_receipt(
@@ -118,6 +134,98 @@ def test_validator_rejects_tampered_performance_path(tmp_path: Path) -> None:
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     payload["evidence"]["performance"]["path"] = "tampered-performance.json"
     _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("path", "docs/quality/forged-reconciliation.json"),
+        ("sha256", "0" * 64),
+        ("status", "HOLD"),
+        ("claims_count", 95),
+        ("violations", ["forged reconciliation claim"]),
+    ),
+)
+def test_validator_rejects_tampered_reconciliation_evidence(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["reconciliation"][field] = value
+    if field == "claims_count":
+        payload["reconciliation"]["scored_claims"] = 29
+    _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("graph_sha256", "0" * 64),
+        ("parser", {"name": "forged", "version": "0", "python": "0"}),
+    ),
+)
+def test_validator_rejects_tampered_reachability_evidence(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["reachability"][field] = value
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rebuilds_reachability_without_ignored_graph_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    original_is_file = Path.is_file
+    graph_path = (ROOT / ".tmp/quality/reachability-check.json").resolve()
+
+    def hide_ignored_graph(path: Path) -> bool:
+        if path.resolve() == graph_path:
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", hide_ignored_graph)
+    candidate = tmp_path / "roadmap-freeze.json"
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    freeze = validate_freeze(ROOT, candidate)
+    assert freeze.reachability.production_unknown_edges == 0
+
+
+def test_validator_rejects_tampered_function_lifecycle_evidence(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["function_lifecycle"]["inventory_hash"] = "0" * 64
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_stale_function_lifecycle_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    persisted = roadmap_inventory.load_inventory(ROOT / roadmap_freeze.FUNCTION_LIFECYCLE_RECEIPT)
+    stale = persisted.model_copy(update={"tracked_tree_hash": "0" * 64})
+
+    def stale_inventory(_root: Path) -> roadmap_inventory.FunctionLifecycleInventory:
+        return stale
+
+    monkeypatch.setattr(roadmap_inventory, "build_inventory", stale_inventory)
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_accepts_clean_clone_without_ignored_quality_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    original_is_file = Path.is_file
+
+    def hide_ignored_quality_state(path: Path) -> bool:
+        if ".tmp" in path.resolve().parts:
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", hide_ignored_quality_state)
+    candidate = tmp_path / "roadmap-freeze.json"
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    freeze = validate_freeze(ROOT, candidate)
+    assert freeze.function_lifecycle.candidate_count > 0
 
 
 def _assert_rejected(tmp_path: Path, payload: dict[str, object]) -> None:
@@ -311,4 +419,22 @@ def test_validator_rejects_status_or_closure_drift(tmp_path: Path) -> None:
     payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     payload["artifact_acceptance_status"] = "HOLD"
     payload["bha115_closure"]["rejudge_required"] = False
+    _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("baseline", 627), ("target", 1), ("source_rule_counts", {"# type: ignore": 628})),
+)
+def test_validator_rejects_suppression_retirement_drift(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["suppression_retirement"][field] = value
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_static_quality_denominator_drift(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["target_arithmetic"]["static_quality_baseline"] += 1
     _assert_rejected(tmp_path, payload)

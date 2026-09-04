@@ -372,10 +372,19 @@ def _is_wrapper(path: str) -> bool:
     )
 
 
-def _load_graph(root: Path) -> tuple[ReachabilityGraph, Path]:
+def _graph_bytes(graph: ReachabilityGraph) -> bytes:
+    return (graph.model_dump_json(indent=2) + "\n").encode()
+
+
+def _load_graph(root: Path, *, allow_missing_graph: bool = False) -> tuple[ReachabilityGraph, str]:
     graph_path = root / ".tmp/quality/reachability-check.json"
     if not graph_path.is_file():
-        raise LifecycleError("typed reachability graph is missing")
+        if not allow_missing_graph:
+            raise LifecycleError("typed reachability graph is missing")
+        graph = build_graph(root)
+        if graph.hold:
+            raise LifecycleError("fresh current-worktree reachability graph is on HOLD")
+        return graph, hashlib.sha256(_graph_bytes(graph)).hexdigest()
     try:
         graph = ReachabilityGraph.model_validate_json(graph_path.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as exc:
@@ -387,7 +396,7 @@ def _load_graph(root: Path) -> tuple[ReachabilityGraph, Path]:
         raise LifecycleError("fresh current-worktree reachability graph is on HOLD")
     if graph.model_dump(mode="json") != fresh.model_dump(mode="json"):
         raise LifecycleError("typed reachability graph is stale for the current worktree")
-    return graph, graph_path
+    return graph, hashlib.sha256(graph_path.read_bytes()).hexdigest()
 
 
 def _load_task_manifest(root: Path) -> ScheduledTaskManifest:
@@ -1000,7 +1009,7 @@ def _expected_candidates(
     return expected, violations
 
 
-def _tree_hash(root: Path, paths: Iterable[str], graph_path: Path) -> str:
+def _tree_hash(root: Path, paths: Iterable[str], graph_hash: str) -> str:
     digest = hashlib.sha256()
     for path in sorted(set(paths)):
         absolute = root / path
@@ -1012,7 +1021,7 @@ def _tree_hash(root: Path, paths: Iterable[str], graph_path: Path) -> str:
         digest.update(b"\0")
         digest.update(hashlib.sha256(absolute.read_bytes()).digest())
     digest.update(b".tmp/quality/reachability-check.json\0")
-    digest.update(hashlib.sha256(graph_path.read_bytes()).digest())
+    digest.update(bytes.fromhex(graph_hash))
     return digest.hexdigest()
 
 
@@ -1037,10 +1046,10 @@ def _revision_identity(root: Path) -> tuple[str, bool]:
     return revision, dirty
 
 
-def build_inventory(root: Path) -> LifecycleInventory:
+def build_inventory(root: Path, *, allow_missing_graph: bool = False) -> LifecycleInventory:
     root = root.resolve()
     paths = _worktree_paths(root)
-    graph, graph_path = _load_graph(root)
+    graph, graph_hash = _load_graph(root, allow_missing_graph=allow_missing_graph)
     task_manifest = _load_task_manifest(root)
     dormant_policy, dormant_policy_evidence = _load_dormant_policy(root)
     task_by_xml = {task.xml: task for task in task_manifest.tasks}
@@ -1283,10 +1292,10 @@ def build_inventory(root: Path) -> LifecycleInventory:
         surface_counts={
             name: sum(entry.kind == name for entry in entries) for name in surface_names
         },
-        tracked_tree_hash=_tree_hash(root, authority_paths, graph_path),
+        tracked_tree_hash=_tree_hash(root, authority_paths, graph_hash),
         revision=revision,
         worktree_dirty=worktree_dirty,
-        reachability_graph_hash=hashlib.sha256(graph_path.read_bytes()).hexdigest(),
+        reachability_graph_hash=graph_hash,
         graph_parser=graph.parser,
         coverage={
             "candidates": len(expected),
