@@ -13,9 +13,13 @@ states.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
+from typing import cast
 
 import pytest
 import requests
@@ -33,6 +37,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
     tax_treatment,
 )
+from pipeline import portfolio_panel as portfolio_panel_module
 from pipeline.portfolio_panel import (
     WindowSelection,
     backfill_warning,
@@ -42,6 +47,7 @@ from pipeline.portfolio_panel import (
     render_live_portfolio_section,
     render_next_dollar_panel,
     render_portfolio_analytics_sections,
+    render_portfolio_panel,
     render_portfolio_risk_panel,
     validated_window,
 )
@@ -140,7 +146,34 @@ _TXNS = [
 # --- Analytics payloads (P2.1), shaped like the tracker's response models:
 # PerformanceSeries / PositionAlphaResult / PositioningOut / PolicyOut /
 # BetaResult. Numbers arrive as Decimal-strings; dates as ISO strings.
-_PERFORMANCE = {
+def _benchmark_price_inputs(ticker: str) -> list[dict[str, str]]:
+    return [
+        {
+            "ticker": ticker,
+            "target_date": target_date,
+            "source_date": target_date,
+            "close": "100.00",
+            "resolution": "same_day_close",
+        }
+        for target_date in ("2025-06-10", "2025-12-10", "2026-06-10")
+    ]
+
+
+_PERFORMANCE: dict[str, object] = {
+    "methodology": "performance.modified_dietz",
+    "methodology_version": "2",
+    "calculation_status": "available",
+    "calculation_reason_codes": [],
+    "source_coverage": {
+        "status": "complete",
+        "is_complete": True,
+        "requested_start_date": "2025-06-10",
+        "requested_end_date": "2026-06-10",
+        "required_start_date": "2025-06-11",
+        "required_end_date": "2026-06-10",
+        "accounts": [],
+        "attestations": [],
+    },
     "start_date": "2025-06-10",
     "end_date": "2026-06-10",
     "base_value": "100000.00",
@@ -168,26 +201,83 @@ _PERFORMANCE = {
             "policy_equivalent_value": "114200.00",
         },
         {
-            # Final day has a policy-benchmark gap (None) — cards/legend must
-            # fall back to the last valid value instead of dropping the series.
+            # Final day is fully covered; available responses may not carry
+            # partial required benchmark legs.
             "date": "2026-06-10",
-            "portfolio_value": "133200.00",
+            "portfolio_value": "143200.00",
             "portfolio_return_pct": "18.2",
             "spy_return_pct": "11.5",
             "qqq_return_pct": "14.1",
-            "policy_return_pct": None,
-            "spy_equivalent_value": "111500.00",
-            "qqq_equivalent_value": "114100.00",
-            "policy_equivalent_value": None,
+            "policy_return_pct": "13.0",
+            "spy_equivalent_value": "136500.00",
+            "qqq_equivalent_value": "139100.00",
+            "policy_equivalent_value": "138000.00",
         },
     ],
     "earliest_observed_date": "2025-06-12",
     "net_external_cashflow_in": "25000.00",
     "backfill_start_unreliable": False,
+    "opening_value_provenance": "modeled_transaction_walkback",
+    "ending_value_provenance": "observed_complete_snapshot",
+    "valuation_account_ids": [1],
+    "equation_receipt": {
+        "calculation_id": "calc-1",
+        "external_flow_ledger_id": "ledger-1",
+        "portfolio_valuation_input_id": "valuation-1",
+        "included_account_ids": [1],
+        "requested_start_date": "2025-06-10",
+        "requested_end_date": "2026-06-10",
+        "benchmark_price_resolution_policy": "same_day_or_previous_us_market_close",
+        "opening_value": "100000.00",
+        "dated_external_cashflows": [{"date": "2026-06-10", "amount": "25000.00"}],
+        "net_external_cashflow_in": "25000.00",
+        "ending_value": "143200.00",
+        "investment_gain": "18200.00",
+        "modified_dietz_denominator": "100000.00",
+        "portfolio_return_pct": "18.2",
+        "portfolio_equation_residual": "0",
+        "spy": {
+            "benchmark": "SPY",
+            "ending_value": "136500.00",
+            "investment_gain": "11500.00",
+            "return_pct": "11.5",
+            "dollar_alpha": "6700.00",
+            "percentage_point_alpha": "6.7",
+            "equation_residual": "0",
+            "price_input_id": "sha256:4ca7ea8a7360cd1c1f5e787e4d34b34d6cf0dfa8aa29c0da0eef3224e7b32b37",
+            "price_inputs": _benchmark_price_inputs("SPY"),
+        },
+        "qqq": {
+            "benchmark": "QQQ",
+            "ending_value": "139100.00",
+            "investment_gain": "14100.00",
+            "return_pct": "14.1",
+            "dollar_alpha": "4100.00",
+            "percentage_point_alpha": "4.1",
+            "equation_residual": "0",
+            "price_input_id": "sha256:e346d2f71d6f2ae21b22772bd08e9533b6de05a4e3cc9b52b8cd930047010dca",
+            "price_inputs": _benchmark_price_inputs("QQQ"),
+        },
+        "policy": {
+            "benchmark": "policy",
+            "ending_value": "138000.00",
+            "investment_gain": "13000.00",
+            "return_pct": "13.0",
+            "dollar_alpha": "5200.00",
+            "percentage_point_alpha": "5.2",
+            "equation_residual": "0",
+            "price_input_id": "sha256:6e7ddb8328ce5b1d36b23332cd087d19a78855175f85ac9a5c00dbf345b2c113",
+            "price_inputs": _benchmark_price_inputs("SPY"),
+        },
+    },
 }
 _POSITION_ALPHA = {
+    "methodology": "position_alpha.split_normalized_price_trade_modified_dietz",
+    "methodology_version": "3",
     "start_date": "2025-06-10",
     "end_date": "2026-06-10",
+    "calculation_status": "available",
+    "calculation_reason_codes": [],
     "rows": [
         {
             "ticker": "NU",
@@ -219,7 +309,7 @@ _POSITION_ALPHA = {
             "alpha": "-800.00",
             "alpha_vs_qqq": "-900.00",
             "alpha_vs_policy": "-700.00",
-            "incomplete": True,
+            "incomplete": False,
         },
     ],
     "total_actual_pl": "2700.00",
@@ -229,10 +319,45 @@ _POSITION_ALPHA = {
     "total_alpha": "1400.00",
     "total_alpha_vs_qqq": "1100.00",
     "total_alpha_vs_policy": "1700.00",
-    "series": [],
+    "series": [
+        {
+            "date": "2025-06-10",
+            "portfolio_value": "30000.00",
+            "spy_counterfactual_value": "30000.00",
+            "qqq_counterfactual_value": "30000.00",
+            "policy_counterfactual_value": "30000.00",
+            "position_cashflow": "0.00",
+            "portfolio_return_pct": "0.0000",
+            "spy_return_pct": "0.0000",
+            "qqq_return_pct": "0.0000",
+            "policy_return_pct": "0.0000",
+        },
+        {
+            "date": "2026-06-10",
+            "portfolio_value": "32700.00",
+            "spy_counterfactual_value": "31300.00",
+            "qqq_counterfactual_value": "31600.00",
+            "policy_counterfactual_value": "31000.00",
+            "position_cashflow": "0.00",
+            "portfolio_return_pct": "9.0000",
+            "spy_return_pct": "4.3333",
+            "qqq_return_pct": "5.3333",
+            "policy_return_pct": "3.3333",
+        },
+    ],
     "v_start": "30000.00",
     "v_end": "29700.00",
     "has_policy": True,
+    "matched_returns": {
+        "dietz_denominator": "30000.00",
+        "portfolio_return_pct": "9.0000",
+        "spy_return_pct": "4.3333",
+        "qqq_return_pct": "5.3333",
+        "policy_return_pct": "3.3333",
+        "alpha_vs_spy_pct": "4.6667",
+        "alpha_vs_qqq_pct": "3.6667",
+        "alpha_vs_policy_pct": "5.6667",
+    },
 }
 _POSITIONING = {
     "snapshot_date": "2026-06-10",
@@ -313,6 +438,10 @@ _POLICY = {
     "is_balanced": True,
 }
 _BETA = {
+    "methodology": "risk.beta_drawdown",
+    "methodology_version": "2",
+    "calculation_status": "available",
+    "calculation_reason_codes": [],
     "benchmark": "SPY",
     "start_date": "2025-06-10",
     "end_date": "2026-06-10",
@@ -334,6 +463,10 @@ _BETA = {
     "notes": ["Dropped 2 day(s) with implausible (>30%) reconstructed portfolio moves"],
 }
 _DRAWDOWN = {
+    "methodology": "risk.beta_drawdown",
+    "methodology_version": "2",
+    "calculation_status": "available",
+    "calculation_reason_codes": [],
     "start_date": "2025-06-10",
     "end_date": "2026-06-10",
     "max_drawdown_pct": "-14.6",
@@ -737,7 +870,7 @@ def test_fetch_analytics_parses_all_endpoints(mock_tracker: None) -> None:
     assert perf.base_value == pytest.approx(100000.0)
     assert [p.date for p in perf.points] == ["2025-06-10", "2025-12-10", "2026-06-10"]
     assert perf.points[-1].portfolio_return_pct == pytest.approx(18.2)
-    assert perf.points[-1].policy_return_pct is None  # final-day benchmark gap preserved
+    assert perf.points[-1].policy_return_pct == pytest.approx(13.0)
     assert perf.net_external_cashflow_in == pytest.approx(25000.0)
     assert perf.backfill_start_unreliable is False
 
@@ -747,7 +880,7 @@ def test_fetch_analytics_parses_all_endpoints(mock_tracker: None) -> None:
     by_ticker = {r.ticker: r for r in pa.rows}
     assert by_ticker["NU"].alpha == pytest.approx(2200.0)
     assert by_ticker["NU"].spy_counterfactual_pl == pytest.approx(1300.0)
-    assert by_ticker["AAPL"].incomplete is True
+    assert by_ticker["AAPL"].incomplete is False
     assert pa.total_alpha == pytest.approx(1400.0)
     assert pa.total_alpha_vs_policy == pytest.approx(1700.0)
 
@@ -794,6 +927,82 @@ def test_fetch_analytics_parses_all_endpoints(mock_tracker: None) -> None:
     assert beta.alpha_significant is True
 
 
+def test_legacy_position_alpha_uses_effective_performance_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        calls.append(url)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(
+        api_url="http://tracker.test", only={"performance", "position_alpha"}
+    )
+
+    assert analytics.performance is not None
+    assert analytics.position_alpha is not None
+    alpha_url = next(url for url in calls if "/api/portfolio/position-alpha" in url)
+    assert "start_date=2025-06-10" in alpha_url
+    assert "end_date=2026-06-10" in alpha_url
+
+
+def test_v1_position_alpha_defaults_missing_matched_metrics_to_null() -> None:
+    from integrations.portfolio_tracker_v1 import PositionAlphaResult
+
+    legacy_payload = deepcopy(_POSITION_ALPHA)
+    legacy_payload.pop("matched_returns")
+
+    parsed = PositionAlphaResult.model_validate(legacy_payload)
+
+    assert parsed.matched_returns.portfolio_return_pct is None
+    assert parsed.matched_returns.alpha_vs_spy_pct is None
+
+
+def test_v1_position_alpha_uses_rebased_performance_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_dir = Path(__file__).parent / "fixtures" / "tracker_v1"
+    performance_payload = cast(
+        "dict[str, object]", json.loads((fixture_dir / "performance.json").read_text())
+    )
+    alpha_payload = cast(
+        "dict[str, object]",
+        json.loads((fixture_dir / "position-performance.json").read_text()),
+    )
+    alpha_params: dict[str, object] = {}
+
+    def _get(
+        self: requests.Session,
+        url: str,
+        params: object = None,
+        timeout: object = None,
+    ) -> _FakeResp:
+        if "/api/v1/analytics/performance" in url:
+            payload = deepcopy(performance_payload)
+            assert isinstance(payload, dict)
+            series = cast("dict[str, object]", payload["series"])
+            if isinstance(params, dict) and params.get("start_date"):
+                series["start_date"] = params["start_date"]
+                series["earliest_observed_date"] = params["start_date"]
+            return _FakeResp(payload)
+        if "/api/v1/analytics/position-performance" in url:
+            assert isinstance(params, dict)
+            alpha_params.update(cast("dict[str, object]", params))
+            return _FakeResp(alpha_payload)
+        raise requests.ConnectionError(f"unexpected route {url}")
+
+    monkeypatch.setenv("PORTFOLIO_TRACKER_V1_READS", "1")
+    monkeypatch.setattr(requests.Session, "get", _get)
+    analytics = fetch_portfolio_analytics(only={"performance", "position_alpha"})
+
+    assert analytics.performance is not None
+    assert analytics.performance.start_date == "2026-07-22"
+    assert alpha_params["start_date"] == "2026-07-22"
+    assert alpha_params["end_date"] == "2026-07-22"
+
+
 def test_beta_significance_absent_is_tristate_none() -> None:
     # An older tracker that predates the trio: missing key → None, not False.
     payload: dict[str, object] = {k: v for k, v in _BETA.items() if not k.startswith("alpha_t")}
@@ -805,6 +1014,51 @@ def test_beta_significance_absent_is_tristate_none() -> None:
     assert beta.alpha_std_error_annualized_pct is None
     # The pre-existing alpha number is untouched.
     assert beta.alpha_annualized_pct == pytest.approx(2.5)
+
+
+def test_unavailable_beta_suppresses_risk_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = deepcopy(_BETA)
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = ["insufficient_return_observations"]
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/beta" in url:
+            return _FakeResp(payload)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert analytics.beta is not None
+    assert analytics.beta.beta is None
+    assert analytics.beta.alpha_annualized_pct is None
+    assert "insufficient return observations" in html
+    assert "Beta vs SPY" not in html
+
+
+def test_unavailable_drawdown_suppresses_derived_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = cast("dict[str, object]", deepcopy(_DRAWDOWN))
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = ["external_share_movement_price_unavailable"]
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/drawdown" in url:
+            return _FakeResp(payload)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    drawdown = ptc.fetch_drawdown(api_url="http://tracker.test")
+
+    assert drawdown is not None
+    assert drawdown.calculation_status == "unavailable"
+    assert drawdown.max_drawdown_pct is None
+    assert drawdown.annualized_return_pct is None
+    assert drawdown.underwater == []
 
 
 def test_drawdown_and_exit_quality_are_opt_in(mock_tracker: None) -> None:
@@ -845,6 +1099,32 @@ def test_fetch_drawdown_standalone(mock_tracker: None) -> None:
     assert dd is not None
     assert dd.max_drawdown_pct == pytest.approx(-14.6)
     assert dd.recovery_date == "2026-03-30"
+
+
+def test_risk_bundle_mismatched_bounds_scrubs_beta_and_drawdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mismatched_drawdown = deepcopy(_DRAWDOWN)
+    mismatched_drawdown["start_date"] = "2025-06-11"
+    underwater = cast("list[dict[str, object]]", mismatched_drawdown["underwater"])
+    underwater[0]["date"] = "2025-06-11"
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/drawdown" in url:
+            return _FakeResp(mismatched_drawdown)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test", only={"beta", "drawdown"})
+
+    assert analytics.beta is not None
+    assert analytics.drawdown is not None
+    assert analytics.beta.calculation_status == "unavailable"
+    assert analytics.beta.compatibility_issue == "returned_window_mismatch"
+    assert analytics.beta.beta is None
+    assert analytics.drawdown.calculation_status == "unavailable"
+    assert analytics.drawdown.compatibility_issue == "returned_window_mismatch"
+    assert analytics.drawdown.underwater == []
 
 
 def test_fetch_exit_quality_standalone(mock_tracker: None) -> None:
@@ -978,22 +1258,57 @@ def test_fetch_analytics_partial_failure_isolates_the_failed_endpoint(
 # ----- analytics renderer (P2.1) -----
 
 
+def test_compact_performance_surface_skips_position_fetch_when_drivers_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: set[str] = set()
+
+    def _probe(_api_url: str | None) -> tuple[bool, str]:
+        return True, "http://tracker.test"
+
+    monkeypatch.setattr(portfolio_panel_module, "probe_tracker", _probe)
+
+    def _fetch(**kwargs: object) -> PortfolioAnalytics:
+        requested.update(cast("set[str]", kwargs["only"]))
+        return PortfolioAnalytics(available=True, api_url="http://tracker.test")
+
+    monkeypatch.setattr(portfolio_panel_module, "fetch_portfolio_analytics", _fetch)
+
+    render_portfolio_panel(include_position_drivers=False)
+
+    assert requested == {"performance", "policy"}
+
+
 def test_render_analytics_sections_populated(mock_tracker: None) -> None:
     a = fetch_portfolio_analytics(api_url="http://tracker.test")
     html = render_portfolio_analytics_sections(a)
-    # Performance leads with dollar-legible, same-day matched attribution,
-    # then the Modified-Dietz chart and policy-mix context.
+    # Performance uses one cashflow basis for both percentages and dollars.
     assert "Performance vs benchmarks" in html
+    assert "Whole-portfolio cash-flow-matched return" in html
     assert "+18.2%" in html
-    assert "Actual P&amp;L" in html
-    assert "Matched SPY P&amp;L" in html
-    assert "Alpha vs SPY" in html
-    assert "same-day buys &amp; sells" in html
-    assert "Money-weighted return (Modified Dietz)" in html
-    assert "Time-weighted return (Modified Dietz)" not in html
+    assert "+11.5%" in html
+    assert "+14.1%" in html
+    assert "+13.0%" in html
+    # Position price/trade results remain available only inside the secondary
+    # Position drivers disclosure and never replace the whole-account chart.
+    assert "+9.0%" in html
+    assert "+4.3%" in html
+    assert "+4.7pp" in html
+    assert "Invested-position price/trade return" in html
+    assert "Matched SPY price/trade return" in html
+    assert "Price/trade alpha vs SPY" in html
+    assert "$2,700" in html
+    assert "$1,300" in html
+    assert html.index("Whole-portfolio cash-flow-matched return") < html.index("Position drivers")
+    assert "same dated external cash flows" in html
+    assert "not a total portfolio return" in html
+    assert "excludes cash equivalents" in html
+    assert "cash dividends or interest paid to cash" in html
+    assert "account fees" in html
+    assert "in-kind transfers are not normalized" in html
     assert 'class="pf-chart"' in html
     assert "Policy mix:" in html and "VOO 70%" in html
-    assert "+4.2%" in html  # policy falls back to its last valid point
+    assert "+3.3%" not in html  # secondary position series cannot replace the chart
     # Risk strip (fraction-united fields render as percent).
     assert "Risk &amp; efficiency" in html
     assert "Beta vs SPY" in html and "1.12" in html
@@ -1011,8 +1326,642 @@ def test_render_analytics_sections_populated(mock_tracker: None) -> None:
     assert "pf-total" in html
     # The has_policy=True column renders, now as a sortable living-grid header.
     assert "vs policy" in html and "sortBy('policy','num')" in html
-    assert 'class="pf-flag"' in html  # AAPL's incomplete-window marker
+    assert 'class="pf-flag"' not in html
     assert "<!doctype" not in html.lower()
+
+
+def test_incomplete_matched_returns_preserve_legacy_performance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete = deepcopy(_POSITION_ALPHA)
+    matched = cast("dict[str, object]", incomplete["matched_returns"])
+    matched["spy_return_pct"] = None
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/position-alpha" in url:
+            return _FakeResp(incomplete)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert analytics.position_alpha is not None
+    assert analytics.position_alpha.matched_returns is None
+    assert "Modified Dietz" in html
+    assert "+18.2%" in html
+    assert 'class="kpi-label">Invested-position price/trade return' not in html
+    assert "Position drivers" in html
+    assert "$2,700" not in html
+    assert "$1,400" not in html
+    assert "provider response did not satisfy the supported calculation contract" in html
+
+
+@pytest.mark.parametrize("status", [None, "ready"])
+def test_missing_or_unknown_position_status_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, status: str | None
+) -> None:
+    payload = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+    if status is None:
+        payload.pop("calculation_status")
+    else:
+        payload["calculation_status"] = status
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/position-alpha" in url:
+            return _FakeResp(payload)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert analytics.position_alpha is not None
+    assert analytics.position_alpha.calculation_status == "unavailable"
+    assert analytics.position_alpha.rows == []
+    assert analytics.position_alpha.total_actual_pl is None
+    assert "+18.2%" in html
+    assert "Position drivers" in html
+    assert "$2,700" not in html
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "expected_label"),
+    [
+        ("share_movement_unmatched", "share movement could not be matched"),
+        ("no_invested_position_capital", "no invested position capital"),
+    ],
+)
+def test_position_unavailable_reason_does_not_affect_authoritative_performance(
+    monkeypatch: pytest.MonkeyPatch,
+    reason_code: str,
+    expected_label: str,
+) -> None:
+    payload = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = [reason_code]
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/position-alpha" in url:
+            return _FakeResp(payload)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert "+18.2%" in html
+    assert expected_label in html
+    assert "Position drivers" in html
+    assert "$2,700" not in html
+
+
+def test_position_no_invested_capital_reason_is_a_supported_unavailable_state() -> None:
+    payload = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = ["no_invested_position_capital"]
+
+    parsed = ptc._parse_position_alpha(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.calculation_reason_codes == ["no_invested_position_capital"]
+    assert parsed.compatibility_issue is None
+    assert parsed.rows == []
+    assert parsed.matched_returns is None
+
+
+def test_position_nonpositive_dietz_reason_is_a_supported_unavailable_state() -> None:
+    payload = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = ["nonpositive_dietz_denominator"]
+
+    parsed = ptc._parse_position_alpha(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.calculation_reason_codes == ["nonpositive_dietz_denominator"]
+    assert parsed.compatibility_issue is None
+    assert parsed.rows == []
+    assert parsed.matched_returns is None
+
+
+def test_nonpositive_dietz_reason_is_a_supported_unavailable_state() -> None:
+    payload = deepcopy(_PERFORMANCE)
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = ["nonpositive_dietz_denominator"]
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    html = render_portfolio_analytics_sections(
+        PortfolioAnalytics(available=True, api_url="http://tracker.test", performance=parsed)
+    )
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.calculation_reason_codes == ["nonpositive_dietz_denominator"]
+    assert parsed.compatibility_issue is None
+    assert parsed.points == []
+    assert "nonpositive Modified Dietz denominator" in html
+
+
+def test_available_position_data_never_substitutes_for_unavailable_performance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    performance = deepcopy(_PERFORMANCE)
+    performance["calculation_status"] = "unavailable"
+    performance["calculation_reason_codes"] = ["external_share_movement_price_unavailable"]
+    position = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/performance" in url:
+            return _FakeResp(performance)
+        if "/api/portfolio/position-alpha" in url:
+            return _FakeResp(position)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert analytics.performance is not None
+    assert analytics.performance.calculation_status == "unavailable"
+    assert analytics.performance.points == []
+    assert "+18.2%" not in html
+    assert 'class="pf-chart"' not in html
+    assert "Whole-portfolio cash-flow-matched return" not in html
+    assert "Invested-position price/trade return" in html
+    assert "+9.0%" in html
+    assert "Whole-account Modified Dietz return unavailable" in html
+    assert "external share-movement price unavailable" in html
+    assert "Position drivers" in html
+
+
+def test_missing_performance_status_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    performance = deepcopy(_PERFORMANCE)
+    performance.pop("calculation_status")
+    position = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+    position["calculation_status"] = "unavailable"
+    position["calculation_reason_codes"] = ["share_movement_unmatched"]
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/performance" in url:
+            return _FakeResp(performance)
+        if "/api/portfolio/position-alpha" in url:
+            return _FakeResp(position)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert analytics.performance is not None
+    assert analytics.performance.compatibility_issue == "missing_calculation_status"
+    assert analytics.performance.points == []
+    assert "+18.2%" not in html
+    assert "provider response did not satisfy the supported calculation contract" in html
+
+
+def test_position_unsupported_methodology_fails_closed() -> None:
+    from integrations.portfolio_tracker_v1 import V1Meta
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "tracker_v1" / "position-performance.json"
+        ).read_text()
+    )
+    meta = V1Meta.model_validate(fixture["meta"]).model_copy(update={"methodology_version": "2"})
+
+    parsed = ptc._parse_position_alpha(  # pyright: ignore[reportPrivateUsage]
+        cast("dict[str, object]", deepcopy(_POSITION_ALPHA)), meta=meta
+    )
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "unsupported_methodology"
+    assert parsed.rows == []
+    assert parsed.matched_returns is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "parser"),
+    [
+        (_PERFORMANCE, ptc._parse_performance),  # pyright: ignore[reportPrivateUsage]
+        (_POSITION_ALPHA, ptc._parse_position_alpha),  # pyright: ignore[reportPrivateUsage]
+        (_BETA, ptc.parse_beta),
+        (_DRAWDOWN, ptc._parse_drawdown),  # pyright: ignore[reportPrivateUsage]
+    ],
+)
+def test_legacy_analytics_missing_embedded_methodology_fails_closed(
+    payload: dict[str, object], parser: Callable[[dict[str, object]], object]
+) -> None:
+    missing = deepcopy(payload)
+    missing.pop("methodology")
+
+    parsed = parser(missing)
+
+    assert getattr(parsed, "calculation_status") == "unavailable"
+    assert getattr(parsed, "compatibility_issue") == "unsupported_methodology"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("base_value", None),
+        ("base_value", 0),
+        ("net_external_cashflow_in", None),
+        ("backfill_start_unreliable", "false"),
+    ],
+)
+def test_available_performance_core_contradictions_fail_closed(field: str, value: object) -> None:
+    payload = deepcopy(_PERFORMANCE)
+    payload[field] = value
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.points == []
+
+
+@pytest.mark.parametrize("mutation", ["nan", "duplicate_date", "wrong_endpoint"])
+def test_available_performance_series_contradictions_fail_closed(mutation: str) -> None:
+    payload = deepcopy(_PERFORMANCE)
+    points = cast("list[dict[str, object]]", payload["points"])
+    if mutation == "nan":
+        points[-1]["portfolio_return_pct"] = "NaN"
+    elif mutation == "duplicate_date":
+        points[-1]["date"] = points[-2]["date"]
+    else:
+        points[-1]["date"] = "2026-06-11"
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.points == []
+
+
+@pytest.mark.parametrize("mutation", ["missing", "tampered_alpha"])
+def test_available_performance_requires_a_reconciling_equation_receipt(mutation: str) -> None:
+    payload = deepcopy(_PERFORMANCE)
+    if mutation == "missing":
+        payload["equation_receipt"] = None
+    else:
+        receipt = cast("dict[str, object]", payload["equation_receipt"])
+        spy = cast("dict[str, object]", receipt["spy"])
+        spy["dollar_alpha"] = "6700.01"
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.equation_receipt is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_policy",
+        "unknown_policy",
+        "missing_inputs",
+        "empty_inputs",
+        "malformed_input",
+        "wrong_ticker",
+        "invalid_date",
+        "duplicate_target",
+        "missing_target",
+        "extra_target",
+        "nonpositive_close",
+        "nonfinite_close",
+        "wrong_resolution",
+        "source_after_target",
+        "opaque_id_missing",
+        "final_point_mismatch",
+        "policy_receipt_mismatch",
+        "duplicate_flow_date",
+        "out_of_window_flow",
+    ],
+)
+def test_available_performance_requires_complete_market_session_lineage(mutation: str) -> None:
+    payload = deepcopy(_PERFORMANCE)
+    receipt = cast("dict[str, object]", payload["equation_receipt"])
+    spy = cast("dict[str, object]", receipt["spy"])
+    inputs = cast("list[object]", spy["price_inputs"])
+    first_input = cast("dict[str, object]", inputs[0])
+    if mutation == "missing_policy":
+        receipt.pop("benchmark_price_resolution_policy")
+    elif mutation == "unknown_policy":
+        receipt["benchmark_price_resolution_policy"] = "nearest_close"
+    elif mutation == "missing_inputs":
+        spy.pop("price_inputs")
+    elif mutation == "empty_inputs":
+        spy["price_inputs"] = []
+    elif mutation == "malformed_input":
+        inputs.append("not-an-input")
+    elif mutation == "wrong_ticker":
+        first_input["ticker"] = "QQQ"
+    elif mutation == "invalid_date":
+        first_input["target_date"] = "not-a-date"
+    elif mutation == "duplicate_target":
+        inputs.append(deepcopy(inputs[0]))
+    elif mutation == "missing_target":
+        inputs.pop()
+    elif mutation == "extra_target":
+        extra = deepcopy(first_input)
+        extra["target_date"] = "2026-01-15"
+        extra["source_date"] = "2026-01-15"
+        inputs.append(extra)
+    elif mutation == "nonpositive_close":
+        first_input["close"] = "0"
+    elif mutation == "nonfinite_close":
+        first_input["close"] = "NaN"
+    elif mutation == "wrong_resolution":
+        first_input["resolution"] = "previous_market_close"
+    elif mutation == "source_after_target":
+        first_input["source_date"] = "2025-06-11"
+    elif mutation == "opaque_id_missing":
+        spy["price_input_id"] = ""
+    elif mutation == "final_point_mismatch":
+        spy["ending_value"] = "136501.00"
+    elif mutation == "policy_receipt_mismatch":
+        receipt["policy"] = None
+    else:
+        flows = cast("list[object]", receipt["dated_external_cashflows"])
+        extra_flow = {"date": "2026-06-10", "amount": "0"}
+        if mutation == "out_of_window_flow":
+            extra_flow["date"] = "2025-06-10"
+        flows.append(extra_flow)
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.equation_receipt is None
+
+
+def test_available_performance_rejects_unverified_source_cashflows() -> None:
+    payload = deepcopy(_PERFORMANCE)
+    source_coverage = cast("dict[str, object]", payload["source_coverage"])
+    source_coverage["status"] = "incomplete"
+    source_coverage["is_complete"] = False
+
+    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "source_cashflow_coverage_incomplete"
+
+
+def test_available_position_series_rejects_nonpositive_intermediate_dietz_denominator() -> None:
+    payload = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+    series = cast("list[dict[str, object]]", payload["series"])
+    first = deepcopy(series[0])
+    first["date"] = "2025-06-11"
+    first["position_cashflow"] = "-60000.00"
+    second = deepcopy(series[0])
+    second["date"] = "2025-06-12"
+    second["position_cashflow"] = "120000.00"
+    series[1:1] = [first, second]
+
+    parsed = ptc._parse_position_alpha(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.rows == []
+    assert parsed.matched_returns is None
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("total_alpha",), "1400.02"),
+        (("matched_returns", "alpha_vs_spy_pct"), "4.6668"),
+        (("rows", 0, "alpha"), "2200.02"),
+        (("rows", 0, "value_at_start"), None),
+        (("rows", 0, "incomplete"), True),
+        (("series", 1, "portfolio_return_pct"), "999"),
+        (("total_actual_pl",), "NaN"),
+    ],
+)
+def test_position_arithmetic_or_nonfinite_contradiction_fails_closed(
+    path: tuple[str | int, ...], value: object
+) -> None:
+    payload: object = deepcopy(_POSITION_ALPHA)
+    cursor = payload
+    for key in path[:-1]:
+        cursor = (
+            cast("dict[str, object]", cursor)[key]
+            if isinstance(key, str)
+            else cast("list[object]", cursor)[key]
+        )
+    last = path[-1]
+    if isinstance(last, str):
+        cast("dict[str, object]", cursor)[last] = value
+    else:
+        cast("list[object]", cursor)[last] = value
+
+    parsed = ptc._parse_position_alpha(  # pyright: ignore[reportPrivateUsage]
+        cast("dict[str, object]", payload)
+    )
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.matched_returns is None
+    assert parsed.rows == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sample_size", 0),
+        ("risk_free_annual", None),
+        ("beta", "NaN"),
+        ("r_squared", 1.01),
+        ("correlation", -1.01),
+        ("alpha_significant", "false"),
+    ],
+)
+def test_available_beta_core_contradictions_fail_closed(field: str, value: object) -> None:
+    payload = cast("dict[str, object]", deepcopy(_BETA))
+    payload[field] = value
+
+    parsed = ptc.parse_beta(payload)
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.beta is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_drawdown_pct", "NaN"),
+        ("annualized_return_pct", None),
+    ],
+)
+def test_available_drawdown_core_contradictions_fail_closed(field: str, value: object) -> None:
+    payload = cast("dict[str, object]", deepcopy(_DRAWDOWN))
+    payload[field] = value
+
+    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+    assert parsed.max_drawdown_pct is None
+    assert parsed.underwater == []
+
+
+def test_available_drawdown_invalid_underwater_point_fails_closed() -> None:
+    payload = cast("dict[str, object]", deepcopy(_DRAWDOWN))
+    points = cast("list[dict[str, object]]", payload["underwater"])
+    points[1]["drawdown_pct"] = None
+
+    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+
+
+def test_available_drawdown_curve_must_reconcile_to_summary() -> None:
+    payload = cast("dict[str, object]", deepcopy(_DRAWDOWN))
+    points = cast("list[dict[str, object]]", payload["underwater"])
+    points[1]["drawdown_pct"] = "-99"
+
+    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.compatibility_issue == "contradictory_available_payload"
+
+
+def test_drawdown_insufficient_observations_is_supported_unavailability() -> None:
+    payload = cast("dict[str, object]", deepcopy(_DRAWDOWN))
+    payload["calculation_status"] = "unavailable"
+    payload["calculation_reason_codes"] = ["insufficient_return_observations"]
+
+    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert parsed.calculation_status == "unavailable"
+    assert parsed.calculation_reason_codes == ["insufficient_return_observations"]
+    assert parsed.compatibility_issue is None
+
+
+def test_mismatched_matched_window_preserves_performance_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mismatched = deepcopy(_POSITION_ALPHA)
+    mismatched["start_date"] = "2025-05-01"
+    modeled_perf = deepcopy(_PERFORMANCE)
+    modeled_perf["backfill_start_unreliable"] = True
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/performance" in url:
+            return _FakeResp(modeled_perf)
+        if "/api/portfolio/position-alpha" in url:
+            return _FakeResp(mismatched)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert "+18.2%" in html
+    assert "+9.0%" not in html
+    assert 'class="kpi-label">Invested-position price/trade return' not in html
+    assert "This window is modeled, not measured" in html
+    assert "2025-06-12" in html
+
+
+def test_unpriced_position_benchmarks_do_not_suppress_whole_account_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unavailable = cast("dict[str, object]", deepcopy(_POSITION_ALPHA))
+    matched = cast("dict[str, object]", unavailable["matched_returns"])
+    matched["qqq_return_pct"] = None
+    matched["alpha_vs_qqq_pct"] = None
+    matched["policy_return_pct"] = None
+    matched["alpha_vs_policy_pct"] = None
+    unavailable["total_qqq_pl"] = None
+    unavailable["total_alpha_vs_qqq"] = None
+    unavailable["total_policy_pl"] = None
+    unavailable["total_alpha_vs_policy"] = None
+    for row in cast("list[dict[str, object]]", unavailable["rows"]):
+        row["qqq_counterfactual_pl"] = None
+        row["alpha_vs_qqq"] = None
+        row["policy_counterfactual_pl"] = None
+        row["alpha_vs_policy"] = None
+    series = cast("list[dict[str, object]]", unavailable["series"])
+    for point in series:
+        point["qqq_counterfactual_value"] = "0.00"
+        point["qqq_return_pct"] = None
+        point["policy_counterfactual_value"] = None
+        point["policy_return_pct"] = None
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/api/portfolio/position-alpha" in url:
+            return _FakeResp(unavailable)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert "Matched SPY price/trade return" in html
+    assert "Matched QQQ price/trade return" not in html
+    assert "Price/trade alpha vs QQQ" not in html
+    assert "pf-swatch-qqq" in html
+    assert "pf-swatch-policy" in html
+    assert "$0 P&amp;L" not in html
+    assert "sortBy('qqq','num')" not in html
+    assert "sortBy('policy','num')" not in html
+
+
+def test_performance_renders_public_analytics_freshness_and_coverage(
+    mock_tracker: None,
+) -> None:
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    assert analytics.performance is not None
+    assert analytics.position_alpha is not None
+    analytics.performance.provenance = ptc.AnalyticsProvenance(
+        as_of="2026-06-10",
+        is_stale=False,
+        is_partial=False,
+        warning_codes=(),
+        source_providers=("plaid", "snaptrade"),
+        included_account_count=2,
+        excluded_account_count=1,
+        lagging_account_count=0,
+        methodology="performance.modified_dietz",
+        methodology_version="2",
+    )
+    analytics.position_alpha.provenance = ptc.AnalyticsProvenance(
+        as_of="2026-06-09",
+        is_stale=True,
+        is_partial=True,
+        warning_codes=(
+            "position_price_coverage_partial",
+            "unsafe warning with account detail",
+        ),
+        source_providers=("plaid", "snaptrade"),
+        included_account_count=3,
+        excluded_account_count=1,
+        lagging_account_count=1,
+        methodology="position_alpha.split_normalized_price_trade_modified_dietz",
+        methodology_version="3",
+    )
+
+    html = render_portfolio_analytics_sections(analytics)
+
+    assert "Analytics as of 2026-06-10" in html
+    assert "performance.modified_dietz v2" in html
+    assert "Analytics as of 2026-06-09" in html
+    assert "stale" in html
+    assert "partial coverage" in html
+    assert "position_price_coverage_partial" in html
+    assert "unsafe warning with account detail" not in html
+    assert "providers: plaid, snaptrade" in html
+    assert "accounts: 3 included, 1 excluded, 1 lagging" in html
+    assert "position_alpha.split_normalized_price_trade_modified_dietz v3" in html
+    assert html.index("performance.modified_dietz v2") < html.index("Position drivers")
+    assert html.index("Position drivers") < html.index(
+        "position_alpha.split_normalized_price_trade_modified_dietz v3"
+    )
 
 
 def test_render_analytics_partial_notes_missing_sections(
@@ -1119,9 +2068,17 @@ def test_fetch_analytics_passes_window_params(monkeypatch: pytest.MonkeyPatch) -
         assert "end_date=2026-06-10" in by_endpoint[key]
         assert "include_backfill" not in by_endpoint[key]
     assert "?" not in by_endpoint["policy"]
+    assert a.performance is not None
+    assert a.performance.compatibility_issue == "returned_window_mismatch"
+    assert a.position_alpha is not None
+    assert a.position_alpha.compatibility_issue == "returned_window_mismatch"
+    assert a.beta is not None
+    assert a.beta.compatibility_issue == "returned_window_mismatch"
 
 
-def test_fetch_analytics_default_omits_window_params(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_analytics_default_aligns_only_position_alpha_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seen: list[str] = []
 
     def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
@@ -1130,8 +2087,13 @@ def test_fetch_analytics_default_omits_window_params(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(ptc.requests, "get", _get)
     fetch_portfolio_analytics(api_url="http://tracker.test")
-    # No window chosen -> the tracker's own defaults, no query strings at all.
-    assert seen and all("?" not in u for u in seen)
+    # Performance establishes the effective default window. Position alpha is
+    # then requested against those exact bounds; unrelated endpoints keep their
+    # own default requests.
+    alpha_url = next(url for url in seen if "/position-alpha" in url)
+    assert "start_date=2025-06-10" in alpha_url
+    assert "end_date=2026-06-10" in alpha_url
+    assert all("?" not in url for url in seen if "/position-alpha" not in url)
 
 
 def test_validated_window_sanitizes() -> None:
@@ -1446,6 +2408,8 @@ def test_render_risk_panel_populated(mock_tracker: None) -> None:
     assert 'id="pfr-root"' in html
     # Benchmark-risk recap (reuses the Performance tab's risk strip).
     assert "Risk &amp; efficiency" in html and "Beta vs SPY" in html
+    assert "method: risk.beta_drawdown v2" in html
+    assert "provider/account coverage/stale-partial status not supplied" in html
     # Drawdown — the mock TWR series climbs monotonically, so no drawdown.
     assert "Drawdown" in html
     assert "no drawdown in window" in html and "none needed" in html

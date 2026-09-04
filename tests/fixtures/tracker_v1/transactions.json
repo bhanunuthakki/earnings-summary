@@ -24,7 +24,7 @@
     },
     "methodology": "transactions.normalized",
     "methodology_version": "1",
-    "schema_version": "1.0.0",
+    "schema_version": "1.1.0",
     "source_providers": [
       "plaid",
       "snaptrade"
@@ -95,10 +95,10 @@
       "currency": "USD",
       "date": "2026-07-15",
       "effective_classification": null,
-      "fees": null,
+      "fees": "0.000000",
       "name": "Buy Beta Corp",
       "override_classification": null,
-      "price": null,
+      "price": "116.000000",
       "quantity": "5.0000000000",
       "security_id": 2,
       "subtype": "buy",

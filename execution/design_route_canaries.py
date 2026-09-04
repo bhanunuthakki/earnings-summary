@@ -24,8 +24,6 @@ from integrations.portfolio_tracker_client import (
     PerformancePoint,
     PerformanceSeries,
     PortfolioAnalytics,
-    PositionAlpha,
-    PositionAlphaRow,
 )
 from pipeline.explore_panel import render_explore_panel
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel
@@ -495,48 +493,6 @@ def canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
 
 def _canary_performance_fragment() -> str:
     """Render deterministic populated Performance content without a live tracker."""
-
-    rows = [
-        PositionAlphaRow(
-            ticker="NU",
-            name="Canary Financial Holdings",
-            value_at_start=10000.0,
-            bought_in_window=500.0,
-            sold_in_window=0.0,
-            value_at_end=11200.0,
-            actual_pl=700.0,
-            spy_counterfactual_pl=420.0,
-            alpha=280.0,
-            alpha_vs_qqq=190.0,
-            alpha_vs_policy=230.0,
-            incomplete=False,
-        ),
-        PositionAlphaRow(
-            ticker="CANARY",
-            name="Deterministic Responsive Grid Company",
-            value_at_start=8000.0,
-            bought_in_window=0.0,
-            sold_in_window=250.0,
-            value_at_end=7900.0,
-            actual_pl=150.0,
-            spy_counterfactual_pl=210.0,
-            alpha=-60.0,
-            alpha_vs_qqq=-80.0,
-            alpha_vs_policy=-45.0,
-            incomplete=False,
-        ),
-    ]
-    alpha = PositionAlpha(
-        start_date="2025-10-01",
-        end_date="2026-01-01",
-        has_policy=True,
-        total_actual_pl=850.0,
-        total_spy_pl=630.0,
-        total_alpha=220.0,
-        total_alpha_vs_qqq=110.0,
-        total_alpha_vs_policy=185.0,
-        rows=rows,
-    )
     analytics = PortfolioAnalytics(
         available=True,
         api_url="http://design-canary.invalid",
@@ -548,10 +504,10 @@ def _canary_performance_fragment() -> str:
             backfill_start_unreliable=False,
             points=[
                 PerformancePoint("2025-10-01", 0.0, 0.0, 0.0, 0.0),
-                PerformancePoint("2026-01-01", 8.5, 6.3, 7.8, 6.9),
+                PerformancePoint("2026-01-01", 12.4, 6.3, 7.4, 6.65),
             ],
+            calculation_status="available",
         ),
-        position_alpha=alpha,
     )
     live = LivePortfolio(available=True, api_url="http://design-canary.invalid")
     return compose_portfolio_page(

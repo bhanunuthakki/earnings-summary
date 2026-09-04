@@ -218,22 +218,90 @@ def test_positions_result_has_no_meta_envelope() -> None:
 
 
 def test_data_quality_fixture_typed_values() -> None:
-    """The official fixture carries 5 findings (1 info, 4 warning)."""
+    """The official fixture carries one informational snapshot-history finding."""
     result = tv1.DataQualityV1Result.model_validate(_load(FIXTURES_DIR / "data-quality.json"))
-    assert len(result.report.findings) == 5
-    assert result.report.summary_counts == {"info": 1, "warning": 4}
+    assert len(result.report.findings) == 1
+    assert result.report.summary_counts == {"info": 1}
     severities = [f.severity for f in result.report.findings]
-    assert severities.count("warning") == 4
+    assert severities.count("warning") == 0
     assert severities.count("info") == 1
 
 
 def test_performance_fixture_has_full_year_series() -> None:
     """The official fixture is a full 365-point daily series."""
     result = tv1.PerformanceV1Result.model_validate(_load(FIXTURES_DIR / "performance.json"))
+    assert result.series.calculation_status == "available"
+    assert result.series.calculation_reason_codes == []
     assert len(result.series.points) == 365
     first = result.series.points[0]
     assert isinstance(first.portfolio_value, Decimal)
-    assert first.spy_return_pct is None  # no benchmark history yet on day 1
+    assert first.portfolio_return_pct == Decimal("0")
+    assert first.spy_return_pct == Decimal("0")
+    assert first.spy_equivalent_value == result.series.base_value
+    receipt = result.series.equation_receipt
+    assert receipt is not None
+    assert receipt.benchmark_price_resolution_policy == "same_day_or_previous_us_market_close"
+    assert receipt.spy.price_inputs
+    assert receipt.qqq.price_inputs
+
+
+@pytest.mark.parametrize("mutation", ["missing_policy", "unknown_policy", "empty_inputs"])
+def test_performance_receipt_market_session_lineage_is_required(mutation: str) -> None:
+    data = _deep_copy(_load(FIXTURES_DIR / "performance.json"))
+    series = cast("dict[str, object]", data["series"])
+    receipt = cast("dict[str, object]", series["equation_receipt"])
+    if mutation == "missing_policy":
+        receipt.pop("benchmark_price_resolution_policy")
+    elif mutation == "unknown_policy":
+        receipt["benchmark_price_resolution_policy"] = "nearest_close"
+    else:
+        spy = cast("dict[str, object]", receipt["spy"])
+        spy["price_inputs"] = []
+
+    with pytest.raises(ValidationError):
+        tv1.PerformanceV1Result.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["net_external_cashflow_in", "backfill_start_unreliable"],
+)
+def test_performance_required_financial_provenance_field_omission_is_invalid(field: str) -> None:
+    data = _deep_copy(_load(FIXTURES_DIR / "performance.json"))
+    series = cast("dict[str, object]", data["series"])
+    series.pop(field)
+
+    with pytest.raises(ValidationError):
+        tv1.PerformanceV1Result.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["net_external_cashflow_in", "backfill_start_unreliable"],
+)
+def test_performance_fetch_fails_closed_when_required_field_is_omitted(
+    field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _deep_copy(_load(FIXTURES_DIR / "performance.json"))
+    series = cast("dict[str, object]", data["series"])
+    series.pop(field)
+
+    def fake_get(
+        self: requests.Session,
+        url: str,
+        params: object = None,
+        timeout: object = None,
+    ) -> _FakeResponse:
+        return _FakeResponse(data)
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+    fetch = tv1.TrackerV1Client().get_performance()
+
+    assert fetch.available is False
+    assert fetch.data is None
+    assert fetch.error is not None
+    assert "schema_validation_error" in fetch.error
+    assert field in fetch.error
 
 
 def test_risk_fixture_has_meta_beta_drawdown_top_level_shape() -> None:
@@ -584,7 +652,7 @@ def test_telemetry_log_has_no_payload_contents(
         assert leaked not in log_text
     # The allowed telemetry fields ARE expected to be present.
     assert "/api/v1/accounts" in log_text
-    assert "schema_version=1.0.0" in log_text
+    assert "schema_version=1.1.0" in log_text
     assert "status=200" in log_text
 
 

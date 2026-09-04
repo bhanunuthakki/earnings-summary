@@ -27,7 +27,9 @@ from __future__ import annotations
 import importlib.util
 import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 from alembic.config import Config
@@ -306,7 +308,13 @@ def test_comparable_false_when_both_sides_unknown() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _load_refresh_module() -> object:
+class _RefreshModule(Protocol):
+    fetch_portfolio_analytics: Callable[..., PortfolioAnalytics]
+
+    def main(self, argv: list[str] | None = None) -> int: ...
+
+
+def _load_refresh_module() -> _RefreshModule:
     spec = importlib.util.spec_from_file_location(
         "refresh_portfolio_risk_snapshot_prov",
         PROJECT_ROOT / "execution" / "refresh_portfolio_risk_snapshot.py",
@@ -314,7 +322,14 @@ def _load_refresh_module() -> object:
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return cast(_RefreshModule, mod)
+
+
+def _analytics_fetcher(result: PortfolioAnalytics) -> Callable[..., PortfolioAnalytics]:
+    def fetch(**_kwargs: object) -> PortfolioAnalytics:
+        return result
+
+    return fetch
 
 
 def _canned_analytics(
@@ -367,6 +382,7 @@ def _canned_analytics(
             backfill_start_unreliable=False,
             points=points,
             earliest_observed_date=earliest_observed_date,
+            calculation_status="available",
         ),
         positioning=Positioning(
             snapshot_date="2026-07-23",
@@ -401,6 +417,7 @@ def _canned_analytics(
             portfolio_volatility_annualized=0.22,
             benchmark_volatility_annualized=0.15,
             tracking_error_annualized=0.09,
+            calculation_status="available",
         ),
     )
 
@@ -412,7 +429,9 @@ def test_refresh_script_stamps_observed_when_window_starts_at_first_observation(
     monkeypatch.setattr(
         mod,
         "fetch_portfolio_analytics",
-        lambda **_: _canned_analytics(start_date="2026-01-23", earliest_observed_date="2026-01-23"),
+        _analytics_fetcher(
+            _canned_analytics(start_date="2026-01-23", earliest_observed_date="2026-01-23")
+        ),
     )
     assert mod.main(["--db-path", str(head_db)]) == 0
     latest = read_latest_snapshot(db_path=head_db)
@@ -428,7 +447,9 @@ def test_refresh_script_stamps_modeled_backfill_when_window_precedes_observation
     monkeypatch.setattr(
         mod,
         "fetch_portfolio_analytics",
-        lambda **_: _canned_analytics(start_date="2025-07-24", earliest_observed_date="2026-05-09"),
+        _analytics_fetcher(
+            _canned_analytics(start_date="2025-07-24", earliest_observed_date="2026-05-09")
+        ),
     )
     assert mod.main(["--db-path", str(head_db)]) == 0
     latest = read_latest_snapshot(db_path=head_db)
@@ -445,7 +466,9 @@ def test_refresh_script_summary_json_includes_provenance(
     monkeypatch.setattr(
         mod,
         "fetch_portfolio_analytics",
-        lambda **_: _canned_analytics(start_date="2025-07-24", earliest_observed_date="2026-05-09"),
+        _analytics_fetcher(
+            _canned_analytics(start_date="2025-07-24", earliest_observed_date="2026-05-09")
+        ),
     )
     assert mod.main(["--db-path", str(head_db)]) == 0
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -462,7 +485,7 @@ def test_refresh_script_stamps_unknown_when_provider_omits_observation_marker(
     monkeypatch.setattr(
         mod,
         "fetch_portfolio_analytics",
-        lambda **_: _canned_analytics(earliest_observed_date=None),
+        _analytics_fetcher(_canned_analytics(earliest_observed_date=None)),
     )
     assert mod.main(["--db-path", str(head_db)]) == 0
     latest = read_latest_snapshot(db_path=head_db)

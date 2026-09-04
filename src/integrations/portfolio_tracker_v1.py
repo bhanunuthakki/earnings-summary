@@ -388,6 +388,17 @@ class CashFlowV1(V1Model):
     currency: str
 
 
+class CashFlowSourceCoverage(V1Model):
+    status: str
+    is_complete: bool
+    requested_start_date: date
+    requested_end_date: date
+    required_start_date: date | None
+    required_end_date: date | None
+    accounts: list[dict[str, object]]
+    attestations: list[dict[str, object]]
+
+
 class CashFlowsV1Result(V1Model):
     """``GET /api/v1/cash-flows`` — keyset-cursor paginated."""
 
@@ -396,7 +407,11 @@ class CashFlowsV1Result(V1Model):
     end_date: date
     include_internal: bool
     cash_flows: list[CashFlowV1] = Field(default_factory=list[CashFlowV1])
-    net_external_cashflow_in: Money
+    net_external_cashflow_in: MoneyOrNone
+    structural_is_complete: bool
+    source_coverage: CashFlowSourceCoverage
+    is_complete: bool
+    issues: list[dict[str, object]]
     next_cursor: str | None
 
 
@@ -582,7 +597,7 @@ class PositioningV1Result(V1Model):
 class PerformancePoint(V1Model):
     date: date
     portfolio_value: Money
-    portfolio_return_pct: Money
+    portfolio_return_pct: Money | None
     spy_return_pct: MoneyOrNone
     qqq_return_pct: MoneyOrNone
     policy_return_pct: MoneyOrNone
@@ -591,13 +606,68 @@ class PerformancePoint(V1Model):
     policy_equivalent_value: MoneyOrNone
 
 
+class PerformanceBenchmarkPriceInput(V1Model):
+    ticker: str
+    target_date: date
+    source_date: date
+    close: Money
+    resolution: Literal["same_day_close", "previous_market_close"]
+
+
+class PerformanceBenchmarkReceipt(V1Model):
+    benchmark: str
+    ending_value: Money
+    investment_gain: Money
+    return_pct: Money
+    dollar_alpha: Money
+    percentage_point_alpha: Money
+    equation_residual: Money
+    price_input_id: str
+    price_inputs: list[PerformanceBenchmarkPriceInput] = Field(min_length=1)
+
+
+class PerformanceDatedCashflow(V1Model):
+    date: date
+    amount: Money
+
+
+class PerformanceEquationReceipt(V1Model):
+    calculation_id: str
+    external_flow_ledger_id: str
+    portfolio_valuation_input_id: str
+    included_account_ids: list[int]
+    requested_start_date: date
+    requested_end_date: date
+    benchmark_price_resolution_policy: Literal["same_day_or_previous_us_market_close"]
+    opening_value: Money
+    dated_external_cashflows: list[PerformanceDatedCashflow]
+    net_external_cashflow_in: Money
+    ending_value: Money
+    investment_gain: Money
+    modified_dietz_denominator: Money
+    portfolio_return_pct: Money
+    portfolio_equation_residual: Money
+    spy: PerformanceBenchmarkReceipt
+    qqq: PerformanceBenchmarkReceipt
+    policy: PerformanceBenchmarkReceipt | None
+
+
 class PerformanceSeries(V1Model):
+    methodology: Literal["performance.modified_dietz"]
+    methodology_version: Literal["2"]
+    calculation_status: Literal["available", "unavailable"]
+    calculation_reason_codes: list[str]
+    source_coverage: CashFlowSourceCoverage
     start_date: date
     end_date: date
     base_value: Money
-    net_external_cashflow_in: Money = Decimal("0")
-    backfill_start_unreliable: bool = False
+    net_external_cashflow_in: Money | None
+    equation_receipt: PerformanceEquationReceipt | None = None
+    backfill_start_unreliable: bool
     earliest_observed_date: date | None = None
+    opening_value_provenance: str | None
+    ending_value_provenance: str | None
+    valuation_account_ids: list[int]
     points: list[PerformancePoint] = Field(default_factory=list[PerformancePoint])
 
 
@@ -617,10 +687,25 @@ class PerformanceV1Result(V1Model):
 class PositionAlphaTimePoint(V1Model):
     date: date
     portfolio_value: Money
-    spy_counterfactual_value: Money
-    qqq_counterfactual_value: Money
-    policy_counterfactual_value: Money
+    spy_counterfactual_value: Money | None
+    qqq_counterfactual_value: Money | None
+    policy_counterfactual_value: Money | None
     position_cashflow: Money = Decimal("0")
+    portfolio_return_pct: Money | None = None
+    spy_return_pct: Money | None = None
+    qqq_return_pct: Money | None = None
+    policy_return_pct: Money | None = None
+
+
+class PositionMatchedReturns(V1Model):
+    dietz_denominator: Money | None = None
+    portfolio_return_pct: Money | None = None
+    spy_return_pct: Money | None = None
+    qqq_return_pct: Money | None = None
+    policy_return_pct: Money | None = None
+    alpha_vs_spy_pct: Money | None = None
+    alpha_vs_qqq_pct: Money | None = None
+    alpha_vs_policy_pct: Money | None = None
 
 
 class PositionAlphaRow(V1Model):
@@ -630,31 +715,36 @@ class PositionAlphaRow(V1Model):
     bought_in_window: Money
     sold_in_window: Money
     value_at_end: Money
-    actual_pl: Money
-    spy_counterfactual_pl: Money
-    qqq_counterfactual_pl: Money
-    policy_counterfactual_pl: Money
-    alpha: Money
-    alpha_vs_qqq: Money
-    alpha_vs_policy: Money
+    actual_pl: Money | None
+    spy_counterfactual_pl: Money | None
+    qqq_counterfactual_pl: Money | None
+    policy_counterfactual_pl: Money | None
+    alpha: Money | None
+    alpha_vs_qqq: Money | None
+    alpha_vs_policy: Money | None
     incomplete: bool
 
 
 class PositionAlphaResult(V1Model):
+    methodology: Literal["position_alpha.split_normalized_price_trade_modified_dietz"]
+    methodology_version: Literal["3"]
     start_date: date
     end_date: date
+    calculation_status: Literal["available", "unavailable"]
+    calculation_reason_codes: list[str]
     has_policy: bool = False
     rows: list[PositionAlphaRow] = Field(default_factory=list[PositionAlphaRow])
     series: list[PositionAlphaTimePoint] = Field(default_factory=list[PositionAlphaTimePoint])
-    total_actual_pl: Money
-    total_spy_pl: Money
-    total_qqq_pl: Money
-    total_policy_pl: Money
-    total_alpha: Money
-    total_alpha_vs_qqq: Money
-    total_alpha_vs_policy: Money
+    total_actual_pl: Money | None
+    total_spy_pl: Money | None
+    total_qqq_pl: Money | None
+    total_policy_pl: Money | None
+    total_alpha: Money | None
+    total_alpha_vs_qqq: Money | None
+    total_alpha_vs_policy: Money | None
     v_start: Money = Decimal("0")
     v_end: Money = Decimal("0")
+    matched_returns: PositionMatchedReturns = Field(default_factory=PositionMatchedReturns)
 
 
 class PositionPerformanceV1Result(V1Model):
@@ -673,6 +763,10 @@ class BetaResult(V1Model):
     """Regression + risk-adjusted stats vs one benchmark. Per OpenAPI these
     are plain JSON numbers (not decimal strings) — kept as ``float``."""
 
+    methodology: Literal["risk.beta_drawdown"]
+    methodology_version: Literal["2"]
+    calculation_status: Literal["available", "unavailable"]
+    calculation_reason_codes: list[str]
     benchmark: str
     start_date: date
     end_date: date
@@ -703,6 +797,10 @@ class DrawdownResult(V1Model):
     """Peak-to-trough pain over the TWR series. ``calmar`` is
     ``annualized_return_pct / |max_drawdown_pct|``."""
 
+    methodology: Literal["risk.beta_drawdown"]
+    methodology_version: Literal["2"]
+    calculation_status: Literal["available", "unavailable"]
+    calculation_reason_codes: list[str]
     start_date: date
     end_date: date
     max_drawdown_pct: MoneyOrNone

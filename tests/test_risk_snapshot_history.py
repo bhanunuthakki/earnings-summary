@@ -16,12 +16,19 @@ from __future__ import annotations
 import shutil
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
-from integrations.portfolio_tracker_client import PortfolioAnalytics
+from integrations.portfolio_tracker_client import (
+    BetaStats,
+    PerformancePoint,
+    PerformanceSeries,
+    PortfolioAnalytics,
+)
 from portfolio_risk_snapshot_store import (
     RiskSnapshot,
     read_history,
@@ -107,3 +114,27 @@ def test_persist_gate_rejects_degenerate_tracker_response(head_db: Path) -> None
     latest = read_latest_snapshot(db_path=head_db)
     assert latest is not None
     assert latest.beta == pytest.approx(1.1)  # untouched — no NULL clobber
+
+    structurally_unavailable = PortfolioAnalytics(
+        available=True,
+        api_url="http://x",
+        performance=PerformanceSeries(
+            start_date="2026-01-01",
+            end_date="2026-07-01",
+            base_value=100.0,
+            net_external_cashflow_in=0.0,
+            backfill_start_unreliable=False,
+            points=cast("list[PerformancePoint]", [object()]),
+            calculation_status="available",
+        ),
+        beta=cast(
+            "BetaStats",
+            SimpleNamespace(calculation_status="unavailable", beta=None),
+        ),
+    )
+    pp._persist_risk_snapshot(  # pyright: ignore[reportPrivateUsage]
+        structurally_unavailable, head_db
+    )
+    latest = read_latest_snapshot(db_path=head_db)
+    assert latest is not None
+    assert latest.beta == pytest.approx(1.1)

@@ -55,8 +55,9 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from decimal import Decimal
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
+from math import isfinite
 from typing import Literal, TypeVar, cast
 from urllib.parse import urlencode
 
@@ -87,6 +88,52 @@ _ANALYTICS_TIMEOUT_SECONDS = 6.0
 # cycle to ~2s — the Portfolio / Decisions landing tabs degrade in ~1s
 # total instead of 8s when the tracker is offline.
 _CONNECT_TIMEOUT_SECONDS = 0.5
+
+_POSITION_METHODOLOGY = "position_alpha.split_normalized_price_trade_modified_dietz"
+_POSITION_METHODOLOGY_VERSION = "3"
+_PERFORMANCE_METHODOLOGY = "performance.modified_dietz"
+_PERFORMANCE_METHODOLOGY_VERSION = "2"
+_POSITION_REASON_CODES = frozenset(
+    {
+        "no_active_accounts",
+        "no_invested_position_capital",
+        "nonpositive_dietz_denominator",
+        "primary_benchmark_price_unavailable",
+        "position_price_unavailable",
+        "share_movement_missing_security",
+        "share_movement_missing_ticker",
+        "share_movement_unmatched",
+        "share_movement_cross_date",
+        "share_movement_price_unavailable",
+        "share_movement_unclassified",
+        "trade_security_missing",
+        "trade_ticker_missing",
+        "trade_notional_unavailable",
+    }
+)
+_PERFORMANCE_REASON_CODES = frozenset(
+    {
+        "no_portfolio_values",
+        "external_share_movement_missing_security",
+        "external_share_movement_missing_ticker",
+        "external_share_movement_price_unavailable",
+        "nonpositive_dietz_denominator",
+        "portfolio_start_value_unavailable",
+        "portfolio_end_value_unavailable",
+        "partial_snapshot_start_date",
+        "partial_snapshot_end_date",
+        "modeled_opening_account_coverage_incomplete",
+        "modeled_opening_valuation_coverage_incomplete",
+        "spy_benchmark_price_unavailable",
+        "qqq_benchmark_price_unavailable",
+        "policy_benchmark_price_unavailable",
+        "external_flow_source_coverage_incomplete",
+        "unpriceable_holding_snapshot",
+    }
+)
+_BETA_REASON_CODES = _POSITION_REASON_CODES | {"insufficient_return_observations"}
+_RISK_METHODOLOGY = "risk.beta_drawdown"
+_RISK_METHODOLOGY_VERSION = "2"
 
 _T = TypeVar("_T")
 
@@ -419,7 +466,8 @@ def _f(v: object) -> float | None:
     if v is None or v == "":
         return None
     try:
-        return float(cast("str | float | int", v))
+        parsed = float(cast("str | float | int", v))
+        return parsed if isfinite(parsed) else None
     except (ValueError, TypeError):
         return None
 
@@ -446,8 +494,9 @@ def _b(v: object) -> bool | None:
     """Tri-state bool: None when the key was absent / null (a tracker build that
     predates the field), else ``bool(v)``. Distinguishes "not provided" from an
     explicit ``False`` — load-bearing for ``alpha_significant`` (None must not
-    read as "insignificant")."""
-    return None if v is None else bool(v)
+    read as "insignificant"). Non-boolean JSON values are contract failures,
+    never Python-truthiness aliases."""
+    return v if isinstance(v, bool) else None
 
 
 def _dicts(v: object) -> list[dict[str, object]]:
@@ -459,6 +508,311 @@ def _dicts(v: object) -> list[dict[str, object]]:
         for item in cast("list[object]", v)
         if isinstance(item, dict)
     ]
+
+
+def _decimal(v: object) -> Decimal | None:
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        parsed = Decimal(str(v))
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _close_decimal(left: Decimal, right: Decimal) -> bool:
+    return abs(left - right) <= Decimal("0.000001")
+
+
+def _parse_performance_receipt(
+    data: dict[str, object], points: list[dict[str, object]]
+) -> PerformanceEquationReceipt | None:
+    raw = data.get("equation_receipt")
+    if not isinstance(raw, dict):
+        return None
+    receipt = cast("dict[str, object]", raw)
+    numeric_names = (
+        "opening_value",
+        "net_external_cashflow_in",
+        "ending_value",
+        "investment_gain",
+        "modified_dietz_denominator",
+        "portfolio_return_pct",
+        "portfolio_equation_residual",
+    )
+    values = {name: _decimal(receipt.get(name)) for name in numeric_names}
+    if any(value is None for value in values.values()):
+        return None
+    decimals = cast("dict[str, Decimal]", values)
+    if decimals["modified_dietz_denominator"] <= 0:
+        return None
+    requested_start_text = _s(receipt.get("requested_start_date"))
+    requested_end_text = _s(receipt.get("requested_end_date"))
+    if requested_start_text is None or requested_end_text is None:
+        return None
+    try:
+        requested_start = date.fromisoformat(requested_start_text)
+        requested_end = date.fromisoformat(requested_end_text)
+    except ValueError:
+        return None
+    if requested_start >= requested_end:
+        return None
+    dated_flows: list[PerformanceDatedCashflow] = []
+    dated_flow_total = Decimal(0)
+    dated_flow_dates: set[date] = set()
+    raw_dated_flows = receipt.get("dated_external_cashflows")
+    if not isinstance(raw_dated_flows, list):
+        return None
+    dated_flow_items = cast("list[object]", raw_dated_flows)
+    if not all(isinstance(flow, dict) for flow in dated_flow_items):
+        return None
+    for raw_flow in dated_flow_items:
+        flow = cast("dict[str, object]", raw_flow)
+        flow_date = _s(flow.get("date"))
+        amount = _decimal(flow.get("amount"))
+        if flow_date is None or amount is None:
+            return None
+        try:
+            parsed_flow_date = date.fromisoformat(flow_date)
+        except ValueError:
+            return None
+        if (
+            parsed_flow_date in dated_flow_dates
+            or parsed_flow_date <= requested_start
+            or parsed_flow_date > requested_end
+        ):
+            return None
+        dated_flow_dates.add(parsed_flow_date)
+        dated_flow_total += amount
+        dated_flows.append(PerformanceDatedCashflow(flow_date, float(amount)))
+    if dated_flow_total != decimals["net_external_cashflow_in"]:
+        return None
+    if not _close_decimal(
+        decimals["investment_gain"],
+        decimals["ending_value"] - decimals["opening_value"] - decimals["net_external_cashflow_in"],
+    ):
+        return None
+    if decimals["portfolio_equation_residual"] != 0:
+        return None
+    if not _close_decimal(
+        decimals["portfolio_return_pct"],
+        decimals["investment_gain"] / decimals["modified_dietz_denominator"] * Decimal(100),
+    ):
+        return None
+    if requested_start_text != _s(data.get("start_date")) or requested_end_text != _s(
+        data.get("end_date")
+    ):
+        return None
+    if _decimal(data.get("base_value")) != decimals["opening_value"]:
+        return None
+    if _decimal(data.get("net_external_cashflow_in")) != decimals["net_external_cashflow_in"]:
+        return None
+    if not points:
+        return None
+    final_point = points[-1]
+    if _decimal(final_point.get("portfolio_value")) != decimals["ending_value"]:
+        return None
+    if _decimal(final_point.get("portfolio_return_pct")) != decimals["portfolio_return_pct"]:
+        return None
+
+    raw_account_ids = receipt.get("included_account_ids")
+    valuation_account_ids = data.get("valuation_account_ids")
+    if not isinstance(raw_account_ids, list):
+        return None
+    account_id_items = cast("list[object]", raw_account_ids)
+    if (
+        not all(
+            isinstance(account_id, int) and not isinstance(account_id, bool)
+            for account_id in account_id_items
+        )
+        or raw_account_ids != valuation_account_ids
+    ):
+        return None
+    account_ids = cast("list[int]", raw_account_ids)
+    identity_names = (
+        "calculation_id",
+        "external_flow_ledger_id",
+        "portfolio_valuation_input_id",
+    )
+    identities = {name: _s(receipt.get(name)) for name in identity_names}
+    if any(not value for value in identities.values()):
+        return None
+    resolution_policy = _s(receipt.get("benchmark_price_resolution_policy"))
+    if resolution_policy != "same_day_or_previous_us_market_close":
+        return None
+
+    required_target_dates: set[date] = set()
+    for point in points:
+        point_date = _s(point.get("date"))
+        if point_date is None:
+            return None
+        try:
+            required_target_dates.add(date.fromisoformat(point_date))
+        except ValueError:
+            return None
+    for flow in dated_flows:
+        try:
+            required_target_dates.add(date.fromisoformat(flow.date))
+        except ValueError:
+            return None
+
+    parsed_benchmarks: list[PerformanceBenchmarkReceipt] = []
+    for key, expected_name in (("spy", "SPY"), ("qqq", "QQQ"), ("policy", "policy")):
+        raw_benchmark = receipt.get(key)
+        if raw_benchmark is None and key == "policy":
+            if (
+                final_point.get("policy_return_pct") is not None
+                or final_point.get("policy_equivalent_value") is not None
+            ):
+                return None
+            continue
+        if not isinstance(raw_benchmark, dict):
+            return None
+        benchmark_raw = cast("dict[str, object]", raw_benchmark)
+        benchmark = _s(benchmark_raw.get("benchmark"))
+        numeric = {
+            name: _decimal(benchmark_raw.get(name))
+            for name in (
+                "ending_value",
+                "investment_gain",
+                "return_pct",
+                "dollar_alpha",
+                "percentage_point_alpha",
+                "equation_residual",
+            )
+        }
+        price_input_id = _s(benchmark_raw.get("price_input_id"))
+        if (
+            benchmark != expected_name
+            or not price_input_id
+            or any(value is None for value in numeric.values())
+        ):
+            return None
+        raw_price_inputs = benchmark_raw.get("price_inputs")
+        if not isinstance(raw_price_inputs, list) or not raw_price_inputs:
+            return None
+        price_input_items = cast("list[object]", raw_price_inputs)
+        if not all(isinstance(item, dict) for item in price_input_items):
+            return None
+        parsed_price_inputs: list[PerformanceBenchmarkPriceInput] = []
+        input_targets: dict[str, set[date]] = {}
+        seen_inputs: set[tuple[str, date]] = set()
+        for raw_input in price_input_items:
+            price_input = cast("dict[str, object]", raw_input)
+            ticker = _s(price_input.get("ticker"))
+            target_text = _s(price_input.get("target_date"))
+            source_text = _s(price_input.get("source_date"))
+            close = _decimal(price_input.get("close"))
+            resolution = _s(price_input.get("resolution"))
+            if (
+                not ticker
+                or target_text is None
+                or source_text is None
+                or close is None
+                or close <= 0
+            ):
+                return None
+            try:
+                target_date = date.fromisoformat(target_text)
+                source_date = date.fromisoformat(source_text)
+            except ValueError:
+                return None
+            if expected_name != "policy" and ticker != expected_name:
+                return None
+            if source_date > target_date or resolution not in {
+                "same_day_close",
+                "previous_market_close",
+            }:
+                return None
+            if (source_date == target_date) != (resolution == "same_day_close"):
+                return None
+            input_key = (ticker, target_date)
+            if input_key in seen_inputs:
+                return None
+            seen_inputs.add(input_key)
+            input_targets.setdefault(ticker, set()).add(target_date)
+            parsed_price_inputs.append(
+                PerformanceBenchmarkPriceInput(
+                    ticker=ticker,
+                    target_date=target_text,
+                    source_date=source_text,
+                    close=float(close),
+                    resolution=cast(
+                        "Literal['same_day_close', 'previous_market_close']", resolution
+                    ),
+                )
+            )
+        if not input_targets or any(
+            target_dates != required_target_dates for target_dates in input_targets.values()
+        ):
+            return None
+        numbers = cast("dict[str, Decimal]", numeric)
+        point_return_name = f"{key}_return_pct"
+        point_value_name = f"{key}_equivalent_value"
+        if (
+            _decimal(final_point.get(point_return_name)) != numbers["return_pct"]
+            or _decimal(final_point.get(point_value_name)) != numbers["ending_value"]
+        ):
+            return None
+        if not _close_decimal(
+            numbers["investment_gain"],
+            numbers["ending_value"]
+            - decimals["opening_value"]
+            - decimals["net_external_cashflow_in"],
+        ):
+            return None
+        if numbers["equation_residual"] != 0:
+            return None
+        if not _close_decimal(
+            numbers["return_pct"],
+            numbers["investment_gain"] / decimals["modified_dietz_denominator"] * Decimal(100),
+        ):
+            return None
+        if not _close_decimal(
+            numbers["percentage_point_alpha"],
+            decimals["portfolio_return_pct"] - numbers["return_pct"],
+        ):
+            return None
+        if not _close_decimal(
+            numbers["dollar_alpha"],
+            decimals["investment_gain"] - numbers["investment_gain"],
+        ) or not _close_decimal(
+            numbers["dollar_alpha"],
+            decimals["modified_dietz_denominator"]
+            * numbers["percentage_point_alpha"]
+            / Decimal(100),
+        ):
+            return None
+        parsed_benchmarks.append(
+            PerformanceBenchmarkReceipt(
+                benchmark=expected_name,
+                ending_value=float(numbers["ending_value"]),
+                investment_gain=float(numbers["investment_gain"]),
+                return_pct=float(numbers["return_pct"]),
+                dollar_alpha=float(numbers["dollar_alpha"]),
+                percentage_point_alpha=float(numbers["percentage_point_alpha"]),
+                equation_residual=float(numbers["equation_residual"]),
+                price_input_id=price_input_id,
+                price_inputs=tuple(parsed_price_inputs),
+            )
+        )
+    return PerformanceEquationReceipt(
+        calculation_id=cast("str", identities["calculation_id"]),
+        external_flow_ledger_id=cast("str", identities["external_flow_ledger_id"]),
+        portfolio_valuation_input_id=cast("str", identities["portfolio_valuation_input_id"]),
+        included_account_ids=tuple(account_ids),
+        requested_start_date=_s(receipt.get("requested_start_date")) or "",
+        requested_end_date=_s(receipt.get("requested_end_date")) or "",
+        benchmark_price_resolution_policy=resolution_policy,
+        opening_value=float(decimals["opening_value"]),
+        dated_external_cashflows=tuple(dated_flows),
+        net_external_cashflow_in=float(decimals["net_external_cashflow_in"]),
+        ending_value=float(decimals["ending_value"]),
+        investment_gain=float(decimals["investment_gain"]),
+        modified_dietz_denominator=float(decimals["modified_dietz_denominator"]),
+        portfolio_return_pct=float(decimals["portfolio_return_pct"]),
+        benchmarks=tuple(parsed_benchmarks),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +837,53 @@ class PerformancePoint:
     spy_return_pct: float | None
     qqq_return_pct: float | None
     policy_return_pct: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceBenchmarkPriceInput:
+    ticker: str
+    target_date: str
+    source_date: str
+    close: float
+    resolution: Literal["same_day_close", "previous_market_close"]
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceBenchmarkReceipt:
+    benchmark: str
+    ending_value: float
+    investment_gain: float
+    return_pct: float
+    dollar_alpha: float
+    percentage_point_alpha: float
+    equation_residual: float
+    price_input_id: str
+    price_inputs: tuple[PerformanceBenchmarkPriceInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceDatedCashflow:
+    date: str
+    amount: float
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceEquationReceipt:
+    calculation_id: str
+    external_flow_ledger_id: str
+    portfolio_valuation_input_id: str
+    included_account_ids: tuple[int, ...]
+    requested_start_date: str
+    requested_end_date: str
+    benchmark_price_resolution_policy: Literal["same_day_or_previous_us_market_close"]
+    opening_value: float
+    dated_external_cashflows: tuple[PerformanceDatedCashflow, ...]
+    net_external_cashflow_in: float
+    ending_value: float
+    investment_gain: float
+    modified_dietz_denominator: float
+    portfolio_return_pct: float
+    benchmarks: tuple[PerformanceBenchmarkReceipt, ...]
 
 
 @dataclass(slots=True)
@@ -514,6 +915,33 @@ class PerformanceSeries:
     # "don't trust this", the date says how far back the trustworthy part goes.
     earliest_observed_date: str | None = None
     points: list[PerformancePoint] = field(default_factory=list[PerformancePoint])
+    provenance: AnalyticsProvenance | None = None
+    calculation_status: Literal["available", "unavailable"] = "unavailable"
+    calculation_reason_codes: list[str] = field(default_factory=list[str])
+    compatibility_issue: str | None = None
+    source_coverage_status: str = "incomplete"
+    equation_receipt: PerformanceEquationReceipt | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyticsProvenance:
+    """Public-safe provenance for one analytics metric family.
+
+    Account identifiers intentionally stop at the transport boundary; the UI
+    receives only coverage counts.
+    """
+
+    as_of: str | None
+    is_stale: bool
+    is_partial: bool
+    warning_codes: tuple[str, ...]
+    source_providers: tuple[str, ...]
+    included_account_count: int
+    excluded_account_count: int
+    lagging_account_count: int
+    methodology: str | None
+    methodology_version: str | None
+    coverage_supplied: bool = True
 
 
 @dataclass(slots=True)
@@ -532,6 +960,29 @@ class PositionAlphaRow:
     alpha_vs_qqq: float | None
     alpha_vs_policy: float | None
     incomplete: bool
+    qqq_counterfactual_pl: float | None = None
+    policy_counterfactual_pl: float | None = None
+
+
+@dataclass(slots=True)
+class PositionAlphaTimePoint:
+    date: str
+    portfolio_return_pct: float | None
+    spy_return_pct: float | None
+    qqq_return_pct: float | None
+    policy_return_pct: float | None
+
+
+@dataclass(slots=True)
+class PositionMatchedReturns:
+    dietz_denominator: float | None = None
+    portfolio_return_pct: float | None = None
+    spy_return_pct: float | None = None
+    qqq_return_pct: float | None = None
+    policy_return_pct: float | None = None
+    alpha_vs_spy_pct: float | None = None
+    alpha_vs_qqq_pct: float | None = None
+    alpha_vs_policy_pct: float | None = None
 
 
 @dataclass(slots=True)
@@ -548,6 +999,16 @@ class PositionAlpha:
     total_alpha_vs_qqq: float | None
     total_alpha_vs_policy: float | None
     rows: list[PositionAlphaRow] = field(default_factory=list[PositionAlphaRow])
+    total_qqq_pl: float | None = None
+    total_policy_pl: float | None = None
+    matched_returns: PositionMatchedReturns | None = None
+    series: list[PositionAlphaTimePoint] = field(default_factory=list[PositionAlphaTimePoint])
+    qqq_benchmark_priced: bool = False
+    policy_benchmark_priced: bool = False
+    calculation_status: Literal["available", "unavailable"] = "unavailable"
+    calculation_reason_codes: list[str] = field(default_factory=list[str])
+    compatibility_issue: str | None = None
+    provenance: AnalyticsProvenance | None = None
 
 
 @dataclass(slots=True)
@@ -832,6 +1293,10 @@ class BetaStats:
     benchmark_volatility_annualized: float | None
     tracking_error_annualized: float | None
     notes: list[str] = field(default_factory=list[str])
+    calculation_status: Literal["available", "unavailable"] = "unavailable"
+    calculation_reason_codes: list[str] = field(default_factory=list[str])
+    provenance: AnalyticsProvenance | None = None
+    compatibility_issue: str | None = None
 
 
 @dataclass(slots=True)
@@ -865,6 +1330,10 @@ class Drawdown:
     annualized_return_pct: float | None
     calmar: float | None
     underwater: list[UnderwaterPoint] = field(default_factory=list[UnderwaterPoint])
+    calculation_status: Literal["available", "unavailable"] = "unavailable"
+    calculation_reason_codes: list[str] = field(default_factory=list[str])
+    provenance: AnalyticsProvenance | None = None
+    compatibility_issue: str | None = None
 
 
 @dataclass(slots=True)
@@ -998,9 +1467,11 @@ def fetch_portfolio_analytics(
     ``/performance`` backward through the tracker's MODELED transaction
     walk-back (its docs caution the backfilled values are reconstructed, not
     observed). All omitted → the tracker's own defaults: a snapshot-derived
-    window for ``/performance``, trailing 365 days elsewhere. The window is
-    passed through verbatim — date arithmetic for presets lives with the UI,
-    return math stays in the tracker.
+    window for ``/performance``. When performance and position alpha are read
+    together, the latter is requested over the performance endpoint's effective
+    returned bounds so the two methods cannot be silently mixed in one panel.
+    Date arithmetic for presets lives with the UI; return math stays in the
+    tracker.
 
     ``only`` restricts the fetch to the named sections (``performance`` /
     ``position_alpha`` / ``positioning`` / ``policy`` / ``beta`` / ``drawdown``
@@ -1059,13 +1530,15 @@ def fetch_portfolio_analytics(
         (
             "performance",
             f"/api/portfolio/performance{q(perf_params)}",
-            _parse_performance,
+            lambda data: _parse_performance(data, expected_start=start_date, expected_end=end_date),
             "performance",
         ),
         (
             "position_alpha",
             f"/api/portfolio/position-alpha{q(window)}",
-            _parse_position_alpha,
+            lambda data: _parse_position_alpha(
+                data, expected_start=start_date, expected_end=end_date
+            ),
             "position_alpha",
         ),
         (
@@ -1075,8 +1548,18 @@ def fetch_portfolio_analytics(
             "positioning",
         ),
         ("policy", "/api/policy", _parse_policy, "policy"),
-        ("beta", f"/api/portfolio/beta{q(window)}", parse_beta, "beta"),
-        ("drawdown", f"/api/portfolio/drawdown{q(window)}", _parse_drawdown, "drawdown"),
+        (
+            "beta",
+            f"/api/portfolio/beta{q(window)}",
+            lambda data: parse_beta(data, expected_start=start_date, expected_end=end_date),
+            "beta",
+        ),
+        (
+            "drawdown",
+            f"/api/portfolio/drawdown{q(window)}",
+            lambda data: _parse_drawdown(data, expected_start=start_date, expected_end=end_date),
+            "drawdown",
+        ),
         (
             "exit_quality",
             f"/api/portfolio/exit-quality{q(window)}",
@@ -1092,6 +1575,37 @@ def fetch_portfolio_analytics(
         first_key, first_path, first_parse, first_attr = selected[0]
         setattr(out, first_attr, load(first_key, first_path, first_parse))
         remaining = selected[1:]
+        if first_key == "performance" and out.performance is not None and start_date is None:
+            effective_start = out.performance.start_date
+            effective_end = out.performance.end_date
+            aligned_window: dict[str, str] = {}
+            if effective_start:
+                aligned_window["start_date"] = effective_start
+            if effective_end:
+                aligned_window["end_date"] = effective_end
+
+            def parse_aligned_position(data: dict[str, object]) -> PositionAlpha:
+                return _parse_position_alpha(
+                    data,
+                    expected_start=effective_start,
+                    expected_end=effective_end,
+                )
+
+            aligned_remaining: list[
+                tuple[str, str, Callable[[dict[str, object]], object], str]
+            ] = []
+            for key, path, parse, attr in remaining:
+                aligned_remaining.append(
+                    (
+                        key,
+                        f"/api/portfolio/position-alpha{q(aligned_window)}"
+                        if key == "position_alpha"
+                        else path,
+                        parse_aligned_position if key == "position_alpha" else parse,
+                        attr,
+                    )
+                )
+            remaining = aligned_remaining
         if conn_down is not None:
             for key, path, parse, attr in remaining:
                 setattr(out, attr, load(key, path, parse))
@@ -1106,6 +1620,7 @@ def fetch_portfolio_analytics(
                 ]
                 for attr, future in futures:
                     setattr(out, attr, future.result())
+    _enforce_risk_window_agreement(out)
     out.available = any(
         section is not None
         for section in (
@@ -1131,7 +1646,52 @@ def _get_obj(base: str, path: str, *, timeout: float) -> dict[str, object]:
     return cast("dict[str, object]", data)
 
 
-def _parse_performance(data: dict[str, object]) -> PerformanceSeries:
+def _parse_performance(
+    data: dict[str, object],
+    *,
+    meta: V1Meta | None = None,
+    expected_start: str | None = None,
+    expected_end: str | None = None,
+) -> PerformanceSeries:
+    raw_status = data.get("calculation_status")
+    raw_reasons = data.get("calculation_reason_codes")
+    reason_codes: list[str] = []
+    reasons_valid = False
+    if isinstance(raw_reasons, list):
+        raw_reason_items = cast("list[object]", raw_reasons)
+        if all(isinstance(code, str) for code in raw_reason_items):
+            reason_codes = list(dict.fromkeys(cast("list[str]", raw_reason_items)))
+            reasons_valid = all(code in _PERFORMANCE_REASON_CODES for code in reason_codes)
+
+    compatibility_issue: str | None = None
+    if raw_status is None:
+        compatibility_issue = "missing_calculation_status"
+    elif raw_status not in ("available", "unavailable"):
+        compatibility_issue = "unknown_calculation_status"
+    elif not reasons_valid:
+        compatibility_issue = "invalid_calculation_reason_codes"
+    elif (
+        data.get("methodology") != _PERFORMANCE_METHODOLOGY
+        or data.get("methodology_version") != _PERFORMANCE_METHODOLOGY_VERSION
+        or (
+            meta is not None
+            and (
+                meta.methodology != _PERFORMANCE_METHODOLOGY
+                or meta.methodology_version != _PERFORMANCE_METHODOLOGY_VERSION
+            )
+        )
+    ):
+        compatibility_issue = "unsupported_methodology"
+    elif raw_status == "available" and reason_codes:
+        compatibility_issue = "available_with_reason_codes"
+    elif raw_status == "unavailable" and not reason_codes:
+        compatibility_issue = "unavailable_without_reason"
+    elif (expected_start is not None and _s(data.get("start_date")) != expected_start) or (
+        expected_end is not None and _s(data.get("end_date")) != expected_end
+    ):
+        compatibility_issue = "returned_window_mismatch"
+
+    raw_points = _dicts(data.get("points"))
     points = [
         PerformancePoint(
             date=_s(p.get("date")) or "",
@@ -1140,20 +1700,481 @@ def _parse_performance(data: dict[str, object]) -> PerformanceSeries:
             qqq_return_pct=_f(p.get("qqq_return_pct")),
             policy_return_pct=_f(p.get("policy_return_pct")),
         )
-        for p in _dicts(data.get("points"))
+        for p in raw_points
     ]
+    base_value = _f(data.get("base_value"))
+    raw_source_coverage = data.get("source_coverage")
+    source_coverage = (
+        cast("dict[str, object]", raw_source_coverage)
+        if isinstance(raw_source_coverage, dict)
+        else None
+    )
+    source_coverage_status = _s(source_coverage.get("status")) if source_coverage else None
+    source_coverage_complete = (
+        source_coverage is not None and source_coverage.get("is_complete") is True
+    )
+    receipt = _parse_performance_receipt(data, raw_points)
+    if compatibility_issue is None and source_coverage is None:
+        compatibility_issue = "missing_source_coverage"
+    elif compatibility_issue is None and raw_status == "available" and not source_coverage_complete:
+        compatibility_issue = "source_cashflow_coverage_incomplete"
+    calculation_available = bool(
+        raw_status == "available"
+        and compatibility_issue is None
+        and source_coverage_complete
+        and receipt is not None
+        and base_value is not None
+        and base_value > 0
+        and _f(data.get("net_external_cashflow_in")) is not None
+        and isinstance(data.get("backfill_start_unreliable"), bool)
+        and _series_dates_valid(raw_points, data.get("start_date"), data.get("end_date"))
+        and all(
+            point.date
+            and point.portfolio_return_pct is not None
+            and point.spy_return_pct is not None
+            and point.qqq_return_pct is not None
+            for point in points
+        )
+    )
+    if raw_status == "available" and not calculation_available and compatibility_issue is None:
+        compatibility_issue = "contradictory_available_payload"
+    if not calculation_available:
+        points = []
+        if compatibility_issue is not None:
+            log.info(
+                {
+                    "event": "tracker_performance_rejected",
+                    "reason": compatibility_issue,
+                }
+            )
     return PerformanceSeries(
         start_date=_s(data.get("start_date")),
         end_date=_s(data.get("end_date")),
-        base_value=_f(data.get("base_value")),
-        net_external_cashflow_in=_f(data.get("net_external_cashflow_in")),
+        base_value=base_value,
+        net_external_cashflow_in=(
+            _f(data.get("net_external_cashflow_in")) if calculation_available else None
+        ),
         backfill_start_unreliable=bool(data.get("backfill_start_unreliable")),
         earliest_observed_date=_s(data.get("earliest_observed_date")),
         points=points,
+        calculation_status="available" if calculation_available else "unavailable",
+        calculation_reason_codes=[
+            code for code in reason_codes if code in _PERFORMANCE_REASON_CODES
+        ],
+        compatibility_issue=compatibility_issue,
+        source_coverage_status=source_coverage_status or "incomplete",
+        equation_receipt=receipt if calculation_available else None,
+        provenance=_analytics_provenance(
+            meta,
+            embedded_methodology=data.get("methodology"),
+            embedded_methodology_version=data.get("methodology_version"),
+        ),
     )
 
 
-def _parse_position_alpha(data: dict[str, object]) -> PositionAlpha:
+def _analytics_provenance(
+    meta: V1Meta | None,
+    *,
+    embedded_methodology: object = None,
+    embedded_methodology_version: object = None,
+) -> AnalyticsProvenance:
+    if meta is None:
+        return AnalyticsProvenance(
+            as_of=None,
+            is_stale=False,
+            is_partial=False,
+            warning_codes=(),
+            source_providers=(),
+            included_account_count=0,
+            excluded_account_count=0,
+            lagging_account_count=0,
+            methodology=_s(embedded_methodology),
+            methodology_version=_s(embedded_methodology_version),
+            coverage_supplied=False,
+        )
+    coverage = meta.account_coverage
+    return AnalyticsProvenance(
+        as_of=meta.as_of.isoformat() if meta.as_of is not None else None,
+        is_stale=meta.is_stale,
+        is_partial=meta.is_partial,
+        warning_codes=tuple(_envelope_codes(meta)),
+        source_providers=tuple(meta.source_providers),
+        included_account_count=len(coverage.included_account_ids),
+        excluded_account_count=len(coverage.excluded_account_ids),
+        lagging_account_count=len(coverage.lagging_account_ids),
+        methodology=meta.methodology,
+        methodology_version=meta.methodology_version,
+        coverage_supplied=True,
+    )
+
+
+def _position_alpha_rejected(
+    data: dict[str, object],
+    *,
+    reason_codes: list[str],
+    compatibility_issue: str | None,
+    provenance: AnalyticsProvenance | None,
+) -> PositionAlpha:
+    if compatibility_issue is not None:
+        log.info(
+            {
+                "event": "tracker_position_alpha_rejected",
+                "reason": compatibility_issue,
+            }
+        )
+    return PositionAlpha(
+        start_date=_s(data.get("start_date")),
+        end_date=_s(data.get("end_date")),
+        has_policy=bool(data.get("has_policy")),
+        total_actual_pl=None,
+        total_spy_pl=None,
+        total_alpha=None,
+        total_alpha_vs_qqq=None,
+        total_alpha_vs_policy=None,
+        total_qqq_pl=None,
+        total_policy_pl=None,
+        rows=[],
+        matched_returns=None,
+        series=[],
+        calculation_status="unavailable",
+        calculation_reason_codes=reason_codes,
+        compatibility_issue=compatibility_issue,
+        provenance=provenance,
+    )
+
+
+def _decimal_value(value: object) -> Decimal | None:
+    try:
+        parsed = Decimal(str(value)) if value is not None else None
+        return parsed if parsed is not None and parsed.is_finite() else None
+    except (ArithmeticError, ValueError):
+        return None
+
+
+def _valid_iso_window(start: object, end: object) -> bool:
+    start_text = _s(start)
+    end_text = _s(end)
+    if start_text is None or end_text is None:
+        return False
+    try:
+        return date.fromisoformat(start_text) <= date.fromisoformat(end_text)
+    except ValueError:
+        return False
+
+
+def _series_dates_valid(
+    points: list[dict[str, object]],
+    start_value: object,
+    end_value: object,
+    *,
+    require_end: bool = False,
+) -> bool:
+    if not points or not _valid_iso_window(start_value, end_value):
+        return False
+    start_text = _s(start_value)
+    end_text = _s(end_value)
+    dates: list[date] = []
+    for point in points:
+        point_text = _s(point.get("date"))
+        if point_text is None:
+            return False
+        try:
+            point_date = date.fromisoformat(point_text)
+        except ValueError:
+            return False
+        if dates and point_date <= dates[-1]:
+            return False
+        dates.append(point_date)
+    if start_text is None or end_text is None:
+        return False
+    start = date.fromisoformat(start_text)
+    end = date.fromisoformat(end_text)
+    return dates[0] == start and dates[-1] <= end and (not require_end or dates[-1] == end)
+
+
+def _drawdown_points_valid(data: dict[str, object]) -> bool:
+    if not _valid_iso_window(data.get("start_date"), data.get("end_date")):
+        return False
+    start = date.fromisoformat(_s(data.get("start_date")) or "")
+    end = date.fromisoformat(_s(data.get("end_date")) or "")
+    previous: date | None = None
+    points = _dicts(data.get("underwater"))
+    if not points:
+        return False
+    for point in points:
+        point_text = _s(point.get("date"))
+        drawdown = _f(point.get("drawdown_pct"))
+        if point_text is None or drawdown is None or drawdown > 0:
+            return False
+        try:
+            point_date = date.fromisoformat(point_text)
+        except ValueError:
+            return False
+        if (
+            point_date < start
+            or point_date > end
+            or (previous is not None and point_date <= previous)
+        ):
+            return False
+        previous = point_date
+    return True
+
+
+def _position_arithmetic_valid(
+    data: dict[str, object], rows: list[dict[str, object]], matched: dict[str, object]
+) -> bool:
+    cents = Decimal("0.01")
+    dollar_identity_tolerance = Decimal("0.02")
+    pct_identity_tolerance = Decimal("0.0002")
+    row_total_tolerance = cents * Decimal(len(rows) + 1) / Decimal(2)
+
+    def close(left: Decimal | None, right: Decimal | None, tolerance: Decimal) -> bool:
+        return left is not None and right is not None and abs(left - right) <= tolerance
+
+    total_actual = _decimal_value(data.get("total_actual_pl"))
+    denominator = _decimal_value(matched.get("dietz_denominator"))
+    portfolio_pct = _decimal_value(matched.get("portfolio_return_pct"))
+    if (
+        denominator is None
+        or denominator <= Decimal("0.005")
+        or total_actual is None
+        or portfolio_pct is None
+    ):
+        return False
+
+    def ratio_tolerance(numerator: Decimal) -> Decimal:
+        denominator_floor = denominator - Decimal("0.005")
+        return Decimal("0.00005") + Decimal(100) * (
+            Decimal("0.005") / denominator_floor
+            + abs(numerator) * Decimal("0.005") / (denominator * denominator_floor)
+        )
+
+    if not close(
+        portfolio_pct,
+        total_actual / denominator * Decimal(100),
+        ratio_tolerance(total_actual),
+    ):
+        return False
+    if not close(
+        sum((_decimal_value(row.get("actual_pl")) or Decimal(0) for row in rows), Decimal(0)),
+        total_actual,
+        row_total_tolerance,
+    ):
+        return False
+
+    for suffix, row_benchmark_field in (
+        ("spy", "spy_counterfactual_pl"),
+        ("qqq", "qqq_counterfactual_pl"),
+        ("policy", "policy_counterfactual_pl"),
+    ):
+        total_benchmark = _decimal_value(data.get(f"total_{suffix}_pl"))
+        total_alpha = _decimal_value(
+            data.get("total_alpha" if suffix == "spy" else f"total_alpha_vs_{suffix}")
+        )
+        benchmark_pct = _decimal_value(matched.get(f"{suffix}_return_pct"))
+        alpha_pct = _decimal_value(
+            matched.get("alpha_vs_spy_pct" if suffix == "spy" else f"alpha_vs_{suffix}_pct")
+        )
+        fields = (total_benchmark, total_alpha, benchmark_pct, alpha_pct)
+        if suffix != "spy" and all(value is None for value in fields):
+            continue
+        if any(value is None for value in fields):
+            return False
+        assert total_benchmark is not None
+        assert total_alpha is not None
+        assert benchmark_pct is not None
+        assert alpha_pct is not None
+        if not close(total_actual - total_benchmark, total_alpha, dollar_identity_tolerance):
+            return False
+        if not close(portfolio_pct - benchmark_pct, alpha_pct, pct_identity_tolerance):
+            return False
+        if not close(
+            benchmark_pct,
+            total_benchmark / denominator * Decimal(100),
+            ratio_tolerance(total_benchmark),
+        ):
+            return False
+        if not close(
+            total_alpha / denominator * Decimal(100),
+            alpha_pct,
+            ratio_tolerance(total_alpha),
+        ):
+            return False
+        row_benchmarks = [_decimal_value(row.get(row_benchmark_field)) for row in rows]
+        row_alphas = [
+            _decimal_value(row.get("alpha" if suffix == "spy" else f"alpha_vs_{suffix}"))
+            for row in rows
+        ]
+        if any(value is None for value in (*row_benchmarks, *row_alphas)):
+            return False
+        if not close(
+            sum(cast("list[Decimal]", row_benchmarks), Decimal(0)),
+            total_benchmark,
+            row_total_tolerance,
+        ):
+            return False
+        if not close(
+            sum(cast("list[Decimal]", row_alphas), Decimal(0)),
+            total_alpha,
+            row_total_tolerance,
+        ):
+            return False
+        for row, row_benchmark, row_alpha in zip(rows, row_benchmarks, row_alphas, strict=True):
+            row_actual = _decimal_value(row.get("actual_pl"))
+            if not close(
+                row_actual - row_benchmark
+                if row_actual is not None and row_benchmark is not None
+                else None,
+                row_alpha,
+                dollar_identity_tolerance,
+            ):
+                return False
+    return True
+
+
+def _position_series_valid(
+    data: dict[str, object],
+    points: list[dict[str, object]],
+    matched: dict[str, object],
+) -> bool:
+    if not _series_dates_valid(
+        points, data.get("start_date"), data.get("end_date"), require_end=True
+    ):
+        return False
+    if not _position_series_denominators_positive(points):
+        return False
+    for metric_field in (
+        "portfolio_return_pct",
+        "spy_return_pct",
+        "qqq_return_pct",
+        "policy_return_pct",
+    ):
+        summary = _decimal_value(matched.get(metric_field))
+        values = [_decimal_value(point.get(metric_field)) for point in points]
+        if summary is None:
+            if any(value is not None for value in values):
+                return False
+        elif any(value is None for value in values) or (
+            values[-1] is None or abs(values[-1] - summary) > Decimal("0.0002")
+        ):
+            return False
+    return True
+
+
+def _position_series_denominators_positive(points: list[dict[str, object]]) -> bool:
+    if not points:
+        return False
+    start_text = _s(points[0].get("date"))
+    opening_value = _decimal_value(points[0].get("portfolio_value"))
+    if start_text is None or opening_value is None or opening_value <= 0:
+        return False
+    try:
+        start_date = date.fromisoformat(start_text)
+    except ValueError:
+        return False
+    flows: list[tuple[date, Decimal]] = []
+    for point in points:
+        point_text = _s(point.get("date"))
+        flow = _decimal_value(point.get("position_cashflow"))
+        if point_text is None or flow is None:
+            return False
+        try:
+            point_date = date.fromisoformat(point_text)
+        except ValueError:
+            return False
+        if point_date > start_date and flow != 0:
+            flows.append((point_date, flow))
+    for point in points[1:]:
+        current_text = _s(point.get("date"))
+        if current_text is None:
+            return False
+        current_date = date.fromisoformat(current_text)
+        period_days = (current_date - start_date).days
+        if period_days <= 0:
+            return False
+        weighted_flow = sum(
+            (
+                amount * (Decimal((current_date - flow_date).days) / Decimal(period_days))
+                for flow_date, amount in flows
+                if flow_date <= current_date
+            ),
+            Decimal(0),
+        )
+        if opening_value + weighted_flow <= 0:
+            return False
+    return True
+
+
+def _parse_position_alpha(
+    data: dict[str, object],
+    *,
+    meta: V1Meta | None = None,
+    expected_start: str | None = None,
+    expected_end: str | None = None,
+) -> PositionAlpha:
+    provenance = _analytics_provenance(
+        meta,
+        embedded_methodology=data.get("methodology"),
+        embedded_methodology_version=data.get("methodology_version"),
+    )
+    raw_status = data.get("calculation_status")
+    raw_reasons = data.get("calculation_reason_codes")
+    if not isinstance(raw_reasons, list):
+        reason_codes: list[str] = []
+        reasons_valid = False
+    else:
+        raw_reason_items = cast("list[object]", raw_reasons)
+        if not all(isinstance(code, str) for code in raw_reason_items):
+            reason_codes = []
+            reasons_valid = False
+        else:
+            reason_codes = list(dict.fromkeys(cast("list[str]", raw_reason_items)))
+            reasons_valid = all(code in _POSITION_REASON_CODES for code in reason_codes)
+
+    compatibility_issue: str | None = None
+    if raw_status is None:
+        compatibility_issue = "missing_calculation_status"
+    elif raw_status not in ("available", "unavailable"):
+        compatibility_issue = "unknown_calculation_status"
+    elif not reasons_valid:
+        compatibility_issue = "invalid_calculation_reason_codes"
+    elif (
+        data.get("methodology") != _POSITION_METHODOLOGY
+        or data.get("methodology_version") != _POSITION_METHODOLOGY_VERSION
+        or (
+            meta is not None
+            and (
+                meta.methodology != _POSITION_METHODOLOGY
+                or meta.methodology_version != _POSITION_METHODOLOGY_VERSION
+            )
+        )
+    ):
+        compatibility_issue = "unsupported_methodology"
+    elif raw_status == "unavailable":
+        if not reason_codes:
+            compatibility_issue = "unavailable_without_reason"
+        return _position_alpha_rejected(
+            data,
+            reason_codes=reason_codes,
+            compatibility_issue=compatibility_issue,
+            provenance=provenance,
+        )
+    elif (expected_start is not None and _s(data.get("start_date")) != expected_start) or (
+        expected_end is not None and _s(data.get("end_date")) != expected_end
+    ):
+        compatibility_issue = "returned_window_mismatch"
+    elif reason_codes:
+        compatibility_issue = "available_with_reason_codes"
+
+    if compatibility_issue is not None:
+        return _position_alpha_rejected(
+            data,
+            reason_codes=[code for code in reason_codes if code in _POSITION_REASON_CODES],
+            compatibility_issue=compatibility_issue,
+            provenance=provenance,
+        )
+
+    raw_rows = _dicts(data.get("rows"))
     rows = [
         PositionAlphaRow(
             ticker=_s(r.get("ticker")),
@@ -1164,23 +2185,123 @@ def _parse_position_alpha(data: dict[str, object]) -> PositionAlpha:
             value_at_end=_f(r.get("value_at_end")),
             actual_pl=_f(r.get("actual_pl")),
             spy_counterfactual_pl=_f(r.get("spy_counterfactual_pl")),
+            qqq_counterfactual_pl=_f(r.get("qqq_counterfactual_pl")),
+            policy_counterfactual_pl=_f(r.get("policy_counterfactual_pl")),
             alpha=_f(r.get("alpha")),
             alpha_vs_qqq=_f(r.get("alpha_vs_qqq")),
             alpha_vs_policy=_f(r.get("alpha_vs_policy")),
             incomplete=bool(r.get("incomplete")),
         )
-        for r in _dicts(data.get("rows"))
+        for r in raw_rows
     ]
+    raw_series = _dicts(data.get("series"))
+    matched_data = data.get("matched_returns")
+    matched: PositionMatchedReturns | None = None
+    if isinstance(matched_data, dict):
+        matched_values = cast("dict[str, object]", matched_data)
+        candidate = PositionMatchedReturns(
+            dietz_denominator=_f(matched_values.get("dietz_denominator")),
+            portfolio_return_pct=_f(matched_values.get("portfolio_return_pct")),
+            spy_return_pct=_f(matched_values.get("spy_return_pct")),
+            qqq_return_pct=_f(matched_values.get("qqq_return_pct")),
+            policy_return_pct=_f(matched_values.get("policy_return_pct")),
+            alpha_vs_spy_pct=_f(matched_values.get("alpha_vs_spy_pct")),
+            alpha_vs_qqq_pct=_f(matched_values.get("alpha_vs_qqq_pct")),
+            alpha_vs_policy_pct=_f(matched_values.get("alpha_vs_policy_pct")),
+        )
+        if (
+            candidate.dietz_denominator is not None
+            and candidate.dietz_denominator > 0
+            and candidate.portfolio_return_pct is not None
+            and candidate.spy_return_pct is not None
+            and candidate.alpha_vs_spy_pct is not None
+            and _f(data.get("total_actual_pl")) is not None
+            and _f(data.get("total_spy_pl")) is not None
+            and _f(data.get("total_alpha")) is not None
+            and bool(rows)
+            and isinstance(data.get("has_policy"), bool)
+            and all(
+                row.ticker is not None
+                and row.value_at_start is not None
+                and row.bought_in_window is not None
+                and row.sold_in_window is not None
+                and row.value_at_end is not None
+                and row.actual_pl is not None
+                and row.spy_counterfactual_pl is not None
+                and row.alpha is not None
+                and not row.incomplete
+                and isinstance(raw.get("incomplete"), bool)
+                for row, raw in zip(rows, raw_rows, strict=True)
+            )
+            and bool(raw_series)
+            and _position_arithmetic_valid(data, raw_rows, matched_values)
+            and _position_series_valid(data, raw_series, matched_values)
+            and all(
+                _s(point.get("date"))
+                and _f(point.get("portfolio_return_pct")) is not None
+                and _f(point.get("spy_return_pct")) is not None
+                for point in raw_series
+            )
+        ):
+            matched = candidate
+    series = [
+        PositionAlphaTimePoint(
+            date=_s(p.get("date")) or "",
+            portfolio_return_pct=_f(p.get("portfolio_return_pct")),
+            spy_return_pct=_f(p.get("spy_return_pct")),
+            qqq_return_pct=_f(p.get("qqq_return_pct")),
+            policy_return_pct=_f(p.get("policy_return_pct")),
+        )
+        for p in raw_series
+    ]
+    if matched is None:
+        return _position_alpha_rejected(
+            data,
+            reason_codes=[],
+            compatibility_issue="contradictory_available_payload",
+            provenance=provenance,
+        )
+    qqq_benchmark_priced = bool(
+        matched.qqq_return_pct is not None
+        and matched.alpha_vs_qqq_pct is not None
+        and _f(data.get("total_qqq_pl")) is not None
+        and _f(data.get("total_alpha_vs_qqq")) is not None
+        and all(
+            row.qqq_counterfactual_pl is not None and row.alpha_vs_qqq is not None for row in rows
+        )
+        and all(point.qqq_return_pct is not None for point in series)
+    )
+    policy_benchmark_priced = bool(
+        bool(data.get("has_policy"))
+        and matched.policy_return_pct is not None
+        and matched.alpha_vs_policy_pct is not None
+        and _f(data.get("total_policy_pl")) is not None
+        and _f(data.get("total_alpha_vs_policy")) is not None
+        and all(
+            row.policy_counterfactual_pl is not None and row.alpha_vs_policy is not None
+            for row in rows
+        )
+        and all(point.policy_return_pct is not None for point in series)
+    )
     return PositionAlpha(
         start_date=_s(data.get("start_date")),
         end_date=_s(data.get("end_date")),
         has_policy=bool(data.get("has_policy")),
         total_actual_pl=_f(data.get("total_actual_pl")),
         total_spy_pl=_f(data.get("total_spy_pl")),
+        total_qqq_pl=_f(data.get("total_qqq_pl")),
+        total_policy_pl=_f(data.get("total_policy_pl")),
         total_alpha=_f(data.get("total_alpha")),
         total_alpha_vs_qqq=_f(data.get("total_alpha_vs_qqq")),
         total_alpha_vs_policy=_f(data.get("total_alpha_vs_policy")),
         rows=rows,
+        matched_returns=matched,
+        series=series,
+        qqq_benchmark_priced=qqq_benchmark_priced,
+        policy_benchmark_priced=policy_benchmark_priced,
+        calculation_status="available",
+        calculation_reason_codes=[],
+        provenance=provenance,
     )
 
 
@@ -1275,54 +2396,277 @@ def _parse_policy(data: dict[str, object]) -> PolicyMix:
     )
 
 
-def parse_beta(data: dict[str, object]) -> BetaStats:
+def parse_beta(
+    data: dict[str, object],
+    *,
+    meta: V1Meta | None = None,
+    expected_start: str | None = None,
+    expected_end: str | None = None,
+) -> BetaStats:
     raw_notes = data.get("notes")
     notes = (
         [n for n in cast("list[object]", raw_notes) if isinstance(n, str)]
         if isinstance(raw_notes, list)
         else []
     )
+    raw_status = data.get("calculation_status")
+    raw_reasons = data.get("calculation_reason_codes")
+    reasons_valid = bool(
+        isinstance(raw_reasons, list)
+        and all(isinstance(code, str) for code in cast("list[object]", raw_reasons))
+    )
+    reasons = list(dict.fromkeys(cast("list[str]", raw_reasons))) if reasons_valid else []
+    reasons_valid = reasons_valid and all(code in _BETA_REASON_CODES for code in reasons)
+    compatibility_issue: str | None = None
+    if raw_status is None:
+        compatibility_issue = "missing_calculation_status"
+    elif raw_status not in ("available", "unavailable"):
+        compatibility_issue = "unknown_calculation_status"
+    elif not reasons_valid:
+        compatibility_issue = "invalid_calculation_reason_codes"
+    elif (
+        data.get("methodology") != _RISK_METHODOLOGY
+        or data.get("methodology_version") != _RISK_METHODOLOGY_VERSION
+        or (
+            meta is not None
+            and (
+                meta.methodology != _RISK_METHODOLOGY
+                or meta.methodology_version != _RISK_METHODOLOGY_VERSION
+            )
+        )
+    ):
+        compatibility_issue = "unsupported_methodology"
+    elif (expected_start is not None and _s(data.get("start_date")) != expected_start) or (
+        expected_end is not None and _s(data.get("end_date")) != expected_end
+    ):
+        compatibility_issue = "returned_window_mismatch"
+    elif raw_status == "available" and reasons:
+        compatibility_issue = "available_with_reason_codes"
+    elif raw_status == "unavailable" and not reasons:
+        compatibility_issue = "unavailable_without_reason"
+    elif raw_status == "available":
+        required = {
+            field: _f(data.get(field))
+            for field in (
+                "beta",
+                "alpha_annualized_pct",
+                "r_squared",
+                "correlation",
+                "sharpe",
+                "information_ratio",
+                "portfolio_volatility_annualized",
+                "benchmark_volatility_annualized",
+                "tracking_error_annualized",
+            )
+        }
+        sample_size = _i(data.get("sample_size"))
+        if (
+            not _s(data.get("benchmark"))
+            or sample_size is None
+            or sample_size < 2
+            or _f(data.get("risk_free_annual")) is None
+            or not (
+                data.get("alpha_significant") is None
+                or isinstance(data.get("alpha_significant"), bool)
+            )
+            or not _valid_iso_window(data.get("start_date"), data.get("end_date"))
+            or any(value is None for value in required.values())
+            or not 0 <= cast("float", required["r_squared"]) <= 1
+            or not -1 <= cast("float", required["correlation"]) <= 1
+            or any(
+                cast("float", required[field]) < 0
+                for field in (
+                    "portfolio_volatility_annualized",
+                    "benchmark_volatility_annualized",
+                    "tracking_error_annualized",
+                )
+            )
+        ):
+            compatibility_issue = "contradictory_available_payload"
+    status_available = raw_status == "available" and compatibility_issue is None
+    reason_codes = [code for code in reasons if code in _BETA_REASON_CODES]
+    if compatibility_issue is not None:
+        log.info({"event": "tracker_beta_rejected", "reason": compatibility_issue})
     return BetaStats(
         benchmark=_s(data.get("benchmark")),
         start_date=_s(data.get("start_date")),
         end_date=_s(data.get("end_date")),
         sample_size=_i(data.get("sample_size")),
         risk_free_annual=_f(data.get("risk_free_annual")),
-        beta=_f(data.get("beta")),
-        alpha_annualized_pct=_f(data.get("alpha_annualized_pct")),
-        alpha_t_stat=_f(data.get("alpha_t_stat")),
-        alpha_std_error_annualized_pct=_f(data.get("alpha_std_error_annualized_pct")),
-        alpha_significant=_b(data.get("alpha_significant")),
-        r_squared=_f(data.get("r_squared")),
-        correlation=_f(data.get("correlation")),
-        sharpe=_f(data.get("sharpe")),
-        sortino=_f(data.get("sortino")),
-        information_ratio=_f(data.get("information_ratio")),
-        portfolio_volatility_annualized=_f(data.get("portfolio_volatility_annualized")),
-        benchmark_volatility_annualized=_f(data.get("benchmark_volatility_annualized")),
-        tracking_error_annualized=_f(data.get("tracking_error_annualized")),
+        beta=_f(data.get("beta")) if status_available else None,
+        alpha_annualized_pct=_f(data.get("alpha_annualized_pct")) if status_available else None,
+        alpha_t_stat=_f(data.get("alpha_t_stat")) if status_available else None,
+        alpha_std_error_annualized_pct=(
+            _f(data.get("alpha_std_error_annualized_pct")) if status_available else None
+        ),
+        alpha_significant=_b(data.get("alpha_significant")) if status_available else None,
+        r_squared=_f(data.get("r_squared")) if status_available else None,
+        correlation=_f(data.get("correlation")) if status_available else None,
+        sharpe=_f(data.get("sharpe")) if status_available else None,
+        sortino=_f(data.get("sortino")) if status_available else None,
+        information_ratio=_f(data.get("information_ratio")) if status_available else None,
+        portfolio_volatility_annualized=(
+            _f(data.get("portfolio_volatility_annualized")) if status_available else None
+        ),
+        benchmark_volatility_annualized=(
+            _f(data.get("benchmark_volatility_annualized")) if status_available else None
+        ),
+        tracking_error_annualized=(
+            _f(data.get("tracking_error_annualized")) if status_available else None
+        ),
         notes=notes,
+        calculation_status="available" if status_available else "unavailable",
+        calculation_reason_codes=reason_codes,
+        provenance=_analytics_provenance(
+            meta,
+            embedded_methodology=data.get("methodology"),
+            embedded_methodology_version=data.get("methodology_version"),
+        ),
+        compatibility_issue=compatibility_issue,
     )
 
 
-def _parse_drawdown(data: dict[str, object]) -> Drawdown:
-    underwater = [
-        UnderwaterPoint(date=_s(p.get("date")) or "", drawdown_pct=_f(p.get("drawdown_pct")))
-        for p in _dicts(data.get("underwater"))
+def _parse_drawdown(
+    data: dict[str, object],
+    *,
+    meta: V1Meta | None = None,
+    expected_start: str | None = None,
+    expected_end: str | None = None,
+) -> Drawdown:
+    raw_status = data.get("calculation_status")
+    raw_reasons = data.get("calculation_reason_codes")
+    reasons_valid = bool(
+        isinstance(raw_reasons, list)
+        and all(isinstance(code, str) for code in cast("list[object]", raw_reasons))
+    )
+    reasons = list(dict.fromkeys(cast("list[str]", raw_reasons))) if reasons_valid else []
+    reasons_valid = reasons_valid and all(
+        code in (_PERFORMANCE_REASON_CODES | {"insufficient_return_observations"})
+        for code in reasons
+    )
+    compatibility_issue: str | None = None
+    if raw_status is None:
+        compatibility_issue = "missing_calculation_status"
+    elif raw_status not in ("available", "unavailable"):
+        compatibility_issue = "unknown_calculation_status"
+    elif not reasons_valid:
+        compatibility_issue = "invalid_calculation_reason_codes"
+    elif (
+        data.get("methodology") != _RISK_METHODOLOGY
+        or data.get("methodology_version") != _RISK_METHODOLOGY_VERSION
+        or (
+            meta is not None
+            and (
+                meta.methodology != _RISK_METHODOLOGY
+                or meta.methodology_version != _RISK_METHODOLOGY_VERSION
+            )
+        )
+    ):
+        compatibility_issue = "unsupported_methodology"
+    elif (expected_start is not None and _s(data.get("start_date")) != expected_start) or (
+        expected_end is not None and _s(data.get("end_date")) != expected_end
+    ):
+        compatibility_issue = "returned_window_mismatch"
+    elif raw_status == "available" and reasons:
+        compatibility_issue = "available_with_reason_codes"
+    elif raw_status == "unavailable" and not reasons:
+        compatibility_issue = "unavailable_without_reason"
+    elif raw_status == "available":
+        max_drawdown = _f(data.get("max_drawdown_pct"))
+        current_drawdown = _f(data.get("current_drawdown_pct"))
+        curve = [
+            value
+            for point in _dicts(data.get("underwater"))
+            if (value := _f(point.get("drawdown_pct"))) is not None
+        ]
+        if (
+            max_drawdown is None
+            or current_drawdown is None
+            or _f(data.get("annualized_return_pct")) is None
+            or max_drawdown > current_drawdown
+            or current_drawdown > 0
+            or not _drawdown_points_valid(data)
+            or not curve
+            or abs(min(curve) - max_drawdown) > 0.0001
+            or abs(curve[-1] - current_drawdown) > 0.0001
+        ):
+            compatibility_issue = "contradictory_available_payload"
+    status_available = raw_status == "available" and compatibility_issue is None
+    reason_codes = [
+        code
+        for code in reasons
+        if code in (_PERFORMANCE_REASON_CODES | {"insufficient_return_observations"})
     ]
+    if compatibility_issue is not None:
+        log.info({"event": "tracker_drawdown_rejected", "reason": compatibility_issue})
+    underwater = (
+        [
+            UnderwaterPoint(date=_s(p.get("date")) or "", drawdown_pct=_f(p.get("drawdown_pct")))
+            for p in _dicts(data.get("underwater"))
+        ]
+        if status_available
+        else []
+    )
     return Drawdown(
         start_date=_s(data.get("start_date")),
         end_date=_s(data.get("end_date")),
-        max_drawdown_pct=_f(data.get("max_drawdown_pct")),
-        peak_date=_s(data.get("peak_date")),
-        trough_date=_s(data.get("trough_date")),
-        recovery_date=_s(data.get("recovery_date")),
-        days_to_recovery=_i(data.get("days_to_recovery")),
-        current_drawdown_pct=_f(data.get("current_drawdown_pct")),
-        annualized_return_pct=_f(data.get("annualized_return_pct")),
-        calmar=_f(data.get("calmar")),
+        max_drawdown_pct=_f(data.get("max_drawdown_pct")) if status_available else None,
+        peak_date=_s(data.get("peak_date")) if status_available else None,
+        trough_date=_s(data.get("trough_date")) if status_available else None,
+        recovery_date=_s(data.get("recovery_date")) if status_available else None,
+        days_to_recovery=_i(data.get("days_to_recovery")) if status_available else None,
+        current_drawdown_pct=(_f(data.get("current_drawdown_pct")) if status_available else None),
+        annualized_return_pct=(_f(data.get("annualized_return_pct")) if status_available else None),
+        calmar=_f(data.get("calmar")) if status_available else None,
         underwater=underwater,
+        calculation_status="available" if status_available else "unavailable",
+        calculation_reason_codes=reason_codes,
+        provenance=_analytics_provenance(
+            meta,
+            embedded_methodology=data.get("methodology"),
+            embedded_methodology_version=data.get("methodology_version"),
+        ),
+        compatibility_issue=compatibility_issue,
     )
+
+
+def _enforce_risk_window_agreement(analytics: PortfolioAnalytics) -> None:
+    """Reject a risk bundle whose beta and drawdown periods do not match."""
+    beta = analytics.beta
+    drawdown = analytics.drawdown
+    if (
+        beta is None
+        or drawdown is None
+        or (beta.start_date == drawdown.start_date and beta.end_date == drawdown.end_date)
+    ):
+        return
+    beta.calculation_status = "unavailable"
+    beta.compatibility_issue = "returned_window_mismatch"
+    beta.beta = None
+    beta.alpha_annualized_pct = None
+    beta.alpha_t_stat = None
+    beta.alpha_std_error_annualized_pct = None
+    beta.alpha_significant = None
+    beta.r_squared = None
+    beta.correlation = None
+    beta.sharpe = None
+    beta.sortino = None
+    beta.information_ratio = None
+    beta.portfolio_volatility_annualized = None
+    beta.benchmark_volatility_annualized = None
+    beta.tracking_error_annualized = None
+    drawdown.calculation_status = "unavailable"
+    drawdown.compatibility_issue = "returned_window_mismatch"
+    drawdown.max_drawdown_pct = None
+    drawdown.peak_date = None
+    drawdown.trough_date = None
+    drawdown.recovery_date = None
+    drawdown.days_to_recovery = None
+    drawdown.current_drawdown_pct = None
+    drawdown.annualized_return_pct = None
+    drawdown.calmar = None
+    drawdown.underwater = []
+    log.info({"event": "tracker_risk_rejected", "reason": "returned_window_mismatch"})
 
 
 def _parse_exit_quality(data: dict[str, object]) -> ExitQuality:
@@ -1538,7 +2882,10 @@ def fetch_drawdown(
         window["end_date"] = end_date
     suffix = f"?{urlencode(window)}" if window else ""
     return _fetch_section(
-        f"/api/portfolio/drawdown{suffix}", _parse_drawdown, api_url=api_url, timeout=timeout
+        f"/api/portfolio/drawdown{suffix}",
+        lambda data: _parse_drawdown(data, expected_start=start_date, expected_end=end_date),
+        api_url=api_url,
+        timeout=timeout,
     )
 
 
@@ -1915,7 +3262,12 @@ def _fetch_portfolio_analytics_v1(
             client, start_date=start_date, end_date=end_date, include_backfill=include_backfill
         )
         if perf.available and perf.data is not None:
-            out.performance = _parse_performance(_dump_model(perf.data.series))
+            out.performance = _parse_performance(
+                _dump_model(perf.data.series),
+                meta=perf.meta,
+                expected_start=start_date,
+                expected_end=end_date,
+            )
             note_meta(perf.meta)
             # Only meaningful when the caller took the rebase path: an explicit
             # window or include_backfill is the caller OWNING the window, not
@@ -1928,9 +3280,20 @@ def _fetch_portfolio_analytics_v1(
         else:
             out.errors["performance"] = f"v1: {perf.error}"
     if want("position_alpha"):
-        alpha = client.get_position_performance(start_date=start_date, end_date=end_date)
+        if out.performance is not None and start_date is None:
+            alpha_start = out.performance.start_date
+            alpha_end = out.performance.end_date
+        else:
+            alpha_start = start_date
+            alpha_end = end_date
+        alpha = client.get_position_performance(start_date=alpha_start, end_date=alpha_end)
         if alpha.available and alpha.data is not None:
-            out.position_alpha = _parse_position_alpha(_dump_model(alpha.data.result))
+            out.position_alpha = _parse_position_alpha(
+                _dump_model(alpha.data.result),
+                meta=alpha.meta,
+                expected_start=alpha_start,
+                expected_end=alpha_end,
+            )
             note_meta(alpha.meta)
         else:
             out.errors["position_alpha"] = f"v1: {alpha.error}"
@@ -1952,9 +3315,19 @@ def _fetch_portfolio_analytics_v1(
         risk = client.get_risk(start_date=start_date, end_date=end_date)
         if risk.available and risk.data is not None:
             if want("beta"):
-                out.beta = parse_beta(_dump_model(risk.data.beta))
+                out.beta = parse_beta(
+                    _dump_model(risk.data.beta),
+                    meta=risk.meta,
+                    expected_start=start_date,
+                    expected_end=end_date,
+                )
             if want("drawdown"):
-                out.drawdown = _parse_drawdown(_dump_model(risk.data.drawdown))
+                out.drawdown = _parse_drawdown(
+                    _dump_model(risk.data.drawdown),
+                    meta=risk.meta,
+                    expected_start=start_date,
+                    expected_end=end_date,
+                )
             note_meta(risk.meta)
         else:
             if want("beta"):
@@ -1969,6 +3342,7 @@ def _fetch_portfolio_analytics_v1(
         else:
             out.errors["exit_quality"] = f"v1: {exit_q.error}"
 
+    _enforce_risk_window_agreement(out)
     out.available = any(
         section is not None
         for section in (

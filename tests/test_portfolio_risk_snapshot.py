@@ -168,6 +168,7 @@ def _populated_analytics() -> PortfolioAnalytics:
             PerformancePoint("2026-01-01", 10.0, None, None, None),
             PerformancePoint("2026-03-01", -5.0, None, None, None),  # underwater
         ],
+        calculation_status="available",
     )
     pos = Positioning(
         snapshot_date="2026-06-10",
@@ -209,6 +210,7 @@ def _populated_analytics() -> PortfolioAnalytics:
         benchmark_volatility_annualized=0.15,
         tracking_error_annualized=0.08,
         notes=[],
+        calculation_status="available",
     )
     return PortfolioAnalytics(
         available=True, api_url="http://x", performance=perf, positioning=pos, beta=beta
@@ -222,8 +224,14 @@ def test_risk_panel_persists_snapshot_on_successful_fetch(
 
     # Wave B (B4b): a liveness probe now gates the data walk — mark it up so
     # the patched fetcher is reached.
-    monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: (True, "http://x"))
-    monkeypatch.setattr(pp, "fetch_portfolio_analytics", lambda **_kw: _populated_analytics())
+    def probe_tracker(_api_url: str | None = None) -> tuple[bool, str]:
+        return True, "http://x"
+
+    def fetch_analytics(**_kwargs: object) -> PortfolioAnalytics:
+        return _populated_analytics()
+
+    monkeypatch.setattr(pp, "probe_tracker", probe_tracker)
+    monkeypatch.setattr(pp, "fetch_portfolio_analytics", fetch_analytics)
     html = pp.render_portfolio_risk_panel(api_url="http://x", db_path=migrated_db)
     assert "Factor &amp; style exposure" in html  # live render
     snap = read_latest_snapshot(db_path=migrated_db)

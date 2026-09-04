@@ -23,6 +23,7 @@ from execution.tracker_v1_parity import (
     compare_live,
 )
 from integrations import portfolio_tracker_client as tc
+from pipeline.portfolio_panel import render_portfolio_analytics_sections
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "tracker_v1"
 
@@ -252,8 +253,20 @@ def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
     assert analytics.positioning is not None
     assert analytics.positioning.concentration is not None
     assert analytics.beta is not None and analytics.beta.benchmark == "SPY"
+    assert analytics.beta.calculation_status == "available"
+    assert analytics.beta.provenance is not None
+    assert analytics.beta.provenance.as_of == "2026-07-22"
+    assert analytics.beta.provenance.source_providers == ("plaid", "snaptrade")
+    assert analytics.beta.provenance.included_account_count == 3
     assert analytics.drawdown is not None
-    assert analytics.drawdown.max_drawdown_pct == pytest.approx(-31.90)
+    risk_fixture = _fixture("risk")
+    expected_drawdown = cast("dict[str, object]", risk_fixture["drawdown"])
+    assert analytics.drawdown.calculation_status == "available"
+    assert analytics.drawdown.calculation_reason_codes == []
+    assert analytics.drawdown.provenance == analytics.beta.provenance
+    assert analytics.drawdown.max_drawdown_pct == pytest.approx(
+        float(cast("str", expected_drawdown["max_drawdown_pct"]))
+    )
     assert analytics.policy is not None and analytics.policy.total_pct == pytest.approx(100.0)
     assert legacy_calls == [f"{analytics.api_url}/api/policy"]
     # beta + drawdown share ONE /analytics/risk read.
@@ -262,6 +275,23 @@ def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
     # Envelope aggregated across sections.
     assert analytics.as_of is not None
     assert analytics.is_stale is False
+    rendered = render_portfolio_analytics_sections(analytics)
+    # The fixtures deliberately diverge. Whole-account Modified Dietz owns the
+    # sole headline/chart; position price/trade return is secondary detail.
+    assert analytics.performance.points[-1].portfolio_return_pct == pytest.approx(11.1573501)
+    assert analytics.position_alpha.matched_returns is not None
+    assert analytics.position_alpha.matched_returns.portfolio_return_pct == pytest.approx(4.6418)
+    assert "Whole-portfolio cash-flow-matched return" in rendered
+    assert "+11.2%" in rendered
+    assert "+4.6%" in rendered
+    assert rendered.index("+11.2%") < rendered.index("Position drivers")
+    assert rendered.index("Position drivers") < rendered.index("+4.6%")
+    assert "method: performance.modified_dietz v2" in rendered
+    assert "method: position_alpha.split_normalized_price_trade_modified_dietz v3" in rendered
+    assert "Analytics as of 2026-07-22" in rendered
+    assert "providers: plaid, snaptrade" in rendered
+    assert "accounts: 3 included, 1 excluded, 0 lagging" in rendered
+    assert "method: risk.beta_drawdown v2" in rendered
 
 
 def test_analytics_v1_per_section_isolation(v1_on: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,6 +306,33 @@ def test_analytics_v1_per_section_isolation(v1_on: None, monkeypatch: pytest.Mon
     assert analytics.performance is not None
     assert analytics.beta is None
     assert "beta" in analytics.errors and analytics.errors["beta"].startswith("v1:")
+
+
+def test_analytics_v1_explicit_window_mismatch_fails_closed(
+    v1_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/analytics/performance": _fixture("performance"),
+            "/api/v1/analytics/risk": _fixture("risk"),
+        },
+    )
+    analytics = tc.fetch_portfolio_analytics(
+        start_date="2026-01-01",
+        end_date="2026-07-23",
+        only={"performance", "beta", "drawdown"},
+    )
+
+    assert analytics.performance is not None
+    assert analytics.performance.compatibility_issue == "returned_window_mismatch"
+    assert analytics.performance.points == []
+    assert analytics.beta is not None
+    assert analytics.beta.compatibility_issue == "returned_window_mismatch"
+    assert analytics.beta.beta is None
+    assert analytics.drawdown is not None
+    assert analytics.drawdown.compatibility_issue == "returned_window_mismatch"
+    assert analytics.drawdown.underwater == []
 
 
 def test_exit_quality_v1_standalone_carries_envelope(
@@ -385,6 +442,7 @@ class _PerfRouter:
     def payload(self, start: str | None) -> dict[str, object]:
         series = dict(cast("dict[str, object]", self._base["series"]))
         effective = start or self.probe_start
+        end = cast("str", series["end_date"])
         series["start_date"] = effective
         # earliest_observed_date is WINDOW-RELATIVE on the real provider: it
         # never precedes the requested window start.
@@ -392,8 +450,83 @@ class _PerfRouter:
         if observed is not None and observed < effective:
             observed = effective
         series["earliest_observed_date"] = observed
-        points = cast("list[dict[str, object]]", series["points"])
-        series["points"] = [p for p in points if str(p["date"]) >= effective]
+        series["base_value"] = "100.00"
+        series["net_external_cashflow_in"] = "0.00"
+        series["points"] = [
+            {
+                "date": effective,
+                "portfolio_value": "100.00",
+                "portfolio_return_pct": "0",
+                "spy_return_pct": "0",
+                "qqq_return_pct": "0",
+                "policy_return_pct": None,
+                "spy_equivalent_value": "100.00",
+                "qqq_equivalent_value": "100.00",
+                "policy_equivalent_value": None,
+            },
+            {
+                "date": end,
+                "portfolio_value": "110.00",
+                "portfolio_return_pct": "10",
+                "spy_return_pct": "5",
+                "qqq_return_pct": "6",
+                "policy_return_pct": None,
+                "spy_equivalent_value": "105.00",
+                "qqq_equivalent_value": "106.00",
+                "policy_equivalent_value": None,
+            },
+        ]
+        def price_inputs(ticker: str) -> list[dict[str, str]]:
+            return [
+                {
+                    "ticker": ticker,
+                    "target_date": target_date,
+                    "source_date": target_date,
+                    "close": "100.00",
+                    "resolution": "same_day_close",
+                }
+                for target_date in (effective, end)
+            ]
+        series["equation_receipt"] = {
+            "calculation_id": "calc-router",
+            "external_flow_ledger_id": "ledger-router",
+            "portfolio_valuation_input_id": "valuation-router",
+            "included_account_ids": series["valuation_account_ids"],
+            "requested_start_date": effective,
+            "requested_end_date": end,
+            "benchmark_price_resolution_policy": "same_day_or_previous_us_market_close",
+            "opening_value": "100.00",
+            "dated_external_cashflows": [],
+            "net_external_cashflow_in": "0.00",
+            "ending_value": "110.00",
+            "investment_gain": "10.00",
+            "modified_dietz_denominator": "100.00",
+            "portfolio_return_pct": "10",
+            "portfolio_equation_residual": "0",
+            "spy": {
+                "benchmark": "SPY",
+                "ending_value": "105.00",
+                "investment_gain": "5.00",
+                "return_pct": "5",
+                "dollar_alpha": "5.00",
+                "percentage_point_alpha": "5",
+                "equation_residual": "0",
+                "price_input_id": "spy-router",
+                "price_inputs": price_inputs("SPY"),
+            },
+            "qqq": {
+                "benchmark": "QQQ",
+                "ending_value": "106.00",
+                "investment_gain": "6.00",
+                "return_pct": "6",
+                "dollar_alpha": "4.00",
+                "percentage_point_alpha": "4",
+                "equation_residual": "0",
+                "price_input_id": "qqq-router",
+                "price_inputs": price_inputs("QQQ"),
+            },
+            "policy": None,
+        }
         return {"meta": self._base["meta"], "series": series}
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
