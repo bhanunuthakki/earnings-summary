@@ -135,10 +135,6 @@ class FetchQaOutcome:
     result: FetchQaResult | None = None
 
 
-class TranscriptCollectionPolicyError(TranscriptAcquisitionDeniedError):
-    """The stored role or reported-quarter window denied a network fetch."""
-
-
 def _request_for_source(
     spec: FetchQaSpec,
     *,

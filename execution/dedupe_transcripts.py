@@ -65,22 +65,6 @@ _MANIFEST_DIR = PROJECT_ROOT / ".tmp" / "dedupe_transcripts"
 
 
 @dataclass
-class RowView:
-    transcript_id: int
-    document_id: int
-    ticker: str
-    fiscal_period_type: str | None
-    period_end: str | None
-    file_path: str
-    doc_type: str
-    fetched_at: str | None
-    stored_source: str | None
-    segment_count: int
-    resolved_source: str
-    broken_file: bool
-
-
-@dataclass
 class SupersededRow:
     transcript_id: int
     document_id: int
