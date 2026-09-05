@@ -101,8 +101,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 259,
-      "fingerprint": "49cc7641f4e1348e76211e015f4e9d076d7562d5314a736af332b9d9aa4d9283",
+      "line": 266,
+      "fingerprint": "f92d107839a0973ec60fed8077ee342d420bef29abfe21e0841d90c2af889594",
       "disposition": "internal_python_target",
       "target": ".github/scripts/ci_gate.py",
       "command_family": "managed Python child",
@@ -110,8 +110,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 525,
-      "fingerprint": "e67758f3bc1bac4c9368dded8eb5036e0319e1986fb2b7251b93372ca2868bce",
+      "line": 532,
+      "fingerprint": "51b4d5526ce01a1d4e1b1d213ed8b47e29d586eb04ca48287f6e0016d486e3d6",
       "disposition": "closed_command_set",
       "target": "pytest over the frozen cohort",
       "command_family": "schema-validated pytest argv",
@@ -876,8 +876,8 @@
     },
     {
       "path": "tests/test_test_ci_performance.py",
-      "line": 241,
-      "fingerprint": "0e6024a1d1e29c94dd0b8da927c394cb83dc949ed62dd495363c23fb95eb1af9",
+      "line": 259,
+      "fingerprint": "cdb7b88eeb54a7224ece7fca59e777c19a5eb6b466ecc9a58661148aa5566e04",
       "disposition": "internal_python_target",
       "targets": [
         "execution/capture_test_ci_performance.py",

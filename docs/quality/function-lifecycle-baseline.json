@@ -242,20 +242,20 @@
     }
   ],
   "counts": {
-    "protected": 11762,
-    "referenced": 15735,
+    "protected": 11764,
+    "referenced": 15736,
     "unknown": 6382,
     "unreferenced-static-candidate": 15
   },
   "files_failed": [],
   "files_scanned": 2472,
-  "inventory_hash": "542ff36dc3db19479eb7655eaa402b2c27e0a917a31d796f77e52c903b9fc764",
+  "inventory_hash": "46ebc3b6abc31c8f0efd7f00344565c40c73fbbf39ba58e58bb14d72d1da418c",
   "parser_version": "python-ast-3.11-v3",
-  "revision": "1baee2d3849a7299ac44e3ea0580f68bf0ef224f",
+  "revision": "5a9c100dc09053ef7e1b6908f82f95a464927c84",
   "schema_version": "bha-109.v1",
   "status": "PASS",
-  "symbol_count": 33894,
-  "tracked_tree_hash": "9567586898bac38da610d2917d1c5f81d6bc9f7aa535987d9b5c23e99d7b5d0f",
+  "symbol_count": 33897,
+  "tracked_tree_hash": "633fb33e1dfda9f57c7ee95802d198634612da0d68df1cfc6132c1d42341b07b",
   "unknown_hazard_counts": {
     "class-method-dispatch": 563,
     "cli-entrypoint": 414,

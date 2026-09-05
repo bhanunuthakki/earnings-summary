@@ -44,7 +44,7 @@
       "endpoint": null,
       "owner_evidence": null,
       "invocation_evidence": null,
-      "incoming_edge": "execution/capture_test_ci_performance.py:259:unknown",
+      "incoming_edge": "execution/capture_test_ci_performance.py:266:unknown",
       "sealed_completion_evidence": null,
       "tombstone_consumer": null,
       "tombstone_expiry": null,
@@ -21790,11 +21790,11 @@
     },
     {
       "path": "src/quality/architecture.py",
-      "line": 683,
+      "line": 686,
       "kind": "python_module",
       "identifier": "src/quality/architecture.py",
       "evidence": "parser = argparse.ArgumentParser(description=__doc__)",
-      "fingerprint": "c2e6b4cb3cdf8318075f7137f032be81e6fe7c68c33f14ab2d0e2b6b4cd6aaa2",
+      "fingerprint": "ee2313ba9a2f0fb9c79261a569d9649f553ee5dbcac1bd350850153524f61feb",
       "disposition": "internal-delegate",
       "classification_basis": "typed_incoming_edge",
       "rationale": "A verified typed edge retains this internal delegate.",
@@ -23315,16 +23315,16 @@
     "reconstruction": 56,
     "registry": 68
   },
-  "tracked_tree_hash": "d3a9b159c00eb6bc6a7a5361347d98548a947060409f94067939373fddd57b46",
-  "revision": "1baee2d3849a7299ac44e3ea0580f68bf0ef224f",
+  "tracked_tree_hash": "3c7198b20b19fdfc8218732c91e053875cc4ad76f9311a4e3d74520c20ed0df0",
+  "revision": "5a9c100dc09053ef7e1b6908f82f95a464927c84",
   "worktree_dirty": true,
-  "reachability_graph_hash": "8749e7f360311c48f67a9dd63a4530e4b60c0352b7548cc5adcbbab40f5f21fa",
+  "reachability_graph_hash": "586c93a98ab354a9062ed96b1148818b12040a23c2d08143fac82a0ff343c20b",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.1.0",
     "python": ">=3.11",
-    "source_sha256": "62d654a050198b5f74aaa8dd680fd9066aaaf5dbbeabf352c0a28d1dd37d394a",
-    "dispositions_sha256": "497691ca2a353de122b79c0ff078dcddaa9f89ca974f93ce8ca222e951736357"
+    "source_sha256": "5f19b43f759d33ff7904f772e0713c68bc77ca9db38ddb5f42d02b4907cacb93",
+    "dispositions_sha256": "a957ef4dfb6f74d0c4531d17fe7fe725392d746cb48607e3d4173830a58a46ea"
   },
   "coverage": {
     "candidates": 836,
