@@ -313,7 +313,9 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "Run quality ratchets" in workflow
     assert "make quality-ratchets" in workflow
     assert "trusted_loader" in workflow
-    assert "--collect-only -q -n 2 --dist=loadfile --durations=25" in workflow
+    assert "python -m pytest --collect-only -q --disable-warnings" in population_step
+    assert "-n 2" not in population_step
+    assert "--dist=loadfile" not in population_step
     assert "len(node_payload) != len(set(node_payload))" in workflow
     assert "nodes = sorted(set(node_payload))" not in workflow
     assert '--fragments-dir "$RUNNER_TEMP/test-ci-performance/' in workflow
@@ -377,4 +379,14 @@ def test_ci_performance_receipts_are_uploaded_without_becoming_a_gate() -> None:
     assert "Upload raw test CI performance evidence" in workflow
     assert "name: test-ci-performance-${{ matrix.label }}" in workflow
     assert "if: ${{ always() }}" in workflow
+    upload_step = workflow.split(
+        "      - name: Upload raw test CI performance evidence\n", maxsplit=1
+    )[1].split("\n  design:", maxsplit=1)[0]
+    assert ".tmp/quality/test-ci-performance/${{ matrix.label }}/receipt.json" in upload_step
+    runner_temp_root = "${{ runner.temp }}/test-ci-performance/${{ matrix.label }}/**/"
+    assert f"{runner_temp_root}worker-*.json" in upload_step
+    assert f"{runner_temp_root}pytest.stdout" in upload_step
+    assert f"{runner_temp_root}pytest.stderr" in upload_step
+    assert "if-no-files-found: error" in upload_step
+    assert "if-no-files-found: ignore" not in upload_step
     assert "evidence_status" not in workflow

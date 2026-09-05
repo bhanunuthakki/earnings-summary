@@ -244,8 +244,8 @@ jobs:
               NO_NETWORK=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
               PYTHONPATH="$population_dir" LD_PRELOAD="$CI_SQLITE_PRELOAD" \
               CI_POPULATION_NODES="$nodes" \
-              python -m pytest --collect-only -q -n 2 --dist=loadfile --durations=25 \
-              --disable-warnings -p "${trusted_loader[0]}" -p ci_population_plugin \
+              python -m pytest --collect-only -q --disable-warnings \
+              -p "${trusted_loader[0]}" -p ci_population_plugin \
               "${selected[@]}"
           population="$population_dir/expected-population.json"
           POPULATION_PATH="$population" POPULATION_NODES="$nodes" \
@@ -317,8 +317,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-ci-performance-${{ matrix.label }}
-          path: .tmp/quality/test-ci-performance/**
-          if-no-files-found: ignore
+          path: |
+            .tmp/quality/test-ci-performance/${{ matrix.label }}/receipt.json
+            ${{ runner.temp }}/test-ci-performance/${{ matrix.label }}/**/worker-*.json
+            ${{ runner.temp }}/test-ci-performance/${{ matrix.label }}/**/pytest.stdout
+            ${{ runner.temp }}/test-ci-performance/${{ matrix.label }}/**/pytest.stderr
+          if-no-files-found: error
 
   design:
     name: Design Sync
