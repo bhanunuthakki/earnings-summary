@@ -8,7 +8,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.0.0",
       "python": "3.14.7",
-      "source_sha256": "5827c6db8cbee906c06fca3ca5ba902b98e4ca602b7cb3b391cf9c9898251c1e"
+      "source_sha256": "19397cd5682407978cf3c2b0aa9ad51b93ca8588fdbbf34c7c41ee3bf45e22fe"
     }
   },
   "scope": {
@@ -20,9 +20,9 @@
     ]
   },
   "counts": {
-    "graph_unknown_getattr": 47,
+    "graph_unknown_getattr": 49,
     "dispositions": {
-      "closed_literal_set": 26,
+      "closed_literal_set": 28,
       "external_adapter": 3,
       "unresolved": 0,
       "schema_field": 12,
@@ -32,6 +32,24 @@
   },
   "residual_unresolved": [],
   "edges": [
+    {
+      "path": "src/earnings_surprise_store.py",
+      "line": 148,
+      "target": "<dynamic attribute>",
+      "fingerprint": "6dab249dd256b4609012fbcf9b625cd8ccaeeb9e267ff801026d45552700986d",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "eps_estimate, eps_actual, revenue_estimate, revenue_actual, eps_surprise_pct, revenue_surprise_pct",
+      "evidence": "The decimal validation loop supplies only the persisted earnings-surprise field tuple."
+    },
+    {
+      "path": "src/earnings_surprise_store.py",
+      "line": 168,
+      "target": "<dynamic attribute>",
+      "fingerprint": "3df50ec566bfa14b46265e9e1a1ada3d1e64b7136ba66986982fa90de41ee2a8",
+      "disposition": "closed_literal_set",
+      "allowed_attributes": "num_analysts_eps, num_analysts_revenue",
+      "evidence": "The analyst-count validation loop supplies only its checked-in two-field tuple."
+    },
     {
       "path": "execution/build_holdco_sotp.py",
       "line": 428,
@@ -259,11 +277,11 @@
     },
     {
       "path": "src/earnings_surprise_store.py",
-      "line": 195,
+      "line": 258,
       "target": "<dynamic attribute>",
-      "fingerprint": "f88f090e808fcfa26ef1ec9907ce5fb95fe557cd6a55423543f7336cdc5f1d8e",
+      "fingerprint": "0da289720fdea5b11ed150126a03df67dbb101bf30149edc18fd0201df87692f",
       "disposition": "closed_literal_set",
-      "allowed_attributes": "eps_estimate, eps_actual, eps_surprise, eps_surprise_percent",
+      "allowed_attributes": "eps_estimate, eps_actual, revenue_estimate, revenue_actual, eps_surprise_pct, revenue_surprise_pct",
       "evidence": "The tuple literal is the persisted earnings-surprise field set."
     },
     {
