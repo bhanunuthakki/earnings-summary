@@ -58,4 +58,4 @@ def test_explicit_escalation_opt_in_allows_third_higher_tier_call(
     assert result == {"ok": True}
     assert len(calls) == 3
     assert calls[2]["model"] is not None
-    assert calls[2]["backend"] == "claude"
+    assert calls[2]["backend"] is None
