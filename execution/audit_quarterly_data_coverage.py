@@ -206,14 +206,22 @@ def _attempts_are_sufficient(
         )
     if reason_code == "reacquired_transcript_conflicts_with_canonical_bytes":
         by_provider = {attempt.provider: attempt.status for attempt in attempts}
-        return by_provider == {
-            "issuer_ir": (
-                CoverageAttemptStatus.IDEMPOTENT_REPLAY
-                if CoverageAttemptStatus.IDEMPOTENT_REPLAY in statuses
-                else CoverageAttemptStatus.ACQUIRED
-            ),
-            "canonical_processed_path": CoverageAttemptStatus.FAILED,
+        issuer_status = by_provider.pop("issuer_ir", None)
+        canonical_status = by_provider.pop("canonical_processed_path", None)
+        expected_fallbacks = {
+            source.name for source in TRANSCRIPT_SOURCES if source.name != "issuer_ir"
         }
+        return (
+            len(attempts) == len({attempt.provider for attempt in attempts})
+            and issuer_status
+            in {
+                CoverageAttemptStatus.ACQUIRED,
+                CoverageAttemptStatus.IDEMPOTENT_REPLAY,
+            }
+            and canonical_status is CoverageAttemptStatus.FAILED
+            and set(by_provider) <= expected_fallbacks
+            and set(by_provider.values()) <= {CoverageAttemptStatus.POLICY_DENIED}
+        )
     return CoverageAttemptStatus.FAILED in statuses
 
 

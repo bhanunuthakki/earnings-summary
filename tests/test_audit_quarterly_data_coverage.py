@@ -404,6 +404,42 @@ def test_reacquired_canonical_collision_is_valid_but_actionable() -> None:
     assert reasons == ["disposition_not_accepted_for_closure"]
 
 
+def test_reacquired_canonical_collision_accepts_automatic_policy_denials() -> None:
+    attempts = (
+        CoverageAttempt(
+            provider="roic",
+            status=CoverageAttemptStatus.POLICY_DENIED,
+            authorization_key="transcript:" + "b" * 64,
+        ),
+        CoverageAttempt(
+            provider="stockanalysis",
+            status=CoverageAttemptStatus.POLICY_DENIED,
+            authorization_key="transcript:" + "c" * 64,
+        ),
+        CoverageAttempt(
+            provider="tickertrends",
+            status=CoverageAttemptStatus.POLICY_DENIED,
+            authorization_key="transcript:" + "d" * 64,
+        ),
+        CoverageAttempt(
+            provider="issuer_ir",
+            status=CoverageAttemptStatus.ACQUIRED,
+            authorization_key="transcript:" + "a" * 64,
+        ),
+        CoverageAttempt(
+            provider="canonical_processed_path",
+            status=CoverageAttemptStatus.FAILED,
+        ),
+    )
+
+    assert audit._attempts_are_sufficient(  # pyright: ignore[reportPrivateUsage]
+        artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
+        status=CoverageDispositionStatus.OPERATIONAL_ERROR,
+        reason_code="reacquired_transcript_conflicts_with_canonical_bytes",
+        attempts=attempts,
+    )
+
+
 def test_legacy_surprise_projection_is_not_source_complete(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
