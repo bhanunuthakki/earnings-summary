@@ -45,6 +45,15 @@ from ir_pipeline.config import IrConfig, get_config
 from ir_pipeline.discover import discover_history_hybrid
 from ir_pipeline.discover._docmeta import classify, filename_for_url
 from ir_pipeline.manifest import load_manifest
+from transcripts import reviewed_issuer_policy as _reviewed_issuer_policy
+
+# Keep the historical ``ir_pipeline.transcript`` imports available while the
+# policy itself lives in the lower, dependency-free authority module.
+ReviewedIssuerTranscript = _reviewed_issuer_policy.ReviewedIssuerTranscript
+reviewed_issuer_transcript = _reviewed_issuer_policy.reviewed_issuer_transcript
+reviewed_issuer_transcript_url_is_authorized = (
+    _reviewed_issuer_policy.reviewed_issuer_transcript_url_is_authorized
+)
 
 # src/ir_pipeline/transcript.py → repo root is parents[2] (mirrors config.py).
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -81,63 +90,6 @@ class IrTranscriptHit:
     page_url: str
     qa_text: str
     filename: str
-
-
-@dataclass(frozen=True)
-class ReviewedIssuerTranscript:
-    """One exact issuer-owned transcript URL admitted by manual source review."""
-
-    ticker: str
-    year: int
-    quarter: int
-    url: str
-    filename: str
-
-
-_REVIEWED_ISSUER_TRANSCRIPTS = (
-    ReviewedIssuerTranscript(
-        ticker="BN",
-        year=2026,
-        quarter=2,
-        url=(
-            "https://bn.brookfield.com/sites/brookfield-bn-v2/files/"
-            "Brookfield-BN-IR-V2/2026/Q2/BN%20Q2-2026-transcript.pdf"
-        ),
-        filename="BN Q2 2026 transcript.pdf",
-    ),
-)
-
-
-def reviewed_issuer_transcript(
-    ticker: str, year: int, quarter: int
-) -> ReviewedIssuerTranscript | None:
-    normalized = ticker.strip().upper()
-    return next(
-        (
-            item
-            for item in _REVIEWED_ISSUER_TRANSCRIPTS
-            if (item.ticker, item.year, item.quarter) == (normalized, year, quarter)
-        ),
-        None,
-    )
-
-
-def reviewed_issuer_transcript_url_is_authorized(
-    ticker: str,
-    year: int,
-    quarter: int,
-    source_url: str,
-) -> bool:
-    """Return True only for an exact URL in the reviewed issuer transcript set."""
-
-    from pipeline.source_policy import canonical_https_url
-
-    candidate = canonical_https_url(source_url)
-    return candidate is not None and any(
-        (item.ticker, item.year, item.quarter) == (ticker.strip().upper(), year, quarter)
-        and canonical_https_url(item.url) == candidate
-        for item in _REVIEWED_ISSUER_TRANSCRIPTS
-    )
 
 
 def _normalize(raw: str) -> str:

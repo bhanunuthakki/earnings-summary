@@ -420,6 +420,8 @@ jobs:
         run: |
           pip install --require-hashes -r requirements.lock
           pip install -e .[dev]
+      - name: Exercise pre-push hook
+        run: sh .githooks/test_pre_push.sh
       - name: LLM eval coverage - no new registered gaps
         # Provider-free registry check: adding a purpose to either LLM_MODELS
         # or prompt_versions must include a real quality eval in the same PR.

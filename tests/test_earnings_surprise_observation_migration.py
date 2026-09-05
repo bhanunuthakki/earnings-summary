@@ -15,8 +15,8 @@ from alembic.config import Config
 from alembic import command
 from earnings_surprise_store import EarningsSurpriseRecordV1, append_observation
 from execution.ingest_earnings_surprises import (
-    _persist_ingested_coverage,  # pyright: ignore[reportPrivateUsage] - migration seam
     ingest_one_ticker,
+    persist_ingested_coverage,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -187,7 +187,7 @@ def test_satisfied_coverage_requires_persisted_observation_and_projection(
                 observation_id,
             ),
         )
-        persisted = _persist_ingested_coverage(
+        persisted = persist_ingested_coverage(
             connection,
             ticker="WIX",
             observed_at=datetime(2026, 9, 5, tzinfo=UTC),
@@ -304,7 +304,7 @@ def test_legacy_projection_cannot_emit_satisfied_coverage(
     )
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
-        persisted = _persist_ingested_coverage(
+        persisted = persist_ingested_coverage(
             connection,
             ticker="WIX",
             observed_at=datetime(2026, 9, 5, tzinfo=UTC),

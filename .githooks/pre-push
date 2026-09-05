@@ -71,6 +71,19 @@ EOF
   [ "$status" -eq 0 ] || exit 1
 fi
 
+# Git exports repository-local variables while invoking hooks.  They must not
+# leak into tests that create or inspect a different repository with `git -C`.
+git_local_env_vars=$(git rev-parse --local-env-vars 2>/dev/null) || {
+  printf 'PRE-PUSH FAILED: unable to resolve repository-local Git environment variables.\n' >&2
+  exit 1
+}
+run_without_git_env() (
+  for var in $git_local_env_vars; do
+    unset "$var"
+  done
+  run "$@"
+)
+
 # The whole-repo strict Pyright comparison remains a CI ratchet because the
 # checkout carries a reviewed legacy baseline. Full tests are the local default;
 # FAST_PUSH=1 keeps the existing changed-test inner loop.
@@ -80,12 +93,12 @@ if [ "${FAST_PUSH:-0}" = "1" ]; then
     'instruction_tests/**/test_*.py' 2>/dev/null || true)
   if [ -n "$changed_tests" ]; then
     # shellcheck disable=SC2086
-    run "$python_bin" -m pytest -q $changed_tests
+    run_without_git_env "$python_bin" -m pytest -q $changed_tests || exit 1
   else
     printf 'FAST_PUSH=1: no changed test files — skipping full pytest suite.\n' >&2
   fi
 else
-  run "$python_bin" -m pytest -q
+  run_without_git_env "$python_bin" -m pytest -q || exit 1
 fi
 
 printf 'pre-push gate passed.\n' >&2

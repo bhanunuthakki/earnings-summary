@@ -58,16 +58,12 @@ def _no_disposition(_conn: sqlite3.Connection, **_kwargs: object) -> dict[str, o
 
 
 def test_reporting_season_maps_non_calendar_fye_to_exact_issuer_quarter() -> None:
-    assert audit._season_target(  # pyright: ignore[reportPrivateUsage] - direct unit seam
-        reporting_year=2026, reporting_quarter=2, fye_month=12
-    ) == (
+    assert audit.season_target(reporting_year=2026, reporting_quarter=2, fye_month=12) == (
         2026,
         2,
         date(2026, 6, 30),
     )
-    assert audit._season_target(  # pyright: ignore[reportPrivateUsage] - direct unit seam
-        reporting_year=2026, reporting_quarter=2, fye_month=1
-    ) == (
+    assert audit.season_target(reporting_year=2026, reporting_quarter=2, fye_month=1) == (
         2027,
         1,
         date(2026, 4, 30),
@@ -136,15 +132,8 @@ def test_false_satisfied_ledger_is_invalid_but_truthful_gap_is_distinct() -> Non
         "evidence_sha256": None,
     }
 
-    assert (
-        audit._classify_artifact(  # pyright: ignore[reportPrivateUsage] - direct unit seam
-            missing, satisfied
-        )[0]
-        == "invalid"
-    )
-    assert audit._classify_artifact(  # pyright: ignore[reportPrivateUsage] - direct unit seam
-        missing, truthful
-    ) == (
+    assert audit.classify_artifact(missing, satisfied)[0] == "invalid"
+    assert audit.classify_artifact(missing, truthful) == (
         "accepted_truthful_disposition",
         [],
     )
@@ -261,7 +250,7 @@ def test_latest_disposition_rejects_wrong_target_policy_attempts_and_identities(
                 "2026-09-01T00:00:01.000000Z",
             ),
         )
-        disposition = audit._latest_disposition(  # pyright: ignore[reportPrivateUsage]
+        disposition = audit.latest_disposition(
             conn,
             ticker="BN",
             fiscal_year=2026,
@@ -290,7 +279,7 @@ def test_latest_disposition_accepts_exact_current_policy_and_canonical_identitie
     db_path = migrated_db(tmp_path / "portfolio.db")
     providers = ("issuer_ir", "roic", "stockanalysis", "tickertrends")
     observed_at = datetime(2026, 9, 1, tzinfo=UTC)
-    authorization_keys = audit._transcript_authorization_keys(  # pyright: ignore[reportPrivateUsage]
+    authorization_keys = audit.transcript_authorization_keys(
         ticker="BN",
         fiscal_year=2026,
         fiscal_quarter=2,
@@ -337,7 +326,7 @@ def test_latest_disposition_accepts_exact_current_policy_and_canonical_identitie
             ),
             recorded_at=observed_at,
         )
-        disposition = audit._latest_disposition(  # pyright: ignore[reportPrivateUsage]
+        disposition = audit.latest_disposition(
             conn,
             ticker="BN",
             fiscal_year=2026,
@@ -358,12 +347,12 @@ def test_repair_disposition_rejects_acquired_attempts() -> None:
         for provider in ("issuer_ir", "roic", "stockanalysis", "tickertrends")
     )
 
-    assert not audit._attempts_are_sufficient(  # pyright: ignore[reportPrivateUsage]
+    assert not audit.attempts_are_sufficient(
         artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
         status=CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING,
         attempts=attempts,
     )
-    assert audit._reason_matches_status(  # pyright: ignore[reportPrivateUsage]
+    assert audit.reason_matches_status(
         artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
         status=CoverageDispositionStatus.SATISFIED,
         reason_code="authorized_processed_transcript_with_segments",
@@ -402,7 +391,7 @@ def test_legacy_surprise_projection_is_not_source_complete(
     )
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        evidence = audit._surprise_evidence(  # pyright: ignore[reportPrivateUsage]
+        evidence = audit.surprise_evidence(
             conn,
             ticker="BN",
             period_end=date(2026, 6, 30),

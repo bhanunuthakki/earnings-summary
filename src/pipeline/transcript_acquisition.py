@@ -56,6 +56,12 @@ from transcripts.immutable_staging import (
     read_staged_transcript,
     stage_transcript_artifact,
 )
+from transcripts.receipt_sqlite import (
+    project_root_for_database,
+    register_transcript_receipt_sqlite_functions,
+    register_transcript_receipt_validator,
+)
+from transcripts.reviewed_issuer_policy import reviewed_issuer_transcript_url_is_authorized
 
 _STRICT_FROZEN = ConfigDict(
     extra="forbid",
@@ -370,13 +376,6 @@ def _receipt_id(artifact_json: str) -> str:
     return hashlib.sha256(artifact_json.encode("utf-8")).hexdigest()
 
 
-def project_root_for_database(database_path: str | os.PathLike[str]) -> Path:
-    """Derive the trusted repository root from the canonical database location."""
-
-    path = Path(database_path).resolve()
-    return path.parent.parent if path.parent.name.lower() == "data" else path.parent
-
-
 def issuer_transcript_source_url_is_authorized(
     ticker: str,
     source_url: str,
@@ -390,8 +389,6 @@ def issuer_transcript_source_url_is_authorized(
     candidate = canonical_https_url(source_url)
     if candidate is None:
         return False
-    from ir_pipeline.transcript import reviewed_issuer_transcript_url_is_authorized
-
     if (
         fiscal_year is not None
         and fiscal_quarter is not None
@@ -459,114 +456,102 @@ def _receipt_paths_are_safe(
     return True
 
 
-def register_transcript_receipt_sqlite_functions(
-    conn: sqlite3.Connection,
-    *,
-    database_path: str | os.PathLike[str],
-) -> None:
-    """Register deterministic validation used by the receipt INSERT trigger."""
+def _validate_transcript_receipt(project_root: Path, values: tuple[object, ...]) -> int:
+    """Validate one receipt trigger call at the acquisition boundary."""
 
-    project_root = project_root_for_database(database_path)
-
-    def validate(
-        receipt_id: object,
-        idempotency_key: object,
-        document_id: object,
-        canonical_ticker: object,
-        fiscal_year: object,
-        fiscal_quarter: object,
-        canonical_document_path: object,
-        artifact_sha256: object,
-        artifact_size_bytes: object,
-        source_url: object,
-        provider: object,
-        source_type: object,
-        document_type: object,
-        source_regime: object,
-        source_regime_contract_sha256: object,
-        authorization_json: object,
-        artifact_json: object,
-        recorded_at: object,
-    ) -> int:
-        try:
-            if not isinstance(authorization_json, str) or not isinstance(artifact_json, str):
-                return 0
-            authorization = TranscriptAcquisitionAuthorization.model_validate_json(
-                authorization_json
-            )
-            authorization = validate_transcript_acquisition_authorization(authorization)
-            artifact = AuthorizedTranscriptArtifact.model_validate_json(artifact_json)
-            if artifact.authorization != authorization:
-                return 0
-            request = authorization.request
-            scalar_values = (
-                receipt_id,
-                idempotency_key,
-                document_id,
-                canonical_ticker,
-                fiscal_year,
-                fiscal_quarter,
-                canonical_document_path,
-                artifact_sha256,
-                artifact_size_bytes,
-                source_url,
-                provider,
-                source_type,
-                document_type,
-                source_regime,
-                source_regime_contract_sha256,
-            )
-            expected_values = (
-                _receipt_id(_durable_artifact_json(artifact)),
-                transcript_authorization_idempotency_key(request),
-                artifact.document_id,
-                request.canonical_ticker,
-                request.fiscal_year,
-                request.fiscal_quarter,
-                artifact.canonical_document_path.as_posix(),
-                artifact.sha256,
-                artifact.size_bytes,
-                artifact.source_url,
-                request.provider.value,
-                request.source_type.value,
-                request.document_type.value,
-                request.source_regime_identity.regime.value,
-                request.source_regime_identity.contract_sha256,
-            )
-            if scalar_values != expected_values:
-                return 0
-            if authorization_json != _canonical_json(authorization.model_dump(mode="json")):
-                return 0
-            if artifact_json != _durable_artifact_json(artifact):
-                return 0
-            if not isinstance(recorded_at, str) or _UTC_TIMESTAMP.fullmatch(recorded_at) is None:
-                return 0
-            parsed_recorded_at = datetime.strptime(recorded_at, "%Y-%m-%dT%H:%M:%S.%fZ")
-            if parsed_recorded_at.tzinfo is not None:
-                return 0
-            if not _receipt_paths_are_safe(artifact, project_root=project_root):
-                return 0
-            if request.provider is TranscriptProvider.ISSUER_IR and (
-                artifact.source_url is None
-                or not issuer_transcript_source_url_is_authorized(
-                    request.canonical_ticker,
-                    artifact.source_url,
-                    project_root=project_root,
-                    fiscal_year=request.fiscal_year,
-                    fiscal_quarter=request.fiscal_quarter,
-                )
-            ):
-                return 0
-        except (OSError, TypeError, ValueError):
+    (
+        receipt_id,
+        idempotency_key,
+        document_id,
+        canonical_ticker,
+        fiscal_year,
+        fiscal_quarter,
+        canonical_document_path,
+        artifact_sha256,
+        artifact_size_bytes,
+        source_url,
+        provider,
+        source_type,
+        document_type,
+        source_regime,
+        source_regime_contract_sha256,
+        authorization_json,
+        artifact_json,
+        recorded_at,
+    ) = values
+    try:
+        if not isinstance(authorization_json, str) or not isinstance(artifact_json, str):
             return 0
-        return 1
+        authorization = TranscriptAcquisitionAuthorization.model_validate_json(authorization_json)
+        authorization = validate_transcript_acquisition_authorization(authorization)
+        artifact = AuthorizedTranscriptArtifact.model_validate_json(artifact_json)
+        if artifact.authorization != authorization:
+            return 0
+        request = authorization.request
+        scalar_values = (
+            receipt_id,
+            idempotency_key,
+            document_id,
+            canonical_ticker,
+            fiscal_year,
+            fiscal_quarter,
+            canonical_document_path,
+            artifact_sha256,
+            artifact_size_bytes,
+            source_url,
+            provider,
+            source_type,
+            document_type,
+            source_regime,
+            source_regime_contract_sha256,
+        )
+        expected_values = (
+            _receipt_id(_durable_artifact_json(artifact)),
+            transcript_authorization_idempotency_key(request),
+            artifact.document_id,
+            request.canonical_ticker,
+            request.fiscal_year,
+            request.fiscal_quarter,
+            artifact.canonical_document_path.as_posix(),
+            artifact.sha256,
+            artifact.size_bytes,
+            artifact.source_url,
+            request.provider.value,
+            request.source_type.value,
+            request.document_type.value,
+            request.source_regime_identity.regime.value,
+            request.source_regime_identity.contract_sha256,
+        )
+        if scalar_values != expected_values:
+            return 0
+        if authorization_json != _canonical_json(authorization.model_dump(mode="json")):
+            return 0
+        if artifact_json != _durable_artifact_json(artifact):
+            return 0
+        if not isinstance(recorded_at, str) or _UTC_TIMESTAMP.fullmatch(recorded_at) is None:
+            return 0
+        parsed_recorded_at = datetime.strptime(recorded_at, "%Y-%m-%dT%H:%M:%S.%fZ")
+        if parsed_recorded_at.tzinfo is not None:
+            return 0
+        if not _receipt_paths_are_safe(artifact, project_root=project_root):
+            return 0
+        if request.provider is TranscriptProvider.ISSUER_IR and (
+            artifact.source_url is None
+            or not issuer_transcript_source_url_is_authorized(
+                request.canonical_ticker,
+                artifact.source_url,
+                project_root=project_root,
+                fiscal_year=request.fiscal_year,
+                fiscal_quarter=request.fiscal_quarter,
+            )
+        ):
+            return 0
+    except (OSError, TypeError, ValueError):
+        return 0
+    return 1
 
-    conn.create_function(
-        "transcript_receipt_valid",
-        18,
-        validate,
-        deterministic=True,
-    )
+
+register_transcript_receipt_validator(_validate_transcript_receipt)
 
 
 def persist_authorized_transcript_artifact(

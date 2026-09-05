@@ -400,6 +400,11 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "name: CI Gate" in workflow
     assert "name: Public Boundary" in workflow
     assert "python execution/verify_public_tree.py" in workflow
+    assert "- name: Exercise pre-push hook" in workflow
+    assert "run: sh .githooks/test_pre_push.sh" in workflow
+    assert workflow.index("- name: Exercise pre-push hook") < workflow.index(
+        "- name: LLM eval coverage - no new registered gaps"
+    )
     assert (
         "needs: [changes, public-boundary, tests, design, quality, typecheck, security]" in workflow
     )
