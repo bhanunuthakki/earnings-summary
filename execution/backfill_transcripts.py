@@ -62,6 +62,7 @@ from llm.prompt_versions import prompt_version_for  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from pipeline.commitment_scan_receipts import (  # noqa: E402
     current_commitment_scan_receipt,
+    current_transcript_scan_binding,
 )
 from pipeline.data_coverage_dispositions import (  # noqa: E402
     COMMITMENT_SCAN_POLICY_NAME,
@@ -189,6 +190,17 @@ class CommitmentScanTarget:
     transcript_id: int
 
 
+class CommitmentScanSelectionError(RuntimeError):
+    """A fiscal period has more than one selected transcript."""
+
+    def __init__(self, transcript_ids: tuple[int, ...]) -> None:
+        self.transcript_ids = transcript_ids
+        super().__init__(
+            "ambiguous_selected_transcript: transcript_ids="
+            + ",".join(str(transcript_id) for transcript_id in transcript_ids)
+        )
+
+
 @dataclass
 class TickerBackfillResult:
     ticker: str
@@ -304,44 +316,48 @@ def _ingested_evidence(
     conn = db.get_connection()
     try:
         try:
+            relation = selected_transcripts_relation(conn).sql
             rows = conn.execute(
-                "SELECT d.id, d.file_path, d.sha256, r.receipt_id FROM documents AS d "
-                "JOIN transcripts AS t ON t.document_id=d.id "
-                "JOIN transcript_acquisition_receipts AS r "
-                "ON r.canonical_ticker=UPPER(t.ticker) "
-                "AND r.fiscal_year=? AND r.fiscal_quarter=? "
-                "AND r.artifact_sha256=d.sha256 "
-                "AND (r.document_id IS NULL OR r.document_id=d.id) "
+                "SELECT t.id AS transcript_id,d.id AS document_id,d.file_path,d.sha256 "
+                f"FROM {relation} AS t "  # nosec B608 -- repository-owned selection relation
+                "JOIN documents AS d ON d.id=t.document_id "
                 "WHERE UPPER(d.ticker)=? AND UPPER(t.ticker)=? "
                 "AND t.fiscal_period_type=? AND date(t.period_end)=date(?) "
                 "AND t.is_current=1 AND d.file_path=? "
-                "AND r.provider='issuer_ir' AND r.source_type='ir_doc' "
-                "AND r.document_type='earnings_call_transcript' "
-                "AND r.canonical_document_path=? "
                 "AND EXISTS ("
                 "SELECT 1 FROM transcript_segments AS s WHERE s.transcript_id=t.id"
-                ") ORDER BY d.id DESC, r.recorded_at DESC, r.receipt_id DESC",
+                ") ORDER BY d.id DESC,t.id DESC",
                 (
-                    year,
-                    quarter,
                     ticker.upper(),
                     ticker.upper(),
                     f"Q{quarter}",
                     period_end,
                     f"transcripts/processed/{ticker.upper()}_Q{quarter}_{year}.txt",
-                    f"transcripts/raw/{ticker.upper()}_Q{quarter}_{year}.txt",
                 ),
             ).fetchall()
+            bindings = {
+                int(row["transcript_id"]): current_transcript_scan_binding(
+                    conn, int(row["transcript_id"])
+                )
+                for row in rows
+            }
         except sqlite3.OperationalError:
             return None
     finally:
         conn.close()
     root = Path(db.PROJECT_ROOT).resolve()
     for row in rows:
+        binding = bindings[int(row["transcript_id"])]
+        if (
+            binding is None
+            or binding.document_id != int(row["document_id"])
+            or binding.transcript_sha256 != str(row["sha256"])
+        ):
+            continue
         snapshot = snapshot_recorded_evidence(root, str(row["file_path"]))
         if snapshot is not None and snapshot.sha256 == str(row["sha256"]):
             return TranscriptEvidence(
-                reference=f"transcript-receipt:{row['receipt_id']}",
+                reference=(f"transcript-receipt:{binding.transcript_acquisition_receipt_id}"),
                 sha256=snapshot.sha256,
             )
     return None
@@ -832,7 +848,10 @@ def _transcript_id_for_period(
             "ORDER BY id",
             (ticker.upper(), f"Q{quarter}", period_end),
         ).fetchall()
-        return int(rows[0]["id"]) if len(rows) == 1 else None
+        transcript_ids = tuple(int(row["id"]) for row in rows)
+        if len(transcript_ids) > 1:
+            raise CommitmentScanSelectionError(transcript_ids)
+        return transcript_ids[0] if transcript_ids else None
     finally:
         conn.close()
 
@@ -845,12 +864,18 @@ def _commitment_scan_targets(
     pending: list[CommitmentScanTarget] = []
     for result in results:
         for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
-            transcript_id = _transcript_id_for_period(
-                result.ticker,
-                year,
-                quarter,
-                result.fye_month,
-            )
+            try:
+                transcript_id = _transcript_id_for_period(
+                    result.ticker,
+                    year,
+                    quarter,
+                    result.fye_month,
+                )
+            except CommitmentScanSelectionError as exc:
+                result.errors.append(
+                    f"{_qlabel(year, quarter)}: commitment scan selection failed: {exc}"
+                )
+                continue
             if (
                 transcript_id is not None
                 and (_ingested_evidence(result.ticker, year, quarter, result.fye_month) is not None)
