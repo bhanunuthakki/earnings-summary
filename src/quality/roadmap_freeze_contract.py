@@ -64,12 +64,12 @@ LOC_TARGET_CAPS = {
     "src/pipeline/portfolio_panel.py": 200,
 }
 TYPE_DEBT_AUTHORITY_PATH = "docs/quality/type-debt-membership-authority.json"
-TYPE_DEBT_AUTHORITY_SHA256 = "0fd4e594d1708ece4f3e04255b366bf3e5a42b39f3e552c7c69c6240ffbfac96"
+TYPE_DEBT_AUTHORITY_SHA256 = "9cb0bab9c95e2e6793325394c55abf3f6be9c3d397de9e6a2325997c99136a64"
 TYPE_DEBT_EVIDENCE_ALGORITHM = "pyright-generalDiagnostics/v1"
 FROZEN_TYPE_DEBT_AUTHORITY_SHA256 = (
-    "36c76e08424a3c7d63d180150165afca72d1c17c7beecef81dc5e720780c2e2a"
+    "b8f77169df0721539b2d5b2718bde0e4fdb828d3b54f70e4f6ae05ad61b88ad8"
 )
-FROZEN_TYPE_DEBT_TOTALS = {"total": 4199, "archived": 175, "all": 4374}
+FROZEN_TYPE_DEBT_TOTALS = {"total": 4192, "archived": 175, "all": 4367}
 
 # Train 0 froze one specific performance run.  The receipt is intentionally
 # under .tmp and may be absent on a fresh checkout, so its absence cannot turn
