@@ -13,10 +13,10 @@ enter transcript collection.
   3. After acquisition, invoke `execution/ingest_transcripts.py` separately
      for each ticker with a new artifact. A quarantined peer ticker cannot
      block the rest of the portfolio batch (ingest remains idempotent on sha256).
-  4. For each ticker with at least one transcript row, invoke
-     `execution/extract_commitments_from_transcript.py --auto --ticker X` to
-     extract forward-looking management commitments from any transcripts that
-     don't yet have any commitments row.
+  4. For each exact transcript in the configured recent-quarter window that
+     lacks a durable scan receipt, invoke
+     `execution/extract_commitments_from_transcript.py --auto --transcript-id X`.
+     Out-of-window historical transcripts are not admitted to this job.
 
 The script is idempotent at every layer:
   - Exact DB/path/SHA evidence skips a period already ingested
@@ -74,6 +74,7 @@ from llm.prompt_versions import prompt_version_for  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from pipeline.commitment_scan_receipts import (  # noqa: E402
     current_commitment_scan_receipt,
+    current_transcript_scan_binding,
 )
 from pipeline.data_coverage_dispositions import (  # noqa: E402
     COMMITMENT_SCAN_POLICY_NAME,
@@ -159,6 +160,42 @@ def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[in
     return out
 
 
+@dataclass(frozen=True)
+class FetchedTranscriptIdentity:
+    label: str
+    receipt_id: str
+    canonical_document_path: str
+    sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class TranscriptArtifactConflict:
+    label: str
+    receipt_id: str
+    reason_code: str
+
+
+@dataclass(frozen=True)
+class CommitmentScanTarget:
+    ticker: str
+    fye_month: int
+    fiscal_year: int
+    fiscal_quarter: int
+    transcript_id: int
+
+
+class CommitmentScanSelectionError(RuntimeError):
+    """A fiscal period has more than one selected transcript."""
+
+    def __init__(self, transcript_ids: tuple[int, ...]) -> None:
+        self.transcript_ids = transcript_ids
+        super().__init__(
+            "ambiguous_selected_transcript: transcript_ids="
+            + ",".join(str(transcript_id) for transcript_id in transcript_ids)
+        )
+
+
 @dataclass
 class TickerBackfillResult:
     ticker: str
@@ -169,6 +206,12 @@ class TickerBackfillResult:
     errors: list[str] = field(default_factory=list[str])
     coverage_dispositions: list[str] = field(default_factory=list[str])
     commitment_scan_dispositions: list[str] = field(default_factory=list[str])
+    fetched_artifacts: list[FetchedTranscriptIdentity] = field(
+        default_factory=list[FetchedTranscriptIdentity]
+    )
+    artifact_conflicts: list[TranscriptArtifactConflict] = field(
+        default_factory=list[TranscriptArtifactConflict]
+    )
 
 
 @dataclass(frozen=True)
@@ -187,6 +230,24 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_processed_path_conflicts(identity: FetchedTranscriptIdentity) -> bool:
+    processed_relative = f"transcripts/processed/{Path(identity.canonical_document_path).name}"
+    conn = db.get_connection()
+    try:
+        recorded = {
+            str(row["sha256"])
+            for row in conn.execute(
+                "SELECT sha256 FROM documents WHERE file_path=?", (processed_relative,)
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    if recorded and recorded != {identity.sha256}:
+        return True
+    processed_path = Path(db.PROJECT_ROOT).resolve() / processed_relative
+    return processed_path.exists() and _sha256(processed_path) != identity.sha256
 
 
 def _recorded_evidence_path(root: Path, recorded: str) -> Path | None:
@@ -250,44 +311,48 @@ def _ingested_evidence(
     conn = db.get_connection()
     try:
         try:
+            relation = selected_transcripts_relation(conn).sql
             rows = conn.execute(
-                "SELECT d.id, d.file_path, d.sha256, r.receipt_id FROM documents AS d "
-                "JOIN transcripts AS t ON t.document_id=d.id "
-                "JOIN transcript_acquisition_receipts AS r "
-                "ON r.canonical_ticker=UPPER(t.ticker) "
-                "AND r.fiscal_year=? AND r.fiscal_quarter=? "
-                "AND r.artifact_sha256=d.sha256 "
-                "AND (r.document_id IS NULL OR r.document_id=d.id) "
+                "SELECT t.id AS transcript_id,d.id AS document_id,d.file_path,d.sha256 "
+                f"FROM {relation} AS t "  # nosec B608 -- repository-owned selection relation
+                "JOIN documents AS d ON d.id=t.document_id "
                 "WHERE UPPER(d.ticker)=? AND UPPER(t.ticker)=? "
                 "AND t.fiscal_period_type=? AND date(t.period_end)=date(?) "
                 "AND t.is_current=1 AND d.file_path=? "
-                "AND r.provider='issuer_ir' AND r.source_type='ir_doc' "
-                "AND r.document_type='earnings_call_transcript' "
-                "AND r.canonical_document_path=? "
                 "AND EXISTS ("
                 "SELECT 1 FROM transcript_segments AS s WHERE s.transcript_id=t.id"
-                ") ORDER BY d.id DESC",
+                ") ORDER BY d.id DESC,t.id DESC",
                 (
-                    year,
-                    quarter,
                     ticker.upper(),
                     ticker.upper(),
                     f"Q{quarter}",
                     period_end,
                     f"transcripts/processed/{ticker.upper()}_Q{quarter}_{year}.txt",
-                    f"transcripts/raw/{ticker.upper()}_Q{quarter}_{year}.txt",
                 ),
             ).fetchall()
+            bindings = {
+                int(row["transcript_id"]): current_transcript_scan_binding(
+                    conn, int(row["transcript_id"])
+                )
+                for row in rows
+            }
         except sqlite3.OperationalError:
             return None
     finally:
         conn.close()
     root = Path(db.PROJECT_ROOT).resolve()
     for row in rows:
+        binding = bindings[int(row["transcript_id"])]
+        if (
+            binding is None
+            or binding.document_id != int(row["document_id"])
+            or binding.transcript_sha256 != str(row["sha256"])
+        ):
+            continue
         snapshot = snapshot_recorded_evidence(root, str(row["file_path"]))
         if snapshot is not None and snapshot.sha256 == str(row["sha256"]):
             return TranscriptEvidence(
-                reference=f"transcript-receipt:{row['receipt_id']}",
+                reference=(f"transcript-receipt:{binding.transcript_acquisition_receipt_id}"),
                 sha256=snapshot.sha256,
             )
     return None
@@ -307,6 +372,7 @@ def _coverage_attempts(hit: object) -> tuple[CoverageAttempt, ...]:
         FetchQaAttemptStatus.DENIED: CoverageAttemptStatus.POLICY_DENIED,
         FetchQaAttemptStatus.PROVIDER_MISS: CoverageAttemptStatus.AUTHORIZED_MISS,
         FetchQaAttemptStatus.ACQUIRED: CoverageAttemptStatus.ACQUIRED,
+        FetchQaAttemptStatus.IDEMPOTENT_REPLAY: CoverageAttemptStatus.IDEMPOTENT_REPLAY,
     }
     for attempt in attempts:
         mapped.append(
@@ -482,7 +548,54 @@ def _backfill_one(
                 )
             continue
         if hit.status in {FetchQaStatus.ACQUIRED, FetchQaStatus.IDEMPOTENT_REPLAY}:
+            if hit.result is None:
+                result.errors.append(f"{label}: acquired transcript omitted exact receipt identity")
+                continue
+            identity = FetchedTranscriptIdentity(
+                label=label,
+                receipt_id=hit.result.receipt_id,
+                canonical_document_path=hit.result.acquired_artifact.canonical_document_path.as_posix(),
+                sha256=hit.result.acquired_artifact.sha256,
+                size_bytes=hit.result.acquired_artifact.size_bytes,
+            )
+            if _canonical_processed_path_conflicts(identity):
+                reason = "reacquired_transcript_conflicts_with_canonical_bytes"
+                attempts = (
+                    *_coverage_attempts(hit),
+                    CoverageAttempt(
+                        provider="canonical_processed_path",
+                        status=CoverageAttemptStatus.FAILED,
+                    ),
+                )
+                try:
+                    result.coverage_dispositions.append(
+                        f"{label}:"
+                        + _persist_coverage_disposition(
+                            ticker=ticker,
+                            year=y,
+                            quarter=q,
+                            fye_month=fye_month,
+                            status=CoverageDispositionStatus.OPERATIONAL_ERROR,
+                            reason_code=reason,
+                            attempts=attempts,
+                            observed_at=observed_at,
+                            retry_after=observed_at + timedelta(days=1),
+                        )
+                    )
+                    result.artifact_conflicts.append(
+                        TranscriptArtifactConflict(
+                            label=label,
+                            receipt_id=identity.receipt_id,
+                            reason_code=reason,
+                        )
+                    )
+                except Exception as exc:
+                    result.errors.append(
+                        f"{label}: coverage disposition: {type(exc).__name__}: {exc}"[:200]
+                    )
+                continue
             result.fetched.append(label)
+            result.fetched_artifacts.append(identity)
             # Acquisition is not completeness. A final disposition is written
             # only after ingest proves current segments, the exact processed
             # bytes, and their authorized acquisition receipt.
@@ -601,7 +714,14 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
     ]
 
 
-def _run_ingest(repo_root: Path, ticker: str, dry_run: bool) -> int:
+def _run_ingest(
+    repo_root: Path,
+    ticker: str,
+    receipt_ids: list[str],
+    dry_run: bool,
+    *,
+    owner_requested: bool,
+) -> int:
     """Ingest newly fetched files for one ticker.
 
     Runs the current code checkout's state adapter while keeping mutable
@@ -611,7 +731,8 @@ def _run_ingest(repo_root: Path, ticker: str, dry_run: bool) -> int:
     """
     if dry_run:
         print(
-            f"  [dry-run] would invoke ingest_transcripts.py --ticker {ticker}",
+            f"  [dry-run] would invoke ingest_transcripts.py --ticker {ticker} "
+            f"for {len(receipt_ids)} exact receipts",
             file=sys.stderr,
         )
         return 0
@@ -623,18 +744,28 @@ def _run_ingest(repo_root: Path, ticker: str, dry_run: bool) -> int:
         "--ticker",
         ticker,
     ]
+    if owner_requested:
+        cmd.append("--owner-requested")
+    for receipt_id in receipt_ids:
+        cmd.extend(["--receipt-id", receipt_id])
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
 
 
-def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
-    """Run extract_commitments_from_transcript.py --auto --ticker X for one ticker.
+def _run_extract(
+    repo_root: Path,
+    ticker: str,
+    transcript_id: int,
+    dry_run: bool,
+) -> int:
+    """Run commitment extraction for one exact in-window transcript.
 
     Runs current code with an explicit state-root database.
     """
     if dry_run:
         print(
-            f"  [dry-run] would invoke extract_commitments --auto --ticker {ticker}",
+            f"  [dry-run] would invoke extract_commitments --auto "
+            f"--transcript-id {transcript_id} ({ticker})",
             file=sys.stderr,
         )
         return 0
@@ -642,24 +773,13 @@ def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
         *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"),
         "--auto",
-        "--rescan-unreceipted",
-        "--ticker",
-        ticker,
+        "--transcript-id",
+        str(transcript_id),
         "--db",
         str(repo_root / "data" / "portfolio.db"),
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
-
-
-def _ticker_has_transcripts(ticker: str) -> bool:
-    """Return True if there's at least one transcripts row for this ticker."""
-    conn = db.get_connection()
-    try:
-        cur = conn.execute("SELECT 1 FROM transcripts WHERE ticker = ? LIMIT 1", (ticker.upper(),))
-        return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
 def _commitment_scan_evidence(
@@ -705,25 +825,120 @@ def _commitment_scan_evidence(
         conn.close()
 
 
-def _tickers_requiring_commitment_scan(
-    results: list[TickerBackfillResult], today: date, lookback: int
-) -> list[str]:
-    """Select existing exact-period transcripts with no durable scan outcome."""
+def _transcript_id_for_period(
+    ticker: str,
+    year: int,
+    quarter: int,
+    fye_month: int,
+) -> int | None:
+    """Return the one selected transcript for an exact fiscal period."""
 
-    pending: list[str] = []
+    period_end = quarter_end_date(year, quarter, fye_month).isoformat()
+    conn = db.get_connection()
+    try:
+        relation = selected_transcripts_relation(conn).sql
+        rows = conn.execute(
+            f"SELECT id FROM {relation} WHERE UPPER(ticker)=? "  # nosec B608
+            "AND is_current=1 AND fiscal_period_type=? AND date(period_end)=date(?) "
+            "ORDER BY id",
+            (ticker.upper(), f"Q{quarter}", period_end),
+        ).fetchall()
+        transcript_ids = tuple(int(row["id"]) for row in rows)
+        if len(transcript_ids) > 1:
+            raise CommitmentScanSelectionError(transcript_ids)
+        return transcript_ids[0] if transcript_ids else None
+    finally:
+        conn.close()
+
+
+def _commitment_scan_targets(
+    results: list[TickerBackfillResult], today: date, lookback: int
+) -> list[CommitmentScanTarget]:
+    """Select exact in-window transcripts that lack a durable scan outcome."""
+
+    pending: list[CommitmentScanTarget] = []
     for result in results:
         for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
+            try:
+                transcript_id = _transcript_id_for_period(
+                    result.ticker,
+                    year,
+                    quarter,
+                    result.fye_month,
+                )
+            except CommitmentScanSelectionError as exc:
+                result.errors.append(
+                    f"{_qlabel(year, quarter)}: commitment scan selection failed: {exc}"
+                )
+                continue
             if (
-                _transcript_rows_exist(result.ticker, year, quarter, result.fye_month)
+                transcript_id is not None
                 and (_ingested_evidence(result.ticker, year, quarter, result.fye_month) is not None)
                 and (
                     _commitment_scan_evidence(result.ticker, year, quarter, result.fye_month)
                     is None
                 )
             ):
-                pending.append(result.ticker)
-                break
+                pending.append(
+                    CommitmentScanTarget(
+                        ticker=result.ticker,
+                        fye_month=result.fye_month,
+                        fiscal_year=year,
+                        fiscal_quarter=quarter,
+                        transcript_id=transcript_id,
+                    )
+                )
     return pending
+
+
+def _run_commitment_scan_targets(
+    repo_root: Path,
+    targets: list[CommitmentScanTarget],
+    *,
+    dry_run: bool,
+) -> list[dict[str, object]]:
+    """Run and verify each exact target without aborting its peers."""
+
+    results: list[dict[str, object]] = []
+    for target in targets:
+        print(
+            f"[backfill_transcripts] extracting commitments for {target.ticker} "
+            f"transcript_id={target.transcript_id}",
+            file=sys.stderr,
+        )
+        rc = _run_extract(
+            repo_root,
+            target.ticker,
+            target.transcript_id,
+            dry_run,
+        )
+        if (
+            rc == 0
+            and not dry_run
+            and _commitment_scan_evidence(
+                target.ticker,
+                target.fiscal_year,
+                target.fiscal_quarter,
+                target.fye_month,
+            )
+            is None
+        ):
+            print(
+                f"[backfill_transcripts] {target.ticker} transcript_id="
+                f"{target.transcript_id}: extractor returned 0 without exact scan evidence",
+                file=sys.stderr,
+            )
+            rc = 1
+        results.append(
+            {
+                "ticker": target.ticker,
+                "fiscal_year": target.fiscal_year,
+                "fiscal_quarter": target.fiscal_quarter,
+                "transcript_id": target.transcript_id,
+                "rc": rc,
+            }
+        )
+    return results
 
 
 def _persist_commitment_scan_coverage(
@@ -969,15 +1184,21 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    any_fetched = any(r.fetched for r in per_ticker)
+    any_fetched = any(r.fetched_artifacts for r in per_ticker)
     ingest_rc: int | None = None
     ingest_results: list[dict[str, object]] = []
     if any_fetched and not args.skip_ingest:
         print("[backfill_transcripts] running per-ticker transcript ingest", file=sys.stderr)
         for result in per_ticker:
-            if not result.fetched:
+            if not result.fetched_artifacts:
                 continue
-            rc = _run_ingest(repo_root, result.ticker, args.dry_run)
+            rc = _run_ingest(
+                repo_root,
+                result.ticker,
+                [artifact.receipt_id for artifact in result.fetched_artifacts],
+                args.dry_run,
+                owner_requested=args.ticker is not None,
+            )
             if rc == 0 and not args.dry_run and not _fetched_evidence_complete(result):
                 print(
                     f"[backfill_transcripts] {result.ticker}: ingest returned 0 without "
@@ -1005,21 +1226,20 @@ def main() -> int:
     # scan outcome. This catches transcripts that predated the current run as
     # well as artifacts ingested above, while the scan log keeps reruns bounded.
     extract_results: list[dict[str, object]] = []
+    commitment_scan_targets: list[CommitmentScanTarget] = []
     commitment_scan_tickers: set[str] = set()
     if not args.skip_extract and not args.dry_run:
-        commitment_scan_tickers = set(
-            _tickers_requiring_commitment_scan(
-                per_ticker,
-                today,
-                args.lookback_quarters,
-            )
+        commitment_scan_targets = _commitment_scan_targets(
+            per_ticker,
+            today,
+            args.lookback_quarters,
         )
-        for ticker in sorted(commitment_scan_tickers):
-            if not _ticker_has_transcripts(ticker):
-                continue
-            print(f"[backfill_transcripts] extracting commitments for {ticker}", file=sys.stderr)
-            rc = _run_extract(repo_root, ticker, args.dry_run)
-            extract_results.append({"ticker": ticker, "rc": rc})
+        commitment_scan_tickers = {target.ticker for target in commitment_scan_targets}
+        extract_results = _run_commitment_scan_targets(
+            repo_root,
+            commitment_scan_targets,
+            dry_run=args.dry_run,
+        )
         for result in per_ticker:
             try:
                 closed = _persist_commitment_scan_coverage(
@@ -1031,11 +1251,20 @@ def main() -> int:
             except Exception as exc:
                 result.errors.append(f"commitment scan coverage: {type(exc).__name__}: {exc}"[:200])
                 closed = False
-            if result.ticker in commitment_scan_tickers and not closed:
-                for item in extract_results:
-                    if item["ticker"] == result.ticker:
-                        item["rc"] = 1
-                        break
+            if (
+                result.ticker in commitment_scan_tickers
+                and not closed
+                and not any(
+                    item["ticker"] == result.ticker and item["rc"] != 0 for item in extract_results
+                )
+            ):
+                extract_results.append(
+                    {
+                        "ticker": result.ticker,
+                        "phase": "coverage_postcondition",
+                        "rc": 1,
+                    }
+                )
     elif args.skip_extract:
         print("[backfill_transcripts] --skip-extract set; skipping commitments", file=sys.stderr)
 
@@ -1050,6 +1279,7 @@ def main() -> int:
         "extract_results": extract_results,
         "totals": {
             "fetched": sum(len(r.fetched) for r in per_ticker),
+            "artifact_conflicts": sum(len(r.artifact_conflicts) for r in per_ticker),
             "skipped_existing": sum(len(r.skipped_existing) for r in per_ticker),
             "aggregator_misses": sum(len(r.aggregator_misses) for r in per_ticker),
             "errors": sum(len(r.errors) for r in per_ticker),

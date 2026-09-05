@@ -137,6 +137,7 @@ def _attempts_are_sufficient(
     *,
     artifact_kind: CoverageArtifactKind,
     status: CoverageDispositionStatus,
+    reason_code: str,
     attempts: tuple[CoverageAttempt, ...],
 ) -> bool:
     if not attempts:
@@ -203,6 +204,24 @@ def _attempts_are_sufficient(
             and providers == {"transcript_prerequisite"}
             and statuses == {CoverageAttemptStatus.FAILED}
         )
+    if reason_code == "reacquired_transcript_conflicts_with_canonical_bytes":
+        by_provider = {attempt.provider: attempt.status for attempt in attempts}
+        issuer_status = by_provider.pop("issuer_ir", None)
+        canonical_status = by_provider.pop("canonical_processed_path", None)
+        expected_fallbacks = {
+            source.name for source in TRANSCRIPT_SOURCES if source.name != "issuer_ir"
+        }
+        return (
+            len(attempts) == len({attempt.provider for attempt in attempts})
+            and issuer_status
+            in {
+                CoverageAttemptStatus.ACQUIRED,
+                CoverageAttemptStatus.IDEMPOTENT_REPLAY,
+            }
+            and canonical_status is CoverageAttemptStatus.FAILED
+            and set(by_provider) <= expected_fallbacks
+            and set(by_provider.values()) <= {CoverageAttemptStatus.POLICY_DENIED}
+        )
     return CoverageAttemptStatus.FAILED in statuses
 
 
@@ -231,7 +250,11 @@ def _reason_matches_status(
             CoverageArtifactKind.TEXT_TRANSCRIPT,
             CoverageDispositionStatus.OPERATIONAL_ERROR,
         ): frozenset(
-            {"transcript_acquisition_exception", "transcript_ingest_postcondition_failed"}
+            {
+                "reacquired_transcript_conflicts_with_canonical_bytes",
+                "transcript_acquisition_exception",
+                "transcript_ingest_postcondition_failed",
+            }
         ),
         (CoverageArtifactKind.COMMITMENT_SCAN, CoverageDispositionStatus.SATISFIED): frozenset(
             {"commitment_scan_evidence_present"}
@@ -424,6 +447,7 @@ def _latest_disposition(
     if latest_request is not None and not _attempts_are_sufficient(
         artifact_kind=artifact_kind,
         status=latest_request.status,
+        reason_code=latest_request.reason_code,
         attempts=latest_request.attempts,
     ):
         reasons.append("attempts_semantically_insufficient")
@@ -441,6 +465,7 @@ def _latest_disposition(
             CoverageDispositionStatus.SOURCE_UNAVAILABLE,
             CoverageDispositionStatus.POLICY_BLOCKED,
             CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING,
+            CoverageDispositionStatus.OPERATIONAL_ERROR,
         }
     ):
         expected_keys = _transcript_authorization_keys(
@@ -450,7 +475,8 @@ def _latest_disposition(
             period_end=period_end,
         )
         if any(
-            attempt.authorization_key != expected_keys.get(attempt.provider)
+            attempt.provider in expected_keys
+            and attempt.authorization_key != expected_keys[attempt.provider]
             for attempt in latest_request.attempts
         ):
             reasons.append("attempt_authorization_identity_mismatch")

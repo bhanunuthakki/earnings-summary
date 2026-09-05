@@ -87,6 +87,59 @@ def test_transcript_adapter_binds_files_and_db_to_state(
     ]
 
 
+def test_transcript_adapter_forwards_exact_receipt_selectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ingester = _FakeIngester()
+    monkeypatch.setattr(transcript_adapter, "_load_ingester", lambda: ingester)
+    receipts = ("a" * 64, "b" * 64)
+
+    assert (
+        transcript_adapter.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--ticker",
+                "nu",
+                "--receipt-id",
+                receipts[0],
+                "--receipt-id",
+                receipts[1],
+            ]
+        )
+        == 0
+    )
+
+    assert ingester.seen_argv[-4:] == [
+        "--receipt-id",
+        receipts[0],
+        "--receipt-id",
+        receipts[1],
+    ]
+
+
+def test_transcript_adapter_preserves_explicit_owner_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ingester = _FakeIngester()
+    monkeypatch.setattr(transcript_adapter, "_load_ingester", lambda: ingester)
+
+    assert (
+        transcript_adapter.main(
+            ["--repo-root", str(tmp_path), "--ticker", "nu", "--owner-requested"]
+        )
+        == 0
+    )
+
+    assert ingester.seen_argv == [
+        "ingest_transcripts.py",
+        "--db",
+        str(tmp_path / "data/portfolio.db"),
+        "--ticker",
+        "NU",
+    ]
+
+
 def test_transcript_adapter_retargets_real_legacy_candidate_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

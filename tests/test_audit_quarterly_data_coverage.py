@@ -350,12 +350,82 @@ def test_repair_disposition_rejects_acquired_attempts() -> None:
     assert not audit.attempts_are_sufficient(
         artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
         status=CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING,
+        reason_code="canonical_transcript_evidence_missing",
         attempts=attempts,
     )
     assert audit.reason_matches_status(
         artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
         status=CoverageDispositionStatus.SATISFIED,
         reason_code="authorized_processed_transcript_with_segments",
+    )
+
+
+def test_reacquired_canonical_collision_is_valid_but_actionable() -> None:
+    attempts = (
+        CoverageAttempt(
+            provider="issuer_ir",
+            status=CoverageAttemptStatus.ACQUIRED,
+            authorization_key="transcript:" + "a" * 64,
+        ),
+        CoverageAttempt(
+            provider="canonical_processed_path",
+            status=CoverageAttemptStatus.FAILED,
+        ),
+    )
+    reason = "reacquired_transcript_conflicts_with_canonical_bytes"
+
+    assert audit._attempts_are_sufficient(  # pyright: ignore[reportPrivateUsage]
+        artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
+        status=CoverageDispositionStatus.OPERATIONAL_ERROR,
+        reason_code=reason,
+        attempts=attempts,
+    )
+    assert audit._reason_matches_status(  # pyright: ignore[reportPrivateUsage]
+        artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
+        status=CoverageDispositionStatus.OPERATIONAL_ERROR,
+        reason_code=reason,
+    )
+    closure, reasons = audit._classify_artifact(  # pyright: ignore[reportPrivateUsage]
+        {"complete": False},
+        {"valid": True, "status": "operational_error"},
+    )
+    assert closure == "actionable"
+    assert reasons == ["disposition_not_accepted_for_closure"]
+
+
+def test_reacquired_canonical_collision_accepts_automatic_policy_denials() -> None:
+    attempts = (
+        CoverageAttempt(
+            provider="roic",
+            status=CoverageAttemptStatus.POLICY_DENIED,
+            authorization_key="transcript:" + "b" * 64,
+        ),
+        CoverageAttempt(
+            provider="stockanalysis",
+            status=CoverageAttemptStatus.POLICY_DENIED,
+            authorization_key="transcript:" + "c" * 64,
+        ),
+        CoverageAttempt(
+            provider="tickertrends",
+            status=CoverageAttemptStatus.POLICY_DENIED,
+            authorization_key="transcript:" + "d" * 64,
+        ),
+        CoverageAttempt(
+            provider="issuer_ir",
+            status=CoverageAttemptStatus.ACQUIRED,
+            authorization_key="transcript:" + "a" * 64,
+        ),
+        CoverageAttempt(
+            provider="canonical_processed_path",
+            status=CoverageAttemptStatus.FAILED,
+        ),
+    )
+
+    assert audit._attempts_are_sufficient(  # pyright: ignore[reportPrivateUsage]
+        artifact_kind=CoverageArtifactKind.TEXT_TRANSCRIPT,
+        status=CoverageDispositionStatus.OPERATIONAL_ERROR,
+        reason_code="reacquired_transcript_conflicts_with_canonical_bytes",
+        attempts=attempts,
     )
 
 

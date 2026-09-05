@@ -313,6 +313,7 @@ def _run_auto(
     return {
         "targets": len(targets),
         "total_inserted": total_inserted,
+        "failed_targets": sum("error" in result for result in results),
         "dry_run": dry_run,
         "results": results,
     }
@@ -381,7 +382,8 @@ def main(argv: list[str] | None = None) -> int:
                 rescan_unreceipted=args.rescan_unreceipted,
             )
             print(json.dumps(report, indent=2))
-            return 0
+            failed_targets = report.get("failed_targets")
+            return 1 if isinstance(failed_targets, int) and failed_targets > 0 else 0
 
         with open(args.apply, encoding="utf-8") as f:
             payload = json.load(f)
