@@ -5,10 +5,10 @@
     "schema_version": "operational-reachability/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.1.0",
-      "python": ">=3.11"
-    },
-    "source_sha256": "19397cd5682407978cf3c2b0aa9ad51b93ca8588fdbbf34c7c41ee3bf45e22fe"
+      "version": "1.2.0",
+      "python": ">=3.11",
+      "source_sha256": "e21574f52c3ee9da7900b40d53ea74354822b08c7961f5bfeb9835f352b42864"
+    }
   },
   "scope": {
     "source_roots": [

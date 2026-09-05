@@ -1,14 +1,16 @@
 {
   "schema_version": "reachability-dynamic-import-dispositions/v1",
-  "scanner": {
-    "report": ".tmp/quality/reachability-check.json",
-    "report_sha256": "eb504ba3be2b44cc918f899a8ec7b6675ba8685bc6729b3e057f0e9a3d3f57a0",
-    "name": "ast+xml+literal-scanner",
-    "version": "1.0.0",
-    "python": "3.14.7",
-    "source_sha256": "5827c6db8cbee906c06fca3ca5ba902b98e4ca602b7cb3b391cf9c9898251c1e",
-    "fingerprint_algorithm": "sha256(UTF-8({path}:{line}:{source_line.strip()}))"
+  "graph_provenance": {
+    "path": ".tmp/quality/reachability-check.json",
+    "schema_version": "operational-reachability/v1",
+    "parser": {
+      "name": "ast+xml+literal-scanner",
+      "version": "1.2.0",
+      "python": ">=3.11",
+      "source_sha256": "e21574f52c3ee9da7900b40d53ea74354822b08c7961f5bfeb9835f352b42864"
+    }
   },
+  "fingerprint_algorithm": "sha256(UTF-8({path}:{line}:{source_line.strip()}))",
   "disposition_policy": {
     "internal_target": "The call site and checked-in registry prove one or more repository targets.",
     "external_optional_dependency": "The call site imports a package outside src/ and execution, with an explicit optional/runtime boundary.",

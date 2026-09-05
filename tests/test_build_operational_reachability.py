@@ -162,6 +162,31 @@ def _fingerprint(path: str, line: int, source_line: str) -> str:
     return hashlib.sha256(f"{path}:{line}:{source_line.strip()}".encode()).hexdigest()
 
 
+def _disposition_manifest(
+    root: Path,
+    schema_version: str,
+    parser_overrides: dict[str, str] | None = None,
+    **sections: object,
+) -> dict[str, object]:
+    parser = build_graph(root).parser
+    parser_fields = {
+        "name": parser["name"],
+        "version": parser["version"],
+        "python": parser["python"],
+        "source_sha256": parser["source_sha256"],
+    }
+    parser_fields.update(parser_overrides or {})
+    return {
+        "schema_version": schema_version,
+        "graph_provenance": {
+            "path": ".tmp/quality/reachability-check.json",
+            "schema_version": "operational-reachability/v1",
+            "parser": parser_fields,
+        },
+        **sections,
+    }
+
+
 def test_valid_reviewed_disposition_resolves_unknown_edge(tmp_path: Path) -> None:
     source_line = "getattr(mod, name)"
     _write(tmp_path, "execution/main.py", source_line + "\n")
@@ -169,9 +194,10 @@ def test_valid_reviewed_disposition_resolves_unknown_edge(tmp_path: Path) -> Non
         tmp_path,
         "docs/quality/reachability-getattr-dispositions.json",
         json.dumps(
-            {
-                "schema_version": "reachability-getattr-dispositions/v1",
-                "edges": [
+            _disposition_manifest(
+                tmp_path,
+                "reachability-getattr-dispositions/v1",
+                edges=[
                     {
                         "path": "execution/main.py",
                         "line": 1,
@@ -180,7 +206,7 @@ def test_valid_reviewed_disposition_resolves_unknown_edge(tmp_path: Path) -> Non
                         "evidence": "caller registry fixes the names",
                     }
                 ],
-            }
+            )
         ),
     )
     graph = build_graph(tmp_path)
@@ -192,15 +218,154 @@ def test_valid_reviewed_disposition_resolves_unknown_edge(tmp_path: Path) -> Non
     assert graph.parser["dispositions_sha256"]
 
 
+@pytest.mark.parametrize(
+    ("manifest_name", "schema_version", "source", "line", "disposition"),
+    [
+        (
+            "reachability-dynamic-import-dispositions.json",
+            "reachability-dynamic-import-dispositions/v1",
+            "importlib.import_module(name)",
+            1,
+            "external_optional_dependency",
+        ),
+        (
+            "reachability-getattr-dispositions.json",
+            "reachability-getattr-dispositions/v1",
+            "getattr(mod, name)",
+            1,
+            "closed_literal_set",
+        ),
+        (
+            "reachability-process-dispositions.json",
+            "reachability-process-dispositions/v1",
+            "import subprocess\nsubprocess.run(command)",
+            2,
+            "external_process",
+        ),
+    ],
+)
+def test_missing_disposition_provenance_cannot_resolve_any_edge(
+    tmp_path: Path,
+    manifest_name: str,
+    schema_version: str,
+    source: str,
+    line: int,
+    disposition: str,
+) -> None:
+    _write(tmp_path, "execution/main.py", source + "\n")
+    graph_before = build_graph(tmp_path)
+    edge = next(edge for edge in graph_before.unknown_edges if edge.source == "execution/main.py")
+    _write(
+        tmp_path,
+        f"docs/quality/{manifest_name}",
+        json.dumps(
+            {
+                "schema_version": schema_version,
+                "edges": [
+                    {
+                        "path": "execution/main.py",
+                        "line": line,
+                        "fingerprint": _fingerprint(
+                            "execution/main.py", line, source.splitlines()[line - 1]
+                        ),
+                        "disposition": disposition,
+                        "evidence": "missing provenance must not be trusted",
+                    }
+                ],
+            }
+        ),
+    )
+
+    graph = build_graph(tmp_path)
+    assert any(
+        item.path == f"docs/quality/{manifest_name}"
+        and "invalid reachability disposition manifest" in item.message
+        for item in graph.diagnostics
+    )
+    assert any(
+        candidate.source == edge.source and candidate.line == edge.line and candidate.unknown
+        for candidate in graph.unknown_edges
+    )
+    assert graph.hold is True
+
+
+@pytest.mark.parametrize(
+    ("manifest_name", "schema_version", "source", "line", "disposition"),
+    [
+        (
+            "reachability-dynamic-import-dispositions.json",
+            "reachability-dynamic-import-dispositions/v1",
+            "importlib.import_module(name)",
+            1,
+            "external_optional_dependency",
+        ),
+        (
+            "reachability-getattr-dispositions.json",
+            "reachability-getattr-dispositions/v1",
+            "getattr(mod, name)",
+            1,
+            "closed_literal_set",
+        ),
+        (
+            "reachability-process-dispositions.json",
+            "reachability-process-dispositions/v1",
+            "import subprocess\nsubprocess.run(command)",
+            2,
+            "external_process",
+        ),
+    ],
+)
+def test_stale_disposition_provenance_cannot_resolve_any_edge(
+    tmp_path: Path,
+    manifest_name: str,
+    schema_version: str,
+    source: str,
+    line: int,
+    disposition: str,
+) -> None:
+    _write(tmp_path, "execution/main.py", source + "\n")
+    _write(
+        tmp_path,
+        f"docs/quality/{manifest_name}",
+        json.dumps(
+            _disposition_manifest(
+                tmp_path,
+                schema_version,
+                parser_overrides={"version": "0.0.0"},
+                edges=[
+                    {
+                        "path": "execution/main.py",
+                        "line": line,
+                        "fingerprint": _fingerprint(
+                            "execution/main.py", line, source.splitlines()[line - 1]
+                        ),
+                        "disposition": disposition,
+                        "evidence": "stale parser provenance must not be trusted",
+                    }
+                ],
+            )
+        ),
+    )
+
+    graph = build_graph(tmp_path)
+    assert any(
+        item.path == f"docs/quality/{manifest_name}" and "provenance mismatch" in item.message
+        for item in graph.diagnostics
+    )
+    assert any(candidate.unknown for candidate in graph.unknown_edges)
+    assert graph.hold is True
+
+
 def test_stale_reviewed_disposition_holds_and_does_not_resolve(tmp_path: Path) -> None:
     _write(tmp_path, "execution/main.py", "getattr(mod, name)\n")
     _write(
         tmp_path,
         "docs/quality/reachability-getattr-dispositions.json",
         json.dumps(
-            {
-                "schema_version": "reachability-getattr-dispositions/v1",
-                "edges": [
+            _disposition_manifest(
+                tmp_path,
+                "reachability-getattr-dispositions/v1",
+                edges=[
                     {
                         "path": "execution/main.py",
                         "line": 1,
@@ -209,7 +374,7 @@ def test_stale_reviewed_disposition_holds_and_does_not_resolve(tmp_path: Path) -
                         "evidence": "stale",
                     }
                 ],
-            }
+            )
         ),
     )
     graph = build_graph(tmp_path)
@@ -225,9 +390,10 @@ def test_unresolved_reviewed_disposition_remains_unknown(tmp_path: Path) -> None
         tmp_path,
         "docs/quality/reachability-getattr-dispositions.json",
         json.dumps(
-            {
-                "schema_version": "reachability-getattr-dispositions/v1",
-                "edges": [
+            _disposition_manifest(
+                tmp_path,
+                "reachability-getattr-dispositions/v1",
+                edges=[
                     {
                         "path": "execution/main.py",
                         "line": 1,
@@ -236,7 +402,7 @@ def test_unresolved_reviewed_disposition_remains_unknown(tmp_path: Path) -> None
                         "evidence": "target is still arbitrary",
                     }
                 ],
-            }
+            )
         ),
     )
     graph = build_graph(tmp_path)
@@ -254,9 +420,10 @@ def test_internal_process_review_requires_existing_repo_file_and_keeps_target(
         tmp_path,
         "docs/quality/reachability-process-dispositions.json",
         json.dumps(
-            {
-                "schema_version": "reachability-process-dispositions/v1",
-                "edges": [
+            _disposition_manifest(
+                tmp_path,
+                "reachability-process-dispositions/v1",
+                edges=[
                     {
                         "path": "execution/main.py",
                         "line": 2,
@@ -266,7 +433,7 @@ def test_internal_process_review_requires_existing_repo_file_and_keeps_target(
                         "evidence": "fixed child entrypoint",
                     }
                 ],
-            }
+            )
         ),
     )
 
@@ -287,9 +454,10 @@ def test_internal_process_review_emits_one_edge_per_target(tmp_path: Path) -> No
         tmp_path,
         "docs/quality/reachability-process-dispositions.json",
         json.dumps(
-            {
-                "schema_version": "reachability-process-dispositions/v1",
-                "edges": [
+            _disposition_manifest(
+                tmp_path,
+                "reachability-process-dispositions/v1",
+                edges=[
                     {
                         "path": "execution/main.py",
                         "line": 2,
@@ -303,7 +471,7 @@ def test_internal_process_review_emits_one_edge_per_target(tmp_path: Path) -> No
                         "evidence": "fixed child entrypoints",
                     }
                 ],
-            }
+            )
         ),
     )
 
@@ -326,9 +494,10 @@ def test_internal_process_review_rejects_prose_target(tmp_path: Path) -> None:
         tmp_path,
         "docs/quality/reachability-process-dispositions.json",
         json.dumps(
-            {
-                "schema_version": "reachability-process-dispositions/v1",
-                "edges": [
+            _disposition_manifest(
+                tmp_path,
+                "reachability-process-dispositions/v1",
+                edges=[
                     {
                         "path": "execution/main.py",
                         "line": 2,
@@ -338,7 +507,7 @@ def test_internal_process_review_rejects_prose_target(tmp_path: Path) -> None:
                         "evidence": "not an exact target",
                     }
                 ],
-            }
+            )
         ),
     )
 

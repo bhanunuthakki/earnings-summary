@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-PARSER_VERSION = "1.1.0"
+PARSER_VERSION = "1.2.0"
 # Parser provenance is compared as part of the semantic lifecycle receipt.
 # Record the supported interpreter contract rather than the runtime's patch or
 # minor version, which would make equivalent receipts stale across clean clones.
@@ -129,9 +129,17 @@ class DispositionEntry(BaseModel):
     evidence: str
 
 
+class DispositionGraphProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    schema_version: str
+    parser: dict[str, str]
+
+
 class DispositionManifest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     schema_version: str
+    graph_provenance: DispositionGraphProvenance
     entries: tuple[DispositionEntry, ...] = ()
     edges: tuple[DispositionEntry, ...] = ()
 
@@ -403,8 +411,8 @@ def _reviewed_targets(root: Path, entry: DispositionEntry) -> tuple[str, ...] | 
 def _apply_reviewed_dispositions(
     root: Path,
     edges: list[GraphEdge],
+    expected_parser: dict[str, str],
 ) -> tuple[list[GraphEdge], list[Diagnostic], dict[str, str]]:
-    """Resolve reviewed dynamic edges while failing closed on stale evidence."""
     manifests: dict[tuple[str, int, EdgeKind], tuple[DispositionEntry, str, tuple[str, ...]]] = {}
     diagnostics: list[Diagnostic] = []
     hashes: dict[str, str] = {}
@@ -415,16 +423,22 @@ def _apply_reviewed_dispositions(
         try:
             raw = manifest_path.read_bytes()
             manifest = DispositionManifest.model_validate_json(raw)
-        except (OSError, ValidationError, ValueError) as exc:
+        except (OSError, ValidationError, ValueError):
+            message = "invalid reachability disposition manifest"
+            diagnostics.append(Diagnostic(path=manifest_rel, message=message, kind="unknown"))
+            continue
+        hashes[manifest_rel] = hashlib.sha256(raw).hexdigest()
+        if (
+            manifest.graph_provenance.path != ".tmp/quality/reachability-check.json"
+            or manifest.graph_provenance.schema_version != "operational-reachability/v1"
+            or manifest.graph_provenance.parser != expected_parser
+        ):
             diagnostics.append(
                 Diagnostic(
-                    path=manifest_rel,
-                    message=f"invalid reachability disposition manifest: {type(exc).__name__}",
-                    kind="unknown",
+                    path=manifest_rel, message="disposition provenance mismatch", kind="unknown"
                 )
             )
             continue
-        hashes[manifest_rel] = hashlib.sha256(raw).hexdigest()
         entries = (*manifest.entries, *manifest.edges)
         for entry in entries:
             key = (entry.path, entry.line, edge_kind)
@@ -959,7 +973,18 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
         {e.model_dump_json(): e for e in edges}.values(),
         key=lambda e: (e.source, e.target, e.kind, e.line or 0, e.evidence),
     )
-    edges, disposition_diagnostics, disposition_hashes = _apply_reviewed_dispositions(root, edges)
+    source_sha256 = hashlib.sha256(
+        "".join(f"{key}:{source_hashes[key]}\n" for key in sorted(source_hashes)).encode()
+    ).hexdigest()
+    expected_parser = dict(
+        name="ast+xml+literal-scanner",
+        version=PARSER_VERSION,
+        python=PARSER_PYTHON,
+        source_sha256=source_sha256,
+    )
+    edges, disposition_diagnostics, disposition_hashes = _apply_reviewed_dispositions(
+        root, edges, expected_parser
+    )
     diagnostics.extend(disposition_diagnostics)
     unknown = [e for e in edges if e.unknown]
     diagnostics.extend(
@@ -978,12 +1003,7 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
     )
     return ReachabilityGraph(
         parser={
-            "name": "ast+xml+literal-scanner",
-            "version": PARSER_VERSION,
-            "python": PARSER_PYTHON,
-            "source_sha256": hashlib.sha256(
-                "".join(f"{key}:{source_hashes[key]}\n" for key in sorted(source_hashes)).encode()
-            ).hexdigest(),
+            **expected_parser,
             "dispositions_sha256": hashlib.sha256(
                 "".join(
                     f"{key}:{disposition_hashes[key]}\n" for key in sorted(disposition_hashes)
