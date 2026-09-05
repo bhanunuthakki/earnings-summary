@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT
+except ImportError:  # pragma: no cover - test/import path fallback
+    from execution._lib import PROJECT_ROOT
+
 import argparse
 import json
 import sqlite3
@@ -12,23 +17,20 @@ from typing import cast
 
 import requests
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from ir_pipeline.home_authority_batch import (  # noqa: E402
+from ir_pipeline.home_authority_batch import (
     IRHomeBatchRequest,
     IRHomeBatchResult,
     SessionLike,
     verify_ir_home_candidates,
 )
-from ir_pipeline.home_authority_registry import (  # noqa: E402
+from ir_pipeline.home_authority_registry import (
     IR_HOME_AUTHORITY_CANDIDATES,
     IRHomeAuthorityCandidate,
     candidate_for_ticker,
 )
-from log_redact import redact  # noqa: E402
-from runtime.job_runtime import JobLock  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from log_redact import redact
+from runtime.job_runtime import JobLock
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _DEFAULT_USER_AGENT = "earnings-summary IR authority verification"
 

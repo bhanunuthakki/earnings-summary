@@ -12,12 +12,12 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT
+except ImportError:  # pragma: no cover - test/import path fallback
+    from execution._lib import PROJECT_ROOT
 
-from scheduler_manifest import (  # noqa: E402
+from scheduler_manifest import (
     load_manifest,
     validate_source_tree,
 )

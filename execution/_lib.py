@@ -1,7 +1,7 @@
 """Small shared substrate for deterministic ``execution`` entrypoints.
 
 New CLIs use this module instead of growing another project-root calculation,
-database-path parser, or ad-hoc JSON logger. Existing scripts can migrate
+database-path argument helper, or ad-hoc JSON logger. Existing scripts can migrate
 mechanically without changing their business logic.
 """
 
@@ -44,32 +44,38 @@ def log_event(event: str, **fields: object) -> None:
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")), file=sys.stderr)
 
 
-def standard_parser(
-    description: str,
+def command_parser(description: str | None) -> argparse.ArgumentParser:
+    """Create the shared execution CLI parser shell."""
+    return argparse.ArgumentParser(description=description)
+
+
+def add_database_argument(
+    parser: argparse.ArgumentParser,
     *,
-    ticker: bool = False,
-    force: bool = False,
-    mutation_mode: bool = False,
-) -> argparse.ArgumentParser:
-    """Create the common typed CLI surface used by execution scripts."""
-    parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    parser.add_argument("--db-path", type=Path)
-    if ticker:
-        parser.add_argument("--ticker", type=str)
-    if force:
-        parser.add_argument("--force", action="store_true")
-    if mutation_mode:
-        mode = parser.add_mutually_exclusive_group()
-        mode.add_argument("--apply", action="store_true")
-        mode.add_argument("--dry-run", action="store_true")
-    return parser
+    flag: str = "--db-path",
+    default: Path | None = None,
+) -> None:
+    """Attach a typed database path while leaving path policy with the command.
+
+    The default is deliberately ``None``. Legacy commands that historically
+    used a checkout-relative database must opt into that default explicitly;
+    new commands should resolve an authorized database at their own boundary.
+    """
+    default_hint = f" (default: {default})" if default is not None else ""
+    parser.add_argument(
+        flag,
+        type=Path,
+        default=default,
+        metavar="PATH",
+        help=f"Path to the SQLite database{default_hint}",
+    )
 
 
 __all__ = [
     "PROJECT_ROOT",
     "SRC_ROOT",
+    "add_database_argument",
+    "command_parser",
     "log_event",
     "resolve_db_path",
-    "standard_parser",
 ]

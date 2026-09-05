@@ -14,15 +14,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT
+except ImportError:  # pragma: no cover - test/import path fallback
+    from execution._lib import PROJECT_ROOT
 
-from sources.readers import DualReadShadowingVerifier, ParityStatus  # noqa: E402
+from sources.readers import DualReadShadowingVerifier, ParityStatus
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Verify dual-read parity across data readers.")
     parser.add_argument(
         "--tickers",
@@ -41,10 +41,10 @@ def main() -> None:
         "--strict",
         action="store_true",
         default=False,
-        help="Require 100% verified matches (fail closed with exit code 2 on PARTIAL status)",
+        help="Require 100%% verified matches (fail closed with exit code 2 on PARTIAL status)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     tickers: list[str] = [t.upper().strip() for t in args.tickers]
     output_receipt: Path = args.output_receipt
 

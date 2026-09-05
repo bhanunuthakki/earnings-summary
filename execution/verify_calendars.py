@@ -13,7 +13,6 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import json
 import sqlite3
 import sys
@@ -22,13 +21,15 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser
+except ImportError:  # pragma: no cover - test/import path fallback
+    from execution._lib import add_database_argument, command_parser
 
-from calendar_clock import CALENDAR_TIME_ZONE, calendar_today  # noqa: E402
-from dashboard.upcoming import upcoming_earnings  # noqa: E402
-from expected_earnings import last_reported_by_ticker, upcoming_by_ticker  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from calendar_clock import CALENDAR_TIME_ZONE, calendar_today
+from dashboard.upcoming import upcoming_earnings
+from expected_earnings import last_reported_by_ticker, upcoming_by_ticker
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 @dataclass(frozen=True)
@@ -142,20 +143,11 @@ def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditRe
     )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="End-to-end calendar verification.")
-    parser.add_argument(
-        "--db",
-        type=Path,
-        default=Path("data/portfolio.db"),
-        help="Path to portfolio database (default: data/portfolio.db)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit JSON output",
-    )
-    args = parser.parse_args()
+def main(argv: list[str] | None = None) -> int:
+    parser = command_parser("End-to-end calendar verification.")
+    add_database_argument(parser, flag="--db", default=Path("data/portfolio.db"))
+    parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    args = parser.parse_args(argv)
 
     result = audit_calendars(args.db)
 
