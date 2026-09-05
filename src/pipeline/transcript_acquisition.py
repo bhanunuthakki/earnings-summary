@@ -673,11 +673,15 @@ def load_authorized_transcript_replay(
             raise TranscriptAcquisitionDeniedError(
                 "stored transcript receipt does not exactly match target"
             )
-        # Owner intent is an authorization boundary even though it is deliberately
-        # excluded from the target-level idempotency key. Never replay a manual
-        # receipt into a scheduler run (or the inverse); allow that origin to
+        # Entrypoint and owner intent are authorization boundaries even though
+        # they are deliberately excluded from the target-level idempotency key.
+        # Never replay a receipt across those origins; let the current origin
         # persist its own exact receipt instead.
-        if artifact.authorization.request.owner_requested is not request.owner_requested:
+        stored_request = artifact.authorization.request
+        if (
+            stored_request.entrypoint is not request.entrypoint
+            or stored_request.owner_requested is not request.owner_requested
+        ):
             continue
         read_authorized_transcript(
             conn,

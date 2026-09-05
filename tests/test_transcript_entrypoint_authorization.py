@@ -622,6 +622,81 @@ def test_staged_existing_issuer_bytes_are_exact_and_replay_is_content_addressed(
         )
 
 
+def test_fetch_replay_does_not_cross_quarterly_refresh_entrypoint(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    darwin_staging_double: None,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from pipeline.transcript_acquisition import (
+        load_authorized_transcript_replay,
+        persist_authorized_transcript_artifact,
+        register_transcript_receipt_sqlite_functions,
+        stage_pending_issuer_transcripts,
+    )
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    evidence = repo_root / "ir_documents" / "ACME_Q2_2026.txt"
+    evidence.parent.mkdir(parents=True)
+    payload = b"Operator\nWelcome.\nAnalyst\nQuestion?"
+    evidence.write_bytes(payload)
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        register_transcript_receipt_sqlite_functions(conn, database_path=db_path)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+        conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,file_path,sha256,raw_bytes_size,source_url,"
+            "fetch_status,fetched_at) VALUES (?,?,?,?,?,?,?,'ok','2026-08-12T00:00:00Z')",
+            (
+                "ACME",
+                SourceType.IR_DOC.value,
+                DocType.IR_TRANSCRIPT.value,
+                "ir_documents/ACME_Q2_2026.txt",
+                hashlib.sha256(payload).hexdigest(),
+                len(payload),
+                "https://issuer.example.invalid/transcript",
+            ),
+        )
+        artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=["ACME"],
+            project_root=repo_root,
+            private_root=staging_root,
+            entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
+            as_of=date(2026, 8, 12),
+        )
+        quarterly = next(iter(artifacts.values()))
+        persist_authorized_transcript_artifact(
+            conn,
+            quarterly,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+
+        request = fetch._request_for_source(
+            fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+            source=fetch.SOURCES[0],
+            owner_requested=False,
+            as_of=date(2026, 8, 13),
+        )
+        replay = load_authorized_transcript_replay(
+            conn,
+            request=request,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+
+    assert replay is None
+
+
 def test_same_hash_is_unique_and_artifact_cannot_cross_document_identity(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
