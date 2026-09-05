@@ -110,6 +110,128 @@ def test_unreceipted_raw_ingest_fails_before_files_or_database_writes(
         assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize(
+    (
+        "source_type",
+        "doc_type",
+        "fetch_status",
+        "is_active",
+        "is_current",
+        "segment_count",
+        "expected",
+    ),
+    [
+        ("transcript_audio", "earnings_call_transcript", "ok", 1, 1, 1, True),
+        ("transcript_audio", "earnings_call_transcript", "ok", 0, 0, 1, False),
+        ("transcript_audio", "ir_press_release", "ok", 1, 1, 1, False),
+        ("ir_doc", "earnings_call_transcript", "ok", 1, 1, 1, False),
+        ("transcript_audio", "earnings_call_transcript", "failed", 1, 1, 1, False),
+        ("transcript_audio", "earnings_call_transcript", "ok", 1, 1, 0, False),
+    ],
+)
+def test_legacy_processed_skip_requires_exact_canonical_ingest_evidence(
+    source_type: str,
+    doc_type: str,
+    fetch_status: str,
+    is_active: int,
+    is_current: int,
+    segment_count: int,
+    expected: bool,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    mod = _load_module()
+    repo_root = tmp_path / "repo"
+    processed_root = repo_root / "transcripts" / "processed"
+    processed_root.mkdir(parents=True)
+    path = processed_root / "NU_Q1_2026.txt"
+    payload = _body("LEGACY")
+    path.write_text(payload, encoding="utf-8")
+    digest = transcript_ingest.sha256_of(path)
+    parsed = transcript_ingest.parse_transcript_filename(path)
+    assert parsed is not None
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        document = conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,"
+            "raw_bytes_size) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "NU",
+                source_type,
+                doc_type,
+                "2026-03-31 00:00:00",
+                "transcripts/processed/NU_Q1_2026.txt",
+                digest,
+                "2026-04-01 00:00:00",
+                fetch_status,
+                len(payload.encode("utf-8")),
+            ),
+        )
+        assert document.lastrowid is not None
+        superseded_at: str | None = None
+        superseded_by: int | None = None
+        version_number = 1
+        if not is_current:
+            winner_document = conn.execute(
+                "INSERT INTO documents "
+                "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,"
+                "raw_bytes_size) VALUES "
+                "('NU','transcript_audio','earnings_call_transcript','2026-03-31 00:00:00',"
+                "'transcripts/processed/NU_Q1_2026_winner.txt',?,'2026-04-02 00:00:00','ok',1)",
+                ("0" * 64,),
+            )
+            assert winner_document.lastrowid is not None
+            winner_transcript = conn.execute(
+                "INSERT INTO transcripts "
+                "(document_id,ticker,fiscal_period_type,period_end,source,is_active,is_current) "
+                "VALUES (?,'NU','Q1','2026-03-31 00:00:00','issuer_ir',1,1)",
+                (winner_document.lastrowid,),
+            )
+            assert winner_transcript.lastrowid is not None
+            superseded_at = "2026-04-02 00:00:00"
+            superseded_by = winner_transcript.lastrowid
+            version_number = 2
+        transcript = conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id,ticker,fiscal_period_type,period_end,source,is_active,is_current,"
+            "superseded_at,superseded_by_transcript_id,superseded_by_id,version_number) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                document.lastrowid,
+                "NU",
+                "Q1",
+                "2026-03-31 00:00:00",
+                "unknown_legacy",
+                is_active,
+                is_current,
+                superseded_at,
+                superseded_by,
+                superseded_by,
+                version_number,
+            ),
+        )
+        assert transcript.lastrowid is not None
+        if segment_count:
+            conn.execute(
+                "INSERT INTO transcript_segments (transcript_id,seq,text) VALUES (?,0,?)",
+                (transcript.lastrowid, "Legacy transcript segment."),
+            )
+
+        assert (
+            mod._is_exactly_ingested_processed_candidate(
+                conn,
+                path=path,
+                parsed=parsed,
+                project_root=repo_root,
+                processed_root=processed_root,
+            )
+            is expected
+        )
+
+
 def test_staging_rejects_source_mutation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     raw = tmp_path / "transcripts" / "raw"
