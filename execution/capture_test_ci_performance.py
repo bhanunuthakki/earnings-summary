@@ -45,9 +45,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-part", type=int, default=0)
     parser.add_argument("--cache-state", choices=("cold", "warm", "unknown"), required=True)
     parser.add_argument("--receipt", required=True, help="Receipt JSON output path.")
-    parser.add_argument(
-        "--fragments-dir", help="Raw fragments root (defaults to runner temporary storage)."
-    )
+    parser.add_argument("--fragments-dir", help="Raw fragments root; defaults to runner temp.")
     parser.add_argument(
         "--expected-population", type=Path, required=True, help="Trusted population JSON."
     )
