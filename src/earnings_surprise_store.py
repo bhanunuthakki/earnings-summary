@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -120,6 +120,69 @@ def _record_payload(record: EarningsSurpriseRecordV1) -> dict[str, object]:
 
 def observation_identity(record: EarningsSurpriseRecordV1) -> str:
     return _sha256(_canonical_json(_record_payload(record)))
+
+
+def verify_persisted_observation_row(
+    row: sqlite3.Row,
+) -> tuple[EarningsSurpriseRecordV1 | None, tuple[str, ...]]:
+    """Revalidate immutable observation identity and its typed column projection."""
+
+    reasons: list[str] = []
+    canonical_json = str(row["canonical_payload_json"])
+    canonical_sha = _sha256(canonical_json)
+    observation_id = str(row["observation_id"])
+    try:
+        record = EarningsSurpriseRecordV1.model_validate_json(canonical_json)
+    except (TypeError, ValueError):
+        return None, ("canonical_payload_invalid",)
+    if canonical_sha != str(row["canonical_payload_sha256"]):
+        reasons.append("canonical_payload_sha256_mismatch")
+    if observation_id != canonical_sha or observation_identity(record) != observation_id:
+        reasons.append("observation_id_mismatch")
+    if str(row["idempotency_key"]) != f"earnings-surprise-observation:{observation_id}":
+        reasons.append("observation_idempotency_mismatch")
+    if _sha256(str(row["raw_payload_json"])) != str(row["raw_payload_sha256"]):
+        reasons.append("raw_payload_sha256_mismatch")
+
+    def decimal_matches(field: str) -> bool:
+        expected = getattr(record, field)
+        actual = row[field]
+        if expected is None or actual is None:
+            return expected is None and actual is None
+        try:
+            return expected == Decimal(str(actual))
+        except (InvalidOperation, ValueError):
+            return False
+
+    for field in (
+        "eps_estimate",
+        "eps_actual",
+        "revenue_estimate",
+        "revenue_actual",
+        "eps_surprise_pct",
+        "revenue_surprise_pct",
+    ):
+        if not decimal_matches(field):
+            reasons.append(f"{field}_mismatch")
+    for field in ("num_analysts_eps", "num_analysts_revenue"):
+        if getattr(record, field) != row[field]:
+            reasons.append(f"{field}_mismatch")
+    if record.ticker != str(row["ticker"]):
+        reasons.append("ticker_mismatch")
+    if record.release_date.isoformat() != str(row["release_date"]):
+        reasons.append("release_date_mismatch")
+    if record.source_name != str(row["source_name"]):
+        reasons.append("source_name_mismatch")
+    if record.source_url != (None if row["source_url"] is None else str(row["source_url"])):
+        reasons.append("source_url_mismatch")
+    try:
+        fetched_at = datetime.fromisoformat(str(row["fetched_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        reasons.append("fetched_at_invalid")
+    else:
+        if record.fetched_at != fetched_at:
+            reasons.append("fetched_at_mismatch")
+    return record, tuple(sorted(set(reasons)))
 
 
 def observation_clock_lexeme(record: EarningsSurpriseRecordV1) -> str:

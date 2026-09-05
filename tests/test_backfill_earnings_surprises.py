@@ -15,10 +15,12 @@ import sys
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from pipeline.data_coverage_dispositions import DataCoverageDispositionRequest
 from surprise_sources import SurpriseHit, SurpriseSource
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -283,6 +285,54 @@ def test_backfill_one_attribution_across_sources(tmp_path: Path) -> None:
     )
     assert result.hits_written == 3
     assert result.sources_per_hit == {"fmp_calendar": 2, "yfinance": 1}
+
+
+def test_missing_q2_surprise_persists_provider_gap_not_completeness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    requests: list[DataCoverageDispositionRequest] = []
+
+    class Connection:
+        def commit(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def calendar_fye(_ticker: str) -> int:
+        return 12
+
+    monkeypatch.setattr(mod, "_fye_month", calendar_fye)
+    monkeypatch.setattr(mod.db, "get_connection", Connection)
+
+    def append(_conn: object, request: DataCoverageDispositionRequest) -> object:
+        requests.append(request)
+        return SimpleNamespace(request=request)
+
+    monkeypatch.setattr(mod, "append_data_coverage_disposition", append)
+    result = mod.TickerBackfillResult(
+        ticker="BN",
+        sources_tried=["fmp_calendar", "yfinance"],
+        source_release_dates={"fmp_calendar": [], "yfinance": []},
+    )
+
+    persisted = mod._persist_surprise_coverage(
+        result,
+        hits=[],
+        as_of=date(2026, 9, 5),
+        lookback=2,
+    )
+
+    q2 = next(
+        request
+        for request in requests
+        if request.fiscal_year == 2026 and request.fiscal_quarter == 2
+    )
+    assert q2.status.value == "provider_coverage_gap"
+    assert q2.evidence_reference is None
+    assert q2.evidence_sha256 is None
+    assert "Q2_2026:provider_coverage_gap" in persisted
 
 
 def test_main_exits_nonzero_on_partial_backfill_failure(

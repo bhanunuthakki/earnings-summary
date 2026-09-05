@@ -41,7 +41,7 @@ NOW = datetime(2026, 8, 30, tzinfo=UTC)
 ORIGIN = "https://windows.example.ts.net"
 CODE_SHA = "a" * 64
 DATABASE_SHA = "b" * 64
-SCHEMA_REVISION = "0035_add_report_kpi_reference_resolution_states"
+SCHEMA_REVISION = "0036_add_data_coverage_dispositions"
 STATE = KpiSemanticReviewState.SOURCE_DOCUMENT_MISSING
 
 

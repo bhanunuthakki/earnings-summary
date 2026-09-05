@@ -34,7 +34,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -42,17 +42,32 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from earnings_surprise_store import cache_generation_identity  # noqa: E402
+from pipeline.data_coverage_dispositions import (  # noqa: E402
+    EARNINGS_SURPRISE_POLICY_NAME,
+    EARNINGS_SURPRISE_POLICY_VERSION,
+    CoverageArtifactKind,
+    CoverageAttempt,
+    CoverageAttemptStatus,
+    CoverageDispositionStatus,
+    DataCoverageDispositionRequest,
+    append_data_coverage_disposition,
+    policy_config_sha256,
+    recent_completed_fiscal_quarters,
+)
 from surprise_sources import (  # noqa: E402
     SurpriseHit,
     SurpriseSource,
     default_sources,
-    fetch_surprises_with_fallback,
+    fetch_surprises_with_outcomes,
 )
 
 _SURPRISE_DIR = PROJECT_ROOT / "data" / "surprise"
 _FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 _YF_SNAPSHOTS_DIR = PROJECT_ROOT / "data" / "historical" / "yfinance_snapshots"
 _DEFAULT_LOOKBACK = 8
+_POLICY_NAME = EARNINGS_SURPRISE_POLICY_NAME
+_POLICY_VERSION = EARNINGS_SURPRISE_POLICY_VERSION
+_MAX_RELEASE_LAG_DAYS = 110
 
 
 def _retarget_paths(repo_root: Path) -> tuple[Path, Path, Path]:
@@ -79,8 +94,10 @@ class TickerBackfillResult:
     hits_total: int = 0
     hits_written: int = 0
     sources_per_hit: dict[str, int] = field(default_factory=dict[str, int])
+    source_release_dates: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
     output_path: str | None = None
     error: str | None = None
+    coverage_dispositions: list[str] = field(default_factory=list[str])
 
 
 def _resolve_tickers(arg_ticker: str | None) -> list[str]:
@@ -139,26 +156,174 @@ def _backfill_one(
     surprise_dir: Path,
     lookback: int,
     dry_run: bool,
+    persist_coverage: bool = False,
 ) -> TickerBackfillResult:
     result = TickerBackfillResult(ticker=ticker.upper())
+    all_hits: list[SurpriseHit] = []
     try:
-        all_hits, tried = fetch_surprises_with_fallback(ticker, sources=sources)
+        all_hits, source_outcomes = fetch_surprises_with_outcomes(ticker, sources=sources)
     except Exception as e:
         # Per-ticker failure isolation — one bad ticker should not abort the
         # universe-wide backfill. Truncated to keep stderr summary readable.
         result.error = f"{type(e).__name__}: {e}"[:200]
-        return result
-    result.sources_tried = tried
-    result.hits_total = len(all_hits)
-    trimmed = _trim_to_lookback(all_hits, lookback)
-    result.hits_written = len(trimmed)
-    # Per-source attribution for the trimmed window — useful telemetry for
-    # gauging FMP-loss impact.
-    for h in trimmed:
-        result.sources_per_hit[h.source_name] = result.sources_per_hit.get(h.source_name, 0) + 1
-    out_path = _write_ticker_cache(ticker, trimmed, surprise_dir, dry_run)
-    result.output_path = str(out_path)
+    else:
+        result.sources_tried = [outcome.source_name for outcome in source_outcomes]
+        result.source_release_dates = {
+            outcome.source_name: [hit.release_date.isoformat() for hit in outcome.hits]
+            for outcome in source_outcomes
+        }
+        result.hits_total = len(all_hits)
+        trimmed = _trim_to_lookback(all_hits, lookback)
+        result.hits_written = len(trimmed)
+        # Per-source attribution for the trimmed window — useful telemetry for
+        # gauging FMP-loss impact.
+        for h in trimmed:
+            result.sources_per_hit[h.source_name] = result.sources_per_hit.get(h.source_name, 0) + 1
+        out_path = _write_ticker_cache(ticker, trimmed, surprise_dir, dry_run)
+        result.output_path = str(out_path)
+    if persist_coverage and not dry_run:
+        try:
+            result.coverage_dispositions = _persist_surprise_coverage(
+                result,
+                hits=all_hits,
+                as_of=date.today(),
+                lookback=lookback,
+            )
+        except Exception as exc:
+            result.error = f"coverage disposition: {type(exc).__name__}: {exc}"[:200]
     return result
+
+
+def _fye_month(ticker: str) -> int:
+    conn = db.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT fiscal_year_end FROM tracked_companies "
+            "WHERE UPPER(ticker)=? AND archived_at IS NULL",
+            (ticker.upper(),),
+        ).fetchone()
+    finally:
+        conn.close()
+    raw = None if row is None else row["fiscal_year_end"]
+    if not isinstance(raw, str) or len(raw) < 2:
+        raise ValueError(f"{ticker}: fiscal_year_end is unavailable")
+    month = int(raw[:2])
+    if not 1 <= month <= 12:
+        raise ValueError(f"{ticker}: fiscal_year_end month is invalid")
+    return month
+
+
+def _assign_release_dates(
+    releases: list[date], targets: tuple[tuple[int, int, date], ...]
+) -> dict[date, tuple[int, int, date]]:
+    assigned: dict[date, tuple[int, int, date]] = {}
+    for release in releases:
+        candidates = [
+            target
+            for target in targets
+            if target[2] < release and (release - target[2]).days <= _MAX_RELEASE_LAG_DAYS
+        ]
+        if candidates:
+            assigned[release] = max(candidates, key=lambda target: target[2])
+    return assigned
+
+
+def _persist_surprise_coverage(
+    result: TickerBackfillResult,
+    *,
+    hits: list[SurpriseHit],
+    as_of: date,
+    lookback: int,
+) -> list[str]:
+    fye_month = _fye_month(result.ticker)
+    targets = recent_completed_fiscal_quarters(
+        fye_month=fye_month,
+        as_of=as_of,
+        limit=lookback if lookback > 0 else _DEFAULT_LOOKBACK,
+    )
+    hit_assignments = _assign_release_dates([hit.release_date for hit in hits], targets)
+    source_assignments = {
+        source: _assign_release_dates([date.fromisoformat(item) for item in releases], targets)
+        for source, releases in result.source_release_dates.items()
+    }
+    hits_by_target = {
+        target: hit
+        for hit in hits
+        for release, target in hit_assignments.items()
+        if hit.release_date == release
+    }
+    providers = tuple(result.sources_tried)
+    policy_sha = policy_config_sha256(
+        policy_name=_POLICY_NAME,
+        policy_version=_POLICY_VERSION,
+        providers=providers,
+    )
+    observed_at = datetime.now(UTC)
+    persisted: list[str] = []
+    conn = db.get_connection()
+    try:
+        for fiscal_year, fiscal_quarter, period_end in targets:
+            target = (fiscal_year, fiscal_quarter, period_end)
+            hit = hits_by_target.get(target)
+            attempts = tuple(
+                CoverageAttempt(
+                    provider=source,
+                    status=(
+                        CoverageAttemptStatus.SOURCE_HIT
+                        if target in assignments.values()
+                        else CoverageAttemptStatus.SOURCE_MISS
+                    ),
+                )
+                for source, assignments in source_assignments.items()
+            )
+            if result.error is not None:
+                status = CoverageDispositionStatus.OPERATIONAL_ERROR
+                reason = "surprise_source_refresh_failed"
+                attempts = (
+                    CoverageAttempt(
+                        provider="surprise_chain",
+                        status=CoverageAttemptStatus.FAILED,
+                    ),
+                )
+                evidence_reference = None
+                evidence_sha256 = None
+                retry_after = observed_at + timedelta(days=1)
+            elif hit is None:
+                status = CoverageDispositionStatus.PROVIDER_COVERAGE_GAP
+                reason = "no_admitted_surprise_observation"
+                evidence_reference = None
+                evidence_sha256 = None
+                retry_after = observed_at + timedelta(days=1)
+            else:
+                # A provider hit is not database completeness. The ingest job
+                # writes SATISFIED only after immutable observation + current
+                # projection identities both exist.
+                continue
+            disposition = append_data_coverage_disposition(
+                conn,
+                DataCoverageDispositionRequest(
+                    artifact_kind=CoverageArtifactKind.EARNINGS_SURPRISE,
+                    ticker=result.ticker,
+                    fiscal_year=fiscal_year,
+                    fiscal_quarter=fiscal_quarter,
+                    period_end=period_end,
+                    status=status,
+                    reason_code=reason,
+                    attempts=attempts,
+                    policy_name=_POLICY_NAME,
+                    policy_version=_POLICY_VERSION,
+                    policy_config_sha256=policy_sha,
+                    evidence_reference=evidence_reference,
+                    evidence_sha256=evidence_sha256,
+                    observed_at=observed_at,
+                    retry_after=retry_after,
+                ),
+            )
+            persisted.append(f"Q{fiscal_quarter}_{fiscal_year}:{disposition.request.status.value}")
+        conn.commit()
+    finally:
+        conn.close()
+    return persisted
 
 
 def main() -> int:
@@ -204,7 +369,14 @@ def main() -> int:
         file=sys.stderr,
     )
     for ticker in tickers:
-        r = _backfill_one(ticker, sources, surprise_dir, args.lookback_quarters, args.dry_run)
+        r = _backfill_one(
+            ticker,
+            sources,
+            surprise_dir,
+            args.lookback_quarters,
+            args.dry_run,
+            True,
+        )
         results.append(r)
         attribution = " ".join(f"{k}={v}" for k, v in sorted(r.sources_per_hit.items()))
         print(

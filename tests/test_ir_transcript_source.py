@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import socket
 from pathlib import Path
+from typing import Never
 
 import pytest
 
@@ -41,11 +42,14 @@ _MZ_CFG = IrConfig(ticker="NU", platform="mz", results_center_url="https://ir.ex
 def public_test_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep transcript tests hermetic while the production guard resolves DNS."""
 
+    def public_address(
+        _host: object, port: int | str | None, **_kwargs: object
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", int(port or 443)))]
+
     monkeypatch.setattr(
         "ir_pipeline._net.socket.getaddrinfo",
-        lambda host, port, **_kwargs: [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
-        ],
+        public_address,
     )
 
 
@@ -281,6 +285,69 @@ def _cfg_nu(_ticker: str, _repo: Path | None = None) -> IrConfig:
 def test_fetch_returns_none_for_unconfigured_ticker() -> None:
     # A ticker with no IR config never launches a browser.
     assert fetch_ir_transcript("ZZZZ_NOT_A_TICKER", 2026, 1) is None
+
+
+def test_bn_reviewed_q2_source_bypasses_mz_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = "Prepared remarks. We will now start the Q&A session. " + ("x " * 1000)
+
+    def unexpected_config(*_args: object) -> Never:
+        pytest.fail("reviewed direct BN source must not require MZ config")
+
+    def unexpected_locate(*_args: object) -> Never:
+        pytest.fail("reviewed direct BN source must not crawl")
+
+    def extract_text(_content: bytes) -> str:
+        return body
+
+    monkeypatch.setattr(
+        transcript,
+        "get_config",
+        unexpected_config,
+    )
+    monkeypatch.setattr(
+        transcript,
+        "_locate_transcript",
+        unexpected_locate,
+    )
+    monkeypatch.setattr(transcript, "build_public_opener", _FakeOpener)
+    monkeypatch.setattr(transcript, "_extract_pdf_text", extract_text)
+
+    hit = fetch_ir_transcript("BN", 2026, 2)
+
+    assert hit is not None
+    assert hit.filename == "BN Q2 2026 transcript.pdf"
+    assert hit.qa_text.startswith("We will now start the Q&A session")
+    assert "bn.brookfield.com" in hit.page_url or hit.page_url == "https://files/abc"
+
+
+def test_bn_reviewed_policy_is_exact_to_official_q2_pdf() -> None:
+    from pipeline.transcript_acquisition import issuer_transcript_source_url_is_authorized
+
+    official = (
+        "https://bn.brookfield.com/sites/brookfield-bn-v2/files/"
+        "Brookfield-BN-IR-V2/2026/Q2/BN%20Q2-2026-transcript.pdf"
+    )
+    assert issuer_transcript_source_url_is_authorized(
+        "BN",
+        official,
+        project_root=Path("."),
+        fiscal_year=2026,
+        fiscal_quarter=2,
+    )
+    assert not issuer_transcript_source_url_is_authorized(
+        "BN",
+        official,
+        project_root=Path("."),
+        fiscal_year=2026,
+        fiscal_quarter=3,
+    )
+    assert not issuer_transcript_source_url_is_authorized(
+        "BN",
+        official.replace("Q2/BN%20Q2", "Q3/BN%20Q3"),
+        project_root=Path("."),
+    )
 
 
 def test_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:

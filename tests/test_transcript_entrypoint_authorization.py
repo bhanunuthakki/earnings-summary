@@ -27,13 +27,14 @@ from transcripts.immutable_staging import StagedTranscriptArtifact, TranscriptSt
 
 
 @pytest.fixture
-def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
+def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], None]:
     """Replace unavailable Darwin staging with a typed, read-only test seam."""
 
-    if sys.platform != "darwin":
-        return
     from execution import fetch_qa_transcript as fetch
     from pipeline import transcript_acquisition as acquisition
+
+    def install_for(fetch_module: Any) -> None:
+        monkeypatch.setattr(fetch_module, "install_transcript_output", install)
 
     def stage(
         source_path: Path,
@@ -136,9 +137,11 @@ def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
             target.write_bytes(payload)
         return target
 
-    monkeypatch.setattr(acquisition, "stage_transcript_artifact", stage)
-    monkeypatch.setattr(acquisition, "read_staged_transcript", read)
-    monkeypatch.setattr(fetch, "install_transcript_output", install)
+    if sys.platform == "darwin":
+        monkeypatch.setattr(acquisition, "stage_transcript_artifact", stage)
+        monkeypatch.setattr(acquisition, "read_staged_transcript", read)
+    install_for(fetch)
+    return install_for
 
 
 def _stored_company(path: Path, *, role: str = "portfolio") -> None:
@@ -251,6 +254,77 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     assert calls == ["issuer_ir"]
     assert len(registrations) == 2
     assert second.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
+
+
+def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+) -> None:
+    from execution import backfill_transcripts as backfill
+
+    fetch = backfill.fetch_qa_transcript_module
+    darwin_staging_double(fetch)
+    state_root = tmp_path / "state-repo"
+    _issuer_config(state_root)
+    db_path = migrated_db(state_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    registrations: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        (
+            replace(
+                fetch.SOURCES[0],
+                fetch_qa=lambda *_args: fetch.AggregatorHit(
+                    source_name="issuer_ir",
+                    page_url="https://issuer.example.invalid/transcript",
+                    qa_text="Operator\nQuestion and answer section.",
+                    full_text_chars=100,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    monkeypatch.setattr(
+        fetch.index_manager,
+        "register_transcript",
+        lambda *_args, **kwargs: registrations.append(kwargs),
+    )
+
+    backfill._retarget_paths(state_root.resolve())
+    outcome = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        db_path=db_path,
+        owner_requested=False,
+        as_of=date(2026, 8, 12),
+    )
+
+    assert outcome.status is fetch.FetchQaStatus.ACQUIRED
+    assert state_root.resolve() / "transcripts" / "raw" == fetch.RAW_DIR
+    assert state_root.resolve() / ".tmp" / "transcript-acquisition" == fetch.STAGING_DIR
+    assert (fetch.RAW_DIR / "ACME_Q2_2026.txt").is_file()
+    with sqlite3.connect(db_path) as conn:
+        receipt = conn.execute(
+            "SELECT canonical_document_path,artifact_sha256 FROM transcript_acquisition_receipts"
+        ).fetchone()
+    assert receipt is not None
+    assert receipt[0] == "transcripts/raw/ACME_Q2_2026.txt"
+    assert (fetch.STAGING_DIR / f"{receipt[1]}.transcript").is_file()
+    assert len(registrations) == 1
 
 
 def test_fetch_qa_denial_has_zero_network_and_zero_persistence(
@@ -724,7 +798,7 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     first.result.output_path.unlink()
     registrations.clear()
 
-    replay = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+    replay = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 13))
 
     assert replay.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
     assert first.result.output_path.read_bytes()

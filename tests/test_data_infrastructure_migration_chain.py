@@ -13,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import migration_schema_targets
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0035_add_report_kpi_reference_resolution_states"
+HEAD = "0036_add_data_coverage_dispositions"
 SCHEDULE_CLASS_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 RETAINED_TABLES = {
     "archive_generations",
@@ -22,6 +22,8 @@ RETAINED_TABLES = {
     "ask_grounding_traces",
     "ask_session_contexts",
     "canonical_resolution_operation_ledger",
+    "data_coverage_dispositions",
+    "commitment_scan_receipts",
     "document_processing_operation_ledger",
     "evidence_content_blobs",
     "metric_ontology_operation_ledger",
