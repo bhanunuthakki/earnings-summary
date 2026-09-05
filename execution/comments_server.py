@@ -44,7 +44,7 @@ import threading
 import time
 import urllib.parse
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import TracebackType
@@ -94,6 +94,18 @@ from comments_server_panel_cache import (  # noqa: E402
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
+)
+from comments_server_profile_routes import (  # noqa: E402
+    ProfileRouteContext,
+    register_profile_routes,
+)
+from comments_server_proposal_routes import (  # noqa: E402
+    ResearchProposalRouteContext,
+    register_research_proposal_routes,
+)
+from comments_server_research_routes import (  # noqa: E402
+    ResearchTaskRouteContext,
+    register_research_task_routes,
 )
 from comments_server_settings_routes import (  # noqa: E402
     SettingsRouteContext,
@@ -227,16 +239,7 @@ from pipeline.work_os_portfolio import (  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from portfolio_risk_snapshot_store import read_latest_snapshot  # noqa: E402
 from readme_updater import evidence_sha256  # noqa: E402
-from research.proposal_approval import (  # noqa: E402
-    AskProposalDecisionV1,
-    ProposalConflictError,
-    StoredProposalError,
-    TargetDriftError,
-    bind_ask_proposal_events,
-    decide_ask_proposal,
-    get_ask_proposal_detail,
-)
-from run_lock import RunLockHeldError  # noqa: E402
+from research.proposal_approval import bind_ask_proposal_events  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
 from runtime.portfolio_tracker import (  # noqa: E402
     AtomicFileLease,
@@ -612,6 +615,9 @@ def create_app(
         max_workers=4, thread_name_prefix="comments-server-chat"
     )
     app.config["CHAT_EXECUTOR"] = chat_pool
+
+    def _start_background_task(task: Callable[[], None], name: str) -> None:
+        threading.Thread(target=task, daemon=True, name=name).start()
 
     def _client_error(message: str, status: int) -> tuple[dict[str, str], int]:
         return ({"error": message, "correlation_id": get_correlation_id()}, status)
@@ -1143,282 +1149,6 @@ def create_app(
         )
         return {"answer": text or None, "pending": bool(ctx.get("ledger_answer_pending"))}
 
-    @app.route("/api/research/task/<int:task_id>/run", methods=["POST", "OPTIONS"])
-    def research_run(task_id: int):
-        """W1-5d: run the two-pass research engine on a proposed task → an inert
-        proposal. Gated by LEDGER_RESEARCH_RUN (the only place the expensive web
-        pass is triggered, and only on an explicit owner tap). CSRF-guarded by the
-        global Origin check.
-
-        The engine takes seconds-to-minutes (web pass + two LLM passes) —
-        running it inline pinned this request, and the "Research it" button,
-        for that whole window. The run happens on a background thread and this
-        returns ``{started: true}`` immediately; the panel polls
-        ``/api/research/task/<id>/status`` (``run_research_task`` moves the row
-        proposed → running → drafted, reverting to proposed on failure)."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from research.proposals import get_task, research_run_enabled
-
-        if not research_run_enabled():
-            return ({"error": "research run disabled; set LEDGER_RESEARCH_RUN=1"}, 403)
-        task = get_task(task_id, db_path=db_path)
-        if task is None or task.status != "proposed":
-            return ({"error": "task not runnable (missing or already researched)"}, 409)
-        from research.run import run_research_task
-
-        def _run_bg() -> None:
-            try:
-                proposal_id = run_research_task(task_id, db_path=db_path, repo_root=repo_root)
-            except Exception as exc:  # the engine reverts the row; the poll sees 'proposed'
-                _log_redacted_failure(
-                    f"research run failed for task {task_id}", exc, level="warning"
-                )
-                return
-            if proposal_id is None:
-                return
-            # Push the drafted proposal to the owner's Telegram thread (Phase C:
-            # close the loop where the owner lives). The Telegram-initiated run
-            # already did this; a WEB-initiated run's draft used to settle
-            # silently into the collapsed Queues block — a click whose payoff
-            # arrives minutes later, invisible, reads as a dead button.
-            # Best-effort: no bot token / no chat id on file → skip quietly.
-            try:
-                from capture import research_notify, token_store
-                from research.proposals import get_proposal
-
-                token = token_store.load_token()
-                chat_id = token_store.load_chat_id(
-                    repo_root / "data" / "capture" / "telegram_chat_id.json"
-                )
-                prop = get_proposal(proposal_id, db_path=db_path)
-                if token and chat_id is not None and prop is not None:
-                    research_notify.send_proposal_card(token, chat_id, prop)
-            except Exception as exc:
-                _log_redacted_failure("research telegram push skipped", exc, level="debug")
-
-        threading.Thread(target=_run_bg, daemon=True, name=f"research-run-{task_id}").start()
-        _bump_activation_count("act:research_run")
-        return {"started": True}
-
-    @app.route("/api/research/task/<int:task_id>/status", methods=["GET"])
-    def research_task_status(task_id: int):
-        """The run-poll read: the task's current status (proposed / running /
-        drafted / …) so the panel knows when the background run finished."""
-        from research.proposals import get_task
-
-        task = get_task(task_id, db_path=db_path)
-        if task is None:
-            return ({"error": "not found"}, 404)
-        return {"status": task.status}
-
-    @app.route("/api/research/task/<int:task_id>/reject", methods=["POST", "OPTIONS"])
-    def research_reject(task_id: int):
-        """Dismiss a proposed wondering from the Ledger's open-wonderings list —
-        the counterpart to /run for a task that was never a real research
-        question (e.g. a retrospective lesson mis-staged via Incorporate). Flips
-        the task proposed → rejected so it drops out of the list. State-changing,
-        so a cross-site fetch is rejected; 404 on an unknown id."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
-            return ({"error": "cross-site reject rejected"}, 403)
-        from research.proposals import get_task, set_task_status
-
-        if get_task(task_id, db_path=db_path) is None:
-            return ({"error": "task not found"}, 404)
-        _bump_activation_count("act:research_reject")
-        set_task_status(task_id, "rejected", db_path=db_path)
-        return {"ok": True}
-
-    @app.route("/api/research/proposal/<int:proposal_id>/<verb>", methods=["POST", "OPTIONS"])
-    def research_act(proposal_id: int, verb: str):
-        """W1-7: the 4-action core (approve / further / steer / reject). 'approve'
-        flips status; a view artifact then writes its saved view via the separate
-        write-dispatch (no web fetch, so never a trifecta). CSRF-guarded."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from research.proposals import PROPOSAL_VERBS, act_on_proposal, get_proposal
-
-        if verb not in PROPOSAL_VERBS:
-            return ({"error": f"unknown verb {verb!r}"}, 400)
-        proposal = get_proposal(proposal_id, db_path=db_path)
-        if proposal is not None and proposal.canonical_content_json is not None:
-            return (
-                {
-                    "error": "governed Ask proposals require the revisioned decision endpoint",
-                    "detail_url": f"/api/research/proposals/{proposal_id}",
-                    "decision_url": f"/api/research/proposals/{proposal_id}/decision",
-                },
-                409,
-            )
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
-        steer_text = str(payload.get("steer_text") or "").strip() or None
-        _bump_activation_count(f"act:proposal:{verb}")
-        if verb == "approve" and proposal is not None and proposal.kind == "question":
-            from research.question_artifact import approve_question_proposal
-            from user_state.notes import NoteRevisionConflictError
-
-            try:
-                note = approve_question_proposal(proposal_id, db_path=db_path)
-            except NoteRevisionConflictError as exc:
-                return (
-                    {"error": "revision_conflict", "current_revision": exc.current_revision},
-                    409,
-                )
-            except LookupError as exc:
-                return ({"error": str(exc)}, 404)
-            except ValueError as exc:
-                return ({"error": str(exc)}, 400)
-            applied = f"open question #{note.id} persisted for {note.ticker or 'portfolio'}"
-            return {
-                "status": "approved",
-                "applied": applied,
-                "receipt": f"Approved — {applied}",
-            }
-        status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
-        applied = ""
-        apply_failed = False
-        if verb == "approve":
-            from research.apply import apply_approved_proposal
-
-            try:
-                applied = apply_approved_proposal(proposal_id, db_path=db_path)
-            except Exception as exc:  # a bad apply must not 500 the action
-                apply_failed = True
-                _log_redacted_failure(
-                    f"research proposal apply failed for proposal {proposal_id}", exc
-                )
-        # Consequence receipt (Ledger UX overhaul): a plain-English line of what
-        # just happened, built from the SAME status/applied values above — never
-        # a second query. 'approve' echoes the live write when there was one
-        # (a saved view); memo/dcf/thesis/code approvals write nothing here.
-        receipts = {
-            "approved": f"Approved — {applied}" if applied else "Approved — marked for follow-up",
-            "researching": "Sent back for deeper research",
-            "steered": "Steered — your direction was recorded",
-            "rejected": "Rejected — this proposal won't be revisited",
-        }
-        receipt = receipts.get(status, "Saved")
-        response: dict[str, object] = {"status": status, "applied": applied, "receipt": receipt}
-        if apply_failed:
-            response.update(
-                {
-                    "apply_error": "approved proposal could not be applied; retry the request",
-                    "correlation_id": get_correlation_id(),
-                }
-            )
-        return response
-
-    def _ask_proposal_error(
-        code: str,
-        message: str,
-        *,
-        proposal_id: int,
-        status: int,
-        **details: object,
-    ) -> tuple[dict[str, object], int]:
-        error: dict[str, object] = {
-            "code": code,
-            "message": message,
-            "proposal_id": proposal_id,
-        }
-        error.update({key: value for key, value in details.items() if value is not None})
-        return ({"schema_version": "ask_proposal_error.v1", "error": error}, status)
-
-    @app.route("/api/research/proposals/<int:proposal_id>", methods=["GET"])
-    def ask_proposal_detail(proposal_id: int):
-        try:
-            detail = get_ask_proposal_detail(proposal_id, db_path=db_path)
-        except StoredProposalError as exc:
-            _log_redacted_failure("governed Ask proposal detail invalid", exc)
-            return _ask_proposal_error(
-                "stored_proposal_invalid",
-                "proposal data is unavailable",
-                proposal_id=proposal_id,
-                status=500,
-            )
-        if detail is None:
-            return _ask_proposal_error(
-                "proposal_not_found",
-                "governed proposal was not found",
-                proposal_id=proposal_id,
-                status=404,
-            )
-        return detail.model_dump(mode="json")
-
-    @app.route(
-        "/api/research/proposals/<int:proposal_id>/decision",
-        methods=["POST", "OPTIONS"],
-    )
-    def ask_proposal_decision(proposal_id: int):
-        if request.method == "OPTIONS":
-            return ("", 204)
-        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
-            return _ask_proposal_error(
-                "cross_site_rejected",
-                "cross-site proposal decisions are not allowed",
-                proposal_id=proposal_id,
-                status=403,
-            )
-        try:
-            decision = AskProposalDecisionV1.model_validate(request.get_json(silent=True))
-        except ValidationError:
-            return _ask_proposal_error(
-                "invalid_request",
-                "decision payload does not match ask_proposal_decision.v1",
-                proposal_id=proposal_id,
-                status=400,
-            )
-        if decision.proposal_id != proposal_id:
-            return _ask_proposal_error(
-                "proposal_id_mismatch",
-                "path and payload proposal_id must match",
-                proposal_id=proposal_id,
-                status=400,
-            )
-        try:
-            receipt = decide_ask_proposal(
-                decision,
-                repo_root=repo_root,
-                db_path=db_path,
-            )
-        except ProposalConflictError as exc:
-            return _ask_proposal_error(
-                exc.code,
-                str(exc),
-                proposal_id=proposal_id,
-                status=409,
-                current_proposal_revision=exc.current_proposal_revision,
-                current_status=exc.current_status,
-            )
-        except TargetDriftError as exc:
-            return _ask_proposal_error(
-                "target_drift",
-                "proposal target changed after the proposal was created",
-                proposal_id=proposal_id,
-                status=412,
-                expected_target_sha256=exc.expected_target_sha256,
-                actual_target_sha256=exc.actual_target_sha256,
-            )
-        except RunLockHeldError:
-            return _ask_proposal_error(
-                "mutation_busy",
-                "another portfolio mutation is in progress; retry the decision",
-                proposal_id=proposal_id,
-                status=409,
-            )
-        except (StoredProposalError, ValueError, OSError, sqlite3.Error) as exc:
-            _log_redacted_failure("governed Ask proposal decision failed", exc)
-            return _ask_proposal_error(
-                "decision_failed",
-                "proposal decision could not be completed",
-                proposal_id=proposal_id,
-                status=500,
-            )
-        _bump_activation_count(f"act:ask_proposal:{decision.decision}")
-        return receipt.model_dump(mode="json")
-
     @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
     def reconcile_verdict(kind: str, item_id: int, verdict: str):
         """Seed-corpus freshness pass: stamp a one-tap verdict on a seed note or
@@ -1521,226 +1251,6 @@ def create_app(
             },
             200 if result.ok else 404,
         )
-
-    @app.route("/api/tenets", methods=["POST", "OPTIONS"])
-    def tenets_create():
-        """Add an owner-stated Tenet — a durable belief about how the owner invests
-        (Worldview P2). Lands ``current`` immediately (the owner's own belief needs
-        no approval); reusing a scope_key revises the standing Tenet via the
-        supersede chain. CSRF-guarded by the global Origin check."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from synthesis.tenets import record_tenet
-
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
-        body_md = str(payload.get("body_md") or "").strip()
-        if not body_md:
-            return ({"error": "body_md required"}, 400)
-        scope_key = str(payload.get("scope_key") or "").strip() or None
-        tenet = record_tenet(
-            body_md=body_md,
-            scope_key=scope_key,
-            status="current",
-            provenance="owner",
-            db_path=db_path,
-        )
-        return {"ok": True, "id": tenet.id, "scope_key": tenet.scope_key}
-
-    @app.route("/api/tenets/<int:tenet_id>/<action>", methods=["POST", "OPTIONS"])
-    def tenets_act(tenet_id: int, action: str):
-        """Approve, reject, or revert a Tenet/stance insight. Approve promotes a
-        ``proposed`` Tenet to ``current`` (superseding the prior belief on that
-        topic); reject retires a ``proposed`` Tenet; revert (B4) undoes an
-        auto-adopted ``current`` row — restoring the prior belief on a
-        revision, or simply retiring a brand-new adoption. CSRF-guarded."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from synthesis.tenets import approve_tenet, reject_tenet, revert_tenet
-
-        if action == "approve":
-            row = approve_tenet(tenet_id, db_path=db_path)
-            if row is None:
-                return ({"ok": False}, 404)
-            return (
-                {
-                    "ok": True,
-                    "status": row.status,
-                    "receipt": "Adopted — now a standing Tenet in your decision prompts",
-                },
-                200,
-            )
-        if action == "reject":
-            ok = reject_tenet(tenet_id, db_path=db_path)
-            if not ok:
-                return ({"ok": False}, 404)
-            return ({"ok": True, "receipt": "Retired — this Tenet was not adopted"}, 200)
-        if action == "revert":
-            reverted = revert_tenet(tenet_id, db_path=db_path)
-            if reverted is None:
-                return ({"ok": False}, 404)
-            receipt = (
-                "Reverted — restores your prior belief"
-                if reverted.status == "current"
-                else "Reverted — retired, no longer live"
-            )
-            return ({"ok": True, "status": reverted.status, "receipt": receipt}, 200)
-        return ({"error": f"unknown action {action!r}"}, 400)
-
-    @app.route("/api/profile/fact/<int:fact_id>/affirm", methods=["POST", "OPTIONS"])
-    def profile_fact_affirm(fact_id: int):
-        """Ratify one proposed owner-profile fact (tenet-2 Phase 1 gated
-        assertion, §7.1) — the ONLY way a fact becomes 'affirmed'. CSRF-guarded
-        by the global Origin check."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from owner_profile.store import affirm_fact
-
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        try:
-            row = affirm_fact(conn, fact_id)
-            conn.commit()
-        finally:
-            conn.close()
-        _bump_activation_count("act:profile:affirm")
-        if row is None:
-            return ({"ok": False}, 404)
-        return (
-            {
-                "ok": True,
-                "status": row.status,
-                "receipt": "Affirmed — the coach may now cite this when reviewing your trades",
-            },
-            200,
-        )
-
-    @app.route("/api/profile/fact/<int:fact_id>/reject", methods=["POST", "OPTIONS"])
-    def profile_fact_reject(fact_id: int):
-        """Reject one proposed owner-profile fact — retires it without ever
-        conditioning advice. CSRF-guarded by the global Origin check."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from owner_profile.store import reject_fact
-
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        try:
-            ok = reject_fact(conn, fact_id)
-            conn.commit()
-        finally:
-            conn.close()
-        _bump_activation_count("act:profile:reject")
-        if not ok:
-            return ({"ok": False}, 404)
-        return ({"ok": True, "receipt": "Dropped — never used, won't be re-proposed"}, 200)
-
-    @app.route("/api/profile/fact/<int:fact_id>/reaffirm", methods=["POST", "OPTIONS"])
-    def profile_fact_reaffirm(fact_id: int):
-        """ "Still true" on an EXPIRING affirmed fact (tenet-2 Phase 3 packet
-        walk) — refreshes ``affirmed_at``, no value change. Distinct from
-        ``affirm`` (proposed -> affirmed). CSRF-guarded by the global Origin
-        check."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from owner_profile.store import reaffirm_fact
-
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        try:
-            row = reaffirm_fact(conn, fact_id)
-            conn.commit()
-        finally:
-            conn.close()
-        _bump_activation_count("act:profile:reaffirm")
-        if row is None:
-            return ({"ok": False}, 404)
-        return (
-            {
-                "ok": True,
-                "status": row.status,
-                "receipt": "Confirmed — good for another review cycle",
-            },
-            200,
-        )
-
-    @app.route("/api/profile/fact/<int:fact_id>/retire", methods=["POST", "OPTIONS"])
-    def profile_fact_retire(fact_id: int):
-        """ "Drop" on an EXPIRING affirmed fact — retires it (status ->
-        'rejected'). Distinct from ``reject`` (proposed-only). CSRF-guarded by
-        the global Origin check."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from owner_profile.store import retire_fact
-
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        try:
-            ok = retire_fact(conn, fact_id)
-            conn.commit()
-        finally:
-            conn.close()
-        _bump_activation_count("act:profile:retire")
-        if not ok:
-            return ({"ok": False}, 404)
-        return ({"ok": True, "receipt": "Dropped — the coach will stop citing this fact"}, 200)
-
-    @app.route("/api/profile/fact/<int:fact_id>/update", methods=["POST", "OPTIONS"])
-    def profile_fact_update(fact_id: int):
-        """ "Update" on an EXPIRING affirmed fact — the minimal edit route
-        (§4 delivery seam 5): narrative-only (never a structured-value
-        re-entry — an actual balance/date change belongs to a fresh importer
-        run), landing a NEW ``proposed`` fact that supersedes the old via
-        ``append_fact``. Gated assertion holds even on the owner's own edit —
-        it resurfaces at the next packet walk for an explicit affirm tap, the
-        SAME proposed-facts source Phase 1 wired. CSRF-guarded by the global
-        Origin check."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from owner_profile.store import append_fact, get_fact
-
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
-        narrative = payload.get("narrative")
-        if not isinstance(narrative, str) or not narrative.strip():
-            return ({"ok": False, "error": "narrative is required"}, 400)
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        try:
-            old = get_fact(conn, fact_id)
-            if old is None:
-                return ({"ok": False}, 404)
-            new_id = append_fact(
-                conn,
-                category=old.category,
-                key=old.key,
-                value=old.value,
-                narrative=narrative.strip(),
-                provenance="owner",
-                status="proposed",
-                review_horizon_days=old.review_horizon_days,
-                source_detail="ledger_update",
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        _bump_activation_count("act:profile:update")
-        return (
-            {
-                "ok": True,
-                "new_fact_id": new_id,
-                "receipt": "Saved — your edit awaits your affirm next walk",
-            },
-            200,
-        )
-
-    @app.route("/api/tenets/distill", methods=["POST", "OPTIONS"])
-    def tenets_distill():
-        """Owner-tapped Worldview distillation: distil the owner's flagged
-        (saved/incorporated) musings into ``proposed`` Tenets. Never automatic; the
-        deterministic $0 triage means nothing-flagged ⇒ zero LLM. CSRF-guarded."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from synthesis.tenet_distill import run_tenet_distill
-
-        try:
-            counts = run_tenet_distill(db_path, user_id=DEFAULT_USER_ID)
-        except Exception as exc:  # a distill failure must not 500 the tap
-            return _internal_failure("distillation failed", exc, status=500)
-        return {"ok": True, **counts}
 
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
@@ -2980,7 +2490,7 @@ def create_app(
     metric_cache_modes = frozenset({"cold", "swr", "prefetch", "revalidate"})
     activation_cache_modes = frozenset({"cold", "swr"})
 
-    def _bump_activation_count(panel: str) -> None:
+    def _bump_activation_count(panel_id: str) -> None:
         """UPSERT +1 for (panel, today); Alembic owns table creation.
 
         A pre-migration database degrades to an omitted metric. Request paths
@@ -2993,7 +2503,7 @@ def create_app(
                     "INSERT INTO panel_activation_counts (panel_id, day, count)"
                     " VALUES (?, ?, 1)"
                     " ON CONFLICT(panel_id, day) DO UPDATE SET count = count + 1",
-                    (panel, datetime.now(UTC).strftime("%Y-%m-%d")),
+                    (panel_id, datetime.now(UTC).strftime("%Y-%m-%d")),
                 )
                 conn.commit()
             finally:
@@ -3003,7 +2513,7 @@ def create_app(
                 json.dumps(
                     {
                         "event": "panel_activation_count_failed",
-                        "panel": panel,
+                        "panel": panel_id,
                         "error": redact(f"{type(exc).__name__}: {exc}")[:500],
                     }
                 ),
@@ -3129,6 +2639,34 @@ def create_app(
     register_ir_approval_routes(
         app,
         IrApprovalRouteContext(db_path=db_path, owner_actor=DEFAULT_USER_ID),
+    )
+    register_research_task_routes(
+        app,
+        ResearchTaskRouteContext(
+            repo_root=repo_root,
+            db_path=db_path,
+            start_background_task=_start_background_task,
+            bump_activation_count=_bump_activation_count,
+            log_redacted_failure=_log_redacted_failure,
+        ),
+    )
+    register_research_proposal_routes(
+        app,
+        ResearchProposalRouteContext(
+            repo_root=repo_root,
+            db_path=db_path,
+            bump_activation_count=_bump_activation_count,
+            log_redacted_failure=_log_redacted_failure,
+        ),
+    )
+    register_profile_routes(
+        app,
+        ProfileRouteContext(
+            db_path=db_path,
+            default_user_id=DEFAULT_USER_ID,
+            bump_activation_count=_bump_activation_count,
+            internal_failure=_internal_failure,
+        ),
     )
     register_governed_alert_routes(
         app,
