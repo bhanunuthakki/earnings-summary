@@ -606,7 +606,13 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
     ]
 
 
-def _run_ingest(repo_root: Path, ticker: str, dry_run: bool) -> int:
+def _run_ingest(
+    repo_root: Path,
+    ticker: str,
+    dry_run: bool,
+    *,
+    owner_requested: bool,
+) -> int:
     """Ingest newly fetched files for one ticker.
 
     Runs the current code checkout's state adapter while keeping mutable
@@ -628,6 +634,8 @@ def _run_ingest(repo_root: Path, ticker: str, dry_run: bool) -> int:
         "--ticker",
         ticker,
     ]
+    if owner_requested:
+        cmd.append("--owner-requested")
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
 
@@ -982,7 +990,12 @@ def main() -> int:
         for result in per_ticker:
             if not result.fetched:
                 continue
-            rc = _run_ingest(repo_root, result.ticker, args.dry_run)
+            rc = _run_ingest(
+                repo_root,
+                result.ticker,
+                args.dry_run,
+                owner_requested=args.ticker is not None,
+            )
             if rc == 0 and not args.dry_run and not _fetched_evidence_complete(result):
                 print(
                     f"[backfill_transcripts] {result.ticker}: ingest returned 0 without "

@@ -52,8 +52,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--ticker", help="Restrict ingestion to one ticker")
+    parser.add_argument(
+        "--owner-requested",
+        action="store_true",
+        help="Preserve explicit owner intent for a per-ticker acquisition",
+    )
     parser.add_argument("--no-promote", action="store_true")
     args = parser.parse_args(argv)
+    if args.owner_requested and not args.ticker:
+        parser.error("--owner-requested requires --ticker")
 
     state_root = args.repo_root.resolve()
     ingester = _load_ingester()
@@ -64,7 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         str(state_root / "data" / "portfolio.db"),
     ]
     if args.ticker:
-        legacy_argv.extend(["--ticker", args.ticker.upper(), "--automatic"])
+        legacy_argv.extend(["--ticker", args.ticker.upper()])
+        if not args.owner_requested:
+            legacy_argv.append("--automatic")
     if args.no_promote:
         legacy_argv.append("--no-promote")
     original_argv = sys.argv
