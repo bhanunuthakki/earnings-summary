@@ -53,10 +53,12 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
+    load_authorized_transcript_receipt,
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
     read_authorized_transcript,
     stage_pending_issuer_transcripts,
+    transcript_acquisition_receipt_id,
 )
 from provenance.selection import selected_transcripts_relation  # noqa: E402
 from transcripts.acquisition_semantics import (  # noqa: E402
@@ -258,6 +260,60 @@ def _candidate_files(restrict_ticker: str | None) -> list[tuple[Path, ParsedFile
     return out
 
 
+def _receipt_scoped_candidates(
+    conn: sqlite3.Connection,
+    receipt_ids: list[str],
+    *,
+    restrict_ticker: str | None,
+    expected_owner_requested: bool,
+    project_root: Path,
+) -> tuple[list[tuple[Path, ParsedFilename]], dict[Path, AuthorizedTranscriptArtifact]]:
+    """Resolve only exact currently-authorized raw artifacts named by durable receipts."""
+
+    if len(receipt_ids) != len(set(receipt_ids)):
+        raise TranscriptAcquisitionDeniedError("duplicate transcript receipt selector")
+    raw_root = project_root / "transcripts" / "raw"
+    candidates: list[tuple[Path, ParsedFilename]] = []
+    artifacts: dict[Path, AuthorizedTranscriptArtifact] = {}
+    for receipt_id in receipt_ids:
+        artifact = load_authorized_transcript_receipt(
+            conn,
+            receipt_id=receipt_id,
+            project_root=project_root,
+            trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
+        )
+        request = artifact.authorization.request
+        if (
+            request.entrypoint is not TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT
+            or request.owner_requested is not expected_owner_requested
+            or (restrict_ticker is not None and request.canonical_ticker != restrict_ticker.upper())
+        ):
+            raise TranscriptAcquisitionDeniedError(
+                "transcript receipt does not match the requested ingest scope"
+            )
+        path = project_root / artifact.canonical_document_path
+        if path.parent != raw_root:
+            raise TranscriptAcquisitionDeniedError(
+                "transcript receipt does not name a canonical raw artifact"
+            )
+        parsed = parse_transcript_filename(path)
+        if parsed is None or (
+            parsed.ticker != request.canonical_ticker
+            or parsed.fiscal_year_label != request.fiscal_year
+            or parsed.quarter_idx != request.fiscal_quarter
+        ):
+            raise TranscriptAcquisitionDeniedError(
+                "transcript receipt filename does not match its authorized target"
+            )
+        if path in artifacts:
+            raise TranscriptAcquisitionDeniedError(
+                "multiple transcript receipts name the same canonical raw artifact"
+            )
+        candidates.append((path, parsed))
+        artifacts[path] = artifact
+    return candidates, artifacts
+
+
 def _is_exactly_ingested_processed_candidate(
     conn: sqlite3.Connection,
     *,
@@ -438,12 +494,25 @@ def _invocation_inputs(
     *,
     include_ir_transcripts: bool,
     no_promote: bool,
+    receipt_artifacts: dict[Path, AuthorizedTranscriptArtifact],
 ) -> dict[str, JsonValue]:
     source_paths = [path for path, _ in in_scope]
     return {
         "include_ir_transcripts": include_ir_transcripts,
         "no_promote": no_promote,
         "candidate_files": files_fingerprint(source_paths, root=PROJECT_ROOT),
+        "transcript_receipts": [
+            {
+                "receipt_id": transcript_acquisition_receipt_id(artifact),
+                "canonical_document_path": artifact.canonical_document_path.as_posix(),
+                "sha256": artifact.sha256,
+                "size_bytes": artifact.size_bytes,
+            }
+            for artifact in sorted(
+                receipt_artifacts.values(),
+                key=transcript_acquisition_receipt_id,
+            )
+        ],
         "ir_documents": [
             {"document_id": doc_id, "ticker": ticker, "period_end": period_end}
             for doc_id, ticker, period_end, _ in ir_sources
@@ -454,6 +523,12 @@ def _invocation_inputs(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Restrict to a single ticker (case-insensitive)")
+    parser.add_argument(
+        "--receipt-id",
+        action="append",
+        default=[],
+        help="Ingest only this exact durable transcript acquisition receipt (repeatable)",
+    )
     parser.add_argument(
         "--automatic",
         action="store_true",
@@ -484,13 +559,38 @@ def main() -> int:
     conn = open_db(args.db)
     try:
         tracked = _load_tracked_tickers(conn)
-        candidates = _candidate_files(args.ticker)
+        selected_artifacts: dict[Path, AuthorizedTranscriptArtifact] = {}
+        try:
+            if args.receipt_id:
+                candidates, selected_artifacts = _receipt_scoped_candidates(
+                    conn,
+                    args.receipt_id,
+                    restrict_ticker=args.ticker,
+                    expected_owner_requested=bool(args.ticker) and not args.automatic,
+                    project_root=PROJECT_ROOT,
+                )
+            else:
+                candidates = _candidate_files(args.ticker)
+        except TranscriptAcquisitionDeniedError as exc:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "transcript_acquisition_denied",
+                        "ticker": args.ticker.upper() if args.ticker else None,
+                        "error_class": type(exc).__name__,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            return 2
 
         in_scope = [(p, parsed) for p, parsed in candidates if parsed.ticker in tracked]
         out_of_scope = [(p, parsed) for p, parsed in candidates if parsed.ticker not in tracked]
 
         plan = {
             "candidates_total": len(candidates),
+            "receipt_ids": list(args.receipt_id),
             "in_scope": [
                 {"file": str(p.relative_to(PROJECT_ROOT)), "ticker": parsed.ticker}
                 for p, parsed in in_scope
@@ -519,6 +619,10 @@ def main() -> int:
 
         raw_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
         for path, parsed in pending_scope:
+            selected = selected_artifacts.get(path)
+            if selected is not None:
+                raw_authorizations[path] = selected
+                continue
             request = TranscriptAcquisitionRequest(
                 entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
                 canonical_ticker=parsed.ticker,
@@ -572,10 +676,16 @@ def main() -> int:
         raw_root = PROJECT_ROOT / "transcripts" / "raw"
         snapshots: dict[Path, evidence_snapshot.EvidenceSnapshot] = {}
         staged_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
-        try:
-            staged_scope: list[tuple[Path, ParsedFilename]] = []
-            for path, parsed in pending_scope:
+        staged_scope: list[tuple[Path, ParsedFilename]] = []
+        staging_failures: list[tuple[Path, ParsedFilename, str]] = []
+        for path, parsed in pending_scope:
+            try:
                 stable = evidence_snapshot.capture_snapshot(path, path.parent)
+                artifact = raw_authorizations[path]
+                if stable.sha256 != artifact.sha256 or len(stable.payload) != artifact.size_bytes:
+                    raise TranscriptAcquisitionDeniedError(
+                        "transcript receipt raw artifact does not match its exact bytes"
+                    )
                 staged = _stage_evidence_file(
                     path,
                     PROJECT_ROOT,
@@ -583,46 +693,49 @@ def main() -> int:
                     processed_root,
                     snapshot=stable,
                 )
+                _assert_evidence_path_identity(
+                    conn,
+                    file_path=staged,
+                    project_root=PROJECT_ROOT,
+                    current_sha=stable.sha256,
+                )
                 staged_scope.append((staged, parsed))
-                staged_authorizations[staged] = raw_authorizations[path]
+                staged_authorizations[staged] = artifact
                 snapshots[staged] = evidence_snapshot.EvidenceSnapshot(
                     path=staged,
                     payload=stable.payload,
                     sha256=stable.sha256,
                 )
-            for path, _parsed in staged_scope:
-                _assert_evidence_path_identity(
-                    conn,
-                    file_path=path,
-                    project_root=PROJECT_ROOT,
-                    current_sha=snapshots[path].sha256,
+            except (
+                OSError,
+                ValueError,
+                TranscriptAcquisitionDeniedError,
+            ) as exc:
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "transcript_evidence_capture_failed",
+                            "ticker": parsed.ticker,
+                            "error_class": type(exc).__name__,
+                        }
+                    )
+                    + "\n"
                 )
-        except (
-            EvidencePathConflictError,
-            EvidenceSourceChangedError,
-            UnsafeEvidencePathError,
-        ) as exc:
-            sys.stderr.write(
-                json.dumps(
-                    {
-                        "event": "transcript_evidence_capture_failed",
-                        "error_class": type(exc).__name__,
-                    }
+                if args.receipt_id:
+                    staging_failures.append((path, parsed, type(exc).__name__))
+                    continue
+                print(
+                    json.dumps(
+                        {
+                            **plan,
+                            "ingested": 0,
+                            "skipped_existing": 0,
+                            "failed": 1,
+                            "terminal_status": "failed_closed",
+                        }
+                    )
                 )
-                + "\n"
-            )
-            print(
-                json.dumps(
-                    {
-                        **plan,
-                        "ingested": 0,
-                        "skipped_existing": 0,
-                        "failed": 1,
-                        "terminal_status": "failed_closed",
-                    }
-                )
-            )
-            return 1
+                return 1
         in_scope = staged_scope
 
         ir_sources = (
@@ -664,15 +777,21 @@ def main() -> int:
         if not in_scope and not ir_sources:
             print(
                 json.dumps(
-                    {**plan, "ingested": 0, "skipped_existing": len(already_ingested)},
+                    {
+                        **plan,
+                        "ingested": 0,
+                        "skipped_existing": len(already_ingested),
+                        "failed": len(staging_failures),
+                    },
                     indent=2,
                 )
             )
-            return 0
+            return 1 if staging_failures else 0
 
         ticker_scope = sorted(
             {parsed.ticker for _, parsed in in_scope}
             | {parsed.ticker for _, parsed in already_ingested}
+            | {parsed.ticker for _, parsed, _ in staging_failures}
             | {ticker for _, ticker, _, _ in ir_sources}
         )
         try:
@@ -685,6 +804,7 @@ def main() -> int:
                     ir_sources,
                     include_ir_transcripts=bool(args.include_ir_transcripts),
                     no_promote=bool(args.no_promote),
+                    receipt_artifacts=selected_artifacts,
                 ),
                 force=bool(args.force),
                 deduplicate_completed=True,
@@ -695,7 +815,7 @@ def main() -> int:
 
         ingested: list[dict[str, object]] = []
         skipped_existing = len(already_ingested)
-        failed = 0
+        failed = len(staging_failures)
 
         for _path, parsed in already_ingested:
             record_stage(
@@ -705,6 +825,17 @@ def main() -> int:
                 StageName.INGEST,
                 StageStatus.SKIPPED,
                 period_end=map_to_period(parsed).period_end,
+            )
+
+        for path, parsed, error_class in staging_failures:
+            record_stage(
+                conn,
+                run_id,
+                parsed.ticker,
+                StageName.INGEST,
+                StageStatus.FAILED,
+                period_end=map_to_period(parsed).period_end,
+                error_msg=f"{path.name}: {error_class}",
             )
 
         for path, parsed in in_scope:

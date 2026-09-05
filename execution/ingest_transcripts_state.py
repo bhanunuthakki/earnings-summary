@@ -53,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--ticker", help="Restrict ingestion to one ticker")
     parser.add_argument(
+        "--receipt-id",
+        action="append",
+        default=[],
+        help="Forward an exact transcript acquisition receipt selector (repeatable)",
+    )
+    parser.add_argument(
         "--owner-requested",
         action="store_true",
         help="Preserve explicit owner intent for a per-ticker acquisition",
@@ -74,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         legacy_argv.extend(["--ticker", args.ticker.upper()])
         if not args.owner_requested:
             legacy_argv.append("--automatic")
+    for receipt_id in args.receipt_id:
+        legacy_argv.extend(["--receipt-id", receipt_id])
     if args.no_promote:
         legacy_argv.append("--no-promote")
     original_argv = sys.argv
