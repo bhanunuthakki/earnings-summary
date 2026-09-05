@@ -25,6 +25,11 @@ CODE_PREFIXES = (
     ".github/workflows/",
     ".github/scripts/",
 )
+QUALITY_PREFIXES = (
+    "docs/quality/",
+    ".github/workflows/",
+    ".github/scripts/",
+)
 CODE_ROOT_FILES = {
     ".bandit-baseline.json",
     ".pre-commit-config.yaml",
@@ -36,12 +41,13 @@ CODE_ROOT_FILES = {
     "requirements.txt",
     "directives/design_language.md",
 }
+QUALITY_ROOT_FILES = {"Makefile"}
 PYTHON_ROOT_FILES = {"pyproject.toml", "requirements.lock"}
 DOCUMENTATION_SUFFIXES = {".md", ".rst"}
 CONDITIONAL_JOBS = {
     "tests": "code",
     "design": "code",
-    "quality": "python",
+    "quality": "quality",
     "typecheck": "python",
     "security": "code",
 }
@@ -58,6 +64,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
 
     code = False
     python = False
+    quality = False
     for raw_path in paths:
         path = _normalize(raw_path)
         if not path:
@@ -65,9 +72,11 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         known_code_path = path in CODE_ROOT_FILES or path.startswith(CODE_PREFIXES)
         is_code = known_code_path or Path(path).suffix.lower() not in DOCUMENTATION_SUFFIXES
         is_python = path in PYTHON_ROOT_FILES or path.endswith(".py")
+        is_quality = is_python or path in QUALITY_ROOT_FILES or path.startswith(QUALITY_PREFIXES)
         code = code or is_code
         python = python or is_python
-    return {"code": code, "python": python}
+        quality = quality or is_quality
+    return {"code": code, "python": python, "quality": quality}
 
 
 def select_test_files(
@@ -94,7 +103,9 @@ def select_test_files(
     return selected
 
 
-def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> list[str]:
+def gate_failures(
+    *, code: bool, python: bool, quality: bool, results: Mapping[str, str]
+) -> list[str]:
     """Explain every terminal result that makes the aggregate gate unsafe."""
 
     failures: list[str] = []
@@ -108,7 +119,11 @@ def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> li
         if result not in TERMINAL_SUCCESS_RESULTS:
             failures.append(f"{job_name} finished with {result or 'missing result'}")
 
-    required_groups = {"code": code, "python": python}
+    required_groups = {
+        "code": code,
+        "python": python,
+        "quality": quality or python,
+    }
     for job_name, group in CONDITIONAL_JOBS.items():
         result = results.get(job_name, "")
         if required_groups[group] and result in TERMINAL_SUCCESS_RESULTS and result != "success":
@@ -273,9 +288,12 @@ def _classify_command(github_output: Path) -> int:
     paths = [path.decode("utf-8", errors="surrogateescape") for path in raw_paths if path]
     groups = classify_paths(paths)
     with github_output.open("a", encoding="utf-8", newline="\n") as output:
-        for name in ("code", "python"):
+        for name in ("code", "python", "quality"):
             print(f"{name}={str(groups[name]).lower()}", file=output)
-    print(f"Changed paths: {len(paths)}; code={groups['code']}; python={groups['python']}")
+    print(
+        f"Changed paths: {len(paths)}; code={groups['code']}; "
+        f"python={groups['python']}; quality={groups['quality']}"
+    )
     return 0
 
 
@@ -289,7 +307,9 @@ def _verify_command(args: argparse.Namespace) -> int:
         "typecheck": args.typecheck_result,
         "security": args.security_result,
     }
-    failures = gate_failures(code=args.code, python=args.python, results=results)
+    failures = gate_failures(
+        code=args.code, python=args.python, quality=args.quality, results=results
+    )
     for failure in failures:
         print(f"::error::{failure}")
     if failures:
@@ -308,6 +328,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
+    verify.add_argument("--quality", type=_parse_bool, required=True)
     for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     subparsers.add_parser("pyright-count")

@@ -29,6 +29,7 @@ def test_documentation_only_change_skips_expensive_jobs(helper: ModuleType) -> N
     assert helper.classify_paths(["README.md", "directives/roadmap_2026_08_consolidated.md"]) == {
         "code": False,
         "python": False,
+        "quality": False,
     }
 
 
@@ -36,14 +37,34 @@ def test_documentation_only_change_skips_expensive_jobs(helper: ModuleType) -> N
 def test_agent_and_design_contract_changes_run_executable_guards(
     helper: ModuleType, path: str
 ) -> None:
-    assert helper.classify_paths([path]) == {"code": True, "python": False}
+    assert helper.classify_paths([path]) == {"code": True, "python": False, "quality": False}
 
 
 def test_unknown_non_documentation_path_fails_closed(helper: ModuleType) -> None:
     assert helper.classify_paths(["new-tool/config.toml"]) == {
         "code": True,
         "python": False,
+        "quality": False,
     }
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/quality/architecture-ratchet.json",
+        "docs/quality/README.md",
+        "Makefile",
+        ".github/workflows/ci.yml",
+        ".github/scripts/ci_gate.py",
+        "src/quality/architecture.py",
+    ],
+)
+def test_quality_control_changes_run_quality_ratchets(helper: ModuleType, path: str) -> None:
+    assert helper.classify_paths([path])["quality"] is True
+
+
+def test_unrelated_documentation_change_does_not_run_quality_ratchets(helper: ModuleType) -> None:
+    assert helper.classify_paths(["docs/architecture.md"])["quality"] is False
 
 
 @pytest.mark.parametrize(
@@ -67,13 +88,20 @@ def test_unknown_non_documentation_path_fails_closed(helper: ModuleType) -> None
     ],
 )
 def test_code_change_classification(helper: ModuleType, path: str, python: bool) -> None:
-    assert helper.classify_paths([path]) == {"code": True, "python": python}
+    assert helper.classify_paths([path]) == {
+        "code": True,
+        "python": python,
+        "quality": python
+        or path in {"Makefile"}
+        or path.startswith((".github/workflows/", ".github/scripts/")),
+    }
 
 
 def test_gate_requires_every_applicable_job_to_succeed(helper: ModuleType) -> None:
     assert helper.gate_failures(
         code=True,
         python=True,
+        quality=True,
         results={
             "changes": "success",
             "public-boundary": "success",
@@ -86,11 +114,48 @@ def test_gate_requires_every_applicable_job_to_succeed(helper: ModuleType) -> No
     ) == ["typecheck must succeed for this change set; got skipped"]
 
 
+def test_gate_requires_quality_for_quality_control_changes(helper: ModuleType) -> None:
+    assert helper.gate_failures(
+        code=True,
+        python=False,
+        quality=True,
+        results={
+            "changes": "success",
+            "public-boundary": "success",
+            "tests": "success",
+            "design": "success",
+            "quality": "skipped",
+            "typecheck": "skipped",
+            "security": "success",
+        },
+    ) == ["quality must succeed for this change set; got skipped"]
+
+
+def test_gate_keeps_python_changes_quality_required_even_if_groups_disagree(
+    helper: ModuleType,
+) -> None:
+    assert helper.gate_failures(
+        code=True,
+        python=True,
+        quality=False,
+        results={
+            "changes": "success",
+            "public-boundary": "success",
+            "tests": "success",
+            "design": "success",
+            "quality": "skipped",
+            "typecheck": "success",
+            "security": "success",
+        },
+    ) == ["quality must succeed for this change set; got skipped"]
+
+
 def test_gate_accepts_skipped_expensive_jobs_for_docs_only(helper: ModuleType) -> None:
     assert (
         helper.gate_failures(
             code=False,
             python=False,
+            quality=False,
             results={
                 "changes": "success",
                 "public-boundary": "success",
@@ -109,6 +174,7 @@ def test_gate_never_hides_failed_or_cancelled_jobs(helper: ModuleType) -> None:
     assert helper.gate_failures(
         code=False,
         python=False,
+        quality=False,
         results={
             "changes": "failure",
             "public-boundary": "success",
@@ -128,6 +194,7 @@ def test_gate_rejects_skipped_change_classification(helper: ModuleType) -> None:
     assert helper.gate_failures(
         code=False,
         python=False,
+        quality=False,
         results={
             "changes": "skipped",
             "public-boundary": "success",
@@ -144,6 +211,7 @@ def test_gate_always_requires_public_boundary(helper: ModuleType) -> None:
     gate_failures = helper.gate_failures(
         code=False,
         python=False,
+        quality=False,
         results={
             "changes": "success",
             "public-boundary": "skipped",
@@ -324,6 +392,10 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "errcount || echo 0" not in workflow
     assert "python .github/scripts/ci_gate.py classify" in workflow
     assert "python .github/scripts/ci_gate.py verify" in workflow
+    assert "quality: ${{ steps.classify.outputs.quality }}" in workflow
+    assert "needs.changes.outputs.quality == 'true'" in workflow
+    assert "QUALITY_CHANGED: ${{ needs.changes.outputs.quality || 'false' }}" in workflow
+    assert '--quality "$QUALITY_CHANGED"' in workflow
     assert "if: ${{ always() }}" in workflow
     assert "name: CI Gate" in workflow
     assert "name: Public Boundary" in workflow

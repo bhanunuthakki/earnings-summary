@@ -37,6 +37,7 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
       python: ${{ steps.classify.outputs.python }}
+      quality: ${{ steps.classify.outputs.quality }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -403,7 +404,7 @@ jobs:
 
   quality:
     needs: [changes]
-    if: ${{ needs.changes.outputs.python == 'true' }}
+    if: ${{ needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -657,6 +658,7 @@ jobs:
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
+          QUALITY_CHANGED: ${{ needs.changes.outputs.quality || 'false' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           PUBLIC_BOUNDARY_RESULT: ${{ needs.public-boundary.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
@@ -668,6 +670,7 @@ jobs:
           python .github/scripts/ci_gate.py verify
           --code "$CODE_CHANGED"
           --python "$PYTHON_CHANGED"
+          --quality "$QUALITY_CHANGED"
           --changes-result "$CHANGES_RESULT"
           --public-boundary-result "$PUBLIC_BOUNDARY_RESULT"
           --tests-result "$TESTS_RESULT"
