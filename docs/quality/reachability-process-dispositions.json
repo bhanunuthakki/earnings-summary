@@ -7,7 +7,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.2.0",
       "python": ">=3.11",
-      "source_sha256": "60f3dc2fccc6f48b1dfe40ed3f45647705e8b01b5ad58118fddc696171240d65"
+      "source_sha256": "d137fa87b641ffbba1a867f5599f94f05f8d6e940493ec94ac488b4f71895eec"
     }
   },
   "scope": {
@@ -53,8 +53,8 @@
     },
     {
       "path": "execution/backfill_transcripts.py",
-      "line": 626,
-      "fingerprint": "71d4aa8b30ceaaf3d30f5b4177415953dfa2ffb4e1af13d63df8ef56311703ee",
+      "line": 751,
+      "fingerprint": "f76f946a80104b7a2d90acbc1c4dcc42d530ae781474881a69a1da04a7fb4363",
       "disposition": "internal_python_target",
       "target": "execution/ingest_transcripts_state.py",
       "command_family": "managed Python child",
@@ -62,8 +62,8 @@
     },
     {
       "path": "execution/backfill_transcripts.py",
-      "line": 651,
-      "fingerprint": "fd7650c81558628c2c42eefacee0f71dd42fdeed9fb77772a6e543ee21699acc",
+      "line": 781,
+      "fingerprint": "93a2e2f1cfc32341a4536cb1d25817fb1f6a4c0f9e985b839de4388a8f4066f4",
       "disposition": "internal_python_target",
       "target": "execution/extract_commitments_from_transcript.py",
       "command_family": "managed Python child",

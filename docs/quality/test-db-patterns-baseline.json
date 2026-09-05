@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "8c0c58ec7827ab70fc84247f1abd2f9180a35115",
+  "scoped_commit": "1815fc96f4b2b9f107cd27d4a11c25d202b253ab",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "3b20499d6483e2bd74c222b627c739829cf5d6620b52a1d8195e2b6c013bd84e",
+  "source_sha256": "99ac1e8eac45fcbef68b8d39443fbe37abb1830dcf16de6f9adc67d437711d36",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",
@@ -6589,7 +6589,7 @@
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "taxonomy": "hand-DDL-unit-schema",
+      "taxonomy": "archived-graph",
       "evidence": [
         "call:migrated_db",
         "sql:create table"
@@ -6901,12 +6901,12 @@
     }
   ],
   "counts_by_taxonomy": {
-    "archived-graph": 36,
+    "archived-graph": 37,
     "cached-current-head": 62,
     "custom-bootstrap": 28,
     "direct-downgrade": 102,
     "direct-historical": 24,
-    "hand-DDL-unit-schema": 350,
+    "hand-DDL-unit-schema": 349,
     "performance-volume": 36,
     "seeded-upgrade": 57
   },
@@ -7195,7 +7195,7 @@
     },
     {
       "path": "tests/test_audit_quarterly_data_coverage.py",
-      "line": 411,
+      "line": 481,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
@@ -7303,49 +7303,73 @@
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 208,
+      "line": 266,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 246,
+      "line": 335,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 311,
+      "line": 370,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 348,
+      "line": 429,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 505,
+      "line": 494,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 540,
+      "line": 531,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 580,
+      "line": 773,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 626,
+      "line": 808,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 850,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 906,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 983,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 1021,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
@@ -9499,31 +9523,31 @@
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 193,
+      "line": 242,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 336,
+      "line": 385,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 377,
+      "line": 426,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 420,
+      "line": 469,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 448,
+      "line": 497,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },

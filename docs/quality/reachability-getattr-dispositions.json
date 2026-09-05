@@ -8,7 +8,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.2.0",
       "python": ">=3.11",
-      "source_sha256": "60f3dc2fccc6f48b1dfe40ed3f45647705e8b01b5ad58118fddc696171240d65"
+      "source_sha256": "d137fa87b641ffbba1a867f5599f94f05f8d6e940493ec94ac488b4f71895eec"
     }
   },
   "scope": {

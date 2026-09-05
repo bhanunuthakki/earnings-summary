@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "8c9db7d251946d65b1660fcaabe0947c64cbbbab",
-  "source_hash": "bae587d1a5360648bd8f12bf22b8554338b96f9f3c2213fd2a01c0484b13ec99",
+  "commit_hash": "1815fc96f4b2b9f107cd27d4a11c25d202b253ab",
+  "source_hash": "55386e68493ef4c0e8911fa78ae449f384152dec452378718b7e0bb3f25abe80",
   "scanner_hash": "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -11,7 +11,7 @@
     "min_body_lines": 15
   },
   "files_scanned": 1339,
-  "functions_scanned": 14358,
+  "functions_scanned": 14368,
   "exact_groups": [
     {
       "group_id": "exact-008cef8bb5653e6d",
@@ -264,6 +264,31 @@
           "body_lines": 25,
           "ast_nodes": 135,
           "normalized_hash": "41cce012010a30eb5d3a3481d4a4a0e5ec0648462ba361bbf0c09efb2057d040"
+        }
+      ]
+    },
+    {
+      "group_id": "near-03fb6de615b531f6",
+      "similarity": 0.964821,
+      "duplicated_loc": 55,
+      "functions": [
+        {
+          "path": "execution/backfill_transcripts.py",
+          "qualified_name": "_recorded_evidence_path",
+          "lineno": 253,
+          "end_lineno": 280,
+          "body_lines": 27,
+          "ast_nodes": 219,
+          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
+        },
+        {
+          "path": "execution/scan_ir_transcripts.py",
+          "qualified_name": "_recorded_evidence_path",
+          "lineno": 121,
+          "end_lineno": 149,
+          "body_lines": 28,
+          "ast_nodes": 227,
+          "normalized_hash": "3106bd9ffbb5c098df6f3b4c1e15c21ed06d4de35dd1db326eefaf84f728f355"
         }
       ]
     },
@@ -714,31 +739,6 @@
           "body_lines": 52,
           "ast_nodes": 437,
           "normalized_hash": "3f37e13b5e18c98582808fa2b9c143e5216936a9231e683935b0f048b3d27cd9"
-        }
-      ]
-    },
-    {
-      "group_id": "near-2922a70cf746700c",
-      "similarity": 0.997218,
-      "duplicated_loc": 141,
-      "functions": [
-        {
-          "path": "execution/backfill_transcripts.py",
-          "qualified_name": "_resolve_tickers",
-          "lineno": 531,
-          "end_lineno": 601,
-          "body_lines": 70,
-          "ast_nodes": 403,
-          "normalized_hash": "14f7f9656d0494410a0d6a2d2e9c1db8d23d0e38848636e2df5fec649af37516"
-        },
-        {
-          "path": "execution/scan_ir_transcripts.py",
-          "qualified_name": "_resolve_tickers",
-          "lineno": 247,
-          "end_lineno": 318,
-          "body_lines": 71,
-          "ast_nodes": 403,
-          "normalized_hash": "f8c44e23124f74ec140e1b1edfc728c993fad473040b2ecd3269ad3e35cb022c"
         }
       ]
     },
@@ -1802,6 +1802,31 @@
       ]
     },
     {
+      "group_id": "near-6638b24e14239212",
+      "similarity": 0.997218,
+      "duplicated_loc": 141,
+      "functions": [
+        {
+          "path": "execution/backfill_transcripts.py",
+          "qualified_name": "_resolve_tickers",
+          "lineno": 644,
+          "end_lineno": 714,
+          "body_lines": 70,
+          "ast_nodes": 403,
+          "normalized_hash": "14f7f9656d0494410a0d6a2d2e9c1db8d23d0e38848636e2df5fec649af37516"
+        },
+        {
+          "path": "execution/scan_ir_transcripts.py",
+          "qualified_name": "_resolve_tickers",
+          "lineno": 247,
+          "end_lineno": 318,
+          "body_lines": 71,
+          "ast_nodes": 403,
+          "normalized_hash": "f8c44e23124f74ec140e1b1edfc728c993fad473040b2ecd3269ad3e35cb022c"
+        }
+      ]
+    },
+    {
       "group_id": "near-69cba1db14c941b7",
       "similarity": 0.888986,
       "duplicated_loc": 36,
@@ -2491,31 +2516,6 @@
           "body_lines": 16,
           "ast_nodes": 197,
           "normalized_hash": "ff59f4e1efd70e925a8d5df977a4f64328ea00ecd456ffa9168136f68f08fdcb"
-        }
-      ]
-    },
-    {
-      "group_id": "near-838e71c4d42998af",
-      "similarity": 0.952436,
-      "duplicated_loc": 55,
-      "functions": [
-        {
-          "path": "execution/audit_transcript_evidence.py",
-          "qualified_name": "_safe_path",
-          "lineno": 61,
-          "end_lineno": 89,
-          "body_lines": 28,
-          "ast_nodes": 227,
-          "normalized_hash": "f44a4685a5d9e19077a570b4318bc2facf0e52829abc1e1206d31ba9a9d2cf57"
-        },
-        {
-          "path": "execution/backfill_transcripts.py",
-          "qualified_name": "_recorded_evidence_path",
-          "lineno": 192,
-          "end_lineno": 219,
-          "body_lines": 27,
-          "ast_nodes": 219,
-          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
         }
       ]
     },
@@ -4270,31 +4270,6 @@
       ]
     },
     {
-      "group_id": "near-f7ca7c323b163c61",
-      "similarity": 0.964821,
-      "duplicated_loc": 55,
-      "functions": [
-        {
-          "path": "execution/backfill_transcripts.py",
-          "qualified_name": "_recorded_evidence_path",
-          "lineno": 192,
-          "end_lineno": 219,
-          "body_lines": 27,
-          "ast_nodes": 219,
-          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
-        },
-        {
-          "path": "execution/scan_ir_transcripts.py",
-          "qualified_name": "_recorded_evidence_path",
-          "lineno": 121,
-          "end_lineno": 149,
-          "body_lines": 28,
-          "ast_nodes": 227,
-          "normalized_hash": "3106bd9ffbb5c098df6f3b4c1e15c21ed06d4de35dd1db326eefaf84f728f355"
-        }
-      ]
-    },
-    {
       "group_id": "near-f9395a7a5897aa65",
       "similarity": 0.946934,
       "duplicated_loc": 31,
@@ -4416,6 +4391,31 @@
           "body_lines": 40,
           "ast_nodes": 248,
           "normalized_hash": "86422d122eeee66ba259a348bf22012ac9de22443ea6bf09007544499b5f32bd"
+        }
+      ]
+    },
+    {
+      "group_id": "near-ffd74f4636d9930a",
+      "similarity": 0.952436,
+      "duplicated_loc": 55,
+      "functions": [
+        {
+          "path": "execution/audit_transcript_evidence.py",
+          "qualified_name": "_safe_path",
+          "lineno": 61,
+          "end_lineno": 89,
+          "body_lines": 28,
+          "ast_nodes": 227,
+          "normalized_hash": "f44a4685a5d9e19077a570b4318bc2facf0e52829abc1e1206d31ba9a9d2cf57"
+        },
+        {
+          "path": "execution/backfill_transcripts.py",
+          "qualified_name": "_recorded_evidence_path",
+          "lineno": 253,
+          "end_lineno": 280,
+          "body_lines": 27,
+          "ast_nodes": 219,
+          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
         }
       ]
     }

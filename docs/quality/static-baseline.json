@@ -2791,7 +2791,7 @@
       "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 2,
-      "receipt_path": ".tmp/static_quality/7d68bdfcfe30f6e8e39dabd3/ruff-check.json",
+      "receipt_path": ".tmp/static_quality/8afd63bc55335a40e944554c/ruff-check.json",
       "diagnostics_by_directory": {
         "src/user_state": 2
       },
@@ -2812,7 +2812,7 @@
       "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 62,
-      "receipt_path": ".tmp/static_quality/7d68bdfcfe30f6e8e39dabd3/ruff-format.txt",
+      "receipt_path": ".tmp/static_quality/8afd63bc55335a40e944554c/ruff-format.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {},
       "command_hash": "877e0d1f5a03b9e09cdaa9cafecf0b4dcfed21d89454511be97498af2660c883",
@@ -2829,7 +2829,7 @@
       "version": "pyright 1.1.411",
       "exit_status": 1,
       "count": 4367,
-      "receipt_path": ".tmp/static_quality/7d68bdfcfe30f6e8e39dabd3/pyright.json",
+      "receipt_path": ".tmp/static_quality/8afd63bc55335a40e944554c/pyright.json",
       "diagnostics_by_directory": {
         "alembic/versions_archived": 175,
         "execution": 1120,
@@ -2893,12 +2893,12 @@
       ],
       "version": "n/a",
       "exit_status": 0,
-      "count": 606,
-      "receipt_path": ".tmp/static_quality/7d68bdfcfe30f6e8e39dabd3/source-ignore-comments.txt",
+      "count": 612,
+      "receipt_path": ".tmp/static_quality/8afd63bc55335a40e944554c/source-ignore-comments.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {
         "# type: ignore": 251,
-        "# pyright: ignore": 355
+        "# pyright: ignore": 361
       },
       "command_hash": "a59001a2bdaaa50c7012c1ccbe4d0ace257f221b32a2d40e285a9a7c73a9288b",
       "version_hash": "a683c5c5349f6f7fb903ba8a9e7e55d0ba1b8f03579f95be83f4954c33e81098"
@@ -2969,10 +2969,10 @@
   ],
   "status": "PASS",
   "violations": [],
-  "scoped_commit": "8c0c58ec7827ab70fc84247f1abd2f9180a35115",
-  "source_hash": "1230151510bf8a9373e2dec5be9037b18a84522bf10872daff632f2dd70f88a4",
+  "scoped_commit": "1815fc96f4b2b9f107cd27d4a11c25d202b253ab",
+  "source_hash": "1760fc0f2260d563f19511f7c3c58951b082ade222498dce735ed0698206693f",
   "config_hash": "15aaf211f0d5d011d13e12d447c055098b09fd448f0d3b2e3244abd0c80bfbef",
-  "receipt_identity": "7d68bdfcfe30f6e8e39dabd3",
+  "receipt_identity": "8afd63bc55335a40e944554c",
   "suppressions_by_file": {
     "evals/structural/test_provider_blind_evals.py": {
       "# type: ignore": 1,
@@ -3223,6 +3223,14 @@
       "# pyright: ignore": 2
     },
     "tests/test_ask_turn_cache.py": {
+      "# type: ignore": 0,
+      "# pyright: ignore": 2
+    },
+    "tests/test_audit_quarterly_data_coverage.py": {
+      "# type: ignore": 0,
+      "# pyright: ignore": 4
+    },
+    "tests/test_backfill_transcripts.py": {
       "# type: ignore": 0,
       "# pyright: ignore": 2
     },

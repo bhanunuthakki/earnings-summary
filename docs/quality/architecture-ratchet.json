@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8c9db7d251946d65b1660fcaabe0947c64cbbbab",
+  "scoped_commit": "1815fc96f4b2b9f107cd27d4a11c25d202b253ab",
   "scanner_sha256": "458ece6a481930630754ba67af17d21df0ddec64588404d50e8054b8ec5a18d9",
-  "source_sha256": "bae587d1a5360648bd8f12bf22b8554338b96f9f3c2213fd2a01c0484b13ec99",
+  "source_sha256": "55386e68493ef4c0e8911fa78ae449f384152dec452378718b7e0bb3f25abe80",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,8 +23,8 @@
   },
   "metrics": {
     "executable_modules": 1339,
-    "total_noncomment_loc": 495092,
-    "modules_over_1000_loc": 91,
+    "total_noncomment_loc": 495677,
+    "modules_over_1000_loc": 92,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 156,
@@ -367,9 +367,9 @@
         "path": "execution/audit_quarterly_data_coverage.py",
         "module": "execution.audit_quarterly_data_coverage",
         "lines": {
-          "physical": 994,
-          "nonblank": 949,
-          "noncomment": 947
+          "physical": 1020,
+          "nonblank": 975,
+          "noncomment": 973
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -782,9 +782,9 @@
         "path": "execution/backfill_transcripts.py",
         "module": "execution.backfill_transcripts",
         "lines": {
-          "physical": 1067,
-          "nonblank": 985,
-          "noncomment": 977
+          "physical": 1297,
+          "nonblank": 1200,
+          "noncomment": 1192
         },
         "internal_fan_out": 13,
         "responsibilities": [
@@ -2426,14 +2426,15 @@
         "path": "execution/extract_commitments_from_transcript.py",
         "module": "execution.extract_commitments_from_transcript",
         "lines": {
-          "physical": 410,
-          "nonblank": 370,
-          "noncomment": 355
+          "physical": 412,
+          "nonblank": 372,
+          "noncomment": 357
         },
         "internal_fan_out": 8,
         "responsibilities": [
           "database",
-          "filesystem"
+          "filesystem",
+          "network"
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -3011,9 +3012,9 @@
         "path": "execution/fetch_qa_transcript.py",
         "module": "execution.fetch_qa_transcript",
         "lines": {
-          "physical": 442,
-          "nonblank": 395,
-          "noncomment": 395
+          "physical": 460,
+          "nonblank": 413,
+          "noncomment": 413
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -3533,11 +3534,11 @@
         "path": "execution/ingest_transcripts.py",
         "module": "execution.ingest_transcripts",
         "lines": {
-          "physical": 767,
-          "nonblank": 710,
-          "noncomment": 710
+          "physical": 1004,
+          "nonblank": 937,
+          "noncomment": 937
         },
-        "internal_fan_out": 12,
+        "internal_fan_out": 14,
         "responsibilities": [
           "database",
           "filesystem",
@@ -3550,9 +3551,9 @@
         "path": "execution/ingest_transcripts_state.py",
         "module": "execution.ingest_transcripts_state",
         "lines": {
-          "physical": 79,
-          "nonblank": 63,
-          "noncomment": 63
+          "physical": 96,
+          "nonblank": 80,
+          "noncomment": 80
         },
         "internal_fan_out": 0,
         "responsibilities": [],
@@ -7907,16 +7908,16 @@
         "path": "src/compute/management_indicators.py",
         "module": "compute.management_indicators",
         "lines": {
-          "physical": 279,
-          "nonblank": 241,
-          "noncomment": 241
+          "physical": 294,
+          "nonblank": 253,
+          "noncomment": 253
         },
         "internal_fan_out": 2,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/compute/metrics_engine/__init__.py",
@@ -8105,9 +8106,9 @@
         "path": "src/compute/say_do_extractor.py",
         "module": "compute.say_do_extractor",
         "lines": {
-          "physical": 559,
-          "nonblank": 487,
-          "noncomment": 478
+          "physical": 578,
+          "nonblank": 504,
+          "noncomment": 495
         },
         "internal_fan_out": 7,
         "responsibilities": [
@@ -14261,17 +14262,17 @@
         "path": "src/pipeline/transcript_acquisition.py",
         "module": "pipeline.transcript_acquisition",
         "lines": {
-          "physical": 825,
-          "nonblank": 760,
-          "noncomment": 760
+          "physical": 888,
+          "nonblank": 815,
+          "noncomment": 811
         },
         "internal_fan_out": 9,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 9,
-        "fully_annotated_public_functions": 9
+        "public_functions": 11,
+        "fully_annotated_public_functions": 11
       },
       {
         "path": "src/pipeline/triage_panel.py",

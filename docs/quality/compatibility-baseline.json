@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "8c9db7d251946d65b1660fcaabe0947c64cbbbab",
-  "source_sha256": "a235bdb16da1cddeb12c64d08b531ab80fa3e7793ff8c67954d1a3aca29053bf",
+  "current_revision": "1815fc96f4b2b9f107cd27d4a11c25d202b253ab",
+  "source_sha256": "0fd005392c93e5eea07a56510351a095a6a4ba5e65e0f22b797a72630f8f5a7f",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -255,7 +255,7 @@
     },
     {
       "path": "execution/audit_quarterly_data_coverage.py",
-      "current_sha256": "bcad2271b6bb6e27616e64ec15b552f833666705f85101ef6eb9a2df9b9743f5",
+      "current_sha256": "36f7a051b7dd6b7590e39d2a79a379aafadaf0d539dc6874a2f70f649b1a94c6",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -423,7 +423,7 @@
     },
     {
       "path": "execution/backfill_transcripts.py",
-      "current_sha256": "dd2960172ee306fd05962c37a4a510e11cf6bd6c007d262e3c00dc96c61e690a",
+      "current_sha256": "27b6be101c23aa0d7b9e324fe9c143a94a76173d86b1c666bec9634e15985a1a",
       "baseline_sha256": "05201a5f5009af95c0c2ab106a8ed56749913a7e02ebd0eda0be4784c6cfee30",
       "status": "changed"
     },
@@ -1059,7 +1059,7 @@
     },
     {
       "path": "execution/extract_commitments_from_transcript.py",
-      "current_sha256": "a21a264c9fd714e3681f21ba0f8336ff02e45cc445a297862b96b8ae17d8d323",
+      "current_sha256": "d8ac6563d28c1edbe5eb46dc5fba6ba5bee611386af1ad96dbef35f3b7965ad2",
       "baseline_sha256": "3cd49cfa3b743f751835875762afa9146b1594a66806dfe1ef5fdf88e3068b44",
       "status": "changed"
     },
@@ -1281,7 +1281,7 @@
     },
     {
       "path": "execution/fetch_qa_transcript.py",
-      "current_sha256": "897c526a5e823d1924b305d01654529284bd5052711374f336c4b74c6880389e",
+      "current_sha256": "5de800007088defc995c707b17397a0931a340d1515fec9267512338426c5db8",
       "baseline_sha256": "49c00c9ba3cbc699b597edd3954c8b4c0195a618a0c260402f449215350536c9",
       "status": "changed"
     },
@@ -1485,13 +1485,13 @@
     },
     {
       "path": "execution/ingest_transcripts.py",
-      "current_sha256": "b46da8a238aae98840b1df7f160552f6870506036893cad92b6e88863daab00e",
+      "current_sha256": "d04cc4414ceeef643ee0c580fed2ea79055f3e2f8f5f0ef0f66fd7427b8f8cea",
       "baseline_sha256": "35caa566440f9b2e434d3bf29677dd8d371b922b17799f54593da296f6baaaa7",
       "status": "changed"
     },
     {
       "path": "execution/ingest_transcripts_state.py",
-      "current_sha256": "04132124ecb2b0b684330d4cc8a64b02aa03ea24d095e0cfbb3bbc641b8943eb",
+      "current_sha256": "be8a970cdf5667d2c653da60ef06c8f887af892e863c3636beb2bfcea8620e70",
       "baseline_sha256": "589af7a0adf1793c0dce067a00d4068be1d6e6aade9365ab21e2be5a71a8be10",
       "status": "changed"
     },
@@ -3213,9 +3213,9 @@
     },
     {
       "path": "src/compute/management_indicators.py",
-      "current_sha256": "0f2c716db732a03e8fe2358f2ee824ad5d35cb46ad8330c4fcb33e990366af93",
+      "current_sha256": "a368a46f37b23218c6546b9c1c32d4a94f62cb67347e9ed709b4b4171ebd8dce",
       "baseline_sha256": "0f2c716db732a03e8fe2358f2ee824ad5d35cb46ad8330c4fcb33e990366af93",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "src/compute/metrics_engine/__init__.py",
@@ -3291,7 +3291,7 @@
     },
     {
       "path": "src/compute/say_do_extractor.py",
-      "current_sha256": "943ff6490f7eedf003fa2044a3aaeb25ce692d7ed20c2f63bb6a92053ac81e0c",
+      "current_sha256": "8b472336c570c1bd6c7284eef34e96c0d1cc824ffefdd0877c6946a5cb1ff4a2",
       "baseline_sha256": "450fe68b71fd941205356eb30f662bcd50ccc9d66fd8354171f71472f0545285",
       "status": "changed"
     },
@@ -5721,7 +5721,7 @@
     },
     {
       "path": "src/pipeline/transcript_acquisition.py",
-      "current_sha256": "98aeb7751ed490b1a8d6ce4a66c8ad046532e9bc7be1881d1d3426ac7d807365",
+      "current_sha256": "fd7c3af9704e4e07275c5bc1e5aafdeaf31b6d4d021258a3466b746513780efb",
       "baseline_sha256": "649e200b929037648386965f1652a2b8c6ec173195d4880bdcdcc4e264a4bac5",
       "status": "changed"
     },
@@ -6483,7 +6483,7 @@
     },
     {
       "path": "src/quality/roadmap_freeze_contract.py",
-      "current_sha256": "68f6ae71868e15542844a6577d34ddb56015f90b7c3ebd60498732525290bb4b",
+      "current_sha256": "2c97f98cfc1bd9fbc56fb89ebfd5bf8e92fd49b7393d012a002422137b60b657",
       "baseline_sha256": null,
       "status": "added"
     },
