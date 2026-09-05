@@ -49,6 +49,7 @@ from compute.management_indicators import (
     IndicatorRecurrence,
     IndicatorScope,
     ManagementIndicatorInput,
+    validate_indicator_source_binding,
 )
 from compute.say_do import CommitmentExtractionManifest, CommitmentInput
 from compute.thesis_evaluator import Comparator
@@ -545,15 +546,33 @@ def extract_for_transcript(
         source_doc_id=source_doc_id,
         speaker=speaker,
     )
+
+    def parse_and_validate(response: str) -> TranscriptExtractionManifest:
+        manifest = parse_llm_response(response, context=context)
+        try:
+            for indicator in manifest.indicators:
+                validate_indicator_source_binding(conn, indicator=indicator)
+        except ValueError as exc:
+            raise CommitmentParseError(
+                f"novel indicator source evidence failed exact segment binding: {exc}"
+            ) from exc
+        return manifest
+
     response_text = llm_call(prompt)
     try:
-        return parse_llm_response(response_text, context=context)
+        return parse_and_validate(response_text)
     except CommitmentParseError as first_exc:
+        validation_error = str(first_exc)
         log.warning(
             "transcript_id=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
             transcript_id,
             ticker,
-            first_exc,
+            validation_error,
         )
-    retry_text = llm_call(_RETRY_PREAMBLE + prompt)
-    return parse_llm_response(retry_text, context=context)
+    retry_text = llm_call(
+        _RETRY_PREAMBLE
+        + f"VALIDATION ERROR: {validation_error}\n"
+        + "Copy each novel indicator source_excerpt exactly from the transcript.\n\n"
+        + prompt
+    )
+    return parse_and_validate(retry_text)

@@ -152,6 +152,21 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
+def validate_indicator_source_binding(
+    conn: sqlite3.Connection,
+    *,
+    indicator: ManagementIndicatorInput,
+) -> None:
+    """Require the indicator excerpt to bind to one exact issuer transcript segment."""
+
+    _resolve_indicator_source(
+        conn,
+        anchor_segment_id=indicator.transcript_segment_id,
+        ticker=indicator.ticker,
+        source_excerpt=indicator.source_excerpt,
+    )
+
+
 def _canonical_payload(
     indicator: ManagementIndicatorInput,
     *,
