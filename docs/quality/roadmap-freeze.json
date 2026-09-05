@@ -6,43 +6,43 @@
   "evidence": {
     "architecture": {
       "path": "docs/quality/architecture-ratchet.json",
-      "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
-      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+      "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
+      "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
       "scope": "WORKTREE"
     },
     "static": {
       "path": "docs/quality/static-baseline.json",
-      "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
-      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+      "sha256": "dedb0f5fead3bd24c299e4039a07b648968cd4ee9334b03cc5f4f114c9e78a35",
+      "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
       "scope": "WORKTREE"
     },
     "test_db": {
       "path": "docs/quality/test-db-patterns-baseline.json",
-      "sha256": "941a03a98b19f064e967ed6bf85a44b34472ea3767514d515b343da6a78ee497",
-      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+      "sha256": "bca936384d1023b35812b3ad5523684b09cd19b3a28c1a2cbe8c424d6db22efc",
+      "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
       "scope": "WORKTREE"
     },
     "duplicate": {
       "path": "docs/quality/duplicates-ratchet.json",
-      "sha256": "112384f8e7a7c56732f4c1320f3107394bb9ef2f324d59df228c5e3d9dd7f651",
-      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+      "sha256": "dd748919ffa949ee862da0934cc3e3ae0d50fc87ffa2ea4bad953283598cbd95",
+      "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
       "scope": "WORKTREE"
     },
     "lifecycle": {
       "path": "docs/quality/lifecycle-baseline.json",
-      "sha256": "eb204df99d5e7fd5c7464a2fc1562f52866ba0dd47e5fac4b21f25c30ead925e",
-      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+      "sha256": "06fcfd9db24fb81b0d471d5e8835b916710bb50967e45cb8a39caf5dd81dad51",
+      "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
       "scope": "WORKTREE"
     },
     "function_lifecycle": {
       "path": "docs/quality/function-lifecycle-baseline.json",
-      "sha256": "20046015e769cf68b2a9cb17782e3a8104bc3ce0f97c1dab433088b11d8e147e",
-      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+      "sha256": "98030a1c634b4f8f06e51e2c195645f1925cf8ace0f2c3b2c612b04d6b60d92a",
+      "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
       "scope": "WORKTREE"
     },
     "reconciliation": {
       "path": "docs/quality/reconciliation-baseline.json",
-      "sha256": "c1ba5855a1fc03b93f91f399c4512ac314ad739a1b89df046ba9b12982bcf7f8",
+      "sha256": "7d3323499fa956b981af2ab72f5153a37afd22400d9eebd876945aeb57e6824a",
       "scoped_commit": "WORKTREE",
       "scope": "WORKTREE"
     },
@@ -61,12 +61,12 @@
   },
   "function_lifecycle": {
     "path": "docs/quality/function-lifecycle-baseline.json",
-    "sha256": "20046015e769cf68b2a9cb17782e3a8104bc3ce0f97c1dab433088b11d8e147e",
+    "sha256": "98030a1c634b4f8f06e51e2c195645f1925cf8ace0f2c3b2c612b04d6b60d92a",
     "schema_version": "bha-109.v1",
     "parser_version": "python-ast-3.11-v3",
     "status": "PASS",
-    "tracked_tree_hash": "3dfba097bb0f90d89443a89e4063129778f744f1006773ca17d0cc59273f6521",
-    "inventory_hash": "c3b275bca8b6bfbe88e32ff36d1092474755f69167978e5ea60ad936e96957e2",
+    "tracked_tree_hash": "168aa68c6233ab28e880d1f3800e0e71dad205521b40857e9fc3de36965ab792",
+    "inventory_hash": "fb1ea3f17db85f75c7a4aa3c1d75b236eeeb96d1d0ef06de7aff1ac52aedaafd",
     "files_scanned": 2462,
     "symbol_count": 33740,
     "candidate_count": 15,
@@ -103,24 +103,24 @@
   },
   "reconciliation": {
     "path": "docs/quality/reconciliation-baseline.json",
-    "sha256": "c1ba5855a1fc03b93f91f399c4512ac314ad739a1b89df046ba9b12982bcf7f8",
+    "sha256": "7d3323499fa956b981af2ab72f5153a37afd22400d9eebd876945aeb57e6824a",
     "status": "PASS",
     "claims_count": 96,
     "scored_claims": 30,
     "rejected_claims": 66,
-    "source_hash": "91d5d6426318d3845d893565394d3ac1bb457d2f1c26ae42617561008da0ab1f",
+    "source_hash": "0da0ff86c7725c67e07bccc4cad22a87ade787cc2853c58a682143f862e9bd02",
     "claim_manifest_sha256": "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089",
     "claim_content_sha256": "cad998ea64984a6177c49e30d54b2d47ab7744fd474a7767e0f8a8924cd2b9c8",
     "roadmap_source_sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
     "violations": []
   },
   "reachability": {
-    "graph_sha256": "c751ece053edcdbfe26490cdff891ae424f72c0b24685b186fd92c15ec82237b",
+    "graph_sha256": "2309925841a5f879f4b1a4fb4944f57e930f0fe440013cd1736f5075f5b358f2",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "version": "1.1.0",
       "python": ">=3.11",
-      "source_sha256": "729b09d32b0a4a54f0192230fb599989460ca83c516543da4a45ff7fc942d242",
+      "source_sha256": "d5591fb4ab8d14d518a41981ab7975054d41d768061c66eb7eb038654cc8d294",
       "dispositions_sha256": "3f7decab1bd2c18ae46914e801e1e72ba0efaa0216be0d64940d5cd84498cb20"
     },
     "lifecycle_status": "PASS",

@@ -10,7 +10,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.executable_modules"
       },
       "provisional_evidence": {
@@ -28,7 +28,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.total_noncomment_loc"
       },
       "provisional_evidence": {
@@ -46,7 +46,7 @@
       "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.max_internal_fan_out"
       },
       "provisional_evidence": {
@@ -64,7 +64,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.modules_over_1000_loc"
       },
       "provisional_evidence": {
@@ -82,7 +82,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.modules_over_2000_loc"
       },
       "provisional_evidence": {
@@ -100,7 +100,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.modules_at_least_3000_loc"
       },
       "provisional_evidence": {
@@ -230,7 +230,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.definitions.internal_edges"
       },
       "provisional_evidence": {
@@ -248,7 +248,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.scc_count"
       },
       "provisional_evidence": {
@@ -266,7 +266,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.scc_module_count"
       },
       "provisional_evidence": {
@@ -284,7 +284,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.largest_scc"
       },
       "provisional_evidence": {
@@ -302,7 +302,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "112384f8e7a7c56732f4c1320f3107394bb9ef2f324d59df228c5e3d9dd7f651",
+        "sha256": "dd748919ffa949ee862da0934cc3e3ae0d50fc87ffa2ea4bad953283598cbd95",
         "locator": "$.exact_totals.groups"
       },
       "provisional_evidence": {
@@ -320,7 +320,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "112384f8e7a7c56732f4c1320f3107394bb9ef2f324d59df228c5e3d9dd7f651",
+        "sha256": "dd748919ffa949ee862da0934cc3e3ae0d50fc87ffa2ea4bad953283598cbd95",
         "locator": "$.exact_totals.participating_functions"
       },
       "provisional_evidence": {
@@ -338,7 +338,7 @@
       "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "112384f8e7a7c56732f4c1320f3107394bb9ef2f324d59df228c5e3d9dd7f651",
+        "sha256": "dd748919ffa949ee862da0934cc3e3ae0d50fc87ffa2ea4bad953283598cbd95",
         "locator": "$.near_miss_totals.groups"
       },
       "provisional_evidence": {
@@ -356,7 +356,7 @@
       "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "112384f8e7a7c56732f4c1320f3107394bb9ef2f324d59df228c5e3d9dd7f651",
+        "sha256": "dd748919ffa949ee862da0934cc3e3ae0d50fc87ffa2ea4bad953283598cbd95",
         "locator": "$.near_miss_totals.duplicated_loc"
       },
       "provisional_evidence": {
@@ -374,7 +374,7 @@
       "scored_eligible": false,
       "evidence": {
         "path": "docs/quality/duplicates-ratchet.json",
-        "sha256": "112384f8e7a7c56732f4c1320f3107394bb9ef2f324d59df228c5e3d9dd7f651",
+        "sha256": "dd748919ffa949ee862da0934cc3e3ae0d50fc87ffa2ea4bad953283598cbd95",
         "locator": "$.exact_totals.duplicated_loc"
       },
       "provisional_evidence": {
@@ -448,7 +448,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
+        "sha256": "dedb0f5fead3bd24c299e4039a07b648968cd4ee9334b03cc5f4f114c9e78a35",
         "locator": "$.diagnostics[tool=ruff].count"
       },
       "provisional_evidence": {
@@ -466,7 +466,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
+        "sha256": "dedb0f5fead3bd24c299e4039a07b648968cd4ee9334b03cc5f4f114c9e78a35",
         "locator": "$.diagnostics[tool=ruff-format].count"
       },
       "provisional_evidence": {
@@ -484,7 +484,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
+        "sha256": "dedb0f5fead3bd24c299e4039a07b648968cd4ee9334b03cc5f4f114c9e78a35",
         "locator": "$.diagnostics[tool=pyright].count"
       },
       "provisional_evidence": {
@@ -516,7 +516,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
+        "sha256": "dedb0f5fead3bd24c299e4039a07b648968cd4ee9334b03cc5f4f114c9e78a35",
         "locator": "$.suppressions_by_file[# type: ignore]"
       },
       "provisional_evidence": {
@@ -534,7 +534,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
+        "sha256": "dedb0f5fead3bd24c299e4039a07b648968cd4ee9334b03cc5f4f114c9e78a35",
         "locator": "$.suppressions_by_file[# pyright: ignore]"
       },
       "provisional_evidence": {
@@ -552,7 +552,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
+        "sha256": "dedb0f5fead3bd24c299e4039a07b648968cd4ee9334b03cc5f4f114c9e78a35",
         "locator": "$.suppressions_by_file"
       },
       "provisional_evidence": {
@@ -570,7 +570,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "941a03a98b19f064e967ed6bf85a44b34472ea3767514d515b343da6a78ee497",
+        "sha256": "bca936384d1023b35812b3ad5523684b09cd19b3a28c1a2cbe8c424d6db22efc",
         "locator": "$.tracked_test_files"
       },
       "provisional_evidence": {
@@ -588,7 +588,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "941a03a98b19f064e967ed6bf85a44b34472ea3767514d515b343da6a78ee497",
+        "sha256": "bca936384d1023b35812b3ad5523684b09cd19b3a28c1a2cbe8c424d6db22efc",
         "locator": "$.database_builders[*].evidence contains call:command.upgrade"
       },
       "provisional_evidence": {
@@ -606,7 +606,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "941a03a98b19f064e967ed6bf85a44b34472ea3767514d515b343da6a78ee497",
+        "sha256": "bca936384d1023b35812b3ad5523684b09cd19b3a28c1a2cbe8c424d6db22efc",
         "locator": "$.database_builders[*].evidence contains call:migrated_db"
       },
       "provisional_evidence": {
@@ -624,7 +624,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "941a03a98b19f064e967ed6bf85a44b34472ea3767514d515b343da6a78ee497",
+        "sha256": "bca936384d1023b35812b3ad5523684b09cd19b3a28c1a2cbe8c424d6db22efc",
         "locator": "$.database_builders[*].evidence contains sql:"
       },
       "provisional_evidence": {
@@ -1062,7 +1062,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.strongly_connected_components[1]"
       },
       "provisional_evidence": {
@@ -1346,7 +1346,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "941a03a98b19f064e967ed6bf85a44b34472ea3767514d515b343da6a78ee497",
+        "sha256": "bca936384d1023b35812b3ad5523684b09cd19b3a28c1a2cbe8c424d6db22efc",
         "locator": "$.database_builders[*].evidence contains call:command.upgrade"
       },
       "provisional_evidence": {
@@ -1364,7 +1364,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "c751ece053edcdbfe26490cdff891ae424f72c0b24685b186fd92c15ec82237b",
+        "sha256": "2309925841a5f879f4b1a4fb4944f57e930f0fe440013cd1736f5075f5b358f2",
         "locator": "$.edges[target=src/synthesis/theme_synth.py]"
       },
       "provisional_evidence": {
@@ -1382,7 +1382,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "c751ece053edcdbfe26490cdff891ae424f72c0b24685b186fd92c15ec82237b",
+        "sha256": "2309925841a5f879f4b1a4fb4944f57e930f0fe440013cd1736f5075f5b358f2",
         "locator": "$.edges[target=src/filings/boilerplate_classify.py]"
       },
       "provisional_evidence": {
@@ -1400,7 +1400,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "c751ece053edcdbfe26490cdff891ae424f72c0b24685b186fd92c15ec82237b",
+        "sha256": "2309925841a5f879f4b1a4fb4944f57e930f0fe440013cd1736f5075f5b358f2",
         "locator": "$.edges[target=src/filings/cross_sectional_detrend.py]"
       },
       "provisional_evidence": {
@@ -1418,7 +1418,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "c751ece053edcdbfe26490cdff891ae424f72c0b24685b186fd92c15ec82237b",
+        "sha256": "2309925841a5f879f4b1a4fb4944f57e930f0fe440013cd1736f5075f5b358f2",
         "locator": "$.edges[target=src/ask/turn_cache.py]"
       },
       "provisional_evidence": {
@@ -1436,7 +1436,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "c751ece053edcdbfe26490cdff891ae424f72c0b24685b186fd92c15ec82237b",
+        "sha256": "2309925841a5f879f4b1a4fb4944f57e930f0fe440013cd1736f5075f5b358f2",
         "locator": "$.edges[target=src/etf_sources/vanguard.py]"
       },
       "provisional_evidence": {
@@ -1454,7 +1454,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.modules[path=execution/refetch_aggregator.py]"
       },
       "provisional_evidence": {
@@ -1472,7 +1472,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/architecture-ratchet.json",
-        "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+        "sha256": "156db8ca7b8739959e95344fdf78114e828e4ca35494e5bb9f5782dd1340f7d1",
         "locator": "$.metrics.modules[path=execution/refetch_aggregator_transcripts.py]"
       },
       "provisional_evidence": {
@@ -1485,7 +1485,7 @@
   ],
   "scored_claims": 30,
   "rejected_claims": 66,
-  "source_hash": "91d5d6426318d3845d893565394d3ac1bb457d2f1c26ae42617561008da0ab1f",
+  "source_hash": "0da0ff86c7725c67e07bccc4cad22a87ade787cc2853c58a682143f862e9bd02",
   "roadmap_source": {
     "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
     "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
