@@ -32,7 +32,7 @@ FROZEN_RECONCILIATION_ROADMAP_SHA256 = (
     "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"
 )
 PERFORMANCE_RECEIPT = ".tmp/quality/test-ci-performance/full-suite-8c7dc0c3/receipt.json"
-EXPECTED_SCC_CUTS = 31
+EXPECTED_SCC_CUTS = 30
 MANDATORY_LOC_ROOTS = (
     "execution/comments_server.py",
     "src/pipeline/portfolio_panel.py",
@@ -94,12 +94,12 @@ FROZEN_ESTIMATE_MATRIX: dict[str, tuple[float, int, float]] = {
     "active-type-debt": (387.55, 20, 8.0),
     "integrity-audit": (120.0, 9, 5.0),
     "duplicate-authorities": (80.0, 11, 6.0),
-    "architecture-boundaries": (180.0, 68, 16.0),
+    "architecture-boundaries": (180.0, 67, 16.0),
     "lifecycle-pruning": (120.0, 12, 6.0),
     "final-static-zero": (80.0, 12, 6.0),
     "quality-closure": (60.0, 2, 3.0),
 }
-FROZEN_ESTIMATE_TOTALS: tuple[float, int, float] = (1083.55, 156, 57.0)
+FROZEN_ESTIMATE_TOTALS: tuple[float, int, float] = (1083.55, 155, 57.0)
 BHA115_CLOSURE_CONDITION = (
     "BHA-115 closes only after integrity SQL/rows/time/RSS, Alembic invocation/time, "
     "fixed 20-route cold/warm connection/query evidence, DCF stage evidence, source "
@@ -580,7 +580,7 @@ class RoadmapFreeze(StrictModel):
             raise ValueError("budget mappings must not overlap items")
         mapping_counts = Counter(row.item_kind for row in self.budget_mappings)
         if mapping_counts != {
-            "scc_cut": 31,
+            "scc_cut": EXPECTED_SCC_CUTS,
             "loc_crossing": 56,
             "type_cluster": 61,
             "builder": 172,

@@ -87,7 +87,7 @@ def test_evidence_ref_resolves_receipt_scope(
 def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
     freeze = RoadmapFreeze.model_validate_json(ARTIFACT.read_text(encoding="utf-8"))
 
-    assert len(freeze.scc_cut_edges) == 31
+    assert len(freeze.scc_cut_edges) == 30
     assert freeze.issue_train_matrix == {
         "BHA-104": "Train 1",
         "BHA-105": "Train 2",
@@ -103,12 +103,12 @@ def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
         20,
         9,
         11,
-        68,
+        67,
         12,
         12,
         2,
     ]
-    assert freeze.estimate_totals.total_estimated_prs == 156
+    assert freeze.estimate_totals.total_estimated_prs == 155
     assert freeze.estimate_totals.critical_path_calendar_weeks == 57
     assert {
         "execution/comments_server.py",

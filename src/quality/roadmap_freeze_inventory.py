@@ -445,7 +445,7 @@ def _feedback_arc_cut(
     """Choose a stable minimum feedback-arc set for the architecture SCCs.
 
     Exact minimum feedback arc set is NP-hard.  These SCCs are small, and the
-    deterministic seeded insertion search reaches the known 31-edge optimum;
+    deterministic seeded insertion search reaches the known 30-edge optimum;
     the resulting artifact is still validated by removing the chosen edges and
     proving that no SCC remains.
     """

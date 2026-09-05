@@ -10,26 +10,34 @@ import pytest
 from transcripts import receipt_sqlite
 
 
-def test_open_connection_uses_validator_registered_later(
+def test_connections_capture_validator_at_registration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A connection opened before acquisition import observes the later authority."""
+    """Early connections stay fail-closed while new connections use authority."""
 
     monkeypatch.setattr(receipt_sqlite, "_receipt_validator", None)
-    connection = sqlite3.connect(":memory:")
+    early_connection = sqlite3.connect(":memory:")
     receipt_sqlite.register_transcript_receipt_sqlite_functions(
-        connection,
+        early_connection,
         database_path=tmp_path / "data" / "portfolio.db",
     )
     values = ",".join("NULL" for _ in range(18))
-    assert connection.execute(f"SELECT transcript_receipt_valid({values})").fetchone() == (0,)
+    assert early_connection.execute(f"SELECT transcript_receipt_valid({values})").fetchone() == (0,)
 
     def validator(_project_root: Path, _values: tuple[object, ...]) -> int:
         return 1
 
     receipt_sqlite.register_transcript_receipt_validator(validator)
-    assert connection.execute(f"SELECT transcript_receipt_valid({values})").fetchone() == (1,)
-    connection.close()
+    assert early_connection.execute(f"SELECT transcript_receipt_valid({values})").fetchone() == (0,)
+
+    new_connection = sqlite3.connect(":memory:")
+    receipt_sqlite.register_transcript_receipt_sqlite_functions(
+        new_connection,
+        database_path=tmp_path / "data" / "portfolio.db",
+    )
+    assert new_connection.execute(f"SELECT transcript_receipt_valid({values})").fetchone() == (1,)
+    early_connection.close()
+    new_connection.close()
 
 
 def test_validator_authority_cannot_be_replaced(monkeypatch: pytest.MonkeyPatch) -> None:

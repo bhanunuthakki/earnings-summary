@@ -41,14 +41,14 @@ def register_transcript_receipt_sqlite_functions(
     """Register deterministic validation used by the receipt INSERT trigger.
 
     A connection opened before the acquisition boundary is imported receives a
-    fail-closed function. Normal acquisition entrypoints import and register
-    their validator before opening their connection.
+    fail-closed function permanently. Normal acquisition entrypoints import and
+    register their validator before opening their connection.
     """
 
     project_root = project_root_for_database(database_path)
+    validator = _receipt_validator
 
     def validate(*values: object) -> int:
-        validator = _receipt_validator
         if validator is None or len(values) != 18:
             return 0
         return validator(project_root, values)

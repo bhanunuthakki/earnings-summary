@@ -12,14 +12,14 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from models.companies import ListType
-from models.documents import DocType
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from transcripts.reviewed_issuer_policy import (
+from canonical_url import (
     canonical_dns_host,
     canonical_https_url,
     canonical_safe_path,
 )
+from models.companies import ListType
+from models.documents import DocType
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 POLICY_VERSION = "2026-08-12.2"
 _canonical_dns_host = canonical_dns_host
