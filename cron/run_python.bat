@@ -35,6 +35,10 @@ if /I "%SCHEDULED_LLM_ALLOW_PROVIDER_FALLBACK%"=="1" (
 )
 set "OPENAI_API_KEY="
 set "CODEX_API_KEY="
+set "ANTHROPIC_API_KEY="
+set "GEMINI_API_KEY="
+set "GOOGLE_API_KEY="
+set "OPENROUTER_API_KEY="
 
 set "TRIGGER_ARG="
 if /I "%ES_JOB_TRIGGER_KIND%"=="service" set "TRIGGER_ARG=--trigger-kind service"
