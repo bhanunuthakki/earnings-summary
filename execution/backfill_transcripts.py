@@ -46,18 +46,35 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sqlite3
 import subprocess
 import sys
 from calendar import monthrange
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
+from llm.prompt_versions import prompt_version_for  # noqa: E402
 from models.companies import ListType  # noqa: E402
+from pipeline.commitment_scan_receipts import (  # noqa: E402
+    current_commitment_scan_receipt,
+)
+from pipeline.data_coverage_dispositions import (  # noqa: E402
+    COMMITMENT_SCAN_POLICY_NAME,
+    COMMITMENT_SCAN_POLICY_PROVIDERS,
+    COMMITMENT_SCAN_POLICY_VERSION,
+    CoverageArtifactKind,
+    CoverageAttempt,
+    CoverageAttemptStatus,
+    CoverageDispositionStatus,
+    DataCoverageDispositionRequest,
+    append_data_coverage_disposition,
+    policy_config_sha256,
+)
 from pipeline.source_policy import (  # noqa: E402
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
@@ -65,13 +82,22 @@ from pipeline.source_policy import (  # noqa: E402
     CollectionTarget,
     select_collection_targets,
 )
+from provenance.selection import selected_transcripts_relation  # noqa: E402
 from runtime.python_process import managed_python_prefix  # noqa: E402
+from transcripts.acquisition_semantics import (  # noqa: E402
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+)
 
 # Sibling scripts in execution/ — needed when this module is imported (e.g.
 # from tests) rather than run directly via `python execution/backfill_transcripts.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import fetch_qa_transcript as fetch_qa_transcript_module  # type: ignore[import-not-found]  # noqa: E402
 from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
+    SOURCES as TRANSCRIPT_SOURCES,
+)
+from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
+    FetchQaAttemptStatus,
     FetchQaSpec,
     FetchQaStatus,
     fetch_qa,
@@ -95,10 +121,8 @@ def _retarget_paths(repo_root: Path) -> None:
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
     _RAW_DIR = repo_root / "transcripts" / "raw"
     _PROCESSED_DIR = repo_root / "transcripts" / "processed"
-    # Reach into fetch_qa_transcript to point its RAW_DIR at the right place too.
-    import fetch_qa_transcript  # type: ignore[import-not-found]
-
-    fetch_qa_transcript.RAW_DIR = _RAW_DIR
+    fetch_qa_transcript_module.RAW_DIR = _RAW_DIR
+    fetch_qa_transcript_module.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
 
 
 def quarter_end_date(fiscal_year: int, fiscal_quarter: int, fye_month: int) -> date:
@@ -145,6 +169,14 @@ class TickerBackfillResult:
     skipped_existing: list[str] = field(default_factory=list[str])
     aggregator_misses: list[str] = field(default_factory=list[str])
     errors: list[str] = field(default_factory=list[str])
+    coverage_dispositions: list[str] = field(default_factory=list[str])
+    commitment_scan_dispositions: list[str] = field(default_factory=list[str])
+
+
+@dataclass(frozen=True)
+class TranscriptEvidence:
+    reference: str
+    sha256: str
 
 
 def _qlabel(year: int, quarter: int) -> str:
@@ -190,25 +222,152 @@ def _recorded_evidence_path(root: Path, recorded: str) -> Path | None:
 
 
 def _has_ingested_evidence(ticker: str, year: int, quarter: int, fye_month: int) -> bool:
-    """Require the exact fiscal-period DB receipt, path, and bytes."""
+    """Require current segments, processed bytes, and exact authorized receipt."""
+
+    return _ingested_evidence(ticker, year, quarter, fye_month) is not None
+
+
+def _transcript_rows_exist(ticker: str, year: int, quarter: int, fye_month: int) -> bool:
     period_end = quarter_end_date(year, quarter, fye_month).isoformat()
     conn = db.get_connection()
     try:
-        rows = conn.execute(
-            "SELECT d.file_path, d.sha256 FROM documents AS d "
-            "JOIN transcripts AS t ON t.document_id = d.id "
-            "WHERE UPPER(d.ticker) = ? AND UPPER(t.ticker) = ? "
-            "AND t.fiscal_period_type = ? AND date(t.period_end) = date(?)",
-            (ticker.upper(), ticker.upper(), f"Q{quarter}", period_end),
-        ).fetchall()
+        relation = selected_transcripts_relation(conn).sql
+        return (
+            conn.execute(
+                f"SELECT 1 FROM {relation} WHERE UPPER(ticker)=? "  # nosec B608
+                "AND is_current=1 AND fiscal_period_type=? "
+                "AND date(period_end)=date(?) LIMIT 1",
+                (ticker.upper(), f"Q{quarter}", period_end),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+
+
+def _ingested_evidence(
+    ticker: str, year: int, quarter: int, fye_month: int
+) -> TranscriptEvidence | None:
+    period_end = quarter_end_date(year, quarter, fye_month).isoformat()
+    conn = db.get_connection()
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT d.id, d.file_path, d.sha256, r.receipt_id FROM documents AS d "
+                "JOIN transcripts AS t ON t.document_id=d.id "
+                "JOIN transcript_acquisition_receipts AS r "
+                "ON r.canonical_ticker=UPPER(t.ticker) "
+                "AND r.fiscal_year=? AND r.fiscal_quarter=? "
+                "AND r.artifact_sha256=d.sha256 "
+                "AND (r.document_id IS NULL OR r.document_id=d.id) "
+                "WHERE UPPER(d.ticker)=? AND UPPER(t.ticker)=? "
+                "AND t.fiscal_period_type=? AND date(t.period_end)=date(?) "
+                "AND t.is_current=1 AND d.file_path=? "
+                "AND r.provider='issuer_ir' AND r.source_type='ir_doc' "
+                "AND r.document_type='earnings_call_transcript' "
+                "AND r.canonical_document_path=? "
+                "AND EXISTS ("
+                "SELECT 1 FROM transcript_segments AS s WHERE s.transcript_id=t.id"
+                ") ORDER BY d.id DESC",
+                (
+                    year,
+                    quarter,
+                    ticker.upper(),
+                    ticker.upper(),
+                    f"Q{quarter}",
+                    period_end,
+                    f"transcripts/processed/{ticker.upper()}_Q{quarter}_{year}.txt",
+                    f"transcripts/raw/{ticker.upper()}_Q{quarter}_{year}.txt",
+                ),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return None
     finally:
         conn.close()
     root = Path(db.PROJECT_ROOT).resolve()
     for row in rows:
         snapshot = snapshot_recorded_evidence(root, str(row["file_path"]))
         if snapshot is not None and snapshot.sha256 == str(row["sha256"]):
-            return True
-    return False
+            return TranscriptEvidence(
+                reference=f"transcript-receipt:{row['receipt_id']}",
+                sha256=snapshot.sha256,
+            )
+    return None
+
+
+_TRANSCRIPT_POLICY_SHA256 = policy_config_sha256(
+    policy_name="transcript_acquisition",
+    policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    providers=tuple(source.name for source in TRANSCRIPT_SOURCES),
+)
+
+
+def _coverage_attempts(hit: object) -> tuple[CoverageAttempt, ...]:
+    attempts = getattr(hit, "attempts", ())
+    mapped: list[CoverageAttempt] = []
+    statuses = {
+        FetchQaAttemptStatus.DENIED: CoverageAttemptStatus.POLICY_DENIED,
+        FetchQaAttemptStatus.PROVIDER_MISS: CoverageAttemptStatus.AUTHORIZED_MISS,
+        FetchQaAttemptStatus.ACQUIRED: CoverageAttemptStatus.ACQUIRED,
+    }
+    for attempt in attempts:
+        mapped.append(
+            CoverageAttempt(
+                provider=str(attempt.provider),
+                status=statuses[attempt.status],
+                authorization_key=str(attempt.idempotency_key),
+            )
+        )
+    return tuple(mapped)
+
+
+def _persist_coverage_disposition(
+    *,
+    ticker: str,
+    year: int,
+    quarter: int,
+    fye_month: int,
+    status: CoverageDispositionStatus,
+    reason_code: str,
+    attempts: tuple[CoverageAttempt, ...],
+    observed_at: datetime,
+    evidence: TranscriptEvidence | None = None,
+    retry_after: datetime | None = None,
+    artifact_kind: CoverageArtifactKind = CoverageArtifactKind.TEXT_TRANSCRIPT,
+    policy_name: str = "transcript_acquisition",
+    policy_version: str = TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    policy_config_sha256_override: str | None = None,
+) -> str:
+    conn = db.get_connection()
+    try:
+        disposition = append_data_coverage_disposition(
+            conn,
+            DataCoverageDispositionRequest(
+                artifact_kind=artifact_kind,
+                ticker=ticker,
+                fiscal_year=year,
+                fiscal_quarter=quarter,
+                period_end=quarter_end_date(year, quarter, fye_month),
+                status=status,
+                reason_code=reason_code,
+                attempts=attempts,
+                policy_name=policy_name,
+                policy_version=policy_version,
+                policy_config_sha256=(
+                    _TRANSCRIPT_POLICY_SHA256
+                    if policy_config_sha256_override is None
+                    else policy_config_sha256_override
+                ),
+                evidence_reference=None if evidence is None else evidence.reference,
+                evidence_sha256=None if evidence is None else evidence.sha256,
+                observed_at=observed_at,
+                retry_after=retry_after,
+            ),
+        )
+        conn.commit()
+        return disposition.request.status.value
+    finally:
+        conn.close()
 
 
 def _backfill_one(
@@ -226,8 +385,38 @@ def _backfill_one(
     quarters = recent_fiscal_quarters(fye_month, today, lookback)
     for y, q in quarters:
         label = _qlabel(y, q)
+        observed_at = datetime.now(UTC)
         if _has_ingested_evidence(ticker, y, q, fye_month):
             result.skipped_existing.append(label)
+            if dry_run:
+                continue
+            try:
+                evidence = _ingested_evidence(ticker, y, q, fye_month)
+                if evidence is None:
+                    raise RuntimeError("exact ingested evidence disappeared before disposition")
+                result.coverage_dispositions.append(
+                    f"{label}:"
+                    + _persist_coverage_disposition(
+                        ticker=ticker,
+                        year=y,
+                        quarter=q,
+                        fye_month=fye_month,
+                        status=CoverageDispositionStatus.SATISFIED,
+                        reason_code="exact_db_path_sha_evidence",
+                        attempts=(
+                            CoverageAttempt(
+                                provider="canonical_store",
+                                status=CoverageAttemptStatus.EVIDENCE_PRESENT,
+                            ),
+                        ),
+                        observed_at=observed_at,
+                        evidence=evidence,
+                    )
+                )
+            except Exception as exc:
+                result.errors.append(
+                    f"{label}: coverage disposition: {type(exc).__name__}: {exc}"[:200]
+                )
             continue
         if dry_run:
             result.aggregator_misses.append(f"{label} [dry-run]")
@@ -241,13 +430,76 @@ def _backfill_one(
             )
         except Exception as e:
             result.errors.append(f"{label}: {type(e).__name__}: {e}"[:200])
+            try:
+                result.coverage_dispositions.append(
+                    f"{label}:"
+                    + _persist_coverage_disposition(
+                        ticker=ticker,
+                        year=y,
+                        quarter=q,
+                        fye_month=fye_month,
+                        status=CoverageDispositionStatus.OPERATIONAL_ERROR,
+                        reason_code="transcript_acquisition_exception",
+                        attempts=(
+                            CoverageAttempt(
+                                provider="transcript_chain",
+                                status=CoverageAttemptStatus.FAILED,
+                            ),
+                        ),
+                        observed_at=observed_at,
+                        retry_after=observed_at + timedelta(days=1),
+                    )
+                )
+            except Exception as disposition_exc:
+                result.errors.append(
+                    f"{label}: coverage disposition: {type(disposition_exc).__name__}: "
+                    f"{disposition_exc}"[:200]
+                )
             continue
         if hit.status in {FetchQaStatus.ACQUIRED, FetchQaStatus.IDEMPOTENT_REPLAY}:
             result.fetched.append(label)
+            # Acquisition is not completeness. A final disposition is written
+            # only after ingest proves current segments, the exact processed
+            # bytes, and their authorized acquisition receipt.
+            continue
+        if _transcript_rows_exist(ticker, y, q, fye_month):
+            evidence = None
+            status = CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING
+            reason = "canonical_transcript_evidence_missing"
         elif hit.status == FetchQaStatus.DENIED:
             result.errors.append(f"{label}: transcript acquisition denied")
+            evidence = None
+            status = CoverageDispositionStatus.POLICY_BLOCKED
+            reason = "transcript_source_policy_denied"
         else:
             result.aggregator_misses.append(label)
+            evidence = None
+            status = CoverageDispositionStatus.SOURCE_UNAVAILABLE
+            reason = "authorized_text_transcript_unavailable"
+        try:
+            result.coverage_dispositions.append(
+                f"{label}:"
+                + _persist_coverage_disposition(
+                    ticker=ticker,
+                    year=y,
+                    quarter=q,
+                    fye_month=fye_month,
+                    status=status,
+                    reason_code=reason,
+                    attempts=_coverage_attempts(hit),
+                    observed_at=observed_at,
+                    evidence=evidence,
+                    retry_after=(
+                        observed_at + timedelta(days=7)
+                        if status is CoverageDispositionStatus.SOURCE_UNAVAILABLE
+                        else None
+                    ),
+                )
+            )
+        except Exception as exc:
+            result.errors.append(
+                f"{label}: coverage disposition: {type(exc).__name__}: {exc}"[:200]
+            )
     return result
 
 
@@ -345,7 +597,6 @@ def _run_ingest(repo_root: Path, ticker: str, dry_run: bool) -> int:
         str(repo_root),
         "--ticker",
         ticker,
-        "--no-promote",
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
@@ -366,6 +617,7 @@ def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
         *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"),
         "--auto",
+        "--rescan-unreceipted",
         "--ticker",
         ticker,
         "--db",
@@ -383,6 +635,145 @@ def _ticker_has_transcripts(ticker: str) -> bool:
         return cur.fetchone() is not None
     finally:
         conn.close()
+
+
+def _commitment_scan_evidence(
+    ticker: str, year: int, quarter: int, fye_month: int
+) -> TranscriptEvidence | None:
+    """Return exact durable evidence that the period's transcript was scanned."""
+
+    period_end = quarter_end_date(year, quarter, fye_month).isoformat()
+    transcript_evidence = _ingested_evidence(ticker, year, quarter, fye_month)
+    if transcript_evidence is None:
+        return None
+    conn = db.get_connection()
+    try:
+        relation = selected_transcripts_relation(conn).sql
+        transcripts = conn.execute(
+            f"SELECT id FROM {relation} WHERE UPPER(ticker)=? "  # nosec B608
+            "AND is_current=1 AND fiscal_period_type=? AND date(period_end)=date(?) "
+            "ORDER BY id",
+            (ticker.upper(), f"Q{quarter}", period_end),
+        ).fetchall()
+        if len(transcripts) != 1:
+            return None
+        receipt = current_commitment_scan_receipt(
+            conn,
+            transcript_id=int(transcripts[0]["id"]),
+            prompt_version=prompt_version_for("saydo_commitment_extract"),
+        )
+        if receipt is None:
+            return None
+        expected_transcript_receipt = transcript_evidence.reference.removeprefix(
+            "transcript-receipt:"
+        )
+        if (
+            receipt.binding.transcript_acquisition_receipt_id != expected_transcript_receipt
+            or receipt.binding.transcript_sha256 != transcript_evidence.sha256
+        ):
+            return None
+        return TranscriptEvidence(
+            reference=f"commitment-scan-receipt:{receipt.receipt_id}",
+            sha256=receipt.receipt_id,
+        )
+    finally:
+        conn.close()
+
+
+def _tickers_requiring_commitment_scan(
+    results: list[TickerBackfillResult], today: date, lookback: int
+) -> list[str]:
+    """Select existing exact-period transcripts with no durable scan outcome."""
+
+    pending: list[str] = []
+    for result in results:
+        for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
+            if (
+                _transcript_rows_exist(result.ticker, year, quarter, result.fye_month)
+                and (_ingested_evidence(result.ticker, year, quarter, result.fye_month) is not None)
+                and (
+                    _commitment_scan_evidence(result.ticker, year, quarter, result.fye_month)
+                    is None
+                )
+            ):
+                pending.append(result.ticker)
+                break
+    return pending
+
+
+def _persist_commitment_scan_coverage(
+    result: TickerBackfillResult,
+    *,
+    today: date,
+    lookback: int,
+    extraction_attempted: bool,
+) -> bool:
+    """Persist exact scan/evidence or an explicit non-complete prerequisite outcome."""
+
+    observed_at = datetime.now(UTC)
+    all_actionable_closed = True
+    policy_sha = policy_config_sha256(
+        policy_name=COMMITMENT_SCAN_POLICY_NAME,
+        policy_version=COMMITMENT_SCAN_POLICY_VERSION,
+        providers=COMMITMENT_SCAN_POLICY_PROVIDERS,
+    )
+    for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
+        label = _qlabel(year, quarter)
+        evidence = _commitment_scan_evidence(result.ticker, year, quarter, result.fye_month)
+        transcript_exists = _transcript_rows_exist(result.ticker, year, quarter, result.fye_month)
+        transcript_evidence = _ingested_evidence(result.ticker, year, quarter, result.fye_month)
+        attempt_provider = "governed_llm"
+        if evidence is not None:
+            status = CoverageDispositionStatus.SATISFIED
+            reason = "commitment_scan_evidence_present"
+            attempt_status = CoverageAttemptStatus.EVIDENCE_PRESENT
+            retry_after = None
+        elif not transcript_exists:
+            status = CoverageDispositionStatus.SOURCE_UNAVAILABLE
+            reason = "transcript_prerequisite_unavailable"
+            attempt_status = CoverageAttemptStatus.AUTHORIZED_MISS
+            attempt_provider = "transcript_prerequisite"
+            retry_after = observed_at + timedelta(days=7)
+        elif transcript_evidence is None:
+            status = CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING
+            reason = "transcript_evidence_prerequisite_missing"
+            attempt_status = CoverageAttemptStatus.FAILED
+            attempt_provider = "transcript_prerequisite"
+            retry_after = None
+        else:
+            status = CoverageDispositionStatus.OPERATIONAL_ERROR
+            reason = (
+                "commitment_extraction_missing_evidence"
+                if extraction_attempted
+                else "commitment_extraction_not_attempted"
+            )
+            attempt_status = CoverageAttemptStatus.FAILED
+            attempt_provider = "governed_llm"
+            retry_after = observed_at + timedelta(days=1)
+            all_actionable_closed = False
+        persisted = _persist_coverage_disposition(
+            ticker=result.ticker,
+            year=year,
+            quarter=quarter,
+            fye_month=result.fye_month,
+            status=status,
+            reason_code=reason,
+            attempts=(
+                CoverageAttempt(
+                    provider=attempt_provider,
+                    status=attempt_status,
+                ),
+            ),
+            observed_at=observed_at,
+            evidence=evidence,
+            retry_after=retry_after,
+            artifact_kind=CoverageArtifactKind.COMMITMENT_SCAN,
+            policy_name=COMMITMENT_SCAN_POLICY_NAME,
+            policy_version=COMMITMENT_SCAN_POLICY_VERSION,
+            policy_config_sha256_override=policy_sha,
+        )
+        result.commitment_scan_dispositions.append(f"{label}:{persisted}")
+    return all_actionable_closed
 
 
 def _newly_ingested_tickers(
@@ -412,6 +803,49 @@ def _fetched_evidence_complete(result: TickerBackfillResult) -> bool:
         if not _has_ingested_evidence(result.ticker, year, quarter, result.fye_month):
             return False
     return True
+
+
+def _persist_fetched_transcript_coverage(result: TickerBackfillResult) -> bool:
+    """Close fetched periods only after their full canonical ingest postcondition."""
+
+    complete = True
+    for label in result.fetched:
+        quarter_token, year_token = label.split("_", 1)
+        quarter = int(quarter_token.removeprefix("Q"))
+        year = int(year_token)
+        observed_at = datetime.now(UTC)
+        evidence = _ingested_evidence(result.ticker, year, quarter, result.fye_month)
+        if evidence is not None:
+            status = CoverageDispositionStatus.SATISFIED
+            reason = "authorized_processed_transcript_with_segments"
+            retry_after = None
+            attempt_status = CoverageAttemptStatus.EVIDENCE_PRESENT
+        elif _transcript_rows_exist(result.ticker, year, quarter, result.fye_month):
+            status = CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING
+            reason = "canonical_transcript_evidence_missing"
+            retry_after = None
+            attempt_status = CoverageAttemptStatus.FAILED
+            complete = False
+        else:
+            status = CoverageDispositionStatus.OPERATIONAL_ERROR
+            reason = "transcript_ingest_postcondition_failed"
+            retry_after = observed_at + timedelta(days=1)
+            attempt_status = CoverageAttemptStatus.FAILED
+            complete = False
+        persisted = _persist_coverage_disposition(
+            ticker=result.ticker,
+            year=year,
+            quarter=quarter,
+            fye_month=result.fye_month,
+            status=status,
+            reason_code=reason,
+            attempts=(CoverageAttempt(provider="canonical_store", status=attempt_status),),
+            observed_at=observed_at,
+            evidence=evidence,
+            retry_after=retry_after,
+        )
+        result.coverage_dispositions.append(f"{label}:{persisted}")
+    return complete
 
 
 def _first_nonzero_ingest_rc(ingest_results: list[dict[str, object]]) -> int:
@@ -526,6 +960,15 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 rc = 1
+            if not args.dry_run:
+                try:
+                    if not _persist_fetched_transcript_coverage(result):
+                        rc = 1
+                except Exception as exc:
+                    result.errors.append(
+                        f"transcript coverage postcondition: {type(exc).__name__}: {exc}"[:200]
+                    )
+                    rc = 1
             ingest_results.append({"ticker": result.ticker, "rc": rc})
         ingest_rc = _first_nonzero_ingest_rc(ingest_results)
     elif args.skip_ingest:
@@ -533,17 +976,41 @@ def main() -> int:
     else:
         print("[backfill_transcripts] no new fetches; skipping ingest", file=sys.stderr)
 
-    # Extract commitments only for tickers whose transcripts were newly fetched
-    # and successfully ingested during this invocation. Existing transcripts are
-    # handled idempotently when first acquired, not rescanned every morning.
+    # Select every recent exact-period transcript that still lacks a durable
+    # scan outcome. This catches transcripts that predated the current run as
+    # well as artifacts ingested above, while the scan log keeps reruns bounded.
     extract_results: list[dict[str, object]] = []
+    commitment_scan_tickers: set[str] = set()
     if not args.skip_extract and not args.dry_run:
-        for ticker in _newly_ingested_tickers(per_ticker, ingest_results):
+        commitment_scan_tickers = set(
+            _tickers_requiring_commitment_scan(
+                per_ticker,
+                today,
+                args.lookback_quarters,
+            )
+        )
+        for ticker in sorted(commitment_scan_tickers):
             if not _ticker_has_transcripts(ticker):
                 continue
             print(f"[backfill_transcripts] extracting commitments for {ticker}", file=sys.stderr)
             rc = _run_extract(repo_root, ticker, args.dry_run)
             extract_results.append({"ticker": ticker, "rc": rc})
+        for result in per_ticker:
+            try:
+                closed = _persist_commitment_scan_coverage(
+                    result,
+                    today=today,
+                    lookback=args.lookback_quarters,
+                    extraction_attempted=result.ticker in commitment_scan_tickers,
+                )
+            except Exception as exc:
+                result.errors.append(f"commitment scan coverage: {type(exc).__name__}: {exc}"[:200])
+                closed = False
+            if result.ticker in commitment_scan_tickers and not closed:
+                for item in extract_results:
+                    if item["ticker"] == result.ticker:
+                        item["rc"] = 1
+                        break
     elif args.skip_extract:
         print("[backfill_transcripts] --skip-extract set; skipping commitments", file=sys.stderr)
 

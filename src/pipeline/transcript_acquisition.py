@@ -382,12 +382,27 @@ def issuer_transcript_source_url_is_authorized(
     source_url: str,
     *,
     project_root: Path,
+    fiscal_year: int | None = None,
+    fiscal_quarter: int | None = None,
 ) -> bool:
     """Bind issuer transcript URLs to reviewed policy or configured issuer authority."""
 
     candidate = canonical_https_url(source_url)
     if candidate is None:
         return False
+    from ir_pipeline.transcript import reviewed_issuer_transcript_url_is_authorized
+
+    if (
+        fiscal_year is not None
+        and fiscal_quarter is not None
+        and reviewed_issuer_transcript_url_is_authorized(
+            ticker,
+            fiscal_year,
+            fiscal_quarter,
+            source_url,
+        )
+    ):
+        return True
     try:
         policy = issuer_policy(ticker)
     except ValueError:
@@ -537,6 +552,8 @@ def register_transcript_receipt_sqlite_functions(
                     request.canonical_ticker,
                     artifact.source_url,
                     project_root=project_root,
+                    fiscal_year=request.fiscal_year,
+                    fiscal_quarter=request.fiscal_quarter,
                 )
             ):
                 return 0

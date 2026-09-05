@@ -331,6 +331,8 @@ def fetch_qa(
                 canonical,
                 hit.page_url,
                 project_root=project_root,
+                fiscal_year=spec.year,
+                fiscal_quarter=spec.quarter,
             )
         ):
             raise TranscriptAcquisitionDeniedError(

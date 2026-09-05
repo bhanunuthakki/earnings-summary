@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0035_add_report_kpi_reference_resolution_states"
+_ACTIVE_HEAD = "0036_add_data_coverage_dispositions"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

@@ -14,7 +14,7 @@ import sqlite3
 import sys
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
@@ -32,8 +32,22 @@ from earnings_surprise_store import (  # noqa: E402
     observation_identity,
     quarantine_payload,
     validate_source_record,
+    verify_persisted_observation_row,
 )
 from log_redact import redact  # noqa: E402
+from pipeline.data_coverage_dispositions import (  # noqa: E402
+    EARNINGS_SURPRISE_POLICY_NAME,
+    EARNINGS_SURPRISE_POLICY_PROVIDERS,
+    EARNINGS_SURPRISE_POLICY_VERSION,
+    CoverageArtifactKind,
+    CoverageAttempt,
+    CoverageAttemptStatus,
+    CoverageDispositionStatus,
+    DataCoverageDispositionRequest,
+    append_data_coverage_disposition,
+    policy_config_sha256,
+    recent_completed_fiscal_quarters,
+)
 
 _SURPRISE_DIR = PROJECT_ROOT / "data" / "surprise"
 
@@ -91,6 +105,98 @@ class TickerIngestResult:
     observations_inserted: int = 0
     observation_duplicates: int = 0
     errors: list[str] = field(default_factory=list[str])
+    coverage_dispositions: list[str] = field(default_factory=list[str])
+
+
+def _persist_ingested_coverage(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    observed_at: datetime,
+) -> list[str]:
+    """Write SATISFIED only from immutable observation + current projection rows."""
+
+    company = conn.execute(
+        "SELECT fiscal_year_end FROM tracked_companies WHERE UPPER(ticker)=? "
+        "AND archived_at IS NULL",
+        (ticker.upper(),),
+    ).fetchone()
+    raw_fye = None if company is None else company["fiscal_year_end"]
+    if not isinstance(raw_fye, str) or len(raw_fye) < 2:
+        raise ValueError(f"{ticker}: fiscal_year_end is unavailable")
+    targets = recent_completed_fiscal_quarters(
+        fye_month=int(raw_fye[:2]),
+        as_of=observed_at.date(),
+        limit=8,
+    )
+    rows = conn.execute(
+        "SELECT o.*,CASE WHEN e.ticker IS o.ticker AND e.release_date IS o.release_date "
+        "AND e.eps_estimate IS o.eps_estimate AND e.eps_actual IS o.eps_actual "
+        "AND e.revenue_estimate IS o.revenue_estimate "
+        "AND e.revenue_actual IS o.revenue_actual "
+        "AND e.eps_surprise_pct IS o.eps_surprise_pct "
+        "AND e.revenue_surprise_pct IS o.revenue_surprise_pct "
+        "AND e.num_analysts_eps IS o.num_analysts_eps "
+        "AND e.num_analysts_revenue IS o.num_analysts_revenue "
+        "AND e.source_name IS o.source_name AND e.source_url IS o.source_url "
+        "AND e.fetched_at IS o.fetched_at THEN 1 ELSE 0 END AS projection_matches "
+        "FROM earnings_surprise_observations AS o "
+        "JOIN earnings_surprises AS e ON e.source_observation_id=o.observation_id "
+        "WHERE UPPER(o.ticker)=? AND o.provenance_status='source_observed' "
+        "ORDER BY date(o.release_date)",
+        (ticker.upper(),),
+    ).fetchall()
+    by_target: dict[tuple[int, int, date], sqlite3.Row] = {}
+    for row in rows:
+        _, verification_reasons = verify_persisted_observation_row(row)
+        if (
+            verification_reasons
+            or str(row["provenance_status"]) != "source_observed"
+            or str(row["source_name"]) not in EARNINGS_SURPRISE_POLICY_PROVIDERS
+            or int(row["projection_matches"]) != 1
+        ):
+            continue
+        release = date.fromisoformat(str(row["release_date"])[:10])
+        candidates = [
+            target
+            for target in targets
+            if target[2] < release and (release - target[2]).days <= 110
+        ]
+        if candidates:
+            by_target[max(candidates, key=lambda item: item[2])] = row
+    policy_sha = policy_config_sha256(
+        policy_name=EARNINGS_SURPRISE_POLICY_NAME,
+        policy_version=EARNINGS_SURPRISE_POLICY_VERSION,
+        providers=EARNINGS_SURPRISE_POLICY_PROVIDERS,
+    )
+    persisted: list[str] = []
+    for (fiscal_year, fiscal_quarter, period_end), row in by_target.items():
+        disposition = append_data_coverage_disposition(
+            conn,
+            DataCoverageDispositionRequest(
+                artifact_kind=CoverageArtifactKind.EARNINGS_SURPRISE,
+                ticker=ticker,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+                period_end=period_end,
+                status=CoverageDispositionStatus.SATISFIED,
+                reason_code="persisted_surprise_observation_and_projection",
+                attempts=(
+                    CoverageAttempt(
+                        provider=str(row["source_name"]),
+                        status=CoverageAttemptStatus.EVIDENCE_PRESENT,
+                    ),
+                ),
+                policy_name=EARNINGS_SURPRISE_POLICY_NAME,
+                policy_version=EARNINGS_SURPRISE_POLICY_VERSION,
+                policy_config_sha256=policy_sha,
+                evidence_reference=f"earnings-surprise-observation:{row['observation_id']}",
+                evidence_sha256=str(row["canonical_payload_sha256"]),
+                observed_at=observed_at,
+            ),
+        )
+        persisted.append(f"Q{fiscal_quarter}_{fiscal_year}:{disposition.request.status.value}")
+    return persisted
 
 
 def _candidate_caches(surprise_dir: Path, restrict_ticker: str | None) -> list[Path]:
@@ -425,6 +531,12 @@ def main() -> int:
                 wall_clock=run_recorded_at,
                 ingestion_run_id=run_id,
             )
+            if not args.dry_run and (result.inserted or result.updated or result.unchanged):
+                result.coverage_dispositions = _persist_ingested_coverage(
+                    conn,
+                    ticker=result.ticker,
+                    observed_at=run_recorded_at,
+                )
             results.append(result)
             print(
                 json.dumps(

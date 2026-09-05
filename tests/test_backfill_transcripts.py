@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Never
 
 import pytest
 
@@ -30,6 +30,18 @@ def _load_module() -> Any:
     sys.modules["backfill_transcripts"] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def _q2_2026(*_args: object) -> list[tuple[int, int]]:
+    return [(2026, 2)]
+
+
+def _always_true(*_args: object) -> bool:
+    return True
+
+
+def _always_false(*_args: object) -> bool:
+    return False
 
 
 class _FakeProc:
@@ -61,7 +73,7 @@ def test_run_ingest_uses_repo_root_for_cwd_and_script_path(
     assert captured["cmd"][2] == str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py")
     assert captured["cmd"][captured["cmd"].index("--repo-root") + 1] == str(repo_root)
     assert captured["cmd"][captured["cmd"].index("--ticker") + 1] == "AAPL"
-    assert captured["cmd"][-1] == "--no-promote"
+    assert "--no-promote" not in captured["cmd"]
 
 
 def test_run_extract_uses_repo_root_for_cwd_and_script_path(
@@ -89,6 +101,7 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
         PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"
     )
     assert "--auto" in captured["cmd"]
+    assert "--rescan-unreceipted" in captured["cmd"]
     assert "AAPL" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--db") + 1] == str(
         repo_root / "data" / "portfolio.db"
@@ -176,11 +189,20 @@ def test_unreceipted_local_file_is_reacquired_before_ingest(
 
     def fake_fetch_qa(spec: object, **kwargs: object) -> SimpleNamespace:
         calls.append((spec, kwargs))
-        return SimpleNamespace(status=mod.FetchQaStatus.ACQUIRED)
+        return SimpleNamespace(
+            status=mod.FetchQaStatus.ACQUIRED,
+            idempotency_key="transcript:" + "a" * 64,
+            attempts=(),
+            result=SimpleNamespace(acquired_artifact=SimpleNamespace(sha256="b" * 64)),
+        )
 
     monkeypatch.setattr(mod, "recent_fiscal_quarters", fake_recent_fiscal_quarters)
     monkeypatch.setattr(mod, "_has_ingested_evidence", fake_has_ingested_evidence)
     monkeypatch.setattr(mod, "fetch_qa", fake_fetch_qa)
+    def persist_satisfied(**_kwargs: object) -> str:
+        return "satisfied"
+
+    monkeypatch.setattr(mod, "_persist_coverage_disposition", persist_satisfied)
 
     result = mod._backfill_one(
         "NU",
@@ -194,6 +216,205 @@ def test_unreceipted_local_file_is_reacquired_before_ingest(
 
     assert result.fetched == ["Q2_2026"]
     assert len(calls) == 1
+
+
+def test_dry_run_existing_evidence_performs_zero_disposition_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
+    monkeypatch.setattr(mod, "_has_ingested_evidence", _always_true)
+
+    def unexpected_disposition(**_kwargs: object) -> Never:
+        pytest.fail("dry-run crossed the disposition write boundary")
+
+    def unexpected_fetch(*_args: object, **_kwargs: object) -> Never:
+        pytest.fail("dry-run crossed the acquisition boundary")
+
+    monkeypatch.setattr(
+        mod,
+        "_persist_coverage_disposition",
+        unexpected_disposition,
+    )
+    monkeypatch.setattr(
+        mod,
+        "fetch_qa",
+        unexpected_fetch,
+    )
+
+    result = mod._backfill_one(
+        "MELI",
+        12,
+        1,
+        mod.date(2026, 9, 5),
+        True,
+        tmp_path / "portfolio.db",
+        False,
+    )
+
+    assert result.skipped_existing == ["Q2_2026"]
+    assert result.coverage_dispositions == []
+
+
+@pytest.mark.parametrize(
+    ("canonical_row_exists", "expected_status"),
+    [
+        (False, "source_unavailable"),
+        (True, "repair_evidence_missing"),
+    ],
+)
+def test_provider_miss_persists_exact_non_complete_disposition_without_failing_run(
+    canonical_row_exists: bool,
+    expected_status: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    persisted: list[Any] = []
+    outcome = SimpleNamespace(
+        status=(
+            mod.FetchQaStatus.DENIED if canonical_row_exists else mod.FetchQaStatus.PROVIDER_MISS
+        ),
+        idempotency_key="transcript:" + "a" * 64,
+        attempts=(
+            SimpleNamespace(
+                provider="issuer_ir",
+                status=mod.FetchQaAttemptStatus.PROVIDER_MISS,
+                idempotency_key="transcript:" + "b" * 64,
+            ),
+            SimpleNamespace(
+                provider="roic_ai",
+                status=mod.FetchQaAttemptStatus.DENIED,
+                idempotency_key="transcript:" + "c" * 64,
+            ),
+        ),
+        result=None,
+    )
+
+    def transcript_rows_exist(*_args: object) -> bool:
+        return canonical_row_exists
+
+    def fetch_outcome(*_args: object, **_kwargs: object) -> object:
+        return outcome
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
+    monkeypatch.setattr(mod, "_has_ingested_evidence", _always_false)
+    monkeypatch.setattr(mod, "_transcript_rows_exist", transcript_rows_exist)
+    monkeypatch.setattr(mod, "fetch_qa", fetch_outcome)
+
+    def persist(**kwargs: object) -> str:
+        persisted.append(kwargs["status"])
+        return str(persisted[-1].value)
+
+    monkeypatch.setattr(mod, "_persist_coverage_disposition", persist)
+    result = mod._backfill_one(
+        "NVO" if not canonical_row_exists else "NOW",
+        12,
+        1,
+        mod.date(2026, 9, 4),
+        False,
+        tmp_path / "portfolio.db",
+        False,
+    )
+
+    assert result.errors == []
+    assert result.aggregator_misses == ([] if canonical_row_exists else ["Q2_2026"])
+    assert result.coverage_dispositions == [f"Q2_2026:{expected_status}"]
+    assert [item.value for item in persisted] == [expected_status]
+
+
+def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    result = mod.TickerBackfillResult("BKNG", 12, skipped_existing=["Q2_2026"])
+    def exact_evidence(*_args: object) -> object:
+        return mod.TranscriptEvidence("transcript-receipt:exact", "a" * 64)
+
+    def no_scan_evidence(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
+    monkeypatch.setattr(mod, "_transcript_rows_exist", _always_true)
+    monkeypatch.setattr(
+        mod,
+        "_ingested_evidence",
+        exact_evidence,
+    )
+    monkeypatch.setattr(mod, "_commitment_scan_evidence", no_scan_evidence)
+
+    assert mod._tickers_requiring_commitment_scan([result], mod.date(2026, 9, 5), 1) == ["BKNG"]
+
+
+@pytest.mark.parametrize(
+    ("transcript_exists", "exact_transcript", "evidence", "expected", "closed"),
+    [
+        (False, False, None, "source_unavailable", True),
+        (
+            True,
+            True,
+            ("commitment-scan:42", "d" * 64),
+            "satisfied",
+            True,
+        ),
+        (True, True, None, "operational_error", False),
+        (True, False, None, "repair_evidence_missing", True),
+    ],
+)
+def test_commitment_scan_disposition_preserves_missing_prerequisite_and_failures(
+    transcript_exists: bool,
+    exact_transcript: bool,
+    evidence: tuple[str, str] | None,
+    expected: str,
+    closed: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    persisted: list[dict[str, Any]] = []
+    transcript_evidence = (
+        None if evidence is None else mod.TranscriptEvidence(evidence[0], evidence[1])
+    )
+    def transcript_rows_exist(*_args: object) -> bool:
+        return transcript_exists
+
+    def current_evidence(*_args: object) -> object | None:
+        return (
+            mod.TranscriptEvidence("transcript-receipt:exact", "a" * 64)
+            if exact_transcript
+            else None
+        )
+
+    def scan_evidence(*_args: object) -> object | None:
+        return transcript_evidence
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
+    monkeypatch.setattr(mod, "_transcript_rows_exist", transcript_rows_exist)
+    monkeypatch.setattr(
+        mod,
+        "_ingested_evidence",
+        current_evidence,
+    )
+    monkeypatch.setattr(mod, "_commitment_scan_evidence", scan_evidence)
+
+    def persist(**kwargs: Any) -> str:
+        persisted.append(kwargs)
+        return str(kwargs["status"].value)
+
+    monkeypatch.setattr(mod, "_persist_coverage_disposition", persist)
+    result = mod.TickerBackfillResult("NVO", 12)
+
+    assert (
+        mod._persist_commitment_scan_coverage(
+            result,
+            today=mod.date(2026, 9, 5),
+            lookback=1,
+            extraction_attempted=transcript_exists,
+        )
+        is closed
+    )
+    assert persisted[0]["artifact_kind"].value == "commitment_scan"
+    assert persisted[0]["status"].value == expected
+    assert result.commitment_scan_dispositions == [f"Q2_2026:{expected}"]
 
 
 def test_ingest_success_requires_exact_evidence_for_every_fetched_period(
@@ -262,7 +483,7 @@ def test_backfill_rejects_non_relative_recorded_paths(
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is False
 
 
-def test_backfill_stop_requires_exact_db_path_and_sha(
+def test_backfill_stop_rejects_unreceipted_raw_path_even_with_matching_sha(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mod = _load_module()
@@ -299,8 +520,55 @@ def test_backfill_stop_requires_exact_db_path_and_sha(
 
     monkeypatch.setattr(mod.db, "PROJECT_ROOT", str(tmp_path))
     monkeypatch.setattr(mod.db, "get_connection", connect)
+    assert mod._has_ingested_evidence("NU", 2026, 1, 12) is False
+
+
+def test_backfill_stop_requires_processed_current_segments_and_authorized_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    processed = tmp_path / "transcripts" / "processed" / "NU_Q1_2026.txt"
+    processed.parent.mkdir(parents=True)
+    processed.write_text("authorized bound transcript", encoding="utf-8")
+    digest = hashlib.sha256(processed.read_bytes()).hexdigest()
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE documents (id INTEGER PRIMARY KEY,ticker TEXT,file_path TEXT,sha256 TEXT);
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY,document_id INTEGER,ticker TEXT,
+            fiscal_period_type TEXT,period_end TEXT,is_current INTEGER
+        );
+        CREATE TABLE transcript_segments (id INTEGER PRIMARY KEY,transcript_id INTEGER);
+        CREATE TABLE transcript_acquisition_receipts (
+            receipt_id TEXT,document_id INTEGER,canonical_ticker TEXT,fiscal_year INTEGER,
+            fiscal_quarter INTEGER,canonical_document_path TEXT,artifact_sha256 TEXT,
+            provider TEXT,source_type TEXT,document_type TEXT
+        );
+        INSERT INTO documents VALUES (
+            1,'NU','transcripts/processed/NU_Q1_2026.txt','DIGEST'
+        );
+        INSERT INTO transcripts VALUES (2,1,'NU','Q1','2026-03-31',1);
+        INSERT INTO transcript_segments VALUES (3,2);
+        INSERT INTO transcript_acquisition_receipts VALUES (
+            'receipt',NULL,'NU',2026,1,'transcripts/raw/NU_Q1_2026.txt','DIGEST',
+            'issuer_ir','ir_doc','earnings_call_transcript'
+        );
+        """.replace("DIGEST", digest)
+    )
+    conn.commit()
+    conn.close()
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod.db, "PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(mod.db, "get_connection", connect)
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is True
-    raw.write_text("mutated", encoding="utf-8")
+    processed.write_text("mutated", encoding="utf-8")
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is False
 
 

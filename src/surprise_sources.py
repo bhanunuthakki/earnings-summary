@@ -100,6 +100,14 @@ class SurpriseSource:
     fetch_all: Callable[[str], list[SurpriseHit]]
 
 
+@dataclass(frozen=True)
+class SurpriseSourceOutcome:
+    """One provider's complete observed result for a ticker refresh."""
+
+    source_name: str
+    hits: tuple[SurpriseHit, ...]
+
+
 # --- Decimal coercion + surprise computation --------------------------------
 
 
@@ -472,13 +480,25 @@ def fetch_surprises_with_fallback(
     the beat/miss signal. The lower-priority source effectively only contributes
     NEW release dates the higher-priority source missed.
     """
+    out, outcomes = fetch_surprises_with_outcomes(ticker, sources=sources)
+    return out, [outcome.source_name for outcome in outcomes]
+
+
+def fetch_surprises_with_outcomes(
+    ticker: str,
+    *,
+    sources: list[SurpriseSource],
+) -> tuple[list[SurpriseHit], tuple[SurpriseSourceOutcome, ...]]:
+    """Merge sources while retaining each provider's exact observed hit set."""
+
     merged: dict[date, SurpriseHit] = {}
-    tried: list[str] = []
+    outcomes: list[SurpriseSourceOutcome] = []
     for src in sources:
-        tried.append(src.name)
-        for hit in src.fetch_all(ticker):
+        hits = tuple(src.fetch_all(ticker))
+        outcomes.append(SurpriseSourceOutcome(source_name=src.name, hits=hits))
+        for hit in hits:
             key = _merge_key(hit.release_date)
             if key not in merged:
                 merged[key] = hit
     out = sorted(merged.values(), key=lambda h: h.release_date)
-    return out, tried
+    return out, tuple(outcomes)

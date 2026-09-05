@@ -21,6 +21,7 @@ from compute.say_do_extractor import (
     parse_llm_response,
     record_scan,
     transcripts_pending_extraction,
+    transcripts_without_scan_receipt,
 )
 
 
@@ -175,6 +176,23 @@ def test_transcripts_pending_extraction_excludes_already_processed(
     )
     conn.commit()
     assert transcripts_pending_extraction(conn) == []
+
+
+def test_unreceipted_legacy_commitment_still_requires_exact_scan(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_kpi_def(conn, "AMZN", "X")
+    tid, sid = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+    conn.execute(
+        "INSERT INTO management_commitments "
+        "(ticker,period_made,transcript_segment_id,period_target,kpi_name,"
+        "comparator,target_value,unit,narrative) "
+        "VALUES ('AMZN',?,?,?,?, 'ge','5','percent','n')",
+        (datetime(2025, 12, 31), sid, datetime(2026, 3, 31), "X"),
+    )
+    conn.commit()
+
+    assert [item[0] for item in transcripts_without_scan_receipt(conn)] == [tid]
 
 
 def test_transcripts_pending_extraction_filters_by_ticker(
