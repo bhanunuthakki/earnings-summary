@@ -199,6 +199,7 @@ def test_unreceipted_local_file_is_reacquired_before_ingest(
     monkeypatch.setattr(mod, "recent_fiscal_quarters", fake_recent_fiscal_quarters)
     monkeypatch.setattr(mod, "_has_ingested_evidence", fake_has_ingested_evidence)
     monkeypatch.setattr(mod, "fetch_qa", fake_fetch_qa)
+
     def persist_satisfied(**_kwargs: object) -> str:
         return "satisfied"
 
@@ -323,11 +324,55 @@ def test_provider_miss_persists_exact_non_complete_disposition_without_failing_r
     assert [item.value for item in persisted] == [expected_status]
 
 
+def test_acquisition_denial_is_persisted_as_policy_blocked_not_operational_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    persisted: list[dict[str, Any]] = []
+
+    def denied_fetch(*_args: object, **_kwargs: object) -> Never:
+        raise mod.TranscriptAcquisitionDeniedError(
+            "returned issuer source URL is outside configured authority"
+        )
+
+    def persist(**kwargs: Any) -> str:
+        persisted.append(kwargs)
+        return str(kwargs["status"].value)
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
+    monkeypatch.setattr(mod, "_has_ingested_evidence", _always_false)
+    monkeypatch.setattr(mod, "fetch_qa", denied_fetch)
+    monkeypatch.setattr(mod, "_persist_coverage_disposition", persist)
+
+    result = mod._backfill_one(
+        "NU",
+        12,
+        1,
+        mod.date(2026, 9, 5),
+        False,
+        tmp_path / "portfolio.db",
+        False,
+    )
+
+    assert result.coverage_dispositions == ["Q2_2026:policy_blocked"]
+    assert "TranscriptAcquisitionDeniedError" in result.errors[0]
+    assert persisted[0]["status"] is mod.CoverageDispositionStatus.POLICY_BLOCKED
+    assert persisted[0]["reason_code"] == "transcript_source_policy_denied"
+    assert persisted[0]["attempts"] == (
+        mod.CoverageAttempt(
+            provider="transcript_chain",
+            status=mod.CoverageAttemptStatus.POLICY_DENIED,
+        ),
+    )
+
+
 def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mod = _load_module()
     result = mod.TickerBackfillResult("BKNG", 12, skipped_existing=["Q2_2026"])
+
     def exact_evidence(*_args: object) -> object:
         return mod.TranscriptEvidence("transcript-receipt:exact", "a" * 64)
 
@@ -374,6 +419,7 @@ def test_commitment_scan_disposition_preserves_missing_prerequisite_and_failures
     transcript_evidence = (
         None if evidence is None else mod.TranscriptEvidence(evidence[0], evidence[1])
     )
+
     def transcript_rows_exist(*_args: object) -> bool:
         return transcript_exists
 

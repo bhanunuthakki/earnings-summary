@@ -82,6 +82,9 @@ from pipeline.source_policy import (  # noqa: E402
     CollectionTarget,
     select_collection_targets,
 )
+from pipeline.transcript_acquisition import (  # noqa: E402
+    TranscriptAcquisitionDeniedError,
+)
 from provenance.selection import selected_transcripts_relation  # noqa: E402
 from runtime.python_process import managed_python_prefix  # noqa: E402
 from transcripts.acquisition_semantics import (  # noqa: E402
@@ -428,6 +431,33 @@ def _backfill_one(
                 db_path=db_path,
                 owner_requested=owner_requested,
             )
+        except TranscriptAcquisitionDeniedError as e:
+            result.errors.append(f"{label}: {type(e).__name__}: {e}"[:200])
+            try:
+                result.coverage_dispositions.append(
+                    f"{label}:"
+                    + _persist_coverage_disposition(
+                        ticker=ticker,
+                        year=y,
+                        quarter=q,
+                        fye_month=fye_month,
+                        status=CoverageDispositionStatus.POLICY_BLOCKED,
+                        reason_code="transcript_source_policy_denied",
+                        attempts=(
+                            CoverageAttempt(
+                                provider="transcript_chain",
+                                status=CoverageAttemptStatus.POLICY_DENIED,
+                            ),
+                        ),
+                        observed_at=observed_at,
+                    )
+                )
+            except Exception as disposition_exc:
+                result.errors.append(
+                    f"{label}: coverage disposition: {type(disposition_exc).__name__}: "
+                    f"{disposition_exc}"[:200]
+                )
+            continue
         except Exception as e:
             result.errors.append(f"{label}: {type(e).__name__}: {e}"[:200])
             try:
