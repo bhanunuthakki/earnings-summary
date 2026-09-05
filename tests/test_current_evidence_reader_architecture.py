@@ -21,7 +21,6 @@ _RAW_RELATION = re.compile(r"\b(?:FROM|JOIN)\s+(?:transcripts|filing_sections)\b
 # must not appear, and deleting an entry is always allowed.
 AUDITED_RAW_RELATION_READS = {
     "execution/audit_transcript_evidence.py": 1,
-    "execution/backfill_transcripts.py": 2,
     "execution/dedupe_transcripts.py": 1,
     "execution/ingest_filing_sections.py": 1,
     "execution/refetch_aggregator_transcripts.py": 1,

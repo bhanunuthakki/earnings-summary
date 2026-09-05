@@ -133,7 +133,7 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    rc = mod._run_extract(repo_root, "AAPL", dry_run=False)
+    rc = mod._run_extract(repo_root, "AAPL", 42, dry_run=False)
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
     assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
@@ -141,8 +141,9 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
         PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"
     )
     assert "--auto" in captured["cmd"]
-    assert "--rescan-unreceipted" in captured["cmd"]
-    assert "AAPL" in captured["cmd"]
+    assert "--rescan-unreceipted" not in captured["cmd"]
+    assert "--ticker" not in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--transcript-id") + 1] == "42"
     assert captured["cmd"][captured["cmd"].index("--db") + 1] == str(
         repo_root / "data" / "portfolio.db"
     )
@@ -174,7 +175,7 @@ def test_run_extract_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) -
         raise AssertionError("subprocess.run must not be called in dry-run")
 
     monkeypatch.setattr(mod.subprocess, "run", boom)
-    assert mod._run_extract(Path("/nonexistent"), "AAPL", dry_run=True) == 0
+    assert mod._run_extract(Path("/nonexistent"), "AAPL", 42, dry_run=True) == 0
 
 
 def test_commitment_extraction_is_limited_to_newly_ingested_tickers() -> None:
@@ -561,8 +562,11 @@ def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
     def no_scan_evidence(*_args: object) -> None:
         return None
 
+    def transcript_id(*_args: object) -> int:
+        return 42
+
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
-    monkeypatch.setattr(mod, "_transcript_rows_exist", _always_true)
+    monkeypatch.setattr(mod, "_transcript_id_for_period", transcript_id)
     monkeypatch.setattr(
         mod,
         "_ingested_evidence",
@@ -570,7 +574,89 @@ def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
     )
     monkeypatch.setattr(mod, "_commitment_scan_evidence", no_scan_evidence)
 
-    assert mod._tickers_requiring_commitment_scan([result], mod.date(2026, 9, 5), 1) == ["BKNG"]
+    assert mod._commitment_scan_targets([result], mod.date(2026, 9, 5), 1) == [
+        mod.CommitmentScanTarget(
+            ticker="BKNG",
+            fye_month=12,
+            fiscal_year=2026,
+            fiscal_quarter=2,
+            transcript_id=42,
+        )
+    ]
+
+
+def test_commitment_scan_targets_exclude_out_of_window_unreceipted_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    result = mod.TickerBackfillResult("BN", 12)
+    historical_ids = {(2026, 2): 1135, (2025, 4): 1075}
+    selected_periods: list[tuple[int, int]] = []
+
+    def in_window(*_args: object) -> list[tuple[int, int]]:
+        return [(2026, 2)]
+
+    def transcript_id(
+        _ticker: str,
+        year: int,
+        quarter: int,
+        _fye_month: int,
+    ) -> int | None:
+        selected_periods.append((year, quarter))
+        return historical_ids.get((year, quarter))
+
+    def exact_evidence(*_args: object) -> object:
+        return mod.TranscriptEvidence("transcript-receipt:exact", "a" * 64)
+
+    def no_scan_evidence(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", in_window)
+    monkeypatch.setattr(mod, "_transcript_id_for_period", transcript_id)
+    monkeypatch.setattr(mod, "_ingested_evidence", exact_evidence)
+    monkeypatch.setattr(mod, "_commitment_scan_evidence", no_scan_evidence)
+
+    targets = mod._commitment_scan_targets([result], mod.date(2026, 9, 5), 1)
+
+    assert [
+        (target.fiscal_year, target.fiscal_quarter, target.transcript_id) for target in targets
+    ] == [(2026, 2, 1135)]
+    assert selected_periods == [(2026, 2)]
+    assert all(target.transcript_id != 1075 for target in targets)
+
+
+def test_exact_commitment_scan_targets_continue_after_peer_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    targets = [
+        mod.CommitmentScanTarget("BN", 12, 2026, 2, 1135),
+        mod.CommitmentScanTarget("NU", 12, 2026, 2, 1136),
+    ]
+    invoked: list[tuple[str, int]] = []
+
+    def run_extract(
+        _repo_root: Path,
+        ticker: str,
+        transcript_id: int,
+        _dry_run: bool,
+    ) -> int:
+        invoked.append((ticker, transcript_id))
+        return 7 if transcript_id == 1135 else 0
+
+    def scan_evidence(ticker: str, *_args: object) -> object | None:
+        if ticker == "NU":
+            return mod.TranscriptEvidence("commitment-scan-receipt:nu", "a" * 64)
+        return None
+
+    monkeypatch.setattr(mod, "_run_extract", run_extract)
+    monkeypatch.setattr(mod, "_commitment_scan_evidence", scan_evidence)
+
+    results = mod._run_commitment_scan_targets(tmp_path, targets, dry_run=False)
+
+    assert invoked == [("BN", 1135), ("NU", 1136)]
+    assert [item["rc"] for item in results] == [7, 0]
+    assert mod._terminal_exit_code(None, results) == 1
 
 
 @pytest.mark.parametrize(
@@ -759,6 +845,8 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
     processed.parent.mkdir(parents=True)
     processed.write_text("authorized bound transcript", encoding="utf-8")
     digest = hashlib.sha256(processed.read_bytes()).hexdigest()
+    artifact_json = '{"artifact":"nu-q1-2026"}'
+    receipt_id = hashlib.sha256(artifact_json.encode()).hexdigest()
     db_path = tmp_path / "portfolio.db"
     conn = sqlite3.connect(db_path)
     conn.executescript(
@@ -772,7 +860,7 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
         CREATE TABLE transcript_acquisition_receipts (
             receipt_id TEXT,document_id INTEGER,canonical_ticker TEXT,fiscal_year INTEGER,
             fiscal_quarter INTEGER,canonical_document_path TEXT,artifact_sha256 TEXT,
-            provider TEXT,source_type TEXT,document_type TEXT
+            provider TEXT,source_type TEXT,document_type TEXT,artifact_json TEXT,recorded_at TEXT
         );
         INSERT INTO documents VALUES (
             1,'NU','transcripts/processed/NU_Q1_2026.txt','DIGEST'
@@ -780,10 +868,13 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
         INSERT INTO transcripts VALUES (2,1,'NU','Q1','2026-03-31',1);
         INSERT INTO transcript_segments VALUES (3,2);
         INSERT INTO transcript_acquisition_receipts VALUES (
-            'receipt',NULL,'NU',2026,1,'transcripts/raw/NU_Q1_2026.txt','DIGEST',
-            'issuer_ir','ir_doc','earnings_call_transcript'
+            'RECEIPT',NULL,'NU',2026,1,'transcripts/raw/NU_Q1_2026.txt','DIGEST',
+            'issuer_ir','ir_doc','earnings_call_transcript','ARTIFACT',
+            '2026-09-05T01:00:00Z'
         );
         """.replace("DIGEST", digest)
+        .replace("RECEIPT", receipt_id)
+        .replace("ARTIFACT", artifact_json)
     )
     conn.commit()
     conn.close()
@@ -798,6 +889,128 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is True
     processed.write_text("mutated", encoding="utf-8")
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is False
+
+
+def test_ingested_and_scan_evidence_share_latest_valid_receipt_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    from pipeline.commitment_scan_receipts import append_commitment_scan_receipt
+
+    processed = tmp_path / "transcripts" / "processed" / "BN_Q2_2026.txt"
+    processed.parent.mkdir(parents=True)
+    processed.write_text("authorized bound transcript", encoding="utf-8")
+    digest = hashlib.sha256(processed.read_bytes()).hexdigest()
+    valid_artifact_json = '{"artifact":"bn-q2-2026-valid"}'
+    valid_receipt_id = hashlib.sha256(valid_artifact_json.encode()).hexdigest()
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE documents (id INTEGER PRIMARY KEY,ticker TEXT,file_path TEXT,sha256 TEXT);
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY,document_id INTEGER,ticker TEXT,
+            fiscal_period_type TEXT,period_end TEXT,is_current INTEGER
+        );
+        CREATE TABLE transcript_segments (id INTEGER PRIMARY KEY,transcript_id INTEGER);
+        CREATE TABLE transcript_acquisition_receipts (
+            receipt_id TEXT,document_id INTEGER,canonical_ticker TEXT,fiscal_year INTEGER,
+            fiscal_quarter INTEGER,canonical_document_path TEXT,artifact_sha256 TEXT,
+            provider TEXT,source_type TEXT,document_type TEXT,artifact_json TEXT,recorded_at TEXT
+        );
+        CREATE TABLE commitment_scan_receipts (
+            receipt_id TEXT PRIMARY KEY,transcript_id INTEGER,document_id INTEGER,
+            transcript_acquisition_receipt_id TEXT,transcript_sha256 TEXT,
+            prompt_version TEXT,n_extracted INTEGER,output_manifest_json TEXT,
+            output_manifest_sha256 TEXT,recorded_at TEXT
+        );
+        INSERT INTO documents VALUES (
+            7,'BN','transcripts/processed/BN_Q2_2026.txt','DIGEST'
+        );
+        INSERT INTO transcripts VALUES (1135,7,'BN','Q2','2026-06-30',1);
+        INSERT INTO transcript_segments VALUES (9,1135);
+        INSERT INTO transcript_acquisition_receipts VALUES (
+            'VALID_RECEIPT',NULL,'BN',2026,2,'transcripts/raw/BN_Q2_2026.txt','DIGEST',
+            'issuer_ir','ir_doc','earnings_call_transcript','VALID_ARTIFACT',
+            '2026-09-05T01:00:00Z'
+        );
+        INSERT INTO transcript_acquisition_receipts VALUES (
+            'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+            NULL,'BN',2026,2,'transcripts/raw/BN_Q2_2026.txt','DIGEST',
+            'issuer_ir','ir_doc','earnings_call_transcript','{}',
+            '2026-09-05T02:00:00Z'
+        );
+        """.replace("DIGEST", digest)
+        .replace("VALID_RECEIPT", valid_receipt_id)
+        .replace("VALID_ARTIFACT", valid_artifact_json)
+    )
+    scan_receipt = append_commitment_scan_receipt(
+        conn,
+        transcript_id=1135,
+        prompt_version=mod.prompt_version_for("saydo_commitment_extract"),
+    )
+    conn.commit()
+    conn.close()
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod.db, "PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+
+    evidence = mod._ingested_evidence("BN", 2026, 2, 12)
+
+    assert evidence is not None
+    assert evidence.reference == f"transcript-receipt:{valid_receipt_id}"
+    assert evidence.sha256 == digest
+
+    scan_evidence = mod._commitment_scan_evidence("BN", 2026, 2, 12)
+    assert scan_evidence == mod.TranscriptEvidence(
+        reference=f"commitment-scan-receipt:{scan_receipt.receipt_id}",
+        sha256=scan_receipt.receipt_id,
+    )
+
+
+def test_ambiguous_selected_transcript_is_explicit_terminal_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    result = mod.TickerBackfillResult("BN", 12)
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY,document_id INTEGER,ticker TEXT,
+            fiscal_period_type TEXT,period_end TEXT,is_current INTEGER
+        );
+        INSERT INTO transcripts VALUES (1135,7,'BN','Q2','2026-06-30',1);
+        INSERT INTO transcripts VALUES (1136,8,'BN','Q2','2026-06-30',1);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+
+    targets = mod._commitment_scan_targets([result], mod.date(2026, 9, 5), 1)
+
+    assert targets == []
+    assert result.errors == [
+        "Q2_2026: commitment scan selection failed: "
+        "ambiguous_selected_transcript: transcript_ids=1135,1136"
+    ]
+    assert mod._terminal_exit_code(None, [], acquisition_errors=len(result.errors)) == 1
 
 
 def test_scheduled_transcript_scope_is_portfolio_only_but_explicit_evaluation_is_allowed(
