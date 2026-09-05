@@ -38,9 +38,12 @@ Current evidence at the Train 0 instrumentation baseline:
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced
   or corrected by typed generators and 66 are explicitly rejected from scoring
   for lack of an admissible generator.
-- The roadmap-freeze artifact itself validates as `PASS`; program feasibility
-  remains `HOLD` because the 952-second full-suite observation is still a
-  single unpaired run without independent Windows cache/network attestation.
+- The roadmap-freeze artifact contract is accepted
+  (`artifact_acceptance_status: PASS`), while its top-level and
+  program-feasibility statuses remain `HOLD`
+  because the 952-second full-suite observation is still a single unpaired run
+  without independent Windows cache/network attestation and the type-debt and
+  composition-root plans still lack ownership-confirmed execution receipts.
 
 Reproduce the receipts from the repository root:
 
