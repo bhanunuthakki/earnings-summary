@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
+  "scoped_commit": "1baee2d3849a7299ac44e3ea0580f68bf0ef224f",
   "scanner_sha256": "ec24487bb530f2aa7fce8433d597797e1ce5a7bf3d297114a72aa4b5cf0327eb",
-  "source_sha256": "960338e6937cef23591207c204acb92fc8fff04f406d45a0fd74b0508a10ed53",
+  "source_sha256": "fdcbe8a693dde64ee49a5d53ce5ce25f9ec26d984939997564d06ad9651c2398",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,14 +22,14 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1333,
-    "total_noncomment_loc": 492213,
+    "executable_modules": 1339,
+    "total_noncomment_loc": 495045,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 156,
-    "scc_count": 17,
-    "scc_module_count": 80,
+    "scc_count": 16,
+    "scc_module_count": 77,
     "largest_scc": 25,
     "composition_root_loc": {
       "execution/comments_server.py": 5011,
@@ -364,6 +364,22 @@
         "fully_annotated_public_functions": 3
       },
       {
+        "path": "execution/audit_quarterly_data_coverage.py",
+        "module": "execution.audit_quarterly_data_coverage",
+        "lines": {
+          "physical": 994,
+          "nonblank": 949,
+          "noncomment": 947
+        },
+        "internal_fan_out": 10,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
         "path": "execution/audit_segment_coverage.py",
         "module": "execution.audit_segment_coverage",
         "lines": {
@@ -505,11 +521,11 @@
         "path": "execution/backfill_earnings_surprises.py",
         "module": "execution.backfill_earnings_surprises",
         "lines": {
-          "physical": 232,
-          "nonblank": 201,
-          "noncomment": 194
+          "physical": 404,
+          "nonblank": 367,
+          "noncomment": 357
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 4,
         "responsibilities": [
           "database",
           "filesystem",
@@ -766,11 +782,11 @@
         "path": "execution/backfill_transcripts.py",
         "module": "execution.backfill_transcripts",
         "lines": {
-          "physical": 575,
-          "nonblank": 514,
-          "noncomment": 506
+          "physical": 1067,
+          "nonblank": 985,
+          "noncomment": 977
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 13,
         "responsibilities": [
           "database",
           "filesystem",
@@ -2410,9 +2426,9 @@
         "path": "execution/extract_commitments_from_transcript.py",
         "module": "execution.extract_commitments_from_transcript",
         "lines": {
-          "physical": 331,
-          "nonblank": 294,
-          "noncomment": 279
+          "physical": 410,
+          "nonblank": 370,
+          "noncomment": 355
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -2995,9 +3011,9 @@
         "path": "execution/fetch_qa_transcript.py",
         "module": "execution.fetch_qa_transcript",
         "lines": {
-          "physical": 440,
-          "nonblank": 393,
-          "noncomment": 393
+          "physical": 442,
+          "nonblank": 395,
+          "noncomment": 395
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -3427,11 +3443,11 @@
         "path": "execution/ingest_earnings_surprises.py",
         "module": "execution.ingest_earnings_surprises",
         "lines": {
-          "physical": 484,
-          "nonblank": 441,
-          "noncomment": 441
+          "physical": 601,
+          "nonblank": 553,
+          "noncomment": 551
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 4,
         "responsibilities": [
           "database",
           "filesystem",
@@ -7163,6 +7179,21 @@
         "fully_annotated_public_functions": 4
       },
       {
+        "path": "src/canonical_url.py",
+        "module": "canonical_url",
+        "lines": {
+          "physical": 79,
+          "nonblank": 65,
+          "noncomment": 65
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
         "path": "src/capture/__init__.py",
         "module": "capture",
         "lines": {
@@ -8074,16 +8105,16 @@
         "path": "src/compute/say_do_extractor.py",
         "module": "compute.say_do_extractor",
         "lines": {
-          "physical": 485,
-          "nonblank": 417,
-          "noncomment": 408
+          "physical": 559,
+          "nonblank": 487,
+          "noncomment": 478
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 7,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 8,
-        "fully_annotated_public_functions": 8
+        "public_functions": 9,
+        "fully_annotated_public_functions": 9
       },
       {
         "path": "src/compute/sector_benchmark_map.py",
@@ -9294,16 +9325,16 @@
         "path": "src/earnings_surprise_store.py",
         "module": "earnings_surprise_store",
         "lines": {
-          "physical": 295,
-          "nonblank": 258,
-          "noncomment": 258
+          "physical": 358,
+          "nonblank": 316,
+          "noncomment": 316
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 7,
-        "fully_annotated_public_functions": 7
+        "public_functions": 8,
+        "fully_annotated_public_functions": 8
       },
       {
         "path": "src/entity_seed.py",
@@ -10886,11 +10917,11 @@
         "path": "src/ir_pipeline/transcript.py",
         "module": "ir_pipeline.transcript",
         "lines": {
-          "physical": 207,
-          "nonblank": 172,
-          "noncomment": 166
+          "physical": 219,
+          "nonblank": 184,
+          "noncomment": 176
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 7,
         "responsibilities": [
           "filesystem",
           "network"
@@ -11059,17 +11090,17 @@
         "path": "src/llm/cli.py",
         "module": "llm.cli",
         "lines": {
-          "physical": 2668,
-          "nonblank": 2489,
-          "noncomment": 1763
+          "physical": 2703,
+          "nonblank": 2521,
+          "noncomment": 1795
         },
         "internal_fan_out": 16,
         "responsibilities": [
           "network",
           "process"
         ],
-        "public_functions": 6,
-        "fully_annotated_public_functions": 6
+        "public_functions": 7,
+        "fully_annotated_public_functions": 7
       },
       {
         "path": "src/llm/codex_backend.py",
@@ -11401,16 +11432,16 @@
         "path": "src/llm/resolver.py",
         "module": "llm.resolver",
         "lines": {
-          "physical": 282,
-          "nonblank": 236,
-          "noncomment": 227
+          "physical": 298,
+          "nonblank": 248,
+          "noncomment": 239
         },
         "internal_fan_out": 3,
         "responsibilities": [
           "network"
         ],
-        "public_functions": 8,
-        "fully_annotated_public_functions": 8
+        "public_functions": 9,
+        "fully_annotated_public_functions": 9
       },
       {
         "path": "src/llm/structured.py",
@@ -12647,6 +12678,22 @@
         "fully_annotated_public_functions": 0
       },
       {
+        "path": "src/pipeline/commitment_scan_receipts.py",
+        "module": "pipeline.commitment_scan_receipts",
+        "lines": {
+          "physical": 408,
+          "nonblank": 373,
+          "noncomment": 373
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
+      },
+      {
         "path": "src/pipeline/confidence.py",
         "module": "pipeline.confidence",
         "lines": {
@@ -12734,6 +12781,22 @@
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/pipeline/data_coverage_dispositions.py",
+        "module": "pipeline.data_coverage_dispositions",
+        "lines": {
+          "physical": 413,
+          "nonblank": 361,
+          "noncomment": 361
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/pipeline/data_policy_settings_panel.py",
@@ -14071,17 +14134,17 @@
         "path": "src/pipeline/source_policy.py",
         "module": "pipeline.source_policy",
         "lines": {
-          "physical": 803,
-          "nonblank": 695,
-          "noncomment": 695
+          "physical": 745,
+          "nonblank": 643,
+          "noncomment": 643
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 4,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 11,
-        "fully_annotated_public_functions": 11
+        "public_functions": 10,
+        "fully_annotated_public_functions": 10
       },
       {
         "path": "src/pipeline/source_routing.py",
@@ -14198,17 +14261,17 @@
         "path": "src/pipeline/transcript_acquisition.py",
         "module": "pipeline.transcript_acquisition",
         "lines": {
-          "physical": 823,
-          "nonblank": 755,
-          "noncomment": 755
+          "physical": 825,
+          "nonblank": 760,
+          "noncomment": 760
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 9,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 11,
-        "fully_annotated_public_functions": 11
+        "public_functions": 9,
+        "fully_annotated_public_functions": 9
       },
       {
         "path": "src/pipeline/triage_panel.py",
@@ -18686,7 +18749,7 @@
         "path": "src/sqlite_runtime.py",
         "module": "sqlite_runtime",
         "lines": {
-          "physical": 210,
+          "physical": 209,
           "nonblank": 169,
           "noncomment": 166
         },
@@ -18834,17 +18897,17 @@
         "path": "src/surprise_sources.py",
         "module": "surprise_sources",
         "lines": {
-          "physical": 484,
-          "nonblank": 427,
-          "noncomment": 407
+          "physical": 510,
+          "nonblank": 445,
+          "noncomment": 423
         },
         "internal_fan_out": 1,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 7,
-        "fully_annotated_public_functions": 7
+        "public_functions": 8,
+        "fully_annotated_public_functions": 8
       },
       {
         "path": "src/synthesis/__init__.py",
@@ -19682,6 +19745,34 @@
         "fully_annotated_public_functions": 21
       },
       {
+        "path": "src/transcripts/receipt_sqlite.py",
+        "module": "transcripts.receipt_sqlite",
+        "lines": {
+          "physical": 69,
+          "nonblank": 51,
+          "noncomment": 51
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "database"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "src/transcripts/reviewed_issuer_policy.py",
+        "module": "transcripts.reviewed_issuer_policy",
+        "lines": {
+          "physical": 79,
+          "nonblank": 62,
+          "noncomment": 62
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
         "path": "src/transcripts/source_reliability.py",
         "module": "transcripts.source_reliability",
         "lines": {
@@ -20419,11 +20510,6 @@
         "pipeline.issuer_document_coverage",
         "pipeline.issuer_fact_manifest",
         "provenance.source_coverage"
-      ],
-      [
-        "pipeline.source_policy",
-        "pipeline.transcript_acquisition",
-        "sqlite_runtime"
       ],
       [
         "provenance.search_index_lineage",

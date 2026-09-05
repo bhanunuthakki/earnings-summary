@@ -84,12 +84,12 @@
       "classification": "unreferenced-static-candidate",
       "decorators": [],
       "dynamic_hazards": [],
-      "end_line": 987,
-      "fingerprint": "ad423460c1dabb381a24c74da900ea110f16b060346597af7c75ffcb1eb7b195",
+      "end_line": 1008,
+      "fingerprint": "f19e9de7116e1fd5878d1bd90de2ef502cc67f37f013feb5cf37e4c1642f8217",
       "inbound_static_ref_count": 0,
       "inbound_static_refs": [],
       "kind": "function",
-      "line": 986,
+      "line": 1007,
       "loc": 2,
       "path": "src/llm/cli.py",
       "qualified_name": "src.llm.cli._primary_subscription_backend",
@@ -242,23 +242,23 @@
     }
   ],
   "counts": {
-    "protected": 11741,
-    "referenced": 15666,
-    "unknown": 6322,
+    "protected": 11762,
+    "referenced": 15735,
+    "unknown": 6382,
     "unreferenced-static-candidate": 15
   },
   "files_failed": [],
-  "files_scanned": 2462,
-  "inventory_hash": "82a00b903bced2e5995ef4723995937d0bda5d1b0cf2f5423555c9b9e40087fe",
+  "files_scanned": 2472,
+  "inventory_hash": "542ff36dc3db19479eb7655eaa402b2c27e0a917a31d796f77e52c903b9fc764",
   "parser_version": "python-ast-3.11-v3",
-  "revision": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
+  "revision": "1baee2d3849a7299ac44e3ea0580f68bf0ef224f",
   "schema_version": "bha-109.v1",
   "status": "PASS",
-  "symbol_count": 33744,
-  "tracked_tree_hash": "1e4d3c89d34177d4bc2ff6d954ebd9f01e0edf1f09ba291f96c693c93a3e3b64",
+  "symbol_count": 33894,
+  "tracked_tree_hash": "9567586898bac38da610d2917d1c5f81d6bc9f7aa535987d9b5c23e99d7b5d0f",
   "unknown_hazard_counts": {
-    "class-method-dispatch": 562,
-    "cli-entrypoint": 413,
+    "class-method-dispatch": 563,
+    "cli-entrypoint": 414,
     "decorator:app.after_request": 2,
     "decorator:app.errorhandler": 1,
     "decorator:app.route": 1,
@@ -268,14 +268,14 @@
     "dunder-protocol": 142,
     "dynamic:__import__": 5,
     "dynamic:exec": 1,
-    "dynamic:getattr": 294,
+    "dynamic:getattr": 297,
     "dynamic:locals": 1,
-    "dynamic:setattr": 1980,
-    "dynamic:unbounded-reflection-in-module": 1287,
+    "dynamic:setattr": 1998,
+    "dynamic:unbounded-reflection-in-module": 1288,
     "dynamic:vars": 18,
-    "public-module-symbol": 3657,
-    "string-or-reflection-reference": 3056,
-    "test-fixture-or-helper": 2978
+    "public-module-symbol": 3692,
+    "string-or-reflection-reference": 3094,
+    "test-fixture-or-helper": 3005
   },
   "unknown_symbols": [
     {
@@ -288,7 +288,7 @@
       ],
       "end_line": 358,
       "fingerprint": "1a88dc0fae13a41af5f5f2712b7b4c0b9ed07eb986973de46ebeb073e1cd9895",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -386,7 +386,7 @@
       ],
       "end_line": 325,
       "fingerprint": "be981226f386c787004f53bf6c2abc24b532fe2f6090f0edaa964ed6357a254b",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -415,7 +415,7 @@
       ],
       "end_line": 71,
       "fingerprint": "533d2c2b6b3a53619ad84f662e465528a566ee2bca06dbb91ff0335a02ead286",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -472,7 +472,7 @@
       ],
       "end_line": 335,
       "fingerprint": "e7ee1f057a00a6b437d4f879a3217c27b6b4424443e42c4ee714c7021c6bf90d",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -550,7 +550,7 @@
       ],
       "end_line": 87,
       "fingerprint": "d6872f03972fbbbf1256c404760b446ceed557bf07015936a79e61c38aa63e62",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -628,7 +628,7 @@
       ],
       "end_line": 348,
       "fingerprint": "1af65948b7898bc13845d65ff85309278d6010bf127fb74b47ad09f9bf8166ef",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -685,7 +685,7 @@
       ],
       "end_line": 276,
       "fingerprint": "c42bc26e1daf680aabd3029ffe4a96fd80964f663085c5da01c56369e24c6243",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -714,7 +714,7 @@
       ],
       "end_line": 47,
       "fingerprint": "09095a71d6426040806ae113eb2bd6c476a5ea36b264594002386d1d975f2b61",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -766,7 +766,7 @@
       ],
       "end_line": 549,
       "fingerprint": "4df4b90538dd1aea4720923a20159880377dd1d3b00016f3ed912e8303bc9726",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -941,7 +941,7 @@
       ],
       "end_line": 1206,
       "fingerprint": "b8b3818d28406bc905200540d542b391efec6016cd800a8dc9236ba8090a3cb6",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -970,7 +970,7 @@
       ],
       "end_line": 814,
       "fingerprint": "e8b073dda4f9e1ad66c8e0c30e23cd7e990226df4988fef333b97eca72ebddba",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -999,7 +999,7 @@
       ],
       "end_line": 137,
       "fingerprint": "20ed0bda5036d661df847acffc244f09459819313596ae5de8aee300a1dc2157",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1028,7 +1028,7 @@
       ],
       "end_line": 51,
       "fingerprint": "5b4f014f54f611b5b61488ad4be190b98b0e40bb377b53dde7efb407ae922304",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1057,7 +1057,7 @@
       ],
       "end_line": 249,
       "fingerprint": "856e22d3061f5eff9963f749c7311588f260da383f4954fa24f3490156115e36",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1086,7 +1086,7 @@
       ],
       "end_line": 214,
       "fingerprint": "fb26fab33a4f50181bb7a61c3deb1577f8f6afeba1a721ee345058d33040e8c9",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1162,7 +1162,7 @@
       ],
       "end_line": 202,
       "fingerprint": "7180d4918382b7d638be9331463721dbc6e437e7b32a65663a4a7d21789fe795",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1191,7 +1191,7 @@
       ],
       "end_line": 65,
       "fingerprint": "ffcb38e879091d6483dc307f964dd58281179aa966c6e5c6fb2b75cba380deab",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1248,7 +1248,7 @@
       ],
       "end_line": 150,
       "fingerprint": "b7255d696cd3d714d7bf226d1a1fb5c66a3cd7636ae461490475760a2de258b5",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1275,16 +1275,16 @@
       ],
       "end_line": 50,
       "fingerprint": "fd0429677c8dc4e496c6626ae4fe763e7cdd396483220a0e2724ce31dd624721",
-      "inbound_static_ref_count": 176,
+      "inbound_static_ref_count": 196,
       "inbound_static_refs": [
         "execution/audit_deleted_table_recovery.py:133",
-        "execution/audit_transcript_evidence.py:156",
-        "execution/audit_transcript_evidence.py:168",
-        "execution/backup_restore_readiness_receipt.py:171",
-        "execution/backup_restore_readiness_receipt.py:218",
-        "execution/capture_test_ci_performance.py:195",
-        "execution/capture_test_ci_performance.py:422",
-        "execution/capture_test_ci_performance.py:425"
+        "execution/audit_quarterly_data_coverage.py:383",
+        "execution/audit_quarterly_data_coverage.py:394",
+        "execution/audit_quarterly_data_coverage.py:413",
+        "execution/audit_quarterly_data_coverage.py:581",
+        "execution/audit_quarterly_data_coverage.py:920",
+        "execution/audit_quarterly_data_coverage.py:925",
+        "execution/audit_quarterly_data_coverage.py:940"
       ],
       "kind": "function",
       "line": 45,
@@ -1332,7 +1332,7 @@
       ],
       "end_line": 163,
       "fingerprint": "b3be989033368051e1462c0926c93d91c547a383696b40a604be0a23118c4fbd",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1361,7 +1361,7 @@
       ],
       "end_line": 99,
       "fingerprint": "a118d08063e626e14f8a5f93027385a8b8f449939845fd4b78ac09f1d82d6a71",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1390,7 +1390,7 @@
       ],
       "end_line": 115,
       "fingerprint": "ac79e14d9493dcd8d67d23b2676c87c96ba86badb5100edb61e126ed9a9c30a5",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1419,7 +1419,7 @@
       ],
       "end_line": 152,
       "fingerprint": "de79b245283a0fe595b681d35d1b656359a5d3531bd30574189cd8f29813ceec",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1442,13 +1442,154 @@
       "classification": "unknown",
       "decorators": [],
       "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 78,
+      "fingerprint": "ced841b3d29c5d50f94dc143c7f36d757b30d3d40adad5a8ceeb20f32104b1ec",
+      "inbound_static_ref_count": 196,
+      "inbound_static_refs": [
+        "execution/audit_deleted_table_recovery.py:133",
+        "execution/audit_quarterly_data_coverage.py:383",
+        "execution/audit_quarterly_data_coverage.py:394",
+        "execution/audit_quarterly_data_coverage.py:413",
+        "execution/audit_quarterly_data_coverage.py:581",
+        "execution/audit_quarterly_data_coverage.py:920",
+        "execution/audit_quarterly_data_coverage.py:925",
+        "execution/audit_quarterly_data_coverage.py:940"
+      ],
+      "kind": "function",
+      "line": 77,
+      "loc": 2,
+      "path": "execution/audit_quarterly_data_coverage.py",
+      "qualified_name": "execution.audit_quarterly_data_coverage._sha256",
+      "source_hash": "dc0e10b7e392eee8639fdcce7628d2574a1f5269c23623f79cff7e83a4d0bb2e",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 500,
+      "fingerprint": "501a5c4f46c4619f21c7cd2afe5479ee3c541a472beb5425622b6eb06d5f85c3",
+      "inbound_static_ref_count": 2,
+      "inbound_static_refs": [
+        "execution/audit_quarterly_data_coverage.py:751",
+        "execution/audit_quarterly_data_coverage.py:843"
+      ],
+      "kind": "function",
+      "line": 342,
+      "loc": 159,
+      "path": "execution/audit_quarterly_data_coverage.py",
+      "qualified_name": "execution.audit_quarterly_data_coverage._latest_disposition",
+      "source_hash": "0da9c218fffaf61036addbab775beb88570e42639a938ae0b0615edeea3bd28e",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 597,
+      "fingerprint": "673f894fe218c4698b3da7617ed66bae45812f6cc86fb779e721cb5e8f74d426",
+      "inbound_static_ref_count": 2,
+      "inbound_static_refs": [
+        "execution/audit_quarterly_data_coverage.py:819",
+        "src/ask/grounding.py:1478"
+      ],
+      "kind": "function",
+      "line": 503,
+      "loc": 95,
+      "path": "execution/audit_quarterly_data_coverage.py",
+      "qualified_name": "execution.audit_quarterly_data_coverage._transcript_evidence",
+      "source_hash": "de7513511dc8aadbb35eb81437768d380372570fb4de89e14abe4da9dfa63c11",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 648,
+      "fingerprint": "5c7d04e91efaa0d11fd6ca926a5d1e25eed80ba009b31753339fd214a3c172ae",
+      "inbound_static_ref_count": 3,
+      "inbound_static_refs": [
+        "execution/audit_quarterly_data_coverage.py:830",
+        "execution/backfill_transcripts.py:720",
+        "execution/backfill_transcripts.py:747"
+      ],
+      "kind": "function",
+      "line": 600,
+      "loc": 49,
+      "path": "execution/audit_quarterly_data_coverage.py",
+      "qualified_name": "execution.audit_quarterly_data_coverage._commitment_scan_evidence",
+      "source_hash": "0a5b42ec5a6640ed4bcdc20da00677e75025f18ba961f07480c26ac7028deefe",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "string-or-reflection-reference"
+      ],
+      "end_line": 717,
+      "fingerprint": "e86b1d1937a4c55329631f17b814266e5b4b9fba09626ac97dd74db45762eadd",
+      "inbound_static_ref_count": 2,
+      "inbound_static_refs": [
+        "execution/audit_quarterly_data_coverage.py:752",
+        "execution/audit_quarterly_data_coverage.py:833"
+      ],
+      "kind": "function",
+      "line": 651,
+      "loc": 67,
+      "path": "execution/audit_quarterly_data_coverage.py",
+      "qualified_name": "execution.audit_quarterly_data_coverage._surprise_evidence",
+      "source_hash": "0f2dbe9c9f6504b61c373fc0a363caab4b783ec5f38c1e614f885160f214bd75",
+      "visibility": "private"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "cli-entrypoint",
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 990,
+      "fingerprint": "69035280a87d63b582a05518f673653a757f8d123c1b7f80e4a621b3f408350b",
+      "inbound_static_ref_count": 913,
+      "inbound_static_refs": [
+        ".github/scripts/ci_gate.py:362",
+        "cron/backup_db.py:329",
+        "cron/job_runtime.py:14",
+        "cron/migrate_legacy_backups.py:75",
+        "cron/restore_db.py:339",
+        "execution/activate_data_cutover.py:91",
+        "execution/analyze_code_duplicates.py:14",
+        "execution/analyze_filing_intelligence.py:357"
+      ],
+      "kind": "function",
+      "line": 944,
+      "loc": 47,
+      "path": "execution/audit_quarterly_data_coverage.py",
+      "qualified_name": "execution.audit_quarterly_data_coverage.main",
+      "source_hash": "f1ca1ebc94d1e499757b98b5ce4b7b322a3844feaf959468cccd66923035ca4e",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
         "cli-entrypoint",
         "public-module-symbol",
         "string-or-reflection-reference"
       ],
       "end_line": 194,
       "fingerprint": "ec8a370c602c8e36b4d28dfcedaa2dea221e8ba6d1f8462d5a0af3d81359780c",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1477,7 +1618,7 @@
       ],
       "end_line": 91,
       "fingerprint": "570848ea781a14f05d1795b1ec3f7ce90ab16a2050af898b0b8e8688f1e2abd1",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1534,8 +1675,8 @@
       "inbound_static_ref_count": 55,
       "inbound_static_refs": [
         "execution/audit_segment_quarterly_coverage.py:74",
-        "execution/backfill_earnings_surprises.py:191",
-        "execution/backfill_transcripts.py:482",
+        "execution/backfill_earnings_surprises.py:356",
+        "execution/backfill_transcripts.py:941",
         "execution/build_artifacts.py:263",
         "execution/build_comparable_sets.py:135",
         "execution/build_saydo_pairs.py:55",
@@ -1560,7 +1701,7 @@
       ],
       "end_line": 44,
       "fingerprint": "228fe40ab8be86dccdb3725af244fe0aee43256e047af1db278456840e02d31a",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1616,7 +1757,7 @@
       ],
       "end_line": 977,
       "fingerprint": "a06ff14b7a56568a1a08cef162d246629a70c5f6b062f77fdf0e857a14d4902d",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1643,16 +1784,16 @@
       ],
       "end_line": 58,
       "fingerprint": "48b836a97806f4d9b43a298feed185c2f92b6dab8489a305b586e3eed1e31ab5",
-      "inbound_static_ref_count": 176,
+      "inbound_static_ref_count": 196,
       "inbound_static_refs": [
         "execution/audit_deleted_table_recovery.py:133",
-        "execution/audit_transcript_evidence.py:156",
-        "execution/audit_transcript_evidence.py:168",
-        "execution/backup_restore_readiness_receipt.py:171",
-        "execution/backup_restore_readiness_receipt.py:218",
-        "execution/capture_test_ci_performance.py:195",
-        "execution/capture_test_ci_performance.py:422",
-        "execution/capture_test_ci_performance.py:425"
+        "execution/audit_quarterly_data_coverage.py:383",
+        "execution/audit_quarterly_data_coverage.py:394",
+        "execution/audit_quarterly_data_coverage.py:413",
+        "execution/audit_quarterly_data_coverage.py:581",
+        "execution/audit_quarterly_data_coverage.py:920",
+        "execution/audit_quarterly_data_coverage.py:925",
+        "execution/audit_quarterly_data_coverage.py:940"
       ],
       "kind": "function",
       "line": 57,
@@ -1694,7 +1835,7 @@
       ],
       "end_line": 230,
       "fingerprint": "0810c5aede3b939438e7b33ccaad222c4326441e4c6740bccedbb772658f70de",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1751,7 +1892,7 @@
       ],
       "end_line": 117,
       "fingerprint": "e425a4a33bb23f3af36f9d82355cf15ee9e34a026afad85920e310116b6949e1",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1780,7 +1921,7 @@
       ],
       "end_line": 107,
       "fingerprint": "8f7ea6156a698d487cde737613725553d231ef1f4088592136db26aac2627f29",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1809,7 +1950,7 @@
       ],
       "end_line": 116,
       "fingerprint": "0c096e69d0554792997bb2937482ee5da3050c1def6a28e23da73cc8bb0a2b7e",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1838,7 +1979,7 @@
       ],
       "end_line": 268,
       "fingerprint": "bf81cf899aa22763445a5b6b1d6a581589326f75d3e849ac4a17741b4e6526b3",
-      "inbound_static_ref_count": 911,
+      "inbound_static_ref_count": 913,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:362",
         "cron/backup_db.py:329",
@@ -1856,175 +1997,9 @@
       "qualified_name": "execution.backfill_document_accessions.main",
       "source_hash": "c9cfb25621680bf3e4317b21ff34ff222cfb38025fec3c409cb3a66556041ba9",
       "visibility": "public"
-    },
-    {
-      "classification": "unknown",
-      "decorators": [],
-      "dynamic_hazards": [
-        "string-or-reflection-reference"
-      ],
-      "end_line": 72,
-      "fingerprint": "a706b425da59826e7a9974e89d16e7cb3751de05fa4d3f3c04bdac7fd2ac0106",
-      "inbound_static_ref_count": 6,
-      "inbound_static_refs": [
-        "execution/backfill_earnings_surprises.py:187",
-        "execution/backfill_transcripts.py:478",
-        "execution/fetch_fmp_historical_data.py:201",
-        "execution/ingest_earnings_surprises.py:392",
-        "execution/scan_ir_transcripts.py:369",
-        "tests/test_fetch_fmp_historical_retry.py:48"
-      ],
-      "kind": "function",
-      "line": 58,
-      "loc": 15,
-      "path": "execution/backfill_earnings_surprises.py",
-      "qualified_name": "execution.backfill_earnings_surprises._retarget_paths",
-      "source_hash": "81011f5688892da33c60305932c4e37522be78f3d2698561e5ea052fbb1bcce7",
-      "visibility": "private"
-    },
-    {
-      "classification": "unknown",
-      "decorators": [],
-      "dynamic_hazards": [
-        "string-or-reflection-reference"
-      ],
-      "end_line": 104,
-      "fingerprint": "8d41526838e52279fa74bc375b99ae3ce9040db90f34e48be0b0ca889e1cb278",
-      "inbound_static_ref_count": 55,
-      "inbound_static_refs": [
-        "execution/audit_segment_quarterly_coverage.py:74",
-        "execution/backfill_earnings_surprises.py:191",
-        "execution/backfill_transcripts.py:482",
-        "execution/build_artifacts.py:263",
-        "execution/build_comparable_sets.py:135",
-        "execution/build_saydo_pairs.py:55",
-        "execution/compute_derived_metrics.py:179",
-        "execution/compute_derived_metrics.py:91"
-      ],
-      "kind": "function",
-      "line": 86,
-      "loc": 19,
-      "path": "execution/backfill_earnings_surprises.py",
-      "qualified_name": "execution.backfill_earnings_surprises._resolve_tickers",
-      "source_hash": "79e4afe6165f5499cbdccf559046f778fd89724e9fca861fffa2951e97b8badc",
-      "visibility": "private"
-    },
-    {
-      "classification": "unknown",
-      "decorators": [],
-      "dynamic_hazards": [
-        "string-or-reflection-reference"
-      ],
-      "end_line": 161,
-      "fingerprint": "6c7d9f810edc8c27fa5f76e865e13c499a597fec733a5f47877dbb387ee278ff",
-      "inbound_static_ref_count": 8,
-      "inbound_static_refs": [
-        "execution/backfill_earnings_surprises.py:207",
-        "execution/backfill_insider_transactions.py:164",
-        "execution/backfill_transcripts.py:494",
-        "tests/test_backfill_earnings_surprises.py:206",
-        "tests/test_backfill_earnings_surprises.py:225",
-        "tests/test_backfill_earnings_surprises.py:246",
-        "tests/test_backfill_earnings_surprises.py:277",
-        "tests/test_backfill_transcripts.py:185"
-      ],
-      "kind": "function",
-      "line": 136,
-      "loc": 26,
-      "path": "execution/backfill_earnings_surprises.py",
-      "qualified_name": "execution.backfill_earnings_surprises._backfill_one",
-      "source_hash": "e969ecafa8050b604f4f183ed66e90e81efac5ec660cf80ee9c456311c17c7db",
-      "visibility": "private"
-    },
-    {
-      "classification": "unknown",
-      "decorators": [],
-      "dynamic_hazards": [
-        "cli-entrypoint",
-        "public-module-symbol",
-        "string-or-reflection-reference"
-      ],
-      "end_line": 228,
-      "fingerprint": "46c01db47e895409998602d0b78c5809cd74d37c854eb5217597d307c50461ac",
-      "inbound_static_ref_count": 911,
-      "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
-        "cron/backup_db.py:329",
-        "cron/job_runtime.py:14",
-        "cron/migrate_legacy_backups.py:75",
-        "cron/restore_db.py:339",
-        "execution/activate_data_cutover.py:91",
-        "execution/analyze_code_duplicates.py:14",
-        "execution/analyze_filing_intelligence.py:357"
-      ],
-      "kind": "function",
-      "line": 164,
-      "loc": 65,
-      "path": "execution/backfill_earnings_surprises.py",
-      "qualified_name": "execution.backfill_earnings_surprises.main",
-      "source_hash": "917fdae58144d62124e111f35c1c995262ea9076c04a41b1be57709155aee1ce",
-      "visibility": "public"
-    },
-    {
-      "classification": "unknown",
-      "decorators": [],
-      "dynamic_hazards": [
-        "cli-entrypoint",
-        "public-module-symbol",
-        "string-or-reflection-reference"
-      ],
-      "end_line": 54,
-      "fingerprint": "4c103511b490e1713fa554a96f31f082970711ea9e7acf45660bd3212b6666e4",
-      "inbound_static_ref_count": 911,
-      "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
-        "cron/backup_db.py:329",
-        "cron/job_runtime.py:14",
-        "cron/migrate_legacy_backups.py:75",
-        "cron/restore_db.py:339",
-        "execution/activate_data_cutover.py:91",
-        "execution/analyze_code_duplicates.py:14",
-        "execution/analyze_filing_intelligence.py:357"
-      ],
-      "kind": "function",
-      "line": 21,
-      "loc": 34,
-      "path": "execution/backfill_evidence_ledger.py",
-      "qualified_name": "execution.backfill_evidence_ledger.main",
-      "source_hash": "df5771bdcf518affe1cf02339bf78a229d5285f4e522516f19c31614ec591370",
-      "visibility": "public"
-    },
-    {
-      "classification": "unknown",
-      "decorators": [],
-      "dynamic_hazards": [
-        "cli-entrypoint",
-        "public-module-symbol",
-        "string-or-reflection-reference"
-      ],
-      "end_line": 123,
-      "fingerprint": "d3bf549b3341d4013e39886968fc9dfe53cd5427e8113f54c6809135406b26b6",
-      "inbound_static_ref_count": 911,
-      "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
-        "cron/backup_db.py:329",
-        "cron/job_runtime.py:14",
-        "cron/migrate_legacy_backups.py:75",
-        "cron/restore_db.py:339",
-        "execution/activate_data_cutover.py:91",
-        "execution/analyze_code_duplicates.py:14",
-        "execution/analyze_filing_intelligence.py:357"
-      ],
-      "kind": "function",
-      "line": 30,
-      "loc": 94,
-      "path": "execution/backfill_financial_fact_resolutions.py",
-      "qualified_name": "execution.backfill_financial_fact_resolutions.main",
-      "source_hash": "af27e50a74c015943e90e15e9a7bcb56c6ddef408d773d8d1431c650880f261a",
-      "visibility": "public"
     }
   ],
-  "unknown_total": 6322,
+  "unknown_total": 6382,
   "violations": [],
   "worktree_dirty": true
 }

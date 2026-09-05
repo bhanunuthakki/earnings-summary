@@ -12,27 +12,27 @@ Scanner and source hashes inside each receipt make definition drift explicit.
 
 Current evidence at the Train 0 instrumentation baseline:
 
-- 1,333 executable modules and 492,213 non-comment lines.
+- 1,339 executable modules and 495,045 non-comment lines.
 - 91 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
-- 17 import cycles spanning 80 modules; the largest contains 25 modules.
+- 16 import cycles spanning 77 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.
-- 168 near-miss groups covering 11,889 body lines.
-- 2 whole-tree Ruff findings, 62 format findings, 4,199 active strict-Pyright
+- 166 near-miss groups covering 11,680 body lines.
+- 2 whole-tree Ruff findings, 62 format findings, 4,192 active strict-Pyright
   diagnostics, 175 separately retained archived-migration diagnostics, and
-  608 suppression directives. The typed static receipt is `PASS`: every
+  606 suppression directives. The typed static receipt is `PASS`: every
   configured source root is included and immutable archived migrations remain
   a separately reported denominator.
-- 692 database-builder occurrences across 1,117 tracked test files are
+- 695 database-builder occurrences across 1,121 tracked test files are
   classified with zero violations or unclassified cases.
 - The operational graph has no parse failures, unresolved targets, stale
   dispositions, or unknown production edges. The remaining 84 unknown edges
   are confined to tests and instruction tests and remain visible in the raw
   graph.
-- The lifecycle receipt classifies all 835 candidates with zero omissions,
+- The lifecycle receipt classifies all 836 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
-  UI-reachable, 230 internal-delegate, and 271 time-bounded dormant entries.
-- The function-lifecycle receipt validates as `PASS` for 33,744 symbols:
-  11,741 protected, 15,666 referenced, 6,322 unknown, and 15 conservative
+  UI-reachable, 231 internal-delegate, and 271 time-bounded dormant entries.
+- The function-lifecycle receipt validates as `PASS` for 33,894 symbols:
+  11,762 protected, 15,735 referenced, 6,382 unknown, and 15 conservative
   unreferenced-static candidates. Candidates are review inputs, not deletion
   authority.
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced
@@ -40,9 +40,10 @@ Current evidence at the Train 0 instrumentation baseline:
   for lack of an admissible generator.
 - The roadmap-freeze artifact itself validates as `PASS`; program feasibility
   remains `HOLD`, and the top-level status is likewise `HOLD`, for both recorded
-  reasons: the 952-second full-suite observation is still a single unpaired run
-  without independent Windows cache/network attestation, and the type-debt and
-  composition-root plans still lack ownership-confirmed execution receipts.
+  reasons: `full-suite evidence is a single unpaired run; >=7 paired cold/warm
+  runs and network isolation are not yet proven`, and `type-debt burn-down and
+  composition-root split feasibility lack ownership-confirmed execution
+  receipts`.
 
 Reproduce the receipts from the repository root:
 

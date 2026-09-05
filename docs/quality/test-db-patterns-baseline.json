@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
+  "scoped_commit": "1baee2d3849a7299ac44e3ea0580f68bf0ef224f",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "57ac673715a212380133daab8c83ca256beb0205e210ecc2e7a5c2c6b15502fd",
+  "source_sha256": "87abd7c784e6f7cb7aee508288cad87f107e537c653814f362b44d4c1233d63a",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",
@@ -90,6 +90,7 @@
     "tests/test_ask_viewspec_override_consistency.py",
     "tests/test_attribution.py",
     "tests/test_audit_data_cutover_readiness.py",
+    "tests/test_audit_quarterly_data_coverage.py",
     "tests/test_audit_segment_quarterly_coverage.py",
     "tests/test_audit_test_db_patterns.py",
     "tests/test_audit_thesis_episode_clone.py",
@@ -188,6 +189,7 @@
     "tests/test_comments_server_operations.py",
     "tests/test_comments_server_startup.py",
     "tests/test_comments_store_atomicity.py",
+    "tests/test_commitment_scan_receipts.py",
     "tests/test_comp_set_context.py",
     "tests/test_comp_set_drift.py",
     "tests/test_comp_set_metrics.py",
@@ -244,6 +246,7 @@
     "tests/test_dashboard_style_master.py",
     "tests/test_dashboard_upcoming.py",
     "tests/test_data_backbone_rehearsal.py",
+    "tests/test_data_coverage_dispositions.py",
     "tests/test_data_infrastructure_benchmark.py",
     "tests/test_data_infrastructure_migration_chain.py",
     "tests/test_data_infrastructure_production_benchmark.py",
@@ -1045,6 +1048,7 @@
     "tests/test_transcript_longitudinal.py",
     "tests/test_transcript_period_guard.py",
     "tests/test_transcript_promotion.py",
+    "tests/test_transcript_receipt_sqlite.py",
     "tests/test_transcript_version_migration.py",
     "tests/test_triage_panel.py",
     "tests/test_trigger_decision_condition.py",
@@ -1657,6 +1661,14 @@
       ]
     },
     {
+      "path": "tests/test_audit_quarterly_data_coverage.py",
+      "taxonomy": "hand-DDL-unit-schema",
+      "evidence": [
+        "call:migrated_db",
+        "sql:create table"
+      ]
+    },
+    {
       "path": "tests/test_audit_segment_quarterly_coverage.py",
       "taxonomy": "hand-DDL-unit-schema",
       "evidence": [
@@ -2118,6 +2130,14 @@
       ]
     },
     {
+      "path": "tests/test_commitment_scan_receipts.py",
+      "taxonomy": "hand-DDL-unit-schema",
+      "evidence": [
+        "call:conn.executescript",
+        "sql:create table"
+      ]
+    },
+    {
       "path": "tests/test_comp_set_context.py",
       "taxonomy": "performance-volume",
       "evidence": [
@@ -2359,6 +2379,13 @@
         "call:conn.executescript",
         "call:connection.executescript",
         "sql:create table"
+      ]
+    },
+    {
+      "path": "tests/test_data_coverage_dispositions.py",
+      "taxonomy": "cached-current-head",
+      "evidence": [
+        "call:migrated_db"
       ]
     },
     {
@@ -6875,11 +6902,11 @@
   ],
   "counts_by_taxonomy": {
     "archived-graph": 36,
-    "cached-current-head": 61,
+    "cached-current-head": 62,
     "custom-bootstrap": 28,
     "direct-downgrade": 102,
     "direct-historical": 24,
-    "hand-DDL-unit-schema": 348,
+    "hand-DDL-unit-schema": 350,
     "performance-volume": 36,
     "seeded-upgrade": 57
   },
@@ -7155,6 +7182,24 @@
       "evidence": "temporary fixture path expression"
     },
     {
+      "path": "tests/test_audit_quarterly_data_coverage.py",
+      "line": 217,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_audit_quarterly_data_coverage.py",
+      "line": 279,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_audit_quarterly_data_coverage.py",
+      "line": 411,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
       "path": "tests/test_audit_test_db_patterns.py",
       "line": 24,
       "kind": "explicit_fixture",
@@ -7186,13 +7231,13 @@
     },
     {
       "path": "tests/test_backfill_earnings_surprises.py",
-      "line": 112,
+      "line": 114,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_earnings_surprises.py",
-      "line": 136,
+      "line": 138,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
@@ -7258,25 +7303,49 @@
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 185,
+      "line": 208,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 238,
+      "line": 246,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 273,
+      "line": 311,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_backfill_transcripts.py",
-      "line": 312,
+      "line": 348,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 505,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 540,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 580,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_backfill_transcripts.py",
+      "line": 626,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
@@ -9430,31 +9499,31 @@
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 190,
+      "line": 193,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 262,
+      "line": 336,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 303,
+      "line": 377,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 346,
+      "line": 420,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
     {
       "path": "tests/test_transcript_entrypoint_authorization.py",
-      "line": 374,
+      "line": 448,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },
