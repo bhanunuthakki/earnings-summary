@@ -270,14 +270,6 @@ def _from_row(row: sqlite3.Row | tuple[object, ...]) -> DataCoverageDisposition:
     )
 
 
-_SELECT = (
-    "disposition_id,idempotency_key,artifact_kind,ticker,fiscal_year,fiscal_quarter,"
-    "period_end,status,reason_code,attempts_json,attempts_sha256,policy_name,policy_version,"
-    "policy_config_sha256,evidence_reference,evidence_sha256,operation_id,observed_at,"
-    "retry_after,revision,supersedes_disposition_id,recorded_at"
-)
-
-
 def current_data_coverage_disposition(
     conn: sqlite3.Connection,
     *,
@@ -287,7 +279,11 @@ def current_data_coverage_disposition(
     fiscal_quarter: int,
 ) -> DataCoverageDisposition | None:
     row = conn.execute(
-        f"SELECT {_SELECT} FROM v_data_coverage_dispositions_current "
+        "SELECT disposition_id,idempotency_key,artifact_kind,ticker,fiscal_year,fiscal_quarter,"
+        "period_end,status,reason_code,attempts_json,attempts_sha256,policy_name,policy_version,"
+        "policy_config_sha256,evidence_reference,evidence_sha256,operation_id,observed_at,"
+        "retry_after,revision,supersedes_disposition_id,recorded_at "
+        "FROM v_data_coverage_dispositions_current "
         "WHERE artifact_kind=? AND ticker=? AND fiscal_year=? AND fiscal_quarter=?",
         (artifact_kind.value, ticker.strip().upper(), fiscal_year, fiscal_quarter),
     ).fetchone()
@@ -313,7 +309,11 @@ def append_data_coverage_disposition(
     request_json = _canonical_json(_request_payload(validated))
     idempotency_key = _sha256(request_json)
     existing = conn.execute(
-        f"SELECT {_SELECT} FROM data_coverage_dispositions WHERE idempotency_key=?",
+        "SELECT disposition_id,idempotency_key,artifact_kind,ticker,fiscal_year,fiscal_quarter,"
+        "period_end,status,reason_code,attempts_json,attempts_sha256,policy_name,policy_version,"
+        "policy_config_sha256,evidence_reference,evidence_sha256,operation_id,observed_at,"
+        "retry_after,revision,supersedes_disposition_id,recorded_at "
+        "FROM data_coverage_dispositions WHERE idempotency_key=?",
         (idempotency_key,),
     ).fetchone()
     if existing is not None:
@@ -380,7 +380,11 @@ def append_data_coverage_disposition(
         ),
     )
     row = conn.execute(
-        f"SELECT {_SELECT} FROM data_coverage_dispositions WHERE disposition_id=?",
+        "SELECT disposition_id,idempotency_key,artifact_kind,ticker,fiscal_year,fiscal_quarter,"
+        "period_end,status,reason_code,attempts_json,attempts_sha256,policy_name,policy_version,"
+        "policy_config_sha256,evidence_reference,evidence_sha256,operation_id,observed_at,"
+        "retry_after,revision,supersedes_disposition_id,recorded_at "
+        "FROM data_coverage_dispositions WHERE disposition_id=?",
         (disposition_id,),
     ).fetchone()
     if row is None:  # pragma: no cover - SQLite insert/read invariant

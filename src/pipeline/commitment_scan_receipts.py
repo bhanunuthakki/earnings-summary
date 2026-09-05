@@ -365,19 +365,27 @@ def current_commitment_scan_receipt(
     binding = current_transcript_scan_binding(conn, transcript_id)
     if binding is None:
         return None
-    cutoff_sql = "" if cutoff_at is None else "AND datetime(recorded_at)<=datetime(?) "
     params: tuple[object, ...] = (transcript_id, prompt_version)
-    if cutoff_at is not None:
+    if cutoff_at is None:
+        row = conn.execute(
+            "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"
+            "transcript_sha256,prompt_version,n_extracted,output_manifest_json,"
+            "output_manifest_sha256,recorded_at FROM commitment_scan_receipts "
+            "WHERE transcript_id=? AND prompt_version=? "
+            "ORDER BY datetime(recorded_at) DESC,receipt_id DESC LIMIT 1",
+            params,
+        ).fetchone()
+    else:
         params += (cutoff_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),)
-    sql = (
-        "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"
-        "transcript_sha256,prompt_version,n_extracted,output_manifest_json,"
-        "output_manifest_sha256,recorded_at FROM commitment_scan_receipts "
-        "WHERE transcript_id=? AND prompt_version=? "
-        + cutoff_sql
-        + "ORDER BY datetime(recorded_at) DESC,receipt_id DESC LIMIT 1"
-    )
-    row = conn.execute(sql, params).fetchone()
+        row = conn.execute(
+            "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"
+            "transcript_sha256,prompt_version,n_extracted,output_manifest_json,"
+            "output_manifest_sha256,recorded_at FROM commitment_scan_receipts "
+            "WHERE transcript_id=? AND prompt_version=? "
+            "AND datetime(recorded_at)<=datetime(?) "
+            "ORDER BY datetime(recorded_at) DESC,receipt_id DESC LIMIT 1",
+            params,
+        ).fetchone()
     return (
         None
         if row is None
