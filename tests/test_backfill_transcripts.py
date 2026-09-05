@@ -133,7 +133,7 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    rc = mod._run_extract(repo_root, "AAPL", dry_run=False)
+    rc = mod._run_extract(repo_root, "AAPL", 42, dry_run=False)
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
     assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
@@ -141,8 +141,9 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
         PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"
     )
     assert "--auto" in captured["cmd"]
-    assert "--rescan-unreceipted" in captured["cmd"]
-    assert "AAPL" in captured["cmd"]
+    assert "--rescan-unreceipted" not in captured["cmd"]
+    assert "--ticker" not in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--transcript-id") + 1] == "42"
     assert captured["cmd"][captured["cmd"].index("--db") + 1] == str(
         repo_root / "data" / "portfolio.db"
     )
@@ -174,7 +175,7 @@ def test_run_extract_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) -
         raise AssertionError("subprocess.run must not be called in dry-run")
 
     monkeypatch.setattr(mod.subprocess, "run", boom)
-    assert mod._run_extract(Path("/nonexistent"), "AAPL", dry_run=True) == 0
+    assert mod._run_extract(Path("/nonexistent"), "AAPL", 42, dry_run=True) == 0
 
 
 def test_commitment_extraction_is_limited_to_newly_ingested_tickers() -> None:
@@ -561,8 +562,11 @@ def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
     def no_scan_evidence(*_args: object) -> None:
         return None
 
+    def transcript_id(*_args: object) -> int:
+        return 42
+
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
-    monkeypatch.setattr(mod, "_transcript_rows_exist", _always_true)
+    monkeypatch.setattr(mod, "_transcript_id_for_period", transcript_id)
     monkeypatch.setattr(
         mod,
         "_ingested_evidence",
@@ -570,7 +574,89 @@ def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
     )
     monkeypatch.setattr(mod, "_commitment_scan_evidence", no_scan_evidence)
 
-    assert mod._tickers_requiring_commitment_scan([result], mod.date(2026, 9, 5), 1) == ["BKNG"]
+    assert mod._commitment_scan_targets([result], mod.date(2026, 9, 5), 1) == [
+        mod.CommitmentScanTarget(
+            ticker="BKNG",
+            fye_month=12,
+            fiscal_year=2026,
+            fiscal_quarter=2,
+            transcript_id=42,
+        )
+    ]
+
+
+def test_commitment_scan_targets_exclude_out_of_window_unreceipted_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    result = mod.TickerBackfillResult("BN", 12)
+    historical_ids = {(2026, 2): 1135, (2025, 4): 1075}
+    selected_periods: list[tuple[int, int]] = []
+
+    def in_window(*_args: object) -> list[tuple[int, int]]:
+        return [(2026, 2)]
+
+    def transcript_id(
+        _ticker: str,
+        year: int,
+        quarter: int,
+        _fye_month: int,
+    ) -> int | None:
+        selected_periods.append((year, quarter))
+        return historical_ids.get((year, quarter))
+
+    def exact_evidence(*_args: object) -> object:
+        return mod.TranscriptEvidence("transcript-receipt:exact", "a" * 64)
+
+    def no_scan_evidence(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", in_window)
+    monkeypatch.setattr(mod, "_transcript_id_for_period", transcript_id)
+    monkeypatch.setattr(mod, "_ingested_evidence", exact_evidence)
+    monkeypatch.setattr(mod, "_commitment_scan_evidence", no_scan_evidence)
+
+    targets = mod._commitment_scan_targets([result], mod.date(2026, 9, 5), 1)
+
+    assert [
+        (target.fiscal_year, target.fiscal_quarter, target.transcript_id) for target in targets
+    ] == [(2026, 2, 1135)]
+    assert selected_periods == [(2026, 2)]
+    assert all(target.transcript_id != 1075 for target in targets)
+
+
+def test_exact_commitment_scan_targets_continue_after_peer_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    targets = [
+        mod.CommitmentScanTarget("BN", 12, 2026, 2, 1135),
+        mod.CommitmentScanTarget("NU", 12, 2026, 2, 1136),
+    ]
+    invoked: list[tuple[str, int]] = []
+
+    def run_extract(
+        _repo_root: Path,
+        ticker: str,
+        transcript_id: int,
+        _dry_run: bool,
+    ) -> int:
+        invoked.append((ticker, transcript_id))
+        return 7 if transcript_id == 1135 else 0
+
+    def scan_evidence(ticker: str, *_args: object) -> object | None:
+        if ticker == "NU":
+            return mod.TranscriptEvidence("commitment-scan-receipt:nu", "a" * 64)
+        return None
+
+    monkeypatch.setattr(mod, "_run_extract", run_extract)
+    monkeypatch.setattr(mod, "_commitment_scan_evidence", scan_evidence)
+
+    results = mod._run_commitment_scan_targets(tmp_path, targets, dry_run=False)
+
+    assert invoked == [("BN", 1135), ("NU", 1136)]
+    assert [item["rc"] for item in results] == [7, 0]
+    assert mod._terminal_exit_code(None, results) == 1
 
 
 @pytest.mark.parametrize(
@@ -772,7 +858,7 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
         CREATE TABLE transcript_acquisition_receipts (
             receipt_id TEXT,document_id INTEGER,canonical_ticker TEXT,fiscal_year INTEGER,
             fiscal_quarter INTEGER,canonical_document_path TEXT,artifact_sha256 TEXT,
-            provider TEXT,source_type TEXT,document_type TEXT
+            provider TEXT,source_type TEXT,document_type TEXT,recorded_at TEXT
         );
         INSERT INTO documents VALUES (
             1,'NU','transcripts/processed/NU_Q1_2026.txt','DIGEST'
@@ -781,7 +867,7 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
         INSERT INTO transcript_segments VALUES (3,2);
         INSERT INTO transcript_acquisition_receipts VALUES (
             'receipt',NULL,'NU',2026,1,'transcripts/raw/NU_Q1_2026.txt','DIGEST',
-            'issuer_ir','ir_doc','earnings_call_transcript'
+            'issuer_ir','ir_doc','earnings_call_transcript','2026-09-05T01:00:00Z'
         );
         """.replace("DIGEST", digest)
     )
@@ -798,6 +884,82 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is True
     processed.write_text("mutated", encoding="utf-8")
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is False
+
+
+def test_ingested_evidence_selects_latest_duplicate_exact_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    processed = tmp_path / "transcripts" / "processed" / "BN_Q2_2026.txt"
+    processed.parent.mkdir(parents=True)
+    processed.write_text("authorized bound transcript", encoding="utf-8")
+    digest = hashlib.sha256(processed.read_bytes()).hexdigest()
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE documents (id INTEGER PRIMARY KEY,ticker TEXT,file_path TEXT,sha256 TEXT);
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY,document_id INTEGER,ticker TEXT,
+            fiscal_period_type TEXT,period_end TEXT,is_current INTEGER
+        );
+        CREATE TABLE transcript_segments (id INTEGER PRIMARY KEY,transcript_id INTEGER);
+        CREATE TABLE transcript_acquisition_receipts (
+            receipt_id TEXT,document_id INTEGER,canonical_ticker TEXT,fiscal_year INTEGER,
+            fiscal_quarter INTEGER,canonical_document_path TEXT,artifact_sha256 TEXT,
+            provider TEXT,source_type TEXT,document_type TEXT,recorded_at TEXT
+        );
+        INSERT INTO documents VALUES (
+            7,'BN','transcripts/processed/BN_Q2_2026.txt','DIGEST'
+        );
+        INSERT INTO transcripts VALUES (1135,7,'BN','Q2','2026-06-30',1);
+        INSERT INTO transcript_segments VALUES (9,1135);
+        INSERT INTO transcript_acquisition_receipts VALUES (
+            'receipt-old-z',NULL,'BN',2026,2,'transcripts/raw/BN_Q2_2026.txt','DIGEST',
+            'issuer_ir','ir_doc','earnings_call_transcript','2026-09-05T01:00:00Z'
+        );
+        INSERT INTO transcript_acquisition_receipts VALUES (
+            'receipt-latest-a',NULL,'BN',2026,2,'transcripts/raw/BN_Q2_2026.txt','DIGEST',
+            'issuer_ir','ir_doc','earnings_call_transcript','2026-09-05T02:00:00Z'
+        );
+        INSERT INTO transcript_acquisition_receipts VALUES (
+            'receipt-latest-b',NULL,'BN',2026,2,'transcripts/raw/BN_Q2_2026.txt','DIGEST',
+            'issuer_ir','ir_doc','earnings_call_transcript','2026-09-05T02:00:00Z'
+        );
+        """.replace("DIGEST", digest)
+    )
+    conn.commit()
+    conn.close()
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod.db, "PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+
+    evidence = mod._ingested_evidence("BN", 2026, 2, 12)
+
+    assert evidence is not None
+    assert evidence.reference == "transcript-receipt:receipt-latest-b"
+    assert evidence.sha256 == digest
+
+    def current_scan_receipt(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            receipt_id="scan-receipt",
+            binding=SimpleNamespace(
+                transcript_acquisition_receipt_id="receipt-latest-b",
+                transcript_sha256=digest,
+            ),
+        )
+
+    monkeypatch.setattr(mod, "current_commitment_scan_receipt", current_scan_receipt)
+    scan_evidence = mod._commitment_scan_evidence("BN", 2026, 2, 12)
+    assert scan_evidence == mod.TranscriptEvidence(
+        reference="commitment-scan-receipt:scan-receipt",
+        sha256="scan-receipt",
+    )
 
 
 def test_scheduled_transcript_scope_is_portfolio_only_but_explicit_evaluation_is_allowed(

@@ -13,10 +13,10 @@ enter transcript collection.
   3. After acquisition, invoke `execution/ingest_transcripts.py` separately
      for each ticker with a new artifact. A quarantined peer ticker cannot
      block the rest of the portfolio batch (ingest remains idempotent on sha256).
-  4. For each ticker with at least one transcript row, invoke
-     `execution/extract_commitments_from_transcript.py --auto --ticker X` to
-     extract forward-looking management commitments from any transcripts that
-     don't yet have any commitments row.
+  4. For each exact transcript in the configured recent-quarter window that
+     lacks a durable scan receipt, invoke
+     `execution/extract_commitments_from_transcript.py --auto --transcript-id X`.
+     Out-of-window historical transcripts are not admitted to this job.
 
 The script is idempotent at every layer:
   - Exact DB/path/SHA evidence skips a period already ingested
@@ -180,6 +180,15 @@ class TranscriptArtifactConflict:
     reason_code: str
 
 
+@dataclass(frozen=True)
+class CommitmentScanTarget:
+    ticker: str
+    fye_month: int
+    fiscal_year: int
+    fiscal_quarter: int
+    transcript_id: int
+
+
 @dataclass
 class TickerBackfillResult:
     ticker: str
@@ -311,7 +320,7 @@ def _ingested_evidence(
                 "AND r.canonical_document_path=? "
                 "AND EXISTS ("
                 "SELECT 1 FROM transcript_segments AS s WHERE s.transcript_id=t.id"
-                ") ORDER BY d.id DESC",
+                ") ORDER BY d.id DESC, r.recorded_at DESC, r.receipt_id DESC",
                 (
                     year,
                     quarter,
@@ -732,14 +741,20 @@ def _run_ingest(
     return proc.returncode
 
 
-def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
-    """Run extract_commitments_from_transcript.py --auto --ticker X for one ticker.
+def _run_extract(
+    repo_root: Path,
+    ticker: str,
+    transcript_id: int,
+    dry_run: bool,
+) -> int:
+    """Run commitment extraction for one exact in-window transcript.
 
     Runs current code with an explicit state-root database.
     """
     if dry_run:
         print(
-            f"  [dry-run] would invoke extract_commitments --auto --ticker {ticker}",
+            f"  [dry-run] would invoke extract_commitments --auto "
+            f"--transcript-id {transcript_id} ({ticker})",
             file=sys.stderr,
         )
         return 0
@@ -747,24 +762,13 @@ def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
         *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"),
         "--auto",
-        "--rescan-unreceipted",
-        "--ticker",
-        ticker,
+        "--transcript-id",
+        str(transcript_id),
         "--db",
         str(repo_root / "data" / "portfolio.db"),
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
-
-
-def _ticker_has_transcripts(ticker: str) -> bool:
-    """Return True if there's at least one transcripts row for this ticker."""
-    conn = db.get_connection()
-    try:
-        cur = conn.execute("SELECT 1 FROM transcripts WHERE ticker = ? LIMIT 1", (ticker.upper(),))
-        return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
 def _commitment_scan_evidence(
@@ -810,25 +814,111 @@ def _commitment_scan_evidence(
         conn.close()
 
 
-def _tickers_requiring_commitment_scan(
-    results: list[TickerBackfillResult], today: date, lookback: int
-) -> list[str]:
-    """Select existing exact-period transcripts with no durable scan outcome."""
+def _transcript_id_for_period(
+    ticker: str,
+    year: int,
+    quarter: int,
+    fye_month: int,
+) -> int | None:
+    """Return the one selected transcript for an exact fiscal period."""
 
-    pending: list[str] = []
+    period_end = quarter_end_date(year, quarter, fye_month).isoformat()
+    conn = db.get_connection()
+    try:
+        relation = selected_transcripts_relation(conn).sql
+        rows = conn.execute(
+            f"SELECT id FROM {relation} WHERE UPPER(ticker)=? "  # nosec B608
+            "AND is_current=1 AND fiscal_period_type=? AND date(period_end)=date(?) "
+            "ORDER BY id",
+            (ticker.upper(), f"Q{quarter}", period_end),
+        ).fetchall()
+        return int(rows[0]["id"]) if len(rows) == 1 else None
+    finally:
+        conn.close()
+
+
+def _commitment_scan_targets(
+    results: list[TickerBackfillResult], today: date, lookback: int
+) -> list[CommitmentScanTarget]:
+    """Select exact in-window transcripts that lack a durable scan outcome."""
+
+    pending: list[CommitmentScanTarget] = []
     for result in results:
         for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
+            transcript_id = _transcript_id_for_period(
+                result.ticker,
+                year,
+                quarter,
+                result.fye_month,
+            )
             if (
-                _transcript_rows_exist(result.ticker, year, quarter, result.fye_month)
+                transcript_id is not None
                 and (_ingested_evidence(result.ticker, year, quarter, result.fye_month) is not None)
                 and (
                     _commitment_scan_evidence(result.ticker, year, quarter, result.fye_month)
                     is None
                 )
             ):
-                pending.append(result.ticker)
-                break
+                pending.append(
+                    CommitmentScanTarget(
+                        ticker=result.ticker,
+                        fye_month=result.fye_month,
+                        fiscal_year=year,
+                        fiscal_quarter=quarter,
+                        transcript_id=transcript_id,
+                    )
+                )
     return pending
+
+
+def _run_commitment_scan_targets(
+    repo_root: Path,
+    targets: list[CommitmentScanTarget],
+    *,
+    dry_run: bool,
+) -> list[dict[str, object]]:
+    """Run and verify each exact target without aborting its peers."""
+
+    results: list[dict[str, object]] = []
+    for target in targets:
+        print(
+            f"[backfill_transcripts] extracting commitments for {target.ticker} "
+            f"transcript_id={target.transcript_id}",
+            file=sys.stderr,
+        )
+        rc = _run_extract(
+            repo_root,
+            target.ticker,
+            target.transcript_id,
+            dry_run,
+        )
+        if (
+            rc == 0
+            and not dry_run
+            and _commitment_scan_evidence(
+                target.ticker,
+                target.fiscal_year,
+                target.fiscal_quarter,
+                target.fye_month,
+            )
+            is None
+        ):
+            print(
+                f"[backfill_transcripts] {target.ticker} transcript_id="
+                f"{target.transcript_id}: extractor returned 0 without exact scan evidence",
+                file=sys.stderr,
+            )
+            rc = 1
+        results.append(
+            {
+                "ticker": target.ticker,
+                "fiscal_year": target.fiscal_year,
+                "fiscal_quarter": target.fiscal_quarter,
+                "transcript_id": target.transcript_id,
+                "rc": rc,
+            }
+        )
+    return results
 
 
 def _persist_commitment_scan_coverage(
@@ -1116,21 +1206,20 @@ def main() -> int:
     # scan outcome. This catches transcripts that predated the current run as
     # well as artifacts ingested above, while the scan log keeps reruns bounded.
     extract_results: list[dict[str, object]] = []
+    commitment_scan_targets: list[CommitmentScanTarget] = []
     commitment_scan_tickers: set[str] = set()
     if not args.skip_extract and not args.dry_run:
-        commitment_scan_tickers = set(
-            _tickers_requiring_commitment_scan(
-                per_ticker,
-                today,
-                args.lookback_quarters,
-            )
+        commitment_scan_targets = _commitment_scan_targets(
+            per_ticker,
+            today,
+            args.lookback_quarters,
         )
-        for ticker in sorted(commitment_scan_tickers):
-            if not _ticker_has_transcripts(ticker):
-                continue
-            print(f"[backfill_transcripts] extracting commitments for {ticker}", file=sys.stderr)
-            rc = _run_extract(repo_root, ticker, args.dry_run)
-            extract_results.append({"ticker": ticker, "rc": rc})
+        commitment_scan_tickers = {target.ticker for target in commitment_scan_targets}
+        extract_results = _run_commitment_scan_targets(
+            repo_root,
+            commitment_scan_targets,
+            dry_run=args.dry_run,
+        )
         for result in per_ticker:
             try:
                 closed = _persist_commitment_scan_coverage(
@@ -1142,11 +1231,20 @@ def main() -> int:
             except Exception as exc:
                 result.errors.append(f"commitment scan coverage: {type(exc).__name__}: {exc}"[:200])
                 closed = False
-            if result.ticker in commitment_scan_tickers and not closed:
-                for item in extract_results:
-                    if item["ticker"] == result.ticker:
-                        item["rc"] = 1
-                        break
+            if (
+                result.ticker in commitment_scan_tickers
+                and not closed
+                and not any(
+                    item["ticker"] == result.ticker and item["rc"] != 0 for item in extract_results
+                )
+            ):
+                extract_results.append(
+                    {
+                        "ticker": result.ticker,
+                        "phase": "coverage_postcondition",
+                        "rc": 1,
+                    }
+                )
     elif args.skip_extract:
         print("[backfill_transcripts] --skip-extract set; skipping commitments", file=sys.stderr)
 
