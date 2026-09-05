@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
-  "source_sha256": "b6152bfa444ebef55d3cc8b2c47f9e9b47dc6d8dc6ba6b6dc10edf21459d13e5",
+  "current_revision": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+  "source_sha256": "cb5218ec0a0afd88a83b44a83a8c1e3fa682610245358fa146c912a4af486dc5",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -705,7 +705,7 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "current_sha256": "ed128a4ac1b795b6342d2c4dc978935bc130e0f1618b2711757fa4b6ba39b6a8",
+      "current_sha256": "860fc594048d849fa35fcc19b41709b589b9722d9e3cbe4d36a4b6522322a508",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6459,7 +6459,7 @@
     },
     {
       "path": "src/quality/roadmap_freeze_contract.py",
-      "current_sha256": "73dc7669017759f0b7c635966250acbd12721918550225d25eb5b112df856af3",
+      "current_sha256": "0e276f5782e8bfac12ff45a6a868aef70932eebece1666d82e76ae17ff8cb5da",
       "baseline_sha256": null,
       "status": "added"
     },

@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
+  "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
   "scanner_sha256": "ec24487bb530f2aa7fce8433d597797e1ce5a7bf3d297114a72aa4b5cf0327eb",
-  "source_sha256": "c6904bfd9b04caf042fc09b797a1ee2e53ee4ba8cb9879bfa7cc02cbbb5e6155",
+  "source_sha256": "960338e6937cef23591207c204acb92fc8fff04f406d45a0fd74b0508a10ed53",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -1516,7 +1516,7 @@
           "nonblank": 570,
           "noncomment": 565
         },
-        "internal_fan_out": 0,
+        "internal_fan_out": 1,
         "responsibilities": [
           "filesystem",
           "network",

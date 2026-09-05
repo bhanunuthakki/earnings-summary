@@ -2780,7 +2780,7 @@
       "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 2,
-      "receipt_path": ".tmp/static_quality/8f56c18c40f47f48a6fbf024/ruff-check.json",
+      "receipt_path": ".tmp/static_quality/7ccae5c634f6c21c8def47c9/ruff-check.json",
       "diagnostics_by_directory": {
         "src/user_state": 2
       },
@@ -2801,7 +2801,7 @@
       "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 62,
-      "receipt_path": ".tmp/static_quality/8f56c18c40f47f48a6fbf024/ruff-format.txt",
+      "receipt_path": ".tmp/static_quality/7ccae5c634f6c21c8def47c9/ruff-format.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {},
       "command_hash": "877e0d1f5a03b9e09cdaa9cafecf0b4dcfed21d89454511be97498af2660c883",
@@ -2818,7 +2818,7 @@
       "version": "pyright 1.1.411",
       "exit_status": 1,
       "count": 4374,
-      "receipt_path": ".tmp/static_quality/8f56c18c40f47f48a6fbf024/pyright.json",
+      "receipt_path": ".tmp/static_quality/7ccae5c634f6c21c8def47c9/pyright.json",
       "diagnostics_by_directory": {
         "alembic/versions_archived": 175,
         "execution": 1120,
@@ -2883,7 +2883,7 @@
       "version": "n/a",
       "exit_status": 0,
       "count": 608,
-      "receipt_path": ".tmp/static_quality/8f56c18c40f47f48a6fbf024/source-ignore-comments.txt",
+      "receipt_path": ".tmp/static_quality/7ccae5c634f6c21c8def47c9/source-ignore-comments.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {
         "# type: ignore": 253,
@@ -2958,10 +2958,10 @@
   ],
   "status": "PASS",
   "violations": [],
-  "scoped_commit": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
-  "source_hash": "bdc626e8606cd6efcbaf46ae9addb85589427e1fc80785f4866ab3da9b98856a",
+  "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+  "source_hash": "5663c1d0af8e8fa9ba991643c9f36c7b215aa1ff71420de7a89cf4aab75d45e0",
   "config_hash": "15aaf211f0d5d011d13e12d447c055098b09fd448f0d3b2e3244abd0c80bfbef",
-  "receipt_identity": "8f56c18c40f47f48a6fbf024",
+  "receipt_identity": "7ccae5c634f6c21c8def47c9",
   "suppressions_by_file": {
     "evals/structural/test_provider_blind_evals.py": {
       "# type: ignore": 1,

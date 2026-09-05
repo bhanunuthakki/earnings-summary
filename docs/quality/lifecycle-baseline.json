@@ -5348,11 +5348,11 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 37,
+      "line": 39,
       "kind": "python_module",
       "identifier": "execution/capture_test_ci_performance.py",
       "evidence": "parser = argparse.ArgumentParser(description=__doc__)",
-      "fingerprint": "0de4dd84e0c656bbb8957afec5297ab0fc2e9a10a4b1c6e16f5f334b0eacc887",
+      "fingerprint": "953d5bd54d19e4854d378b7ff6976caac6039d0061baecf0fb46e9f4c9e0d0aa",
       "disposition": "internal-delegate",
       "classification_basis": "typed_incoming_edge",
       "rationale": "A verified typed edge retains this internal delegate.",
@@ -23288,15 +23288,15 @@
     "reconstruction": 56,
     "registry": 68
   },
-  "tracked_tree_hash": "3a0534af4299ba8621e025acfbb09db4adee2f374031444bad569952a5729ca2",
-  "revision": "0db3e592ea26cfcb79418baa73506dfbbe8c601a",
+  "tracked_tree_hash": "0ee364fbd1e155f1c56b534b2db8c73e7258bfc42f6fbc9f1dae2f35d9844647",
+  "revision": "57e00e4f612aea881209f14229e0496cfe6ed45e",
   "worktree_dirty": true,
-  "reachability_graph_hash": "2309925841a5f879f4b1a4fb4944f57e930f0fe440013cd1736f5075f5b358f2",
+  "reachability_graph_hash": "52f562f2d5f1be1f5688d1ca1d91d572212af62c01ea4f60b036466141a4d96c",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.1.0",
     "python": ">=3.11",
-    "source_sha256": "d5591fb4ab8d14d518a41981ab7975054d41d768061c66eb7eb038654cc8d294",
+    "source_sha256": "a423b1d919fe114865986522cee19147b7a104ce0725c77b98e43f2b41688966",
     "dispositions_sha256": "3f7decab1bd2c18ae46914e801e1e72ba0efaa0216be0d64940d5cd84498cb20"
   },
   "coverage": {
