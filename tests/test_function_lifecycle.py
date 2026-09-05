@@ -169,6 +169,43 @@ def test_computed_reflection_blocks_private_candidates_in_its_module(tmp_path: P
     assert "dynamic:unbounded-reflection-in-module" in target.dynamic_hazards
 
 
+def test_vars_reflection_blocks_private_candidates_in_its_module(tmp_path: Path) -> None:
+    inventory = _one(
+        tmp_path,
+        "def _target() -> None:\n"
+        "    pass\n\n"
+        "def lookup(obj: object, name: str):\n"
+        "    return vars(obj)[name]\n",
+    )
+    target = next(item for item in inventory.symbols if item.qualified_name.endswith("._target"))
+    lookup = next(item for item in inventory.symbols if item.qualified_name.endswith(".lookup"))
+    assert target.classification == "unknown"
+    assert "dynamic:unbounded-reflection-in-module" in target.dynamic_hazards
+    assert "dynamic:vars" in lookup.dynamic_hazards
+
+
+def test_explicitly_documented_compatibility_seams_are_protected(
+    tmp_path: Path,
+) -> None:
+    inventory = _one(
+        tmp_path,
+        "# private compatibility seam for older callers\n"
+        "def _comment_seam() -> None:\n"
+        "    pass\n\n"
+        "def _docstring_seam() -> None:\n"
+        '    """Backward-compatible helper for legacy callers."""\n'
+        "    pass\n\n"
+        "def _ordinary_wording() -> None:\n"
+        '    """Compatibility is important, but this is not a seam."""\n'
+        "    pass\n",
+    )
+    by_name = {item.qualified_name.rsplit(".", 1)[-1]: item for item in inventory.symbols}
+    for name in ("_comment_seam", "_docstring_seam"):
+        assert by_name[name].classification == "protected"
+        assert "documented-compatibility-seam" in by_name[name].dynamic_hazards
+    assert by_name["_ordinary_wording"].classification == "unreferenced-static-candidate"
+
+
 def test_malformed_ast_holds(tmp_path: Path) -> None:
     inventory = _one(tmp_path, "def broken(:\n")
     assert inventory.status == "HOLD"

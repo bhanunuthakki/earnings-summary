@@ -105,9 +105,6 @@ def _read_json(root: Path, path: str) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
-_PRODUCTION_PATH_PREFIXES = ("src/", "execution/", "cron/", "scripts/", ".github/")
-
-
 def _graph_sha256(graph: ReachabilityGraph) -> str:
     """Hash the exact CLI serialization, while keeping the graph in memory."""
     payload = graph.model_dump_json(indent=2) + "\n"
@@ -166,9 +163,7 @@ def reachability_evidence(root: Path, lifecycle: dict[str, object]) -> Reachabil
         else ()
     )
     unknown_edges = tuple(graph.unknown_edges)
-    production_unknown = sum(
-        edge.source.startswith(_PRODUCTION_PATH_PREFIXES) for edge in unknown_edges
-    )
+    production_unknown = sum(edge.source in graph.roots for edge in unknown_edges)
     stale_disposition_diagnostics = sum(
         diagnostic.kind == "unknown" and "stale reachability disposition" in diagnostic.message
         for diagnostic in graph.diagnostics

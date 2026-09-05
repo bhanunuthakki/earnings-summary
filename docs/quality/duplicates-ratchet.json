@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
-  "source_hash": "892581836f0ffbd329a6510a7e2bf3a2e2cac0886447e8356ee83bb955d5ac41",
+  "commit_hash": "f6bfe084f6d192efc99e74171809589ee66aaef8",
+  "source_hash": "e60ae35b73dc19cc96d5f7109e094436d7bc10ba5ae5728ea4fd405726f5f6b9",
   "scanner_hash": "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -11,7 +11,7 @@
     "min_body_lines": 15
   },
   "files_scanned": 1333,
-  "functions_scanned": 14284,
+  "functions_scanned": 14285,
   "exact_groups": [
     {
       "group_id": "exact-008cef8bb5653e6d",
@@ -668,6 +668,31 @@
       ]
     },
     {
+      "group_id": "near-236a5ed49ec8667a",
+      "similarity": 0.864384,
+      "duplicated_loc": 73,
+      "functions": [
+        {
+          "path": "src/quality/architecture.py",
+          "qualified_name": "_strong_components",
+          "lineno": 366,
+          "end_lineno": 401,
+          "body_lines": 35,
+          "ast_nodes": 357,
+          "normalized_hash": "0076c8abba7094ff6486a44f056b08d4039f79da992e90b329658dacbb4aa7fe"
+        },
+        {
+          "path": "src/quality/roadmap_freeze_inventory.py",
+          "qualified_name": "_sccs",
+          "lineno": 396,
+          "end_lineno": 434,
+          "body_lines": 38,
+          "ast_nodes": 391,
+          "normalized_hash": "c0e7a40e783ac58fd9d2525e0d0827742c6dbb93ac22ab98ac9dc5d2bf67ac2f"
+        }
+      ]
+    },
+    {
       "group_id": "near-27d6976e3480a493",
       "similarity": 0.941557,
       "duplicated_loc": 106,
@@ -1214,6 +1239,31 @@
           "body_lines": 22,
           "ast_nodes": 137,
           "normalized_hash": "824074f7147376a77f5113c885dd4c3f62df611de19c5b4d5eeed8c3f4c0a6c2"
+        }
+      ]
+    },
+    {
+      "group_id": "near-44d9f2b0d0e8bc6f",
+      "similarity": 0.968354,
+      "duplicated_loc": 44,
+      "functions": [
+        {
+          "path": "src/quality/architecture.py",
+          "qualified_name": "_strong_components.visit",
+          "lineno": 374,
+          "end_lineno": 396,
+          "body_lines": 22,
+          "ast_nodes": 206,
+          "normalized_hash": "efb59e1e5e6ea594df2d07df22fb18762b7ed11a21835ab961bf5a27b5189122"
+        },
+        {
+          "path": "src/quality/roadmap_freeze_inventory.py",
+          "qualified_name": "_sccs.visit",
+          "lineno": 407,
+          "end_lineno": 429,
+          "body_lines": 22,
+          "ast_nodes": 202,
+          "normalized_hash": "f4e7c1c9b195fb8ccc51d71b7ff786a1a9992cbc9b137c91534a540a585875f7"
         }
       ]
     },
@@ -3670,31 +3720,6 @@
       ]
     },
     {
-      "group_id": "near-dae78e0f9ef3545a",
-      "similarity": 0.968354,
-      "duplicated_loc": 44,
-      "functions": [
-        {
-          "path": "src/quality/architecture.py",
-          "qualified_name": "_strong_components.visit",
-          "lineno": 374,
-          "end_lineno": 396,
-          "body_lines": 22,
-          "ast_nodes": 206,
-          "normalized_hash": "efb59e1e5e6ea594df2d07df22fb18762b7ed11a21835ab961bf5a27b5189122"
-        },
-        {
-          "path": "src/quality/roadmap_freeze_inventory.py",
-          "qualified_name": "_sccs.visit",
-          "lineno": 412,
-          "end_lineno": 434,
-          "body_lines": 22,
-          "ast_nodes": 202,
-          "normalized_hash": "f4e7c1c9b195fb8ccc51d71b7ff786a1a9992cbc9b137c91534a540a585875f7"
-        }
-      ]
-    },
-    {
       "group_id": "near-db613d591bfd6e0a",
       "similarity": 0.997218,
       "duplicated_loc": 141,
@@ -3741,31 +3766,6 @@
           "body_lines": 15,
           "ast_nodes": 94,
           "normalized_hash": "cf95abeb84f5fb2b1a91b55c80c880c212f7a00d7e99cdae0779884efa7b8014"
-        }
-      ]
-    },
-    {
-      "group_id": "near-dcd76b7811dd3130",
-      "similarity": 0.864384,
-      "duplicated_loc": 73,
-      "functions": [
-        {
-          "path": "src/quality/architecture.py",
-          "qualified_name": "_strong_components",
-          "lineno": 366,
-          "end_lineno": 401,
-          "body_lines": 35,
-          "ast_nodes": 357,
-          "normalized_hash": "0076c8abba7094ff6486a44f056b08d4039f79da992e90b329658dacbb4aa7fe"
-        },
-        {
-          "path": "src/quality/roadmap_freeze_inventory.py",
-          "qualified_name": "_sccs",
-          "lineno": 401,
-          "end_lineno": 439,
-          "body_lines": 38,
-          "ast_nodes": 391,
-          "normalized_hash": "c0e7a40e783ac58fd9d2525e0d0827742c6dbb93ac22ab98ac9dc5d2bf67ac2f"
         }
       ]
     },

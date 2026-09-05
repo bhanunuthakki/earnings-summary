@@ -24,6 +24,7 @@ REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "competitive.category_share": 1,
     "pipeline.sec_fpi_ingest": 1,
     "pipeline.issuer_fact_manifest": 2,
+    "quality.dcf_benchmark_fixture": 2,
 }
 
 # Writers that persist a kpi_facts/financial_facts row WITHOUT going through

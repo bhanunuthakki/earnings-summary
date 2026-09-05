@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
+  "scoped_commit": "f6bfe084f6d192efc99e74171809589ee66aaef8",
   "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
-  "source_sha256": "892581836f0ffbd329a6510a7e2bf3a2e2cac0886447e8356ee83bb955d5ac41",
+  "source_sha256": "e60ae35b73dc19cc96d5f7109e094436d7bc10ba5ae5728ea4fd405726f5f6b9",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1333,
-    "total_noncomment_loc": 491873,
+    "total_noncomment_loc": 491910,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -16004,9 +16004,9 @@
         "path": "src/quality/function_lifecycle.py",
         "module": "quality.function_lifecycle",
         "lines": {
-          "physical": 608,
-          "nonblank": 538,
-          "noncomment": 530
+          "physical": 651,
+          "nonblank": 578,
+          "noncomment": 570
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -16196,9 +16196,9 @@
         "path": "src/quality/roadmap_freeze_inventory.py",
         "module": "quality.roadmap_freeze_inventory",
         "lines": {
-          "physical": 999,
-          "nonblank": 929,
-          "noncomment": 921
+          "physical": 994,
+          "nonblank": 926,
+          "noncomment": 918
         },
         "internal_fan_out": 6,
         "responsibilities": [

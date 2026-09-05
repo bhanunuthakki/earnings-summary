@@ -84,22 +84,6 @@
       "classification": "unreferenced-static-candidate",
       "decorators": [],
       "dynamic_hazards": [],
-      "end_line": 252,
-      "fingerprint": "6df1c12e344c80ae15a0a8d129402301d925be02322ed6c33a03a80ef6d74592",
-      "inbound_static_ref_count": 0,
-      "inbound_static_refs": [],
-      "kind": "function",
-      "line": 250,
-      "loc": 3,
-      "path": "src/dcf/country_risk.py",
-      "qualified_name": "src.dcf.country_risk._latest_geo_revenue",
-      "source_hash": "6579ab1cdcd48ce03522cd34c3088d23e0c4544e4bff6526e131db86ec654725",
-      "visibility": "private"
-    },
-    {
-      "classification": "unreferenced-static-candidate",
-      "decorators": [],
-      "dynamic_hazards": [],
       "end_line": 987,
       "fingerprint": "ad423460c1dabb381a24c74da900ea110f16b060346597af7c75ffcb1eb7b195",
       "inbound_static_ref_count": 0,
@@ -110,38 +94,6 @@
       "path": "src/llm/cli.py",
       "qualified_name": "src.llm.cli._primary_subscription_backend",
       "source_hash": "4f8b669bc8197ffb56fe1a5f475709af003a72cd8fa6fe34b5078e26d69cc82f",
-      "visibility": "private"
-    },
-    {
-      "classification": "unreferenced-static-candidate",
-      "decorators": [],
-      "dynamic_hazards": [],
-      "end_line": 489,
-      "fingerprint": "22542e84ea9d1c2b6dad6280354664b74e4ce4856e34354cc3ed0dc3e0863346",
-      "inbound_static_ref_count": 0,
-      "inbound_static_refs": [],
-      "kind": "function",
-      "line": 475,
-      "loc": 15,
-      "path": "src/pipeline/issuer_document_coverage.py",
-      "qualified_name": "src.pipeline.issuer_document_coverage._source_preference_sql",
-      "source_hash": "8b0c87ffb1d10087149140b5065ccc731871797e76da0af2637735bfcb4db997",
-      "visibility": "private"
-    },
-    {
-      "classification": "unreferenced-static-candidate",
-      "decorators": [],
-      "dynamic_hazards": [],
-      "end_line": 228,
-      "fingerprint": "5c7b65548b7b266cd7a2f88052decd102ad1bb4ee5851322c29f6bde1be01b31",
-      "inbound_static_ref_count": 0,
-      "inbound_static_refs": [],
-      "kind": "function",
-      "line": 222,
-      "loc": 7,
-      "path": "src/pipeline/work_os_briefs.py",
-      "qualified_name": "src.pipeline.work_os_briefs._current_coverage_roles",
-      "source_hash": "b300ff528c232e54669361a62670489b5bfa90e2fd83aa808ba819ed0869839e",
       "visibility": "private"
     },
     {
@@ -290,37 +242,40 @@
     }
   ],
   "counts": {
-    "protected": 11724,
-    "referenced": 15765,
-    "unknown": 6205,
-    "unreferenced-static-candidate": 18
+    "protected": 11723,
+    "referenced": 15659,
+    "unknown": 6319,
+    "unreferenced-static-candidate": 15
   },
   "files_failed": [],
   "files_scanned": 2462,
-  "inventory_hash": "c945f24828da9c175b99749b211a63ba5deb322e017d588c56963bfe65113f3e",
-  "parser_version": "python-ast-3.11-v2",
-  "revision": "19431a9e73d4193ab72b84ff17dd47f2381179b8",
+  "inventory_hash": "9e633c0f5d46f4679b67513014736b49ad6dac89ea14d8b0111e127b2f4a5b4f",
+  "parser_version": "python-ast-3.11-v3",
+  "revision": "f6bfe084f6d192efc99e74171809589ee66aaef8",
   "schema_version": "bha-109.v1",
   "status": "PASS",
-  "symbol_count": 33712,
-  "tracked_tree_hash": "bbb0fb60279aeacc6334bca63ad56f8a35deb070ee1e4ad642197b24a97c742a",
+  "symbol_count": 33716,
+  "tracked_tree_hash": "fd8f769e534e8395937d2f63f4abe826affe6c9a3dc1811a5c1e3ec8d55edacd",
   "unknown_hazard_counts": {
-    "class-method-dispatch": 556,
+    "class-method-dispatch": 562,
     "cli-entrypoint": 413,
     "decorator:app.after_request": 2,
     "decorator:app.errorhandler": 1,
+    "decorator:app.route": 1,
     "decorator:property": 35,
     "decorator:pytest.fixture": 124,
-    "dunder-protocol": 140,
+    "documented-compatibility-seam": 6,
+    "dunder-protocol": 142,
     "dynamic:__import__": 5,
     "dynamic:exec": 1,
     "dynamic:getattr": 294,
     "dynamic:locals": 1,
     "dynamic:setattr": 1979,
-    "dynamic:unbounded-reflection-in-module": 1172,
-    "public-module-symbol": 3651,
-    "string-or-reflection-reference": 3049,
-    "test-fixture-or-helper": 2964
+    "dynamic:unbounded-reflection-in-module": 1287,
+    "dynamic:vars": 18,
+    "public-module-symbol": 3654,
+    "string-or-reflection-reference": 3054,
+    "test-fixture-or-helper": 2977
   },
   "unknown_symbols": [
     {
@@ -1767,7 +1722,7 @@
       ],
       "end_line": 50,
       "fingerprint": "c499ef806e78ffc7544920d975bf6fc44ed2f37e6beecc56df5b59d775da12a9",
-      "inbound_static_ref_count": 612,
+      "inbound_static_ref_count": 614,
       "inbound_static_refs": [
         "execution/audit_segment_coverage.py:57",
         "execution/backfill_analyst_notes.py:82",
@@ -2069,7 +2024,7 @@
       "visibility": "public"
     }
   ],
-  "unknown_total": 6205,
+  "unknown_total": 6319,
   "violations": [],
   "worktree_dirty": true
 }

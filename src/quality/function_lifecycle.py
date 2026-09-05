@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -22,7 +23,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = "bha-109.v1"
-PARSER_VERSION = "python-ast-3.11-v2"
+PARSER_VERSION = "python-ast-3.11-v3"
 
 Classification = Literal[
     "referenced",
@@ -197,7 +198,22 @@ _HAZARD_WORDS = (
     "property",
     "cached_property",
 )
-_DYNAMIC_NAMES = {"getattr", "setattr", "globals", "locals", "eval", "exec", "__import__"}
+_DYNAMIC_NAMES = {
+    "getattr",
+    "setattr",
+    "globals",
+    "locals",
+    "vars",
+    "eval",
+    "exec",
+    "__import__",
+}
+
+_COMPATIBILITY_DOC_PATTERNS = (
+    r"\bbackward(?:s)?[- ]compat(?:ible|ibility)?\b",
+    r"\bcompatibility[- ](?:helper|shim|alias|seam|wrapper)\b",
+    r"\bcompatibility\s+(?:helper|shim|alias|seam|wrapper)\b",
+)
 
 
 def _call_name(node: ast.expr) -> str:
@@ -228,6 +244,11 @@ def _dynamic_symbol_names(tree: ast.Module) -> set[str]:
                     names.add(candidate.value)
             elif "register" in call.lower():
                 names.update(_string_values(node))
+        elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Call):
+            if _call_name(node.value.func) == "vars":
+                candidate = node.slice
+                if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
+                    names.add(candidate.value)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             value = node.value
@@ -249,9 +270,29 @@ def _has_unbounded_reflection(tree: ast.Module) -> bool:
                 isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str)
             ):
                 return True
-        elif call in {"eval", "exec", "globals", "locals"}:
+        elif call in {"eval", "exec", "globals", "locals", "vars"}:
             return True
     return False
+
+
+def _is_documented_compatibility_seam(symbol: _Symbol) -> bool:
+    """Recognize explicit compatibility documentation without name heuristics."""
+    node = symbol.node
+    docstring = ast.get_docstring(node, clean=False) or ""
+    lines = symbol.source.splitlines()
+    comments: list[str] = []
+    index = node.lineno - 2
+    while index >= 0 and lines[index].lstrip().startswith("#"):
+        comments.append(lines[index])
+        index -= 1
+    if node.end_lineno is not None:
+        comments.extend(
+            line
+            for line in lines[node.lineno - 1 : node.end_lineno]
+            if line.lstrip().startswith("#")
+        )
+    text = "\n".join((docstring, *comments))
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in _COMPATIBILITY_DOC_PATTERNS)
 
 
 class _Symbol:
@@ -368,6 +409,8 @@ def _hazards(
         hazards.add(f"dynamic:{name}")
     if symbol.node.name in dynamic_symbol_names:
         hazards.add("string-or-reflection-reference")
+    if _is_documented_compatibility_seam(symbol):
+        hazards.add("documented-compatibility-seam")
     if module_has_unbounded_reflection and symbol.node.name.startswith("_"):
         hazards.add("dynamic:unbounded-reflection-in-module")
     return hazards

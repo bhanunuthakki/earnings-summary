@@ -13,6 +13,7 @@ import pytest
 import quality.roadmap_freeze as roadmap_freeze
 import quality.roadmap_freeze_inventory as roadmap_inventory
 import quality.static_quality as static_quality
+from quality.reachability import build_graph
 from quality.roadmap_freeze import RoadmapFreeze, validate_freeze
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -227,6 +228,30 @@ def test_validator_rebuilds_reachability_without_ignored_graph_receipt(
     candidate.write_text(json.dumps(payload), encoding="utf-8")
     freeze = validate_freeze(ROOT, candidate)
     assert freeze.reachability.production_unknown_edges == 0
+
+
+def test_reachability_runtime_roots_are_the_production_unknown_authority(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "execution").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "execution" / "main.py").write_text("getattr(module, name)\n", encoding="utf-8")
+    (tmp_path / "src" / "arbitrary.py").write_text("getattr(module, name)\n", encoding="utf-8")
+    (tmp_path / "scripts" / "arbitrary.py").write_text("getattr(module, name)\n", encoding="utf-8")
+    (tmp_path / "reconstruction_manifest.json").write_text(
+        '{"entrypoint": "execution/main.py"}\n', encoding="utf-8"
+    )
+    graph = build_graph(tmp_path)
+    assert "execution/main.py" in graph.roots
+    assert "reconstruction_manifest.json" in graph.roots
+    assert "src/arbitrary.py" not in graph.roots
+    assert "scripts/arbitrary.py" not in graph.roots
+    assert {edge.source for edge in graph.unknown_edges} == {
+        "execution/main.py",
+        "src/arbitrary.py",
+        "scripts/arbitrary.py",
+    }
 
 
 def test_validator_rejects_tampered_function_lifecycle_evidence(tmp_path: Path) -> None:

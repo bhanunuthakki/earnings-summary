@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "5ec690060c0fb50e4a7bdcc5fc27ba71c30ceb27",
+  "scoped_commit": "f6bfe084f6d192efc99e74171809589ee66aaef8",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "cf1103dfa600863bfe47d2fd951c2c2dccbc22fba94a0517fd118e6459ca4cf9",
+  "source_sha256": "342b387b9394b97ed5625c03277b211825e1fe6d6ef155d2c39413fd53029cb2",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",

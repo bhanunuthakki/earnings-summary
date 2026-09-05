@@ -8,7 +8,7 @@
       "version": "1.1.0",
       "python": ">=3.11"
     },
-    "source_sha256": "0a7a0b3f42cb19c6178734073564f93ca8611d785a7a6dd058ff682bf357a3ba"
+      "source_sha256": "c004aa090d329cddd49c29878cda2da7835617fb2d8b1383febe6f6d8dd8efe7"
   },
   "scope": {
     "source_roots": [
@@ -813,8 +813,8 @@
     },
     {
       "path": "src/quality/function_lifecycle.py",
-      "line": 113,
-      "fingerprint": "4a4d7a1f4636b246af71d59fd3e9cbb2fb356baf00052551b783771679f28539",
+      "line": 114,
+      "fingerprint": "e053a58ebe0b74ec5202eea6215bb3ab319cee6adb9485f9d559674c05ff361f",
       "disposition": "closed_command_set",
       "target": "function inventory git metadata probes",
       "command_family": "closed git read-only command set",
