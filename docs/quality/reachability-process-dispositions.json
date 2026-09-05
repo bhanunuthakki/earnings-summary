@@ -7,7 +7,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.2.0",
       "python": ">=3.11",
-      "source_sha256": "e21574f52c3ee9da7900b40d53ea74354822b08c7961f5bfeb9835f352b42864"
+      "source_sha256": "55768a2162c7365670b05902c545c70f6683368298535c40bae578c2c6eb049c"
     }
   },
   "scope": {
@@ -849,8 +849,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 264,
-      "fingerprint": "1cc5d14812431b6fba67d21e0f31635ccb261a246433e0e8337a1e552a87cc16",
+      "line": 283,
+      "fingerprint": "d27efe9d3bead06c4699f82572b64952c0e0ac7dfdce564e6ba2aeaaa4dc48b1",
       "disposition": "closed_command_set",
       "target": "temporary collection-lock probe",
       "command_family": "test-only generated Python probe",
@@ -858,8 +858,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 585,
-      "fingerprint": "dd3cbf226e391be7373ab40bf56a22e277d57df3c1b760d51c74d49b0545d28c",
+      "line": 604,
+      "fingerprint": "4b3336f38e8b01c6fee280ba2490ba74a064dc0eb36a25dd279e4e1f948d33a4",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "test-only managed Python child",
@@ -867,8 +867,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 639,
-      "fingerprint": "548eb38da0e5076645656f87e2b8297c4d308d6338595620432490482d087128",
+      "line": 659,
+      "fingerprint": "717c72a21a08a87e92a8734b7205a01f751a822108e6261d4521c6e2c8fa9fc8",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "test-only managed Python child",

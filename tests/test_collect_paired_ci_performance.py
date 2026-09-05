@@ -12,6 +12,7 @@ from typing import cast
 import pytest
 
 from execution import capture_test_ci_performance as capture
+from execution import collect_paired_ci_performance as collector
 from execution.capture_test_ci_performance import (
     preload_digest,
     redacted_output,
@@ -170,6 +171,24 @@ def test_resume_mid_pair_continues_current_before_next_baseline(tmp_path: Path) 
     launches = (tmp_path / "launch-order.log").read_text().splitlines()
     assert launches[:5] == ["baseline-0", "current-0", "baseline-1", "current-1", "baseline-2"]
     assert launches.count("baseline-1") == 1
+
+
+def test_capture_exit_two_aborts_without_recording_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, _, _ = _manifest(tmp_path)
+    state = tmp_path / "state.json"
+
+    def fail_capture(*_args: object, **_kwargs: object) -> list[str]:
+        return [sys.executable, "-c", "raise SystemExit(2)"]
+
+    monkeypatch.setattr(collector, "capture_command", fail_capture)
+    with pytest.raises(SystemExit, match="capture failed for baseline-0: exit 2"):
+        main(["--manifest", str(manifest), "--state", str(state), "--repo-root", str(Path.cwd())])
+
+    assert not state.exists()
+    assert not (tmp_path / "launch-order.log").exists()
+    assert not (tmp_path / "receipts" / "baseline-0.json").exists()
 
 
 def test_ci_registry_names_real_collector() -> None:
@@ -614,9 +633,10 @@ def test_production_capture_pins_plugin_and_keeps_revision_source(tmp_path: Path
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 1, result.stderr
     assert not marker.exists()
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["evidence_status"] == "invalid"
     assert [node for worker in receipt["workers"] for node in worker["node_ids"]] == [
         "tests/test_smoke.py::test_smoke"
     ]

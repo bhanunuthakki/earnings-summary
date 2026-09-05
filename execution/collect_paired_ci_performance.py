@@ -497,7 +497,7 @@ def _main_unlocked(argv: list[str] | None = None) -> int:
                             ]
                         )
                     completed_process = subprocess.run(command, cwd=worktree, check=False)
-                    if completed_process.returncode not in (0, 2):
+                    if completed_process.returncode != 0:
                         raise SystemExit(
                             f"capture failed for {key}: exit {completed_process.returncode}"
                         )

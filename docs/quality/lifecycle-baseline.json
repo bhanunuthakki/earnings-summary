@@ -22621,11 +22621,11 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 176,
+      "line": 195,
       "kind": "registry",
-      "identifier": "ci@176",
+      "identifier": "ci@195",
       "evidence": "command = COHORT_REGISTRY[\"ci\"].declared_command",
-      "fingerprint": "c7bdaa70ce28b1a3ae27b3a931eff3bb2219ae05cdc905afd4d9301cb1b1f05d",
+      "fingerprint": "76cc125d52ad901aaebb36e75552f36d577fa7902584364031cd20c9dde01d73",
       "disposition": "internal-delegate",
       "classification_basis": "typed_reachability_edge",
       "rationale": "Typed registry edge retains this operational dependency.",
@@ -22636,7 +22636,7 @@
       "endpoint": null,
       "owner_evidence": null,
       "invocation_evidence": null,
-      "incoming_edge": "tests/test_collect_paired_ci_performance.py:176:registry",
+      "incoming_edge": "tests/test_collect_paired_ci_performance.py:195:registry",
       "sealed_completion_evidence": null,
       "tombstone_consumer": null,
       "tombstone_expiry": null,
@@ -23315,16 +23315,16 @@
     "reconstruction": 56,
     "registry": 68
   },
-  "tracked_tree_hash": "bd2aae28c53d8903cbc4d46c93a3eda2a753c8830c6de79937e3739b2394ce6d",
-  "revision": "0e3ed5b8ee1bbb8a278b1923c9706398e551f4f7",
+  "tracked_tree_hash": "91e31c199fa7cfd56cde2c0dd31c8a197f4a5b0e8e4a1adb7ab48447448f148a",
+  "revision": "8c9db7d251946d65b1660fcaabe0947c64cbbbab",
   "worktree_dirty": true,
-  "reachability_graph_hash": "bb391583a62f7df9dcba2aadacbf88195bf1e2488590164416b07fda5c36b6e2",
+  "reachability_graph_hash": "707e6edda15b9f5405827b51d89668e248e4d9501e92206d58a38daddc7d728a",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.2.0",
     "python": ">=3.11",
-    "source_sha256": "e21574f52c3ee9da7900b40d53ea74354822b08c7961f5bfeb9835f352b42864",
-    "dispositions_sha256": "000b2d9cca5fdc36f57b9b475032d99ac01f21801911612187e7af956689e639"
+    "source_sha256": "55768a2162c7365670b05902c545c70f6683368298535c40bae578c2c6eb049c",
+    "dispositions_sha256": "20081ececfd480cf9bd134b9b6972b216f795cba5bfe2d5c43b0f1a74f71e420"
   },
   "coverage": {
     "candidates": 836,

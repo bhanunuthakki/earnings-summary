@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "0e3ed5b8ee1bbb8a278b1923c9706398e551f4f7",
-  "source_hash": "667444ea5cbee2fc68d92bdb624bab91166e9c56a7dff36b2e750ee4750fe467",
+  "commit_hash": "8c9db7d251946d65b1660fcaabe0947c64cbbbab",
+  "source_hash": "bae587d1a5360648bd8f12bf22b8554338b96f9f3c2213fd2a01c0484b13ec99",
   "scanner_hash": "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
