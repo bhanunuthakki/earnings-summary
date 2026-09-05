@@ -66,7 +66,14 @@ def test_run_ingest_uses_repo_root_for_cwd_and_script_path(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    rc = mod._run_ingest(repo_root, "AAPL", dry_run=False, owner_requested=False)
+    receipt_ids = ["a" * 64, "b" * 64]
+    rc = mod._run_ingest(
+        repo_root,
+        "AAPL",
+        receipt_ids,
+        dry_run=False,
+        owner_requested=False,
+    )
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
     assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
@@ -75,6 +82,11 @@ def test_run_ingest_uses_repo_root_for_cwd_and_script_path(
     assert captured["cmd"][captured["cmd"].index("--ticker") + 1] == "AAPL"
     assert "--owner-requested" not in captured["cmd"]
     assert "--no-promote" not in captured["cmd"]
+    assert [
+        captured["cmd"][index + 1]
+        for index, value in enumerate(captured["cmd"])
+        if value == "--receipt-id"
+    ] == receipt_ids
 
 
 def test_run_ingest_preserves_explicit_per_ticker_owner_intent(
@@ -91,7 +103,13 @@ def test_run_ingest_preserves_explicit_per_ticker_owner_intent(
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    rc = mod._run_ingest(repo_root, "NU", dry_run=False, owner_requested=True)
+    rc = mod._run_ingest(
+        repo_root,
+        "NU",
+        ["c" * 64],
+        dry_run=False,
+        owner_requested=True,
+    )
 
     assert rc == 0
     assert captured["cmd"][captured["cmd"].index("--ticker") + 1] == "NU"
@@ -141,6 +159,7 @@ def test_run_ingest_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) ->
         mod._run_ingest(
             Path("/nonexistent"),
             "AAPL",
+            ["a" * 64],
             dry_run=True,
             owner_requested=False,
         )
@@ -223,12 +242,20 @@ def test_unreceipted_local_file_is_reacquired_before_ingest(
             status=mod.FetchQaStatus.ACQUIRED,
             idempotency_key="transcript:" + "a" * 64,
             attempts=(),
-            result=SimpleNamespace(acquired_artifact=SimpleNamespace(sha256="b" * 64)),
+            result=SimpleNamespace(
+                receipt_id="c" * 64,
+                acquired_artifact=SimpleNamespace(
+                    canonical_document_path=Path("transcripts/raw/NU_Q2_2026.txt"),
+                    sha256="b" * 64,
+                    size_bytes=123,
+                ),
+            ),
         )
 
     monkeypatch.setattr(mod, "recent_fiscal_quarters", fake_recent_fiscal_quarters)
     monkeypatch.setattr(mod, "_has_ingested_evidence", fake_has_ingested_evidence)
     monkeypatch.setattr(mod, "fetch_qa", fake_fetch_qa)
+    monkeypatch.setattr(mod, "_canonical_processed_path_conflicts", _always_false)
 
     def persist_satisfied(**_kwargs: object) -> str:
         return "satisfied"
@@ -246,7 +273,132 @@ def test_unreceipted_local_file_is_reacquired_before_ingest(
     )
 
     assert result.fetched == ["Q2_2026"]
+    assert result.fetched_artifacts == [
+        mod.FetchedTranscriptIdentity(
+            label="Q2_2026",
+            receipt_id="c" * 64,
+            canonical_document_path="transcripts/raw/NU_Q2_2026.txt",
+            sha256="b" * 64,
+            size_bytes=123,
+        )
+    ]
     assert len(calls) == 1
+
+
+def test_reacquired_q1_collision_is_actionable_while_q2_remains_ingestible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    persisted: list[dict[str, object]] = []
+
+    def two_quarters(*_args: object) -> list[tuple[int, int]]:
+        return [(2026, 2), (2026, 1)]
+
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", two_quarters)
+    monkeypatch.setattr(mod, "_has_ingested_evidence", _always_false)
+
+    def fake_fetch(spec: Any, **_kwargs: object) -> SimpleNamespace:
+        label = f"Q{spec.quarter}_{spec.year}"
+        digest = str(spec.quarter) * 64
+        return SimpleNamespace(
+            status=mod.FetchQaStatus.ACQUIRED,
+            attempts=(
+                SimpleNamespace(
+                    provider="issuer_ir",
+                    status=mod.FetchQaAttemptStatus.ACQUIRED,
+                    idempotency_key="transcript:" + digest,
+                ),
+            ),
+            result=SimpleNamespace(
+                receipt_id=digest,
+                acquired_artifact=SimpleNamespace(
+                    canonical_document_path=Path(f"transcripts/raw/NU_{label}.txt"),
+                    sha256=digest,
+                    size_bytes=123,
+                ),
+            ),
+        )
+
+    def persist(**kwargs: object) -> str:
+        persisted.append(kwargs)
+        return "operational_error"
+
+    monkeypatch.setattr(mod, "fetch_qa", fake_fetch)
+
+    def conflicts(identity: Any) -> bool:
+        return bool(identity.label == "Q1_2026")
+
+    monkeypatch.setattr(mod, "_canonical_processed_path_conflicts", conflicts)
+    monkeypatch.setattr(mod, "_persist_coverage_disposition", persist)
+
+    result = mod._backfill_one(
+        "NU",
+        12,
+        2,
+        mod.date(2026, 9, 5),
+        False,
+        tmp_path / "portfolio.db",
+        False,
+    )
+
+    assert result.errors == []
+    assert result.fetched == ["Q2_2026"]
+    assert [item.label for item in result.fetched_artifacts] == ["Q2_2026"]
+    assert result.artifact_conflicts == [
+        mod.TranscriptArtifactConflict(
+            label="Q1_2026",
+            receipt_id="1" * 64,
+            reason_code="reacquired_transcript_conflicts_with_canonical_bytes",
+        )
+    ]
+    conflict = persisted[0]
+    assert conflict["status"] is mod.CoverageDispositionStatus.OPERATIONAL_ERROR
+    assert conflict["reason_code"] == "reacquired_transcript_conflicts_with_canonical_bytes"
+    assert mod._terminal_exit_code(0, [], acquisition_errors=len(result.errors)) == 0
+
+
+def test_canonical_processed_collision_compares_db_and_live_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    repo_root = tmp_path / "repo"
+    processed = repo_root / "transcripts" / "processed" / "NU_Q1_2026.txt"
+    processed.parent.mkdir(parents=True)
+    processed.write_bytes(b"immutable legacy bytes")
+    legacy_sha = hashlib.sha256(processed.read_bytes()).hexdigest()
+    db_path = tmp_path / "portfolio.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE documents (file_path TEXT, sha256 TEXT)")
+        conn.execute(
+            "INSERT INTO documents VALUES ('transcripts/processed/NU_Q1_2026.txt', ?)",
+            (legacy_sha,),
+        )
+
+    def connection() -> sqlite3.Connection:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(mod.db, "get_connection", connection)
+    monkeypatch.setattr(mod.db, "PROJECT_ROOT", str(repo_root))
+    assert mod._canonical_processed_path_conflicts(  # pyright: ignore[reportPrivateUsage]
+        mod.FetchedTranscriptIdentity(
+            label="Q1_2026",
+            receipt_id="a" * 64,
+            canonical_document_path="transcripts/raw/NU_Q1_2026.txt",
+            sha256="b" * 64,
+            size_bytes=1,
+        )
+    )
+    assert not mod._canonical_processed_path_conflicts(  # pyright: ignore[reportPrivateUsage]
+        mod.FetchedTranscriptIdentity(
+            label="Q1_2026",
+            receipt_id="a" * 64,
+            canonical_document_path="transcripts/raw/NU_Q1_2026.txt",
+            sha256=legacy_sha,
+            size_bytes=1,
+        )
+    )
 
 
 def test_dry_run_existing_evidence_performs_zero_disposition_writes(

@@ -164,6 +164,22 @@ def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[in
     return out
 
 
+@dataclass(frozen=True)
+class FetchedTranscriptIdentity:
+    label: str
+    receipt_id: str
+    canonical_document_path: str
+    sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class TranscriptArtifactConflict:
+    label: str
+    receipt_id: str
+    reason_code: str
+
+
 @dataclass
 class TickerBackfillResult:
     ticker: str
@@ -174,6 +190,12 @@ class TickerBackfillResult:
     errors: list[str] = field(default_factory=list[str])
     coverage_dispositions: list[str] = field(default_factory=list[str])
     commitment_scan_dispositions: list[str] = field(default_factory=list[str])
+    fetched_artifacts: list[FetchedTranscriptIdentity] = field(
+        default_factory=list[FetchedTranscriptIdentity]
+    )
+    artifact_conflicts: list[TranscriptArtifactConflict] = field(
+        default_factory=list[TranscriptArtifactConflict]
+    )
 
 
 @dataclass(frozen=True)
@@ -192,6 +214,24 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_processed_path_conflicts(identity: FetchedTranscriptIdentity) -> bool:
+    processed_relative = f"transcripts/processed/{Path(identity.canonical_document_path).name}"
+    conn = db.get_connection()
+    try:
+        recorded = {
+            str(row["sha256"])
+            for row in conn.execute(
+                "SELECT sha256 FROM documents WHERE file_path=?", (processed_relative,)
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    if recorded and recorded != {identity.sha256}:
+        return True
+    processed_path = Path(db.PROJECT_ROOT).resolve() / processed_relative
+    return processed_path.exists() and _sha256(processed_path) != identity.sha256
 
 
 def _recorded_evidence_path(root: Path, recorded: str) -> Path | None:
@@ -312,6 +352,7 @@ def _coverage_attempts(hit: object) -> tuple[CoverageAttempt, ...]:
         FetchQaAttemptStatus.DENIED: CoverageAttemptStatus.POLICY_DENIED,
         FetchQaAttemptStatus.PROVIDER_MISS: CoverageAttemptStatus.AUTHORIZED_MISS,
         FetchQaAttemptStatus.ACQUIRED: CoverageAttemptStatus.ACQUIRED,
+        FetchQaAttemptStatus.IDEMPOTENT_REPLAY: CoverageAttemptStatus.IDEMPOTENT_REPLAY,
     }
     for attempt in attempts:
         mapped.append(
@@ -487,7 +528,54 @@ def _backfill_one(
                 )
             continue
         if hit.status in {FetchQaStatus.ACQUIRED, FetchQaStatus.IDEMPOTENT_REPLAY}:
+            if hit.result is None:
+                result.errors.append(f"{label}: acquired transcript omitted exact receipt identity")
+                continue
+            identity = FetchedTranscriptIdentity(
+                label=label,
+                receipt_id=hit.result.receipt_id,
+                canonical_document_path=hit.result.acquired_artifact.canonical_document_path.as_posix(),
+                sha256=hit.result.acquired_artifact.sha256,
+                size_bytes=hit.result.acquired_artifact.size_bytes,
+            )
+            if _canonical_processed_path_conflicts(identity):
+                reason = "reacquired_transcript_conflicts_with_canonical_bytes"
+                attempts = (
+                    *_coverage_attempts(hit),
+                    CoverageAttempt(
+                        provider="canonical_processed_path",
+                        status=CoverageAttemptStatus.FAILED,
+                    ),
+                )
+                try:
+                    result.coverage_dispositions.append(
+                        f"{label}:"
+                        + _persist_coverage_disposition(
+                            ticker=ticker,
+                            year=y,
+                            quarter=q,
+                            fye_month=fye_month,
+                            status=CoverageDispositionStatus.OPERATIONAL_ERROR,
+                            reason_code=reason,
+                            attempts=attempts,
+                            observed_at=observed_at,
+                            retry_after=observed_at + timedelta(days=1),
+                        )
+                    )
+                    result.artifact_conflicts.append(
+                        TranscriptArtifactConflict(
+                            label=label,
+                            receipt_id=identity.receipt_id,
+                            reason_code=reason,
+                        )
+                    )
+                except Exception as exc:
+                    result.errors.append(
+                        f"{label}: coverage disposition: {type(exc).__name__}: {exc}"[:200]
+                    )
+                continue
             result.fetched.append(label)
+            result.fetched_artifacts.append(identity)
             # Acquisition is not completeness. A final disposition is written
             # only after ingest proves current segments, the exact processed
             # bytes, and their authorized acquisition receipt.
@@ -609,6 +697,7 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
 def _run_ingest(
     repo_root: Path,
     ticker: str,
+    receipt_ids: list[str],
     dry_run: bool,
     *,
     owner_requested: bool,
@@ -622,7 +711,8 @@ def _run_ingest(
     """
     if dry_run:
         print(
-            f"  [dry-run] would invoke ingest_transcripts.py --ticker {ticker}",
+            f"  [dry-run] would invoke ingest_transcripts.py --ticker {ticker} "
+            f"for {len(receipt_ids)} exact receipts",
             file=sys.stderr,
         )
         return 0
@@ -636,6 +726,8 @@ def _run_ingest(
     ]
     if owner_requested:
         cmd.append("--owner-requested")
+    for receipt_id in receipt_ids:
+        cmd.extend(["--receipt-id", receipt_id])
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
 
@@ -982,17 +1074,18 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    any_fetched = any(r.fetched for r in per_ticker)
+    any_fetched = any(r.fetched_artifacts for r in per_ticker)
     ingest_rc: int | None = None
     ingest_results: list[dict[str, object]] = []
     if any_fetched and not args.skip_ingest:
         print("[backfill_transcripts] running per-ticker transcript ingest", file=sys.stderr)
         for result in per_ticker:
-            if not result.fetched:
+            if not result.fetched_artifacts:
                 continue
             rc = _run_ingest(
                 repo_root,
                 result.ticker,
+                [artifact.receipt_id for artifact in result.fetched_artifacts],
                 args.dry_run,
                 owner_requested=args.ticker is not None,
             )
@@ -1068,6 +1161,7 @@ def main() -> int:
         "extract_results": extract_results,
         "totals": {
             "fetched": sum(len(r.fetched) for r in per_ticker),
+            "artifact_conflicts": sum(len(r.artifact_conflicts) for r in per_ticker),
             "skipped_existing": sum(len(r.skipped_existing) for r in per_ticker),
             "aggregator_misses": sum(len(r.aggregator_misses) for r in per_ticker),
             "errors": sum(len(r.errors) for r in per_ticker),

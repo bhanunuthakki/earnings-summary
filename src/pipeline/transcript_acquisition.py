@@ -370,6 +370,13 @@ def _receipt_id(artifact_json: str) -> str:
     return hashlib.sha256(artifact_json.encode("utf-8")).hexdigest()
 
 
+def transcript_acquisition_receipt_id(artifact: AuthorizedTranscriptArtifact) -> str:
+    """Return the immutable receipt identity committed by an authorized artifact."""
+
+    validated = AuthorizedTranscriptArtifact.model_validate(artifact, strict=True)
+    return _receipt_id(_durable_artifact_json(validated))
+
+
 def project_root_for_database(database_path: str | os.PathLike[str]) -> Path:
     """Derive the trusted repository root from the canonical database location."""
 
@@ -589,7 +596,7 @@ def persist_authorized_transcript_artifact(
         raise TranscriptAcquisitionDeniedError("staged transcript digest changed before receipt")
     authorization_json = _canonical_json(validated.authorization.model_dump(mode="json"))
     artifact_json = _durable_artifact_json(validated)
-    receipt_id = _receipt_id(artifact_json)
+    receipt_id = transcript_acquisition_receipt_id(validated)
     request = validated.authorization.request
     values = (
         validated.authorization.idempotency_key,
@@ -662,9 +669,26 @@ def load_authorized_transcript_replay(
         ) from exc
     if row is None:
         return None
+    artifact = _validate_transcript_receipt_row(row)
+    if artifact.authorization.idempotency_key != current.idempotency_key:
+        raise TranscriptAcquisitionDeniedError(
+            "stored transcript receipt does not exactly match target"
+        )
+    read_authorized_transcript(
+        conn,
+        artifact,
+        project_root=project_root,
+        trusted_staging_root=trusted_staging_root,
+    )
+    return artifact
+
+
+def _validate_transcript_receipt_row(
+    row: sqlite3.Row,
+) -> AuthorizedTranscriptArtifact:
     try:
         artifact = AuthorizedTranscriptArtifact.model_validate_json(str(row["artifact_json"]))
-    except (ValueError, TypeError) as exc:
+    except (IndexError, KeyError, ValueError, TypeError) as exc:
         raise TranscriptAcquisitionDeniedError("stored transcript receipt is invalid") from exc
     artifact_json = _durable_artifact_json(artifact)
     durable_values = (
@@ -685,13 +709,40 @@ def load_authorized_transcript_replay(
         artifact_json,
     )
     if (
-        str(row["receipt_id"]) != _receipt_id(artifact_json)
+        str(row["receipt_id"]) != transcript_acquisition_receipt_id(artifact)
         or tuple(row)[1:] != durable_values
-        or artifact.authorization.idempotency_key != current.idempotency_key
     ):
         raise TranscriptAcquisitionDeniedError(
             "stored transcript receipt does not exactly match target"
         )
+    return artifact
+
+
+def load_authorized_transcript_receipt(
+    conn: sqlite3.Connection,
+    *,
+    receipt_id: str,
+    project_root: Path,
+    trusted_staging_root: Path,
+) -> AuthorizedTranscriptArtifact:
+    """Load one exact durable receipt and revalidate its current authorization and bytes."""
+
+    try:
+        row = conn.execute(
+            "SELECT receipt_id,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
+            "canonical_document_path,artifact_sha256,artifact_size_bytes,source_url,"
+            "provider,source_type,document_type,source_regime,source_regime_contract_sha256,"
+            "authorization_json,artifact_json FROM transcript_acquisition_receipts "
+            "WHERE receipt_id=?",
+            (receipt_id,),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        raise TranscriptAcquisitionDeniedError(
+            "transcript acquisition receipt store is unavailable"
+        ) from exc
+    if row is None:
+        raise TranscriptAcquisitionDeniedError("transcript acquisition receipt is unavailable")
+    artifact = _validate_transcript_receipt_row(row)
     read_authorized_transcript(
         conn,
         artifact,
@@ -828,6 +879,7 @@ __all__ = [
     "TranscriptAcquisitionDeniedError",
     "authorize_transcript_request",
     "issuer_transcript_source_url_is_authorized",
+    "load_authorized_transcript_receipt",
     "load_authorized_transcript_replay",
     "persist_authorized_transcript_artifact",
     "project_root_for_database",
@@ -837,4 +889,5 @@ __all__ = [
     "require_persisted_authorized_transcript_artifact",
     "stage_authorized_payload",
     "stage_pending_issuer_transcripts",
+    "transcript_acquisition_receipt_id",
 ]
