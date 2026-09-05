@@ -22,29 +22,61 @@ TYPE_IGNORE_KEY = "# type: ignore"
 
 
 @pytest.mark.parametrize(
-    ("receipt", "expected_commit", "expected_scope"),
+    ("path", "receipt", "expected_commit", "expected_scope"),
     (
         (
+            "receipt.json",
             {"revision": "a" * 40, "worktree_dirty": True},
             "a" * 40,
             "WORKTREE",
         ),
+        ("receipt.json", {"revision": "a" * 40}, "a" * 40, "COMMIT"),
         (
-            {"revision": "a" * 40, "worktree_dirty": False},
-            "a" * 40,
+            roadmap_freeze.ARCHITECTURE_RECEIPT,
+            {"scoped_revision": "WORKTREE", "scoped_commit": "b" * 40},
+            "b" * 40,
+            "WORKTREE",
+        ),
+        (roadmap_freeze.STATIC_RECEIPT, {"scoped_commit": "c" * 40}, "c" * 40, "WORKTREE"),
+        (roadmap_freeze.TEST_DB_RECEIPT, {"scoped_commit": "d" * 40}, "d" * 40, "WORKTREE"),
+        (
+            roadmap_freeze.DUPLICATE_RECEIPT,
+            {"scoped_revision": "WORKTREE", "commit_hash": "e" * 40},
+            "e" * 40,
+            "WORKTREE",
+        ),
+        (roadmap_freeze.LIFECYCLE_RECEIPT, {"revision": "f" * 40}, "f" * 40, "WORKTREE"),
+        (
+            roadmap_freeze.FUNCTION_LIFECYCLE_RECEIPT,
+            {"revision": "g" * 40},
+            "g" * 40,
+            "WORKTREE",
+        ),
+        (roadmap_freeze.RECONCILIATION_RECEIPT, {"revision": "h" * 40}, "h" * 40, "WORKTREE"),
+        (
+            roadmap_freeze.TYPE_DEBT_AUTHORITY_PATH,
+            {"revision": "i" * 40},
+            "i" * 40,
+            "WORKTREE",
+        ),
+        (
+            roadmap_freeze.PERFORMANCE_RECEIPT,
+            {"revision": "j" * 40, "worktree_dirty": True},
+            "j" * 40,
             "COMMIT",
         ),
-        ({}, "WORKTREE", "WORKTREE"),
     ),
 )
-def test_evidence_ref_preserves_worktree_provenance(
+def test_evidence_ref_resolves_receipt_scope(
     tmp_path: Path,
+    path: str,
     receipt: dict[str, object],
     expected_commit: str,
     expected_scope: str,
 ) -> None:
-    path = "receipt.json"
-    (tmp_path / path).write_text(json.dumps(receipt), encoding="utf-8")
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(receipt), encoding="utf-8")
 
     evidence = roadmap_freeze.evidence_ref(tmp_path, path, receipt)
 

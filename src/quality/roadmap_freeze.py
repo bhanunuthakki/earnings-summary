@@ -180,10 +180,25 @@ __all__ = (
 # to strict static analysis without widening the module's public `__all__`.
 _LEGACY_PRIVATE_EXPORTS = (_builder_semantic_score, _order_score)
 
+_WORKTREE_EVIDENCE_PATHS = frozenset(
+    {
+        ARCHITECTURE_RECEIPT,
+        STATIC_RECEIPT,
+        TEST_DB_RECEIPT,
+        DUPLICATE_RECEIPT,
+        LIFECYCLE_RECEIPT,
+        FUNCTION_LIFECYCLE_RECEIPT,
+        RECONCILIATION_RECEIPT,
+        TYPE_DEBT_AUTHORITY_PATH,
+    }
+)
+_HISTORICAL_COMMIT_EVIDENCE_PATHS = frozenset({PERFORMANCE_RECEIPT})
+
 
 def evidence_ref(root: Path, path: str, receipt: dict[str, object]) -> EvidenceRef:
-    """Describe receipt provenance without promoting dirty evidence to COMMIT."""
+    """Describe receipt provenance without promoting worktree evidence to COMMIT."""
     revision = receipt.get("revision")
+    scoped_revision = receipt.get("scoped_revision")
     scoped_commit = receipt.get("scoped_commit")
     commit_hash = receipt.get("commit_hash")
     source_commit = next(
@@ -195,7 +210,13 @@ def evidence_ref(root: Path, path: str, receipt: dict[str, object]) -> EvidenceR
         "WORKTREE",
     )
     worktree_dirty = receipt.get("worktree_dirty") is True
-    commit_scoped = source_commit != "WORKTREE" and not worktree_dirty
+    explicit_worktree = scoped_revision == "WORKTREE"
+    if explicit_worktree or path in _WORKTREE_EVIDENCE_PATHS:
+        commit_scoped = False
+    elif path in _HISTORICAL_COMMIT_EVIDENCE_PATHS:
+        commit_scoped = source_commit != "WORKTREE"
+    else:
+        commit_scoped = source_commit != "WORKTREE" and not worktree_dirty
     return EvidenceRef(
         path=path,
         sha256=_sha256(root / path),

@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "f6bfe084f6d192efc99e74171809589ee66aaef8",
+  "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
   "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
-  "source_sha256": "e60ae35b73dc19cc96d5f7109e094436d7bc10ba5ae5728ea4fd405726f5f6b9",
+  "source_sha256": "c5680b79508d863d77927383533993867c49d6ad6e52daff9da46f63a853521a",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1333,
-    "total_noncomment_loc": 491910,
+    "total_noncomment_loc": 491930,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -16165,9 +16165,9 @@
         "path": "src/quality/roadmap_freeze.py",
         "module": "quality.roadmap_freeze",
         "lines": {
-          "physical": 754,
-          "nonblank": 738,
-          "noncomment": 729
+          "physical": 775,
+          "nonblank": 758,
+          "noncomment": 749
         },
         "internal_fan_out": 3,
         "responsibilities": [
