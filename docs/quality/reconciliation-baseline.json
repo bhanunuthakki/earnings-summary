@@ -448,7 +448,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "d081b6dc8e38074f2a82c0a73e204394b3cc4896ec690ec724c8c15717fe1722",
+        "sha256": "ccb308f2b1d479e543cccc3191a942ac542e3adfec21f54581319c2a532b4f64",
         "locator": "$.diagnostics[tool=ruff].count"
       },
       "provisional_evidence": {
@@ -466,7 +466,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "d081b6dc8e38074f2a82c0a73e204394b3cc4896ec690ec724c8c15717fe1722",
+        "sha256": "ccb308f2b1d479e543cccc3191a942ac542e3adfec21f54581319c2a532b4f64",
         "locator": "$.diagnostics[tool=ruff-format].count"
       },
       "provisional_evidence": {
@@ -484,7 +484,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "d081b6dc8e38074f2a82c0a73e204394b3cc4896ec690ec724c8c15717fe1722",
+        "sha256": "ccb308f2b1d479e543cccc3191a942ac542e3adfec21f54581319c2a532b4f64",
         "locator": "$.diagnostics[tool=pyright].count"
       },
       "provisional_evidence": {
@@ -516,7 +516,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "d081b6dc8e38074f2a82c0a73e204394b3cc4896ec690ec724c8c15717fe1722",
+        "sha256": "ccb308f2b1d479e543cccc3191a942ac542e3adfec21f54581319c2a532b4f64",
         "locator": "$.suppressions_by_file[# type: ignore]"
       },
       "provisional_evidence": {
@@ -534,7 +534,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "d081b6dc8e38074f2a82c0a73e204394b3cc4896ec690ec724c8c15717fe1722",
+        "sha256": "ccb308f2b1d479e543cccc3191a942ac542e3adfec21f54581319c2a532b4f64",
         "locator": "$.suppressions_by_file[# pyright: ignore]"
       },
       "provisional_evidence": {
@@ -552,7 +552,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/static-baseline.json",
-        "sha256": "d081b6dc8e38074f2a82c0a73e204394b3cc4896ec690ec724c8c15717fe1722",
+        "sha256": "ccb308f2b1d479e543cccc3191a942ac542e3adfec21f54581319c2a532b4f64",
         "locator": "$.suppressions_by_file"
       },
       "provisional_evidence": {
@@ -570,7 +570,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "1ee551cb3a84cf550d09f37bc9b64231821750e897ee3de0c183543a361200ed",
+        "sha256": "423def6f8c7f184bb37c021519b7ef06a31adcf17c4100d29c8fc42684e7f681",
         "locator": "$.tracked_test_files"
       },
       "provisional_evidence": {
@@ -588,7 +588,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "1ee551cb3a84cf550d09f37bc9b64231821750e897ee3de0c183543a361200ed",
+        "sha256": "423def6f8c7f184bb37c021519b7ef06a31adcf17c4100d29c8fc42684e7f681",
         "locator": "$.database_builders[*].evidence contains call:command.upgrade"
       },
       "provisional_evidence": {
@@ -606,7 +606,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "1ee551cb3a84cf550d09f37bc9b64231821750e897ee3de0c183543a361200ed",
+        "sha256": "423def6f8c7f184bb37c021519b7ef06a31adcf17c4100d29c8fc42684e7f681",
         "locator": "$.database_builders[*].evidence contains call:migrated_db"
       },
       "provisional_evidence": {
@@ -624,7 +624,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "1ee551cb3a84cf550d09f37bc9b64231821750e897ee3de0c183543a361200ed",
+        "sha256": "423def6f8c7f184bb37c021519b7ef06a31adcf17c4100d29c8fc42684e7f681",
         "locator": "$.database_builders[*].evidence contains sql:"
       },
       "provisional_evidence": {
@@ -1346,7 +1346,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "docs/quality/test-db-patterns-baseline.json",
-        "sha256": "1ee551cb3a84cf550d09f37bc9b64231821750e897ee3de0c183543a361200ed",
+        "sha256": "423def6f8c7f184bb37c021519b7ef06a31adcf17c4100d29c8fc42684e7f681",
         "locator": "$.database_builders[*].evidence contains call:command.upgrade"
       },
       "provisional_evidence": {
@@ -1364,7 +1364,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "707e6edda15b9f5405827b51d89668e248e4d9501e92206d58a38daddc7d728a",
+        "sha256": "866e255f362512c7a53a7cc6239d390ec9291fe86179ec442f8c0866ee6295f0",
         "locator": "$.edges[target=src/synthesis/theme_synth.py]"
       },
       "provisional_evidence": {
@@ -1382,7 +1382,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "707e6edda15b9f5405827b51d89668e248e4d9501e92206d58a38daddc7d728a",
+        "sha256": "866e255f362512c7a53a7cc6239d390ec9291fe86179ec442f8c0866ee6295f0",
         "locator": "$.edges[target=src/filings/boilerplate_classify.py]"
       },
       "provisional_evidence": {
@@ -1400,7 +1400,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "707e6edda15b9f5405827b51d89668e248e4d9501e92206d58a38daddc7d728a",
+        "sha256": "866e255f362512c7a53a7cc6239d390ec9291fe86179ec442f8c0866ee6295f0",
         "locator": "$.edges[target=src/filings/cross_sectional_detrend.py]"
       },
       "provisional_evidence": {
@@ -1418,7 +1418,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "707e6edda15b9f5405827b51d89668e248e4d9501e92206d58a38daddc7d728a",
+        "sha256": "866e255f362512c7a53a7cc6239d390ec9291fe86179ec442f8c0866ee6295f0",
         "locator": "$.edges[target=src/ask/turn_cache.py]"
       },
       "provisional_evidence": {
@@ -1436,7 +1436,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "707e6edda15b9f5405827b51d89668e248e4d9501e92206d58a38daddc7d728a",
+        "sha256": "866e255f362512c7a53a7cc6239d390ec9291fe86179ec442f8c0866ee6295f0",
         "locator": "$.edges[target=src/etf_sources/vanguard.py]"
       },
       "provisional_evidence": {
@@ -1485,7 +1485,7 @@
   ],
   "scored_claims": 30,
   "rejected_claims": 66,
-  "source_hash": "bd5b3be4dfb35bdc5da0f6e3575d0b3b509f2f36a6925cbbd6e787e57dc576dd",
+  "source_hash": "19ee363b4bb0c2a5bf0343c1c4a42566167ee987cc286096f75560089b686d92",
   "roadmap_source": {
     "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
     "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",

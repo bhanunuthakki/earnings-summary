@@ -376,11 +376,19 @@ def test_reviewed_multi_target_process_edges_retain_each_child(tmp_path: Path) -
     )
     _write(repo / "src/child_a.py", "if __name__ == '__main__':\n    print('a')\n")
     _write(repo / "src/child_b.py", "if __name__ == '__main__':\n    print('b')\n")
+    parser = build_graph(repo).parser
     _write(
         repo / "docs/quality/reachability-process-dispositions.json",
         json.dumps(
             {
                 "schema_version": "reachability-process-dispositions/v1",
+                "graph_provenance": {
+                    "path": ".tmp/quality/reachability-check.json",
+                    "schema_version": "operational-reachability/v1",
+                    "parser": {
+                        key: parser[key] for key in ("name", "version", "python", "source_sha256")
+                    },
+                },
                 "edges": [
                     {
                         "path": "execution/entry.py",
