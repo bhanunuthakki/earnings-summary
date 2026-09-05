@@ -11,9 +11,10 @@ import platform
 import resource
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 from pydantic import ValidationError
@@ -33,22 +34,34 @@ from src.quality.test_ci_performance import (  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--repo-root", default=PROJECT_ROOT)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", default=PROJECT_ROOT, help="Revision checkout to test.")
     parser.add_argument("--cohort", choices=("full-suite", "ci-shard"), required=True)
     parser.add_argument("--source-shard", type=int)
     parser.add_argument("--source-shards", type=int, default=8)
     parser.add_argument("--split-count", type=int, default=1)
     parser.add_argument("--split-part", type=int, default=0)
     parser.add_argument("--cache-state", choices=("cold", "warm", "unknown"), required=True)
-    parser.add_argument("--receipt", required=True)
-    parser.add_argument("--fragments-dir", default=".tmp/quality/test-ci-performance")
-    parser.add_argument("--expected-population", type=Path)
-    parser.add_argument("--expected-population-sha256")
-    parser.add_argument("--trusted-harness-sha256")
-    parser.add_argument("--trusted-selector-sha256")
-    parser.add_argument("--trusted-plugin-sha256")
-    parser.add_argument("--capture-python-sha256")
+    parser.add_argument("--receipt", required=True, help="Receipt JSON output path.")
+    parser.add_argument(
+        "--fragments-dir", help="Raw fragments root (defaults to runner temporary storage)."
+    )
+    parser.add_argument(
+        "--expected-population", type=Path, required=True, help="Trusted population JSON."
+    )
+    parser.add_argument("--expected-population-sha256", required=True)
+    parser.add_argument("--trusted-harness-sha256", required=True)
+    parser.add_argument("--trusted-selector-sha256", required=True)
+    parser.add_argument("--trusted-plugin-sha256", required=True)
+    parser.add_argument("--capture-python-sha256", required=True)
+    parser.add_argument(
+        "--sqlite-preload",
+        help="Optional absolute SQLite shared library to validate and pass to pytest.",
+    )
+    parser.add_argument(
+        "--sqlite-preload-sha256",
+        help="Expected SHA-256 for the SQLite preload library.",
+    )
     return parser
 
 
@@ -89,7 +102,57 @@ _SAFE_PARENT_ENVIRONMENT = frozenset(
 )
 
 
-def safe_test_environment(attempt_dir: Path, cache_state: str) -> dict[str, str]:
+def _validated_sqlite_preload(value: str | None, expected_sha256: str | None) -> str | None:
+    """Validate one explicitly supplied SQLite preload before propagation."""
+    if value is None and expected_sha256 is not None:
+        raise SystemExit("SQLite preload digest requires --sqlite-preload")
+    if value is None:
+        return None
+    if expected_sha256 is None:
+        raise SystemExit("--sqlite-preload-sha256 is required with --sqlite-preload")
+    if len(expected_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in expected_sha256
+    ):
+        raise SystemExit("SQLite preload SHA-256 must be lowercase hexadecimal")
+    if not value or os.pathsep in value:
+        raise SystemExit("SQLite preload must be one absolute library path")
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        raise SystemExit("SQLite preload must be one absolute library path")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit("SQLite preload library is not readable") from exc
+    if not resolved.is_absolute() or not resolved.is_file():
+        raise SystemExit("SQLite preload library must be an absolute regular file")
+    observed_sha256 = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    if observed_sha256 != expected_sha256:
+        raise SystemExit("SQLite preload library SHA-256 does not match trusted digest")
+    probe_env = {"PATH": os.environ.get("PATH", ""), "LD_PRELOAD": str(resolved)}
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sqlite3; print(sqlite3.sqlite_version)",
+        ],
+        capture_output=True,
+        check=False,
+        env=probe_env,
+        text=True,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "3.53.4":
+        raise SystemExit("SQLite preload library does not provide SQLite 3.53.4")
+    return str(resolved)
+
+
+def safe_test_environment(
+    attempt_dir: Path,
+    cache_state: str,
+    *,
+    sqlite_preload: str | None = None,
+    sqlite_preload_sha256: str | None = None,
+) -> dict[str, str]:
     """Build a least-privilege environment for untrusted revision tests.
 
     A revision's tests are code execution.  In particular, inheriting the
@@ -111,6 +174,9 @@ def safe_test_environment(attempt_dir: Path, cache_state: str) -> dict[str, str]
             "PYTHONPATH": str(attempt_dir),
         }
     )
+    validated_preload = _validated_sqlite_preload(sqlite_preload, sqlite_preload_sha256)
+    if validated_preload is not None:
+        environment["LD_PRELOAD"] = validated_preload
     return environment
 
 
@@ -123,7 +189,101 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _trusted_plugin_loader(attempt_dir: Path) -> tuple[str, Path]:
+def preload_digest(path: Path) -> str:
+    """Return a stable digest for post-run preload integrity checks."""
+    try:
+        return _sha256(path)
+    except OSError:
+        return hashlib.sha256(b"missing-preload").hexdigest()
+
+
+def outside_tested_root(path: Path, root: Path, *, label: str) -> Path:
+    """Resolve a private path and reject anything inside the tested checkout."""
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError:
+        return resolved
+    raise SystemExit(f"{label} must resolve outside the tested repository")
+
+
+def _safe_test_path(root: Path, value: str) -> str:
+    """Validate one canonical, repository-relative test path."""
+    if not value or "\\" in value:
+        raise SystemExit("trusted test population contains an unsafe path")
+    relative = PurePosixPath(value)
+    if (
+        relative.is_absolute()
+        or relative.as_posix() != value
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or len(relative.parts) < 2
+        or relative.parts[0] != "tests"
+        or relative.name == ""
+        or not relative.name.startswith("test_")
+        or relative.suffix != ".py"
+    ):
+        raise SystemExit("trusted test population contains an unsafe path")
+    resolved = (root / relative).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError as exc:
+        raise SystemExit("trusted test population contains an outside path") from exc
+    if not resolved.is_file():
+        raise SystemExit("trusted expected test-file population is absent from revision")
+    return value
+
+
+def canonical_test_universe(root: Path) -> tuple[str, ...]:
+    """Derive the tracked test universe from the tested revision's Git tree."""
+    output = subprocess.check_output(
+        ["git", "-C", str(root), "ls-tree", "-r", "--name-only", "HEAD", "--", "tests"],
+        text=True,
+    )
+    universe = tuple(
+        sorted(
+            _safe_test_path(root, line.strip())
+            for line in output.splitlines()
+            if line.strip().startswith("tests/")
+            and Path(line.strip()).name.startswith("test_")
+            and line.strip().endswith(".py")
+            and line.strip() != "tests/test_design_computed_canary.py"
+        )
+    )
+    if not universe:
+        raise SystemExit("trusted canonical test universe is empty")
+    return universe
+
+
+def trusted_selected_files(universe: tuple[str, ...], args: argparse.Namespace) -> tuple[str, ...]:
+    """Run the trusted selector once against the canonical full universe."""
+    selected = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / ".github" / "scripts" / "ci_gate.py"),
+            "select-tests",
+            "--source-shard",
+            str(args.source_shard),
+            "--source-shards",
+            str(args.source_shards),
+            "--split-count",
+            str(args.split_count),
+            "--split-part",
+            str(args.split_part),
+        ],
+        cwd=PROJECT_ROOT,
+        input=("\n".join(universe) + "\n").encode(),
+        capture_output=True,
+        check=False,
+    )
+    if selected.returncode != 0:
+        raise SystemExit("canonical CI shard selection failed")
+    values = tuple(line for line in selected.stdout.decode().splitlines() if line)
+    if not values or any(value not in universe for value in values):
+        raise SystemExit("trusted CI selector returned an unsafe population")
+    return values
+
+
+def trusted_plugin_loader(attempt_dir: Path, tested_root: Path) -> tuple[str, Path]:
     """Create a private pytest loader for collector-owned plugins.
 
     ``pytest -p`` imports by module name. A module rooted in the revision under
@@ -131,6 +291,8 @@ def _trusted_plugin_loader(attempt_dir: Path) -> tuple[str, Path]:
     imports the pinned collector plugin by absolute path, and then drops the
     collector ``src`` modules so tests still import the revision's source.
     """
+    attempt_dir = outside_tested_root(attempt_dir, tested_root, label="private capture directory")
+    attempt_dir.mkdir(parents=True, exist_ok=True)
     try:
         xdist_root = Path(str(importlib.metadata.distribution("pytest-xdist").locate_file("xdist")))
     except importlib.metadata.PackageNotFoundError as exc:
@@ -191,7 +353,7 @@ for _plugin in (_xdist_plugin, _performance_plugin):
     return module_name, loader
 
 
-def _selected_files(root: Path, args: argparse.Namespace) -> tuple[str, ...]:
+def selected_files(root: Path, args: argparse.Namespace) -> tuple[str, ...]:
     if args.expected_population is None:
         raise SystemExit("trusted expected test population is required")
     try:
@@ -208,39 +370,50 @@ def _selected_files(root: Path, args: argparse.Namespace) -> tuple[str, ...]:
     if not all(isinstance(value, str) for value in raw_files_values):
         raise SystemExit("trusted expected test-file population is invalid")
     raw_files = cast(list[str], raw_files_values)
-    files: tuple[str, ...] = tuple(raw_files)
-    if files != tuple(sorted(set(files))):
+    if len(raw_files) != len(set(raw_files)):
         raise SystemExit("trusted expected test-file population is not canonical")
-    if any(not (root / name).is_file() for name in files):
-        raise SystemExit("trusted expected test-file population is absent from revision")
+    raw_files = [_safe_test_path(root, value) for value in raw_files]
+    files: tuple[str, ...] = tuple(raw_files)
+    if files != tuple(sorted(files)):
+        raise SystemExit("trusted expected test-file population is not canonical")
+    try:
+        observed_revision = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise SystemExit("tested repository revision is unavailable") from exc
+    payload_revision = payload_map.get("revision")
+    if isinstance(payload_revision, str):
+        if observed_revision != payload_revision:
+            raise SystemExit("trusted expected population revision does not match checkout")
+    else:
+        payload_revisions = tuple(
+            value
+            for value in (
+                payload_map.get("baseline_revision"),
+                payload_map.get("current_revision"),
+            )
+            if isinstance(value, str)
+        )
+        if not payload_revisions or observed_revision not in payload_revisions:
+            raise SystemExit("trusted expected population revision does not match checkout")
+    universe = canonical_test_universe(root)
     if args.cohort == "full-suite":
+        if files != universe:
+            raise SystemExit("trusted full-suite population differs from canonical universe")
         return files
-    selector = PROJECT_ROOT / ".github" / "scripts" / "ci_gate.py"
-    selected = subprocess.run(
-        [
-            sys.executable,
-            str(selector),
-            "select-tests",
-            "--source-shard",
-            str(args.source_shard),
-            "--source-shards",
-            str(args.source_shards),
-            "--split-count",
-            str(args.split_count),
-            "--split-part",
-            str(args.split_part),
-        ],
-        cwd=PROJECT_ROOT,
-        input=("\n".join(files) + "\n").encode(),
-        capture_output=True,
-        check=False,
-    )
-    if selected.returncode != 0:
-        raise SystemExit("canonical CI shard selection failed")
-    selected_files = tuple(line for line in selected.stdout.decode().splitlines() if line)
-    if selected_files != files:
-        raise SystemExit("trusted CI selector disagrees with expected population")
-    return selected_files
+    expected_coordinates = {
+        "source_shard": args.source_shard,
+        "source_shards": args.source_shards,
+        "split_count": args.split_count,
+        "split_part": args.split_part,
+    }
+    if any(payload_map.get(name) != value for name, value in expected_coordinates.items()):
+        raise SystemExit("trusted expected population shard coordinates do not match capture")
+    selected = trusted_selected_files(universe, args)
+    if files != selected:
+        raise SystemExit("trusted expected population differs from canonical shard selection")
+    return selected
 
 
 def main() -> int:
@@ -257,16 +430,11 @@ def main() -> int:
         raise SystemExit("trusted selector identity does not match collector pin")
     if args.trusted_plugin_sha256 != plugin_sha256:
         raise SystemExit("trusted pytest plugin identity does not match collector pin")
-    if args.expected_population is None or args.expected_population_sha256 is None:
-        raise SystemExit("trusted expected test population identity is required")
     try:
         capture_python_sha256 = _sha256(Path(sys.executable).resolve())
     except OSError as exc:
         raise SystemExit("capture Python executable is not readable") from exc
-    if (
-        args.capture_python_sha256 is not None
-        and args.capture_python_sha256 != capture_python_sha256
-    ):
+    if args.capture_python_sha256 != capture_python_sha256:
         raise SystemExit("capture Python executable identity does not match collector pin")
     try:
         population_payload = json.loads(args.expected_population.read_text(encoding="utf-8"))
@@ -303,7 +471,9 @@ def main() -> int:
         raise SystemExit("--source-shard is required for ci-shard")
     if args.cohort == "full-suite" and args.source_shard is not None:
         raise SystemExit("--source-shard is only valid for ci-shard")
-    files = _selected_files(root, args)
+    files = selected_files(root, args)
+    if any(node.split("::", 1)[0] not in files for node in expected_nodes):
+        raise SystemExit("trusted expected node population does not belong to selected files")
     cohort = FrozenTestCohort(
         kind=args.cohort,
         source_shard=args.source_shard,
@@ -313,11 +483,22 @@ def main() -> int:
         test_files=files,
     )
     attempt_id = uuid.uuid4().hex
-    fragment_root = Path(args.fragments_dir).resolve()
+    fragment_root = outside_tested_root(
+        Path(args.fragments_dir)
+        if args.fragments_dir
+        else Path(tempfile.gettempdir()) / "earnings-summary-test-ci-performance",
+        root,
+        label="fragments directory",
+    )
     attempt_dir = fragment_root / attempt_id
     attempt_dir.mkdir(parents=True, exist_ok=False)
-    plugin_module, _plugin_loader = _trusted_plugin_loader(attempt_dir)
-    env = safe_test_environment(attempt_dir, args.cache_state)
+    plugin_module, _plugin_loader = trusted_plugin_loader(attempt_dir, root)
+    env = safe_test_environment(
+        attempt_dir,
+        args.cache_state,
+        sqlite_preload=args.sqlite_preload,
+        sqlite_preload_sha256=args.sqlite_preload_sha256,
+    )
     command = [
         sys.executable,
         "-m",
@@ -342,6 +523,11 @@ def main() -> int:
     )
     write_receipt(initial_receipt, args.receipt)
     completed = subprocess.run(command, cwd=root, env=env, capture_output=True, check=False)
+    preload_observed_sha256: str | None = None
+    preload_mutated = False
+    if args.sqlite_preload is not None:
+        preload_observed_sha256 = preload_digest(Path(env["LD_PRELOAD"]))
+        preload_mutated = preload_observed_sha256 != args.sqlite_preload_sha256
     wall = time.perf_counter() - started
     safe_stdout = redacted_output(completed.stdout)
     safe_stderr = redacted_output(completed.stderr)
@@ -361,7 +547,9 @@ def main() -> int:
         cohort,
         fragments,
         attempt_id=attempt_id,
-        execution_outcome="passed" if completed.returncode == 0 else "failed",
+        execution_outcome="passed"
+        if completed.returncode == 0 and not preload_mutated
+        else "failed",
         cache_state=args.cache_state,
         fragment_errors=tuple(fragment_errors),
     )
@@ -374,6 +562,20 @@ def main() -> int:
         ),
         ArtifactIdentity(path="__runtime__/capture-python", sha256=capture_python_sha256),
     )
+    if args.sqlite_preload is not None:
+        trusted_configuration = (
+            *trusted_configuration,
+            ArtifactIdentity(
+                path="__runtime__/sqlite-preload-expected",
+                sha256=args.sqlite_preload_sha256,
+            ),
+            ArtifactIdentity(
+                path="__runtime__/sqlite-preload-observed",
+                sha256=preload_observed_sha256
+                if preload_observed_sha256 is not None
+                else hashlib.sha256(b"missing-preload").hexdigest(),
+            ),
+        )
     receipt = receipt.model_copy(
         update={
             "configuration": trusted_configuration,
@@ -395,8 +597,18 @@ def main() -> int:
                 ),
             }
         )
+    if preload_mutated:
+        receipt = receipt.model_copy(
+            update={
+                "evidence_status": "invalid",
+                "hold_reasons": (
+                    *receipt.hold_reasons,
+                    "SQLite preload digest changed during capture",
+                ),
+            }
+        )
     write_receipt(receipt, args.receipt)
-    return completed.returncode
+    return 1 if preload_mutated and completed.returncode == 0 else completed.returncode
 
 
 if __name__ == "__main__":

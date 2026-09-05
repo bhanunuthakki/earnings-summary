@@ -19,7 +19,7 @@ from .architecture import ArchitectureReceipt, build_architecture_receipt, resol
 from .function_lifecycle import FunctionLifecycleInventory, build_inventory, load_inventory
 from .lifecycle import LifecycleInventory
 from .lifecycle import build_inventory as build_lifecycle_inventory
-from .reachability import ReachabilityGraph, build_graph
+from .reachability import ReachabilityGraph, build_graph, production_unknown_edges
 from .roadmap_freeze_contract import (
     BUILDER_CONVERT_QUOTAS,
     BUILDER_RETAIN_QUOTAS,
@@ -163,7 +163,7 @@ def reachability_evidence(root: Path, lifecycle: dict[str, object]) -> Reachabil
         else ()
     )
     unknown_edges = tuple(graph.unknown_edges)
-    production_unknown = sum(edge.source in graph.roots for edge in unknown_edges)
+    production_unknown = len(production_unknown_edges(graph))
     stale_disposition_diagnostics = sum(
         diagnostic.kind == "unknown" and "stale reachability disposition" in diagnostic.message
         for diagnostic in graph.diagnostics

@@ -13,21 +13,24 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import cast
 
-from src.quality.ci_collection import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.quality.ci_collection import (  # noqa: E402
     CollectionManifest,
     CollectionState,
     capture_python_sha256,
 )
-from src.quality.ci_collection import (
+from src.quality.ci_collection import (  # noqa: E402
     file_sha256 as _file_sha256,
 )
-from src.quality.ci_collection import (
+from src.quality.ci_collection import (  # noqa: E402
     manifest_digest as _digest,
 )
-from src.quality.ci_collection import (
+from src.quality.ci_collection import (  # noqa: E402
     population as _population,
 )
-from src.quality.ci_collection import (
+from src.quality.ci_collection import (  # noqa: E402
     trusted_paths as _trusted_paths,
 )
 
@@ -40,7 +43,7 @@ def _revision(root: Path, value: str) -> None:
         raise ValueError("revision identity does not resolve exactly")
 
 
-def _capture_command(
+def capture_command(
     mode: str,
     worktree: Path,
     destination: Path,
@@ -48,13 +51,15 @@ def _capture_command(
     repeat: int,
     fragments_dir: Path,
     python: str,
+    sqlite_preload: str | None = None,
+    sqlite_preload_sha256: str | None = None,
 ) -> list[str]:
     # The production harness is pinned to this collector checkout.  Only the
     # test/config/source inputs and pytest invocation root come from the
     # immutable revision worktree; a tested revision cannot replace the
     # evidence writer or its shard selector.
     script = (
-        (Path(__file__).resolve())
+        Path(__file__).with_name("capture_test_ci_performance.py").resolve()
         if mode == "production"
         else Path(__file__).with_name("capture_test_ci_performance_fixture.py")
     )
@@ -89,7 +94,17 @@ def _capture_command(
         )
     if manifest.capture_mode == "hermetic":
         command.extend(["--timing-profile", manifest.timing_profile])
+    if sqlite_preload is not None and mode == "production":
+        if sqlite_preload_sha256 is None:
+            raise ValueError("sqlite_preload_sha256 is required with sqlite_preload")
+        command.extend(
+            ["--sqlite-preload", sqlite_preload, "--sqlite-preload-sha256", sqlite_preload_sha256]
+        )
     return command
+
+
+# Preserve the collector's existing private helper name for callers that pin it.
+_capture_command = capture_command
 
 
 def _unit_sort_key(value: str) -> tuple[str, int]:
@@ -305,11 +320,23 @@ def _main_unlocked(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--interrupt-after", type=int, default=None)
     parser.add_argument("--capture-python", default=sys.executable)
+    parser.add_argument(
+        "--sqlite-preload",
+        help="Optional SQLite shared library passed to the production capture harness.",
+    )
+    parser.add_argument(
+        "--sqlite-preload-sha256",
+        help="Expected SHA-256 for the SQLite preload library.",
+    )
     args = parser.parse_args(argv)
     args.manifest = args.manifest.resolve()
     args.state = args.state.resolve()
     args.repo_root = args.repo_root.resolve()
     manifest = CollectionManifest.model_validate_json(args.manifest.read_text(encoding="utf-8"))
+    if (args.sqlite_preload is None) != (args.sqlite_preload_sha256 is None):
+        raise SystemExit("SQLite preload path and SHA-256 must be supplied together")
+    if args.sqlite_preload is not None and manifest.capture_mode != "production":
+        raise SystemExit("SQLite preload is only supported for production capture")
     root = args.repo_root
     harness, selector, plugin = _trusted_paths()
     harness_sha256 = _file_sha256(harness)
@@ -439,7 +466,7 @@ def _main_unlocked(argv: list[str] | None = None) -> int:
                         continue
                     receipt_dir.mkdir(parents=True, exist_ok=True)
                     destination = receipt_dir / f"{key}.json"
-                    command = _capture_command(
+                    command = capture_command(
                         manifest.capture_mode,
                         worktree,
                         destination,
@@ -447,6 +474,8 @@ def _main_unlocked(argv: list[str] | None = None) -> int:
                         repeat,
                         receipt_dir / "fragments" / key,
                         args.capture_python,
+                        args.sqlite_preload,
+                        args.sqlite_preload_sha256,
                     )
                     if manifest.capture_mode == "production":
                         if plugin_sha256 is None:
@@ -574,11 +603,19 @@ def _main_unlocked(argv: list[str] | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if "--help" in arguments or "-h" in arguments:
+        # Let argparse render help before the state-lock bootstrap enforces
+        # the normal execution-time --state requirement.
+        _main_unlocked(arguments)
+        return 0
     bootstrap = argparse.ArgumentParser(add_help=False)
-    bootstrap.add_argument("--state", type=Path, required=True)
-    args, _ = bootstrap.parse_known_args(argv)
+    bootstrap.add_argument("--state", type=Path)
+    args, _ = bootstrap.parse_known_args(arguments)
+    if args.state is None:
+        bootstrap.error("the following arguments are required: --state")
     with collection_state_lock(args.state):
-        return _main_unlocked(argv)
+        return _main_unlocked(arguments)
 
 
 if __name__ == "__main__":

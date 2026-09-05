@@ -131,6 +131,80 @@ def test_architecture_ratchet_rejects_metric_growth() -> None:
     assert any(item.startswith("modules_over_1000_loc increased") for item in regressions)
 
 
+def test_architecture_ratchet_detects_scc_member_replacement_without_order_noise() -> None:
+    baseline = analyze_sources(_sources())
+    reordered = baseline.model_copy(
+        update={
+            "strongly_connected_components": (("b", "a"),),
+            "composition_root_loc": dict(baseline.composition_root_loc),
+        }
+    )
+    assert architecture_regressions(reordered, baseline) == ()
+
+    replacement = baseline.model_copy(update={"strongly_connected_components": (("a", "c"),)})
+    regressions = architecture_regressions(replacement, baseline)
+    assert "scc member set introduced: (a, c)" in regressions
+
+
+def test_architecture_ratchet_catches_same_aggregate_scc_substitution() -> None:
+    baseline = analyze_sources(_sources())
+    replacement = baseline.model_copy(update={"strongly_connected_components": (("a", "c"),)})
+
+    assert replacement.scc_count == baseline.scc_count
+    assert replacement.scc_module_count == baseline.scc_module_count
+    assert replacement.largest_scc == baseline.largest_scc
+    assert "scc member set introduced: (a, c)" in architecture_regressions(replacement, baseline)
+
+
+def test_architecture_ratchet_allows_scc_removal_and_strict_subset() -> None:
+    baseline = analyze_sources(_sources()).model_copy(
+        update={"strongly_connected_components": (("a", "b", "c"),)}
+    )
+    subset = baseline.model_copy(
+        update={"strongly_connected_components": (("a", "b"),), "scc_module_count": 2}
+    )
+    assert architecture_regressions(subset, baseline) == ()
+
+    removed = baseline.model_copy(
+        update={"strongly_connected_components": (), "scc_count": 0, "scc_module_count": 0}
+    )
+    assert architecture_regressions(removed, baseline) == ()
+
+
+def test_architecture_ratchet_compares_each_composition_root_loc() -> None:
+    baseline = analyze_sources(_sources())
+    unchanged = baseline.model_copy(
+        update={"composition_root_loc": dict(baseline.composition_root_loc)}
+    )
+    assert architecture_regressions(unchanged, baseline) == ()
+
+    grown = baseline.model_copy(
+        update={
+            "composition_root_loc": {
+                **baseline.composition_root_loc,
+                "execution/comments_server.py": baseline.composition_root_loc[
+                    "execution/comments_server.py"
+                ]
+                + 1,
+            }
+        }
+    )
+    assert (
+        "composition_root_loc[execution/comments_server.py] increased from "
+        f"{baseline.composition_root_loc['execution/comments_server.py']} to "
+        f"{baseline.composition_root_loc['execution/comments_server.py'] + 1}"
+        in architecture_regressions(grown, baseline)
+    )
+
+    unavailable = baseline.model_copy(
+        update={"composition_root_loc": {"execution/comments_server.py": -1}}
+    )
+    assert not any(
+        item.startswith("composition_root_loc[")
+        for item in architecture_regressions(unavailable, baseline)
+    )
+
+
 def test_architecture_ratchet_receipt_is_small_and_typed() -> None:
     receipt = ArchitectureRatchetReceipt(
         schema_version="architecture-ratchet-v1",

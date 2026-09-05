@@ -154,6 +154,77 @@ def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
     assert any(row.item_kind == "suppression" for row in freeze.budget_mappings)
 
 
+def test_quality_readme_counts_are_sourced_from_checked_receipts() -> None:
+    readme = (ROOT / "docs/quality/README.md").read_text(encoding="utf-8")
+    architecture = json.loads(
+        (ROOT / roadmap_freeze.ARCHITECTURE_RECEIPT).read_text(encoding="utf-8")
+    )
+    metrics = cast(dict[str, object], architecture["metrics"])
+    duplicates = json.loads((ROOT / roadmap_freeze.DUPLICATE_RECEIPT).read_text(encoding="utf-8"))
+    exact = cast(dict[str, object], duplicates["exact_totals"])
+    near = cast(dict[str, object], duplicates["near_miss_totals"])
+    static = json.loads((ROOT / roadmap_freeze.STATIC_RECEIPT).read_text(encoding="utf-8"))
+    static_total, static_components = roadmap_inventory.static_quality(static)
+    static_diagnostics = cast(list[dict[str, object]], static["diagnostics"])
+    pyright = next(row for row in static_diagnostics if row.get("tool") == "pyright")
+    by_directory = cast(dict[str, object], pyright["diagnostics_by_directory"])
+    archived_pyright = sum(
+        value
+        for key, value in by_directory.items()
+        if key.startswith("alembic/versions_archived") and isinstance(value, int)
+    )
+    test_db = json.loads((ROOT / roadmap_freeze.TEST_DB_RECEIPT).read_text(encoding="utf-8"))
+    lifecycle = json.loads((ROOT / roadmap_freeze.LIFECYCLE_RECEIPT).read_text(encoding="utf-8"))
+    function_lifecycle = json.loads(
+        (ROOT / roadmap_freeze.FUNCTION_LIFECYCLE_RECEIPT).read_text(encoding="utf-8")
+    )
+    reconciliation = json.loads(
+        (ROOT / roadmap_freeze.RECONCILIATION_RECEIPT).read_text(encoding="utf-8")
+    )
+    freeze = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    reachability = cast(dict[str, object], freeze["reachability"])
+
+    expected_fragments = (
+        f"- {metrics['executable_modules']:,} executable modules and "
+        f"{metrics['total_noncomment_loc']:,} non-comment lines.",
+        f"- {metrics['modules_over_1000_loc']:,} modules above 1,000 lines, "
+        f"{metrics['modules_over_2000_loc']:,} above 2,000, and "
+        f"{metrics['modules_at_least_3000_loc']:,} at or above 3,000.",
+        f"- {metrics['scc_count']:,} import cycles spanning "
+        f"{metrics['scc_module_count']:,} modules; the largest contains "
+        f"{metrics['largest_scc']:,} modules.",
+        f"- {exact['groups']:,} exact normalized-AST clone groups covering "
+        f"{exact['duplicated_loc']:,} body lines.",
+        f"- {near['groups']:,} near-miss groups covering {near['duplicated_loc']:,} body lines.",
+        f"- {static_components['ruff']:,} whole-tree Ruff findings, "
+        f"{static_components['ruff-format']:,} format findings, "
+        f"{static_components['pyright-active']:,} active strict-Pyright",
+        f"  diagnostics, {archived_pyright:,} separately retained archived-migration diagnostics, and",
+        f"  {static_components['source-ignore-comments']:,} suppression directives.",
+        f"- {len(test_db['database_builders']):,} database-builder occurrences across "
+        f"{len(test_db['tracked_test_files']):,} tracked test files are",
+        "- The operational graph has no parse failures, unresolved targets, stale",
+        f"  dispositions, or unknown production edges. The remaining "
+        f"{reachability['unknown_edges']:,} unknown edges",
+        f"- The lifecycle receipt classifies all "
+        f"{sum(cast(dict[str, int], lifecycle['counts']).values()):,} candidates with zero omissions,",
+        f"- The function-lifecycle receipt validates as `PASS` for "
+        f"{function_lifecycle['symbol_count']:,} symbols:",
+        f"  {function_lifecycle['counts']['protected']:,} protected, "
+        f"{function_lifecycle['counts']['referenced']:,} referenced, "
+        f"{function_lifecycle['counts']['unknown']:,} unknown, and "
+        f"{function_lifecycle['counts']['unreferenced-static-candidate']:,} conservative",
+        f"- The roadmap reconciliation receipt covers "
+        f"{len(reconciliation['claims']):,} named claims: "
+        f"{reconciliation['scored_claims']:,} are reproduced",
+        f"- The roadmap-freeze artifact itself validates as "
+        f"`{freeze['artifact_acceptance_status']}`; program feasibility",
+        f"  remains `{freeze['program_feasibility_status']}`",
+    )
+    assert static_total == sum(static_components.values())
+    assert all(fragment in readme for fragment in expected_fragments)
+
+
 def test_validator_proves_cutset_and_allows_missing_historical_perf_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

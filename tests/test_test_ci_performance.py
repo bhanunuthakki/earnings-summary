@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -229,12 +230,17 @@ def test_missing_fragment_or_configuration_is_invalid(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "script",
-    ["execution/capture_test_ci_performance.py", "execution/compare_test_ci_performance.py"],
+    [
+        "execution/capture_test_ci_performance.py",
+        "execution/collect_paired_ci_performance.py",
+        "execution/compare_test_ci_performance.py",
+    ],
 )
 def test_performance_entrypoints_load_when_run_directly(script: str) -> None:
+    script_path = (Path(__file__).resolve().parents[1] / script).resolve()
     result = subprocess.run(
-        [sys.executable, script, "--help"],
-        cwd=Path(__file__).resolve().parents[1],
+        [sys.executable, str(script_path), "--help"],
+        cwd=Path(tempfile.gettempdir()),
         capture_output=True,
         text=True,
         check=False,

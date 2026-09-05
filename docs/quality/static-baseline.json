@@ -2771,54 +2771,54 @@
     {
       "tool": "ruff",
       "command": [
-        "/Applications/earnings-summary/.venv/bin/ruff",
+        "/Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/ruff",
         "check",
         "--output-format",
         "json",
         "."
       ],
-      "version": "ruff 0.16.4",
+      "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 2,
-      "receipt_path": ".tmp/static_quality/6837cc6acdce9ee7a6807643/ruff-check.json",
+      "receipt_path": ".tmp/static_quality/fcf4706a56ebe38ebb3bf3ca/ruff-check.json",
       "diagnostics_by_directory": {
         "src/user_state": 2
       },
       "diagnostics_by_rule": {
         "RUF036": 2
       },
-      "command_hash": "9229192a23da5e2db4a2ec78a237cab96a54d2858b97d9c1a38936ad5f33f61f",
-      "version_hash": "e361b94eb57e7c2e9421aa3bd63fb752e9ebe4134031433fba0b2eb4e4d5aab7"
+      "command_hash": "25a41c3ed1b4c77d01e6c91a9c12e8e590991b4adc99a64649bcf5fd7f7a35db",
+      "version_hash": "f3d2f01dcaaf38f1cffe9ea8ec59b31e313fcd07e196498023106803024ce749"
     },
     {
       "tool": "ruff-format",
       "command": [
-        "/Applications/earnings-summary/.venv/bin/ruff",
+        "/Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/ruff",
         "format",
         "--check",
         "."
       ],
-      "version": "ruff 0.16.4",
+      "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 62,
-      "receipt_path": ".tmp/static_quality/6837cc6acdce9ee7a6807643/ruff-format.txt",
+      "receipt_path": ".tmp/static_quality/fcf4706a56ebe38ebb3bf3ca/ruff-format.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {},
-      "command_hash": "9df4538e64cb1f6d37a047b5ea78b18a3be5f5d4375ec875f2f6a313b997f5f9",
-      "version_hash": "e361b94eb57e7c2e9421aa3bd63fb752e9ebe4134031433fba0b2eb4e4d5aab7"
+      "command_hash": "877e0d1f5a03b9e09cdaa9cafecf0b4dcfed21d89454511be97498af2660c883",
+      "version_hash": "f3d2f01dcaaf38f1cffe9ea8ec59b31e313fcd07e196498023106803024ce749"
     },
     {
       "tool": "pyright",
       "command": [
-        "/Applications/earnings-summary/.venv/bin/pyright",
+        "/Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/pyright",
         "--pythonpath",
-        "/Applications/earnings-summary/.venv/bin/python",
+        "/Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/python",
         "--outputjson"
       ],
       "version": "pyright 1.1.411",
       "exit_status": 1,
       "count": 4374,
-      "receipt_path": ".tmp/static_quality/6837cc6acdce9ee7a6807643/pyright.json",
+      "receipt_path": ".tmp/static_quality/fcf4706a56ebe38ebb3bf3ca/pyright.json",
       "diagnostics_by_directory": {
         "alembic/versions_archived": 175,
         "execution": 1120,
@@ -2872,7 +2872,7 @@
         "reportUnusedImport": 4,
         "reportUnusedVariable": 2
       },
-      "command_hash": "d61dca2a2ebc261d788c794ea63ee2c5a1ee7fe2135e6193427969ba4c3ee07c",
+      "command_hash": "7247c73fa3091c345a074cf9400e4717ea8fde6f9e0bfd304dd77d593ce0fabf",
       "version_hash": "40c7560256cc8f524e955d3d620dae6e10b672651c9918bf032a9069babf086f"
     },
     {
@@ -2883,7 +2883,7 @@
       "version": "n/a",
       "exit_status": 0,
       "count": 608,
-      "receipt_path": ".tmp/static_quality/6837cc6acdce9ee7a6807643/source-ignore-comments.txt",
+      "receipt_path": ".tmp/static_quality/fcf4706a56ebe38ebb3bf3ca/source-ignore-comments.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {
         "# type: ignore": 253,
@@ -2948,9 +2948,9 @@
       "tests"
     ],
     "commands": [
-      "/Applications/earnings-summary/.venv/bin/ruff check --output-format json .",
-      "/Applications/earnings-summary/.venv/bin/ruff format --check .",
-      "/Applications/earnings-summary/.venv/bin/pyright --pythonpath /Applications/earnings-summary/.venv/bin/python --outputjson"
+      "/Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/ruff check --output-format json .",
+      "/Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/ruff format --check .",
+      "/Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/pyright --pythonpath /Applications/earnings-summary/.tmp/bha-103-worktree/.venv/bin/python --outputjson"
     ]
   },
   "retirement_candidates": [
@@ -2958,10 +2958,10 @@
   ],
   "status": "PASS",
   "violations": [],
-  "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
-  "source_hash": "18119f98198235fd4516a7df6083bbb3e7876d89118f4f329a991bd716ad9b6d",
+  "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+  "source_hash": "a63140ab0a689e211f8bd75876a65dcd8a3b236f60a985e70ceac6cbaeb14ac3",
   "config_hash": "15aaf211f0d5d011d13e12d447c055098b09fd448f0d3b2e3244abd0c80bfbef",
-  "receipt_identity": "6837cc6acdce9ee7a6807643",
+  "receipt_identity": "fcf4706a56ebe38ebb3bf3ca",
   "suppressions_by_file": {
     "evals/structural/test_provider_blind_evals.py": {
       "# type: ignore": 1,

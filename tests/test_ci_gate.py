@@ -282,6 +282,43 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
         'pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"' in workflow
     )
     assert "ci_gate.py select-tests" in workflow
+    assert "Prepare trusted canonical test population" in workflow
+    assert "--expected-population-sha256" in workflow
+    assert "--trusted-harness-sha256" in workflow
+    assert "--trusted-selector-sha256" in workflow
+    assert "--trusted-plugin-sha256" in workflow
+    assert "--capture-python-sha256" in workflow
+    assert "--sqlite-preload" in workflow
+    assert "--sqlite-preload-sha256" in workflow
+    assert "sqlite_preload_sha256" in workflow
+    trusted_index = workflow.index("- name: Pin trusted CI identities")
+    build_index = workflow.index("- name: Build verified SQLite writer runtime")
+    install_index = workflow.index("- name: Install dependencies")
+    population_index = workflow.index("- name: Prepare trusted canonical test population")
+    capture_index = workflow.index("- name: Run test-suite shard with production harness")
+    assert build_index < trusted_index < install_index < population_index < capture_index
+    population_step = workflow[population_index:capture_index]
+    assert "harness_sha256=$(sha256sum" not in population_step
+    assert "selector_sha256=$(sha256sum" not in population_step
+    assert "POPULATION_SELECTOR_SHA256=" in population_step
+    assert '--trusted-harness-sha256 "${{ steps.trusted.outputs.harness_sha256 }}"' in workflow
+    assert '--trusted-selector-sha256 "${{ steps.trusted.outputs.selector_sha256 }}"' in workflow
+    assert '--trusted-plugin-sha256 "${{ steps.trusted.outputs.plugin_sha256 }}"' in workflow
+    assert (
+        '--capture-python-sha256 "${{ steps.trusted.outputs.capture_python_sha256 }}"' in workflow
+    )
+    assert (
+        '--sqlite-preload-sha256 "${{ steps.trusted.outputs.sqlite_preload_sha256 }}"' in workflow
+    )
+    assert "Run quality ratchets" in workflow
+    assert "make quality-ratchets" in workflow
+    assert "trusted_loader" in workflow
+    assert "--collect-only -q -n 2 --dist=loadfile --durations=25" in workflow
+    assert "len(node_payload) != len(set(node_payload))" in workflow
+    assert "nodes = sorted(set(node_payload))" not in workflow
+    assert '--fragments-dir "$RUNNER_TEMP/test-ci-performance/' in workflow
+    assert 'echo "LD_PRELOAD=' not in workflow.split("  tests:", 1)[1].split("\n  design:", 1)[0]
+    assert 'pytest -q -n 2 --dist=loadfile --durations=25 "${selected[@]}"' not in workflow
     assert "errcount || echo 0" not in workflow
     assert "python .github/scripts/ci_gate.py classify" in workflow
     assert "python .github/scripts/ci_gate.py verify" in workflow

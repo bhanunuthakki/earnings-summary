@@ -147,12 +147,22 @@ jobs:
           gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
             "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
             -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
-          echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
+          echo "CI_SQLITE_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
           LD_PRELOAD="$sqlite_dir/libsqlite3.so.0" python - <<'PY'
           import sqlite3
 
           assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
           PY
+      - name: Pin trusted CI identities
+        id: trusted
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "harness_sha256=$(sha256sum execution/capture_test_ci_performance.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "selector_sha256=$(sha256sum .github/scripts/ci_gate.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "plugin_sha256=$(sha256sum src/quality/pytest_performance_plugin.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "capture_python_sha256=$(python -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.executable).resolve().read_bytes()).hexdigest())')" >> "$GITHUB_OUTPUT"
+          echo "sqlite_preload_sha256=$(sha256sum "$CI_SQLITE_PRELOAD" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -167,12 +177,13 @@ jobs:
         # init_db() + alembic, not `alembic upgrade head` alone — the 0000
         # baseline assumes the legacy init_db tables — so we skip it here.)
         run: mkdir -p data
-      - name: Run test-suite shard
+      - name: Prepare trusted canonical test population
+        id: population
         shell: bash
         run: |
           set -euo pipefail
-          # Browser canaries have one authoritative owner below: Design Sync,
-          # which installs the hash-locked Playwright adapter and Chromium.
+          # Select the matrix partition once, then freeze its files and node
+          # IDs for the production capture harness.
           mapfile -t all_files < <(
             find tests -type f -name 'test_*.py' \
               | grep -v '^tests/test_design_computed_canary.py$' \
@@ -190,20 +201,116 @@ jobs:
             echo "::error::test shard ${{ matrix.label }} selected no files"
             exit 1
           fi
-          printf 'Shard %s/8: %s files\n' '${{ matrix.label }}' "${#selected[@]}"
-          # --durations: `pytest -q` emits only dots, so when a shard stalls the
-          # log shows a multi-minute gap between two dot rows and NOTHING about
-          # which test caused it (this is what made the 2026-07-31 shard-6 kills
-          # undiagnosable). The slowest-test table costs nothing and makes the
-          # next occurrence attributable.
+          population_dir="$RUNNER_TEMP/ci-population"
+          mkdir -p "$population_dir"
+          cat > "$population_dir/ci_population_plugin.py" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          import pytest
+
+          @pytest.hookimpl(trylast=True)
+          def pytest_collection_finish(session: object) -> None:
+              if os.environ.get("PYTEST_XDIST_WORKER"):
+                  return
+              items = getattr(session, "items", ())
+              node_ids = sorted(str(item.nodeid) for item in items)
+              Path(os.environ["CI_POPULATION_NODES"]).write_text(
+                  json.dumps(node_ids, separators=(",", ":")) + "\n", encoding="utf-8"
+              )
+          PY
+          nodes="$population_dir/nodes.json"
+          mapfile -t trusted_loader < <(
+            python - "$population_dir" "$GITHUB_WORKSPACE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          from execution.capture_test_ci_performance import trusted_plugin_loader
+
+          module, loader = trusted_plugin_loader(Path(sys.argv[1]), Path(sys.argv[2]))
+          print(module)
+          print(loader)
+          PY
+          )
+          if (( ${#trusted_loader[@]} != 2 )); then
+            echo "::error::trusted pytest loader identity is unavailable"
+            exit 1
+          fi
+          env -i \
+              PATH="$PATH" HOME="$HOME" CI=1 GITHUB_ACTIONS=1 \
+              NO_NETWORK=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+              PYTHONPATH="$population_dir" LD_PRELOAD="$CI_SQLITE_PRELOAD" \
+              CI_POPULATION_NODES="$nodes" \
+              python -m pytest --collect-only -q -n 2 --dist=loadfile --durations=25 \
+              --disable-warnings -p "${trusted_loader[0]}" -p ci_population_plugin \
+              "${selected[@]}"
+          population="$population_dir/expected-population.json"
+          POPULATION_PATH="$population" POPULATION_NODES="$nodes" \
+          POPULATION_SOURCE_SHARD='${{ matrix.source_shard }}' \
+          POPULATION_SOURCE_SHARDS=8 POPULATION_SPLIT_COUNT='${{ matrix.split_count }}' \
+          POPULATION_SPLIT_PART='${{ matrix.split_part }}' \
+          POPULATION_SELECTOR_SHA256='${{ steps.trusted.outputs.selector_sha256 }}' \
+          python - "${selected[@]}" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          selected = sys.argv[1:]
+          node_payload = json.loads(Path(os.environ["POPULATION_NODES"]).read_text())
+          if not isinstance(node_payload, list) or not all(
+              isinstance(node, str) for node in node_payload
+          ):
+              raise SystemExit("canonical node population is invalid")
+          if node_payload != sorted(node_payload) or len(node_payload) != len(set(node_payload)):
+              raise SystemExit("canonical node population is not sorted and unique")
+          nodes = node_payload
+          if not nodes or any(node.split("::", 1)[0] not in selected for node in nodes):
+              raise SystemExit("canonical node population does not belong to selected files")
+          payload = {
+              "schema_version": "ci-population/v1",
+              "cohort": "ci-shard",
+              "test_files": selected,
+              "node_ids": nodes,
+              "source_shard": int(os.environ["POPULATION_SOURCE_SHARD"]),
+              "source_shards": int(os.environ["POPULATION_SOURCE_SHARDS"]),
+              "split_count": int(os.environ["POPULATION_SPLIT_COUNT"]),
+              "split_part": int(os.environ["POPULATION_SPLIT_PART"]),
+              "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "selector_sha256": os.environ["POPULATION_SELECTOR_SHA256"],
+          }
+          encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+          Path(os.environ["POPULATION_PATH"]).write_text(encoded + "\n", encoding="utf-8")
+          PY
+          echo "population=$population" >> "$GITHUB_OUTPUT"
+          echo "population_sha256=$(python -c 'import hashlib, json, pathlib, sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); encoded=json.dumps(payload, sort_keys=True, separators=(",", ":")); print(hashlib.sha256(encoded.encode()).hexdigest())' "$population")" >> "$GITHUB_OUTPUT"
+          nodes_count=$(python -c 'import json, pathlib, sys; print(len(json.loads(pathlib.Path(sys.argv[1]).read_text())))' "$nodes")
+          printf 'Shard %s/8: %s files, %s nodes\n' '${{ matrix.label }}' "${#selected[@]}" "$nodes_count"
+      - name: Run test-suite shard with production harness
+        shell: bash
+        run: |
+          set -euo pipefail
           python execution/capture_test_ci_performance.py \
+            --repo-root "$GITHUB_WORKSPACE" \
             --cohort ci-shard \
             --source-shard '${{ matrix.source_shard }}' \
             --source-shards 8 \
             --split-count '${{ matrix.split_count }}' \
             --split-part '${{ matrix.split_part }}' \
             --cache-state unknown \
-            --fragments-dir ".tmp/quality/test-ci-performance/${{ matrix.label }}" \
+            --expected-population "${{ steps.population.outputs.population }}" \
+            --expected-population-sha256 "${{ steps.population.outputs.population_sha256 }}" \
+            --trusted-harness-sha256 "${{ steps.trusted.outputs.harness_sha256 }}" \
+            --trusted-selector-sha256 "${{ steps.trusted.outputs.selector_sha256 }}" \
+            --trusted-plugin-sha256 "${{ steps.trusted.outputs.plugin_sha256 }}" \
+            --capture-python-sha256 "${{ steps.trusted.outputs.capture_python_sha256 }}" \
+            --sqlite-preload "$CI_SQLITE_PRELOAD" \
+            --sqlite-preload-sha256 "${{ steps.trusted.outputs.sqlite_preload_sha256 }}" \
+            --fragments-dir "$RUNNER_TEMP/test-ci-performance/${{ matrix.label }}" \
             --receipt ".tmp/quality/test-ci-performance/${{ matrix.label }}/receipt.json"
       - name: Upload raw test CI performance evidence
         if: ${{ always() }}
@@ -340,6 +447,11 @@ jobs:
             echo "Changed Python files:"
             echo "$changed"
           fi
+      - name: Run quality ratchets
+        env:
+          BASE: ${{ steps.changed.outputs.base }}
+          PYTHON_BIN: python
+        run: make quality-ratchets
       - name: ruff format (no NEW misformatting on changed lines)
         # Diff-aware format gate, mirroring the lint gate below. The repo carries
         # a large pre-existing `ruff format` backlog (247 files of tooling drift),

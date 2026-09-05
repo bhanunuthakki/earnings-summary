@@ -241,5 +241,16 @@ def population(
         "current_revision": manifest.current_revision,
         "selector_sha256": file_sha256(selector),
     }
+    if manifest.cohort == "ci-shard":
+        if manifest.source_shard is None:
+            raise SystemExit("ci-shard manifest requires source_shard")
+        payload.update(
+            {
+                "source_shard": manifest.source_shard,
+                "source_shards": manifest.source_shards,
+                "split_count": manifest.split_count,
+                "split_part": manifest.split_part,
+            }
+        )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return payload, hashlib.sha256(encoded).hexdigest()

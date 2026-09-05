@@ -6,43 +6,43 @@
   "evidence": {
     "architecture": {
       "path": "docs/quality/architecture-ratchet.json",
-      "sha256": "9e157c5741bc254100564df5e63f5e53e80dc59c9362dd9aaf6dc55d615631ba",
-      "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
+      "sha256": "369a8d773f58617c1b75a7efc2df7de948d897ee4f9cafdcba65bfab5c5efba1",
+      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
       "scope": "WORKTREE"
     },
     "static": {
       "path": "docs/quality/static-baseline.json",
-      "sha256": "29fee5d2e2f0709484462b1e3aa03fc85ceced334cd67d985901e7a3a998ed7d",
-      "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
+      "sha256": "0d6cb906f46feb517d29990e86f5cf4c9cef15ccacd23058aa0bf11bd8cf0760",
+      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
       "scope": "WORKTREE"
     },
     "test_db": {
       "path": "docs/quality/test-db-patterns-baseline.json",
-      "sha256": "0847882a6e7ac8d834a026a7fa8684755ff379146d3cd015edcb4af643f68c9d",
-      "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
+      "sha256": "941a03a98b19f064e967ed6bf85a44b34472ea3767514d515b343da6a78ee497",
+      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
       "scope": "WORKTREE"
     },
     "duplicate": {
       "path": "docs/quality/duplicates-ratchet.json",
-      "sha256": "fff7c81339ff953f9829a6c1ebd69d3bbebf9555d24bf04845186d2f223829a8",
-      "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
+      "sha256": "112384f8e7a7c56732f4c1320f3107394bb9ef2f324d59df228c5e3d9dd7f651",
+      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
       "scope": "WORKTREE"
     },
     "lifecycle": {
       "path": "docs/quality/lifecycle-baseline.json",
-      "sha256": "7f1ae749387da279f6370e8f06a22cedd04e795c271a75b910db49bdb905434a",
-      "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
+      "sha256": "eb204df99d5e7fd5c7464a2fc1562f52866ba0dd47e5fac4b21f25c30ead925e",
+      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
       "scope": "WORKTREE"
     },
     "function_lifecycle": {
       "path": "docs/quality/function-lifecycle-baseline.json",
-      "sha256": "d73197d8043c82a2b3faab9ecba0b00a1f0ad13574d5ebfafe875d3e82773cc4",
-      "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
+      "sha256": "20046015e769cf68b2a9cb17782e3a8104bc3ce0f97c1dab433088b11d8e147e",
+      "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
       "scope": "WORKTREE"
     },
     "reconciliation": {
       "path": "docs/quality/reconciliation-baseline.json",
-      "sha256": "ea8b3225a14dba9f36910b5eeaff4ad89085f8b53e5813ad46a7840de58328fd",
+      "sha256": "c1ba5855a1fc03b93f91f399c4512ac314ad739a1b89df046ba9b12982bcf7f8",
       "scoped_commit": "WORKTREE",
       "scope": "WORKTREE"
     },
@@ -61,20 +61,20 @@
   },
   "function_lifecycle": {
     "path": "docs/quality/function-lifecycle-baseline.json",
-    "sha256": "d73197d8043c82a2b3faab9ecba0b00a1f0ad13574d5ebfafe875d3e82773cc4",
+    "sha256": "20046015e769cf68b2a9cb17782e3a8104bc3ce0f97c1dab433088b11d8e147e",
     "schema_version": "bha-109.v1",
     "parser_version": "python-ast-3.11-v3",
     "status": "PASS",
-    "tracked_tree_hash": "cb398549b22d18070a02ea0cc228d0ec0281ce8f814c9a1df326fb1f7ce65192",
-    "inventory_hash": "9decf13c8e5f72a1fb6665325718fa671cfdd3c64d8877a489b80d6b542a74f1",
+    "tracked_tree_hash": "3dfba097bb0f90d89443a89e4063129778f744f1006773ca17d0cc59273f6521",
+    "inventory_hash": "c3b275bca8b6bfbe88e32ff36d1092474755f69167978e5ea60ad936e96957e2",
     "files_scanned": 2462,
-    "symbol_count": 33716,
+    "symbol_count": 33740,
     "candidate_count": 15,
-    "unknown_total": 6319,
+    "unknown_total": 6322,
     "counts": {
-      "protected": 11723,
-      "referenced": 15659,
-      "unknown": 6319,
+      "protected": 11737,
+      "referenced": 15666,
+      "unknown": 6322,
       "unreferenced-static-candidate": 15
     },
     "unknown_hazard_counts": {
@@ -91,37 +91,37 @@
       "dynamic:exec": 1,
       "dynamic:getattr": 294,
       "dynamic:locals": 1,
-      "dynamic:setattr": 1979,
+      "dynamic:setattr": 1980,
       "dynamic:unbounded-reflection-in-module": 1287,
       "dynamic:vars": 18,
-      "public-module-symbol": 3654,
-      "string-or-reflection-reference": 3054,
-      "test-fixture-or-helper": 2977
+      "public-module-symbol": 3657,
+      "string-or-reflection-reference": 3056,
+      "test-fixture-or-helper": 2978
     },
     "files_failed": [],
     "violations": []
   },
   "reconciliation": {
     "path": "docs/quality/reconciliation-baseline.json",
-    "sha256": "ea8b3225a14dba9f36910b5eeaff4ad89085f8b53e5813ad46a7840de58328fd",
+    "sha256": "c1ba5855a1fc03b93f91f399c4512ac314ad739a1b89df046ba9b12982bcf7f8",
     "status": "PASS",
     "claims_count": 96,
     "scored_claims": 30,
     "rejected_claims": 66,
-    "source_hash": "13c0507f24b389106566bb551bad4ee833f7e56fc43f0f320845dc174ec6d0d7",
+    "source_hash": "91d5d6426318d3845d893565394d3ac1bb457d2f1c26ae42617561008da0ab1f",
     "claim_manifest_sha256": "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089",
-    "claim_content_sha256": "082adfe3047054db93b3dd73d5e96ee1cf93da96c95eee283649024b4b25d173",
+    "claim_content_sha256": "cad998ea64984a6177c49e30d54b2d47ab7744fd474a7767e0f8a8924cd2b9c8",
     "roadmap_source_sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
     "violations": []
   },
   "reachability": {
-    "graph_sha256": "3d5c36b7a7577613355372af68da7a55bfedc628e7395d0cddc4f79f091e0852",
+    "graph_sha256": "c751ece053edcdbfe26490cdff891ae424f72c0b24685b186fd92c15ec82237b",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "version": "1.1.0",
       "python": ">=3.11",
-      "source_sha256": "2a82907a5aa4355d4508938e6c25f3c1201d47a555895d6bc7ab8838a93e0c1c",
-      "dispositions_sha256": "0b5fc5a27e68e23ebd688f6905061c74c836a51ee40f10c3fbaaeae369ea0acc"
+      "source_sha256": "729b09d32b0a4a54f0192230fb599989460ca83c516543da4a45ff7fc942d242",
+      "dispositions_sha256": "3f7decab1bd2c18ae46914e801e1e72ba0efaa0216be0d64940d5cd84498cb20"
     },
     "lifecycle_status": "PASS",
     "lifecycle_violations": [],
@@ -131,7 +131,7 @@
   },
   "architecture_metrics": {
     "executable_modules": 1333,
-    "total_noncomment_loc": 491930,
+    "total_noncomment_loc": 492213,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -142,10 +142,10 @@
   },
   "scc_cut_edges": [
     {
-      "source": "advisor.memos",
-      "target": "advisor.context",
-      "source_path": "src/advisor/memos.py",
-      "target_path": "src/advisor/context.py",
+      "source": "advisor.context",
+      "target": "pipeline.allocation_decisions_panel",
+      "source_path": "src/advisor/context.py",
+      "target_path": "src/pipeline/allocation_decisions_panel.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -177,17 +177,17 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "db_paths",
-      "target": "db",
-      "source_path": "src/db_paths.py",
-      "target_path": "src/db.py",
+      "source": "db",
+      "target": "db_paths",
+      "source_path": "src/db.py",
+      "target_path": "src/db_paths.py",
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "etf_sources.vanguard",
-      "target": "etf_sources.issuer_registry",
-      "source_path": "src/etf_sources/vanguard.py",
-      "target_path": "src/etf_sources/issuer_registry.py",
+      "source": "etf_sources.issuer_registry",
+      "target": "etf_sources.vanguard",
+      "source_path": "src/etf_sources/issuer_registry.py",
+      "target_path": "src/etf_sources/vanguard.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -198,10 +198,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "evals.store",
-      "target": "evals.harness",
-      "source_path": "src/evals/store.py",
-      "target_path": "src/evals/harness.py",
+      "source": "evals.harness",
+      "target": "evals.store",
+      "source_path": "src/evals/harness.py",
+      "target_path": "src/evals/store.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -209,20 +209,6 @@
       "target": "ir_pipeline.discover.generic",
       "source_path": "src/ir_pipeline/discover/__init__.py",
       "target_path": "src/ir_pipeline/discover/generic.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "llm",
-      "target": "llm.openrouter_backend",
-      "source_path": "src/llm/__init__.py",
-      "target_path": "src/llm/openrouter_backend.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "llm.cli",
-      "target": "llm.openrouter_backend",
-      "source_path": "src/llm/cli.py",
-      "target_path": "src/llm/openrouter_backend.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -247,23 +233,37 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "llm.gemini_backend",
-      "target": "llm.ledger",
-      "source_path": "src/llm/gemini_backend.py",
-      "target_path": "src/llm/ledger.py",
+      "source": "llm.ledger",
+      "target": "llm.fallback",
+      "source_path": "src/llm/ledger.py",
+      "target_path": "src/llm/fallback.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.openrouter_backend",
+      "target": "llm",
+      "source_path": "src/llm/openrouter_backend.py",
+      "target_path": "src/llm/__init__.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.openrouter_backend",
+      "target": "llm.cli",
+      "source_path": "src/llm/openrouter_backend.py",
+      "target_path": "src/llm/cli.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "llm.prompt_ab",
+      "target": "llm.structured",
+      "source_path": "src/llm/prompt_ab.py",
+      "target_path": "src/llm/structured.py",
       "rationale": "feedback_arc_set"
     },
     {
       "source": "llm.resolver",
       "target": "llm.cli",
       "source_path": "src/llm/resolver.py",
-      "target_path": "src/llm/cli.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "llm.structured",
-      "target": "llm.cli",
-      "source_path": "src/llm/structured.py",
       "target_path": "src/llm/cli.py",
       "rationale": "feedback_arc_set"
     },
@@ -296,10 +296,17 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "pipeline.source_policy",
-      "target": "sqlite_runtime",
-      "source_path": "src/pipeline/source_policy.py",
-      "target_path": "src/sqlite_runtime.py",
+      "source": "pipeline.sec_xbrl",
+      "target": "provenance.sec_companyfacts_fact_matcher",
+      "source_path": "src/pipeline/sec_xbrl.py",
+      "target_path": "src/provenance/sec_companyfacts_fact_matcher.py",
+      "rationale": "feedback_arc_set"
+    },
+    {
+      "source": "pipeline.transcript_acquisition",
+      "target": "pipeline.source_policy",
+      "source_path": "src/pipeline/transcript_acquisition.py",
+      "target_path": "src/pipeline/source_policy.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -310,24 +317,17 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "provenance.sec_companyfacts_fact_matcher",
-      "target": "pipeline.sec_xbrl",
-      "source_path": "src/provenance/sec_companyfacts_fact_matcher.py",
-      "target_path": "src/pipeline/sec_xbrl.py",
+      "source": "research.governor",
+      "target": "research.calibration_moments",
+      "source_path": "src/research/governor.py",
+      "target_path": "src/research/calibration_moments.py",
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "research.calibration_moments",
-      "target": "research.governor",
-      "source_path": "src/research/calibration_moments.py",
-      "target_path": "src/research/governor.py",
-      "rationale": "feedback_arc_set"
-    },
-    {
-      "source": "research.capacity_moments",
-      "target": "research.governor",
-      "source_path": "src/research/capacity_moments.py",
-      "target_path": "src/research/governor.py",
+      "source": "research.governor",
+      "target": "research.capacity_moments",
+      "source_path": "src/research/governor.py",
+      "target_path": "src/research/capacity_moments.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -345,10 +345,10 @@
       "rationale": "feedback_arc_set"
     },
     {
-      "source": "timeseries.primitives",
-      "target": "timeseries.loaders",
-      "source_path": "src/timeseries/primitives.py",
-      "target_path": "src/timeseries/loaders.py",
+      "source": "timeseries.loaders",
+      "target": "timeseries.primitives",
+      "source_path": "src/timeseries/loaders.py",
+      "target_path": "src/timeseries/primitives.py",
       "rationale": "feedback_arc_set"
     },
     {
@@ -5564,7 +5564,7 @@
   "budget_mappings": [
     {
       "item_kind": "scc_cut",
-      "item_id": "advisor.memos->advisor.context",
+      "item_id": "advisor.context->pipeline.allocation_decisions_panel",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-01",
       "units": 1,
@@ -5624,7 +5624,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "db_paths->db",
+      "item_id": "db->db_paths",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-06",
       "units": 1,
@@ -5636,7 +5636,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "etf_sources.vanguard->etf_sources.issuer_registry",
+      "item_id": "etf_sources.issuer_registry->etf_sources.vanguard",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-07",
       "units": 1,
@@ -5660,7 +5660,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "evals.store->evals.harness",
+      "item_id": "evals.harness->evals.store",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-09",
       "units": 1,
@@ -5684,7 +5684,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm->llm.openrouter_backend",
+      "item_id": "llm.cli->llm_client",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-11",
       "units": 1,
@@ -5696,7 +5696,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.cli->llm.openrouter_backend",
+      "item_id": "llm.gemini_backend->llm",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-12",
       "units": 1,
@@ -5708,7 +5708,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.cli->llm_client",
+      "item_id": "llm.gemini_backend->llm.cli",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-13",
       "units": 1,
@@ -5720,7 +5720,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.gemini_backend->llm",
+      "item_id": "llm.ledger->llm.fallback",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-14",
       "units": 1,
@@ -5732,7 +5732,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.gemini_backend->llm.cli",
+      "item_id": "llm.openrouter_backend->llm",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-15",
       "units": 1,
@@ -5744,7 +5744,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.gemini_backend->llm.ledger",
+      "item_id": "llm.openrouter_backend->llm.cli",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-16",
       "units": 1,
@@ -5756,7 +5756,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.resolver->llm.cli",
+      "item_id": "llm.prompt_ab->llm.structured",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-17",
       "units": 1,
@@ -5768,7 +5768,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "llm.structured->llm.cli",
+      "item_id": "llm.resolver->llm.cli",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-18",
       "units": 1,
@@ -5828,7 +5828,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "pipeline.source_policy->sqlite_runtime",
+      "item_id": "pipeline.sec_xbrl->provenance.sec_companyfacts_fact_matcher",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-23",
       "units": 1,
@@ -5840,7 +5840,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "provenance.search_index_lineage->search.corpus_builder",
+      "item_id": "pipeline.transcript_acquisition->pipeline.source_policy",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-24",
       "units": 1,
@@ -5852,7 +5852,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "provenance.sec_companyfacts_fact_matcher->pipeline.sec_xbrl",
+      "item_id": "provenance.search_index_lineage->search.corpus_builder",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-25",
       "units": 1,
@@ -5864,7 +5864,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "research.calibration_moments->research.governor",
+      "item_id": "research.governor->research.calibration_moments",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-26",
       "units": 1,
@@ -5876,7 +5876,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "research.capacity_moments->research.governor",
+      "item_id": "research.governor->research.capacity_moments",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-27",
       "units": 1,
@@ -5912,7 +5912,7 @@
     },
     {
       "item_kind": "scc_cut",
-      "item_id": "timeseries.primitives->timeseries.loaders",
+      "item_id": "timeseries.loaders->timeseries.primitives",
       "slice_key": "architecture-boundaries",
       "work_package": "architecture-scc-30",
       "units": 1,

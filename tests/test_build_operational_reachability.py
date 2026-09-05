@@ -7,7 +7,15 @@ from pathlib import Path
 import pytest
 
 import quality.reachability as reachability
-from quality.reachability import build_graph, main
+from quality.reachability import (
+    GraphEdge,
+    GraphNode,
+    ReachabilityGraph,
+    build_graph,
+    main,
+    production_reachable_nodes,
+    production_unknown_edges,
+)
 
 
 def _write(root: Path, name: str, text: str) -> None:
@@ -55,6 +63,58 @@ def test_literal_getattr_and_non_python_process_are_not_unknown(tmp_path: Path) 
     graph = build_graph(tmp_path)
     assert any(edge.target == "<attribute:handler>" for edge in graph.edges)
     assert not graph.unknown_edges
+
+
+def test_production_unknowns_follow_known_edges_from_runtime_roots(tmp_path: Path) -> None:
+    _write(tmp_path, "execution/main.py", "from src.intermediate import run\n")
+    _write(tmp_path, "src/intermediate.py", "from src.service import run\n")
+    _write(tmp_path, "src/service.py", "getattr(module, name)\n")
+    _write(tmp_path, "src/orphan.py", "getattr(module, name)\n")
+
+    graph = build_graph(tmp_path)
+    reachable = production_reachable_nodes(graph)
+
+    assert "execution/main.py" in reachable
+    assert "src/intermediate.py" in reachable
+    assert "src/service.py" in reachable
+    assert "src/orphan.py" not in reachable
+    assert [edge.source for edge in production_unknown_edges(graph)] == ["src/service.py"]
+
+
+def test_unknown_edge_does_not_unlock_downstream_closure() -> None:
+    unknown = GraphEdge(
+        source="root",
+        target="unresolved",
+        kind="unknown",
+        evidence="dynamic target",
+        confidence="low",
+        unknown=True,
+    )
+    known_after_unknown = GraphEdge(
+        source="unresolved",
+        target="leaf",
+        kind="import",
+        evidence="known import",
+        confidence="high",
+    )
+    graph = ReachabilityGraph(
+        nodes=[
+            GraphNode(id="root", kind="python"),
+            GraphNode(id="unresolved", kind="python"),
+            GraphNode(id="leaf", kind="python"),
+        ],
+        edges=[unknown, known_after_unknown],
+        roots=["root"],
+        unresolved=[],
+        diagnostics=[],
+        unknown_edges=[unknown],
+        hold=True,
+        stats={"files": 3, "edges": 2, "unknown": 1, "diagnostics": 0},
+        parser={"name": "test", "version": "1", "python": ">=3.11"},
+    )
+
+    assert production_reachable_nodes(graph) == frozenset({"root"})
+    assert production_unknown_edges(graph) == (unknown,)
 
 
 def test_literal_targets_cannot_escape_repository(tmp_path: Path) -> None:

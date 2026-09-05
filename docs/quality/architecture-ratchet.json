@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
-  "scanner_sha256": "43ddd3ef06e60b4f2a81345c999d8c0f23b664cafd1318919d2eea26290450dc",
-  "source_sha256": "c5680b79508d863d77927383533993867c49d6ad6e52daff9da46f63a853521a",
+  "scoped_commit": "a886df1a88717405384fe07e4d791f45da028e0f",
+  "scanner_sha256": "ec24487bb530f2aa7fce8433d597797e1ce5a7bf3d297114a72aa4b5cf0327eb",
+  "source_sha256": "c6904bfd9b04caf042fc09b797a1ee2e53ee4ba8cb9879bfa7cc02cbbb5e6155",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1333,
-    "total_noncomment_loc": 491930,
+    "total_noncomment_loc": 492213,
     "modules_over_1000_loc": 91,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -1512,9 +1512,9 @@
         "path": "execution/capture_test_ci_performance.py",
         "module": "execution.capture_test_ci_performance",
         "lines": {
-          "physical": 403,
-          "nonblank": 370,
-          "noncomment": 365
+          "physical": 615,
+          "nonblank": 570,
+          "noncomment": 565
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -1522,8 +1522,8 @@
           "network",
           "process"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 9,
+        "fully_annotated_public_functions": 9
       },
       {
         "path": "execution/capture_test_ci_performance_fixture.py",
@@ -1694,9 +1694,9 @@
         "path": "execution/collect_paired_ci_performance.py",
         "module": "execution.collect_paired_ci_performance",
         "lines": {
-          "physical": 585,
-          "nonblank": 552,
-          "noncomment": 548
+          "physical": 622,
+          "nonblank": 586,
+          "noncomment": 579
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -1704,8 +1704,8 @@
           "network",
           "process"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "execution/comments_server.py",
@@ -15921,9 +15921,9 @@
         "path": "src/quality/architecture.py",
         "module": "quality.architecture",
         "lines": {
-          "physical": 708,
-          "nonblank": 626,
-          "noncomment": 626
+          "physical": 735,
+          "nonblank": 651,
+          "noncomment": 643
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -15938,9 +15938,9 @@
         "path": "src/quality/ci_collection.py",
         "module": "quality.ci_collection",
         "lines": {
-          "physical": 245,
-          "nonblank": 222,
-          "noncomment": 218
+          "physical": 256,
+          "nonblank": 233,
+          "noncomment": 229
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -16148,9 +16148,9 @@
         "path": "src/quality/reachability.py",
         "module": "quality.reachability",
         "lines": {
-          "physical": 1020,
-          "nonblank": 959,
-          "noncomment": 953
+          "physical": 1050,
+          "nonblank": 983,
+          "noncomment": 977
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -16158,8 +16158,8 @@
           "network",
           "process"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/quality/roadmap_freeze.py",

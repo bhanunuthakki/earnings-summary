@@ -527,6 +527,36 @@ def _apply_reviewed_dispositions(
     return reviewed, diagnostics, hashes
 
 
+def production_reachable_nodes(graph: ReachabilityGraph) -> frozenset[str]:
+    """Return nodes reachable from runtime roots through known edges only.
+
+    Unknown edges are deliberately not traversed: an unresolved source cannot
+    prove that its target is operationally reachable.  This keeps the closure
+    conservative while still following a production entrypoint through local
+    modules before evaluating unknown edges.
+    """
+    known_targets: dict[str, set[str]] = {}
+    for edge in graph.edges:
+        if not edge.unknown:
+            known_targets.setdefault(edge.source, set()).add(edge.target)
+
+    reachable = set(graph.roots)
+    pending = list(reachable)
+    while pending:
+        source = pending.pop()
+        for target in known_targets.get(source, ()):
+            if target not in reachable:
+                reachable.add(target)
+                pending.append(target)
+    return frozenset(reachable)
+
+
+def production_unknown_edges(graph: ReachabilityGraph) -> tuple[GraphEdge, ...]:
+    """Return unknown edges whose source is in the conservative production closure."""
+    reachable = production_reachable_nodes(graph)
+    return tuple(edge for edge in graph.unknown_edges if edge.source in reachable)
+
+
 def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> ReachabilityGraph:
     root = Path(repo_root).resolve()
     files = _files(root)

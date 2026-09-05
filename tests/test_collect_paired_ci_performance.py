@@ -1,20 +1,34 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from execution.capture_test_ci_performance import redacted_output, safe_test_environment
+from execution import capture_test_ci_performance as capture
+from execution.capture_test_ci_performance import (
+    preload_digest,
+    redacted_output,
+    safe_test_environment,
+)
 from execution.collect_paired_ci_performance import (
+    capture_command,
     collection_state_lock,
     main,
 )
-from src.quality.ci_collection import capture_python_sha256
+from src.quality.ci_collection import (
+    CollectionManifest,
+    capture_python_sha256,
+)
+from src.quality.ci_collection import (
+    population as build_population,
+)
 from src.quality.performance import COHORT_REGISTRY
 
 
@@ -164,6 +178,57 @@ def test_ci_registry_names_real_collector() -> None:
     assert "--help" not in command
 
 
+def test_population_payload_carries_shard_coordinates_for_capture(tmp_path: Path) -> None:
+    repo = tmp_path / "revision"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_smoke.py").write_text(
+        "def test_smoke():\n    assert True\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "-C", str(repo), "init", "--quiet"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "tests@example.invalid"], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tests"], check=True)
+    revision = _commit_fixture(repo)
+    manifest = CollectionManifest(
+        cohort="ci-shard",
+        source_shard=1,
+        source_shards=1,
+        split_count=1,
+        split_part=0,
+        baseline_revision=revision,
+        current_revision=revision,
+        capture_mode="hermetic",
+    )
+    selector = Path.cwd() / ".github" / "scripts" / "ci_gate.py"
+    payload, _ = build_population(repo, manifest, selector)
+    assert {
+        name: payload[name]
+        for name in (
+            "source_shard",
+            "source_shards",
+            "split_count",
+            "split_part",
+        )
+    } == {
+        "source_shard": 1,
+        "source_shards": 1,
+        "split_count": 1,
+        "split_part": 0,
+    }
+    population_path = tmp_path / "population.json"
+    population_path.write_text(json.dumps(payload), encoding="utf-8")
+    args = argparse.Namespace(
+        expected_population=population_path,
+        cohort="ci-shard",
+        source_shard=1,
+        source_shards=1,
+        split_count=1,
+        split_part=0,
+    )
+    assert capture.selected_files(repo, args) == tuple(cast(list[str], payload["test_files"]))
+
+
 def test_complete_state_rejects_forged_stable_stop(tmp_path: Path) -> None:
     manifest, _, _ = _manifest(tmp_path)
     state = tmp_path / "state.json"
@@ -221,6 +286,188 @@ def test_capture_environment_is_allowlisted_and_excludes_provider_secrets(
     assert "FMP_API_KEY" not in environment
     assert environment["NO_NETWORK"] == "1"
     assert environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    monkeypatch.setenv("LD_PRELOAD", "/tmp/untrusted.so")
+    assert "LD_PRELOAD" not in safe_test_environment(tmp_path, "cold")
+
+
+def test_production_collection_uses_dedicated_capture_harness(tmp_path: Path) -> None:
+    manifest = CollectionManifest(
+        cohort="full-suite",
+        baseline_revision="a" * 40,
+        current_revision="b" * 40,
+    )
+    command = capture_command(
+        "production",
+        tmp_path / "revision",
+        tmp_path / "receipt.json",
+        manifest,
+        0,
+        tmp_path / "fragments",
+        sys.executable,
+    )
+    expected = (Path.cwd() / "execution" / "capture_test_ci_performance.py").resolve()
+    assert Path(command[1]).resolve() == expected
+    assert Path(command[1]).name == "capture_test_ci_performance.py"
+    assert Path(command[1]).resolve() != Path(__file__).resolve()
+
+    preload_command = capture_command(
+        "production",
+        tmp_path / "revision",
+        tmp_path / "receipt.json",
+        manifest,
+        0,
+        tmp_path / "fragments",
+        sys.executable,
+        "/tmp/sqlite-3.53.4.so",
+        "a" * 64,
+    )
+    assert preload_command[-4:] == [
+        "--sqlite-preload",
+        "/tmp/sqlite-3.53.4.so",
+        "--sqlite-preload-sha256",
+        "a" * 64,
+    ]
+
+
+def test_capture_rejects_unvalidated_sqlite_preload(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="sqlite-preload"):
+        safe_test_environment(tmp_path, "cold", sqlite_preload="relative/libsqlite3.so")
+    with pytest.raises(SystemExit, match="required"):
+        safe_test_environment(tmp_path, "cold", sqlite_preload="/tmp/sqlite.so")
+    with pytest.raises(SystemExit, match="SHA-256"):
+        safe_test_environment(
+            tmp_path,
+            "cold",
+            sqlite_preload=str(Path(__file__).resolve()),
+            sqlite_preload_sha256="0" * 64,
+        )
+
+
+def test_preload_digest_detects_post_validation_mutation(tmp_path: Path) -> None:
+    preload = tmp_path / "libsqlite3.so.0"
+    preload.write_bytes(b"verified library")
+    expected = preload_digest(preload)
+    preload.write_bytes(b"mutated library")
+    assert preload_digest(preload) != expected
+
+
+def test_capture_rejects_population_paths_outside_tests_or_checkout(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_smoke.py").write_text("def test_smoke(): pass\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "init", "--quiet"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "tests@example.invalid"], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tests"], check=True)
+    _commit_fixture(repo)
+    revision = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    payload_path = tmp_path / "population.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "ci-population/v1",
+                "test_files": ["tests/../outside.py"],
+                "node_ids": ["tests/../outside.py::test_smoke"],
+                "revision": revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(expected_population=payload_path, cohort="full-suite")
+    with pytest.raises(SystemExit, match="unsafe path"):
+        capture.selected_files(repo, args)
+
+
+def test_capture_rejects_supplied_full_suite_that_bypasses_universe(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    for name in ("test_smoke.py", "test_second.py"):
+        (repo / "tests" / name).write_text("def test_smoke(): pass\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "init", "--quiet"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "tests@example.invalid"], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tests"], check=True)
+    _commit_fixture(repo)
+    revision = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    payload_path = tmp_path / "population.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "ci-population/v1",
+                "test_files": ["tests/test_smoke.py"],
+                "node_ids": ["tests/test_smoke.py::test_smoke"],
+                "revision": revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(expected_population=payload_path, cohort="full-suite")
+    with pytest.raises(SystemExit, match="canonical universe"):
+        capture.selected_files(repo, args)
+
+
+def test_capture_selects_once_from_full_universe_not_supplied_shard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    for name in ("test_smoke.py", "test_second.py"):
+        (repo / "tests" / name).write_text("def test_smoke(): pass\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "init", "--quiet"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "tests@example.invalid"], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tests"], check=True)
+    revision = _commit_fixture(repo)
+    payload_path = tmp_path / "population.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "ci-population/v1",
+                "test_files": ["tests/test_smoke.py"],
+                "node_ids": ["tests/test_smoke.py::test_smoke"],
+                "revision": revision,
+                "source_shard": 1,
+                "source_shards": 1,
+                "split_count": 1,
+                "split_part": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed: dict[str, str] = {}
+
+    def fake_selector(universe: tuple[str, ...], args: argparse.Namespace) -> tuple[str, ...]:
+        del args
+        observed["input"] = "\n".join(universe) + "\n"
+        return ("tests/test_smoke.py",)
+
+    monkeypatch.setattr(capture, "trusted_selected_files", fake_selector)
+    args = argparse.Namespace(
+        expected_population=payload_path,
+        cohort="ci-shard",
+        source_shard=1,
+        source_shards=1,
+        split_count=1,
+        split_part=0,
+    )
+    assert capture.selected_files(repo, args) == ("tests/test_smoke.py",)
+    assert observed["input"] == "tests/test_second.py\ntests/test_smoke.py\n"
+
+
+def test_private_capture_paths_must_resolve_outside_tested_checkout(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with pytest.raises(SystemExit, match="outside the tested repository"):
+        capture.trusted_plugin_loader(repo / "private", repo)
+    with pytest.raises(SystemExit, match="outside the tested repository"):
+        capture.outside_tested_root(repo / "private", repo, label="private capture directory")
 
 
 def test_capture_output_is_redacted_before_echo_and_retention() -> None:
@@ -359,6 +606,8 @@ def test_production_capture_pins_plugin_and_keeps_revision_source(tmp_path: Path
             hashlib.sha256(selector.read_bytes()).hexdigest(),
             "--trusted-plugin-sha256",
             hashlib.sha256(plugin.read_bytes()).hexdigest(),
+            "--capture-python-sha256",
+            capture_python_sha256(sys.executable),
         ],
         cwd=repo,
         capture_output=True,
@@ -411,6 +660,8 @@ def test_production_capture_rejects_omitted_expected_node_population(tmp_path: P
             hashlib.sha256(
                 (Path.cwd() / "src" / "quality" / "pytest_performance_plugin.py").read_bytes()
             ).hexdigest(),
+            "--capture-python-sha256",
+            capture_python_sha256(sys.executable),
         ],
         cwd=Path.cwd(),
         capture_output=True,

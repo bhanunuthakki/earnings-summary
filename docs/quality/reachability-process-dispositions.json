@@ -8,7 +8,7 @@
       "version": "1.1.0",
       "python": ">=3.11"
     },
-      "source_sha256": "c004aa090d329cddd49c29878cda2da7835617fb2d8b1383febe6f6d8dd8efe7"
+      "source_sha256": "6df7951958931cc0177c2ff38d2195af9b7d7b210e00d705d9a666eb5b24f240"
   },
   "scope": {
     "source_roots": [
@@ -18,14 +18,14 @@
       "tests/"
     ],
     "evidence": "subprocess/runpy expression",
-    "current_production_keys": 79,
+    "current_production_keys": 80,
     "current_test_keys": 6
   },
   "counts": {
-    "unknown_process_edges": 85,
+    "unknown_process_edges": 86,
     "dispositions": {
       "internal_python_target": 53,
-      "closed_command_set": 9,
+      "closed_command_set": 10,
       "external_process": 17,
       "runtime_registry": 1,
       "operator_supplied_process": 5
@@ -101,8 +101,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 219,
-      "fingerprint": "97abcee1eb494642406de046bdbd5de5cbafe7c06dcc4d853ce27bc64032c9d9",
+      "line": 259,
+      "fingerprint": "49cc7641f4e1348e76211e015f4e9d076d7562d5314a736af332b9d9aa4d9283",
       "disposition": "internal_python_target",
       "target": ".github/scripts/ci_gate.py",
       "command_family": "managed Python child",
@@ -110,12 +110,21 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 344,
-      "fingerprint": "705042ab66c8abc6738deb9c1ac78194944d41bbab66752dbaa1db63fa7d005f",
+      "line": 525,
+      "fingerprint": "e67758f3bc1bac4c9368dded8eb5036e0319e1986fb2b7251b93372ca2868bce",
       "disposition": "closed_command_set",
       "target": "pytest over the frozen cohort",
       "command_family": "schema-validated pytest argv",
       "evidence": "The command is assembled from the managed interpreter, fixed pytest flags, and the canonical frozen test-file cohort."
+    },
+    {
+      "path": "execution/capture_test_ci_performance.py",
+      "line": 132,
+      "fingerprint": "854c5e30779f22d5731a9556235504f660b779ce96e339151211dd337acf4271",
+      "disposition": "closed_command_set",
+      "target": "SQLite runtime identity probe",
+      "command_family": "closed interpreter probe",
+      "evidence": "The probe invokes only the current managed interpreter with fixed isolated SQLite-version code and a validated preload environment; no input selects an executable or command family."
     },
     {
       "path": "execution/collect_operations_runtime_observations.py",
@@ -759,8 +768,8 @@
     },
     {
       "path": "execution/collect_paired_ci_performance.py",
-      "line": 470,
-      "fingerprint": "728a7b35a3a6522bb03408f87be8f37fd9a6339b74d5720800fd72a454a08d7e",
+      "line": 499,
+      "fingerprint": "27772408d2fe4e8580633453c3efda4a159e5e60ca3ab257f738d697e1a43172",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "managed Python child",
@@ -840,8 +849,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 199,
-      "fingerprint": "d205912d3298d4b3329684466884deba75720d705a3935495f46931d10445cbc",
+      "line": 264,
+      "fingerprint": "1cc5d14812431b6fba67d21e0f31635ccb261a246433e0e8337a1e552a87cc16",
       "disposition": "closed_command_set",
       "target": "temporary collection-lock probe",
       "command_family": "test-only generated Python probe",
@@ -849,8 +858,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 338,
-      "fingerprint": "961a2181f932799b53cb53b6e9ea3d1cd8f23a6aff85779b3c30cf80b945e39f",
+      "line": 585,
+      "fingerprint": "dd3cbf226e391be7373ab40bf56a22e277d57df3c1b760d51c74d49b0545d28c",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "test-only managed Python child",
@@ -858,8 +867,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 390,
-      "fingerprint": "10a5c7f09f2c2692bca8438713325bab4149de60df47bea81ef96f6fea3481e3",
+      "line": 639,
+      "fingerprint": "548eb38da0e5076645656f87e2b8297c4d308d6338595620432490482d087128",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "test-only managed Python child",
@@ -867,8 +876,8 @@
     },
     {
       "path": "tests/test_test_ci_performance.py",
-      "line": 235,
-      "fingerprint": "18e5b2f914a15ec6d7554740f78635fd57460d1e390597868f7ee9b5441c4f7f",
+      "line": 241,
+      "fingerprint": "0e6024a1d1e29c94dd0b8da927c394cb83dc949ed62dd495363c23fb95eb1af9",
       "disposition": "internal_python_target",
       "targets": [
         "execution/capture_test_ci_performance.py",

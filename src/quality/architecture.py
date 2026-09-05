@@ -548,11 +548,38 @@ def architecture_regressions(
         "largest_scc": (current.largest_scc, baseline.largest_scc),
         "facade_violations": (len(current.facade_violations), len(baseline.facade_violations)),
     }
-    return tuple(
+    regressions = [
         f"{key} increased from {before} to {after}"
         for key, (after, before) in comparisons.items()
         if after > before
+    ]
+
+    # Aggregate SCC counts cannot distinguish a harmless member ordering from
+    # a cycle moving to a different set of modules.  Keep the ratchet
+    # shrink-only: removing a cycle, or splitting one into strict subsets, is
+    # progress; a replacement, expansion, or merge introduces a new exact
+    # member set and must be visible.
+    current_sccs = tuple(
+        frozenset(component) for component in current.strongly_connected_components
     )
+    baseline_sccs = tuple(
+        frozenset(component) for component in baseline.strongly_connected_components
+    )
+    for component in sorted(current_sccs, key=lambda value: tuple(sorted(value))):
+        if component in baseline_sccs or any(component < previous for previous in baseline_sccs):
+            continue
+        members = ", ".join(sorted(component))
+        regressions.append(f"scc member set introduced: ({members})")
+
+    # Composition roots have independent frozen caps.  Comparing their map as
+    # a whole would make insertion order (or an unavailable ``-1`` value) a
+    # false positive, so only compare roots with valid values on both sides.
+    for path in sorted(set(current.composition_root_loc) & set(baseline.composition_root_loc)):
+        after = current.composition_root_loc[path]
+        before = baseline.composition_root_loc[path]
+        if before >= 0 and after >= 0 and after > before:
+            regressions.append(f"composition_root_loc[{path}] increased from {before} to {after}")
+    return tuple(regressions)
 
 
 def score_quality(

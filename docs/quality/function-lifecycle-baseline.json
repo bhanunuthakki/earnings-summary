@@ -242,20 +242,20 @@
     }
   ],
   "counts": {
-    "protected": 11723,
-    "referenced": 15659,
-    "unknown": 6319,
+    "protected": 11737,
+    "referenced": 15666,
+    "unknown": 6322,
     "unreferenced-static-candidate": 15
   },
   "files_failed": [],
   "files_scanned": 2462,
-  "inventory_hash": "9decf13c8e5f72a1fb6665325718fa671cfdd3c64d8877a489b80d6b542a74f1",
+  "inventory_hash": "c3b275bca8b6bfbe88e32ff36d1092474755f69167978e5ea60ad936e96957e2",
   "parser_version": "python-ast-3.11-v3",
-  "revision": "03f6bb1d7de9e206121a00d68a4e43283d2b611f",
+  "revision": "a886df1a88717405384fe07e4d791f45da028e0f",
   "schema_version": "bha-109.v1",
   "status": "PASS",
-  "symbol_count": 33716,
-  "tracked_tree_hash": "cb398549b22d18070a02ea0cc228d0ec0281ce8f814c9a1df326fb1f7ce65192",
+  "symbol_count": 33740,
+  "tracked_tree_hash": "3dfba097bb0f90d89443a89e4063129778f744f1006773ca17d0cc59273f6521",
   "unknown_hazard_counts": {
     "class-method-dispatch": 562,
     "cli-entrypoint": 413,
@@ -270,12 +270,12 @@
     "dynamic:exec": 1,
     "dynamic:getattr": 294,
     "dynamic:locals": 1,
-    "dynamic:setattr": 1979,
+    "dynamic:setattr": 1980,
     "dynamic:unbounded-reflection-in-module": 1287,
     "dynamic:vars": 18,
-    "public-module-symbol": 3654,
-    "string-or-reflection-reference": 3054,
-    "test-fixture-or-helper": 2977
+    "public-module-symbol": 3657,
+    "string-or-reflection-reference": 3056,
+    "test-fixture-or-helper": 2978
   },
   "unknown_symbols": [
     {
@@ -1275,16 +1275,16 @@
       ],
       "end_line": 50,
       "fingerprint": "fd0429677c8dc4e496c6626ae4fe763e7cdd396483220a0e2724ce31dd624721",
-      "inbound_static_ref_count": 175,
+      "inbound_static_ref_count": 176,
       "inbound_static_refs": [
         "execution/audit_deleted_table_recovery.py:133",
         "execution/audit_transcript_evidence.py:156",
         "execution/audit_transcript_evidence.py:168",
         "execution/backup_restore_readiness_receipt.py:171",
         "execution/backup_restore_readiness_receipt.py:218",
-        "execution/capture_test_ci_performance.py:249",
-        "execution/capture_test_ci_performance.py:252",
-        "execution/capture_test_ci_performance.py:253"
+        "execution/capture_test_ci_performance.py:195",
+        "execution/capture_test_ci_performance.py:422",
+        "execution/capture_test_ci_performance.py:425"
       ],
       "kind": "function",
       "line": 45,
@@ -1643,16 +1643,16 @@
       ],
       "end_line": 58,
       "fingerprint": "48b836a97806f4d9b43a298feed185c2f92b6dab8489a305b586e3eed1e31ab5",
-      "inbound_static_ref_count": 175,
+      "inbound_static_ref_count": 176,
       "inbound_static_refs": [
         "execution/audit_deleted_table_recovery.py:133",
         "execution/audit_transcript_evidence.py:156",
         "execution/audit_transcript_evidence.py:168",
         "execution/backup_restore_readiness_receipt.py:171",
         "execution/backup_restore_readiness_receipt.py:218",
-        "execution/capture_test_ci_performance.py:249",
-        "execution/capture_test_ci_performance.py:252",
-        "execution/capture_test_ci_performance.py:253"
+        "execution/capture_test_ci_performance.py:195",
+        "execution/capture_test_ci_performance.py:422",
+        "execution/capture_test_ci_performance.py:425"
       ],
       "kind": "function",
       "line": 57,
@@ -1722,7 +1722,7 @@
       ],
       "end_line": 50,
       "fingerprint": "c499ef806e78ffc7544920d975bf6fc44ed2f37e6beecc56df5b59d775da12a9",
-      "inbound_static_ref_count": 614,
+      "inbound_static_ref_count": 616,
       "inbound_static_refs": [
         "execution/audit_segment_coverage.py:57",
         "execution/backfill_analyst_notes.py:82",
@@ -2024,7 +2024,7 @@
       "visibility": "public"
     }
   ],
-  "unknown_total": 6319,
+  "unknown_total": 6322,
   "violations": [],
   "worktree_dirty": true
 }
