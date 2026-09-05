@@ -598,6 +598,9 @@ def score_quality(
             entry = evidence.blocks[key]
             state = entry.state
             reason = entry.note or entry.receipt or "explicit evidence state"
+            if state == "pass":
+                state = "missing"
+                reason = "no independently anchored or recomputed oracle exists"
         blocks.append(
             ScoreBlock(
                 key=key,
@@ -630,7 +633,7 @@ def score_quality(
                 continue
             if entry.state == "fail":
                 hard_failures.append(key)
-            elif entry.state == "missing":
+            elif entry.state in {"missing", "pass"}:
                 hard_missing.append(key)
     regressions = (
         architecture_regressions(architecture.metrics, baseline.metrics) if baseline else ()

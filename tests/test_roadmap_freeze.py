@@ -590,6 +590,16 @@ def test_validator_rejects_status_or_closure_drift(tmp_path: Path) -> None:
     _assert_rejected(tmp_path, payload)
 
 
+def test_validator_rejects_forged_pass_status_and_empty_hold_reasons(tmp_path: Path) -> None:
+    """A top-level PASS cannot override the performance and closure evidence."""
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["status"] = "PASS"
+    payload["program_feasibility_status"] = "PASS"
+    payload["hold_reasons"] = []
+
+    _assert_rejected(tmp_path, payload)
+
+
 @pytest.mark.parametrize(
     "field",
     ("baseline", "target", "source_rule_counts"),

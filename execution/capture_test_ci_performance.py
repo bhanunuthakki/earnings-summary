@@ -180,6 +180,13 @@ def safe_test_environment(
     return environment
 
 
+def capture_exit_code(pytest_returncode: int, evidence_status: str) -> int:
+    """Fail CI when a nominally green pytest run produced invalid evidence."""
+    if pytest_returncode != 0:
+        return pytest_returncode
+    return 1 if evidence_status == "invalid" else 0
+
+
 def redacted_output(raw: bytes) -> bytes:
     """Return UTF-8 subprocess output safe for echoing and retention."""
     return redact(raw.decode("utf-8", errors="replace")).encode("utf-8")
@@ -608,7 +615,7 @@ def main() -> int:
             }
         )
     write_receipt(receipt, args.receipt)
-    return 1 if preload_mutated and completed.returncode == 0 else completed.returncode
+    return capture_exit_code(completed.returncode, receipt.evidence_status)
 
 
 if __name__ == "__main__":

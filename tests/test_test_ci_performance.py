@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from execution.capture_test_ci_performance import capture_exit_code
 from src.quality.test_ci_performance import (
     CacheState,
     FrozenTestCohort,
@@ -226,6 +227,23 @@ def test_missing_fragment_or_configuration_is_invalid(tmp_path: Path) -> None:
     assert "no valid worker evidence" in reasons
     assert "configuration identities are missing" in reasons
     assert "source identity is unavailable" in reasons
+
+
+@pytest.mark.parametrize(
+    ("pytest_returncode", "evidence_status", "expected"),
+    [
+        (0, "hold", 0),
+        (0, "invalid", 1),
+        (5, "hold", 5),
+        (5, "invalid", 5),
+    ],
+)
+def test_capture_exit_code_fails_closed_on_invalid_evidence(
+    pytest_returncode: int,
+    evidence_status: str,
+    expected: int,
+) -> None:
+    assert capture_exit_code(pytest_returncode, evidence_status) == expected
 
 
 @pytest.mark.parametrize(

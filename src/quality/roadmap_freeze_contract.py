@@ -107,6 +107,14 @@ BHA115_CLOSURE_CONDITION = (
     "approved production-shaped evidence, and Sol acceptance of the owner-amended rejudged receipt"
 )
 BHA115_OWNER_AMENDMENT_PATH = "owner amendment -> regenerate receipts -> Sol rejudge"
+HOLD_REASON_UNPAIRED_PERFORMANCE = (
+    "full-suite evidence is a single unpaired run; >=7 paired cold/warm runs and "
+    "network isolation are not yet proven"
+)
+HOLD_REASON_EXECUTION_RECEIPTS = (
+    "type-debt burn-down and composition-root split feasibility lack "
+    "ownership-confirmed execution receipts"
+)
 
 
 class StrictModel(BaseModel):
@@ -441,6 +449,21 @@ class RoadmapFreeze(StrictModel):
             raise ValueError("BHA-115 closure condition drifted")
         if self.bha115_closure.owner_amendment_path != BHA115_OWNER_AMENDMENT_PATH:
             raise ValueError("BHA-115 owner amendment path drifted")
+        expected_hold_reasons: list[str] = []
+        if not (
+            self.performance_snapshot.paired
+            and self.performance_snapshot.evidence_status == "pass"
+            and self.performance_snapshot.network_isolation == "proven"
+        ):
+            expected_hold_reasons.append(HOLD_REASON_UNPAIRED_PERFORMANCE)
+        # The v1 freeze requires OPEN/rejudge above, so its execution-receipt
+        # hold is mandatory until an owner-amended schema is explicitly approved.
+        expected_hold_reasons.append(HOLD_REASON_EXECUTION_RECEIPTS)
+        expected_status = "HOLD" if expected_hold_reasons else "PASS"
+        if self.status != expected_status or self.program_feasibility_status != expected_status:
+            raise ValueError("freeze status does not derive from its underlying evidence")
+        if self.hold_reasons != tuple(expected_hold_reasons):
+            raise ValueError("freeze hold reasons do not match its underlying evidence")
         if len(self.scc_cut_edges) != EXPECTED_SCC_CUTS:
             raise ValueError(f"expected {EXPECTED_SCC_CUTS} SCC cut edges")
         if (

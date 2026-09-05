@@ -71,54 +71,61 @@ def test_missing_evidence_is_hold_not_partial_pass() -> None:
     assert any(block.state == "missing" for block in result.blocks)
 
 
-def test_score_pass_requires_90_points_and_all_hard_gates() -> None:
+def test_external_self_attestation_and_fake_receipt_stay_missing() -> None:
     architecture = _receipt()
-    architecture_keys = {
-        "elegance.cycles",
-        "elegance.composition_roots",
-        "elegance.module_shape",
-        "elegance.cohesive_typed_facades",
-    }
+    key = "maintainability.static_quality"
+    evidence = ScoreEvidence(
+        schema_version="quality-score-evidence-v1",
+        scoped_commit="abc",
+        blocks={key: EvidenceEntry(state="pass", receipt="does-not-exist.json")},
+        hard_gates={},
+    )
+
+    result = score_quality(architecture, evidence=evidence, baseline=None)
+
+    block = next(item for item in result.blocks if item.key == key)
+    assert block.state == "missing"
+    assert "independently anchored or recomputed oracle" in block.reason
+
+
+def test_all_pass_external_bundle_cannot_reach_pass() -> None:
+    architecture = _receipt()
+    evidence = ScoreEvidence(
+        schema_version="quality-score-evidence-v1",
+        scoped_commit="abc",
+        blocks={key: EvidenceEntry(state="pass") for key, _label, _points in SCORE_BLOCKS},
+        hard_gates={key: EvidenceEntry(state="pass") for key in HARD_GATES},
+    )
+
+    result = score_quality(architecture, evidence=evidence, baseline=architecture)
+
+    assert result.verdict == "HOLD"
+    assert result.score_out_of_ten != "10.0"
+    assert set(HARD_GATES) <= set(result.hard_gate_missing)
+
+
+def test_explicit_fail_and_missing_states_are_preserved() -> None:
+    architecture = _receipt()
     evidence = ScoreEvidence(
         schema_version="quality-score-evidence-v1",
         scoped_commit="abc",
         blocks={
-            key: EvidenceEntry(state="pass", receipt=f".tmp/{key}.json")
-            for key, _label, _points in SCORE_BLOCKS
-            if key not in architecture_keys
+            "maintainability.static_quality": EvidenceEntry(state="fail", note="bad"),
+            "maintainability.duplication": EvidenceEntry(state="missing"),
         },
-        hard_gates={key: EvidenceEntry(state="pass") for key in HARD_GATES},
+        hard_gates={
+            "repository_gates": EvidenceEntry(state="fail"),
+            "active_static_zero": EvidenceEntry(state="missing"),
+        },
     )
-    result = score_quality(architecture, evidence=evidence, baseline=architecture)
-    assert result.verdict == "PASS"
-    assert result.score_points == 100
-    assert result.score_out_of_ten == "10.0"
 
-
-def test_commit_mismatch_fails_even_when_blocks_pass() -> None:
-    architecture = _receipt()
-    evidence = ScoreEvidence(
-        schema_version="quality-score-evidence-v1",
-        scoped_commit="different",
-        blocks={key: EvidenceEntry(state="pass") for key, _label, _points in SCORE_BLOCKS},
-        hard_gates={key: EvidenceEntry(state="pass") for key in HARD_GATES},
-    )
     result = score_quality(architecture, evidence=evidence, baseline=None)
-    assert result.verdict == "FAIL"
-    assert "evidence commit differs from architecture commit" in result.hard_gate_failures
 
-
-def test_absent_named_hard_gates_hold_the_claim() -> None:
-    architecture = _receipt()
-    evidence = ScoreEvidence(
-        schema_version="quality-score-evidence-v1",
-        scoped_commit="abc",
-        blocks={key: EvidenceEntry(state="pass") for key, _label, _points in SCORE_BLOCKS},
-        hard_gates={HARD_GATES[0]: EvidenceEntry(state="pass")},
-    )
-    result = score_quality(architecture, evidence=evidence, baseline=None)
-    assert result.verdict == "HOLD"
-    assert set(HARD_GATES[1:]) <= set(result.hard_gate_missing)
+    states = {block.key: block.state for block in result.blocks}
+    assert states["maintainability.static_quality"] == "fail"
+    assert states["maintainability.duplication"] == "missing"
+    assert "repository_gates" in result.hard_gate_failures
+    assert "active_static_zero" in result.hard_gate_missing
 
 
 def test_architecture_ratchet_rejects_metric_growth() -> None:
