@@ -34,6 +34,7 @@ from compute.transcript_ingest import (  # noqa: E402
     IngestResult,
     ParsedFilename,
     ingest_evidence_file,
+    map_to_period,
     parse_transcript_filename,
 )
 from models.documents import DocType, SourceType  # noqa: E402
@@ -255,6 +256,43 @@ def _candidate_files(restrict_ticker: str | None) -> list[tuple[Path, ParsedFile
     return out
 
 
+def _is_exactly_ingested_processed_candidate(
+    conn: sqlite3.Connection,
+    *,
+    path: Path,
+    parsed: ParsedFilename,
+    project_root: Path,
+    processed_root: Path,
+) -> bool:
+    """Return whether this exact processed artifact already has a transcript row.
+
+    Historical ingests predate acquisition receipts. They may be skipped, but
+    only when the immutable file path, bytes, ticker, and fiscal period all
+    match their existing document/transcript rows. Raw candidates never use
+    this compatibility seam and still require an authorized acquisition receipt.
+    """
+
+    if path.parent != processed_root:
+        return False
+    snapshot = evidence_snapshot.capture_snapshot(path, processed_root)
+    relative = path.relative_to(project_root).as_posix()
+    period = map_to_period(parsed)
+    row = conn.execute(
+        "SELECT 1 FROM documents d JOIN transcripts t ON t.document_id = d.id "
+        "WHERE d.file_path = ? AND d.sha256 = ? AND d.ticker = ? "
+        "AND t.ticker = ? AND t.fiscal_period_type = ? AND t.period_end = ? LIMIT 1",
+        (
+            relative,
+            snapshot.sha256,
+            parsed.ticker,
+            parsed.ticker,
+            period.fiscal_period_type.value,
+            str(period.period_end),
+        ),
+    ).fetchone()
+    return row is not None
+
+
 def _backfill_existing_ir_transcripts(
     conn: sqlite3.Connection,
     run_id: str,
@@ -453,8 +491,22 @@ def main() -> int:
             print(json.dumps(plan, indent=2))
             return 0
 
+        processed_root = PROJECT_ROOT / "transcripts" / "processed"
+        already_ingested = [
+            (path, parsed)
+            for path, parsed in in_scope
+            if _is_exactly_ingested_processed_candidate(
+                conn,
+                path=path,
+                parsed=parsed,
+                project_root=PROJECT_ROOT,
+                processed_root=processed_root,
+            )
+        ]
+        pending_scope = [item for item in in_scope if item not in already_ingested]
+
         raw_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
-        for path, parsed in in_scope:
+        for path, parsed in pending_scope:
             request = TranscriptAcquisitionRequest(
                 entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
                 canonical_ticker=parsed.ticker,
@@ -506,12 +558,11 @@ def main() -> int:
             raw_authorizations[path] = artifact
 
         raw_root = PROJECT_ROOT / "transcripts" / "raw"
-        processed_root = PROJECT_ROOT / "transcripts" / "processed"
         snapshots: dict[Path, evidence_snapshot.EvidenceSnapshot] = {}
         staged_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
         try:
             staged_scope: list[tuple[Path, ParsedFilename]] = []
-            for path, parsed in in_scope:
+            for path, parsed in pending_scope:
                 stable = evidence_snapshot.capture_snapshot(path, path.parent)
                 staged = _stage_evidence_file(
                     path,
@@ -599,11 +650,18 @@ def main() -> int:
             )
         conn.commit()
         if not in_scope and not ir_sources:
-            print(json.dumps({**plan, "ingested": 0, "skipped_existing": 0}, indent=2))
+            print(
+                json.dumps(
+                    {**plan, "ingested": 0, "skipped_existing": len(already_ingested)},
+                    indent=2,
+                )
+            )
             return 0
 
         ticker_scope = sorted(
-            {parsed.ticker for _, parsed in in_scope} | {ticker for _, ticker, _, _ in ir_sources}
+            {parsed.ticker for _, parsed in in_scope}
+            | {parsed.ticker for _, parsed in already_ingested}
+            | {ticker for _, ticker, _, _ in ir_sources}
         )
         try:
             run_id = start_run(
@@ -624,8 +682,18 @@ def main() -> int:
             return 0
 
         ingested: list[dict[str, object]] = []
-        skipped_existing = 0
+        skipped_existing = len(already_ingested)
         failed = 0
+
+        for _path, parsed in already_ingested:
+            record_stage(
+                conn,
+                run_id,
+                parsed.ticker,
+                StageName.INGEST,
+                StageStatus.SKIPPED,
+                period_end=map_to_period(parsed).period_end,
+            )
 
         for path, parsed in in_scope:
             savepoint = (

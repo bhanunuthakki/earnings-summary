@@ -656,11 +656,12 @@ def test_same_hash_is_unique_and_artifact_cannot_cross_document_identity(
             )
 
 
-def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
+def test_legacy_ingested_q1_does_not_block_new_authorized_q2_ingest(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
     darwin_staging_double: None,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from execution import fetch_qa_transcript as fetch
     from execution import ingest_transcripts as ingest
@@ -672,6 +673,40 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
         conn.execute(
             "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
             "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+        legacy_path = repo_root / "transcripts" / "processed" / "ACME_Q1_2026.txt"
+        legacy_path.parent.mkdir(parents=True)
+        legacy_payload = b"Legacy Q1 transcript that predates acquisition receipts."
+        legacy_path.write_bytes(legacy_payload)
+        legacy_sha = hashlib.sha256(legacy_payload).hexdigest()
+        cursor = conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,"
+            "raw_bytes_size) VALUES (?,?,?,?,?,?,?,'ok',?)",
+            (
+                "ACME",
+                SourceType.IR_DOC.value,
+                DocType.EARNINGS_CALL_TRANSCRIPT.value,
+                "2026-03-31 00:00:00",
+                "transcripts/processed/ACME_Q1_2026.txt",
+                legacy_sha,
+                "2026-04-01 00:00:00",
+                len(legacy_payload),
+            ),
+        )
+        assert cursor.lastrowid is not None
+        legacy_document_id = cursor.lastrowid
+        conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id,ticker,fiscal_period_type,period_end,source,is_current) "
+            "VALUES (?,?,?,?,?,1)",
+            (
+                legacy_document_id,
+                "ACME",
+                "Q1",
+                "2026-03-31 00:00:00",
+                "unknown_legacy",
+            ),
         )
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
@@ -712,6 +747,7 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
         as_of=date.today(),
     )
     assert acquired.status is fetch.FetchQaStatus.ACQUIRED
+    capsys.readouterr()
 
     monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
     monkeypatch.setattr(
@@ -733,13 +769,16 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
         ],
     )
     assert ingest.main() == 0
+    first_run = json.loads(capsys.readouterr().out)
+    assert first_run["ingested"] == 1
+    assert first_run["skipped_existing"] == 1
     assert ingest.main() == 0
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
         )
-        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 2
 
 
 def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_duplicate_receipt(
