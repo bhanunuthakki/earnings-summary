@@ -21,7 +21,9 @@ from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from runtime.python_process import managed_python_argv  # noqa: E402
 from src.log_redact import redact  # noqa: E402
 from src.quality.test_ci_performance import (  # noqa: E402
     ArtifactIdentity,
@@ -257,9 +259,9 @@ def canonical_test_universe(root: Path) -> tuple[str, ...]:
 def trusted_selected_files(universe: tuple[str, ...], args: argparse.Namespace) -> tuple[str, ...]:
     """Run the trusted selector once against the canonical full universe."""
     selected = subprocess.run(
-        [
-            sys.executable,
-            str(PROJECT_ROOT / ".github" / "scripts" / "ci_gate.py"),
+        managed_python_argv(
+            PROJECT_ROOT,
+            PROJECT_ROOT / ".github" / "scripts" / "ci_gate.py",
             "select-tests",
             "--source-shard",
             str(args.source_shard),
@@ -269,7 +271,7 @@ def trusted_selected_files(universe: tuple[str, ...], args: argparse.Namespace) 
             str(args.split_count),
             "--split-part",
             str(args.split_part),
-        ],
+        ),
         cwd=PROJECT_ROOT,
         input=("\n".join(universe) + "\n").encode(),
         capture_output=True,
