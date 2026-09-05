@@ -66,14 +66,36 @@ def test_run_ingest_uses_repo_root_for_cwd_and_script_path(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    rc = mod._run_ingest(repo_root, "AAPL", dry_run=False)
+    rc = mod._run_ingest(repo_root, "AAPL", dry_run=False, owner_requested=False)
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
     assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
     assert captured["cmd"][2] == str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py")
     assert captured["cmd"][captured["cmd"].index("--repo-root") + 1] == str(repo_root)
     assert captured["cmd"][captured["cmd"].index("--ticker") + 1] == "AAPL"
+    assert "--owner-requested" not in captured["cmd"]
     assert "--no-promote" not in captured["cmd"]
+
+
+def test_run_ingest_preserves_explicit_per_ticker_owner_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    repo_root = tmp_path / "main-repo"
+    repo_root.mkdir()
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> _FakeProc:
+        captured["cmd"] = cmd
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    rc = mod._run_ingest(repo_root, "NU", dry_run=False, owner_requested=True)
+
+    assert rc == 0
+    assert captured["cmd"][captured["cmd"].index("--ticker") + 1] == "NU"
+    assert "--owner-requested" in captured["cmd"]
 
 
 def test_run_extract_uses_repo_root_for_cwd_and_script_path(
@@ -115,7 +137,15 @@ def test_run_ingest_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) ->
         raise AssertionError("subprocess.run must not be called in dry-run")
 
     monkeypatch.setattr(mod.subprocess, "run", boom)
-    assert mod._run_ingest(Path("/nonexistent"), "AAPL", dry_run=True) == 0
+    assert (
+        mod._run_ingest(
+            Path("/nonexistent"),
+            "AAPL",
+            dry_run=True,
+            owner_requested=False,
+        )
+        == 0
+    )
 
 
 def test_run_extract_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
