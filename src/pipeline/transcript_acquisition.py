@@ -655,32 +655,38 @@ def load_authorized_transcript_replay(
 
     current = authorize_transcript_request(conn, request)
     try:
-        row = conn.execute(
+        rows = conn.execute(
             "SELECT receipt_id,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
             "canonical_document_path,artifact_sha256,artifact_size_bytes,source_url,"
             "provider,source_type,document_type,source_regime,source_regime_contract_sha256,"
             "authorization_json,artifact_json FROM transcript_acquisition_receipts "
-            "WHERE idempotency_key=? ORDER BY recorded_at DESC,receipt_id DESC LIMIT 1",
+            "WHERE idempotency_key=? ORDER BY recorded_at DESC,receipt_id DESC",
             (current.idempotency_key,),
-        ).fetchone()
+        ).fetchall()
     except sqlite3.OperationalError as exc:
         raise TranscriptAcquisitionDeniedError(
             "transcript acquisition receipt store is unavailable"
         ) from exc
-    if row is None:
-        return None
-    artifact = _validate_transcript_receipt_row(row)
-    if artifact.authorization.idempotency_key != current.idempotency_key:
-        raise TranscriptAcquisitionDeniedError(
-            "stored transcript receipt does not exactly match target"
+    for row in rows:
+        artifact = _validate_transcript_receipt_row(row)
+        if artifact.authorization.idempotency_key != current.idempotency_key:
+            raise TranscriptAcquisitionDeniedError(
+                "stored transcript receipt does not exactly match target"
+            )
+        # Owner intent is an authorization boundary even though it is deliberately
+        # excluded from the target-level idempotency key. Never replay a manual
+        # receipt into a scheduler run (or the inverse); allow that origin to
+        # persist its own exact receipt instead.
+        if artifact.authorization.request.owner_requested is not request.owner_requested:
+            continue
+        read_authorized_transcript(
+            conn,
+            artifact,
+            project_root=project_root,
+            trusted_staging_root=trusted_staging_root,
         )
-    read_authorized_transcript(
-        conn,
-        artifact,
-        project_root=project_root,
-        trusted_staging_root=trusted_staging_root,
-    )
-    return artifact
+        return artifact
+    return None
 
 
 def _validate_transcript_receipt_row(

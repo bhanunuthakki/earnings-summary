@@ -1078,6 +1078,25 @@ def test_receipt_scope_rejects_unknown_wrong_owner_ticker_and_raw_identity(
     )
     assert_denied("--ticker", "ACME", "--receipt-id", acquired.result.receipt_id)
 
+    second = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        force=True,
+        db_path=db_path,
+        owner_requested=False,
+        as_of=date(2026, 9, 4),
+    )
+    assert second.result is not None
+    assert second.result.receipt_id != acquired.result.receipt_id
+    assert_denied(
+        "--ticker",
+        "ACME",
+        "--automatic",
+        "--receipt-id",
+        acquired.result.receipt_id,
+        "--receipt-id",
+        second.result.receipt_id,
+    )
+
     acquired.result.output_path.write_text("mutated raw bytes", encoding="utf-8")
     assert_denied(
         "--ticker",
@@ -1303,6 +1322,67 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        )
+
+
+def test_authorized_fetch_does_not_replay_receipt_across_owner_intent(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    calls = 0
+
+    def issuer_hit(*_args: object) -> Any:
+        nonlocal calls
+        calls += 1
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+            full_text_chars=50,
+        )
+
+    monkeypatch.setattr(fetch, "SOURCES", (replace(fetch.SOURCES[0], fetch_qa=issuer_hit),))
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_a, **_k: None)
+    spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
+
+    manual = fetch.fetch_qa(spec, db_path=db_path, owner_requested=True, as_of=date(2026, 8, 12))
+    automatic = fetch.fetch_qa(
+        spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 13)
+    )
+
+    assert manual.result is not None
+    assert automatic.status is fetch.FetchQaStatus.ACQUIRED
+    assert automatic.result is not None
+    assert automatic.result.receipt_id != manual.result.receipt_id
+    assert automatic.result.authorization.request.owner_requested is False
+    assert calls == 2
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 2
         )
 
 

@@ -305,6 +305,10 @@ def _receipt_scoped_candidates(
             raise TranscriptAcquisitionDeniedError(
                 "transcript receipt filename does not match its authorized target"
             )
+        if path in artifacts:
+            raise TranscriptAcquisitionDeniedError(
+                "multiple transcript receipts name the same canonical raw artifact"
+            )
         candidates.append((path, parsed))
         artifacts[path] = artifact
     return candidates, artifacts
