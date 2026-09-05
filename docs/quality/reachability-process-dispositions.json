@@ -101,8 +101,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 261,
-      "fingerprint": "7b6397a9417722e4941aec3840cb67cf636b23a3bbcde6fed5e1d160bd5d1870",
+      "line": 259,
+      "fingerprint": "49cc7641f4e1348e76211e015f4e9d076d7562d5314a736af332b9d9aa4d9283",
       "disposition": "internal_python_target",
       "target": ".github/scripts/ci_gate.py",
       "command_family": "managed Python child",
@@ -110,8 +110,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 527,
-      "fingerprint": "71a592337ed41b1e535b5f258d6a486751e8327b1cf966de608c0e76465e9a33",
+      "line": 525,
+      "fingerprint": "e67758f3bc1bac4c9368dded8eb5036e0319e1986fb2b7251b93372ca2868bce",
       "disposition": "closed_command_set",
       "target": "pytest over the frozen cohort",
       "command_family": "schema-validated pytest argv",
@@ -119,8 +119,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 134,
-      "fingerprint": "71705ca49c0d010887bc7f42e362ac108d44fbb2d1d15efbd38a96450c9725db",
+      "line": 132,
+      "fingerprint": "854c5e30779f22d5731a9556235504f660b779ce96e339151211dd337acf4271",
       "disposition": "closed_command_set",
       "target": "SQLite runtime identity probe",
       "command_family": "closed interpreter probe",
