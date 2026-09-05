@@ -6,43 +6,43 @@
   "evidence": {
     "architecture": {
       "path": "docs/quality/architecture-ratchet.json",
-      "sha256": "5e1c6b23d4530f05f9a9c52fee74a10debaf02662a3d183d18561b3b9355d7d3",
-      "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+      "sha256": "a055012deacd5cb3ef77dac3585127dc70aeaee6bb16093884ee71966206828b",
+      "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
       "scope": "WORKTREE"
     },
     "static": {
       "path": "docs/quality/static-baseline.json",
-      "sha256": "10b2f7e6133523a07e9881f8b0d0506500a44af7a5adaae6a5849de9f0f84483",
-      "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+      "sha256": "0616526dfed102172ea7e515b1558dc7d23073190682f5a82fc05fb570740378",
+      "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
       "scope": "WORKTREE"
     },
     "test_db": {
       "path": "docs/quality/test-db-patterns-baseline.json",
-      "sha256": "7922df96ce9184428a332e71cfd55f0580d2faca78018043e29c6cbdde168d01",
-      "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+      "sha256": "59e3131c7445614fe70a6b10149ef4d3721d91caa0da4bbbd7af8a4d2261ae9b",
+      "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
       "scope": "WORKTREE"
     },
     "duplicate": {
       "path": "docs/quality/duplicates-ratchet.json",
-      "sha256": "c48f7fa188d54d3b9055a690915fa0b6fd123f934a69e6050863f36871e8603e",
-      "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+      "sha256": "680c3ed32cd65fe28eda9388b1dab840259b866e011b066c8a3291adae0d91ca",
+      "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
       "scope": "WORKTREE"
     },
     "lifecycle": {
       "path": "docs/quality/lifecycle-baseline.json",
-      "sha256": "63e40f5db94ac5549f28c81d0924e3f2d32b40f522bdc2329cc86dfe89926876",
-      "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+      "sha256": "a0f45ca5dd1eedf37e3e4cbc5e12fcd347c03a9f620c30fc203f681d2efd0787",
+      "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
       "scope": "WORKTREE"
     },
     "function_lifecycle": {
       "path": "docs/quality/function-lifecycle-baseline.json",
-      "sha256": "11633bacb935188c32a8b108e1cbb3b529aadebc6c0e91f2e21b7f9f3b32edbb",
-      "scoped_commit": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+      "sha256": "4faddf4965afe63ba572077b0ea0fb23b7ef986edd0f536f5a2bd466e7fcc623",
+      "scoped_commit": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
       "scope": "WORKTREE"
     },
     "reconciliation": {
       "path": "docs/quality/reconciliation-baseline.json",
-      "sha256": "f8dc79547dd7c2113f3dc4571f525aa987ba121626c9c2bc50778416170515ae",
+      "sha256": "b306dadc62a0f915b769b0f8df919870fc3f0af2eebe820389ca828944ac6e15",
       "scoped_commit": "WORKTREE",
       "scope": "WORKTREE"
     },
@@ -61,18 +61,18 @@
   },
   "function_lifecycle": {
     "path": "docs/quality/function-lifecycle-baseline.json",
-    "sha256": "11633bacb935188c32a8b108e1cbb3b529aadebc6c0e91f2e21b7f9f3b32edbb",
+    "sha256": "4faddf4965afe63ba572077b0ea0fb23b7ef986edd0f536f5a2bd466e7fcc623",
     "schema_version": "bha-109.v1",
     "parser_version": "python-ast-3.11-v3",
     "status": "PASS",
-    "tracked_tree_hash": "132d3a4556620fe514c6e5027de30b5fcd5a91e345066af0b5ffa43e4d8fe334",
-    "inventory_hash": "8271718ca86ae263f89eaf60172d2d63a8348fe0ba25d1c2e1d9d96eaa68a99d",
+    "tracked_tree_hash": "1e4d3c89d34177d4bc2ff6d954ebd9f01e0edf1f09ba291f96c693c93a3e3b64",
+    "inventory_hash": "82a00b903bced2e5995ef4723995937d0bda5d1b0cf2f5423555c9b9e40087fe",
     "files_scanned": 2462,
-    "symbol_count": 33740,
+    "symbol_count": 33744,
     "candidate_count": 15,
     "unknown_total": 6322,
     "counts": {
-      "protected": 11737,
+      "protected": 11741,
       "referenced": 15666,
       "unknown": 6322,
       "unreferenced-static-candidate": 15
@@ -103,24 +103,24 @@
   },
   "reconciliation": {
     "path": "docs/quality/reconciliation-baseline.json",
-    "sha256": "f8dc79547dd7c2113f3dc4571f525aa987ba121626c9c2bc50778416170515ae",
+    "sha256": "b306dadc62a0f915b769b0f8df919870fc3f0af2eebe820389ca828944ac6e15",
     "status": "PASS",
     "claims_count": 96,
     "scored_claims": 30,
     "rejected_claims": 66,
-    "source_hash": "d4888fab7f912973c9fa1f933de4d6425bcc1f7028e0195fdf70c8804d6e4572",
+    "source_hash": "4332f93e77e4803a2d99a1546bd27a6513ec3fc5e34ece62bfaa11ee23f64f7e",
     "claim_manifest_sha256": "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089",
     "claim_content_sha256": "726c1bc3f155fa321ee057127457eecbf1983e67b90d3f6a2a85fea232b6848d",
     "roadmap_source_sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
     "violations": []
   },
   "reachability": {
-    "graph_sha256": "52f562f2d5f1be1f5688d1ca1d91d572212af62c01ea4f60b036466141a4d96c",
+    "graph_sha256": "1a4f074ee2d9e6e38f35f99b93404ff22268a49c84c784f2cf97c59b36f0009a",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "version": "1.1.0",
       "python": ">=3.11",
-      "source_sha256": "a423b1d919fe114865986522cee19147b7a104ce0725c77b98e43f2b41688966",
+      "source_sha256": "fd714a0f55dec733dd9f0af5ba1ff0422e970bff78c82290c541769f52b3c254",
       "dispositions_sha256": "3f7decab1bd2c18ae46914e801e1e72ba0efaa0216be0d64940d5cd84498cb20"
     },
     "lifecycle_status": "PASS",

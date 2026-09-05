@@ -29,11 +29,11 @@
     },
     {
       "path": ".github/scripts/ci_gate.py",
-      "line": 302,
+      "line": 322,
       "kind": "python_module",
       "identifier": ".github/scripts/ci_gate.py",
       "evidence": "parser = argparse.ArgumentParser(description=__doc__)",
-      "fingerprint": "c72a3086c45c0aeccd711d49564c4d5b14d3af3aec8edb8ffe5f04cd0c3f0c09",
+      "fingerprint": "3a69d0a2d10127d14d07afd4dc3109e530e554286ceed6f24c7e3a0fdee953be",
       "disposition": "internal-delegate",
       "classification_basis": "typed_incoming_edge",
       "rationale": "A verified typed edge retains this internal delegate.",
@@ -23288,15 +23288,15 @@
     "reconstruction": 56,
     "registry": 68
   },
-  "tracked_tree_hash": "0ee364fbd1e155f1c56b534b2db8c73e7258bfc42f6fbc9f1dae2f35d9844647",
-  "revision": "57e00e4f612aea881209f14229e0496cfe6ed45e",
+  "tracked_tree_hash": "d95db25fa2a42417bdf2700594c0efb75bccd35d1826bfb7e58a40dc0a67e940",
+  "revision": "6ef4ce0cadf0769b8c0d4e51e230be205edd76eb",
   "worktree_dirty": true,
-  "reachability_graph_hash": "52f562f2d5f1be1f5688d1ca1d91d572212af62c01ea4f60b036466141a4d96c",
+  "reachability_graph_hash": "1a4f074ee2d9e6e38f35f99b93404ff22268a49c84c784f2cf97c59b36f0009a",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.1.0",
     "python": ">=3.11",
-    "source_sha256": "a423b1d919fe114865986522cee19147b7a104ce0725c77b98e43f2b41688966",
+    "source_sha256": "fd714a0f55dec733dd9f0af5ba1ff0422e970bff78c82290c541769f52b3c254",
     "dispositions_sha256": "3f7decab1bd2c18ae46914e801e1e72ba0efaa0216be0d64940d5cd84498cb20"
   },
   "coverage": {
