@@ -63,6 +63,7 @@ from compute.management_indicators import (  # noqa: E402
 )
 from compute.say_do import (  # noqa: E402
     CommitmentExtractionManifest,
+    CommitmentInput,
     persist_commitment,
     persist_manifest,
 )
@@ -71,6 +72,7 @@ from compute.say_do_extractor import (  # noqa: E402
     extract_for_transcript,
     record_scan,
     transcripts_pending_extraction,
+    transcripts_without_scan_receipt,
 )
 from llm.prompt_versions import prompt_version_for  # noqa: E402
 from llm_client import call_llm  # noqa: E402
@@ -83,6 +85,33 @@ log = logging.getLogger("extract_commitments")
 # attribution all key off this. Registered in src/llm/cli.py and
 # src/llm/prompt_versions.py; budget seeded by migration 0129.
 PURPOSE = "saydo_commitment_extract"
+
+
+def _persist_commitment_idempotently(conn: sqlite3.Connection, commitment: CommitmentInput) -> int:
+    """Avoid duplicating exact legacy commitments during receipt-only rescans."""
+
+    existing = conn.execute(
+        "SELECT id FROM management_commitments WHERE ticker=? "
+        "AND datetime(period_made)=datetime(?) AND transcript_segment_id=? "
+        "AND datetime(period_target)=datetime(?) AND kpi_name=? AND comparator=? "
+        "AND target_value=? AND unit=? AND narrative=? ORDER BY id LIMIT 1",
+        (
+            commitment.ticker.upper(),
+            commitment.period_made,
+            commitment.transcript_segment_id,
+            commitment.period_target,
+            commitment.kpi_name,
+            commitment.comparator.value,
+            str(commitment.target_value),
+            commitment.unit.value,
+            commitment.narrative,
+        ),
+    ).fetchone()
+    return (
+        int(existing["id"])
+        if existing is not None
+        else persist_commitment(conn, commitment=commitment)
+    )
 
 
 def _governed_llm_call(ticker: str) -> Callable[[str], str]:
@@ -125,7 +154,12 @@ def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str
 
 
 def _resolve_auto_targets(
-    conn: sqlite3.Connection, *, ticker: str | None, transcript_id: int | None, max_n: int
+    conn: sqlite3.Connection,
+    *,
+    ticker: str | None,
+    transcript_id: int | None,
+    max_n: int,
+    rescan_unreceipted: bool = False,
 ) -> list[tuple[int, str]]:
     """Pick which transcripts to auto-extract from.
 
@@ -142,7 +176,11 @@ def _resolve_auto_targets(
             return []
         return [(int(row["id"]), row["ticker"])]
 
-    pending = transcripts_pending_extraction(conn, ticker=ticker)
+    pending = (
+        transcripts_without_scan_receipt(conn, ticker=ticker)
+        if rescan_unreceipted
+        else transcripts_pending_extraction(conn, ticker=ticker)
+    )
     targets = [(tid, tk) for tid, tk, _ in pending]
     if max_n > 0:
         targets = targets[:max_n]
@@ -156,9 +194,16 @@ def _run_auto(
     transcript_id: int | None,
     max_n: int,
     dry_run: bool,
+    rescan_unreceipted: bool = False,
 ) -> dict[str, object]:
     """Auto-extract for each target. Returns a structured run report."""
-    targets = _resolve_auto_targets(conn, ticker=ticker, transcript_id=transcript_id, max_n=max_n)
+    targets = _resolve_auto_targets(
+        conn,
+        ticker=ticker,
+        transcript_id=transcript_id,
+        max_n=max_n,
+        rescan_unreceipted=rescan_unreceipted,
+    )
     results: list[dict[str, object]] = []
     total_inserted = 0
     version = prompt_version_for(PURPOSE)
@@ -193,7 +238,28 @@ def _run_auto(
             continue
 
         if n_extracted == 0:
-            record_scan(conn, tid, n_extracted=0, prompt_version=version)
+            try:
+                record_scan(
+                    conn,
+                    tid,
+                    n_extracted=0,
+                    prompt_version=version,
+                    commitment_ids=(),
+                    management_indicator_ids=(),
+                )
+            except Exception as e:
+                conn.rollback()
+                log.warning("scan receipt failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
+                results.append(
+                    {
+                        "transcript_id": tid,
+                        "ticker": tk,
+                        "extracted": 0,
+                        "inserted": 0,
+                        "error": f"{type(e).__name__}: {e}"[:200],
+                    }
+                )
+                continue
             results.append(
                 {
                     "transcript_id": tid,
@@ -211,8 +277,15 @@ def _run_auto(
             indicator_ids = persist_indicators(
                 conn, ManagementIndicatorExtractionManifest(indicators=manifest.indicators)
             )
-            ids = [persist_commitment(conn, commitment=item) for item in manifest.commitments]
-            record_scan(conn, tid, n_extracted=n_extracted, prompt_version=version)
+            ids = [_persist_commitment_idempotently(conn, item) for item in manifest.commitments]
+            record_scan(
+                conn,
+                tid,
+                n_extracted=n_extracted,
+                prompt_version=version,
+                commitment_ids=ids,
+                management_indicator_ids=indicator_ids,
+            )
         except Exception as e:
             conn.rollback()
             log.warning("persist failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
@@ -257,6 +330,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--ticker", help="Restrict --list-pending or --auto to one ticker")
     parser.add_argument(
+        "--rescan-unreceipted",
+        action="store_true",
+        help="--auto only: scan current transcripts lacking commitment_scan_log, even with legacy commitments",
+    )
+    parser.add_argument(
         "--transcript-id",
         type=int,
         help="--auto only: extract for one specific transcript (overrides --ticker)",
@@ -300,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
                 transcript_id=args.transcript_id,
                 max_n=args.max,
                 dry_run=args.dry_run,
+                rescan_unreceipted=args.rescan_unreceipted,
             )
             print(json.dumps(report, indent=2))
             return 0

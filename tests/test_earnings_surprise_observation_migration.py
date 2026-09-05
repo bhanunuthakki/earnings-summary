@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
 
@@ -14,11 +14,14 @@ from alembic.config import Config
 
 from alembic import command
 from earnings_surprise_store import EarningsSurpriseRecordV1, append_observation
-from execution.ingest_earnings_surprises import ingest_one_ticker
+from execution.ingest_earnings_surprises import (
+    _persist_ingested_coverage,  # pyright: ignore[reportPrivateUsage] - migration seam
+    ingest_one_ticker,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0035_add_report_kpi_reference_resolution_states"
+ACTIVE_HEAD = "0036_add_data_coverage_dispositions"
 
 
 def _config(path: Path) -> Config:
@@ -129,6 +132,81 @@ def test_upgrade_creates_immutable_ledgers_and_projection_lineage(
             connection.execute("UPDATE earnings_surprises SET source_observation_id=?", ("d" * 64,))
 
 
+def test_satisfied_coverage_requires_persisted_observation_and_projection(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "surprise-coverage.db", target="head")
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute(
+            "INSERT INTO tracked_companies "
+            "(ticker,name,list_type,fiscal_year_end,archived_at) "
+            "VALUES ('WIX','Wix.com','portfolio','12-31',NULL)"
+        )
+        record = EarningsSurpriseRecordV1.model_validate(
+            {
+                "ticker": "WIX",
+                "release_date": date(2026, 8, 6),
+                "eps_estimate": "2.1",
+                "eps_actual": "2.3",
+                "eps_surprise_pct": "9.52",
+                "source_name": "fmp_calendar",
+                "source_url": "https://example.com/source",
+                "fetched_at": datetime(2026, 8, 6, 20, tzinfo=UTC),
+            }
+        )
+        observation_id, inserted = append_observation(
+            connection,
+            record=record,
+            raw_payload=record.model_dump(mode="json"),
+            cache_path="data/surprise/WIX_surprises.json",
+            record_ordinal=0,
+            recorded_at=datetime(2026, 8, 6, 20, 1, tzinfo=UTC),
+        )
+        assert inserted
+        connection.execute(
+            "INSERT INTO earnings_surprises ("
+            "ticker,release_date,eps_estimate,eps_actual,revenue_estimate,revenue_actual,"
+            "eps_surprise_pct,revenue_surprise_pct,num_analysts_eps,num_analysts_revenue,"
+            "source_name,source_url,fetched_at,source_observation_id"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "WIX",
+                "2026-08-06",
+                "2.1",
+                "2.3",
+                None,
+                None,
+                "9.52",
+                None,
+                None,
+                None,
+                "fmp_calendar",
+                "https://example.com/source",
+                "2026-08-06T20:00:00+00:00",
+                observation_id,
+            ),
+        )
+        persisted = _persist_ingested_coverage(
+            connection,
+            ticker="WIX",
+            observed_at=datetime(2026, 9, 5, tzinfo=UTC),
+        )
+        row = connection.execute(
+            "SELECT status,evidence_reference,evidence_sha256 "
+            "FROM v_data_coverage_dispositions_current "
+            "WHERE artifact_kind='earnings_surprise' AND ticker='WIX' "
+            "AND fiscal_year=2026 AND fiscal_quarter=2"
+        ).fetchone()
+    assert "Q2_2026:satisfied" in persisted
+    assert row is not None
+    assert tuple(row) == (
+        "satisfied",
+        f"earnings-surprise-observation:{observation_id}",
+        observation_id,
+    )
+
+
 def test_upgrade_backfills_and_links_existing_projection_deterministically(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
@@ -192,6 +270,51 @@ def test_upgrade_backfills_and_links_existing_projection_deterministically(
             assert sha256(str(row[6]).encode()).hexdigest() == row[1]
             ids.append(str(row[1]))
     assert ids[0] == ids[1]
+
+
+def test_legacy_projection_cannot_emit_satisfied_coverage(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    def seed_legacy_projection(path: Path) -> None:
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+                "VALUES ('WIX','Wix.com','portfolio','12-31')"
+            )
+            connection.execute(
+                "INSERT INTO earnings_surprises ("
+                "ticker,release_date,eps_estimate,eps_actual,source_name,fetched_at,ingested_at"
+                ") VALUES (?,?,?,?,?,?,?)",
+                (
+                    "WIX",
+                    "2026-08-06",
+                    "2.10",
+                    "2.30",
+                    "fmp_calendar",
+                    "2026-08-06T20:00:00+00:00",
+                    "2026-08-06T20:01:00+00:00",
+                ),
+            )
+
+    path = migrated_db(
+        tmp_path / "legacy-no-satisfaction.db",
+        upgrade_from="0006_add_ask_proposal_approval",
+        before_upgrade=seed_legacy_projection,
+        target="head",
+    )
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        persisted = _persist_ingested_coverage(
+            connection,
+            ticker="WIX",
+            observed_at=datetime(2026, 9, 5, tzinfo=UTC),
+        )
+        count = connection.execute(
+            "SELECT COUNT(*) FROM data_coverage_dispositions WHERE ticker='WIX'"
+        ).fetchone()
+
+    assert persisted == []
+    assert count is not None and int(count[0]) == 0
 
 
 def test_projection_trigger_requires_null_safe_equality_for_every_observed_field(

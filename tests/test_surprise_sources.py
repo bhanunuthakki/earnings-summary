@@ -20,13 +20,44 @@ import pytest
 from surprise_sources import (
     SurpriseHit,
     SurpriseSource,
-    _surprise_pct,
-    _to_decimal,
+    _surprise_pct,  # pyright: ignore[reportPrivateUsage] - direct unit seam
+    _to_decimal,  # pyright: ignore[reportPrivateUsage] - direct unit seam
     default_sources,
     fetch_surprises_with_fallback,
+    fetch_surprises_with_outcomes,
     fmp_earnings_calendar_records,
     yfinance_earnings_dates_records,
 )
+
+
+def test_dispatcher_retains_exact_per_provider_misses() -> None:
+    fmp_hit = SurpriseHit(
+        ticker="BN",
+        release_date=date(2026, 5, 8),
+        eps_estimate=Decimal("1"),
+        eps_actual=Decimal("1.1"),
+        revenue_estimate=None,
+        revenue_actual=None,
+        eps_surprise_pct=Decimal("10"),
+        revenue_surprise_pct=None,
+        num_analysts_eps=None,
+        num_analysts_revenue=None,
+        source_name="fmp_calendar",
+        source_url=None,
+    )
+    sources = [
+        SurpriseSource(name="fmp_calendar", fetch_all=lambda _ticker: [fmp_hit]),
+        SurpriseSource(name="yfinance", fetch_all=lambda _ticker: []),
+    ]
+
+    merged, outcomes = fetch_surprises_with_outcomes("BN", sources=sources)
+
+    assert merged == [fmp_hit]
+    assert [(item.source_name, len(item.hits)) for item in outcomes] == [
+        ("fmp_calendar", 1),
+        ("yfinance", 0),
+    ]
+
 
 # --- _to_decimal -------------------------------------------------------------
 

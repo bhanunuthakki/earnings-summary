@@ -244,7 +244,7 @@ def call_llm_structured(
                 _RETRY_PREAMBLE + prompt,
                 purpose=purpose,
                 model=target_model,
-                backend="claude",
+                backend=None,
                 ticker=ticker,
                 scope=scope,
                 run_id=run_id,

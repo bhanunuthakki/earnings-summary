@@ -214,7 +214,7 @@ def _apply_ready(conn: sqlite3.Connection, *, user_id: str = "owner") -> None:
     conn.executescript(
         """
         CREATE TABLE alembic_version(version_num TEXT);
-        INSERT INTO alembic_version VALUES ('0035_add_report_kpi_reference_resolution_states');
+        INSERT INTO alembic_version VALUES ('0036_add_data_coverage_dispositions');
         CREATE TABLE database_runtime_identity(singleton INTEGER,database_instance_id TEXT);
         INSERT INTO database_runtime_identity VALUES (1,'test-db');
         CREATE TABLE tracked_companies(
@@ -238,7 +238,7 @@ def _manifest(
         logical_idempotency_key="test:report-reference-resolution",
         reviewer="source-review:owner",
         knowledge_at=NOW,
-        expected_schema_revision="0035_add_report_kpi_reference_resolution_states",
+        expected_schema_revision="0036_add_data_coverage_dispositions",
         expected_database_instance_sha256=hashlib.sha256(b"test-db").hexdigest(),
         review_bundle_sha256="b" * 64,
         backup_restore_evidence_id="c" * 64,
@@ -875,7 +875,7 @@ def test_migration_preserves_v1_ids_and_installs_immutable_v2_contract(
         path,
         upgrade_from="0034_add_investment_profile_label_reviews",
         before_upgrade=seed_v1,
-        target="0035_add_report_kpi_reference_resolution_states",
+        target="0036_add_data_coverage_dispositions",
     )
     config = _config(path)
 
@@ -920,7 +920,7 @@ def test_downgrade_refuses_any_v2_history(
 ) -> None:
     path = tmp_path / f"reference-v2-{status}.db"
     config = _config(path)
-    migrated_db(path, target="0035_add_report_kpi_reference_resolution_states")
+    migrated_db(path, target="0036_add_data_coverage_dispositions")
     label_hash = hashlib.sha256(b"Metric").hexdigest()
     with sqlite3.connect(path) as conn:
         binding_columns = ""
@@ -966,7 +966,7 @@ def test_downgrade_refuses_new_reference_kind_even_when_unresolved(
 ) -> None:
     path = migrated_db(
         tmp_path / "reference-v2-soft-kind.db",
-        target="0035_add_report_kpi_reference_resolution_states",
+        target="0036_add_data_coverage_dispositions",
     )
     with sqlite3.connect(path) as conn:
         conn.execute(

@@ -200,6 +200,20 @@ def is_forced_fallback_allowed() -> bool:
     return v in {"1", "true", "yes", "on"}
 
 
+def primary_tier_model_policy_enabled() -> bool:
+    """Return whether provider-shaped pins are only tier hints for this process.
+
+    The scheduler enables this policy at its single runtime seam. Under it,
+    model IDs and explicit backend arguments still communicate capability and
+    quality requirements, but cannot select a provider other than the configured
+    primary subscription transport.
+    """
+    return (
+        os.environ.get(EXPLICIT_MODEL_POLICY_ENV_VAR, "").strip().lower()
+        == PRIMARY_TIER_MODEL_POLICY
+    )
+
+
 def resolve_model_and_backend(
     purpose: str | None,
     *,
@@ -216,9 +230,12 @@ def resolve_model_and_backend(
       3. Purpose pin in `LLM_MODELS`.
 
     Resolution order for backend:
-      1. Explicit `backend` parameter if passed.
-      2. Family mapping of resolved model (`family_of(resolved_model)`).
-      3. Defaults to "claude".
+      1. The configured primary subscription provider when the scheduler's
+         primary-tier policy is enabled. Explicit provider pins are capability
+         hints under this policy, not routing authority.
+      2. Explicit `backend` parameter if passed.
+      3. Family mapping of resolved model (`family_of(resolved_model)`).
+      4. Defaults to "claude".
 
     Every resolved model must have registered capability metadata. The optional
     profile adds call-specific hard constraints. Unknown models and violated
@@ -238,7 +255,12 @@ def resolve_model_and_backend(
 
     # 2. Resolve Backend Provider
     resolved_backend: str
-    if backend is not None:
+    if primary_tier_model_policy_enabled():
+        from llm.cli import model_for_subscription_backend, primary_subscription_backend
+
+        resolved_backend = primary_subscription_backend()
+        resolved_model = model_for_subscription_backend(resolved_model, resolved_backend)
+    elif backend is not None:
         resolved_backend = backend
     else:
         fam = family_of(resolved_model)
@@ -251,13 +273,7 @@ def resolve_model_and_backend(
         elif fam == CLAUDE:
             from llm.cli import PRIMARY_CODEX, primary_subscription_backend
 
-            explicit_model_is_tier = (
-                os.environ.get(EXPLICIT_MODEL_POLICY_ENV_VAR, "").strip().lower()
-                == PRIMARY_TIER_MODEL_POLICY
-            )
-            if (model is None or explicit_model_is_tier) and (
-                primary_subscription_backend() == PRIMARY_CODEX
-            ):
+            if model is None and primary_subscription_backend() == PRIMARY_CODEX:
                 resolved_backend = "codex"
             else:
                 resolved_backend = "claude"
