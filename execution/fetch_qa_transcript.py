@@ -60,6 +60,7 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     project_root_for_database,
     read_authorized_transcript,
     stage_authorized_payload,
+    transcript_acquisition_receipt_id,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from transcript_qa import (  # noqa: E402
@@ -102,7 +103,8 @@ class FetchQaResult:
     quarter: int
     output_path: Path
     source_name: str
-    page_url: str
+    page_url: str | None
+    receipt_id: str
     authorization: TranscriptAcquisitionAuthorization
     acquired_artifact: AuthorizedTranscriptArtifact
 
@@ -111,6 +113,7 @@ class FetchQaAttemptStatus(StrEnum):
     DENIED = "denied"
     PROVIDER_MISS = "provider_miss"
     ACQUIRED = "acquired"
+    IDEMPOTENT_REPLAY = "idempotent_replay"
 
 
 class FetchQaStatus(StrEnum):
@@ -310,10 +313,24 @@ def fetch_qa(
                     artifact=artifact,
                     staged_bytes=staged_bytes,
                 )
+                attempts.append(
+                    FetchQaAttempt(source.name, FetchQaAttemptStatus.IDEMPOTENT_REPLAY, last_key)
+                )
                 return FetchQaOutcome(
                     FetchQaStatus.IDEMPOTENT_REPLAY,
                     last_key,
                     tuple(attempts),
+                    FetchQaResult(
+                        ticker=canonical,
+                        year=spec.year,
+                        quarter=spec.quarter,
+                        output_path=output_path,
+                        source_name=artifact.authorization.request.provider.value,
+                        page_url=artifact.source_url,
+                        receipt_id=transcript_acquisition_receipt_id(artifact),
+                        authorization=artifact.authorization,
+                        acquired_artifact=artifact,
+                    ),
                 )
             authorized_sources.append((source, request, authorization))
 
@@ -331,6 +348,8 @@ def fetch_qa(
                 canonical,
                 hit.page_url,
                 project_root=project_root,
+                fiscal_year=spec.year,
+                fiscal_quarter=spec.quarter,
             )
         ):
             raise TranscriptAcquisitionDeniedError(
@@ -359,7 +378,7 @@ def fetch_qa(
                 project_root=project_root,
                 trusted_staging_root=STAGING_DIR,
             )
-            persist_authorized_transcript_artifact(
+            receipt_id = persist_authorized_transcript_artifact(
                 conn,
                 acquired_artifact,
                 project_root=project_root,
@@ -380,6 +399,7 @@ def fetch_qa(
             output_path=output_path,
             source_name=hit.source_name,
             page_url=hit.page_url,
+            receipt_id=receipt_id,
             authorization=authorization,
             acquired_artifact=acquired_artifact,
         )

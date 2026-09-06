@@ -83,6 +83,63 @@ class IrTranscriptHit:
     filename: str
 
 
+@dataclass(frozen=True)
+class ReviewedIssuerTranscript:
+    """One exact issuer-owned transcript URL admitted by manual source review."""
+
+    ticker: str
+    year: int
+    quarter: int
+    url: str
+    filename: str
+
+
+_REVIEWED_ISSUER_TRANSCRIPTS = (
+    ReviewedIssuerTranscript(
+        ticker="BN",
+        year=2026,
+        quarter=2,
+        url=(
+            "https://bn.brookfield.com/sites/brookfield-bn-v2/files/"
+            "Brookfield-BN-IR-V2/2026/Q2/BN%20Q2-2026-transcript.pdf"
+        ),
+        filename="BN Q2 2026 transcript.pdf",
+    ),
+)
+
+
+def reviewed_issuer_transcript(
+    ticker: str, year: int, quarter: int
+) -> ReviewedIssuerTranscript | None:
+    normalized = ticker.strip().upper()
+    return next(
+        (
+            item
+            for item in _REVIEWED_ISSUER_TRANSCRIPTS
+            if (item.ticker, item.year, item.quarter) == (normalized, year, quarter)
+        ),
+        None,
+    )
+
+
+def reviewed_issuer_transcript_url_is_authorized(
+    ticker: str,
+    year: int,
+    quarter: int,
+    source_url: str,
+) -> bool:
+    """Return True only for an exact URL in the reviewed issuer transcript set."""
+
+    from pipeline.source_policy import canonical_https_url
+
+    candidate = canonical_https_url(source_url)
+    return candidate is not None and any(
+        (item.ticker, item.year, item.quarter) == (ticker.strip().upper(), year, quarter)
+        and canonical_https_url(item.url) == candidate
+        for item in _REVIEWED_ISSUER_TRANSCRIPTS
+    )
+
+
 def _normalize(raw: str) -> str:
     """Clean issuer-PDF text: fold ligatures/compat chars (NFKC turns "ﬁ"→"fi"),
     drop zero-width spaces some PDFs use as separators, collapse the runs of
@@ -177,14 +234,17 @@ def fetch_ir_transcript(
     ticker has no MZ IR config, the shared discovery surfaces no transcript for
     the requested quarter, or Playwright/render/download fails.
     """
-    cfg = get_config(ticker, repo_root)
-    if cfg is None or cfg.platform != "mz" or not cfg.results_center_url:
-        return None
-
-    try:
-        found = _locate_transcript(cfg, ticker, year, quarter, repo_root or _PROJECT_ROOT)
-    except (UnsafeURLError, urllib.error.URLError, OSError, ValueError):
-        return None
+    reviewed = reviewed_issuer_transcript(ticker, year, quarter)
+    if reviewed is not None:
+        found: tuple[str, str] | None = (reviewed.url, reviewed.filename)
+    else:
+        cfg = get_config(ticker, repo_root)
+        if cfg is None or cfg.platform != "mz" or not cfg.results_center_url:
+            return None
+        try:
+            found = _locate_transcript(cfg, ticker, year, quarter, repo_root or _PROJECT_ROOT)
+        except (UnsafeURLError, urllib.error.URLError, OSError, ValueError):
+            return None
     if found is None:
         return None
     url, filename = found

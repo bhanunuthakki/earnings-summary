@@ -27,13 +27,14 @@ from transcripts.immutable_staging import StagedTranscriptArtifact, TranscriptSt
 
 
 @pytest.fixture
-def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
+def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], None]:
     """Replace unavailable Darwin staging with a typed, read-only test seam."""
 
-    if sys.platform != "darwin":
-        return
     from execution import fetch_qa_transcript as fetch
     from pipeline import transcript_acquisition as acquisition
+
+    def install_for(fetch_module: Any) -> None:
+        monkeypatch.setattr(fetch_module, "install_transcript_output", install)
 
     def stage(
         source_path: Path,
@@ -136,9 +137,11 @@ def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
             target.write_bytes(payload)
         return target
 
-    monkeypatch.setattr(acquisition, "stage_transcript_artifact", stage)
-    monkeypatch.setattr(acquisition, "read_staged_transcript", read)
-    monkeypatch.setattr(fetch, "install_transcript_output", install)
+    if sys.platform == "darwin":
+        monkeypatch.setattr(acquisition, "stage_transcript_artifact", stage)
+        monkeypatch.setattr(acquisition, "read_staged_transcript", read)
+    install_for(fetch)
+    return install_for
 
 
 def _stored_company(path: Path, *, role: str = "portfolio") -> None:
@@ -178,6 +181,55 @@ def _issuer_config(repo_root: Path, ticker: str = "ACME") -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _acquire_acme_q2(
+    *,
+    fetch: Any,
+    repo_root: Path,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Any:
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        (
+            replace(
+                fetch.SOURCES[0],
+                fetch_qa=lambda *_args: fetch.AggregatorHit(
+                    source_name="issuer_ir",
+                    page_url="https://issuer.example.invalid/transcript",
+                    qa_text=(
+                        "Operator\nWelcome.\n\nChief Executive Officer\nRevenue grew.\n\n"
+                        "Analyst\nQuestion?\n\nQUESTION AND ANSWER SECTION\n"
+                    ),
+                    full_text_chars=120,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_args, **_kwargs: True)
+    acquired = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        db_path=db_path,
+        owner_requested=False,
+        as_of=date.today(),
+    )
+    assert acquired.status is fetch.FetchQaStatus.ACQUIRED
+    assert acquired.result is not None
+    return acquired
 
 
 def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
@@ -251,6 +303,77 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     assert calls == ["issuer_ir"]
     assert len(registrations) == 2
     assert second.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
+
+
+def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+) -> None:
+    from execution import backfill_transcripts as backfill
+
+    fetch = backfill.fetch_qa_transcript_module
+    darwin_staging_double(fetch)
+    state_root = tmp_path / "state-repo"
+    _issuer_config(state_root)
+    db_path = migrated_db(state_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    registrations: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        (
+            replace(
+                fetch.SOURCES[0],
+                fetch_qa=lambda *_args: fetch.AggregatorHit(
+                    source_name="issuer_ir",
+                    page_url="https://issuer.example.invalid/transcript",
+                    qa_text="Operator\nQuestion and answer section.",
+                    full_text_chars=100,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    monkeypatch.setattr(
+        fetch.index_manager,
+        "register_transcript",
+        lambda *_args, **kwargs: registrations.append(kwargs),
+    )
+
+    backfill._retarget_paths(state_root.resolve())
+    outcome = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        db_path=db_path,
+        owner_requested=False,
+        as_of=date(2026, 8, 12),
+    )
+
+    assert outcome.status is fetch.FetchQaStatus.ACQUIRED
+    assert state_root.resolve() / "transcripts" / "raw" == fetch.RAW_DIR
+    assert state_root.resolve() / ".tmp" / "transcript-acquisition" == fetch.STAGING_DIR
+    assert (fetch.RAW_DIR / "ACME_Q2_2026.txt").is_file()
+    with sqlite3.connect(db_path) as conn:
+        receipt = conn.execute(
+            "SELECT canonical_document_path,artifact_sha256 FROM transcript_acquisition_receipts"
+        ).fetchone()
+    assert receipt is not None
+    assert receipt[0] == "transcripts/raw/ACME_Q2_2026.txt"
+    assert (fetch.STAGING_DIR / f"{receipt[1]}.transcript").is_file()
+    assert len(registrations) == 1
 
 
 def test_fetch_qa_denial_has_zero_network_and_zero_persistence(
@@ -499,6 +622,81 @@ def test_staged_existing_issuer_bytes_are_exact_and_replay_is_content_addressed(
         )
 
 
+def test_fetch_replay_does_not_cross_quarterly_refresh_entrypoint(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    darwin_staging_double: None,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from pipeline.transcript_acquisition import (
+        load_authorized_transcript_replay,
+        persist_authorized_transcript_artifact,
+        register_transcript_receipt_sqlite_functions,
+        stage_pending_issuer_transcripts,
+    )
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    evidence = repo_root / "ir_documents" / "ACME_Q2_2026.txt"
+    evidence.parent.mkdir(parents=True)
+    payload = b"Operator\nWelcome.\nAnalyst\nQuestion?"
+    evidence.write_bytes(payload)
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        register_transcript_receipt_sqlite_functions(conn, database_path=db_path)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+        conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,file_path,sha256,raw_bytes_size,source_url,"
+            "fetch_status,fetched_at) VALUES (?,?,?,?,?,?,?,'ok','2026-08-12T00:00:00Z')",
+            (
+                "ACME",
+                SourceType.IR_DOC.value,
+                DocType.IR_TRANSCRIPT.value,
+                "ir_documents/ACME_Q2_2026.txt",
+                hashlib.sha256(payload).hexdigest(),
+                len(payload),
+                "https://issuer.example.invalid/transcript",
+            ),
+        )
+        artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=["ACME"],
+            project_root=repo_root,
+            private_root=staging_root,
+            entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
+            as_of=date(2026, 8, 12),
+        )
+        quarterly = next(iter(artifacts.values()))
+        persist_authorized_transcript_artifact(
+            conn,
+            quarterly,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+
+        request = fetch._request_for_source(
+            fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+            source=fetch.SOURCES[0],
+            owner_requested=False,
+            as_of=date(2026, 8, 13),
+        )
+        replay = load_authorized_transcript_replay(
+            conn,
+            request=request,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+
+    assert replay is None
+
+
 def test_same_hash_is_unique_and_artifact_cannot_cross_document_identity(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -582,14 +780,17 @@ def test_same_hash_is_unique_and_artifact_cannot_cross_document_identity(
             )
 
 
-def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
+def test_legacy_ingested_q1_does_not_block_new_authorized_q2_ingest(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
-    darwin_staging_double: None,
+    darwin_staging_double: Callable[[Any], None],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from execution import fetch_qa_transcript as fetch
     from execution import ingest_transcripts as ingest
+
+    darwin_staging_double(ingest)
 
     repo_root = tmp_path / "repo"
     _issuer_config(repo_root)
@@ -599,45 +800,60 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
             "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
             "VALUES ('ACME','Acme','portfolio','12-31')"
         )
-    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
-    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
-    fetch.STAGING_DIR.mkdir(parents=True)
-    monkeypatch.setattr(
-        fetch,
-        "SOURCES",
-        (
-            replace(
-                fetch.SOURCES[0],
-                fetch_qa=lambda *_args: fetch.AggregatorHit(
-                    source_name="issuer_ir",
-                    page_url="https://issuer.example.invalid/transcript",
-                    qa_text=(
-                        "Operator\nWelcome.\n\nChief Executive Officer\nRevenue grew.\n\n"
-                        "Analyst\nQuestion?\n\nQUESTION AND ANSWER SECTION\n"
-                    ),
-                    full_text_chars=120,
-                ),
+        legacy_path = repo_root / "transcripts" / "processed" / "ACME_Q1_2026.txt"
+        legacy_path.parent.mkdir(parents=True)
+        legacy_payload = b"Legacy Q1 transcript that predates acquisition receipts."
+        legacy_path.write_bytes(legacy_payload)
+        legacy_sha = hashlib.sha256(legacy_payload).hexdigest()
+        cursor = conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,"
+            "raw_bytes_size) VALUES (?,?,?,?,?,?,?,'ok',?)",
+            (
+                "ACME",
+                SourceType.TRANSCRIPT_AUDIO.value,
+                DocType.EARNINGS_CALL_TRANSCRIPT.value,
+                "2026-03-31 00:00:00",
+                "transcripts/processed/ACME_Q1_2026.txt",
+                legacy_sha,
+                "2026-04-01 00:00:00",
+                len(legacy_payload),
             ),
-        ),
-    )
-    monkeypatch.setattr(
-        fetch,
-        "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
-    )
-    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_args, **_kwargs: True)
-
-    acquired = fetch.fetch_qa(
-        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        )
+        assert cursor.lastrowid is not None
+        legacy_document_id = cursor.lastrowid
+        transcript_cursor = conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id,ticker,fiscal_period_type,period_end,source,is_current) "
+            "VALUES (?,?,?,?,?,1)",
+            (
+                legacy_document_id,
+                "ACME",
+                "Q1",
+                "2026-03-31 00:00:00",
+                "unknown_legacy",
+            ),
+        )
+        assert transcript_cursor.lastrowid is not None
+        conn.execute(
+            "INSERT INTO transcript_segments (transcript_id,seq,text) VALUES (?,0,?)",
+            (transcript_cursor.lastrowid, "Legacy Q1 transcript segment."),
+        )
+        # Reproduce BN's pre-lifecycle-migration state: the canonical active
+        # relation selects this row even though its historical current bit is stale.
+        conn.execute("DROP TRIGGER trg_transcripts_lifecycle_update")
+        conn.execute(
+            "UPDATE transcripts SET is_current=0 WHERE id=?", (transcript_cursor.lastrowid,)
+        )
+    acquired = _acquire_acme_q2(
+        fetch=fetch,
+        repo_root=repo_root,
         db_path=db_path,
-        owner_requested=False,
-        as_of=date.today(),
+        monkeypatch=monkeypatch,
     )
-    assert acquired.status is fetch.FetchQaStatus.ACQUIRED
+    unrelated_legacy_raw = repo_root / "transcripts" / "raw" / "ACME_Q1_2025.txt"
+    unrelated_legacy_raw.write_text("unreceipted historical raw", encoding="utf-8")
+    capsys.readouterr()
 
     monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
     monkeypatch.setattr(
@@ -648,16 +864,469 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["ingest_transcripts.py", "--db", str(db_path), "--no-promote"],
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "ACME",
+            "--automatic",
+            "--receipt-id",
+            acquired.result.receipt_id,
+        ],
     )
     assert ingest.main() == 0
+    first_run = json.loads(capsys.readouterr().out)
+    assert first_run["ingested"] == 1
+    assert first_run["skipped_existing"] == 0
+    assert first_run["candidates_total"] == 1
+    assert unrelated_legacy_raw.read_text(encoding="utf-8") == "unreceipted historical raw"
+    processed_q2 = repo_root / "transcripts" / "processed" / "ACME_Q2_2026.txt"
+    assert processed_q2.is_file()
+    assert hashlib.sha256(processed_q2.read_bytes()).hexdigest() == (
+        acquired.result.acquired_artifact.sha256
+    )
     assert ingest.main() == 0
     with sqlite3.connect(db_path) as conn:
-        assert (
-            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        receipt = conn.execute(
+            "SELECT canonical_document_path,artifact_sha256 FROM transcript_acquisition_receipts"
+        ).fetchone()
+        assert receipt == (
+            "transcripts/raw/ACME_Q2_2026.txt",
+            acquired.result.acquired_artifact.sha256,
         )
-        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 2
+        q2 = conn.execute(
+            "SELECT d.file_path,d.sha256,t.id FROM documents d "
+            "JOIN transcripts t ON t.document_id=d.id "
+            "WHERE d.ticker='ACME' AND t.fiscal_period_type='Q2'"
+        ).fetchone()
+        assert q2 is not None
+        assert q2[0] == "transcripts/processed/ACME_Q2_2026.txt"
+        assert q2[1] == acquired.result.acquired_artifact.sha256
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM transcript_segments WHERE transcript_id=?", (q2[2],)
+            ).fetchone()[0]
+            > 0
+        )
+
+
+def test_fresh_split_root_ingest_creates_processed_root_and_canonical_evidence(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from execution import ingest_transcripts as ingest
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+
+    processed_root = repo_root / "transcripts" / "processed"
+    acquired = _acquire_acme_q2(
+        fetch=fetch,
+        repo_root=repo_root,
+        db_path=db_path,
+        monkeypatch=monkeypatch,
+    )
+    unrelated_legacy_raw = repo_root / "transcripts" / "raw" / "ACME_Q1_2025.txt"
+    unrelated_legacy_raw.write_text("unreceipted historical raw", encoding="utf-8")
+    capsys.readouterr()
+    assert not processed_root.exists()
+    parsed = ingest.parse_transcript_filename(acquired.result.output_path)
+    assert parsed is not None
+    first_inputs = ingest._invocation_inputs(
+        [(acquired.result.output_path, parsed)],
+        [],
+        include_ir_transcripts=False,
+        no_promote=False,
+        receipt_artifacts={
+            acquired.result.output_path: acquired.result.acquired_artifact,
+        },
+    )
+    alternate_receipt = acquired.result.acquired_artifact.model_copy(
+        update={"source_url": "https://issuer.example.invalid/alternate-transcript"}
+    )
+    second_inputs = ingest._invocation_inputs(
+        [(acquired.result.output_path, parsed)],
+        [],
+        include_ir_transcripts=False,
+        no_promote=False,
+        receipt_artifacts={acquired.result.output_path: alternate_receipt},
+    )
+    assert first_inputs["candidate_files"] == second_inputs["candidate_files"]
+    assert first_inputs["transcript_receipts"] != second_inputs["transcript_receipts"]
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (processed_root, repo_root / "transcripts" / "raw"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "ACME",
+            "--automatic",
+            "--receipt-id",
+            acquired.result.receipt_id,
+        ],
+    )
+
+    assert ingest.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["ingested"] == 1
+    assert result["candidates_total"] == 1
+    assert unrelated_legacy_raw.read_text(encoding="utf-8") == "unreceipted historical raw"
+    processed_path = processed_root / "ACME_Q2_2026.txt"
+    assert processed_path.is_file()
+    assert hashlib.sha256(processed_path.read_bytes()).hexdigest() == (
+        acquired.result.acquired_artifact.sha256
+    )
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT d.file_path,d.sha256,t.id FROM documents d "
+            "JOIN transcripts t ON t.document_id=d.id WHERE d.ticker='ACME'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "transcripts/processed/ACME_Q2_2026.txt"
+        assert row[1] == acquired.result.acquired_artifact.sha256
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM transcript_segments WHERE transcript_id=?", (row[2],)
+            ).fetchone()[0]
+            > 0
+        )
+
+
+def test_conflicting_db_path_ownership_fails_before_processed_install(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from execution import ingest_transcripts as ingest
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    acquired = _acquire_acme_q2(
+        fetch=fetch,
+        repo_root=repo_root,
+        db_path=db_path,
+        monkeypatch=monkeypatch,
+    )
+    capsys.readouterr()
+    processed_root = repo_root / "transcripts" / "processed"
+    processed_path = processed_root / "ACME_Q2_2026.txt"
+    assert not processed_path.exists()
+    assert acquired.result.acquired_artifact.sha256 != "f" * 64
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,"
+            "raw_bytes_size) VALUES (?,?,?,?,?,?,?,'ok',?)",
+            (
+                "ACME",
+                SourceType.TRANSCRIPT_AUDIO.value,
+                DocType.EARNINGS_CALL_TRANSCRIPT.value,
+                "2026-06-30 00:00:00",
+                "transcripts/processed/ACME_Q2_2026.txt",
+                "f" * 64,
+                "2026-07-01 00:00:00",
+                1,
+            ),
+        )
+        counts_before = (
+            conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0],
+        )
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (processed_root, repo_root / "transcripts" / "raw"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "ACME",
+            "--automatic",
+            "--receipt-id",
+            acquired.result.receipt_id,
+        ],
+    )
+
+    assert ingest.main() == 1
+    capsys.readouterr()
+    assert not processed_path.exists()
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0],
+        ) == counts_before
+
+
+def test_receipt_scope_rejects_unknown_wrong_owner_ticker_and_raw_identity(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from execution import ingest_transcripts as ingest
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES (?,?,'portfolio','12-31')",
+            (("ACME", "Acme"), ("BETA", "Beta")),
+        )
+    acquired = _acquire_acme_q2(
+        fetch=fetch,
+        repo_root=repo_root,
+        db_path=db_path,
+        monkeypatch=monkeypatch,
+    )
+    capsys.readouterr()
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (repo_root / "transcripts" / "processed", repo_root / "transcripts" / "raw"),
+    )
+
+    def assert_denied(*scope: str, expected_rc: int = 2) -> None:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ingest_transcripts.py", "--db", str(db_path), *scope],
+        )
+        assert ingest.main() == expected_rc
+        capsys.readouterr()
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 0
+
+    assert_denied("--ticker", "ACME", "--automatic", "--receipt-id", "f" * 64)
+    assert_denied(
+        "--ticker",
+        "BETA",
+        "--automatic",
+        "--receipt-id",
+        acquired.result.receipt_id,
+    )
+    assert_denied("--ticker", "ACME", "--receipt-id", acquired.result.receipt_id)
+
+    second = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        force=True,
+        db_path=db_path,
+        owner_requested=False,
+        as_of=date(2026, 9, 4),
+    )
+    assert second.result is not None
+    assert second.result.receipt_id != acquired.result.receipt_id
+    assert_denied(
+        "--ticker",
+        "ACME",
+        "--automatic",
+        "--receipt-id",
+        acquired.result.receipt_id,
+        "--receipt-id",
+        second.result.receipt_id,
+    )
+
+    acquired.result.output_path.write_text("mutated raw bytes", encoding="utf-8")
+    assert_denied(
+        "--ticker",
+        "ACME",
+        "--automatic",
+        "--receipt-id",
+        acquired.result.receipt_id,
+        expected_rc=1,
+    )
+    acquired.result.output_path.unlink()
+    assert_denied(
+        "--ticker",
+        "ACME",
+        "--automatic",
+        "--receipt-id",
+        acquired.result.receipt_id,
+        expected_rc=1,
+    )
+
+
+def test_mutated_first_receipt_does_not_block_later_valid_receipt(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from execution import ingest_transcripts as ingest
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    q2 = _acquire_acme_q2(
+        fetch=fetch,
+        repo_root=repo_root,
+        db_path=db_path,
+        monkeypatch=monkeypatch,
+    )
+    q1 = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=1),
+        db_path=db_path,
+        owner_requested=False,
+        as_of=date.today(),
+    )
+    assert q1.result is not None
+    q1.result.output_path.write_text("mutated after receipt selection", encoding="utf-8")
+    capsys.readouterr()
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (repo_root / "transcripts" / "processed", repo_root / "transcripts" / "raw"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "ACME",
+            "--automatic",
+            "--receipt-id",
+            q1.result.receipt_id,
+            "--receipt-id",
+            q2.result.receipt_id,
+        ],
+    )
+
+    assert ingest.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["candidates_total"] == 2
+    assert result["ingested"] == 1
+    assert result["failed"] == 1
+    assert not (repo_root / "transcripts" / "processed" / "ACME_Q1_2026.txt").exists()
+    assert (repo_root / "transcripts" / "processed" / "ACME_Q2_2026.txt").is_file()
+    with sqlite3.connect(db_path) as conn:
+        periods = conn.execute(
+            "SELECT fiscal_period_type FROM transcripts ORDER BY fiscal_period_type"
+        ).fetchall()
+        assert periods == [("Q2",)]
+
+
+def test_failed_ingest_retains_exact_authorized_processed_bytes_for_retry(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from execution import ingest_transcripts as ingest
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    acquired = _acquire_acme_q2(
+        fetch=fetch,
+        repo_root=repo_root,
+        db_path=db_path,
+        monkeypatch=monkeypatch,
+    )
+    capsys.readouterr()
+    processed_root = repo_root / "transcripts" / "processed"
+    processed_path = processed_root / "ACME_Q2_2026.txt"
+
+    def fail_ingest(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("injected ingest failure")
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (processed_root, repo_root / "transcripts" / "raw"),
+    )
+    monkeypatch.setattr(ingest, "ingest_evidence_file", fail_ingest)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "ACME",
+            "--automatic",
+            "--receipt-id",
+            acquired.result.receipt_id,
+        ],
+    )
+
+    assert ingest.main() == 1
+    capsys.readouterr()
+    assert processed_path.is_file()
+    assert hashlib.sha256(processed_path.read_bytes()).hexdigest() == (
+        acquired.result.acquired_artifact.sha256
+    )
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 0
 
 
 def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_duplicate_receipt(
@@ -716,15 +1385,79 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     first.result.output_path.unlink()
     registrations.clear()
 
-    replay = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+    replay = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 13))
 
     assert replay.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
+    assert replay.result is not None
+    assert replay.result.receipt_id == first.result.receipt_id
+    assert replay.attempts[-1].status is fetch.FetchQaAttemptStatus.IDEMPOTENT_REPLAY
     assert first.result.output_path.read_bytes()
     assert calls == 1
     assert len(registrations) == 1
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        )
+
+
+def test_authorized_fetch_does_not_replay_receipt_across_owner_intent(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    calls = 0
+
+    def issuer_hit(*_args: object) -> Any:
+        nonlocal calls
+        calls += 1
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+            full_text_chars=50,
+        )
+
+    monkeypatch.setattr(fetch, "SOURCES", (replace(fetch.SOURCES[0], fetch_qa=issuer_hit),))
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_a, **_k: None)
+    spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
+
+    manual = fetch.fetch_qa(spec, db_path=db_path, owner_requested=True, as_of=date(2026, 8, 12))
+    automatic = fetch.fetch_qa(
+        spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 13)
+    )
+
+    assert manual.result is not None
+    assert automatic.status is fetch.FetchQaStatus.ACQUIRED
+    assert automatic.result is not None
+    assert automatic.result.receipt_id != manual.result.receipt_id
+    assert automatic.result.authorization.request.owner_requested is False
+    assert calls == 2
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 2
         )
 
 

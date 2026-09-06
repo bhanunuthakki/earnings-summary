@@ -18,6 +18,28 @@ exit /b 1
 "%PYTHON_EXE%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>nul
 if errorlevel 1 goto missing_python
 
+REM One scheduler-facing provider seam. The application still owns purpose-to-role
+REM and role-to-model resolution. Scheduled jobs default to Codex membership and
+REM cannot silently consume another provider; an operator can change the primary
+REM in one machine variable for a future migration or explicit rollback.
+if not defined SCHEDULED_LLM_PRIMARY_PROVIDER set "SCHEDULED_LLM_PRIMARY_PROVIDER=codex"
+set "LLM_PRIMARY_SUBSCRIPTION_BACKEND=%SCHEDULED_LLM_PRIMARY_PROVIDER%"
+set "LLM_EXPLICIT_MODEL_POLICY=primary-tier"
+if not defined SCHEDULED_LLM_ALLOW_PROVIDER_FALLBACK set "SCHEDULED_LLM_ALLOW_PROVIDER_FALLBACK=0"
+if /I "%SCHEDULED_LLM_ALLOW_PROVIDER_FALLBACK%"=="1" (
+  set "LLM_SUBSCRIPTION_FALLBACK_DISABLED=0"
+  set "LLM_FALLBACK_DISABLED=0"
+) else (
+  set "LLM_SUBSCRIPTION_FALLBACK_DISABLED=1"
+  set "LLM_FALLBACK_DISABLED=1"
+)
+set "OPENAI_API_KEY="
+set "CODEX_API_KEY="
+set "ANTHROPIC_API_KEY="
+set "GEMINI_API_KEY="
+set "GOOGLE_API_KEY="
+set "OPENROUTER_API_KEY="
+
 set "TRIGGER_ARG="
 if /I "%ES_JOB_TRIGGER_KIND%"=="service" set "TRIGGER_ARG=--trigger-kind service"
 set "ES_JOB_TRIGGER_KIND="

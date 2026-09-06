@@ -38,7 +38,7 @@ import json
 import logging
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -49,10 +49,16 @@ from compute.management_indicators import (
     IndicatorRecurrence,
     IndicatorScope,
     ManagementIndicatorInput,
+    validate_indicator_source_binding,
 )
 from compute.say_do import CommitmentExtractionManifest, CommitmentInput
 from compute.thesis_evaluator import Comparator
 from models.facts import Unit
+from pipeline.commitment_scan_receipts import (
+    append_commitment_scan_receipt,
+    current_commitment_scan_receipt,
+    scan_receipt_table_available,
+)
 from provenance.selection import selected_transcripts_relation
 
 log = logging.getLogger(__name__)
@@ -243,17 +249,74 @@ def transcripts_pending_extraction(
     return out
 
 
+def transcripts_without_scan_receipt(
+    conn: sqlite3.Connection, ticker: str | None = None
+) -> list[tuple[int, str, datetime]]:
+    """Return current transcripts lacking a valid receipt for today's prompt."""
+
+    transcripts = selected_transcripts_relation(conn)
+    sql = f"SELECT t.id,t.ticker,t.period_end FROM {transcripts} t WHERE 1=1"  # nosec B608
+    params: tuple[str, ...] = ()
+    if ticker is not None:
+        sql += " AND UPPER(t.ticker)=?"
+        params = (ticker.upper(),)
+    sql += " ORDER BY t.ticker,t.period_end DESC"
+    rows = conn.execute(sql, params).fetchall()
+    receipts_available = scan_receipt_table_available(conn)
+    if receipts_available:
+        from llm.prompt_versions import prompt_version_for
+
+        current_prompt_version = prompt_version_for("saydo_commitment_extract")
+    else:
+        current_prompt_version = ""
+    pending: list[tuple[int, str, datetime]] = []
+    for row in rows:
+        transcript_id = int(row["id"])
+        if receipts_available:
+            already_scanned = (
+                current_commitment_scan_receipt(
+                    conn,
+                    transcript_id=transcript_id,
+                    prompt_version=current_prompt_version,
+                )
+                is not None
+            )
+        else:
+            already_scanned = (
+                conn.execute(
+                    "SELECT 1 FROM commitment_scan_log WHERE transcript_id=?",
+                    (transcript_id,),
+                ).fetchone()
+                is not None
+            )
+        if already_scanned:
+            continue
+        period_end = row["period_end"]
+        pending.append(
+            (
+                transcript_id,
+                str(row["ticker"]),
+                datetime.fromisoformat(period_end) if isinstance(period_end, str) else period_end,
+            )
+        )
+    return pending
+
+
 def record_scan(
     conn: sqlite3.Connection,
     transcript_id: int,
     *,
     n_extracted: int,
     prompt_version: str | None = None,
+    commitment_ids: Sequence[int] = (),
+    management_indicator_ids: Sequence[int] = (),
 ) -> None:
     """Persist "this transcript was scanned" so zero-commitment transcripts
     are never re-scanned. No-op (with the scan_log_available warning) on a
     pre-0129 DB. ``prompt_version`` is recorded so a future prompt bump can
-    invalidate old scans by deleting rows with a stale version."""
+    invalidate the receipt. At current schema head, completion is additionally
+    sealed in an append-only receipt bound to current transcript evidence and
+    an immutable output manifest."""
     if not scan_log_available(conn):
         return
     scanned_at = datetime.now(UTC).replace(tzinfo=None).isoformat()
@@ -266,6 +329,18 @@ def record_scan(
         "  prompt_version = excluded.prompt_version",
         (transcript_id, scanned_at, n_extracted, prompt_version),
     )
+    if scan_receipt_table_available(conn):
+        if prompt_version is None:
+            raise ValueError("prompt_version is required for an immutable scan receipt")
+        if n_extracted != len(commitment_ids) + len(management_indicator_ids):
+            raise ValueError("n_extracted does not match the exact scan output identities")
+        append_commitment_scan_receipt(
+            conn,
+            transcript_id=transcript_id,
+            prompt_version=prompt_version,
+            commitment_ids=commitment_ids,
+            management_indicator_ids=management_indicator_ids,
+        )
     conn.commit()
 
 
@@ -471,15 +546,33 @@ def extract_for_transcript(
         source_doc_id=source_doc_id,
         speaker=speaker,
     )
+
+    def parse_and_validate(response: str) -> TranscriptExtractionManifest:
+        manifest = parse_llm_response(response, context=context)
+        try:
+            for indicator in manifest.indicators:
+                validate_indicator_source_binding(conn, indicator=indicator)
+        except ValueError as exc:
+            raise CommitmentParseError(
+                f"novel indicator source evidence failed exact segment binding: {exc}"
+            ) from exc
+        return manifest
+
     response_text = llm_call(prompt)
     try:
-        return parse_llm_response(response_text, context=context)
+        return parse_and_validate(response_text)
     except CommitmentParseError as first_exc:
+        validation_error = str(first_exc)
         log.warning(
             "transcript_id=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
             transcript_id,
             ticker,
-            first_exc,
+            validation_error,
         )
-    retry_text = llm_call(_RETRY_PREAMBLE + prompt)
-    return parse_llm_response(retry_text, context=context)
+    retry_text = llm_call(
+        _RETRY_PREAMBLE
+        + f"VALIDATION ERROR: {validation_error}\n"
+        + "Copy each novel indicator source_excerpt exactly from the transcript.\n\n"
+        + prompt
+    )
+    return parse_and_validate(retry_text)
