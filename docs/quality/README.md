@@ -22,3 +22,19 @@ python execution/analyze_code_duplicates.py \
 
 Later train slices own independently verified score evidence and enforcement.
 These raw receipts cannot award score points on their own.
+
+## Raw operational reachability
+
+Generate the tracked-source operational graph without admitting reviewed
+dispositions or awarding closure:
+
+```bash
+python execution/build_operational_reachability.py \
+  --output .tmp/quality/reachability-check.json
+```
+
+The collector excludes `docs/quality/` evidence artifacts from the operational
+population, records those exclusions explicitly, and always reports closure as
+`HOLD` until a later train slice reviews the raw unknown edges. A successful
+exit proves only that collection completed; it is not a reachability-closure or
+score claim.
