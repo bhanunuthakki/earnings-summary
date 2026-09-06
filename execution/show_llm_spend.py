@@ -24,7 +24,6 @@ The default window is the last 7 days. Pass ``--since 0`` for all-time.
 
 from __future__ import annotations
 
-import argparse
 import json
 import sqlite3
 import sys
@@ -32,10 +31,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import add_database_argument, command_parser
 
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _open_db(db_path: Path) -> sqlite3.Connection:
@@ -317,19 +318,19 @@ def _render_human(report: dict[str, Any], window_label: str) -> str:
     return "\n".join(out)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> int:
+    parser = command_parser(__doc__)
+    add_database_argument(
+        parser,
+        flag="--db",
+        default=Path(__file__).resolve().parents[1] / "data" / "portfolio.db",
+    )
     parser.add_argument("--since", type=int, default=7, help="Days to look back (0 = all time)")
     parser.add_argument("--run-id", default=None, help="Filter to a single run_id")
-    parser.add_argument(
-        "--db",
-        default=str(PROJECT_ROOT / "data" / "portfolio.db"),
-        help="Path to portfolio.db (default: this project's DB)",
-    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of formatted text")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    conn = _open_db(Path(args.db))
+    conn = _open_db(args.db)
     try:
         where, params = _window_clause(args.since, args.run_id)
         report = {

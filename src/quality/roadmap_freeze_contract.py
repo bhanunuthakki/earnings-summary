@@ -23,7 +23,7 @@ LIFECYCLE_RECEIPT = "docs/quality/lifecycle-baseline.json"
 FUNCTION_LIFECYCLE_RECEIPT = "docs/quality/function-lifecycle-baseline.json"
 RECONCILIATION_RECEIPT = "docs/quality/reconciliation-baseline.json"
 FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256 = "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089"  # pragma: allowlist secret -- artifact digest
-FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256 = "172cc62b7f956f8421fcb730a65e538278ec50c1d0f478874fdf2fc5b053537d"  # pragma: allowlist secret -- artifact digest
+FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256 = "915b1f3bb425060e176b677b0e21bf1317538fe247e1d828c968dbd66e87cef1"  # pragma: allowlist secret -- artifact digest
 FROZEN_RECONCILIATION_ROADMAP_SHA256 = "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"  # pragma: allowlist secret -- artifact digest
 PERFORMANCE_RECEIPT = ".tmp/quality/test-ci-performance/full-suite-8c7dc0c3/receipt.json"
 EXPECTED_SCC_CUTS = 30
@@ -58,10 +58,10 @@ LOC_TARGET_CAPS = {
     "src/pipeline/portfolio_panel.py": 200,
 }
 TYPE_DEBT_AUTHORITY_PATH = "docs/quality/type-debt-membership-authority.json"
-TYPE_DEBT_AUTHORITY_SHA256 = "9cb0bab9c95e2e6793325394c55abf3f6be9c3d397de9e6a2325997c99136a64"  # pragma: allowlist secret -- artifact digest
+TYPE_DEBT_AUTHORITY_SHA256 = "f204ea883281e2bb82360e2e16709014fbeb153b61986da9c0d567435bfc322d"  # pragma: allowlist secret -- artifact digest
 TYPE_DEBT_EVIDENCE_ALGORITHM = "pyright-generalDiagnostics/v1"
-FROZEN_TYPE_DEBT_AUTHORITY_SHA256 = "b8f77169df0721539b2d5b2718bde0e4fdb828d3b54f70e4f6ae05ad61b88ad8"  # pragma: allowlist secret -- artifact digest
-FROZEN_TYPE_DEBT_TOTALS = {"total": 4192, "archived": 175, "all": 4367}
+FROZEN_TYPE_DEBT_AUTHORITY_SHA256 = "c271262d727512423e9712a0c4298a225171586b2052907be697ce2f49523018"  # pragma: allowlist secret -- artifact digest
+FROZEN_TYPE_DEBT_TOTALS = {"total": 4178, "archived": 175, "all": 4353}
 
 # Train 0 froze one specific performance run.  The receipt is intentionally
 # under .tmp and may be absent on a fresh checkout, so its absence cannot turn

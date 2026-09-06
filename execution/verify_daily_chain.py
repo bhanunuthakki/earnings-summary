@@ -29,10 +29,12 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT, add_database_argument, command_parser
+except ImportError:  # pragma: no cover - test/import path fallback
+    from execution._lib import PROJECT_ROOT, add_database_argument, command_parser
 
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 STATUS_FILE = PROJECT_ROOT / ".tmp" / "daily_chain_status.json"
@@ -116,10 +118,8 @@ def check(db_path: Path = DB_PATH) -> dict[str, object]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", type=Path, default=DB_PATH)
+    parser = command_parser(__doc__)
+    add_database_argument(parser, flag="--db-path", default=DB_PATH)
     parser.add_argument(
         "--status-file",
         type=Path,

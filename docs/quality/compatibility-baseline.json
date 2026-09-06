@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "b445b86ff924253b0528dd97add210cfd0dea460",
-  "source_sha256": "bcb535004bdd2fdb7283d30ee6952ca4bb7fc2da51cc02ca98408e1c4065748c",
+  "current_revision": "835ecbeab77c724241d8179dada13db70046e6a4",
+  "source_sha256": "cfb3985beb2dad1c5dbcff758495d4fd97de3a9a3a3c840db1a218ed5c6fdf52",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -135,9 +135,9 @@
     },
     {
       "path": "execution/_lib.py",
-      "current_sha256": "8d2e883a9949f1358bba3032168eb3acb27efe341098900aca4276e54aed84de",
+      "current_sha256": "1f245d1459d4a483e7cb2b7d7362f7574f724ab5165b3b663a1977e29f17a9dd",
       "baseline_sha256": "8d2e883a9949f1358bba3032168eb3acb27efe341098900aca4276e54aed84de",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/activate_data_cutover.py",
@@ -789,9 +789,9 @@
     },
     {
       "path": "execution/comments_server.py",
-      "current_sha256": "73ca544bd3c4a9fd115622443d3d84c551b48e5c5f6ab5ffd24c660d578e55a8",
+      "current_sha256": "111df4f23870778ab28031d6e18b911d6a4697a04071fbdf237670a687b7f999",
       "baseline_sha256": "73ca544bd3c4a9fd115622443d3d84c551b48e5c5f6ab5ffd24c660d578e55a8",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/comments_server_alert_routes.py",
@@ -840,6 +840,30 @@
       "current_sha256": "27d988b245f5f9fb64421fe66fb5723e9aaa6e12bfa9dacfded18de66e9d4d58",
       "baseline_sha256": "27d988b245f5f9fb64421fe66fb5723e9aaa6e12bfa9dacfded18de66e9d4d58",
       "status": "unchanged"
+    },
+    {
+      "path": "execution/comments_server_profile_routes.py",
+      "current_sha256": "a32619492bae1a0ff8a895c12cf54b6b6082d33ba0862c0623385662ad317616",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "execution/comments_server_proposal_routes.py",
+      "current_sha256": "b5aaae639912ec7e521e72ea72b085dc72b86c9fa1e9ae733b8fadf3d51c8132",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "execution/comments_server_research_routes.py",
+      "current_sha256": "1222cd625b85832264af066ee47441e1a731e930bcfe601b5a90aadd273426b1",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
+      "path": "execution/comments_server_route_support.py",
+      "current_sha256": "1b83e929dc2dbdd3dfdcd055273fc519e6300f3b06c8ccb796d2067f0ade936f",
+      "baseline_sha256": null,
+      "status": "added"
     },
     {
       "path": "execution/comments_server_settings_routes.py",
@@ -2343,21 +2367,21 @@
     },
     {
       "path": "execution/show_llm_spend.py",
-      "current_sha256": "af7733ebe734bb117ec23157db66cf043e98a22d78614875e28a9fb04646322c",
+      "current_sha256": "1a9934894b3c8a72d7abcb5c3e6c864c801f200b9ae08ba35f3443fbf7f7d798",
       "baseline_sha256": "af7733ebe734bb117ec23157db66cf043e98a22d78614875e28a9fb04646322c",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/show_prompt_calibration.py",
-      "current_sha256": "cbe6fc6db440d6743716d35e51340a1c10a4bce478913d0cb60fffa02cf81c3a",
+      "current_sha256": "80e15f3125da3918d88b191667b48ae1d0e67288523e615d77e44a56bd5eab56",
       "baseline_sha256": "cbe6fc6db440d6743716d35e51340a1c10a4bce478913d0cb60fffa02cf81c3a",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/show_routing.py",
-      "current_sha256": "bf1396397f02c91c8ff4fa176547a117654008c150a70feba94a5d7b3d0cc320",
+      "current_sha256": "a66f0f1fca97192d2193f883f0705f15d3c67ec8a37449fe908b59cfb93e8993",
       "baseline_sha256": "bf1396397f02c91c8ff4fa176547a117654008c150a70feba94a5d7b3d0cc320",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/show_source_calls.py",
@@ -2367,9 +2391,9 @@
     },
     {
       "path": "execution/show_thesis_history.py",
-      "current_sha256": "57a8f59d67e28be5747e4bcc417ea0abac738bbed63a0af73601ddb4eb952643",
+      "current_sha256": "a520f0ff493cc56a907712c6578ecf44f3d04a83bf472917b09e94013677de47",
       "baseline_sha256": "57a8f59d67e28be5747e4bcc417ea0abac738bbed63a0af73601ddb4eb952643",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/simulate_trade_impact.py",
@@ -2511,9 +2535,9 @@
     },
     {
       "path": "execution/verify_calendars.py",
-      "current_sha256": "8d65d52978a037550e5237e18961d039e818deb10618040048ae631214aa2899",
+      "current_sha256": "60e2ab21314f8615bc38757f799a98b1dec98ff524e87627d13f2d7dd6581609",
       "baseline_sha256": "8d65d52978a037550e5237e18961d039e818deb10618040048ae631214aa2899",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/verify_cron_registration.py",
@@ -2523,9 +2547,9 @@
     },
     {
       "path": "execution/verify_daily_chain.py",
-      "current_sha256": "8c2f496ba2df8b87340812a39336273cc910f871c9b3672d57cc071e8d195f81",
+      "current_sha256": "b782cc239a61f0ba72545a14d928a8b605bc45a43417c0091e454a3d7be214f6",
       "baseline_sha256": "8c2f496ba2df8b87340812a39336273cc910f871c9b3672d57cc071e8d195f81",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/verify_design_conformance.py",
@@ -2535,15 +2559,15 @@
     },
     {
       "path": "execution/verify_evidence_judging.py",
-      "current_sha256": "c62de7f80b53c0f0e7cf82ab62f8f7e0f42b3045aad36a44b1c6cc272c0c36df",
+      "current_sha256": "167185a945e2317d694b44ff3186430d066192f08ef8a5884ce484ea74b4e01d",
       "baseline_sha256": "c62de7f80b53c0f0e7cf82ab62f8f7e0f42b3045aad36a44b1c6cc272c0c36df",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/verify_ir_home_authorities.py",
-      "current_sha256": "c401b3916fa32639af624ec72720018aa20acc6e64a1fe30a9498319bba712bb",
+      "current_sha256": "916de6724a2cdb3a96d4d5679aa8a5d2a554583b4eb05716a56f665a06454768",
       "baseline_sha256": "c401b3916fa32639af624ec72720018aa20acc6e64a1fe30a9498319bba712bb",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/verify_llm_adapter_isolation.py",
@@ -2553,15 +2577,15 @@
     },
     {
       "path": "execution/verify_public_tree.py",
-      "current_sha256": "6297cafe00e90eaeaed2c27700e7bedc4992bef9ac88c374db9c70267fed5c71",
+      "current_sha256": "b94ae3420d1bb0736d5a5081e73f56845a82abbcec2fdac980020f6547b4c9ef",
       "baseline_sha256": "6297cafe00e90eaeaed2c27700e7bedc4992bef9ac88c374db9c70267fed5c71",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/verify_reader_parity.py",
-      "current_sha256": "1c0e2243d22519c00f6aa54881c40b47728beb45d0cebdfe6d8f5832495f1965",
+      "current_sha256": "ac92562ffb6dc8683d28a89fbd3e174e5b8b6fb1b343c3f8677f88ef6f61cc68",
       "baseline_sha256": "1c0e2243d22519c00f6aa54881c40b47728beb45d0cebdfe6d8f5832495f1965",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "execution/verify_reconstruction_inventory.py",
@@ -2571,9 +2595,9 @@
     },
     {
       "path": "execution/verify_scheduler_wrappers.py",
-      "current_sha256": "743f7ae1518e791e4205e22bb58b14d846325942c5fa8bd1642aa0ef421b7f98",
+      "current_sha256": "ef020cfd9422ea269e7ccdc0994a5870546a5d56aebf0ea21733ac1bbf63d1bf",
       "baseline_sha256": "743f7ae1518e791e4205e22bb58b14d846325942c5fa8bd1642aa0ef421b7f98",
-      "status": "unchanged"
+      "status": "changed"
     },
     {
       "path": "src/advisor/__init__.py",
@@ -6483,7 +6507,7 @@
     },
     {
       "path": "src/quality/roadmap_freeze_contract.py",
-      "current_sha256": "ee19d0900df9456c50e8f14e4ea109031432055260bdd0b106578c664739a803",
+      "current_sha256": "9ce8ab2736b83f03dd09e99eb6c558b899b06f62d5edef0d8ea5dac1ce0226f2",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -8163,7 +8187,7 @@
     }
   ],
   "golden_count": 24,
-  "entrypoint_count": 1339,
+  "entrypoint_count": 1343,
   "categories": [
     {
       "name": "flask_url_method_endpoint_map",
@@ -8180,6 +8204,9 @@
         "tests/test_comments_server_dcf.py",
         "tests/test_comments_server_dcf_globals.py",
         "tests/test_comments_server_operations.py",
+        "tests/test_comments_server_profile_routes.py",
+        "tests/test_comments_server_proposal_routes.py",
+        "tests/test_comments_server_research_routes.py",
         "tests/test_comments_server_startup.py"
       ],
       "implementation_artifacts": [
@@ -8195,9 +8222,12 @@
         "tests/test_comments_server_dcf.py",
         "tests/test_comments_server_dcf_globals.py",
         "tests/test_comments_server_operations.py",
+        "tests/test_comments_server_profile_routes.py",
+        "tests/test_comments_server_proposal_routes.py",
+        "tests/test_comments_server_research_routes.py",
         "tests/test_comments_server_startup.py"
       ],
-      "artifact_sha256": "124417f700a1ffce49a99be72e72c698b81f3cb9123f83293663ead6c2ef6816",
+      "artifact_sha256": "9d1f6fd96488613da608bdc09198f24e298a27133bfd88b81a906ab4b51f6104",
       "extracted": [
         {
           "kind": "flask_route",
@@ -8561,31 +8591,6 @@
         },
         {
           "kind": "flask_route",
-          "identifier": "/api/profile/fact/<int:fact_id>/affirm",
-          "value": "OPTIONS,POST:profile_fact_affirm"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/profile/fact/<int:fact_id>/reaffirm",
-          "value": "OPTIONS,POST:profile_fact_reaffirm"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/profile/fact/<int:fact_id>/reject",
-          "value": "OPTIONS,POST:profile_fact_reject"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/profile/fact/<int:fact_id>/retire",
-          "value": "OPTIONS,POST:profile_fact_retire"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/profile/fact/<int:fact_id>/update",
-          "value": "OPTIONS,POST:profile_fact_update"
-        },
-        {
-          "kind": "flask_route",
           "identifier": "/api/readme-governance/status",
           "value": "GET:readme_governance_status"
         },
@@ -8621,36 +8626,6 @@
         },
         {
           "kind": "flask_route",
-          "identifier": "/api/research/proposal/<int:proposal_id>/<verb>",
-          "value": "OPTIONS,POST:research_act"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/research/proposals/<int:proposal_id>",
-          "value": "GET:ask_proposal_detail"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/research/proposals/<int:proposal_id>/decision",
-          "value": "OPTIONS,POST:ask_proposal_decision"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/research/task/<int:task_id>/reject",
-          "value": "OPTIONS,POST:research_reject"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/research/task/<int:task_id>/run",
-          "value": "OPTIONS,POST:research_run"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/research/task/<int:task_id>/status",
-          "value": "GET:research_task_status"
-        },
-        {
-          "kind": "flask_route",
           "identifier": "/api/senior-partner-brief/dismiss-item/<int:ping_id>",
           "value": "OPTIONS,POST:senior_partner_brief_dismiss_item_api"
         },
@@ -8678,21 +8653,6 @@
           "kind": "flask_route",
           "identifier": "/api/source-calls",
           "value": "GET:source_calls_api"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/tenets",
-          "value": "OPTIONS,POST:tenets_create"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/tenets/<int:tenet_id>/<action>",
-          "value": "OPTIONS,POST:tenets_act"
-        },
-        {
-          "kind": "flask_route",
-          "identifier": "/api/tenets/distill",
-          "value": "OPTIONS,POST:tenets_distill"
         },
         {
           "kind": "flask_route",
@@ -12929,19 +12889,8 @@
         "src/report/sections/thesis.py",
         "src/report/sections/valuation.py",
         "src/report/windows_appcontainer.py",
-        "tests/golden/workspace/evaluation/pane_bear.html",
+        "tests/golden/workspace/_shared_pane_expectations.json",
         "tests/golden/workspace/evaluation/pane_company.html",
-        "tests/golden/workspace/evaluation/pane_comps.html",
-        "tests/golden/workspace/evaluation/pane_decisions.html",
-        "tests/golden/workspace/evaluation/pane_earnings.html",
-        "tests/golden/workspace/evaluation/pane_exec_comp.html",
-        "tests/golden/workspace/evaluation/pane_financials.html",
-        "tests/golden/workspace/evaluation/pane_news.html",
-        "tests/golden/workspace/evaluation/pane_saydo.html",
-        "tests/golden/workspace/evaluation/pane_sources.html",
-        "tests/golden/workspace/evaluation/pane_synthesis.html",
-        "tests/golden/workspace/evaluation/pane_thesis.html",
-        "tests/golden/workspace/evaluation/pane_valuation.html",
         "tests/golden/workspace/evaluation/shell.html",
         "tests/golden/workspace/portfolio/pane_bear.html",
         "tests/golden/workspace/portfolio/pane_company.html",
@@ -13056,19 +13005,8 @@
         "src/report/windows_appcontainer.py"
       ],
       "verification_artifacts": [
-        "tests/golden/workspace/evaluation/pane_bear.html",
+        "tests/golden/workspace/_shared_pane_expectations.json",
         "tests/golden/workspace/evaluation/pane_company.html",
-        "tests/golden/workspace/evaluation/pane_comps.html",
-        "tests/golden/workspace/evaluation/pane_decisions.html",
-        "tests/golden/workspace/evaluation/pane_earnings.html",
-        "tests/golden/workspace/evaluation/pane_exec_comp.html",
-        "tests/golden/workspace/evaluation/pane_financials.html",
-        "tests/golden/workspace/evaluation/pane_news.html",
-        "tests/golden/workspace/evaluation/pane_saydo.html",
-        "tests/golden/workspace/evaluation/pane_sources.html",
-        "tests/golden/workspace/evaluation/pane_synthesis.html",
-        "tests/golden/workspace/evaluation/pane_thesis.html",
-        "tests/golden/workspace/evaluation/pane_valuation.html",
         "tests/golden/workspace/evaluation/shell.html",
         "tests/golden/workspace/portfolio/pane_bear.html",
         "tests/golden/workspace/portfolio/pane_company.html",
@@ -13097,72 +13035,17 @@
         "tests/test_dashboard_upcoming.py",
         "tests/test_workspace_golden.py"
       ],
-      "artifact_sha256": "5f439b3b882bfedd6b55accfdb09e8a351cd72c67851a80ec66cfb215e73d1c8",
+      "artifact_sha256": "6b7aeb65ba305747e83a284a581aacbfa4f326c4ec594458b4bcd99f7e1dcc90",
       "extracted": [
         {
           "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_bear.html",
-          "value": "sha256:7c2ce225d0f57af17abb84cf0a81968022f507521f617a9aea6ef225435a7adc"
+          "identifier": "tests/golden/workspace/_shared_pane_expectations.json",
+          "value": "sha256:2d03a7bc6f9d97492c5636af82648a26cf2e40b1187b1b06f00538b41346c100"
         },
         {
           "kind": "golden",
           "identifier": "tests/golden/workspace/evaluation/pane_company.html",
           "value": "sha256:de996ab4741137753787f1950d7cb619e7249bc8ada975cecb2f3c8900b20db1"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_comps.html",
-          "value": "sha256:98da979ec44c5760a8058aea6fd4fe6f508b3984463530185b00355478681427"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_decisions.html",
-          "value": "sha256:94ca014daddc308652e072a0e80c5d8c7495f1702f0e51e733a6d20441298a8f"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_earnings.html",
-          "value": "sha256:cc50808defb2ec32f5bf269ebaccef4a4583de3ab04093f002a8073b0bb05b8f"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_exec_comp.html",
-          "value": "sha256:aad4d4e0a16ff651ee9a1cefad9aaf967b1c7c46f2ffc699b15857868b5a57e1"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_financials.html",
-          "value": "sha256:113072f2ebcf4c43f8b7e166a8c6db419f89d6fd7a731c2b1880ae51b65a6836"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_news.html",
-          "value": "sha256:b2a9447a2f622783b90b5d3a2e17cce46fbfd637152c0f8ff32cbbf8df444e7e"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_saydo.html",
-          "value": "sha256:925e568a43f51e752bc4570b0220012ebd998ac3ea622fbbc9c65bda2afbe2ea"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_sources.html",
-          "value": "sha256:c56618a7d8e5e9e6c31edf6e76dea3fc83e1a457a7ad0889ed231aef7e55956d"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_synthesis.html",
-          "value": "sha256:ab5aa309c61421726ddbe0ca32bac3b2b01ff40a4559258db86a9b9dc69c8150"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_thesis.html",
-          "value": "sha256:68674a296179dd1a32d8b8376eb401cad21351021c7d76c40ce7047a40110c7e"
-        },
-        {
-          "kind": "golden",
-          "identifier": "tests/golden/workspace/evaluation/pane_valuation.html",
-          "value": "sha256:4cff5be70648a51591724ecfa40c7cd88275850e01ca52de7b3ad658a06c5c35"
         },
         {
           "kind": "golden",

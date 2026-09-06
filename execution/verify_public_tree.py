@@ -1,4 +1,8 @@
-"""Fail closed when private or generated material enters the public Git tree."""
+"""Fail closed when private or generated material enters the public Git tree.
+
+The scan covers existing tracked and untracked, non-ignored working-tree files.
+Pending deletions are skipped once their path no longer exists on disk.
+"""
 
 from __future__ import annotations
 
@@ -101,6 +105,20 @@ def tracked_files(repo_root: Path) -> list[str]:
         env=_clean_git_env(),
     )
     return [item for item in result.stdout.decode().split("\0") if item]
+
+
+def untracked_files(repo_root: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", "--others", "--exclude-standard", "-z"],
+        check=True,
+        capture_output=True,
+        env=_clean_git_env(),
+    )
+    return [item for item in result.stdout.decode().split("\0") if item]
+
+
+def working_tree_candidates(repo_root: Path) -> list[str]:
+    return sorted({*tracked_files(repo_root), *untracked_files(repo_root)})
 
 
 def forbidden_path_category(relative: str) -> str | None:
@@ -275,16 +293,16 @@ def _read_blobs(repo_root: Path, object_ids: set[str]) -> dict[str, bytes]:
 
 def verify(repo_root: Path) -> list[str]:
     violations: list[str] = []
-    for relative in tracked_files(repo_root):
+    for relative in working_tree_candidates(repo_root):
         path = Path(relative)
         if forbidden_path_category(relative) is not None:
-            violations.append(f"forbidden tracked path: {relative}")
+            violations.append(f"forbidden path: {relative}")
             continue
         if relative == "execution/verify_public_tree.py":
             continue
         try:
             data = (repo_root / path).read_bytes()
-        except IsADirectoryError:
+        except (FileNotFoundError, IsADirectoryError):
             continue
         for category in sorted(content_violation_categories(relative, data)):
             violations.append(f"{category} in: {relative}")

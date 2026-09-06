@@ -242,40 +242,40 @@
     }
   ],
   "counts": {
-    "protected": 11773,
-    "referenced": 15758,
-    "unknown": 6418,
+    "protected": 11787,
+    "referenced": 15807,
+    "unknown": 6465,
     "unreferenced-static-candidate": 15
   },
   "files_failed": [],
-  "files_scanned": 2472,
-  "inventory_hash": "836f0115c75156776a8c0f8aea6a6aef04d1887b06f6cb248195ed2026748898",
+  "files_scanned": 2483,
+  "inventory_hash": "3476cc05381568a4c6a6a50605b8fb1cb0535b7bf0ec890d63d4701ebfd4b635",
   "parser_version": "python-ast-3.11-v3",
-  "revision": "b445b86ff924253b0528dd97add210cfd0dea460",
+  "revision": "835ecbeab77c724241d8179dada13db70046e6a4",
   "schema_version": "bha-109.v1",
   "status": "PASS",
-  "symbol_count": 33964,
-  "tracked_tree_hash": "4cdff6f01fee19bd301998b80ba22b666089f8ce495711bc16a1e5ab41ff0fb3",
+  "symbol_count": 34074,
+  "tracked_tree_hash": "9db6a429d1da05ef0cf3aea91153de5fcffed7103c715f03cb479c118077a408",
   "unknown_hazard_counts": {
-    "class-method-dispatch": 563,
-    "cli-entrypoint": 414,
+    "class-method-dispatch": 573,
+    "cli-entrypoint": 415,
     "decorator:app.after_request": 2,
     "decorator:app.errorhandler": 1,
     "decorator:app.route": 1,
     "decorator:property": 35,
     "decorator:pytest.fixture": 124,
     "documented-compatibility-seam": 6,
-    "dunder-protocol": 142,
+    "dunder-protocol": 146,
     "dynamic:__import__": 5,
     "dynamic:exec": 1,
     "dynamic:getattr": 298,
     "dynamic:locals": 1,
-    "dynamic:setattr": 2018,
-    "dynamic:unbounded-reflection-in-module": 1288,
+    "dynamic:setattr": 2028,
+    "dynamic:unbounded-reflection-in-module": 1287,
     "dynamic:vars": 18,
-    "public-module-symbol": 3716,
-    "string-or-reflection-reference": 3110,
-    "test-fixture-or-helper": 3028
+    "public-module-symbol": 3739,
+    "string-or-reflection-reference": 3152,
+    "test-fixture-or-helper": 3047
   },
   "unknown_symbols": [
     {
@@ -288,7 +288,7 @@
       ],
       "end_line": 477,
       "fingerprint": "87fd53b367789b21cc5df25a695ac273c74681cde6487823a8bead5315b4528e",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -386,7 +386,7 @@
       ],
       "end_line": 325,
       "fingerprint": "be981226f386c787004f53bf6c2abc24b532fe2f6090f0edaa964ed6357a254b",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -415,7 +415,7 @@
       ],
       "end_line": 71,
       "fingerprint": "533d2c2b6b3a53619ad84f662e465528a566ee2bca06dbb91ff0335a02ead286",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -472,7 +472,7 @@
       ],
       "end_line": 335,
       "fingerprint": "e7ee1f057a00a6b437d4f879a3217c27b6b4424443e42c4ee714c7021c6bf90d",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -526,18 +526,53 @@
         "public-module-symbol",
         "string-or-reflection-reference"
       ],
-      "end_line": 66,
-      "fingerprint": "b5f1cf2b459fdb21fa38607db9af9e8041e83315249d499b9c1fac12f431c54e",
-      "inbound_static_ref_count": 1,
+      "end_line": 49,
+      "fingerprint": "0d29ae4fd65c42b979b4dc6521cb4636bae56a2732461b95e23960880a0e3a6c",
+      "inbound_static_ref_count": 8,
       "inbound_static_refs": [
-        "tests/test_execution_lib.py:18"
+        "execution/show_llm_spend.py:322",
+        "execution/show_prompt_calibration.py:114",
+        "execution/show_routing.py:59",
+        "execution/show_thesis_history.py:74",
+        "execution/verify_calendars.py:147",
+        "execution/verify_daily_chain.py:121",
+        "tests/test_execution_lib.py:26",
+        "tests/test_execution_lib.py:33"
       ],
       "kind": "function",
       "line": 47,
+      "loc": 3,
+      "path": "execution/_lib.py",
+      "qualified_name": "execution._lib.command_parser",
+      "source_hash": "8637a88a263793ff3e0fbf81cd90b25ec8a8d52e141fa5243e81a4388137535f",
+      "visibility": "public"
+    },
+    {
+      "classification": "unknown",
+      "decorators": [],
+      "dynamic_hazards": [
+        "public-module-symbol",
+        "string-or-reflection-reference"
+      ],
+      "end_line": 71,
+      "fingerprint": "224c8dbdba0fc77ca35f15d2d0600fcfdec9aba644b88d3bfe10cc45cab1bf4e",
+      "inbound_static_ref_count": 8,
+      "inbound_static_refs": [
+        "execution/show_llm_spend.py:323",
+        "execution/show_prompt_calibration.py:115",
+        "execution/show_routing.py:60",
+        "execution/show_thesis_history.py:75",
+        "execution/verify_calendars.py:148",
+        "execution/verify_daily_chain.py:122",
+        "tests/test_execution_lib.py:27",
+        "tests/test_execution_lib.py:34"
+      ],
+      "kind": "function",
+      "line": 52,
       "loc": 20,
       "path": "execution/_lib.py",
-      "qualified_name": "execution._lib.standard_parser",
-      "source_hash": "e69aa49510fa7b2a4cf91199ccedbc28b33f3817d0a49e258709e7168197ec27",
+      "qualified_name": "execution._lib.add_database_argument",
+      "source_hash": "5ff899baf78718f235655f6a622b23f721dd98a186252d8874c67955eb458822",
       "visibility": "public"
     },
     {
@@ -550,7 +585,7 @@
       ],
       "end_line": 87,
       "fingerprint": "d6872f03972fbbbf1256c404760b446ceed557bf07015936a79e61c38aa63e62",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -628,7 +663,7 @@
       ],
       "end_line": 348,
       "fingerprint": "1af65948b7898bc13845d65ff85309278d6010bf127fb74b47ad09f9bf8166ef",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -685,7 +720,7 @@
       ],
       "end_line": 276,
       "fingerprint": "c42bc26e1daf680aabd3029ffe4a96fd80964f663085c5da01c56369e24c6243",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -714,7 +749,7 @@
       ],
       "end_line": 47,
       "fingerprint": "09095a71d6426040806ae113eb2bd6c476a5ea36b264594002386d1d975f2b61",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -766,7 +801,7 @@
       ],
       "end_line": 549,
       "fingerprint": "4df4b90538dd1aea4720923a20159880377dd1d3b00016f3ed912e8303bc9726",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -941,7 +976,7 @@
       ],
       "end_line": 1206,
       "fingerprint": "b8b3818d28406bc905200540d542b391efec6016cd800a8dc9236ba8090a3cb6",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -970,7 +1005,7 @@
       ],
       "end_line": 814,
       "fingerprint": "e8b073dda4f9e1ad66c8e0c30e23cd7e990226df4988fef333b97eca72ebddba",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -999,7 +1034,7 @@
       ],
       "end_line": 137,
       "fingerprint": "20ed0bda5036d661df847acffc244f09459819313596ae5de8aee300a1dc2157",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1028,7 +1063,7 @@
       ],
       "end_line": 51,
       "fingerprint": "5b4f014f54f611b5b61488ad4be190b98b0e40bb377b53dde7efb407ae922304",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1057,7 +1092,7 @@
       ],
       "end_line": 249,
       "fingerprint": "856e22d3061f5eff9963f749c7311588f260da383f4954fa24f3490156115e36",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1086,7 +1121,7 @@
       ],
       "end_line": 214,
       "fingerprint": "fb26fab33a4f50181bb7a61c3deb1577f8f6afeba1a721ee345058d33040e8c9",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1162,7 +1197,7 @@
       ],
       "end_line": 202,
       "fingerprint": "7180d4918382b7d638be9331463721dbc6e437e7b32a65663a4a7d21789fe795",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1191,7 +1226,7 @@
       ],
       "end_line": 65,
       "fingerprint": "ffcb38e879091d6483dc307f964dd58281179aa966c6e5c6fb2b75cba380deab",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1248,7 +1283,7 @@
       ],
       "end_line": 150,
       "fingerprint": "b7255d696cd3d714d7bf226d1a1fb5c66a3cd7636ae461490475760a2de258b5",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1332,7 +1367,7 @@
       ],
       "end_line": 163,
       "fingerprint": "b3be989033368051e1462c0926c93d91c547a383696b40a604be0a23118c4fbd",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1361,7 +1396,7 @@
       ],
       "end_line": 99,
       "fingerprint": "a118d08063e626e14f8a5f93027385a8b8f449939845fd4b78ac09f1d82d6a71",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1390,7 +1425,7 @@
       ],
       "end_line": 115,
       "fingerprint": "ac79e14d9493dcd8d67d23b2676c87c96ba86badb5100edb61e126ed9a9c30a5",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1419,7 +1454,7 @@
       ],
       "end_line": 152,
       "fingerprint": "de79b245283a0fe595b681d35d1b656359a5d3531bd30574189cd8f29813ceec",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1562,7 +1597,7 @@
       ],
       "end_line": 1016,
       "fingerprint": "521a5198a08fbf80afdccda73ce4729b2c6617871e82d0f07bfcd524341d574e",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1591,7 +1626,7 @@
       ],
       "end_line": 194,
       "fingerprint": "ec8a370c602c8e36b4d28dfcedaa2dea221e8ba6d1f8462d5a0af3d81359780c",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1620,7 +1655,7 @@
       ],
       "end_line": 91,
       "fingerprint": "570848ea781a14f05d1795b1ec3f7ce90ab16a2050af898b0b8e8688f1e2abd1",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1703,7 +1738,7 @@
       ],
       "end_line": 44,
       "fingerprint": "228fe40ab8be86dccdb3725af244fe0aee43256e047af1db278456840e02d31a",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1759,7 +1794,7 @@
       ],
       "end_line": 977,
       "fingerprint": "a06ff14b7a56568a1a08cef162d246629a70c5f6b062f77fdf0e857a14d4902d",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1837,7 +1872,7 @@
       ],
       "end_line": 230,
       "fingerprint": "0810c5aede3b939438e7b33ccaad222c4326441e4c6740bccedbb772658f70de",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1894,7 +1929,7 @@
       ],
       "end_line": 117,
       "fingerprint": "e425a4a33bb23f3af36f9d82355cf15ee9e34a026afad85920e310116b6949e1",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1923,7 +1958,7 @@
       ],
       "end_line": 107,
       "fingerprint": "8f7ea6156a698d487cde737613725553d231ef1f4088592136db26aac2627f29",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1952,7 +1987,7 @@
       ],
       "end_line": 116,
       "fingerprint": "0c096e69d0554792997bb2937482ee5da3050c1def6a28e23da73cc8bb0a2b7e",
-      "inbound_static_ref_count": 922,
+      "inbound_static_ref_count": 932,
       "inbound_static_refs": [
         ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
@@ -1970,38 +2005,9 @@
       "qualified_name": "execution.backfill_decision_basis.main",
       "source_hash": "34a993a8cb0c74e9deb208a02a1a305d972b5bd6222cdb69cb0582aa38195401",
       "visibility": "public"
-    },
-    {
-      "classification": "unknown",
-      "decorators": [],
-      "dynamic_hazards": [
-        "cli-entrypoint",
-        "public-module-symbol",
-        "string-or-reflection-reference"
-      ],
-      "end_line": 268,
-      "fingerprint": "bf81cf899aa22763445a5b6b1d6a581589326f75d3e849ac4a17741b4e6526b3",
-      "inbound_static_ref_count": 922,
-      "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:481",
-        "cron/backup_db.py:329",
-        "cron/job_runtime.py:14",
-        "cron/migrate_legacy_backups.py:75",
-        "cron/restore_db.py:339",
-        "execution/activate_data_cutover.py:91",
-        "execution/analyze_code_duplicates.py:14",
-        "execution/analyze_filing_intelligence.py:357"
-      ],
-      "kind": "function",
-      "line": 239,
-      "loc": 30,
-      "path": "execution/backfill_document_accessions.py",
-      "qualified_name": "execution.backfill_document_accessions.main",
-      "source_hash": "c9cfb25621680bf3e4317b21ff34ff222cfb38025fec3c409cb3a66556041ba9",
-      "visibility": "public"
     }
   ],
-  "unknown_total": 6418,
+  "unknown_total": 6465,
   "violations": [],
   "worktree_dirty": true
 }

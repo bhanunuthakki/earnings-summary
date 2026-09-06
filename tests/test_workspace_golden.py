@@ -37,12 +37,13 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 import os
 import re
 from datetime import UTC, date, datetime
 from itertools import islice
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict, cast
 from unittest import mock
 
 import pytest
@@ -142,6 +143,11 @@ _TS = datetime(2026, 6, 1, 12, 0, 0)
 # subtracts them from datetime.now(UTC), which would crash on naive input).
 _TS_AWARE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 _GEN_DATE = date(2026, 6, 11)
+
+
+class _SharedPaneManifest(TypedDict):
+    canonical_dir: str
+    shared_panes: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -1692,14 +1698,48 @@ def _ext(part: str) -> str:
     return "js" if part == "scripts" else "html"
 
 
+def _load_shared_pane_manifest() -> tuple[str, frozenset[str]]:
+    payload = json.loads(
+        (GOLDEN_DIR / "_shared_pane_expectations.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(payload, dict)
+    manifest = cast("_SharedPaneManifest", payload)
+    canonical_dir = manifest["canonical_dir"]
+    shared_panes = manifest["shared_panes"]
+    assert all(isinstance(item, str) for item in shared_panes)
+    return canonical_dir, frozenset(shared_panes)
+
+
+SHARED_PANE_DIR, SHARED_PANE_PARTS = _load_shared_pane_manifest()
+
+
 # CSS + JS are module constants independent of the spec — both flavors must
 # produce byte-identical bundles (asserted below), so they golden ONCE at the
-# top level instead of per spec dir.
+# top level instead of per spec dir. Shared panes follow the same rule, and the
+# manifest below keeps their canonical owner explicit.
 SHARED_PARTS = frozenset({"styles", "styles_sorted", "scripts"})
 
 
+def _shared_pane_inventory(
+    portfolio_parts: dict[str, str], evaluation_parts: dict[str, str]
+) -> frozenset[str]:
+    shared_panes = {
+        part
+        for part in portfolio_parts
+        if part.startswith("pane_")
+        and part in evaluation_parts
+        and portfolio_parts[part] == evaluation_parts[part]
+    }
+    return frozenset(shared_panes)
+
+
 def _check_golden(spec_name: str, part: str, content: str) -> None:
-    rel = f"{part}.{_ext(part)}" if part in SHARED_PARTS else f"{spec_name}/{part}.{_ext(part)}"
+    if part in SHARED_PARTS:
+        rel = f"{part}.{_ext(part)}"
+    elif part in SHARED_PANE_PARTS:
+        rel = f"{SHARED_PANE_DIR}/{part}.{_ext(part)}"
+    else:
+        rel = f"{spec_name}/{part}.{_ext(part)}"
     path = GOLDEN_DIR / rel
     if REGEN:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1787,6 +1827,15 @@ def test_asset_bundles_flavor_independent(
     """The CSS/JS bundles are spec-independent module constants — pinned as
     shared goldens, so the two flavors must agree byte-for-byte."""
     for part in sorted(SHARED_PARTS):
+        assert portfolio_parts[part] == evaluation_parts[part], part
+
+
+def test_shared_pane_flavor_independence(
+    portfolio_parts: dict[str, str], evaluation_parts: dict[str, str]
+) -> None:
+    """Shared pane goldens are owned once and must render identically in both flavors."""
+    assert _shared_pane_inventory(portfolio_parts, evaluation_parts) == SHARED_PANE_PARTS
+    for part in sorted(SHARED_PANE_PARTS):
         assert portfolio_parts[part] == evaluation_parts[part], part
 
 

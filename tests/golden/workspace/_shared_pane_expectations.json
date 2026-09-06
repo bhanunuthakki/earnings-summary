@@ -1,0 +1,17 @@
+{
+  "canonical_dir": "portfolio",
+  "shared_panes": [
+    "pane_bear",
+    "pane_comps",
+    "pane_decisions",
+    "pane_earnings",
+    "pane_exec_comp",
+    "pane_financials",
+    "pane_news",
+    "pane_saydo",
+    "pane_sources",
+    "pane_synthesis",
+    "pane_thesis",
+    "pane_valuation"
+  ]
+}

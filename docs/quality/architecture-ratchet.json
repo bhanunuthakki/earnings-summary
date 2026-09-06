@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "b445b86ff924253b0528dd97add210cfd0dea460",
+  "scoped_commit": "835ecbeab77c724241d8179dada13db70046e6a4",
   "scanner_sha256": "458ece6a481930630754ba67af17d21df0ddec64588404d50e8054b8ec5a18d9",
-  "source_sha256": "ffd54a43daf227aacc833880898c369ec76814649a077a0d20c383b0cc26e4ef",
+  "source_sha256": "995753f3bea653b232daa737af50d38b57a2c2760be725c6574181641475da23",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,21 +22,21 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1339,
-    "total_noncomment_loc": 495682,
+    "executable_modules": 1343,
+    "total_noncomment_loc": 495811,
     "modules_over_1000_loc": 92,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
-    "max_internal_fan_out": 156,
+    "max_internal_fan_out": 147,
     "scc_count": 16,
     "scc_module_count": 77,
     "largest_scc": 25,
     "composition_root_loc": {
-      "execution/comments_server.py": 5011,
+      "execution/comments_server.py": 4591,
       "src/pipeline/portfolio_panel.py": 3348
     },
     "composition_root_fan_out": {
-      "execution/comments_server.py": 156,
+      "execution/comments_server.py": 147,
       "src/pipeline/portfolio_panel.py": 27
     },
     "facade_violations": [
@@ -61,14 +61,14 @@
         "path": "execution/_lib.py",
         "module": "execution._lib",
         "lines": {
-          "physical": 75,
-          "nonblank": 62,
-          "noncomment": 62
+          "physical": 81,
+          "nonblank": 65,
+          "noncomment": 65
         },
         "internal_fan_out": 2,
         "responsibilities": [],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "execution/activate_data_cutover.py",
@@ -1727,11 +1727,11 @@
         "path": "execution/comments_server.py",
         "module": "execution.comments_server",
         "lines": {
-          "physical": 5824,
-          "nonblank": 5352,
-          "noncomment": 5011
+          "physical": 5362,
+          "nonblank": 4922,
+          "noncomment": 4591
         },
-        "internal_fan_out": 156,
+        "internal_fan_out": 147,
         "responsibilities": [
           "database",
           "filesystem",
@@ -1862,6 +1862,66 @@
         "responsibilities": [
           "network"
         ],
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
+      },
+      {
+        "path": "execution/comments_server_profile_routes.py",
+        "module": "execution.comments_server_profile_routes",
+        "lines": {
+          "physical": 234,
+          "nonblank": 202,
+          "noncomment": 202
+        },
+        "internal_fan_out": 4,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "execution/comments_server_proposal_routes.py",
+        "module": "execution.comments_server_proposal_routes",
+        "lines": {
+          "physical": 234,
+          "nonblank": 213,
+          "noncomment": 213
+        },
+        "internal_fan_out": 7,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "execution/comments_server_research_routes.py",
+        "module": "execution.comments_server_research_routes",
+        "lines": {
+          "physical": 110,
+          "nonblank": 89,
+          "noncomment": 88
+        },
+        "internal_fan_out": 5,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "execution/comments_server_route_support.py",
+        "module": "execution.comments_server_route_support",
+        "lines": {
+          "physical": 42,
+          "nonblank": 25,
+          "noncomment": 25
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [],
         "public_functions": 0,
         "fully_annotated_public_functions": 0
       },
@@ -5693,11 +5753,11 @@
         "path": "execution/show_llm_spend.py",
         "module": "execution.show_llm_spend",
         "lines": {
-          "physical": 359,
-          "nonblank": 313,
-          "noncomment": 312
+          "physical": 360,
+          "nonblank": 314,
+          "noncomment": 313
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "database",
           "network"
@@ -5709,11 +5769,11 @@
         "path": "execution/show_prompt_calibration.py",
         "module": "execution.show_prompt_calibration",
         "lines": {
-          "physical": 157,
-          "nonblank": 131,
-          "noncomment": 129
+          "physical": 158,
+          "nonblank": 132,
+          "noncomment": 130
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -5722,12 +5782,14 @@
         "path": "execution/show_routing.py",
         "module": "execution.show_routing",
         "lines": {
-          "physical": 90,
-          "nonblank": 73,
-          "noncomment": 73
+          "physical": 92,
+          "nonblank": 75,
+          "noncomment": 75
         },
-        "internal_fan_out": 3,
-        "responsibilities": [],
+        "internal_fan_out": 4,
+        "responsibilities": [
+          "database"
+        ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
       },
@@ -5748,12 +5810,14 @@
         "path": "execution/show_thesis_history.py",
         "module": "execution.show_thesis_history",
         "lines": {
-          "physical": 89,
-          "nonblank": 74,
-          "noncomment": 74
+          "physical": 95,
+          "nonblank": 80,
+          "noncomment": 80
         },
-        "internal_fan_out": 2,
-        "responsibilities": [],
+        "internal_fan_out": 3,
+        "responsibilities": [
+          "database"
+        ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
       },
@@ -6115,11 +6179,11 @@
         "path": "execution/verify_calendars.py",
         "module": "execution.verify_calendars",
         "lines": {
-          "physical": 188,
-          "nonblank": 163,
-          "noncomment": 158
+          "physical": 180,
+          "nonblank": 155,
+          "noncomment": 150
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database"
         ],
@@ -6147,10 +6211,10 @@
         "module": "execution.verify_daily_chain",
         "lines": {
           "physical": 184,
-          "nonblank": 155,
-          "noncomment": 147
+          "nonblank": 156,
+          "noncomment": 148
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "database",
           "filesystem",
@@ -6183,7 +6247,7 @@
           "nonblank": 154,
           "noncomment": 145
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "filesystem"
         ],
@@ -6194,11 +6258,11 @@
         "path": "execution/verify_ir_home_authorities.py",
         "module": "execution.verify_ir_home_authorities",
         "lines": {
-          "physical": 179,
-          "nonblank": 158,
-          "noncomment": 158
+          "physical": 181,
+          "nonblank": 160,
+          "noncomment": 160
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"
@@ -6225,9 +6289,9 @@
         "path": "execution/verify_public_tree.py",
         "module": "execution.verify_public_tree",
         "lines": {
-          "physical": 324,
-          "nonblank": 289,
-          "noncomment": 289
+          "physical": 342,
+          "nonblank": 302,
+          "noncomment": 302
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -6235,8 +6299,8 @@
           "network",
           "process"
         ],
-        "public_functions": 7,
-        "fully_annotated_public_functions": 7
+        "public_functions": 9,
+        "fully_annotated_public_functions": 9
       },
       {
         "path": "execution/verify_reader_parity.py",
@@ -6246,7 +6310,7 @@
           "nonblank": 89,
           "noncomment": 89
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "filesystem"
         ],
@@ -6277,7 +6341,7 @@
           "nonblank": 68,
           "noncomment": 68
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "filesystem"
         ],

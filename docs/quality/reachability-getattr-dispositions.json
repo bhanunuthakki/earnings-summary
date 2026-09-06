@@ -8,7 +8,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "9b4506f7dfa4b3e1b10ca3fa06d90544858e6a9176d5ac51e79d5c28fc234c06"
+      "source_sha256": "8c043bbb86c07aca9fa2ee1f58126f7fc2ad4141d55e3bf72317cde066ae4f14"
     }
   },
   "scope": {
@@ -133,9 +133,9 @@
     },
     {
       "path": "execution/comments_server.py",
-      "line": 630,
+      "line": 636,
       "target": "<dynamic attribute>",
-      "fingerprint": "0d23742db00b7c890fc8b723c15b6f83d435724b8f30cb3c52a5917c85cfb687",
+      "fingerprint": "72a80f2cb8d954cd8cbccac6ea5b4580cd893dc94158112d212b15ea772a0118",
       "disposition": "external_adapter",
       "allowed_attributes": "debug, info, warning, error, exception, critical, log",
       "evidence": "Logger API selected by a caller-provided level; standard logging methods are the adapter boundary."

@@ -18,16 +18,17 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import add_database_argument, command_parser
 
-from llm.calibration import VersionSummary, summarize_by_prompt_version  # noqa: E402
+from llm.calibration import VersionSummary, summarize_by_prompt_version
 
 EMPTY_HINT = (
     "No calibration scores recorded yet. Run "
@@ -110,7 +111,13 @@ def _window_label(window_days: int) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = command_parser(__doc__)
+    add_database_argument(
+        parser,
+        flag="--db",
+        default=Path(__file__).resolve().parents[1] / "data" / "portfolio.db",
+    )
+    parser.add_argument("--ticker", default=None, help="Filter to one ticker (e.g. META)")
     parser.add_argument(
         "--window-days",
         type=int,
@@ -118,18 +125,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Days to look back (0 = all time). Default: 30.",
     )
     parser.add_argument("--purpose", default=None, help="Filter to one purpose (e.g. bear_case)")
-    parser.add_argument("--ticker", default=None, help="Filter to one ticker (uppercased)")
-    parser.add_argument(
-        "--db",
-        default=str(PROJECT_ROOT / "data" / "portfolio.db"),
-        help="Path to portfolio.db (default: this project's DB)",
-    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of formatted text")
     args = parser.parse_args(argv)
 
     ticker = args.ticker.upper() if args.ticker else None
     summaries = _load_summaries(
-        db_path=Path(args.db),
+        db_path=args.db,
         window_days=args.window_days,
         purpose=args.purpose,
         ticker=ticker,

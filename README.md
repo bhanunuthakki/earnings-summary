@@ -32,6 +32,9 @@ python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply \
 
 Run the checks with `make check-fast`. See [AGENTS.md](AGENTS.md) for the
 architecture and [DEFINITIONS.md](DEFINITIONS.md) for domain vocabulary.
+For a concise ownership map and the current architecture drift guard, see
+[docs/architecture/codebase_map.md](docs/architecture/codebase_map.md) and
+[`scripts/check_architecture_boundaries.py`](scripts/check_architecture_boundaries.py).
 
 ## Public boundary
 
@@ -46,7 +49,9 @@ records.
 Do not commit credentials, OAuth tokens, local databases, downloaded documents,
 generated reports, or files containing private holdings or account detail.
 The public-tree guard in `execution/verify_public_tree.py` is deterministic and
-can be run before sharing a checkout:
+can be run before sharing a checkout. It scans tracked and untracked,
+non-ignored working-tree files; paths already deleted from the working tree are
+skipped:
 
 ```bash
 python execution/verify_public_tree.py

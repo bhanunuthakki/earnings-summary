@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "b445b86ff924253b0528dd97add210cfd0dea460",
+  "scoped_commit": "835ecbeab77c724241d8179dada13db70046e6a4",
   "scanner_sha256": "8c36c79eb21c160100e20066ab3df85640467b31d93024dc97d6ca1d7912a6de",
-  "source_sha256": "cf0d3f0f010181f60892d6e304f55541033bd572e3e6f84159ddf3275b886d4d",
+  "source_sha256": "510cd245642654ca77b009f70844313e98ca416d98b4b22f3678f3b1cd706306",
   "status": "PASS",
   "tracked_test_files": [
     "instruction_tests/test_instruction_contracts.py",
@@ -57,6 +57,7 @@
     "tests/test_approved_company_desk_production.py",
     "tests/test_approved_ir_catalog.py",
     "tests/test_approved_ir_observation_capture.py",
+    "tests/test_architecture_boundaries.py",
     "tests/test_architecture_migrations.py",
     "tests/test_architecture_runtime_contracts.py",
     "tests/test_archive_catalog.py",
@@ -187,6 +188,9 @@
     "tests/test_comments_server_dcf.py",
     "tests/test_comments_server_dcf_globals.py",
     "tests/test_comments_server_operations.py",
+    "tests/test_comments_server_profile_routes.py",
+    "tests/test_comments_server_proposal_routes.py",
+    "tests/test_comments_server_research_routes.py",
     "tests/test_comments_server_startup.py",
     "tests/test_comments_store_atomicity.py",
     "tests/test_commitment_scan_receipts.py",
@@ -360,6 +364,8 @@
     "tests/test_evidence_revision.py",
     "tests/test_execution_invocation_fingerprints.py",
     "tests/test_execution_lib.py",
+    "tests/test_execution_show_commands.py",
+    "tests/test_execution_verify_commands.py",
     "tests/test_exit_postmortem.py",
     "tests/test_exit_quality_read.py",
     "tests/test_expected_earnings.py",
@@ -2124,6 +2130,27 @@
     },
     {
       "path": "tests/test_comments_server_operations.py",
+      "taxonomy": "cached-current-head",
+      "evidence": [
+        "call:migrated_db"
+      ]
+    },
+    {
+      "path": "tests/test_comments_server_profile_routes.py",
+      "taxonomy": "cached-current-head",
+      "evidence": [
+        "call:migrated_db"
+      ]
+    },
+    {
+      "path": "tests/test_comments_server_proposal_routes.py",
+      "taxonomy": "cached-current-head",
+      "evidence": [
+        "call:migrated_db"
+      ]
+    },
+    {
+      "path": "tests/test_comments_server_research_routes.py",
       "taxonomy": "cached-current-head",
       "evidence": [
         "call:migrated_db"
@@ -6902,7 +6929,7 @@
   ],
   "counts_by_taxonomy": {
     "archived-graph": 37,
-    "cached-current-head": 62,
+    "cached-current-head": 65,
     "custom-bootstrap": 28,
     "direct-downgrade": 102,
     "direct-historical": 24,
@@ -7963,7 +7990,37 @@
     },
     {
       "path": "tests/test_execution_lib.py",
-      "line": 12,
+      "line": 18,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_execution_show_commands.py",
+      "line": 156,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_execution_show_commands.py",
+      "line": 171,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_execution_show_commands.py",
+      "line": 185,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_execution_show_commands.py",
+      "line": 221,
+      "kind": "explicit_fixture",
+      "evidence": "temporary fixture path expression"
+    },
+    {
+      "path": "tests/test_execution_show_commands.py",
+      "line": 227,
       "kind": "explicit_fixture",
       "evidence": "temporary fixture path expression"
     },

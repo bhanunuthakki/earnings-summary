@@ -12,27 +12,27 @@ Scanner and source hashes inside each receipt make definition drift explicit.
 
 Current evidence at the Train 0 instrumentation baseline:
 
-- 1,339 executable modules and 495,682 non-comment lines.
+- 1,343 executable modules and 495,811 non-comment lines.
 - 92 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
 - 16 import cycles spanning 77 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.
 - 166 near-miss groups covering 11,680 body lines.
-- 2 whole-tree Ruff findings, 62 format findings, 4,192 active strict-Pyright
+- 2 whole-tree Ruff findings, 62 format findings, 4,178 active strict-Pyright
   diagnostics, 175 separately retained archived-migration diagnostics, and
   612 suppression directives. The typed static receipt is `PASS`: every
   configured source root is included and immutable archived migrations remain
   a separately reported denominator.
-- 695 database-builder occurrences across 1,121 tracked test files are
+- 698 database-builder occurrences across 1,127 tracked test files are
   classified with zero violations or unclassified cases.
 - The operational graph has no parse failures, unresolved targets, stale
-  dispositions, or unknown production edges. The remaining 84 unknown edges
+  dispositions, or unknown production edges. The remaining 86 unknown edges
   are confined to tests and instruction tests and remain visible in the raw
   graph.
-- The lifecycle receipt classifies all 836 candidates with zero omissions,
+- The lifecycle receipt classifies all 841 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
-  UI-reachable, 231 internal-delegate, and 271 time-bounded dormant entries.
-- The function-lifecycle receipt validates as `PASS` for 33,964 symbols:
-  11,773 protected, 15,758 referenced, 6,418 unknown, and 15 conservative
+  UI-reachable, 235 internal-delegate, and 272 time-bounded dormant entries.
+- The function-lifecycle receipt validates as `PASS` for 34,074 symbols:
+  11,787 protected, 15,807 referenced, 6,465 unknown, and 15 conservative
   unreferenced-static candidates. Candidates are review inputs, not deletion
   authority.
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced

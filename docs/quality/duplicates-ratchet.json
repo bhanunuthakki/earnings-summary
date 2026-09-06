@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "b445b86ff924253b0528dd97add210cfd0dea460",
-  "source_hash": "ffd54a43daf227aacc833880898c369ec76814649a077a0d20c383b0cc26e4ef",
+  "commit_hash": "835ecbeab77c724241d8179dada13db70046e6a4",
+  "source_hash": "995753f3bea653b232daa737af50d38b57a2c2760be725c6574181641475da23",
   "scanner_hash": "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -10,8 +10,8 @@
     "min_ast_nodes": 20,
     "min_body_lines": 15
   },
-  "files_scanned": 1339,
-  "functions_scanned": 14368,
+  "files_scanned": 1343,
+  "functions_scanned": 14380,
   "exact_groups": [
     {
       "group_id": "exact-008cef8bb5653e6d",
@@ -3620,31 +3620,6 @@
       ]
     },
     {
-      "group_id": "near-d2f910fff017d358",
-      "similarity": 0.944846,
-      "duplicated_loc": 60,
-      "functions": [
-        {
-          "path": "src/pipeline/weekly_packet.py",
-          "qualified_name": "_apply_accept",
-          "lineno": 849,
-          "end_lineno": 879,
-          "body_lines": 30,
-          "ast_nodes": 168,
-          "normalized_hash": "dc723ab27f0f333ca1ee8e9f3d185058b15246fd56727b4254879954f51b898c"
-        },
-        {
-          "path": "src/pipeline/weekly_packet.py",
-          "qualified_name": "_apply_drop",
-          "lineno": 882,
-          "end_lineno": 912,
-          "body_lines": 30,
-          "ast_nodes": 168,
-          "normalized_hash": "c928b12616aa99bbc30ef0424639a5db1178fa4cb55c19abb71f98a4f5daa41f"
-        }
-      ]
-    },
-    {
       "group_id": "near-d688d8874eb4b9b9",
       "similarity": 0.873721,
       "duplicated_loc": 373,
@@ -4426,9 +4401,9 @@
     "duplicated_loc": 337
   },
   "near_miss_totals": {
-    "groups": 166,
-    "participating_functions": 251,
-    "duplicated_loc": 11680
+    "groups": 165,
+    "participating_functions": 249,
+    "duplicated_loc": 11620
   },
   "definitions": {
     "eligible_function": "at least 20 AST nodes and at least 15 physical body lines",
