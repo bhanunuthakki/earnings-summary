@@ -38,8 +38,9 @@ class EntrypointParity(BaseModel):
 class EvidenceCategory(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
-    status: Literal["PASS", "HOLD"]
-    reason: str
+    scope: Literal["collection_only"] = "collection_only"
+    collection_status: Literal["COMPLETE", "INCOMPLETE"]
+    collection_reason: str
     artifacts: list[str]
     implementation_artifacts: list[str]
     verification_artifacts: list[str]
@@ -67,7 +68,9 @@ class CompatibilityEvidence(BaseModel):
     entrypoint_count: int = Field(ge=1)
     categories: list[EvidenceCategory]
     checklist_sha256: str
+    verification_status: Literal["DEFERRED"] = "DEFERRED"
     hold: bool
+    hold_reasons: list[str]
 
 
 REQUIRED_CATEGORIES: tuple[str, ...] = (
@@ -393,16 +396,18 @@ def _category(root: Path, name: str, patterns: tuple[str, ...]) -> EvidenceCateg
         missing.extend(
             f"population {mode} mode" for mode in ("dry_run", "apply") if mode not in modes
         )
-    status: Literal["PASS", "HOLD"] = "PASS" if not missing else "HOLD"
-    reason = (
+    collection_status: Literal["COMPLETE", "INCOMPLETE"] = (
+        "COMPLETE" if not missing else "INCOMPLETE"
+    )
+    collection_reason = (
         "all required evidence conditions present"
-        if status == "PASS"
+        if collection_status == "COMPLETE"
         else "missing " + ", ".join(missing)
     )
     return EvidenceCategory(
         name=name,
-        status=status,
-        reason=reason,
+        collection_status=collection_status,
+        collection_reason=collection_reason,
         artifacts=artifacts,
         implementation_artifacts=implementation_artifacts,
         verification_artifacts=verification_artifacts,
@@ -469,6 +474,19 @@ def capture_compatibility_evidence(
             ),
         ),
     ]
+    hold_reasons = sorted(
+        f"incomplete collection: {category.name}: {category.collection_reason}"
+        for category in categories
+        if category.collection_status == "INCOMPLETE"
+    )
+    hold_reasons.extend(
+        sorted(
+            f"entrypoint {record.status}: {record.path}"
+            for record in parity
+            if record.status != "unchanged"
+        )
+    )
+    hold_reasons.append("behavioral verification and admission deferred")
     return CompatibilityEvidence(
         baseline_revision=resolved_baseline.lower(),
         current_revision=current_revision,
@@ -480,5 +498,6 @@ def capture_compatibility_evidence(
         entrypoint_count=len(parity),
         categories=categories,
         checklist_sha256=_sha256(CHECKLIST.encode("utf-8")),
-        hold=any(category.status == "HOLD" for category in categories),
+        hold=True,
+        hold_reasons=hold_reasons,
     )

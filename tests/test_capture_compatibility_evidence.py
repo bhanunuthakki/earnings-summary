@@ -55,8 +55,11 @@ def test_receipt_is_typed_deterministic_and_reports_parity(tmp_path: Path) -> No
         "report_dashboard_goldens",
     }
     assert first.hold is True
+    assert first.verification_status == "DEFERRED"
+    assert "behavioral verification and admission deferred" in first.hold_reasons
     for category in first.categories:
         assert category.artifact_sha256
+        assert category.scope == "collection_only"
         assert set(category.implementation_artifacts + category.verification_artifacts) == set(
             category.artifacts
         )
@@ -69,6 +72,8 @@ def test_changed_entrypoint_is_explicitly_detected(tmp_path: Path) -> None:
     receipt = capture_compatibility_evidence(root, baseline)
     changed = next(item for item in receipt.entrypoint_parity if item.path == "execution/run.py")
     assert changed.status == "changed"
+    assert receipt.hold is True
+    assert "entrypoint changed: execution/run.py" in receipt.hold_reasons
 
 
 def test_recursive_git_pathspec_includes_nested_entrypoints(tmp_path: Path) -> None:
@@ -101,7 +106,7 @@ def test_malformed_route_contract_forces_category_hold(tmp_path: Path) -> None:
     flask = next(
         item for item in receipt.categories if item.name == "flask_url_method_endpoint_map"
     )
-    assert flask.status == "HOLD"
+    assert flask.collection_status == "INCOMPLETE"
     assert flask.extracted == []
 
 
@@ -118,8 +123,8 @@ def test_population_receipt_names_missing_mode(tmp_path: Path) -> None:
     population = next(
         item for item in receipt.categories if item.name == "population_dry_run_apply_receipts"
     )
-    assert population.status == "HOLD"
-    assert "population dry_run mode" in population.reason
+    assert population.collection_status == "INCOMPLETE"
+    assert "population dry_run mode" in population.collection_reason
 
 
 def test_missing_baseline_or_goldens_fails_closed(tmp_path: Path) -> None:
@@ -175,9 +180,12 @@ def test_supported_golden_case_collections_are_counted(tmp_path: Path, payload: 
     assert receipt.legacy_route_golden[0].cases == 1
 
 
-def test_tracked_golden_corpus_shape_is_preserved() -> None:
+def test_tracked_complete_collection_still_holds_for_deferred_verification(
+    tmp_path: Path,
+) -> None:
     root = Path(__file__).parents[1]
-    receipt = capture_compatibility_evidence(root, _git(root, "rev-parse", "HEAD"))
+    baseline = _git(root, "rev-parse", "HEAD")
+    receipt = capture_compatibility_evidence(root, baseline)
     receipts = receipt.legacy_route_golden
 
     assert len(receipts) == 24
@@ -190,6 +198,16 @@ def test_tracked_golden_corpus_shape_is_preserved() -> None:
         )
         == 1
     )
+    assert all(category.collection_status == "COMPLETE" for category in receipt.categories)
+    assert receipt.verification_status == "DEFERRED"
+    assert receipt.hold is True
+    assert "behavioral verification and admission deferred" in receipt.hold_reasons
+
+    from capture_compatibility_evidence import main
+
+    output = tmp_path / "compatibility.json"
+    assert main(["--repo-root", str(root), "--baseline", baseline, "--out", str(output)]) == 2
+    assert json.loads(output.read_text(encoding="utf-8"))["hold"] is True
 
 
 def test_baseline_option_injection_fails_closed(tmp_path: Path) -> None:
@@ -236,7 +254,7 @@ def test_untracked_matching_artifacts_are_ignored(tmp_path: Path) -> None:
 
     assert receipt.golden_count == 1
     assert population.artifacts == []
-    assert population.status == "HOLD"
+    assert population.collection_status == "INCOMPLETE"
 
 
 def test_undecodable_tracked_artifact_fails_closed(
