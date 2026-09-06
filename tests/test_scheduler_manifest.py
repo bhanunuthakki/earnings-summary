@@ -218,11 +218,12 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
         for task in manifest.tasks
         if task.task_name.casefold() != r"\earnings-summary\capture_poller".casefold()
     ]
-    assert first_script.count("schtasks.exe /Create") == len(registered_tasks)
-    assert first_script.count("Failed to register scheduled task") == len(registered_tasks)
+    assert first_script.count("schtasks.exe /Create") == 1
+    assert first_script.count("Failed to register scheduled task") == 1
     tracker_create = (
-        "& schtasks.exe /Create /TN '\\earnings-summary\\portfolio_tracker_api' "
-        "/XML (Join-Path $renderDir 'portfolio_tracker_api.task.xml') /F"
+        "Register-ManifestTask -TaskName 'portfolio_tracker_api' -TaskPath "
+        "'\\earnings-summary\\' -XmlPath (Join-Path $renderDir "
+        "'portfolio_tracker_api.task.xml') -System"
     )
     tracker_acl = (
         "& $taskSecurityScript -TaskPath '\\earnings-summary\\portfolio_tracker_api' "
@@ -232,6 +233,11 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert tracker_acl in first_script
     assert first_script.index(tracker_create) < first_script.index(tracker_acl)
     assert first_script.count("& $taskSecurityScript -TaskPath") == len(registered_tasks)
+    assert "[PSCredential]$BackgroundCredential" in first_script
+    assert "Register-ScheduledTask" in first_script
+    assert "-Password $password" in first_script
+    assert "scheduler_rollback" in first_script
+    assert "Principal.LogonType -ne 'Password'" in first_script
     assert "| Windows service |" in first_doc
 
 

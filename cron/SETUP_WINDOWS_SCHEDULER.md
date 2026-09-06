@@ -1,8 +1,9 @@
 # Setting up the earnings-summary crons on Windows Task Scheduler
 
 This is the operator runbook for the scheduled tasks defined in this folder.
-The manifest owns each task's principal: most jobs run as the interactive user,
-while `portfolio_tracker_api` runs as LOCAL SYSTEM. Jobs log to
+The manifest owns each task's principal: pass `-BackgroundCredential` during
+registration to run user-owned jobs whether or not the owner is signed in;
+`portfolio_tracker_api` runs as LOCAL SYSTEM. Jobs log to
 `.tmp/cron_logs/<task>_<TS>.log` and Scheduler-backed declarations are grouped
 under the `\earnings-summary\` namespace.
 
@@ -83,7 +84,7 @@ current-index-bound content-addressed partitions.
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which snapshots the canonical database with SQLite's online-backup API, compresses it locally, and publishes only an authenticated AES-256-GCM `.gz.enc` envelope to `ES_DB_BACKUP_DIR`. When that variable is unset, both backup and restore choose the first existing mounted `<drive>:\My Drive` from `D:` through `Z:` (for example, `G:\My Drive`), then fall back to `%USERPROFILE%\My Drive`; the backup folder is `earnings-summary-db-backups` beneath that root. The key stays in the external secrets directory. Fires 15 minutes before the 03:00 refresh chain and retains the newest `ES_DB_BACKUP_RETAIN` encrypted snapshots (default 14). |
+| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which snapshots the canonical database with SQLite's online-backup API and writes an authenticated AES-256-GCM `.gz.enc` envelope to `ES_DB_BACKUP_DIR`. The wrapper then uploads that immutable ciphertext through the Drive API to the app-owned `Windows headless backups/earnings-summary-db-backups` folder; Google Drive for desktop and an interactive session are not required. The key stays in the external secrets directory. Fires 15 minutes before the 03:00 refresh chain and retains the newest 14 primary snapshots and 6 archive snapshots locally and remotely. |
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -403,6 +404,9 @@ explicitly so every rendered action points at that checkout:
 $EarningsSummaryCodeRoot = "$env:USERPROFILE\.gemini\antigravity\runtime\earnings-summary"
 $EarningsSummaryPython = (Get-Command python.exe -ErrorAction Stop).Source
 Set-Location $EarningsSummaryCodeRoot
+$BackgroundCredential = Get-Credential `
+  -UserName "$env:COMPUTERNAME\$env:USERNAME" `
+  -Message 'Windows password for background scheduled tasks (not the PIN)'
 
 & $EarningsSummaryPython execution/sqlite_bootstrap.py `
   execution/generate_cron_artifacts.py --check
@@ -410,7 +414,8 @@ if ($LASTEXITCODE -ne 0) { throw 'scheduler source validation failed' }
 
 & (Join-Path $EarningsSummaryCodeRoot 'cron\register_tasks.generated.ps1') `
   -Python $EarningsSummaryPython `
-  -RepoRoot $EarningsSummaryCodeRoot
+  -RepoRoot $EarningsSummaryCodeRoot `
+  -BackgroundCredential $BackgroundCredential
 if ($LASTEXITCODE -ne 0) { throw 'scheduler registration failed' }
 ```
 
@@ -419,6 +424,22 @@ Scheduler-backed declaration in `cron/task_manifest.json`, including
 `\earnings-summary\portfolio_tracker_api` and
 `\earnings-summary\refresh_portfolio_tracker`; the separately managed Windows
 service declaration remains identified as such in `cron/TASKS.generated.md`.
+The password is held only in the local PowerShell process and is handed to Task
+Scheduler's credential store; it is never written to the repository, generated
+XML, rollback export, or command line. Before changing a task, the installer
+exports its prior XML beneath `.tmp/scheduler_rollback/<timestamp>/`. Omitting
+`-BackgroundCredential` preserves the XML-declared interactive/S4U principals
+and is intended only for diagnostics, not production registration.
+
+The backup uploader reuses the existing external `gsheets_credentials.json` and
+`gsheets_token.json` files with the narrow `drive.file` scope. The first
+activation creates its own Drive folder and seeds the currently retained local
+encrypted snapshots. Later runs upload only the newest immutable artifacts,
+verify size plus a stored SHA-256 receipt, and prune only files marked as owned
+by the same backup set. It cannot enumerate or delete unrelated Drive files.
+Local backup and restore still resolve the first existing mounted `<drive>:\My Drive` from `D:` through `Z:`
+(for example, `G:\My Drive`), then fall back to
+`%USERPROFILE%\My Drive`; the API upload is the independent off-machine leg.
 
 ### Migrating from PR #172's `run_triggers` cron
 
