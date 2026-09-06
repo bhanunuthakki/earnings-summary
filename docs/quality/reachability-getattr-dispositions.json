@@ -1,0 +1,529 @@
+{
+  "edges": [
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only fields declared in the checked-in _SOTP_SPEC dashboard spec.",
+      "fingerprint": "a82d23aa835fd2ad8052288c1cb2938ea93769dacb997e8feb209325a1ef4987",
+      "line": 428,
+      "path": "execution/build_holdco_sotp.py",
+      "targets": [
+        "_SOTP_SPEC"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Sync writes only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
+      "fingerprint": "eb91d94b5439a7d0dc6519c350fed257c4ef9433806034129f6d8919b9fdc9a1",
+      "line": 591,
+      "path": "execution/build_holdco_sotp.py",
+      "targets": [
+        "_SOTP_SPEC"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Sync reads only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
+      "fingerprint": "ba5ae6ccd19b909e2e804b1ba4cd169562927e6772122e3f1674fc2a44fa9ee4",
+      "line": 593,
+      "path": "execution/build_holdco_sotp.py",
+      "targets": [
+        "_SOTP_SPEC"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Dashboard build reads only _SOTP_SPEC fields via getattr.",
+      "fingerprint": "439013111792c73827bd00d06031ea25da182a270e8d1e77b95b85a4ae412c2a",
+      "line": 717,
+      "path": "execution/build_holdco_sotp.py",
+      "targets": [
+        "_SOTP_SPEC"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
+      "fingerprint": "88e05586aa34d3077908dbc8dfe2701e3ff3fed4cf06df76016a075ed090e065",
+      "line": 451,
+      "path": "execution/build_meli_platform_dcf.py",
+      "targets": [
+        "comm_g_near",
+        "fpay_g_near",
+        "cbg_near"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
+      "fingerprint": "45b5873dbfebf1d1479b6674e00377d0eb14cb913bacc012269adf807c862ef5",
+      "line": 453,
+      "path": "execution/build_meli_platform_dcf.py",
+      "targets": [
+        "comm_g_term",
+        "fpay_g_term",
+        "cbg_term"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
+      "fingerprint": "8b9f69bcd4af30059183e4d0310f215afa7f04b44af60e0b151569523f3fb9ce",
+      "line": 455,
+      "path": "execution/build_meli_platform_dcf.py",
+      "targets": [
+        "comm_margin_near",
+        "fpay_margin_near",
+        "nimal_near"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
+      "fingerprint": "6e170cd8aa6c4c72264e5f1c4cb773a923e0a25718558027ce6a696ebe3bb9ed",
+      "line": 457,
+      "path": "execution/build_meli_platform_dcf.py",
+      "targets": [
+        "comm_margin_term",
+        "fpay_margin_term",
+        "nimal_term"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "_section_status reads only the closed report-spec section fields.",
+      "fingerprint": "e25bcf6625fe877527e9165b20ec3d370db906db6d8fab7b19fd3ee97c20dbbb",
+      "line": 249,
+      "path": "execution/build_offline_artifact.py",
+      "targets": [
+        "spec"
+      ]
+    },
+    {
+      "disposition": "external_adapter",
+      "evidence": "Dynamic level selects only standard logging adapter methods.",
+      "fingerprint": "72a80f2cb8d954cd8cbccac6ea5b4580cd893dc94158112d212b15ea772a0118",
+      "line": 636,
+      "path": "execution/comments_server.py",
+      "targets": [
+        "logging"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr validates only the checked-in positive_fields argparse tuple.",
+      "fingerprint": "5a4e0253dca91d48a50456727fcab80123ecfa3b8b3dbb013a1d90a174bcd852",
+      "line": 1140,
+      "path": "execution/discover_ir_documents_all.py",
+      "targets": [
+        "positive_fields"
+      ]
+    },
+    {
+      "disposition": "external_adapter",
+      "evidence": "getattr reads only _FRAME_TABLES-mapped yfinance Ticker attributes.",
+      "fingerprint": "0ada94d09f8fd0f690a1d496e48946c319ddd0474145179199a4fbb69e51b66f",
+      "line": 132,
+      "path": "execution/fetch_yf_estimates.py",
+      "targets": [
+        "yfinance"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Document path extraction permits only the filepath and uri tuple.",
+      "fingerprint": "a363d7af04e4e624be79bc86c2ab22a1f7793bc987495fc3fe5e0b5e3cc55865",
+      "line": 494,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "filepath",
+        "uri"
+      ]
+    },
+    {
+      "disposition": "external_adapter",
+      "evidence": "getattr crosses only the Arelle, lxml, and XBRL relationship adapter boundaries.",
+      "fingerprint": "18bddc25e5ef7604123632be780a0fc3bbef6ef59d2a8fe8dd28fcd85f6856ca",
+      "line": 933,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "arelle",
+        "lxml"
+      ]
+    },
+    {
+      "disposition": "runtime_registry",
+      "evidence": "getattr resolves only Windows kernel32 API names.",
+      "fingerprint": "80a84afe0f43ebb52af5f0906ff422b435d478fb3acf3d0b9d2e4cf0cf300f91",
+      "line": 816,
+      "path": "execution/refresh_cache.py",
+      "targets": [
+        "kernel32"
+      ]
+    },
+    {
+      "disposition": "runtime_registry",
+      "evidence": "getattr resolves only Windows kernel32 API names.",
+      "fingerprint": "f68b668bf903c48560baae18a8de7e45502fbfdc56a47c02ca5edb128770865f",
+      "line": 820,
+      "path": "execution/refresh_cache.py",
+      "targets": [
+        "kernel32"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only StageSpec.skip_flags from the checked-in manifest.",
+      "fingerprint": "ace40d29eaa119f80f4c2a986d8002eb4a6c3f39d75a472b52bcab1988fc3116",
+      "line": 158,
+      "path": "execution/run_morning_pipeline.py",
+      "targets": [
+        "StageSpec.skip_flags"
+      ]
+    },
+    {
+      "disposition": "runtime_registry",
+      "evidence": "getattr selects only the three checked-in anchor loaders.",
+      "fingerprint": "7b35aebe06e32ac2b07c5b3b99bd88636016b0a6253dbc51de1aa58fc2a15bf2",
+      "line": 133,
+      "path": "src/ask/context.py",
+      "targets": [
+        "load_worldview_anchor",
+        "load_themes_anchor",
+        "load_owner_profile_anchor"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr reads only line_item_spec provider fields.",
+      "fingerprint": "27c20b90bc592025a43ab28dcec4880af3ee5636c7d4043a90ede08e3cff2cf7",
+      "line": 82,
+      "path": "src/compute/_common.py",
+      "targets": [
+        "line_item_spec"
+      ]
+    },
+    {
+      "disposition": "runtime_registry",
+      "evidence": "getattr resolves only Windows kernel32 API names.",
+      "fingerprint": "05ed6a70b3d8391d0bef4d2f805590e4cbae4c2b845774e58d2cfb48d4bf372c",
+      "line": 83,
+      "path": "src/compute/evidence_snapshot.py",
+      "targets": [
+        "kernel32"
+      ]
+    },
+    {
+      "disposition": "runtime_registry",
+      "evidence": "getattr resolves only Windows kernel32 API names.",
+      "fingerprint": "46e6f6dd06200caacdcf598d3d745210d1c932813cd7cae8381450604afcab3d",
+      "line": 87,
+      "path": "src/compute/evidence_snapshot.py",
+      "targets": [
+        "kernel32"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only _BASELINE_SCALAR_FIELDS attributes.",
+      "fingerprint": "7032c3644f874cf966c5a1b0360032832d9d891e89ef33413db1e81957ca83c3",
+      "line": 262,
+      "path": "src/dcf/assumptions_doc.py",
+      "targets": [
+        "_BASELINE_SCALAR_FIELDS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Scenario row reads only the declared scenario delta attributes.",
+      "fingerprint": "8d9c0adf6b8b9422bee58f2441df486ce8474c320936857712f2b1bc37ac3091",
+      "line": 534,
+      "path": "src/dcf/assumptions_doc.py",
+      "targets": [
+        "bull_deltas",
+        "bear_deltas"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Scenario seed reads only the declared scenario delta attributes.",
+      "fingerprint": "1ad5b4ec0db73eb99ddda100866cb87017d6b74a5d885726ccd6450d5d5e275a",
+      "line": 535,
+      "path": "src/dcf/assumptions_doc.py",
+      "targets": [
+        "bull_deltas",
+        "bear_deltas"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only _SCALAR_ROW_ATTR dashboard scalar attributes.",
+      "fingerprint": "214214082d8af74d7e64f5f9888855b106ca6001eacff4b71fccf14669ee49eb",
+      "line": 1462,
+      "path": "src/dcf/redesign.py",
+      "targets": [
+        "_SCALAR_ROW_ATTR"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Decimal loop accesses only the six persisted earnings-surprise fields.",
+      "fingerprint": "6dab249dd256b4609012fbcf9b625cd8ccaeeb9e267ff801026d45552700986d",
+      "line": 148,
+      "path": "src/earnings_surprise_store.py",
+      "targets": [
+        "eps_estimate",
+        "eps_actual",
+        "revenue_estimate",
+        "revenue_actual",
+        "eps_surprise_pct",
+        "revenue_surprise_pct"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Count loop accesses only the two analyst-count fields.",
+      "fingerprint": "3df50ec566bfa14b46265e9e1a1ada3d1e64b7136ba66986982fa90de41ee2a8",
+      "line": 168,
+      "path": "src/earnings_surprise_store.py",
+      "targets": [
+        "num_analysts_eps",
+        "num_analysts_revenue"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Persistence tuple reads only the six persisted decimal fields.",
+      "fingerprint": "0da289720fdea5b11ed150126a03df67dbb101bf30149edc18fd0201df87692f",
+      "line": 258,
+      "path": "src/earnings_surprise_store.py",
+      "targets": [
+        "eps_estimate",
+        "eps_actual",
+        "revenue_estimate",
+        "revenue_actual",
+        "eps_surprise_pct",
+        "revenue_surprise_pct"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr reads only validated FmpAnalystEstimateRecord metric fields.",
+      "fingerprint": "db6f9c628420340af4b2f27aa1e74790ddc078c96c0d172f05cf46fbdd8a304d",
+      "line": 172,
+      "path": "src/estimates_archive.py",
+      "targets": [
+        "FmpAnalystEstimateRecord"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr checks only the four core wealth total fields.",
+      "fingerprint": "c07ab04df6b76d19830de120fb4e5c1e24829e85a40796df6bbd15f9795f3b27",
+      "line": 95,
+      "path": "src/integrations/wealth_context.py",
+      "targets": [
+        "net_worth_total",
+        "liquid_total",
+        "investable_total",
+        "home_equity"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only _kind_to_date_attr event date attributes.",
+      "fingerprint": "d24609b4bd74a372d5ddaa6778d3a00fa5e26723b57dbfefee02961f221a15bd",
+      "line": 169,
+      "path": "src/integrations/wealthplan_capacity.py",
+      "targets": [
+        "_kind_to_date_attr"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only _OPTIONAL_COLUMNS ledger fields.",
+      "fingerprint": "3e4219e0b4339e751304225c4c16ead957f099c9c98499fb4043a01b5a2a8ea3",
+      "line": 341,
+      "path": "src/llm_call_ledger.py",
+      "targets": [
+        "_OPTIONAL_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "table_names_present checks only the five closed estimate tables.",
+      "fingerprint": "be7e7771013e86696570dc42bd741a8d78b6fa08ef25bc8146233cf75aa475a5",
+      "line": 146,
+      "path": "src/models/yf_payloads.py",
+      "targets": [
+        "earnings_estimate",
+        "revenue_estimate",
+        "growth_estimates",
+        "eps_trend",
+        "eps_revisions"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
+      "fingerprint": "83e45d41bccca12e2a3c419d5f568a790dc32444cf6a22aff3459a26b45e6ae4",
+      "line": 2126,
+      "path": "src/pipeline/peeks.py",
+      "targets": [
+        "_COMPARE_METRIC_ROWS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only _METRIC_COLUMNS snapshot fields.",
+      "fingerprint": "228cccfcd38e0d46d870a217b4b1921dfa61736fd5d867938134cc2012bc4f79",
+      "line": 161,
+      "path": "src/portfolio_risk_snapshot_store.py",
+      "targets": [
+        "_METRIC_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Write path reads only _METRIC_COLUMNS snapshot fields.",
+      "fingerprint": "e81cd6c8893a1ead8fa4590563767ddfb7e86d83513c1c5962212c16cd19073e",
+      "line": 263,
+      "path": "src/portfolio_risk_snapshot_store.py",
+      "targets": [
+        "_METRIC_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr projects only _DISPOSITION_COLUMNS fields.",
+      "fingerprint": "dedf20b2e0c84ce6b6486f8c8b65f89c4321adf4b8188cc24c03bd45b6c204c1",
+      "line": 220,
+      "path": "src/provenance/filing_xbrl_extraction_ledger.py",
+      "targets": [
+        "_DISPOSITION_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr projects only _SEAL_COLUMNS fields.",
+      "fingerprint": "77ff3e0f621077b32039eef0a84101dce5e79ee9e3d4c27d3756673553db03e9",
+      "line": 269,
+      "path": "src/provenance/filing_xbrl_extraction_ledger.py",
+      "targets": [
+        "_SEAL_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr reads the typed registry spec id_column.",
+      "fingerprint": "7000d52085aadbc3024f284eb4d47495a28e4b1dc3cad77eb95a149d55304394",
+      "line": 503,
+      "path": "src/provenance/issuer_registry.py",
+      "targets": [
+        "id_column"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr is bounded by the locator parity validator fields.",
+      "fingerprint": "d83ed5352b31f5eefac496697c02c8b07602d9f4f409d15903ffcd9427fc5ed7",
+      "line": 385,
+      "path": "src/provenance/legacy_fact_evidence_match.py",
+      "targets": [
+        "locator fields"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr is bounded by the locator digest validator fields.",
+      "fingerprint": "19c22a972a71bcbee569ef553370e632fcc39d0d578d2cd3a8e74cab61545925",
+      "line": 399,
+      "path": "src/provenance/legacy_fact_evidence_match.py",
+      "targets": [
+        "locator digest fields"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "getattr reads only the pinned extraction policy fields.",
+      "fingerprint": "4fa2fd0029c2ede342a002ed1bf0bc4237f4e1ab2e17f2bf723dd511d664af23",
+      "line": 104,
+      "path": "src/provenance/pdf_table_extraction.py",
+      "targets": [
+        "extraction policy"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr reads the typed reporting-entity spec id_column.",
+      "fingerprint": "1aa604f2c1ebec5a14c50d9af8ab12bcf5ebac192cd27183d76d5e97ec71411a",
+      "line": 469,
+      "path": "src/provenance/reporting_entity_registry.py",
+      "targets": [
+        "id_column"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "Columns come from SearchProjectionSeal.model_fields.",
+      "fingerprint": "89a37d6de4e0f9cc2992b9b30421f547e57e8f08021fd246ba5b4d1351483cf4",
+      "line": 179,
+      "path": "src/provenance/search_index_lineage.py",
+      "targets": [
+        "SearchProjectionSeal.model_fields"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "getattr projects only the typed publication-member columns.",
+      "fingerprint": "47a9c70d5d2c9e39bfc22fc18e27c69db70da7d9f37665e402f1b2578de473bc",
+      "line": 760,
+      "path": "src/provenance/source_fact_repository.py",
+      "targets": [
+        "member_columns"
+      ]
+    },
+    {
+      "disposition": "runtime_registry",
+      "evidence": "getattr resolves only Windows kernel32 API names.",
+      "fingerprint": "83f9b6fcb00d476e0b01364ebbe8722d91b5629316823852df8c3c69976aecc8",
+      "line": 552,
+      "path": "src/report/offline_artifact.py",
+      "targets": [
+        "kernel32"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "Columns come from EmbeddingEvaluationReceipt.model_fields.",
+      "fingerprint": "885a71905692ea9666990039bbb90c10e66656f32a2693fa294ce356a09420cd",
+      "line": 108,
+      "path": "src/search/embedding_evaluation_receipt.py",
+      "targets": [
+        "EmbeddingEvaluationReceipt.model_fields"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "Columns come from EmbeddingRuntimeRegistration.model_fields.",
+      "fingerprint": "865973482f4c491dacfcbfe625035cc69c5c37436f8bbad64dd411366bd9526d",
+      "line": 115,
+      "path": "src/search/embedding_runtime_registration.py",
+      "targets": [
+        "EmbeddingRuntimeRegistration.model_fields"
+      ]
+    }
+  ],
+  "graph_provenance": {
+    "parser": {
+      "name": "ast+xml+literal-scanner",
+      "python": ">=3.11",
+      "source_sha256": "6158530e5e1598308ccdf087c3013d9a58acfc6253d1a3415ea56abb8a128071",
+      "version": "1.2.1"
+    },
+    "path": ".tmp/quality/reachability-check.json",
+    "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
+    "schema_version": "operational-reachability-raw/v1",
+    "source_manifest_sha256": "c45c703eee7da03042b3e7799828d8cd373d2c01c4625221e5a831ebba3d47a7"
+  },
+  "schema_version": "reachability-getattr-dispositions/v1"
+}
