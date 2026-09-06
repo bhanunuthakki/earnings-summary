@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "835ecbeab77c724241d8179dada13db70046e6a4",
-  "source_sha256": "cfb3985beb2dad1c5dbcff758495d4fd97de3a9a3a3c840db1a218ed5c6fdf52",
+  "current_revision": "67f450088cffd71d00e2367112ee5de9a9aa164d",
+  "source_sha256": "0afff51787f400790f7ca43ee781a8958a3dbe32bcf85c0bad7e521877bab1ce",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -6435,7 +6435,7 @@
     },
     {
       "path": "src/quality/duplicates.py",
-      "current_sha256": "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e",
+      "current_sha256": "9b0bdd3f5f465b02e36d3828da922d3bd784703d89d10b41121dec9591240195",
       "baseline_sha256": null,
       "status": "added"
     },

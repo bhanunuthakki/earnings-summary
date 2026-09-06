@@ -25,15 +25,22 @@ def _inventory(tmp_path: Path, files: dict[str, str]) -> analyzer.DuplicateInven
         path.write_text(content, encoding="utf-8")
         paths.append(path)
     original = analyzer.tracked_python_files
+    original_commit = analyzer.resolve_git_commit
 
     def fake_tracked_python_files(_: Path) -> list[Path]:
         return sorted(paths)
 
     analyzer.tracked_python_files = fake_tracked_python_files
+
+    def fake_git_commit(_: Path, __: str) -> str:
+        return "a" * 40
+
+    analyzer.resolve_git_commit = fake_git_commit
     try:
         return analyzer.build_inventory(tmp_path)
     finally:
         analyzer.tracked_python_files = original
+        analyzer.resolve_git_commit = original_commit
 
 
 def test_deterministic_exact_groups_and_identifier_comment_normalization(tmp_path: Path) -> None:
@@ -62,7 +69,43 @@ def test_threshold_exclusions_and_repository_path_exclusion(tmp_path: Path) -> N
     )
     assert inventory.files_scanned == 3  # path filtering is separately tested below
     assert not inventory.exact_groups
-    assert all("tests" not in path.parts for path in analyzer.tracked_python_files(tmp_path))
+
+
+def test_git_file_listing_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*_: object, **__: object) -> object:
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(analyzer.subprocess, "run", fail)
+    with pytest.raises(ValueError, match="cannot enumerate tracked Python files"):
+        analyzer.tracked_python_files(tmp_path)
+
+
+def test_git_commit_failure_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def fail(*_: object, **__: object) -> object:
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(analyzer.subprocess, "run", fail)
+    with pytest.raises(ValueError, match="cannot resolve git commit"):
+        analyzer.resolve_git_commit(tmp_path, "WORKTREE")
+
+
+def test_successful_empty_inventory_remains_distinguishable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def no_tracked_files(_: Path) -> list[Path]:
+        return []
+
+    def fake_git_commit(_: Path, __: str) -> str:
+        return "a" * 40
+
+    monkeypatch.setattr(analyzer, "tracked_python_files", no_tracked_files)
+    monkeypatch.setattr(analyzer, "resolve_git_commit", fake_git_commit)
+    inventory = analyzer.build_inventory(tmp_path)
+    assert inventory.files_scanned == 0
+    assert inventory.functions_scanned == 0
+    assert not inventory.parse_errors
 
 
 def test_near_miss_group_is_distinct_from_exact(tmp_path: Path) -> None:
@@ -103,10 +146,17 @@ def test_parse_error_is_recorded_and_cli_fails_clearly(
         return [broken]
 
     analyzer.tracked_python_files = fake_tracked_python_files
+    original_commit = analyzer.resolve_git_commit
+
+    def fake_git_commit(_: Path, __: str) -> str:
+        return "a" * 40
+
+    analyzer.resolve_git_commit = fake_git_commit
     try:
         assert analyzer.main(["--repo-root", str(tmp_path)]) == 2
     finally:
         analyzer.tracked_python_files = original
+        analyzer.resolve_git_commit = original_commit
     assert "parse_errors" in capsys.readouterr().err
 
 

@@ -98,8 +98,8 @@ def tracked_python_files(repo_root: Path) -> list[Path]:
             text=False,
         ).stdout
         candidates = [repo_root / item for item in raw.decode().split("\0") if item]
-    except (OSError, subprocess.CalledProcessError):
-        return []
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(f"cannot enumerate tracked Python files in {repo_root}") from exc
     return sorted(p for p in candidates if p.is_file())
 
 
@@ -177,7 +177,7 @@ def _function_records(tree: ast.AST, relative_path: str) -> list[tuple[FunctionR
     return records
 
 
-def _git_commit(repo_root: Path, revision: str) -> str:
+def resolve_git_commit(repo_root: Path, revision: str) -> str:
     try:
         return subprocess.run(
             [
@@ -191,8 +191,8 @@ def _git_commit(repo_root: Path, revision: str) -> str:
             capture_output=True,
             text=True,
         ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "UNCOMMITTED"
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(f"cannot resolve git commit for {revision}") from exc
 
 
 def _source_items(repo_root: Path, revision: str) -> list[tuple[str, bytes]]:
@@ -326,7 +326,7 @@ def build_inventory(
     near.sort(key=lambda g: g.group_id)
     return DuplicateInventory(
         scoped_revision=revision,
-        commit_hash=_git_commit(repo_root, revision),
+        commit_hash=resolve_git_commit(repo_root, revision),
         source_hash=source_digest.hexdigest(),
         scanner_hash=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         parser_version=PARSER_VERSION,

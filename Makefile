@@ -25,6 +25,9 @@ else
 $(error No project Python found; set PYTHON_BIN or create .venv)
 endif
 BASE ?= origin/main
+# One-time authority for introducing the first quality receipts. Once those
+# receipts exist on BASE this SHA is ignored; any other missing-base state fails.
+QUALITY_BOOTSTRAP_BASE := 651a0c9c83062068041e0e62880055669a57eccb
 PYTEST_WORKERS ?= 2
 PYTEST_XDIST_ARGS := $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS) --dist=loadfile)
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
@@ -89,11 +92,31 @@ public-boundary-check:  ## Reject private material in the current tracked tree
 public-ref-check:  ## Audit fetched origin branches by private path category
 	$(PY) execution/verify_public_tree.py --all-refs
 
+# The first rollout is authorized only from QUALITY_BOOTSTRAP_BASE. Thereafter
+# the merge-base receipts are authoritative and a missing receipt fails closed.
 quality-architecture-check:  ## Prevent architecture metric regressions
-	$(PY) execution/score_code_quality.py --repo-root . --revision WORKTREE --baseline docs/quality/architecture-ratchet.json --ratchet-only
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	base_commit=$$(git rev-parse --verify "$(BASE)^{commit}" 2>/dev/null) || { echo "Invalid quality-ratchet BASE: $(BASE)" >&2; exit 2; }; \
+	if git cat-file -e "$(BASE):docs/quality/architecture-ratchet.json" 2>/dev/null; then \
+		git show "$(BASE):docs/quality/architecture-ratchet.json" > "$$tmp/architecture-ratchet.json"; \
+	elif [ "$$base_commit" = "$(QUALITY_BOOTSTRAP_BASE)" ]; then \
+		git show "HEAD:docs/quality/architecture-ratchet.json" > "$$tmp/architecture-ratchet.json"; \
+	else \
+		echo "Missing BASE-owned architecture ratchet outside the authorized bootstrap" >&2; exit 2; \
+	fi; \
+	$(PY) execution/score_code_quality.py --repo-root . --revision WORKTREE --baseline "$$tmp/architecture-ratchet.json" --ratchet-only
 
 quality-duplicates-check:  ## Prevent normalized-AST duplication regressions
-	$(PY) execution/analyze_code_duplicates.py --repo-root . --revision WORKTREE --baseline docs/quality/duplicates-ratchet.json
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	base_commit=$$(git rev-parse --verify "$(BASE)^{commit}" 2>/dev/null) || { echo "Invalid quality-ratchet BASE: $(BASE)" >&2; exit 2; }; \
+	if git cat-file -e "$(BASE):docs/quality/duplicates-ratchet.json" 2>/dev/null; then \
+		git show "$(BASE):docs/quality/duplicates-ratchet.json" > "$$tmp/duplicates-ratchet.json"; \
+	elif [ "$$base_commit" = "$(QUALITY_BOOTSTRAP_BASE)" ]; then \
+		git show "HEAD:docs/quality/duplicates-ratchet.json" > "$$tmp/duplicates-ratchet.json"; \
+	else \
+		echo "Missing BASE-owned duplicate ratchet outside the authorized bootstrap" >&2; exit 2; \
+	fi; \
+	$(PY) execution/analyze_code_duplicates.py --repo-root . --revision WORKTREE --baseline "$$tmp/duplicates-ratchet.json"
 
 quality-reachability-check:  ## Hold changed files with unknown operational edges
 	$(PY) execution/build_operational_reachability.py --repo-root . --output .tmp/quality/reachability-check.json $(TOUCHED_ARGS)

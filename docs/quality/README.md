@@ -31,8 +31,8 @@ Current evidence at the Train 0 instrumentation baseline:
 - The lifecycle receipt classifies all 841 candidates with zero omissions,
   extras, or duplicate identities. It records 149 scheduled, 4 service, 181
   UI-reachable, 235 internal-delegate, and 272 time-bounded dormant entries.
-- The function-lifecycle receipt validates as `PASS` for 34,074 symbols:
-  11,787 protected, 15,807 referenced, 6,465 unknown, and 15 conservative
+- The function-lifecycle receipt validates as `PASS` for 34,085 symbols:
+  11,789 protected, 15,811 referenced, 6,470 unknown, and 15 conservative
   unreferenced-static candidates. Candidates are review inputs, not deletion
   authority.
 - The roadmap reconciliation receipt covers 96 named claims: 30 are reproduced

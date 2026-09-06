@@ -533,7 +533,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
+          # Keep optional IR imports resolvable exactly as they were when the
+          # source-bound static receipt was generated. Browser binaries are not
+          # needed for type analysis.
+          pip install "pyright==1.1.411" "playwright==1.62.0" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
       - name: Resolve base ref
         id: base
         run: |

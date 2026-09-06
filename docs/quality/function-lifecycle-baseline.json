@@ -242,20 +242,20 @@
     }
   ],
   "counts": {
-    "protected": 11787,
-    "referenced": 15807,
-    "unknown": 6465,
+    "protected": 11789,
+    "referenced": 15811,
+    "unknown": 6470,
     "unreferenced-static-candidate": 15
   },
   "files_failed": [],
   "files_scanned": 2483,
-  "inventory_hash": "3476cc05381568a4c6a6a50605b8fb1cb0535b7bf0ec890d63d4701ebfd4b635",
+  "inventory_hash": "c6f76333f8b98404456e2b177a07471654a70ea64a71069179c36668bc8e964d",
   "parser_version": "python-ast-3.11-v3",
-  "revision": "835ecbeab77c724241d8179dada13db70046e6a4",
+  "revision": "67f450088cffd71d00e2367112ee5de9a9aa164d",
   "schema_version": "bha-109.v1",
   "status": "PASS",
-  "symbol_count": 34074,
-  "tracked_tree_hash": "9db6a429d1da05ef0cf3aea91153de5fcffed7103c715f03cb479c118077a408",
+  "symbol_count": 34085,
+  "tracked_tree_hash": "86ced981b6e71c27299047e7e9f9e3713c7c9cec5844beeef79f7967e45ed1dc",
   "unknown_hazard_counts": {
     "class-method-dispatch": 573,
     "cli-entrypoint": 415,
@@ -270,12 +270,12 @@
     "dynamic:exec": 1,
     "dynamic:getattr": 298,
     "dynamic:locals": 1,
-    "dynamic:setattr": 2028,
+    "dynamic:setattr": 2031,
     "dynamic:unbounded-reflection-in-module": 1287,
     "dynamic:vars": 18,
-    "public-module-symbol": 3739,
-    "string-or-reflection-reference": 3152,
-    "test-fixture-or-helper": 3047
+    "public-module-symbol": 3744,
+    "string-or-reflection-reference": 3154,
+    "test-fixture-or-helper": 3050
   },
   "unknown_symbols": [
     {
@@ -2007,7 +2007,7 @@
       "visibility": "public"
     }
   ],
-  "unknown_total": 6465,
+  "unknown_total": 6470,
   "violations": [],
   "worktree_dirty": true
 }

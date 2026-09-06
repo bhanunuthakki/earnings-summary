@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
@@ -517,8 +519,10 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert 'git cat-file -e "$base:docs/quality/static-baseline.json"' in workflow
     assert "the established static-quality baseline was deleted" in workflow
     assert "base and HEAD both lack the required static-quality baseline" in workflow
+    assert 'python-version: "3.14"' in workflow
     assert (
-        'pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"' in workflow
+        'pip install "pyright==1.1.411" "playwright==1.62.0" "pytest>=8" '
+        '"alembic>=1.13" "sqlalchemy>=2.0"' in workflow
     )
     assert "ci_gate.py select-tests" in workflow
     assert "Prepare trusted canonical test population" in workflow
@@ -581,6 +585,43 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
         "needs: [changes, public-boundary, tests, design, quality, typecheck, security]" in workflow
     )
     assert "PUBLIC_BOUNDARY_RESULT" in workflow
+
+
+def test_quality_ratchets_are_base_receipt_anchored_with_explicit_bootstrap() -> None:
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "QUALITY_BOOTSTRAP_BASE := 651a0c9c83062068041e0e62880055669a57eccb" in makefile
+    assert 'git rev-parse --verify "$(BASE)^{commit}"' in makefile
+    assert 'git cat-file -e "$(BASE):docs/quality/architecture-ratchet.json"' in makefile
+    assert 'git show "$(BASE):docs/quality/architecture-ratchet.json"' in makefile
+    assert 'git cat-file -e "$(BASE):docs/quality/duplicates-ratchet.json"' in makefile
+    assert 'git show "$(BASE):docs/quality/duplicates-ratchet.json"' in makefile
+    assert 'git show "HEAD:docs/quality/architecture-ratchet.json"' in makefile
+    assert 'git show "HEAD:docs/quality/duplicates-ratchet.json"' in makefile
+    assert "Missing BASE-owned architecture ratchet outside the authorized bootstrap" in makefile
+    assert "Missing BASE-owned duplicate ratchet outside the authorized bootstrap" in makefile
+    assert "--baseline docs/quality/architecture-ratchet.json" not in makefile
+    assert "--baseline docs/quality/duplicates-ratchet.json" not in makefile
+
+
+@pytest.mark.parametrize("target", ("quality-architecture-check", "quality-duplicates-check"))
+@pytest.mark.parametrize(
+    "base", ("refs/heads/__missing_quality_base__", "09d35d1a2785ff7e6a218031eb43952781be3a93")
+)
+def test_quality_ratchets_reject_invalid_or_unauthorized_missing_base(
+    target: str, base: str
+) -> None:
+    result = subprocess.run(
+        ["make", "-s", target, f"BASE={base}", f"PYTHON_BIN={sys.executable}"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert (
+        "quality-ratchet BASE" in result.stderr
+        or "outside the authorized bootstrap" in result.stderr
+    )
 
 
 def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:

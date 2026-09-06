@@ -7,7 +7,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "f6e500ce84f43fd6ad45c8ee555750d4c0019c8c736d43d9268ba69be560b254"
+      "source_sha256": "e10e08e0c4832b3e4668cf6c68aa5d21325e28b5b4508b449637f3d0ffc9eaeb"
     }
   },
   "fingerprint_algorithm": "sha256(UTF-8({path}:{line}:{source_line.strip()}))",

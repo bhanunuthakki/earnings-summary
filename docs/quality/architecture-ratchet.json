@@ -1,9 +1,9 @@
 {
   "schema_version": "quality-score-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "835ecbeab77c724241d8179dada13db70046e6a4",
+  "scoped_commit": "67f450088cffd71d00e2367112ee5de9a9aa164d",
   "scanner_sha256": "458ece6a481930630754ba67af17d21df0ddec64588404d50e8054b8ec5a18d9",
-  "source_sha256": "995753f3bea653b232daa737af50d38b57a2c2760be725c6574181641475da23",
+  "source_sha256": "b9489918476bcea4014dff5b575106b961348dd79da58989ae6ec6b13961c479",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -16125,8 +16125,8 @@
           "filesystem",
           "process"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/quality/function_lifecycle.py",
