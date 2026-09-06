@@ -294,6 +294,18 @@ def _build_drive(creds: Any) -> Any:
     return discovery.build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
+def build_drive_client(creds: Any) -> Any:
+    """Build a Drive v3 client for other narrow Drive integrations."""
+    return _build_drive(creds)
+
+
+def media_file_upload(path: Path, *, resumable: bool, chunksize: int) -> Any:
+    """Build a lazily imported Drive media upload without a hard dependency."""
+    return _import("googleapiclient.http").MediaFileUpload(
+        str(path), resumable=resumable, chunksize=chunksize
+    )
+
+
 def _media_upload(xlsx_path: Path) -> Any:
     http = _import("googleapiclient.http")
     return http.MediaFileUpload(str(xlsx_path), mimetype=_XLSX_MIME, resumable=False)

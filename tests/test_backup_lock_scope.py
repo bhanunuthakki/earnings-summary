@@ -101,6 +101,18 @@ def test_scheduler_backup_requires_encrypted_receipt_before_file_gc_apply() -> N
     assert text.rstrip().endswith("endlocal & exit /b %RC%")
 
 
+def test_scheduler_backup_publishes_encrypted_artifacts_headlessly() -> None:
+    text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace")
+
+    assert "execution\\upload_drive_backups.py" in text
+    assert '--pattern "portfolio.db.*.gz.enc"' in text
+    assert '--backup-set "portfolio-db" --retain 14 --latest-only' in text
+    assert '--backup-set "portfolio-gc-archive" --retain 6 --allow-empty --latest-only' in text
+    assert text.index("execution\\upload_drive_backups.py") < text.index(
+        "execution\\backup_file_gc.py"
+    )
+
+
 def test_scheduler_backup_treats_completed_idempotent_retry_as_successful_noop() -> None:
     """A completed same-day invocation is healthy, but must not trigger GC.
 
