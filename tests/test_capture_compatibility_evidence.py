@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -9,18 +8,18 @@ from pathlib import Path
 import pytest
 
 from quality.compatibility import CompatibilityEvidenceError, capture_compatibility_evidence
+from quality.git_env import clean_local_git_env
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "execution"))
 
 
 def _git(root: Path, *args: str) -> str:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     return subprocess.run(
         ["git", "-C", str(root), *args],
         check=True,
         capture_output=True,
         text=True,
-        env=env,
+        env=clean_local_git_env(),
     ).stdout.strip()
 
 

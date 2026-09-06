@@ -6,7 +6,6 @@ import ast
 import hashlib
 import io
 import json
-import os
 import re
 import subprocess
 import tarfile
@@ -15,6 +14,8 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from quality.git_env import clean_local_git_env
 
 
 class CompatibilityEvidenceError(RuntimeError):
@@ -87,35 +88,6 @@ CHECKLIST = "\n".join(
     for name in REQUIRED_CATEGORIES
 )
 
-_GIT_LOCAL_ENV_VARS = frozenset(
-    {
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_DIR",
-        "GIT_GRAFT_FILE",
-        "GIT_IMPLICIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_SHALLOW_FILE",
-        "GIT_WORK_TREE",
-    }
-)
-
-
-def _git_env() -> dict[str, str]:
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if key not in _GIT_LOCAL_ENV_VARS
-        and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
-    }
-
 
 def _run(root: Path, args: list[str]) -> str:
     try:
@@ -124,7 +96,7 @@ def _run(root: Path, args: list[str]) -> str:
             capture_output=True,
             check=True,
             text=True,
-            env=_git_env(),
+            env=clean_local_git_env(),
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise CompatibilityEvidenceError(f"git evidence command failed: {' '.join(args)}") from exc
@@ -137,7 +109,7 @@ def _tracked_paths(root: Path, patterns: Sequence[str]) -> set[str]:
             ["git", "-C", str(root), "ls-files", "-z", "--", *patterns],
             capture_output=True,
             check=True,
-            env=_git_env(),
+            env=clean_local_git_env(),
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise CompatibilityEvidenceError(
@@ -248,7 +220,7 @@ def _entrypoints(
             ["git", "-C", str(root), "archive", revision, "--", "src", "execution"],
             capture_output=True,
             check=True,
-            env=_git_env(),
+            env=clean_local_git_env(),
         ).stdout
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
             baseline_data: dict[str, bytes] = {}

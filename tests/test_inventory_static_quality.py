@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -9,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from quality import static_quality
+from quality.git_env import clean_local_git_env, is_git_executable
 from quality.static_quality import InventoryFailure, inventory
 
 
@@ -21,14 +21,30 @@ def _tracked_files_payload(paths: Sequence[str]) -> str:
 
 
 def _clean_git(root: Path, *args: str) -> str:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     return subprocess.run(
         ["git", "-C", str(root), *args],
         check=True,
         capture_output=True,
         text=True,
-        env=env,
+        env=clean_local_git_env(),
     ).stdout.strip()
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git", "/usr/bin/git", "GIT.EXE", r"C:\\Program Files\\Git\\bin\\git.cmd"],
+)
+def test_git_executable_detection_is_portable(command: str) -> None:
+    assert is_git_executable(command)
+
+
+def test_local_git_environment_drops_only_git_variables() -> None:
+    cleaned = clean_local_git_env(
+        {"PATH": "/tools", "GIT_DIR": "/outer.git", "git_work_tree": "/outer"}
+    )
+
+    assert cleaned == {"PATH": "/tools"}
+    assert is_git_executable("ruff") is False
 
 
 def _successful_runner(
