@@ -21,6 +21,7 @@
     "execution/audit_quarterly_data_coverage.py",
     "execution/audit_segment_coverage.py",
     "execution/audit_segment_quarterly_coverage.py",
+    "execution/audit_test_db_patterns.py",
     "execution/audit_thesis_episode_clone.py",
     "execution/audit_transcript_evidence.py",
     "execution/backfill_analyst_notes.py",
