@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
@@ -333,3 +334,16 @@ def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     assert "pip-audit -r requirements-design.lock" in workflow
     assert "cyclonedx-py requirements requirements-design.lock" in workflow
     assert "always() && hashFiles('sbom-*.cdx.json')" in workflow
+
+    exclude_match = re.search(r"--exclude-files\s+'([^']+)'", workflow)
+    assert exclude_match is not None
+    exclude_pattern = exclude_match.group(1)
+    receipt_pattern = (
+        r"docs[\\/]quality[\\/]"
+        r"(?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a)\.json"
+    )
+    assert receipt_pattern in exclude_pattern
+    assert re.fullmatch(exclude_pattern, "docs/quality/architecture-initial-09d35d1a.json")
+    assert re.fullmatch(exclude_pattern, "docs/quality/duplicates-initial-09d35d1a.json")
+    assert not re.fullmatch(exclude_pattern, "docs/quality/policy-enforcement.json")
+    assert r"docs[\\/]quality[\\/].*\.json" not in exclude_pattern
