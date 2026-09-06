@@ -340,10 +340,16 @@ def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     exclude_pattern = exclude_match.group(1)
     receipt_pattern = (
         r"docs[\\/]quality[\\/]"
-        r"(?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a)\.json"
+        r"(?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a|"
+        r"static-baseline|compatibility-baseline)\.json"
     )
     assert receipt_pattern in exclude_pattern
-    assert re.fullmatch(exclude_pattern, "docs/quality/architecture-initial-09d35d1a.json")
-    assert re.fullmatch(exclude_pattern, "docs/quality/duplicates-initial-09d35d1a.json")
+    for receipt in (
+        "architecture-initial-09d35d1a.json",
+        "duplicates-initial-09d35d1a.json",
+        "static-baseline.json",
+        "compatibility-baseline.json",
+    ):
+        assert re.fullmatch(exclude_pattern, f"docs/quality/{receipt}")
     assert not re.fullmatch(exclude_pattern, "docs/quality/policy-enforcement.json")
     assert r"docs[\\/]quality[\\/].*\.json" not in exclude_pattern
