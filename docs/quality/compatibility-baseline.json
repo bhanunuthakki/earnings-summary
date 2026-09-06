@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "c5c4cbe527a60d7a610b9097976f05cdb0aeb398",
-  "source_sha256": "28130f0b4f66ff68202955974b99ef81c4abd7d1490bdae05e3cadcb5dad15a8",
+  "current_revision": "b4b2f8932be5547d285057e5a6ddf57175adc420",
+  "source_sha256": "a72735dcabb0db88bd24c7077410ccc89ac765c91963819f0b3b465172aa0a8f",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -6327,7 +6327,7 @@
     },
     {
       "path": "src/quality/compatibility.py",
-      "current_sha256": "b06f0e2dd563ffb0ad4eae41ea3a644ab42d160bd1022b379937bf4fbac895b9",
+      "current_sha256": "82d17fdad804067957f7d8210ef41c39e524bf3a4b9990df0087f76cd401b607",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -7975,8 +7975,9 @@
   "categories": [
     {
       "name": "flask_url_method_endpoint_map",
-      "status": "PASS",
-      "reason": "all required evidence conditions present",
+      "scope": "collection_only",
+      "collection_status": "COMPLETE",
+      "collection_reason": "all required evidence conditions present",
       "artifacts": [
         "execution/comments_server.py",
         "tests/test_comments_server_actions.py",
@@ -8567,8 +8568,9 @@
     },
     {
       "name": "integrity_serialized_ordering",
-      "status": "PASS",
-      "reason": "all required evidence conditions present",
+      "scope": "collection_only",
+      "collection_status": "COMPLETE",
+      "collection_reason": "all required evidence conditions present",
       "artifacts": [
         "src/models/facts.py",
         "src/provenance/integrity_audit.py",
@@ -9527,8 +9529,9 @@
     },
     {
       "name": "public_import_surfaces",
-      "status": "PASS",
-      "reason": "all required evidence conditions present",
+      "scope": "collection_only",
+      "collection_status": "COMPLETE",
+      "collection_reason": "all required evidence conditions present",
       "artifacts": [
         "execution/__init__.py",
         "src/advisor/__init__.py",
@@ -11027,8 +11030,9 @@
     },
     {
       "name": "dcf_formula_cell_receipts",
-      "status": "PASS",
-      "reason": "all required evidence conditions present",
+      "scope": "collection_only",
+      "collection_status": "COMPLETE",
+      "collection_reason": "all required evidence conditions present",
       "artifacts": [
         "execution/audit_dcf_outliers.py",
         "execution/build_all_redesigned_dcf.py",
@@ -12457,8 +12461,9 @@
     },
     {
       "name": "population_dry_run_apply_receipts",
-      "status": "PASS",
-      "reason": "all required evidence conditions present",
+      "scope": "collection_only",
+      "collection_status": "COMPLETE",
+      "collection_reason": "all required evidence conditions present",
       "artifacts": [
         "execution/evaluate_population_cutover.py",
         "tests/test_evaluate_population_cutover_cli.py",
@@ -12505,8 +12510,9 @@
     },
     {
       "name": "report_dashboard_goldens",
-      "status": "PASS",
-      "reason": "all required evidence conditions present",
+      "scope": "collection_only",
+      "collection_status": "COMPLETE",
+      "collection_reason": "all required evidence conditions present",
       "artifacts": [
         "src/pipeline/analytical_dashboard.py",
         "src/pipeline/analytical_dashboard_html.py",
@@ -12778,5 +12784,62 @@
     }
   ],
   "checklist_sha256": "62f5dca0bd622a70f0b8d6f739aa0cff2fcc310d8509cb8126f76de217c7d7ca",
-  "hold": false
+  "verification_status": "DEFERRED",
+  "hold": true,
+  "hold_reasons": [
+    "entrypoint added: execution/analyze_code_duplicates.py",
+    "entrypoint added: execution/audit_quarterly_data_coverage.py",
+    "entrypoint added: execution/capture_architecture_measurement.py",
+    "entrypoint added: execution/capture_compatibility_evidence.py",
+    "entrypoint added: execution/comments_server_profile_routes.py",
+    "entrypoint added: execution/comments_server_proposal_routes.py",
+    "entrypoint added: execution/comments_server_research_routes.py",
+    "entrypoint added: execution/comments_server_route_support.py",
+    "entrypoint added: execution/inventory_static_quality.py",
+    "entrypoint added: src/pipeline/commitment_scan_receipts.py",
+    "entrypoint added: src/pipeline/data_coverage_dispositions.py",
+    "entrypoint added: src/quality/__init__.py",
+    "entrypoint added: src/quality/architecture.py",
+    "entrypoint added: src/quality/compatibility.py",
+    "entrypoint added: src/quality/duplicates.py",
+    "entrypoint added: src/quality/static_quality.py",
+    "entrypoint changed: execution/_lib.py",
+    "entrypoint changed: execution/backfill_earnings_surprises.py",
+    "entrypoint changed: execution/backfill_transcripts.py",
+    "entrypoint changed: execution/comments_server.py",
+    "entrypoint changed: execution/design_route_canaries.py",
+    "entrypoint changed: execution/extract_commitments_from_transcript.py",
+    "entrypoint changed: execution/fetch_qa_transcript.py",
+    "entrypoint changed: execution/ingest_earnings_surprises.py",
+    "entrypoint changed: execution/ingest_transcripts.py",
+    "entrypoint changed: execution/ingest_transcripts_state.py",
+    "entrypoint changed: execution/refresh_portfolio_risk_snapshot.py",
+    "entrypoint changed: execution/show_llm_spend.py",
+    "entrypoint changed: execution/show_prompt_calibration.py",
+    "entrypoint changed: execution/show_routing.py",
+    "entrypoint changed: execution/show_thesis_history.py",
+    "entrypoint changed: execution/upgrade_database.py",
+    "entrypoint changed: execution/verify_calendars.py",
+    "entrypoint changed: execution/verify_daily_chain.py",
+    "entrypoint changed: execution/verify_evidence_judging.py",
+    "entrypoint changed: execution/verify_ir_home_authorities.py",
+    "entrypoint changed: execution/verify_public_tree.py",
+    "entrypoint changed: execution/verify_reader_parity.py",
+    "entrypoint changed: execution/verify_scheduler_wrappers.py",
+    "entrypoint changed: src/compute/management_indicators.py",
+    "entrypoint changed: src/compute/say_do_extractor.py",
+    "entrypoint changed: src/earnings_surprise_store.py",
+    "entrypoint changed: src/integrations/portfolio_tracker_client.py",
+    "entrypoint changed: src/integrations/portfolio_tracker_v1.py",
+    "entrypoint changed: src/ir_pipeline/transcript.py",
+    "entrypoint changed: src/llm/cli.py",
+    "entrypoint changed: src/llm/resolver.py",
+    "entrypoint changed: src/llm/structured.py",
+    "entrypoint changed: src/pipeline/portfolio_panel.py",
+    "entrypoint changed: src/pipeline/portfolio_styles.py",
+    "entrypoint changed: src/pipeline/transcript_acquisition.py",
+    "entrypoint changed: src/surprise_sources.py",
+    "entrypoint changed: src/ui/design_registry.py",
+    "behavioral verification and admission deferred"
+  ]
 }
