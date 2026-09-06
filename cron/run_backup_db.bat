@@ -49,6 +49,19 @@ if not defined BACKUP_RECEIPT (
   goto done
 )
 
+REM Publish through the Drive API with the existing least-privilege OAuth token.
+REM This runs headlessly and therefore does not depend on Google Drive for desktop
+REM or an interactive Windows session. Routine runs upload only the newest immutable
+REM artifact in each backup set; activation seeds the retained history once.
+for %%I in ("%BACKUP_RECEIPT%") do set "BACKUP_DIR=%%~dpI"
+call "%PROJECT_ROOT%\cron\run_python.bat" "backup-drive-upload" "backup-drive-upload" execution\upload_drive_backups.py --source-dir "%BACKUP_DIR%" --pattern "portfolio.db.*.gz.enc" --folder "earnings-summary-db-backups" --backup-set "portfolio-db" --retain 14 --latest-only >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" goto done
+
+call "%PROJECT_ROOT%\cron\run_python.bat" "backup-drive-upload" "backup-drive-upload" execution\upload_drive_backups.py --source-dir "%BACKUP_DIR%" --pattern "portfolio_gc_archive.db.*.gz.enc" --folder "earnings-summary-db-backups" --backup-set "portfolio-gc-archive" --retain 6 --allow-empty --latest-only >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" goto done
+
 call "%PROJECT_ROOT%\cron\run_python.bat" "backup-file-gc" "backup-file-gc" execution\backup_file_gc.py --root "%PROJECT_ROOT%" --apply >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 

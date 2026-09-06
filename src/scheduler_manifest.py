@@ -15,6 +15,7 @@ TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 NS = f"{{{TASK_NS}}}"
 MANIFEST_VERSION = 1
 SERVICE_OWNED_TASKS = frozenset({r"\earnings-summary\capture_poller".casefold()})
+SYSTEM_OWNED_TASKS = frozenset({r"\earnings-summary\portfolio_tracker_api".casefold()})
 MONTHS = (
     "January",
     "February",
@@ -386,7 +387,8 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         "# Generated from cron/task_manifest.json. Do not edit by hand.",
         "param(",
         "    [Parameter(Mandatory=$true)][string]$Python,",
-        "    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path",
+        "    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,",
+        "    [PSCredential]$BackgroundCredential",
         ")",
         "$ErrorActionPreference = 'Stop'",
         "$renderDir = Join-Path $RepoRoot '.tmp\\scheduler_tasks'",
@@ -394,19 +396,57 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         "& $Python (Join-Path $RepoRoot 'execution\\generate_cron_artifacts.py') "
         "--project-root $RepoRoot --render-dir $renderDir --check",
         "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+        "$rollbackDir = Join-Path $RepoRoot ('.tmp\\scheduler_rollback\\' + (Get-Date -Format 'yyyyMMddTHHmmss'))",
+        "New-Item -ItemType Directory -Path $rollbackDir -Force | Out-Null",
+        "function Register-ManifestTask {",
+        "    param([string]$TaskName, [string]$TaskPath, [string]$XmlPath, [switch]$System)",
+        "    if ($System -or -not $BackgroundCredential) {",
+        "        & schtasks.exe /Create /TN ($TaskPath + $TaskName) /XML $XmlPath /F",
+        '        if ($LASTEXITCODE -ne 0) { throw "Failed to register scheduled task $TaskPath$TaskName" }',
+        "        return",
+        "    }",
+        "    $password = $BackgroundCredential.GetNetworkCredential().Password",
+        "    try {",
+        (
+            "        Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath "
+            "-Xml (Get-Content -LiteralPath $XmlPath -Raw) "
+            "-User $BackgroundCredential.UserName -Password $password -Force | Out-Null"
+        ),
+        "    } finally {",
+        "        $password = $null",
+        "    }",
+        "}",
     ]
     for task in manifest.tasks:
         if task.task_name.casefold() in SERVICE_OWNED_TASKS:
             continue
         rendered_xml = f"(Join-Path $renderDir '{task.xml}')"
-        lines.append(f"& schtasks.exe /Create /TN '{task.task_name}' /XML {rendered_xml} /F")
+        task_leaf = PureWindowsPath(task.task_name).name
+        task_path = str(PureWindowsPath(task.task_name).parent) + "\\"
+        rollback_xml = f"(Join-Path $rollbackDir '{task.xml}')"
         lines.append(
-            f"if ($LASTEXITCODE -ne 0) {{ "
-            f"throw 'Failed to register scheduled task {task.task_name}' }}"
+            f"$existing = Get-ScheduledTask -TaskName '{task_leaf}' -TaskPath '{task_path}' -ErrorAction SilentlyContinue"
+        )
+        lines.append(
+            f"if ($existing) {{ Export-ScheduledTask -TaskName '{task_leaf}' -TaskPath '{task_path}' | Set-Content -LiteralPath {rollback_xml} -Encoding Unicode }}"
+        )
+        system_switch = " -System" if task.task_name.casefold() in SYSTEM_OWNED_TASKS else ""
+        lines.append(
+            f"Register-ManifestTask -TaskName '{task_leaf}' -TaskPath '{task_path}' "
+            f"-XmlPath {rendered_xml}{system_switch}"
         )
         lines.append(
             f"& $taskSecurityScript -TaskPath '{task.task_name}' -RenderedXmlPath {rendered_xml}"
         )
+    lines.extend(
+        [
+            "if ($BackgroundCredential) {",
+            "    $remaining = @(Get-ScheduledTask -TaskPath '\\earnings-summary\\' | Where-Object { $_.State -ne 'Disabled' -and $_.TaskName -ne 'portfolio_tracker_api' -and $_.Principal.LogonType -ne 'Password' })",
+            '    if ($remaining.Count -ne 0) { throw "Background registration verification failed for $($remaining.Count) enabled task(s)" }',
+            "}",
+            'Write-Host "Scheduler rollback XML: $rollbackDir"',
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
