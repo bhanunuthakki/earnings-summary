@@ -69,8 +69,8 @@ tool/runtime directories such as `.git`, `.venv`, and caches.
 | `directives/` | Canonical contracts, runbooks, drafts, and history classified by `directive_manifest.json`. |
 | `tests/` | Application tests; may use application fixtures. |
 | `instruction_tests/` | Standalone instruction and hook tests; never imports `tests/conftest.py` or opens the app DB. |
-| `alembic/` | Append-only migrations governing the canonical Windows checkout's `data/portfolio.db` and explicit disposable migrated test databases. |
-| `data/` | Durable source caches and host-owned application state. The production `portfolio.db` exists only in the canonical Windows checkout; a Mac checkout-local `data/portfolio.db` is an invalid artifact, not a replica or fallback. Preserve legitimate source caches unless a specific recovery or deletion workflow authorizes mutation. |
+| `alembic/` | Append-only migrations governing the configured canonical Windows database authority and explicit disposable migrated test databases. |
+| `data/` | Durable source caches and host-owned application state. The production database location is resolved from approved Windows runtime configuration, not inferred from this checkout. In particular, a Mac checkout-local `data/portfolio.db` is an invalid artifact, not a replica or fallback; explicitly named disposable test databases and approved snapshot restores have separate authority. Preserve legitimate source caches unless a specific recovery or deletion workflow authorizes mutation. |
 | `.tmp/` | Resumable intermediates, checkpoints, and disposable task state. Safe to clear only when no active run or recovery path depends on it. |
 | `.cache/` | Optional reproducible cache with an explicit TTL or invalidation rule. |
 | `output/` | Canonical generated application deliverables, including `output/research/<TICKER>/`. Reproducible unless a directive says otherwise. |

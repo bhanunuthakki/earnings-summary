@@ -8,6 +8,8 @@
   },
   "directives": {
     "README.md": {"class": "canonical", "summary": "Human routing guide to the machine-readable authority graph.", "authority_domains": ["directive_authority"]},
+    "agent_host_operations.md": {"class": "runbook", "summary": "Host, listener, snapshot and handoff mechanics under configured production authority.", "governed_by": ["folder_structure.md", "operations_governance_surface.md"]},
+    "agent_implementation_traps.md": {"class": "runbook", "summary": "Migration, connection, lineage and resumption failure-prevention mechanics.", "governed_by": ["folder_structure.md", "data_pipeline_dag.md", "data_provenance.md"]},
     "annual_kpi_cadence_design.md": {"class": "canonical", "summary": "Annual-cadence KPI behavior and data contract.", "authority_domains": ["annual_kpi_cadence"]},
     "backfill_transcripts.md": {"class": "runbook", "summary": "Transcript and commitment backfill procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
     "capture_every_number_program.md": {"class": "history", "summary": "Completed number-capture program record."},
