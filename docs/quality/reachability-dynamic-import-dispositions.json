@@ -1,0 +1,195 @@
+{
+  "edges": [
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "importlib.import_module loads the optional yfinance provider in _default_yfinance_loader.",
+      "fingerprint": "d467abc7d1ca09f39e91d4634829139c2241a6a03b0c3b9f93d2778d616710e0",
+      "line": 303,
+      "path": "execution/fetch_macro_series.py",
+      "targets": [
+        "yfinance"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Bridge lazily loads the optional arelle.RuntimeOptions factory.",
+      "fingerprint": "7f03132271fb47a13a453811c9e272a18d90a02da692f1c4cc34311f02ff32a4",
+      "line": 342,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "arelle.RuntimeOptions"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Bridge lazily loads the optional arelle.XbrlConst module.",
+      "fingerprint": "f4fe6d5e6a2f044451a7c2b320101f751b7a1af3952fa1e4cf63c748a66b1c44",
+      "line": 840,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "arelle.XbrlConst"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Bridge lazily loads the optional arelle.api.Session factory.",
+      "fingerprint": "a734ab7b7568a72fb8519927557f789e08e4ba78786ffe4d59c42ee25514844e",
+      "line": 338,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "arelle.api.Session"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Bridge lazily loads the optional lxml.etree parser.",
+      "fingerprint": "cd0298c2db2809f1b2b0ea70ec0283ae036a37085158e497161a22dd406e2283",
+      "line": 404,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "lxml.etree"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Windows snapshot path lazily loads the platform msvcrt module.",
+      "fingerprint": "a1b612c48539166cbc558057d1ef7b66b6b58419fe3354460606c2d7c9a62b1f",
+      "line": 811,
+      "path": "execution/refresh_cache.py",
+      "targets": [
+        "msvcrt"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Preflight probes the optional playwright.sync_api and treats ImportError as a capability.",
+      "fingerprint": "225d75eca9df7b148010515519c4f60623926b1320e9f0881adca86626cb784d",
+      "line": 99,
+      "path": "execution/validate_environment.py",
+      "targets": [
+        "playwright.sync_api"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Browser canary lazily loads the optional playwright.sync_api module.",
+      "fingerprint": "a883624d3c2288b125cfc4c677ab969cb2ba30332cbfc0dcee26dec0113993b1",
+      "line": 1100,
+      "path": "execution/verify_design_conformance.py",
+      "targets": [
+        "playwright.sync_api"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Route canaries lazily load the optional playwright.sync_api module.",
+      "fingerprint": "1f861c1e20e26331664465b703c442e61d53aeff5d756855108179735671c35c",
+      "line": 1181,
+      "path": "execution/verify_design_conformance.py",
+      "targets": [
+        "playwright.sync_api"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Windows evidence path lazily loads the platform msvcrt module.",
+      "fingerprint": "4af3ed39cb0c187e25de37df01842b328e238190dc409f244e42294c4bede546",
+      "line": 78,
+      "path": "src/compute/evidence_snapshot.py",
+      "targets": [
+        "msvcrt"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "_import lazily loads only the fixed optional Google client modules.",
+      "fingerprint": "63bb395143ef017debcf10907b881016613c59d48083345b45fe20505b24efc9",
+      "line": 175,
+      "path": "src/integrations/gsheets.py",
+      "targets": [
+        "google.oauth2.service_account",
+        "google.oauth2.credentials",
+        "google.auth.transport.requests",
+        "google_auth_oauthlib.flow",
+        "googleapiclient.discovery",
+        "googleapiclient.http"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Browser capture lazily loads the optional playwright.sync_api runtime.",
+      "fingerprint": "1191fb8b611d83b0e49f77c316b2c25da45826824ba600be7f9a48d10ef240fd",
+      "line": 340,
+      "path": "src/ir_pipeline/approved_ir_observation_capture.py",
+      "targets": [
+        "playwright.sync_api"
+      ]
+    },
+    {
+      "disposition": "internal_target",
+      "evidence": "_ADAPTERS is a fixed registry whose mz entry resolves to this checked-in adapter.",
+      "fingerprint": "2c70099e25d4296ee0dcb5770fc426e3eb391c1dae1614da864b1b152d8eaaff",
+      "line": 40,
+      "path": "src/ir_pipeline/discover/__init__.py",
+      "targets": [
+        "src/ir_pipeline/discover/mz.py"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Wrapper loads codex_cli from the external snippets directory.",
+      "fingerprint": "905d2a4f0ecb659b5428f10fd85079c2cc6ffee8f5d6601177f071a45e3c87c7",
+      "line": 133,
+      "path": "src/llm/codex_backend.py",
+      "targets": [
+        "codex_cli"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Auth probe loads the same external codex_cli module.",
+      "fingerprint": "3814afd4d73cd2aa52aed8e48f1ca7ffdbf8b74a22d96951f085552ab0974f8b",
+      "line": 147,
+      "path": "src/llm/codex_backend.py",
+      "targets": [
+        "codex_cli"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Table extraction lazily loads the optional fitz PyMuPDF module.",
+      "fingerprint": "6875d0631fd114311327f402d6a1d1f845b9ab964ef24486d272908a36ae6f57",
+      "line": 439,
+      "path": "src/provenance/pdf_table_extraction.py",
+      "targets": [
+        "fitz"
+      ]
+    },
+    {
+      "disposition": "internal_target",
+      "evidence": "The fixed MUTATING_KINDS set plus the explicit ask-kind branch select only these checked-in self-registering artifact modules.",
+      "fingerprint": "aaa079ba3bc000f89002e2b010b9b36d370fcf204f77b83284b829d61a156894",
+      "line": 66,
+      "path": "src/research/apply.py",
+      "targets": [
+        "src/research/ask_proposal_artifact.py",
+        "src/research/code_artifact.py",
+        "src/research/dcf_artifact.py",
+        "src/research/thesis_artifact.py"
+      ]
+    }
+  ],
+  "graph_provenance": {
+    "parser": {
+      "name": "ast+xml+literal-scanner",
+      "python": ">=3.11",
+      "source_sha256": "10833f421da5d5b81ea9b539057d16432959c0eba38aba54f8ac13b56a258cb5",
+      "version": "1.2.1"
+    },
+    "path": ".tmp/quality/reachability-check.json",
+    "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
+    "schema_version": "operational-reachability-raw/v1",
+    "source_manifest_sha256": "24bb68f577574b8515ae3e3cd2ab64069d2a825de27bb16a9dd975b67487a30c"
+  },
+  "schema_version": "reachability-dynamic-import-dispositions/v1"
+}

@@ -23,10 +23,10 @@ python execution/analyze_code_duplicates.py \
 Later train slices own independently verified score evidence and enforcement.
 These raw receipts cannot award score points on their own.
 
-## Raw operational reachability
+## Operational reachability
 
-Generate the tracked-source operational graph without admitting reviewed
-dispositions or awarding closure:
+Generate the tracked-source operational graph and validate the checked-in
+reviewed dispositions:
 
 ```bash
 python execution/build_operational_reachability.py \
@@ -34,10 +34,21 @@ python execution/build_operational_reachability.py \
 ```
 
 The collector excludes `docs/quality/` evidence artifacts from the operational
-population, records those exclusions explicitly, and always reports closure as
-`HOLD` until a later train slice reviews the raw unknown edges. A successful
-exit proves only that collection completed; it is not a reachability-closure or
-score claim.
+population and records those exclusions explicitly. The three disposition
+manifests classify production-reachable dynamic imports, reflective attribute
+accesses, and process launches. Each decision is bound to the exact parser,
+source and input-manifest hashes plus a fingerprint of the reviewed source
+line. Missing, malformed, stale, duplicated, or forged evidence leaves the raw
+edge unknown and closure at `HOLD`.
+
+At this slice's source state, collection is `COMPLETE`, all 137 production
+unknown edges have reviewed dispositions, and production closure is `PASS`.
+The remaining 88 unknown edges comprise 87 test or instruction-test edges and
+one non-production-reachable source edge in `src/search/fact_projection.py`.
+They stay visible and cannot be traversed as reachability proof. A successful
+CLI exit still proves collection completion only. Reachability closure does not
+admit a code-quality score or authorize deletion; later lifecycle evidence owns
+those decisions.
 
 ## Raw performance timing
 

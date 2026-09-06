@@ -1,0 +1,794 @@
+{
+  "edges": [
+    {
+      "disposition": "internal_python_target",
+      "evidence": "BUILDER is the checked-in execution/build_redesigned_dcf.py path run via managed_python_prefix.",
+      "fingerprint": "06cb61de81fd278b479391cab72ea213e3ba4a47cc69fbb1765dcadefbe23292",
+      "line": 71,
+      "path": "execution/audit_segment_coverage.py",
+      "targets": [
+        "execution/build_redesigned_dcf.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Argv is the fixed execution/grade_decisions.py path run via managed_python_prefix.",
+      "fingerprint": "f9142a01b8d64c758af76bce674aca14cb5e4d600136d68830bdec17ccc136fb",
+      "line": 46,
+      "path": "execution/backfill_seed_decisions.py",
+      "targets": [
+        "execution/grade_decisions.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_ingest builds a fixed execution/ingest_transcripts_state.py command with managed_python_prefix.",
+      "fingerprint": "07e6f7de16ab867d669de32826637eab48846587935c8ec0ff48d7d36d98688e",
+      "line": 756,
+      "path": "execution/backfill_transcripts.py",
+      "targets": [
+        "execution/ingest_transcripts_state.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_extract builds a fixed execution/extract_commitments_from_transcript.py command with managed_python_prefix.",
+      "fingerprint": "f08c9ae3a71fa0425da13817bd4b4d8816a339d93f89e8b0f970c3bdd3ac796b",
+      "line": 786,
+      "path": "execution/backfill_transcripts.py",
+      "targets": [
+        "execution/extract_commitments_from_transcript.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run executes only the fixed self-probe and the BOOTSTRAP execution/sqlite_bootstrap.py probe commands.",
+      "fingerprint": "5c52b0de8549fe8182b1c25ba2cc33b0ca5cd05494c0a44d1b79551bd1f17e9c",
+      "line": 56,
+      "path": "execution/benchmark_sqlite_runtime.py",
+      "targets": [
+        "execution/benchmark_sqlite_runtime.py",
+        "execution/sqlite_bootstrap.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run invokes only the checked-in HERE/script names via managed_python_prefix.",
+      "fingerprint": "5bca6b727d29bc41a8b442aa625360b6c1d5fe67d84c35f0333da0ee10873d2a",
+      "line": 58,
+      "path": "execution/build_all_redesigned_dcf.py",
+      "targets": [
+        "execution/dcf_opus_assumptions.py",
+        "execution/build_redesigned_dcf.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_ticker_specific_extractors runs the _TICKER_SPECIFIC_EXTRACTORS fixed script via managed_python_prefix.",
+      "fingerprint": "91d736633d876d837f92502f4c17cd34481f09d23521072b0c2500127facadb1",
+      "line": 116,
+      "path": "execution/build_artifacts.py",
+      "targets": [
+        "execution/extract_nvo_patent_timeline_state.py"
+      ]
+    },
+    {
+      "disposition": "closed_command_set",
+      "evidence": "Enumeration runs the fixed powershell.exe Get-Service es-* command with bounded output.",
+      "fingerprint": "5a49272e545f14ea0bd54cc2e93d18fc9ffb8ffce53c4c2d896ebe3699fa41c8",
+      "line": 421,
+      "path": "execution/collect_operations_runtime_observations.py",
+      "targets": [
+        "powershell.exe"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_step executes only the five fixed managed-Python stage scripts.",
+      "fingerprint": "0d00c2f62dd67939bca3757ae02087a276914c5e28a97e7608befbbcd6201bc4",
+      "line": 515,
+      "path": "execution/daily_fetch_and_brief.py",
+      "targets": [
+        "execution/run_thesis_evaluator.py",
+        "execution/match_commitments.py",
+        "execution/refresh_dcf.py",
+        "execution/build_artifacts.py",
+        "execution/sweep_output_history.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Batch runs only the fixed managed-Python discover, fetch, narrative, and process scripts.",
+      "fingerprint": "24029d263abf3b0a53f8e863b9230d41f7ef6c97b712f312c70dd3c01064ebb2",
+      "line": 254,
+      "path": "execution/discover_ir_documents_all.py",
+      "targets": [
+        "execution/discover_ir_documents.py",
+        "execution/fetch_ir_documents.py",
+        "src/compute/ir_narrative.py",
+        "execution/process_ir_documents.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "build_one runs only the three fixed managed-Python onboard, build, and card scripts.",
+      "fingerprint": "1eceb602743268232131406a18b6ea4057e3b6f89b1dfdcfec22831504565c47",
+      "line": 58,
+      "path": "execution/discovery_build.py",
+      "targets": [
+        "execution/onboard_ticker.py",
+        "execution/build_artifacts.py",
+        "execution/build_investment_decision_card.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
+      "fingerprint": "8dcc3d17deb950d7c832a6e236539822825acda4ba8a0bb095d99a42bc543440",
+      "line": 576,
+      "path": "execution/fetch_ir_documents.py",
+      "targets": [
+        "execution/categorize_ir_uploads.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_narrative invokes the fixed src/compute/ir_narrative.py via managed_python_prefix.",
+      "fingerprint": "787ac30592c592b6293695149c0c2930f4ef481e1d34895b0426c61e97f30b19",
+      "line": 102,
+      "path": "execution/fetch_ir_from_urls.py",
+      "targets": [
+        "src/compute/ir_narrative.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_fetch runs the fixed execution/save_fmp_data.py manifest command.",
+      "fingerprint": "67580e75e44f71728d372eaa02e700f50f9c25eb37bc534d047cec7442f77dbc",
+      "line": 188,
+      "path": "execution/fmp_backpop.py",
+      "targets": [
+        "execution/save_fmp_data.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_extract runs the fixed execution/extract_facts.py command.",
+      "fingerprint": "f83fac470b81ba9da8d9b21d7f53faf9b6d2e25c2b149139099e20a7a6f5905e",
+      "line": 205,
+      "path": "execution/fmp_backpop.py",
+      "targets": [
+        "execution/extract_facts.py"
+      ]
+    },
+    {
+      "disposition": "closed_command_set",
+      "evidence": "_run executes only the fixed git diff and ruff format --diff commands.",
+      "fingerprint": "85f955bc4bf2735fe0e42d15a35ce812812509b1178d5fa5cf7749d8508c5578",
+      "line": 95,
+      "path": "execution/format_changed.py",
+      "targets": [
+        "git",
+        "ruff"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Chain runs the fixed execution/process_ir_documents.py via managed_python_prefix.",
+      "fingerprint": "d1d2772e7e15732ee15b109d93fd43141a26b0f140935a0ee85b879f04b989db",
+      "line": 111,
+      "path": "execution/intake_documents.py",
+      "targets": [
+        "execution/process_ir_documents.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Chain runs the fixed execution/ingest_transcripts.py via managed_python_prefix.",
+      "fingerprint": "d601bc50445ad87bbe8ed9250785708646f182c8b55a2e805095992c5aaea476",
+      "line": 126,
+      "path": "execution/intake_documents.py",
+      "targets": [
+        "execution/ingest_transcripts.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Chain runs the fixed execution/extract_commitments_from_transcript.py via managed_python_prefix.",
+      "fingerprint": "3f953ab46e2d9cf70c3e14c946d77cbac652e6453314b67af5c0d50084c57eca",
+      "line": 156,
+      "path": "execution/intake_documents.py",
+      "targets": [
+        "execution/extract_commitments_from_transcript.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "onboard_one runs only the four fixed managed-Python onboard, eval, DCF, and commitment scripts.",
+      "fingerprint": "4c945c86df06434faf6a72e89edb97e37f77e1b97390fb3c1d3b6cc8186b9e15",
+      "line": 313,
+      "path": "execution/onboard_pending_tickers.py",
+      "targets": [
+        "execution/onboard_ticker.py",
+        "execution/run_thesis_evaluator.py",
+        "execution/refresh_dcf.py",
+        "execution/extract_commitments_from_transcript.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_fmp_fetch runs the fixed _FMP_SCRIPT via managed_python_prefix.",
+      "fingerprint": "8046ecaeeae3ce0e3331abae1f88c2d13d3e8e8b8fb09bde9e2f6a33ad2243a8",
+      "line": 382,
+      "path": "execution/onboard_ticker.py",
+      "targets": [
+        "execution/save_fmp_data.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_transcript_backfill runs the fixed _BACKFILL_SCRIPT via managed_python_prefix.",
+      "fingerprint": "7b78ac97da0998a1a8fa1f75466b37e147d123925ee0da5d7e3ecaa89dddbd5d",
+      "line": 398,
+      "path": "execution/onboard_ticker.py",
+      "targets": [
+        "execution/backfill_transcripts.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_saydo first runs the fixed execution/process_ir_documents.py command.",
+      "fingerprint": "d2e200738f81a466db29c3b52e5329c4710d9a28fe57c007b517bfbce488853a",
+      "line": 468,
+      "path": "execution/onboard_ticker.py",
+      "targets": [
+        "execution/process_ir_documents.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_saydo then runs the fixed execution/build_saydo_pairs.py command.",
+      "fingerprint": "be9211419c7f451c20a708f963ab8dd68bfac483ad1912dc0999bcd79b6d88a4",
+      "line": 480,
+      "path": "execution/onboard_ticker.py",
+      "targets": [
+        "execution/build_saydo_pairs.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "ETF path runs the fixed execution/build_etf_workup.py via managed_python_prefix.",
+      "fingerprint": "60d385c5c4acc72f33ee16054fb4e10866deae3291f04303de02157cb8d61959",
+      "line": 535,
+      "path": "execution/onboard_ticker.py",
+      "targets": [
+        "execution/build_etf_workup.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_spawn_step runs only the four fixed managed-Python rebuild scripts.",
+      "fingerprint": "9c41af9ff0a5b8f1bfc62c0b298d2c19eabb66969309d73c97a21ee0941083c6",
+      "line": 742,
+      "path": "execution/process_report_comments.py",
+      "targets": [
+        "execution/seed_kpi_definitions.py",
+        "execution/extract_kpis_from_summaries.py",
+        "execution/run_thesis_evaluator.py",
+        "execution/build_artifacts.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Hints refresh runs the fixed execution/schedule_pre_earnings_refresh.py script.",
+      "fingerprint": "269121a247c0556de673897b8d49e0468f8b4c0796915365541aee02c36bcf19",
+      "line": 2098,
+      "path": "execution/refresh_cache.py",
+      "targets": [
+        "execution/schedule_pre_earnings_refresh.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_dispatch_one runs the fixed execution/save_fmp_data.py manifest command.",
+      "fingerprint": "ba546aa3bf714e55535e97a79c18f29256552f8d855ff1c3eaaaf6810c7e0487",
+      "line": 2428,
+      "path": "execution/refresh_cache.py",
+      "targets": [
+        "execution/save_fmp_data.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_spawn_background re-executes the fixed execution/refresh_cache.py run command.",
+      "fingerprint": "4b50a55ffc06baad7b38075aa4a58d3a4ac9573bf117a7e8b1e2c7398c90e3ee",
+      "line": 2699,
+      "path": "execution/refresh_cache.py",
+      "targets": [
+        "execution/refresh_cache.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
+      "fingerprint": "032b528b99a5169c60ea5af883aa8a6d4602dce7666301b92947817b15d7507b",
+      "line": 664,
+      "path": "execution/refresh_dcf.py",
+      "targets": [
+        "execution/build_bank_dcf.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
+      "fingerprint": "debe9c035a704a8e7c07e90d16798cc38b0aa0cbd0eea4d2dfb4ff58786eda10",
+      "line": 701,
+      "path": "execution/refresh_dcf.py",
+      "targets": [
+        "execution/build_holdco_sotp.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
+      "fingerprint": "47b82fc4f70227422349f6ad3a71d1d4b3792699b29570870283b581194dddd0",
+      "line": 746,
+      "path": "execution/refresh_dcf.py",
+      "targets": [
+        "execution/build_fintech_sotp.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
+      "fingerprint": "eddb473b7fa832b4f02513af5ffc4d58d0ddb138221533542c2892d5d7a7b2cc",
+      "line": 791,
+      "path": "execution/refresh_dcf.py",
+      "targets": [
+        "execution/build_nu_platform_dcf.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
+      "fingerprint": "3a45a2ee69cb6375fa84c3a050e99ea1cbf1a952354d5bd43f74e47f50ce2b73",
+      "line": 838,
+      "path": "execution/refresh_dcf.py",
+      "targets": [
+        "execution/build_meli_platform_dcf.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
+      "fingerprint": "3467d2b8cc8f91b1f42ac49a123e72c6653b0869557de0b5eef1127672b2b6a7",
+      "line": 885,
+      "path": "execution/refresh_dcf.py",
+      "targets": [
+        "execution/build_redesigned_dcf.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Drain invokes only the _PURPOSE_TO_REGENERATOR fixed scripts via managed_python_argv.",
+      "fingerprint": "79d1a4a08dfcf1da1b4a987948f5ac169f2b7cdc295c58935c54e5146bc2e1bd",
+      "line": 308,
+      "path": "execution/refresh_dirty_artifacts.py",
+      "targets": [
+        "execution/build_artifacts.py",
+        "execution/extract_company_description.py",
+        "execution/analyze_filing_intelligence.py",
+        "execution/build_saydo_pairs.py",
+        "execution/build_investment_decision_card.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Dispatcher builds only the nine fixed STEP_NAMES scripts via managed_python_argv.",
+      "fingerprint": "714a0f2d45cb2810b915f6b9493ac7b925f5ce8ba7f82b666fc1f0fd42bbb996",
+      "line": 265,
+      "path": "execution/refresh_dispatch.py",
+      "targets": [
+        "execution/fetch_fmp_historical_data.py",
+        "execution/backfill_transcripts.py",
+        "execution/process_ir_documents_state.py",
+        "execution/fetch_news.py",
+        "execution/extract_kpis_from_summaries.py",
+        "execution/build_saydo_pairs.py",
+        "execution/build_artifacts.py",
+        "execution/refresh_dcf.py",
+        "execution/run_thesis_evaluator.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_one runs the fixed execution/refresh_ir_kpis.py via managed_python_prefix.",
+      "fingerprint": "e67cba5c8603b00615de3f7e304673950c35b7e035b61508d6b7624cd69899a7",
+      "line": 277,
+      "path": "execution/refresh_ir_kpis_all.py",
+      "targets": [
+        "execution/refresh_ir_kpis.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "News refresh delegates to the fixed execution/build_artifacts.py command.",
+      "fingerprint": "1e0a5895d8e5570dcca4fc7dda42b394274d10afbd08184ec9e3b979627909cc",
+      "line": 47,
+      "path": "execution/refresh_news.py",
+      "targets": [
+        "execution/build_artifacts.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_upgrade runs the fixed execution/upgrade_database.py via managed_python_prefix.",
+      "fingerprint": "b1522e5f4a1a74ad0fee7bef3cda5a8e7b410c0190f276ffadafbc2af3ec871f",
+      "line": 214,
+      "path": "execution/rehearse_data_backbone.py",
+      "targets": [
+        "execution/upgrade_database.py"
+      ]
+    },
+    {
+      "disposition": "closed_command_set",
+      "evidence": "Offline replay runs the generated rehearsal-root runner script, not a checked-in path.",
+      "fingerprint": "5afb41e932b86b7a7ede586d51b1ca3310401b77a7845185dfd19b455be2c6d4",
+      "line": 267,
+      "path": "execution/rehearse_data_backbone.py",
+      "targets": [
+        "offline replay runner"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_grader runs only the _GRADERS fixed scripts via managed_python_prefix.",
+      "fingerprint": "7877688fcd35fdd87fd70a2b753b238b407fa3682557ef4e9d8dcacfb45e0f00",
+      "line": 209,
+      "path": "execution/run_calibration_grading.py",
+      "targets": [
+        "execution/prune_llm_capture.py",
+        "execution/grade_predictions.py",
+        "execution/grade_decisions.py",
+        "execution/grade_bear_cases.py",
+        "execution/run_llm_evals.py",
+        "execution/run_behavior_distill.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Stages resolve through the fixed checked-in STAGE_MANIFEST script set via managed_python_argv.",
+      "fingerprint": "56c75dd7250f2e5d4810e35daf72c6d7308120ed962e492fff67d0da1a03fb18",
+      "line": 366,
+      "path": "execution/run_morning_pipeline.py",
+      "targets": [
+        "execution/validate_environment.py",
+        "execution/fetch_news.py",
+        "execution/sync_list_type_from_holdings.py",
+        "execution/record_decisions.py",
+        "execution/sync_position_lifecycle.py",
+        "execution/reconcile_decision_actions.py",
+        "execution/refresh_cockpit_fundamentals.py",
+        "execution/compute_derived_metrics.py",
+        "execution/reprice_dcf.py",
+        "execution/refresh_candidate_fit.py",
+        "execution/fetch_factor_proxies.py",
+        "execution/refresh_position_guard.py",
+        "execution/refresh_portfolio_risk_snapshot.py",
+        "execution/refresh_wealth_context_snapshot.py",
+        "execution/run_triggers.py",
+        "execution/run_standup.py",
+        "execution/generate_pre_earnings_briefs.py",
+        "execution/generate_post_earnings_readouts.py",
+        "execution/build_alert_feed.py",
+        "execution/run_validation_engine.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_harvest runs only the _HARVEST_STEPS fixed scripts via managed_python_prefix.",
+      "fingerprint": "bf02ad57d81a7c18e7aa8cf45522771db2d7f5fb771e3bdf2ae237224fbe7ea1",
+      "line": 211,
+      "path": "execution/run_weekly_model_eval.py",
+      "targets": [
+        "execution/build_artifacts.py",
+        "execution/extract_company_description.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_stage runs only the fixed refresh, lens, and dashboard scripts via managed_python_argv.",
+      "fingerprint": "00eb54b48b8951264cf055057daa8046a12e61e1fe32a623aaad6d5670a7210e",
+      "line": 228,
+      "path": "execution/run_weekly_synthesis.py",
+      "targets": [
+        "execution/refresh_dirty_artifacts.py",
+        "execution/run_lens.py",
+        "execution/build_analytical_dashboard.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_run_ingest runs the fixed execution/ingest_transcripts.py via managed_python_prefix.",
+      "fingerprint": "91311c87a2bc383f868ff2a951ab815534f1f0d35af1b3e3b76e9fb2fe1c8537",
+      "line": 335,
+      "path": "execution/scan_ir_transcripts.py",
+      "targets": [
+        "execution/ingest_transcripts.py"
+      ]
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "_run_target executes the operator-supplied script or -m module path.",
+      "fingerprint": "4f77fbfb907f915eb608291bccd9d6e7a0b38d893cba1140e9eb375bd64cb1bb",
+      "line": 90,
+      "path": "execution/sqlite_bootstrap.py",
+      "targets": [
+        "operator-supplied Python target"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "_notify_alert_hook executes the operator-configured ES_CRON_ALERT_HOOK executable without a shell.",
+      "fingerprint": "62ef3b4515133edb8cf41be023c4273c0e4615e15f2e2b1de133b30a0c20f5ca",
+      "line": 600,
+      "path": "execution/verify_cron_registration.py",
+      "targets": [
+        "ES_CRON_ALERT_HOOK"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Conformance check runs the fixed execution/verify_design_conformance.py --check command.",
+      "fingerprint": "c479d698ed8dbc5fc0ca74223f6645c357760080e75980a3e316efbb6da5d99a",
+      "line": 87,
+      "path": "scripts/check_design_sync.py",
+      "targets": [
+        "execution/verify_design_conformance.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_spawn_onboard_async launches the fixed execution/onboard_ticker.py via managed_python_argv.",
+      "fingerprint": "86534bee40a11dd1e8798252b767f8fe31676a16c4ca384af27113803b70df53",
+      "line": 616,
+      "path": "src/db.py",
+      "targets": [
+        "execution/onboard_ticker.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "_spawn_onboard_async POSIX branch launches the same fixed onboard script.",
+      "fingerprint": "da52c38b3453e95f9e3cdfd19c2c41474658c3931755c59266b5fa433c98e55d",
+      "line": 626,
+      "path": "src/db.py",
+      "targets": [
+        "execution/onboard_ticker.py"
+      ]
+    },
+    {
+      "disposition": "runtime_registry",
+      "evidence": "Job.start_subprocess executes the registry-owned argv which may mix targets.",
+      "fingerprint": "e67f3ee629f1d9693d1c983f95ee5715cfe15c7388becf5d06a69016e6f413a0",
+      "line": 94,
+      "path": "src/dispatch_registry.py",
+      "targets": [
+        "dispatch registry"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Windows ACL fence spawns the fixed powershell.exe fence script.",
+      "fingerprint": "5a59e08648c1c0f6feb32eff89fdc917f945a1cddf1c3ffda4f2a4e7efa8ce6b",
+      "line": 1019,
+      "path": "src/filings/inline_xbrl_processor.py",
+      "targets": [
+        "powershell.exe"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Processor runs the hash-pinned OS sandbox launcher executable.",
+      "fingerprint": "4b23b25011b6033ccd62943ef81ffbbc2e6635db3ed5b2b1858a08648bfba95a",
+      "line": 1306,
+      "path": "src/filings/inline_xbrl_processor.py",
+      "targets": [
+        "sandbox launcher"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "_call_claude spawns the fixed claude CLI executable.",
+      "fingerprint": "323fd3489019ba8519ebcc029d25b99332de553edd9fae1154fdefa0f5eb86a0",
+      "line": 1337,
+      "path": "src/llm/cli.py",
+      "targets": [
+        "claude CLI"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Streaming path spawns the fixed claude CLI executable.",
+      "fingerprint": "08aaa99a4f4e9a4abd987d892b0eb361add946253894741208cd25812643cd48",
+      "line": 2130,
+      "path": "src/llm/cli.py",
+      "targets": [
+        "claude CLI"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
+      "fingerprint": "99cc1a01ee8aa0d582de2d7f3d671f1bcc440a4fcb5dfd294fc609c973cf5c6a",
+      "line": 2580,
+      "path": "src/llm/cli.py",
+      "targets": [
+        "claude CLI"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "canonical_runtime_git_commit runs the fixed git rev-parse command.",
+      "fingerprint": "bec37b420cb4ea3850b0d2016e3af3b5ae836258d4d1ecd5e8dbde67bdea0800",
+      "line": 1824,
+      "path": "src/provenance/gc_recovery.py",
+      "targets": [
+        "git"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "TesseractImageProvider runs the pinned tesseract executable.",
+      "fingerprint": "6c07d4b0559658bff1cf8f6cdf7ede08109c5841e695d82e1684b4fd7f6d8dd4",
+      "line": 328,
+      "path": "src/provenance/image_ocr_extraction.py",
+      "targets": [
+        "tesseract"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "_binary_version probes the pinned tesseract --version command.",
+      "fingerprint": "47d6b31eb47c7fcf28160afe03f188f6c3104a4f4ac8fa5c1f08ccc52600014e",
+      "line": 1309,
+      "path": "src/provenance/image_ocr_extraction.py",
+      "targets": [
+        "tesseract"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Provider renders pages with the pinned pdftoppm executable.",
+      "fingerprint": "7e5d730cb7d836e4b5b60938e9e55aabbdafbe1679540446a095f3db2b874ab4",
+      "line": 374,
+      "path": "src/provenance/ocr_extraction.py",
+      "targets": [
+        "pdftoppm"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Provider extracts text with the pinned tesseract executable.",
+      "fingerprint": "e4ea5da31fe0ea10c9618104903c5ab66a57ca05f8f7a0a49efb919a7688c057",
+      "line": 397,
+      "path": "src/provenance/ocr_extraction.py",
+      "targets": [
+        "tesseract"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "_binary_version probes the pinned OCR executable version.",
+      "fingerprint": "5bad08a1e0a170572405e829ba7ee482c941ffcdf87ee3ed33c7a169b937583e",
+      "line": 1411,
+      "path": "src/provenance/ocr_extraction.py",
+      "targets": [
+        "ocr executable"
+      ]
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "run_benchmark_subprocess executes the operator-supplied benchmark argv.",
+      "fingerprint": "a7a00b6582c387dc4d33143e851594d42e8d782d0fbaf51ffb5932e9b4f618cc",
+      "line": 93,
+      "path": "src/quality/performance.py",
+      "targets": [
+        "operator-supplied benchmark argv"
+      ]
+    },
+    {
+      "disposition": "closed_command_set",
+      "evidence": "run_git_subprocess runs only fixed git metadata probes.",
+      "fingerprint": "330c508f90be7b7290e460c6f3832067f3cd2a2f08f511f395c613a47b1a4bc4",
+      "line": 52,
+      "path": "src/quality/performance_support.py",
+      "targets": [
+        "git"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "_acl grants via the fixed icacls.exe executable.",
+      "fingerprint": "eea3cf25d04b87bb29b4bcfc064aaed54935b07061875d905fccaf6ffc841dbe",
+      "line": 255,
+      "path": "src/report/windows_appcontainer.py",
+      "targets": [
+        "icacls.exe"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "_acl inspects via the fixed icacls.exe executable.",
+      "fingerprint": "b9faf252f4f49f827b135c4ad0ab940503c3dbc5745e4b16d0eec914ba92f51c",
+      "line": 262,
+      "path": "src/report/windows_appcontainer.py",
+      "targets": [
+        "icacls.exe"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Loopback removal uses the fixed CheckNetIsolation.exe executable.",
+      "fingerprint": "84e1a391f5946530000c48d228bd1e6660c2dc50e76800180a349b9b93d67a3c",
+      "line": 293,
+      "path": "src/report/windows_appcontainer.py",
+      "targets": [
+        "CheckNetIsolation.exe"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Loopback verification uses the fixed CheckNetIsolation.exe executable.",
+      "fingerprint": "c54aec184077de755fdec98a027e87ef5a90e40c0efe9accbbcb289caff64eb9",
+      "line": 302,
+      "path": "src/report/windows_appcontainer.py",
+      "targets": [
+        "CheckNetIsolation.exe"
+      ]
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "_run_managed_child runs the operator-supplied managed command.",
+      "fingerprint": "7b69fa1ff97160a5236fbd7899d110ebb2e70a85ab73ac1e4426ed73839192d8",
+      "line": 462,
+      "path": "src/runtime/job_runtime.py",
+      "targets": [
+        "operator-supplied command argv"
+      ]
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "Popen runs the operator-supplied managed command.",
+      "fingerprint": "a4e471ac3df72d85c97c4395db5d3747fc69569c4580abae2369fcd3aff75f86",
+      "line": 465,
+      "path": "src/runtime/job_runtime.py",
+      "targets": [
+        "operator-supplied command argv"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Activation runs the fixed schtasks.exe scheduler executable.",
+      "fingerprint": "4124ecde1efc7185d291ca623f60c36add93ff6ec35ca65b726d66848ad0cd17",
+      "line": 150,
+      "path": "src/runtime/portfolio_tracker.py",
+      "targets": [
+        "schtasks.exe"
+      ]
+    }
+  ],
+  "graph_provenance": {
+    "parser": {
+      "name": "ast+xml+literal-scanner",
+      "python": ">=3.11",
+      "source_sha256": "10833f421da5d5b81ea9b539057d16432959c0eba38aba54f8ac13b56a258cb5",
+      "version": "1.2.1"
+    },
+    "path": ".tmp/quality/reachability-check.json",
+    "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
+    "schema_version": "operational-reachability-raw/v1",
+    "source_manifest_sha256": "24bb68f577574b8515ae3e3cd2ab64069d2a825de27bb16a9dd975b67487a30c"
+  },
+  "schema_version": "reachability-process-dispositions/v1"
+}
