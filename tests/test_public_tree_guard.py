@@ -52,7 +52,7 @@ def test_forbidden_markdown_path_is_never_exempt(tmp_path: Path) -> None:
     private_note.write_text("private operator note\n", encoding="utf-8")
     _commit(tmp_path, "add private note")
 
-    assert verify(tmp_path) == ["forbidden tracked path: notes/portfolio.private.md"]
+    assert verify(tmp_path) == ["forbidden path: notes/portfolio.private.md"]
 
 
 def test_sanitized_dcf_workbook_and_brief_paths_are_allowed(tmp_path: Path) -> None:
@@ -236,3 +236,20 @@ def test_all_ref_audit_classifies_repeated_blobs_once(
 
     assert audit_public_refs(tmp_path) == {}
     assert calls.count(("README.md", b"public\n")) == 1
+
+
+def test_deleted_tracked_files_are_ignored_but_untracked_files_are_scanned(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    tracked = tmp_path / "notes" / "tracked.md"
+    tracked.parent.mkdir()
+    tracked.write_text("account id: 7\n", encoding="utf-8")
+    _commit(tmp_path, "track private note")
+    tracked.unlink()
+
+    untracked = tmp_path / "notes" / "untracked.md"
+    untracked.parent.mkdir(parents=True, exist_ok=True)
+    untracked.write_text("account id: 8\n", encoding="utf-8")
+
+    assert verify(tmp_path) == ["account-level-fact in: notes/untracked.md"]

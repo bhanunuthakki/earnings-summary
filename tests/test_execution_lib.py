@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from execution._lib import PROJECT_ROOT, log_event, resolve_db_path, standard_parser
+from execution._lib import (
+    PROJECT_ROOT,
+    add_database_argument,
+    command_parser,
+    log_event,
+    resolve_db_path,
+)
 
 
 def test_execution_lib_uses_one_project_root_and_db_resolver(tmp_path: Path) -> None:
@@ -14,26 +20,20 @@ def test_execution_lib_uses_one_project_root_and_db_resolver(tmp_path: Path) -> 
     assert resolve_db_path(db_path) == db_path
 
 
-def test_standard_parser_exposes_shared_typed_arguments(tmp_path: Path) -> None:
-    parser = standard_parser("test", ticker=True, force=True, mutation_mode=True)
-    parsed = parser.parse_args(
-        [
-            "--repo-root",
-            str(tmp_path),
-            "--db-path",
-            str(tmp_path / "db.sqlite"),
-            "--ticker",
-            "META",
-            "--force",
-            "--dry-run",
-        ]
-    )
-    assert parsed.repo_root == tmp_path
-    assert parsed.db_path == tmp_path / "db.sqlite"
-    assert parsed.ticker == "META"
-    assert parsed.force is True
-    assert parsed.dry_run is True
-    assert parsed.apply is False
+def test_command_parser_and_database_argument_support_explicit_defaults(
+    tmp_path: Path,
+) -> None:
+    parser = command_parser("test")
+    add_database_argument(parser, flag="--db", default=tmp_path / "db.sqlite")
+    parsed = parser.parse_args(["--db", str(tmp_path / "db.sqlite")])
+    assert parsed.db == tmp_path / "db.sqlite"
+
+
+def test_command_parser_leaves_db_path_none_by_default() -> None:
+    parser = command_parser("test")
+    add_database_argument(parser)
+    parsed = parser.parse_args([])
+    assert parsed.db_path is None
 
 
 def test_log_event_is_structured_and_redacts_credentials(

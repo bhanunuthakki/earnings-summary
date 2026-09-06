@@ -15,12 +15,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT
+except ImportError:  # pragma: no cover - test/import path fallback
+    from execution._lib import PROJECT_ROOT
 
-from evals.evidence_governance import (  # noqa: E402
+from evals.evidence_governance import (
     EvidenceJudgeEnforcer,
     EvidenceJudgeStatus,
     JudgeMode,
@@ -30,7 +30,7 @@ from evals.evidence_governance import (  # noqa: E402
 )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Verify evidence-governed judging and active enforcement."
     )
@@ -42,7 +42,7 @@ def main() -> None:
     )
     parser.add_argument("--json", action="store_true", help="Print receipt JSON to stdout")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     output_receipt: Path = args.output_receipt
 
     auditor = TaskPopulationFrameAuditor(repo_root=PROJECT_ROOT)

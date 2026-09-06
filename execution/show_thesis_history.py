@@ -10,23 +10,25 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import add_database_argument, command_parser
 
-from compute.thesis_history import (  # noqa: E402
+from compute.thesis_history import (
     fetch_history,
     portfolio_summary,
     transitions_for,
 )
-from pipeline.queries import open_db  # noqa: E402
+from pipeline.queries import open_db
 
 
-def _portfolio(conn) -> dict[str, object]:
+def _portfolio(conn: sqlite3.Connection) -> dict[str, object]:
     summaries = portfolio_summary(conn)
     return {
         "tickers": len(summaries),
@@ -44,7 +46,7 @@ def _portfolio(conn) -> dict[str, object]:
     }
 
 
-def _ticker_detail(conn, ticker: str) -> dict[str, object]:
+def _ticker_detail(conn: sqlite3.Connection, ticker: str) -> dict[str, object]:
     history = fetch_history(conn, ticker)
     transitions = transitions_for(conn, ticker)
     return {
@@ -68,11 +70,15 @@ def _ticker_detail(conn, ticker: str) -> dict[str, object]:
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> int:
+    parser = command_parser(__doc__)
+    add_database_argument(
+        parser,
+        flag="--db",
+        default=Path(__file__).resolve().parents[1] / "data" / "portfolio.db",
+    )
     parser.add_argument("--ticker", help="Single-ticker detail (history + transitions)")
-    parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     conn = open_db(args.db)
     try:

@@ -30,7 +30,7 @@ PYTEST_XDIST_ARGS := $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS) --
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
 CHANGED := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
 
-.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed instruction-check public-boundary-check public-ref-check check check-fast ci-local
+.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed architecture-check instruction-check public-boundary-check public-ref-check check check-fast ci-local
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -72,6 +72,9 @@ test-changed:  ## Run pytest only on changed test files vs BASE
 	@changed_tests=$$(git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- 'tests/test_*.py' 'tests/**/test_*.py' 'instruction_tests/test_*.py' 'instruction_tests/**/test_*.py'); \
 	if [ -n "$$changed_tests" ]; then $(PY) -m pytest -q $$changed_tests; else echo "no changed test files"; fi
 
+architecture-check:  ## Guard the monotonic baseline for execution sys.path mutations and loose root src modules
+	$(PY) scripts/check_architecture_boundaries.py
+
 instruction-check:  ## Validate layered instructions without app fixtures or DB setup
 	$(PY) execution/validate_directive_manifest.py
 	$(PY) execution/validate_folder_contract.py
@@ -84,9 +87,9 @@ public-boundary-check:  ## Reject private material in the current tracked tree
 public-ref-check:  ## Audit fetched origin branches by private path category
 	$(PY) execution/verify_public_tree.py --all-refs
 
-check: format-changed lint-changed typecheck-changed test  ## Pre-push gate: your-lines format + your-files lint/types + tests
+check: architecture-check format-changed lint-changed typecheck-changed test  ## Pre-push gate: architecture + your-lines format/lint/types + tests
 
-check-fast: format-changed lint-changed typecheck-changed test-changed  ## Fast inner-loop gate: format + lint + typecheck + changed-tests
+check-fast: architecture-check format-changed lint-changed typecheck-changed test-changed  ## Fast inner-loop gate: architecture + format/lint/typecheck + changed-tests
 
 manifest-check:  ## Validate 11-project reconstruction inventory
 	$(PY) execution/verify_reconstruction_inventory.py
