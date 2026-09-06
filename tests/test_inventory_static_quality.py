@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -19,6 +20,17 @@ def _tracked_files_payload(paths: Sequence[str]) -> str:
     return "\0".join(paths) + "\0"
 
 
+def _clean_git(root: Path, *args: str) -> str:
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
+
+
 def _successful_runner(
     paths: Sequence[str], *, tool_version: str = "1.0"
 ) -> static_quality.CommandRunner:
@@ -35,6 +47,29 @@ def _successful_runner(
         return subprocess.CompletedProcess(command, 0, "[]" if "format" not in command else "", "")
 
     return run
+
+
+def test_scanner_git_ignores_outer_repository_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = tmp_path / "sentinel"
+    requested = tmp_path / "requested"
+    for root in (sentinel, requested):
+        (root / "src").mkdir(parents=True)
+        (root / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        _clean_git(root, "init", "-q")
+        _clean_git(root, "add", ".")
+    sentinel_config = sentinel / ".git/config"
+    before = sentinel_config.read_bytes()
+    monkeypatch.setenv("GIT_DIR", str(sentinel / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(sentinel))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(sentinel / ".git/index"))
+
+    source_hash, config_hash = static_quality.scanner_input_hashes(requested)
+
+    assert source_hash
+    assert config_hash
+    assert sentinel_config.read_bytes() == before
 
 
 def test_inventory_partitions_tracked_python_and_counts_diagnostics(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,12 +14,18 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "execution"))
 
 
 def _git(root: Path, *args: str) -> str:
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     return subprocess.run(
-        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     ).stdout.strip()
 
 
 def _repo(tmp_path: Path) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
@@ -35,6 +42,25 @@ def _repo(tmp_path: Path) -> Path:
     _git(tmp_path, "add", ".")
     _git(tmp_path, "commit", "-qm", "baseline")
     return tmp_path
+
+
+def test_temp_repo_and_scanner_ignore_outer_git_repository_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = _repo(tmp_path / "sentinel")
+    sentinel_config = sentinel / ".git/config"
+    before = sentinel_config.read_bytes()
+    monkeypatch.setenv("GIT_DIR", str(sentinel / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(sentinel))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(sentinel / ".git/index"))
+
+    requested = _repo(tmp_path / "requested")
+    baseline = _git(requested, "rev-parse", "HEAD")
+    receipt = capture_compatibility_evidence(requested, baseline)
+
+    assert receipt.current_revision == baseline
+    assert _git(requested, "rev-parse", "--show-toplevel") == str(requested)
+    assert sentinel_config.read_bytes() == before
 
 
 def test_receipt_is_typed_deterministic_and_reports_parity(tmp_path: Path) -> None:
