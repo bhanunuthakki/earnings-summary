@@ -3,55 +3,69 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Explore · Answer to Work Bench prototype</title>
+  <title>Explore · Company research and analytics</title>
   <link rel="stylesheet" href="explore_concepts.css">
   <style>
     /* Isolated prototype exploration. Production must recompose an approved
        direction through Counterread's registered masters and controls. */
-    .hs-content { max-width: 1320px; padding-top: 24px; }
-    .hs-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
-    .hs-head h1 { margin: 2px 0 0; font-size: var(--fs-display); }
-    .hs-head p { max-width: 620px; margin: 5px 0 0; color: var(--muted); }
-    .hs-thread { width: min(1080px, 100%); margin: 0 auto; }
+    .hs-content { max-width: 1500px; padding: 12px 24px 28px; }
+    .hs-thread { width:min(1240px,100%); margin:0 auto; }
     .hs-turn { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 12px; }
-    .hs-turn + .hs-turn { margin-top: 24px; }
+    .hs-turn + .hs-turn { margin-top: 14px; }
     .hs-avatar { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--border-2); border-radius: var(--radius-full); color: var(--muted); font-size: var(--fs-caption); font-weight: 750; }
     .hs-avatar-ai { border-color: color-mix(in srgb, var(--accent) 44%, transparent); background: var(--accent-soft); color: var(--accent); }
     .hs-turn-label { display: flex; align-items: center; gap: 8px; min-height: 28px; color: var(--muted); font-size: var(--fs-caption); font-weight: 650; }
-    .hs-question { margin: 4px 0 0; font-size: 17px; line-height: 1.5; color: var(--fg); }
-    .hs-answer { margin-top: 5px; font-size: 15px; line-height: 1.65; color: var(--fg-soft); }
+    .hs-question { margin: 1px 0 0; font-size: var(--fs-display); line-height: 1.4; color: var(--fg); }
+    .hs-answer { max-width: 92ch; margin-top: 3px; font-size: var(--fs-title); line-height: 1.65; color: var(--fg-soft); }
     .hs-answer strong { color: var(--fg); }
+    .hs-answer-paragraph { margin: 0 0 12px; }
+    .hs-claim-type { margin-right: 6px; vertical-align: 2px; }
     .hs-inline-definition { padding: 0; border: 0; border-bottom: 1px dotted currentColor; background: transparent; color: inherit; cursor: pointer; font: inherit; font-weight: inherit; }
-    .hs-measures { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
+    .hs-metric-link { padding: 0; border: 0; border-bottom: 1px dotted currentColor; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-weight: 650; }
+    .hs-measures { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .hs-measures .k-chip { min-height: 30px; padding: 4px 10px; font-size: var(--fs-body); }
     .hs-definition-chip { cursor: pointer; }
-    .hs-result { margin-top: 14px; overflow: hidden; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .hs-result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 13px 0 5px; }
-    .hs-result-head h2 { margin: 0; font-size: var(--fs-title); }
-    .hs-result-head p { margin: 3px 0 0; color: var(--muted); font-size: var(--fs-caption); }
-    .hs-chart { display: block; width: 100%; height: 210px; }
-    .hs-chart .grid { stroke: var(--border); }
-    .hs-chart .line-a { fill: none; stroke: var(--accent); stroke-width: 2.5; }
-    .hs-chart .line-b { fill: none; stroke: var(--violet); stroke-width: 2.5; }
-    .hs-chart .dot-a { fill: var(--accent); }
-    .hs-chart .dot-b { fill: var(--violet); }
-    .hs-chart .break { stroke: var(--warn); stroke-dasharray: 4 4; }
-    .hs-chart text { fill: var(--muted); font: 11px var(--sans); }
-    .hs-chart .value { font: 9px var(--mono); text-anchor: middle; }
-    .hs-chart .value-a { fill: var(--accent); }
-    .hs-chart .value-b { fill: var(--violet); }
-    .hs-result-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 4px 0 12px; }
-    .hs-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: var(--fs-caption); }
-    .hs-legend-mark { font-size: 9px; }
-    .hs-legend-definition { padding: 2px 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: var(--fs-caption); }
-    .hs-answer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
-    .hs-compose { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px; margin-top: 30px; padding: 8px 8px 8px 13px; border: 1px solid var(--border-2); border-radius: var(--radius-card); background: var(--surface); }
+    .hs-answer-actions { display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:14px; }
+    .hs-answer-actions .k-chip { min-height:28px;padding:3px 10px;cursor:pointer;background:transparent; }
+    .hs-work-data { font-weight:700; }
+    .hs-compose { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 9px; margin-top: 18px; padding: 8px; border: 1px solid var(--border-2); border-radius: var(--radius-card); background: var(--surface); }
     .hs-compose input { width: 100%; border: 0; background: transparent; }
     .hs-compose input:focus-visible { outline: 0; }
+    .hs-route-controls { display: flex; align-items: center; gap: 5px; padding-right: 8px; border-right: 1px solid var(--border); }
+    .hs-route { min-height: 27px; cursor: pointer; }
+    .hs-route[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+    .hs-compose-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 7px 4px 0 41px; color: var(--muted); font-size: var(--fs-caption); }
+    .hs-route-preview strong { color: var(--fg-soft); }
     .hs-followups { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0 0 41px; }
     .hs-followup { cursor: pointer; }
+    .topbar { gap: 16px; }
+    .top-meta { margin-left: auto; }
+    .hs-topbar-company { min-width: 230px; }
+    .k-select-shell{position:relative;display:inline-flex;min-width:0;max-width:100%}
+    .k-select-shell.hs-topbar-company{min-width:230px}
+    .k-select-native{position:absolute!important;inline-size:1px!important;block-size:1px!important;margin:-1px!important;padding:0!important;border:0!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;clip-path:inset(50%)!important;white-space:nowrap!important}
+    .k-select-trigger{width:100%;min-height:34px;display:inline-flex;align-items:center;padding:6px 28px 6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--paper);color:var(--fg);text-align:left;cursor:pointer}
+    .k-select-trigger::after{content:"⌄";position:absolute;right:10px;color:var(--muted)}
+    .k-select-trigger:focus-visible,.k-select-trigger[aria-expanded="true"]{outline:2px solid var(--accent);outline-offset:2px;border-color:var(--accent)}
+    .k-select-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .k-select-menu{position:absolute;z-index:55;inset-block-start:calc(100% + 4px);inset-inline-start:0;width:max(100%,240px);max-height:260px;overflow:auto;margin:0;padding:4px;list-style:none;background:var(--surface);border:1px solid var(--border-2);border-radius:var(--radius);box-shadow:var(--shadow-pop)}
+    .k-select-option{min-height:34px;display:flex;align-items:center;padding:6px 10px;border-radius:var(--radius);color:var(--fg-soft);cursor:pointer}
+    .k-select-option:hover,.k-select-option[data-active="true"]{color:var(--fg);background:var(--paper)}
+    .k-select-option[aria-selected="true"]{color:var(--accent)}
+    .k-select-empty{padding:10px;color:var(--muted);font-size:var(--fs-caption)}
+    .k-select-live{position:absolute;inline-size:1px;block-size:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+    .hs-window-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin-top:16px;background:var(--border);border:1px solid var(--border); }
+    .hs-window-grid .drawer-row { margin:0;padding:10px;background:var(--surface);border:0; }
+    .hs-window-grid .drawer-row[aria-current="true"] { background:var(--accent-soft);color:var(--fg); }
 
     @media (max-width: 820px) {
-      .hs-head { align-items: flex-start; }
+      .topbar { height:auto;min-height:96px;align-items:flex-start;flex-wrap:wrap;padding-block:9px; }
+      .hs-topbar-company { order:3;width:100%; }
+      .hs-content { padding:10px 14px 22px; }
+      .hs-question { font-size:var(--fs-title); }
+      .hs-compose { grid-template-columns: minmax(0,1fr) auto; }
+      .hs-route-controls { grid-column: 1 / -1; width: 100%; padding: 0 0 7px; border-right: 0; border-bottom: 1px solid var(--border); }
+      .hs-window-grid { grid-template-columns:1fr; }
     }
   </style>
 </head>
@@ -64,44 +78,31 @@
     <div class="nav-group"><p class="nav-label">L3 · Operations</p><a class="nav-item" href="#"><span class="nav-icon">◫</span>Decision Audit Log</a><a class="nav-item" href="#"><span class="nav-icon">ϟ</span>Operations</a></div>
   </aside>
   <main class="main">
-    <header class="topbar"><div class="crumb">Research <span> / </span> <strong>Explore</strong></div><div class="top-meta"><span class="k-pill">Draft</span><span class="mono">MELI</span></div></header>
+    <header class="topbar"><div class="crumb">Research <span> / </span> <strong>Explore</strong></div><span class="k-select-shell hs-topbar-company" data-k-select-shell="true"><select class="k-select-native" id="explore-company" aria-label="Explore company" tabindex="-1" aria-hidden="true"><option value="MELI">MELI · MercadoLibre</option><option value="NU">NU · Nubank</option><option value="SE">SE · Sea Limited</option></select><button class="k-select-trigger" id="explore-company-trigger" type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="explore-company-menu" aria-label="Explore company: MELI · MercadoLibre"><span class="k-select-trigger-label">MELI · MercadoLibre</span></button><ul class="k-select-menu" id="explore-company-menu" role="listbox" hidden><li class="k-select-option" role="option" data-company="MELI" data-search="meli mercadolibre" aria-selected="true">MELI · MercadoLibre</li><li class="k-select-option" role="option" data-company="NU" data-search="nu nubank" aria-selected="false">NU · Nubank</li><li class="k-select-option" role="option" data-company="SE" data-search="se sea limited" aria-selected="false">SE · Sea Limited</li><li class="k-select-empty" hidden>No matching companies</li></ul><span class="k-select-live" role="status" aria-live="polite"></span></span><div class="top-meta"><span class="k-pill">Draft</span><span class="mono" id="top-company-ticker">MELI</span></div></header>
     <div class="content hs-content">
-      <div class="hs-head">
-        <div><div class="concept-tag">Hybrid 02 · Answer → Work Bench</div><h1>Explore</h1></div>
-        <button class="k-btn k-btn-quiet" data-open-drawer="save" title="Export current exploration to workspace or brief">Export session ↗</button>
-      </div>
-
       <section class="hs-thread" aria-label="Analysis conversation">
         <article class="hs-turn">
           <div class="hs-avatar">B</div>
-          <div><div class="hs-turn-label">You</div><p class="hs-question">What are MELI’s segments, and which is growing faster?</p></div>
+          <div><div class="hs-turn-label">You</div><p class="hs-question" id="hs-question">What are MELI’s segments, and which is growing faster?</p></div>
         </article>
 
-        <article class="hs-turn">
+        <article class="hs-turn" id="hs-response">
           <div class="hs-avatar hs-avatar-ai">✦</div>
           <div>
-            <div class="hs-turn-label">Explore <span class="tip" tabindex="0" data-tip="Explore mapped the question to governed company metrics. Hover guidance stays brief; definitions and source lineage open separately.">?</span></div>
-            <p class="hs-answer"><strong>MELI reports <button class="hs-inline-definition" data-definition="commerce">Commerce</button> and <button class="hs-inline-definition" data-definition="fintech">Fintech</button> as its two operating ecosystems.</strong> On the closest comparable issuer-reported revenue series, <button class="hs-inline-definition" data-definition="fintech">Fintech revenue</button> grew faster over the last eight complete quarters: an illustrative <span class="mono ok">29.8%</span> CAGR versus <span class="mono">24.1%</span> for <button class="hs-inline-definition" data-definition="commerce">Commerce revenue</button>.</p>
-            <div class="hs-measures" aria-label="Generated analysis scope"><button class="k-chip k-chip-accent hs-definition-chip" data-definition="commerce" data-tip="Revenue attributed to MELI’s Commerce ecosystem. Click for definition and source scope.">Commerce revenue</button><button class="k-chip k-chip-accent hs-definition-chip" data-definition="fintech" data-tip="Revenue attributed to MELI’s Fintech ecosystem. Click for definition and source scope.">Fintech revenue</button><span class="k-chip">Quarterly · 2 years</span><span class="k-chip k-chip-ok">16 / 16 observations</span></div>
-
-            <section class="hs-result" aria-label="Illustrative segment revenue result">
-              <div class="hs-result-head"><div><h2>Segment revenue trend</h2><p>Illustrative indexed growth · Q3 ’24 = 100</p></div><button class="k-btn k-btn-sm k-btn-quiet" data-open-sheet>Work with data ↗</button></div>
-              <svg class="hs-chart" viewBox="0 0 760 210" role="img" aria-label="Illustrative indexed quarterly growth for Commerce and Fintech">
-                <line class="grid" x1="38" y1="170" x2="738" y2="170"/><line class="grid" x1="38" y1="105" x2="738" y2="105"/><line class="grid" x1="38" y1="40" x2="738" y2="40"/>
-                <polyline class="line-a" points="55,166 150,153 245,138 340,120 435,100 530,81 625,59 720,35"/>
-                <polyline class="line-b" points="55,166 150,158 245,148 340,136 435,122 530,107 625,88 720,67"/>
-                <g><circle class="dot-a" cx="55" cy="166" r="3"/><circle class="dot-a" cx="150" cy="153" r="3"/><circle class="dot-a" cx="245" cy="138" r="3"/><circle class="dot-a" cx="340" cy="120" r="3"/><circle class="dot-a" cx="435" cy="100" r="3"/><circle class="dot-a" cx="530" cy="81" r="3"/><circle class="dot-a" cx="625" cy="59" r="3"/><circle class="dot-a" cx="720" cy="35" r="3"/><circle class="dot-b" cx="55" cy="166" r="3"/><circle class="dot-b" cx="150" cy="158" r="3"/><circle class="dot-b" cx="245" cy="148" r="3"/><circle class="dot-b" cx="340" cy="136" r="3"/><circle class="dot-b" cx="435" cy="122" r="3"/><circle class="dot-b" cx="530" cy="107" r="3"/><circle class="dot-b" cx="625" cy="88" r="3"/><circle class="dot-b" cx="720" cy="67" r="3"/></g>
-                <g><text class="value value-a" x="55" y="157">100</text><text class="value value-a" x="150" y="144">108</text><text class="value value-a" x="245" y="129">117</text><text class="value value-a" x="340" y="111">126</text><text class="value value-a" x="435" y="91">139</text><text class="value value-a" x="530" y="72">151</text><text class="value value-a" x="625" y="50">165</text><text class="value value-a" x="720" y="26">181</text><text class="value value-b" x="55" y="181">100</text><text class="value value-b" x="150" y="173">106</text><text class="value value-b" x="245" y="163">113</text><text class="value value-b" x="340" y="151">121</text><text class="value value-b" x="435" y="137">130</text><text class="value value-b" x="530" y="122">139</text><text class="value value-b" x="625" y="103">149</text><text class="value value-b" x="720" y="82">161</text></g>
-                <line class="break" x1="565" y1="24" x2="565" y2="170"/><text x="574" y="37">presentation revised</text><text x="42" y="193">Q3 ’24</text><text x="230" y="193">Q1 ’25</text><text x="420" y="193">Q3 ’25</text><text x="610" y="193">Q1 ’26</text>
-              </svg>
-              <div class="hs-result-foot"><div class="hs-legend"><button class="hs-legend-definition" data-definition="fintech"><span class="hs-legend-mark" style="color:var(--accent)">●</span> Fintech revenue</button><button class="hs-legend-definition" data-definition="commerce"><span class="hs-legend-mark" style="color:var(--violet)">●</span> Commerce revenue</button><span>Values illustrative</span></div><button class="e-door" data-definition="commerce">◆ Definition changed Q4 ’25</button></div>
-            </section>
-
-            <div class="hs-answer-actions"><button class="k-btn k-btn-quiet" data-open-drawer="sources">Sources &amp; provenance</button><button class="k-btn k-btn-save" data-open-drawer="save">◆ Save immutable view</button></div>
+            <div class="hs-turn-label">Explore <span class="k-pill k-pill-accent" id="hs-answer-mode">Analytics answer</span><span class="tip" tabindex="0" data-tip="Explore chooses a narrative or analytics answer from the question. Both stay in this thread; the Work Bench opens only when deeper data work is useful.">?</span></div>
+            <div class="hs-answer" id="hs-answer-copy">
+              <p class="hs-answer-paragraph"><span class="k-pill k-pill-ok hs-claim-type">Reported fact</span><strong>MELI reports two operating ecosystems: <button class="hs-metric-link" data-definition="commerce" data-window="latest">Commerce</button> and <button class="hs-metric-link" data-definition="fintech" data-window="latest">Fintech</button>.</strong> Both expanded across the eight complete illustrative quarters, but Fintech ended the period with the steeper revenue trajectory.</p>
+              <p class="hs-answer-paragraph"><span class="k-pill k-pill-accent hs-claim-type">Calculation</span>On the closest comparable issuer-reported series, <button class="hs-metric-link" data-definition="fintech" data-window="2y">Fintech’s illustrative 29.8% two-year CAGR</button> exceeded <button class="hs-metric-link" data-definition="commerce" data-window="2y">Commerce’s 24.1%</button>. The spread widened as payments volume, credit, and financial-service adoption grew faster than marketplace commerce.</p>
+              <p class="hs-answer-paragraph"><span class="k-pill hs-claim-type">Management claim</span>Management attributes the mix shift to deeper engagement across payments and credit, not simply pricing. That wording is preserved as a claim rather than promoted to a reported segment fact; the underlying <button class="hs-metric-link" data-definition="tpv" data-window="yoy">payment-volume trend</button> is available separately.</p>
+              <p class="hs-answer-paragraph"><span class="k-pill k-pill-warn hs-claim-type">Analyst inference</span>Fintech is therefore the faster growth engine, while Commerce remains the larger ecosystem anchor. Confidence is moderated by the visible Q4 ’25 presentation change: the pre- and post-change segment series are not silently normalized, so the long-window growth rates should be read as directional until a pro-forma bridge is available.</p>
+            </div>
+            <div class="hs-measures" id="hs-measures" aria-label="Generated analysis scope"><button class="k-chip k-chip-accent hs-definition-chip" data-definition="commerce" data-window="2y">Commerce revenue</button><button class="k-chip k-chip-accent hs-definition-chip" data-definition="fintech" data-window="2y">Fintech revenue</button><button class="k-chip" data-open-drawer="sources">Quarterly · 2 years</button><button class="k-chip k-chip-ok" data-open-drawer="sources">Complete · 16 / 16 observations</button></div>
+            <div class="hs-answer-actions" id="hs-answer-actions"><button class="k-chip" data-open-drawer="sources">Sources &amp; provenance</button><button class="k-chip" data-open-drawer="save">◆ Save immutable view</button><button class="k-chip k-chip-accent hs-work-data" data-open-sheet>Work with data ↗</button><span class="meta">All visible values are illustrative.</span></div>
           </div>
         </article>
 
-        <div class="hs-compose"><input id="hs-follow-up" aria-label="Ask a follow-up" placeholder="Ask a follow-up, add a metric, or request a comparison…"><button class="k-btn k-btn-primary" id="hs-ask">Ask</button></div>
+        <div class="hs-compose"><div class="hs-route-controls" role="group" aria-label="Answer routing"><button class="k-chip hs-route" id="hs-auto-route" aria-pressed="true" data-tip="Explore automatically chooses a narrative or analytics answer from your question.">Auto route</button><button class="k-chip hs-route" id="hs-analytics-once" aria-pressed="false" data-tip="Send only the next question directly into the full-screen Analytics Work Bench.">Analytics once</button></div><input id="hs-follow-up" aria-label="Ask a follow-up" placeholder="Ask a follow-up, add a metric, or request a comparison…"><button class="k-btn k-btn-primary" id="hs-ask">Ask</button></div>
+        <div class="hs-compose-meta"><span class="hs-route-preview" id="hs-route-preview"><strong>Analytics answer</strong> · compact metrics stay in this thread</span><span>Press Enter to ask</span></div>
         <div class="hs-followups" aria-label="Suggested follow-up questions"><button class="k-chip hs-followup">Compare margin contribution</button><button class="k-chip hs-followup">Add total payment volume</button><button class="k-chip hs-followup">Explain the definition change</button></div>
       </section>
     </div>
@@ -109,12 +110,13 @@
 </div>
 
 <div class="scrim" hidden></div>
-<aside class="drawer" id="definition" hidden aria-label="Metric definition">
-  <div class="drawer-head"><div><span class="k-pill k-pill-accent" id="definition-category">Metric definition</span><h2 id="definition-title">Commerce revenue</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+<aside class="drawer" id="metric-quick-view" hidden aria-label="Metric definition and quick view">
+  <div class="drawer-head"><div><span class="k-pill k-pill-accent" id="definition-category">Metric quick view</span><h2 id="definition-title">Commerce revenue</h2></div><button class="k-btn icon-btn k-btn-quiet" data-close aria-label="Close">×</button></div>
+  <div class="hs-window-grid" aria-label="Relevant metric windows"><div class="drawer-row" data-metric-window="latest"><span>Latest</span><span id="metric-latest">$3,422M · Q2 ’26</span></div><div class="drawer-row" data-metric-window="qoq"><span>QoQ</span><span id="metric-qoq">+7.8%</span></div><div class="drawer-row" data-metric-window="yoy"><span>YoY</span><span id="metric-yoy">+29.6%</span></div><div class="drawer-row" data-metric-window="2y"><span>2 year</span><span id="metric-2y">24.1% CAGR</span></div><div class="drawer-row" data-metric-window="5y"><span>5 year</span><span id="metric-5y">Incomplete window</span></div></div>
   <h3>Canonical definition</h3><p class="soft" id="definition-canonical"></p>
   <h3>Issuer-specific scope</h3><p class="soft" id="definition-issuer"></p>
   <div class="drawer-row"><span>Unit</span><span id="definition-unit"></span></div><div class="drawer-row"><span>Period</span><span id="definition-period"></span></div><div class="drawer-row"><span>Basis</span><span id="definition-basis"></span></div><div class="drawer-row"><span>Primary source</span><span id="definition-source"></span></div><div class="drawer-row"><span>DCF relationship</span><span id="definition-dcf"></span></div>
-  <div class="drawer-row"><span>Comparability</span><span class="warn" id="definition-comparability">Definition revision remains visible; no silent normalization</span></div>
+  <div class="drawer-row"><span>Comparability</span><span class="warn" id="definition-comparability">Definition revision remains visible; no silent normalization</span></div><p class="meta">Quick views show only semantically relevant, complete windows. Incomplete windows stay explicit rather than extrapolated.</p>
 </aside>
 
 <aside class="drawer" id="sources" hidden aria-label="Sources and provenance">
@@ -145,8 +147,14 @@
     drawers.forEach((drawer) => drawer.hidden = drawer.id !== id);
     scrim.hidden = false;
   }
-  function openDefinition(metricId) {
+  const metricWindows = {
+    commerce: { latest: '$3,422M · Q2 ’26', qoq: '+7.8%', yoy: '+29.6%', twoYear: '24.1% CAGR', fiveYear: 'Incomplete window' },
+    fintech: { latest: '$3,161M · Q2 ’26', qoq: '+9.5%', yoy: '+44.8%', twoYear: '29.8% CAGR', fiveYear: 'Incomplete window' },
+    tpv: { latest: '181 index · Q2 ’26', qoq: '+9.7%', yoy: '+43.7%', twoYear: '25.7% CAGR', fiveYear: 'Incomplete window' }
+  };
+  function openDefinition(metricId, preferredWindow = 'latest') {
     const definition = window.EXPLORE_METRIC_DEFINITIONS[metricId] || window.EXPLORE_METRIC_DEFINITIONS.commerce;
+    const windows = metricWindows[metricId] || { latest: 'Available in governed series', qoq: 'Not relevant', yoy: 'Available', twoYear: 'Available', fiveYear: 'Incomplete window' };
     document.getElementById('definition-category').textContent = definition.category;
     document.getElementById('definition-title').textContent = definition.label;
     document.getElementById('definition-canonical').textContent = definition.canonical;
@@ -157,34 +165,206 @@
     document.getElementById('definition-source').textContent = definition.source;
     document.getElementById('definition-dcf').textContent = definition.dcf;
     document.getElementById('definition-comparability').innerHTML = definition.comparability ? `<strong>⚠️ Accounting Break:</strong> ${definition.comparability}` : 'Single effective definition across selected window';
-    openDrawer('definition');
+    document.getElementById('metric-latest').textContent = windows.latest;
+    document.getElementById('metric-qoq').textContent = windows.qoq;
+    document.getElementById('metric-yoy').textContent = windows.yoy;
+    document.getElementById('metric-2y').textContent = windows.twoYear;
+    document.getElementById('metric-5y').textContent = windows.fiveYear;
+    openDrawer('metric-quick-view');
+    document.querySelectorAll('[data-metric-window]').forEach((row) => {
+      if (row.dataset.metricWindow === preferredWindow) row.setAttribute('aria-current', 'true');
+      else row.removeAttribute('aria-current');
+    });
+    document.getElementById(`metric-${preferredWindow}`)?.closest('.drawer-row')?.scrollIntoView({ block: 'nearest' });
   }
   function openSheet() {
     closeDrawers();
-    window.location.href = 'explore_hybrid_2_workbench_interactive.html';
+    const params = new URLSearchParams({
+      company: document.getElementById('explore-company').value,
+      intent: document.getElementById('hs-question').textContent.trim()
+    });
+    window.location.href = `explore_hybrid_2_workbench_interactive.html?${params}`;
   }
   document.querySelectorAll('[data-open-drawer]').forEach((button) => button.addEventListener('click', () => openDrawer(button.dataset.openDrawer)));
   document.querySelectorAll('[data-open-sheet]').forEach((button) => button.addEventListener('click', openSheet));
-  document.querySelectorAll('[data-definition]').forEach((button) => button.addEventListener('click', () => openDefinition(button.dataset.definition)));
+  function bindDefinitionButtons(root = document) {
+    root.querySelectorAll('[data-definition]').forEach((button) => {
+      button.dataset.definitionBound = 'true';
+      button.onclick = () => openDefinition(button.dataset.definition, button.dataset.window);
+    });
+  }
+  bindDefinitionButtons();
   document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', closeDrawers));
   scrim.addEventListener('click', closeDrawers);
   addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !scrim.hidden) closeDrawers();
   });
   const followUp = document.getElementById('hs-follow-up');
+  const companySelect = document.getElementById('explore-company');
+  const response = document.getElementById('hs-response');
+  const question = document.getElementById('hs-question');
+  const answerCopy = document.getElementById('hs-answer-copy');
+  const measures = document.getElementById('hs-measures');
+  const answerActions = document.getElementById('hs-answer-actions');
+  const answerMode = document.getElementById('hs-answer-mode');
+  const routePreview = document.getElementById('hs-route-preview');
+  const autoRoute = document.getElementById('hs-auto-route');
+  const analyticsOnce = document.getElementById('hs-analytics-once');
+  const initialQuestion = question.textContent;
+  const initialAnswer = answerCopy.innerHTML;
+  let analyticsOverride = false;
+
+  const companyNames = { MELI: 'MercadoLibre', NU: 'Nubank', SE: 'Sea Limited' };
+  function wireCompanySelect() {
+    const trigger = document.getElementById('explore-company-trigger');
+    const label = trigger.querySelector('.k-select-trigger-label');
+    const menu = document.getElementById('explore-company-menu');
+    const options = [...menu.querySelectorAll('.k-select-option')];
+    const empty = menu.querySelector('.k-select-empty');
+    const live = trigger.closest('.k-select-shell').querySelector('.k-select-live');
+    let search = '';
+    let active = -1;
+    options.forEach((option, index) => option.id = `explore-company-option-${index}`);
+    const selectedLabel = () => companySelect.options[companySelect.selectedIndex]?.textContent || 'Choose company';
+    const visible = () => options.filter((option) => !option.hidden);
+    const render = () => {
+      const term = search.trim().toLowerCase();
+      let matches = 0;
+      options.forEach((option) => {
+        option.hidden = Boolean(term && !option.dataset.search.includes(term));
+        option.dataset.active = 'false';
+        option.setAttribute('aria-selected', String(option.dataset.company === companySelect.value));
+        if (!option.hidden) matches += 1;
+      });
+      empty.hidden = matches !== 0;
+      label.textContent = search || selectedLabel();
+      trigger.setAttribute('aria-label', search ? `Explore company search: ${search}` : `Explore company: ${selectedLabel()}`);
+      trigger.removeAttribute('aria-activedescendant');
+      live.textContent = menu.hidden ? '' : matches ? `${matches} companies` : 'No matching companies';
+      active = -1;
+    };
+    const close = () => { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); search = ''; render(); };
+    const open = (initial = '') => { search = initial; menu.hidden = false; trigger.setAttribute('aria-expanded', 'true'); render(); };
+    const choose = (option) => {
+      companySelect.value = option.dataset.company;
+      companySelect.dispatchEvent(new Event('change', { bubbles: true }));
+      close();
+    };
+    trigger.addEventListener('click', () => menu.hidden ? open() : close());
+    trigger.addEventListener('keydown', (event) => {
+      const printable = event.key.length === 1 && /[a-z0-9 .-]/i.test(event.key);
+      if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+      if (event.key === 'Backspace' && !menu.hidden) { event.preventDefault(); search = search.slice(0, -1); render(); return; }
+      if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+        event.preventDefault();
+        if (menu.hidden) open();
+        const shown = visible();
+        if (!shown.length) return;
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        active = active < 0 ? (direction > 0 ? 0 : shown.length - 1) : (active + direction + shown.length) % shown.length;
+        shown.forEach((option, index) => option.dataset.active = String(index === active));
+        trigger.setAttribute('aria-activedescendant', shown[active].id);
+        return;
+      }
+      if (event.key === 'Enter' && !menu.hidden) { event.preventDefault(); const shown = visible(); if (shown[active]) choose(shown[active]); return; }
+      if (printable) { event.preventDefault(); if (menu.hidden) open(event.key); else { search += event.key; render(); } }
+    });
+    options.forEach((option) => {
+      option.addEventListener('pointerdown', (event) => event.preventDefault());
+      option.addEventListener('click', () => choose(option));
+    });
+    document.addEventListener('click', (event) => { if (!event.target.closest('.k-select-shell')) close(); });
+    render();
+  }
+  function inferredMode(value) {
+    return /growth|growing|faster|segment|revenue|margin|metric|compare|trend|quarter|year|tpv|gmv|volume|rate|how much|chart|table/i.test(value) ? 'analytics' : 'research';
+  }
+  function updateRoutePreview() {
+    const mode = analyticsOverride ? 'analytics-direct' : inferredMode(followUp.value || question.textContent);
+    if (mode === 'analytics-direct') routePreview.innerHTML = '<strong>Analytics Work Bench</strong> · the next question opens full screen';
+    else if (mode === 'analytics') routePreview.innerHTML = '<strong>Analytics answer</strong> · compact metrics stay in this thread';
+    else routePreview.innerHTML = '<strong>Research answer</strong> · narrative with cited evidence stays in this thread';
+  }
+  function setRouteOverride(enabled) {
+    analyticsOverride = enabled;
+    autoRoute.setAttribute('aria-pressed', String(!enabled));
+    analyticsOnce.setAttribute('aria-pressed', String(enabled));
+    updateRoutePreview();
+  }
+  function setCompanyContext(ticker) {
+    document.getElementById('top-company-ticker').textContent = ticker;
+    if (ticker === 'MELI') {
+      question.textContent = initialQuestion;
+      answerCopy.innerHTML = initialAnswer;
+      response.hidden = false;
+      measures.hidden = false;
+      answerActions.hidden = false;
+      answerMode.textContent = 'Analytics answer';
+      followUp.placeholder = 'Ask a follow-up, add a metric, or request a comparison…';
+      bindDefinitionButtons(answerCopy);
+    } else {
+      question.textContent = `Start a new Explore thread for ${ticker}`;
+      response.hidden = true;
+      followUp.value = '';
+      followUp.placeholder = `Ask anything about ${companyNames[ticker]}…`;
+    }
+    updateRoutePreview();
+  }
+  function renderInlineAnswer(value, mode) {
+    question.textContent = value;
+    response.hidden = false;
+    answerActions.hidden = false;
+    answerMode.textContent = mode === 'analytics' ? 'Analytics answer' : 'Research answer';
+    if (mode === 'research') {
+      measures.hidden = true;
+      answerCopy.innerHTML = `<p class="hs-answer-paragraph"><span class="k-pill k-pill-ok hs-claim-type">Reported fact</span><strong>Explore answers from ${companyNames[companySelect.value]}’s governed company record.</strong> Relevant reported observations remain attached to their source locators and effective metric definitions.</p><p class="hs-answer-paragraph"><span class="k-pill hs-claim-type">Management claim</span>Management language is preserved as attributed commentary rather than silently promoted into a financial fact.</p><p class="hs-answer-paragraph"><span class="k-pill k-pill-warn hs-claim-type">Analyst inference</span>The answer interprets what the evidence means for the thesis while keeping the inference visibly separate from reported data. Ask for a comparison or trend to add the relevant complete windows.</p>`;
+    } else if (companySelect.value === 'MELI') {
+      answerCopy.innerHTML = initialAnswer;
+      measures.hidden = false;
+      bindDefinitionButtons(answerCopy);
+    } else {
+      measures.hidden = true;
+      answerCopy.innerHTML = `<p class="hs-answer-paragraph"><span class="k-pill k-pill-ok hs-claim-type">Reported fact</span><strong>Explore recognized an analytics question for ${companyNames[companySelect.value]}.</strong> It resolves the closest governed metrics and complete comparable window before making a claim.</p><p class="hs-answer-paragraph"><span class="k-pill k-pill-accent hs-claim-type">Calculation</span>Growth, mix, and trend comparisons are calculated only from admitted observations with compatible definitions.</p><p class="hs-answer-paragraph"><span class="k-pill k-pill-warn hs-claim-type">Analyst inference</span>Any conclusion remains distinct from the measurements; definition breaks are surfaced before interpretation. Use Work with data only when you want to reshape the underlying analysis.</p>`;
+    }
+    followUp.value = '';
+    setRouteOverride(false);
+  }
   document.querySelectorAll('.hs-followup').forEach((button) => button.addEventListener('click', () => {
     followUp.value = button.textContent.trim();
     followUp.focus();
+    updateRoutePreview();
   }));
+  autoRoute.addEventListener('click', () => setRouteOverride(false));
+  analyticsOnce.addEventListener('click', () => setRouteOverride(true));
+  followUp.addEventListener('input', updateRoutePreview);
+  companySelect.addEventListener('change', () => {
+    const params = new URLSearchParams(location.search);
+    params.set('company', companySelect.value);
+    history.replaceState(null, '', `${location.pathname}?${params}`);
+    setCompanyContext(companySelect.value);
+  });
   document.getElementById('hs-ask').addEventListener('click', () => {
     const value = followUp.value.trim();
     if (!value) { followUp.focus(); return; }
-    window.location.href = `explore_hybrid_2_workbench_interactive.html?intent=${encodeURIComponent(value)}`;
+    if (analyticsOverride) {
+      if (companySelect.value !== 'MELI') {
+        renderInlineAnswer(value, 'analytics');
+        return;
+      }
+      const params = new URLSearchParams({ company: companySelect.value, intent: value });
+      window.location.href = `explore_hybrid_2_workbench_interactive.html?${params}`;
+      return;
+    }
+    renderInlineAnswer(value, inferredMode(value));
   });
   followUp.addEventListener('keydown', (event) => { if (event.key === 'Enter') document.getElementById('hs-ask').click(); });
   document.getElementById('hs-confirm-save').addEventListener('click', () => {
     document.getElementById('hs-save-status').textContent = '✓ Saved to the Explore library (prototype state).';
   });
+  const carriedCompany = new URLSearchParams(location.search).get('company');
+  if (carriedCompany && companyNames[carriedCompany]) companySelect.value = carriedCompany;
+  wireCompanySelect();
+  setCompanyContext(companySelect.value);
 </script>
 </body>
 </html>
