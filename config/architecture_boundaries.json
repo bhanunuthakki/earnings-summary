@@ -88,6 +88,7 @@
     "execution/capture_ir_authority_surfaces.py",
     "execution/capture_issuer_document_inventory.py",
     "execution/capture_observed_ir_documents.py",
+    "execution/capture_performance_baseline.py",
     "execution/capture_poller.py",
     "execution/categorize_ir_uploads.py",
     "execution/check_comp_set_drift.py",

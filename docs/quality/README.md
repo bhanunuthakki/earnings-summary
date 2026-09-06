@@ -38,3 +38,33 @@ population, records those exclusions explicitly, and always reports closure as
 `HOLD` until a later train slice reviews the raw unknown edges. A successful
 exit proves only that collection completed; it is not a reachability-closure or
 score claim.
+
+## Raw performance timing
+
+Capture raw local timing without admitting performance or score:
+
+```bash
+python execution/capture_performance_baseline.py \
+  --command "python -c \"print('ok')\"" \
+  --output .tmp/quality/performance-baseline.json \
+  --samples 7
+```
+
+The collector runs one unscored warmup followed by 1-21 measured repeats;
+fewer than seven are explicitly marked insufficient for stability. It
+labels samples ordinally (`measured` with a 1-based ordinal, never
+cold/warm), and reports median, MAD, a seeded deterministic bootstrap 95% CI,
+and stability. Every receipt records the requested command, resolved argv,
+HEAD revision, tracked Python source hash, declared config hash,
+scanner/module hash and version, runtime identity, elapsed samples, exit
+codes, exact output hash/size, a bounded redacted preview, provenance, and
+collection status. The source identity says whether the complete repository
+working tree is clean at `HEAD` or differs from the recorded revision.
+
+Commands are caller-trusted and run without a shell. Credential-like
+environment variables are removed, but the collector does not claim network
+isolation, and callers must keep benchmark output bounded because subprocess
+capture is in memory. `COMPLETE` means only that raw collection finished; it
+does not make dirty-tree or revision-scoped evidence admissible. Successful
+collection is always admission `HOLD` because causal and paired performance
+evidence is deferred; receipts belong under ignored `.tmp/` paths.
