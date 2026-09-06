@@ -2,17 +2,26 @@
 
 Loads on top of the global `AGENTS.md`. This file adds only earnings-summary facts and constraints. Cross-project safety, authority, and routing stay in the root contract; detailed global workflows live in routed procedures and load only when their trigger applies.
 
-**What this repo is.** A solo-built, pull-only, localhost equity-research platform. Reusable business logic lives under `src/`; `execution/` contains operational entrypoints plus `execution/comments_server.py`, the Flask cockpit at http://127.0.0.1:7421. Production state lives only in the canonical Windows checkout's Alembic-managed `data/portfolio.db`; Mac tests use explicit temporary or restored-snapshot databases. Intermediate artifacts live in `.tmp/`.
+**What this repo is.** A solo-built, pull-only, localhost equity-research platform. Reusable business logic lives under `src/`; `execution/` contains operational entrypoints plus `execution/comments_server.py`, the Flask cockpit at http://127.0.0.1:7421. Production state belongs to the configured canonical Windows database authority; its path must be resolved from approved runtime configuration, never guessed from a checkout. Mac tests use explicit temporary or provenance-bearing restored-snapshot databases. Intermediate artifacts live in `.tmp/`.
 
-## Mac/Windows listener ownership
+## Purpose and improvement latitude
 
-- The always-on production-shaped host is Windows: `es-dashboard` owns loopback `127.0.0.1:7421`, and the Portfolio Tracker API owns loopback `127.0.0.1:8000`. The dashboard reaches the tracker on that same Windows host.
-- The production database authority is configured outside this repository. A checkout-local database is never a live, fallback, replica, or roster authority and must not exist. Treat one as an invalid local artifact: do not inspect it for product facts, migrate it, seed it, or make code pass against it.
-- Mac development and tests must name an explicit disposable migrated database under a test/temp root. A Mac task that needs live roster or production facts must coordinate Windows access and use the canonical Windows database read-only or an explicitly approved provenance-bearing snapshot/export. It must never silently create the checkout-default database.
-- A Mac browser must open the exact private HTTPS origin printed by live `tailscale serve status` on Windows. Mac `127.0.0.1:7421`, a remembered Windows computer name, a raw Tailnet IP, or the DNS name from `tailscale status` is not a substitute.
-- Expose only the dashboard through Tailscale Serve. Keep both backends loopback-only; do not expose port 8000 separately and never use Funnel.
-- After a Windows or Tailscale rename, run the documented Serve reset/reapply flow, set `COMMENTS_SERVER_CORS_WHITELIST` to that exact new HTTPS origin, restart `es-dashboard`, then prove Windows-local dashboard/tracker health and Mac-to-Windows dashboard hydration.
-- A CRD or browser tab that is auto-reconnecting, including one stuck on Connecting, still owns the GUI session. Before handoff, close or navigate it away, verify that it does not reconnect, and explicitly transfer the database, scheduler, service, and browser resources that remain in scope.
+Help the owner understand what changed in a company, whether it changes the investment case, and
+what evidence supports that judgment. Improve acquisition/extraction completeness, novel-metric
+discovery, comparability, provenance access, reading flow, and recovery. Explore analytical hypotheses
+and better UI families within authorized work while distinguishing reported facts, assumptions and
+analyst inference. Production authority, financial lineage and publication permissions remain fixed
+unless the owner explicitly changes them.
+
+## Production and test boundary
+
+The production database authority is configured outside this repository; the canonical Windows host
+owns production dashboard and tracker state. The implicit checkout-default `data/portfolio.db` is
+what “checkout-local database” means here: a checkout-local database is never a live, fallback, replica, or roster authority
+and must not exist. Explicit disposable migrated tests and approved provenance-bearing `.tmp/` snapshot
+restores are separate authorized artifacts, never silently inferred production state. Before live
+access, restoration, listener repair or resource handoff, read `directives/agent_host_operations.md`
+for exact private-origin, loopback-only, resource-ownership and recovery requirements.
 
 ## Investment-grade financial-data invariant
 
@@ -25,6 +34,7 @@ Identification, acquisition, parsing, storage, resolution, and surfacing of comp
 - Preserve novel and one-off management observations with speaker, source locator, raw label/value, period/scope, and recurring/promotion status even when they are not admitted to the recurring KPI database.
 - Every consumer—reports, time series, thesis evaluation, alerts, models, transcripts, and earnings readouts—uses the same provenance-aware fact resolver. User-facing outputs persist a complete source/context manifest or claim-level citations and distinguish reported fact, management claim, consensus estimate, calculation, and analyst inference.
 - A pipeline or UI may claim `decision-grade` only when source authority, completeness, semantic admission, reader parity, and reconstruction checks all pass. Otherwise report the precise degraded state and missing evidence.
+- Never substitute generic web search for company-reported data, earnings updates, or thesis thresholds. Query local `micro_thesis/holdings/<TICKER>.json`, the restored database, and `transcripts/` (or `cron/fetch_transcripts.py`) as the primary authorities.
 
 ## Authority map
 
@@ -40,9 +50,9 @@ Identification, acquisition, parsing, storage, resolution, and surfacing of comp
 - Contract: directives/design_language.md
 - Executable authority: src/ui/tokens.py, src/ui/controls.py, src/ui/design_registry.py, src/ui/conformance_scan.py, src/ui/source_chip.py, src/report/renderers/workspace_styles.py
 - Render: `python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421`, then exercise the affected primary task and its supported widths
-- Gate: `python scripts/check_design_sync.py`; report-renderer changes also require `GOLDEN_REGEN=1 python -m pytest tests/test_workspace_golden.py` plus visual diff review
+- Gate: `python scripts/check_design_sync.py`; report-renderer changes also require `python -m pytest tests/test_workspace_golden.py` (comparison mode) plus visual diff review
 
-UI work uses the shared `frontend-quality` procedure. New work selects registered controls and family recipes rather than adding local visual CSS, open-ended style APIs, or runtime style mutations. `source_chip.py` and `workspace_styles.py` are existing surface-specific authorities whose shared semantics must remain aligned even where geometry differs. Material frontend work requires before/after browser evidence for the affected task and an explicit note for any unverified state.
+UI work uses the shared `frontend-quality` procedure. Registered controls and family recipes are the default. An authorized redesign may evolve the design language through its master/registry extension path, with evidence for the changed user task; do not bypass that owner with local visual CSS, open-ended style APIs, or runtime style mutations. Golden regeneration (`GOLDEN_REGEN=1`) is an intentional expectation update, never the checking gate: review the changed expectations, then rerun comparison mode. Preserve the protected behavior when updating an obsolete expectation. `source_chip.py` and `workspace_styles.py` are existing surface-specific authorities whose shared semantics must remain aligned even where geometry differs. Material frontend work requires before/after browser evidence for the affected task and an explicit note for any unverified state.
 
 ## Testing, CI & Merge Velocity Discipline
 
@@ -57,7 +67,7 @@ UI work uses the shared `frontend-quality` procedure. New work selects registere
 
 ## Agent delegation and review — repo scope note
 
-Use the global Evidence and delegation rules plus `procedures/agent-operations.md` for delegation and `procedures/judging.md` for J0-J3 review rigor. The repository does not redefine either policy.
+Use the global evidence and execution contract plus `procedures/agent-operations.md` for delegation and `procedures/judging.md` for J0-J3 review rigor. The repository does not redefine either policy.
 
 Repo-specific scope: that rule governs **coding/session** model choice. The application's **in-app per-purpose LLM routing** is a separate concern, governed by `LLM_MODELS` in `src/llm/cli.py`, the model-downgrade eval loop (`directives/model_eval_loop.md`), and the cheapest-at-parity routing design (`directives/cheapest_model_routing.md`).
 
@@ -69,11 +79,8 @@ The app's membership-backed pools share quota with interactive sessions. Before 
 
 Use the global `code-change` procedure for typing, testing, architecture review, and validation. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is accepted; never use `# type: ignore`. See `src/log_redact.py` for the canonical credential-redaction helper.
 
-## Architectural & Execution Traps (Operational Learnings)
+## Local implementation traps
 
-- **Alembic Baseline Migrations:** Baseline migrations (`0001_initial_schema.py`) must wrap all DDL in `IF NOT EXISTS` syntax, and seed inserts must execute after table creation. Test fixtures building clean databases must invoke `command.upgrade(cfg, "head")` directly (since `command.stamp()` populates `alembic_version` without executing table DDL).
-- **Transitive Reachability Scans:** Before excising code from legacy modules (e.g., `src/provenance/`), run a full transitive dependency scan from non-provenance entrypoints (`src/timeseries/`, `src/pipeline/`, `execution/`) to prevent breaking hidden product imports.
-- **Request-Scoped DB Connection Pooling:** Surface renderers and server routes (`comments_server.py`) must thread a single request-scoped `sqlite3.Connection` via `open_repo_db(repo_root, conn=conn)` and Flask `g.request_read_db` (closed via `@app.teardown_request`) to eliminate per-section connection churn.
-- **Pre-Persist Fact Plausibility:** Bulk writes to `financial_facts` must route through `insert_with_restatement_detection` to execute pre-persist plausibility gates (`_validate_financial_fact_plausibility`) before committing.
-- **Resumable Multi-Stage Orchestration:** Multi-stage orchestrators (`execution/run_morning_pipeline.py`) track completed stage keys in `.tmp/morning_pipeline/state.json` (18h TTL) to enable exact resumption from the last successful stage on failure/retry.
-- **CI Delegation for Large Diffs:** Use `FAST_PUSH=1 git push` only when the project hook explicitly preserves security and privacy checks while delegating the expensive matrix to CI. Never bypass hooks.
+Read `directives/agent_implementation_traps.md` before migration/fixture changes, legacy-code
+removal, DB-using renderers, financial-fact writes, or morning-pipeline resumption. It owns the
+specific failure-prevention mechanics under the canonical domain contracts above.
