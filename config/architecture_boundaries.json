@@ -1,6 +1,7 @@
 {
   "execution_sys_path_mutations": [
     "execution/activate_data_cutover.py",
+    "execution/analyze_code_duplicates.py",
     "execution/analyze_filing_intelligence.py",
     "execution/analyze_timeseries.py",
     "execution/apply_issuer_fact_manifest.py",
@@ -79,6 +80,7 @@
     "execution/build_wix_avdv_retrospective_checkpoint.py",
     "execution/canonicalize_segments.py",
     "execution/capture_approved_ir_document.py",
+    "execution/capture_architecture_measurement.py",
     "execution/capture_coverage_report.py",
     "execution/capture_expected_sec_documents.py",
     "execution/capture_ir_authority_surfaces.py",
