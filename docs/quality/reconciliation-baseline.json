@@ -1364,7 +1364,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "aeaa069f5a187201927b82e6ebe7943667c8f25df1138943dce175bbf49d3eac",
+        "sha256": "53a5b5b3ba2ef7d412fe2db716175ceb4b0ba4cb335a3a19fe8684c37fe4731a",
         "locator": "$.edges[target=src/synthesis/theme_synth.py]"
       },
       "provisional_evidence": {
@@ -1382,7 +1382,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "aeaa069f5a187201927b82e6ebe7943667c8f25df1138943dce175bbf49d3eac",
+        "sha256": "53a5b5b3ba2ef7d412fe2db716175ceb4b0ba4cb335a3a19fe8684c37fe4731a",
         "locator": "$.edges[target=src/filings/boilerplate_classify.py]"
       },
       "provisional_evidence": {
@@ -1400,7 +1400,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "aeaa069f5a187201927b82e6ebe7943667c8f25df1138943dce175bbf49d3eac",
+        "sha256": "53a5b5b3ba2ef7d412fe2db716175ceb4b0ba4cb335a3a19fe8684c37fe4731a",
         "locator": "$.edges[target=src/filings/cross_sectional_detrend.py]"
       },
       "provisional_evidence": {
@@ -1418,7 +1418,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "aeaa069f5a187201927b82e6ebe7943667c8f25df1138943dce175bbf49d3eac",
+        "sha256": "53a5b5b3ba2ef7d412fe2db716175ceb4b0ba4cb335a3a19fe8684c37fe4731a",
         "locator": "$.edges[target=src/ask/turn_cache.py]"
       },
       "provisional_evidence": {
@@ -1436,7 +1436,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": ".tmp/quality/reachability-check.json",
-        "sha256": "aeaa069f5a187201927b82e6ebe7943667c8f25df1138943dce175bbf49d3eac",
+        "sha256": "53a5b5b3ba2ef7d412fe2db716175ceb4b0ba4cb335a3a19fe8684c37fe4731a",
         "locator": "$.edges[target=src/etf_sources/vanguard.py]"
       },
       "provisional_evidence": {
@@ -1485,7 +1485,7 @@
   ],
   "scored_claims": 30,
   "rejected_claims": 66,
-  "source_hash": "7aef22ffa2b0fe9b3a2cf197b3499b52edd709f5085d38d848d3c496f4a8d012",
+  "source_hash": "d118284c1f652d756259688747572359380c7240a2304a1745d6ed6de4f676bf",
   "roadmap_source": {
     "path": "/Applications/earnings-summary/.tmp/quality-9plus-roadmap.md",
     "sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",

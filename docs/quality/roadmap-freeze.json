@@ -30,8 +30,8 @@
     },
     "lifecycle": {
       "path": "docs/quality/lifecycle-baseline.json",
-      "sha256": "1057af9a7a5e8d421adf5bd4c8c78f141c60d1ce5791531070750fa3c7fa4292",
-      "scoped_commit": "835ecbeab77c724241d8179dada13db70046e6a4",
+      "sha256": "922885f5f536be4e1fa443ba326dfa12b723687f583c8f97b219539b367d86df",
+      "scoped_commit": "58a47f1ab93f706a4cd88a3fa21bd894802ca1e2",
       "scope": "WORKTREE"
     },
     "function_lifecycle": {
@@ -42,7 +42,7 @@
     },
     "reconciliation": {
       "path": "docs/quality/reconciliation-baseline.json",
-      "sha256": "73f12aa45265112f06f8f07c5e208d5ad26fa0d1a61b3645e97cb1bf994a630e",
+      "sha256": "a35a6362a8a37da9c30b4e29be35f32c1734a03bc34d8ef30e0107f9b7b116a6",
       "scoped_commit": "WORKTREE",
       "scope": "WORKTREE"
     },
@@ -103,25 +103,25 @@
   },
   "reconciliation": {
     "path": "docs/quality/reconciliation-baseline.json",
-    "sha256": "73f12aa45265112f06f8f07c5e208d5ad26fa0d1a61b3645e97cb1bf994a630e",
+    "sha256": "a35a6362a8a37da9c30b4e29be35f32c1734a03bc34d8ef30e0107f9b7b116a6",
     "status": "PASS",
     "claims_count": 96,
     "scored_claims": 30,
     "rejected_claims": 66,
-    "source_hash": "7aef22ffa2b0fe9b3a2cf197b3499b52edd709f5085d38d848d3c496f4a8d012",
+    "source_hash": "d118284c1f652d756259688747572359380c7240a2304a1745d6ed6de4f676bf",
     "claim_manifest_sha256": "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089",
     "claim_content_sha256": "915b1f3bb425060e176b677b0e21bf1317538fe247e1d828c968dbd66e87cef1",
     "roadmap_source_sha256": "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c",
     "violations": []
   },
   "reachability": {
-    "graph_sha256": "aeaa069f5a187201927b82e6ebe7943667c8f25df1138943dce175bbf49d3eac",
+    "graph_sha256": "53a5b5b3ba2ef7d412fe2db716175ceb4b0ba4cb335a3a19fe8684c37fe4731a",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "8c043bbb86c07aca9fa2ee1f58126f7fc2ad4141d55e3bf72317cde066ae4f14",
-      "dispositions_sha256": "7c420abaee727fb49bf96e3cd9ae2de055c136108084cb0cb736335764807d90"
+      "source_sha256": "f6e500ce84f43fd6ad45c8ee555750d4c0019c8c736d43d9268ba69be560b254",
+      "dispositions_sha256": "d0c308cfe6861038b9084d12a658190c14c5a658f7cab6391e06286f0a5b3f05"
     },
     "lifecycle_status": "PASS",
     "lifecycle_violations": [],

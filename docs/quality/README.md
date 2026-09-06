@@ -16,7 +16,7 @@ Current evidence at the Train 0 instrumentation baseline:
 - 92 modules above 1,000 lines, 19 above 2,000, and 4 at or above 3,000.
 - 16 import cycles spanning 77 modules; the largest contains 25 modules.
 - 8 exact normalized-AST clone groups covering 337 body lines.
-- 166 near-miss groups covering 11,680 body lines.
+- 165 near-miss groups covering 11,620 body lines.
 - 2 whole-tree Ruff findings, 62 format findings, 4,178 active strict-Pyright
   diagnostics, 175 separately retained archived-migration diagnostics, and
   612 suppression directives. The typed static receipt is `PASS`: every
