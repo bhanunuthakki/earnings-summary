@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "b035a647a3420d9ec34c1006168e679309aa627e",
-  "source_sha256": "5f2c1bdf2cc0de6efdd0d8baf54d34048d03865ab7c3cb572e08b16e787701e7",
+  "current_revision": "12c41f539e26b8cd47742836f991416a1bea394e",
+  "source_sha256": "2c3d58418e869733285c411b97a90758d2d9de2425dc34721704a4774bc093fb",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -6327,7 +6327,7 @@
     },
     {
       "path": "src/quality/compatibility.py",
-      "current_sha256": "62e1f9f203a3e53c8b7719db5de7928b54887e622b1ed629df0efe208c5789fc",
+      "current_sha256": "188315be3d27d900ecb9e6ad8ecd2184d1ae6d622f0030348cfd43bb7a758910",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6338,8 +6338,14 @@
       "status": "added"
     },
     {
+      "path": "src/quality/git_env.py",
+      "current_sha256": "6ec083f48c6edf43251c105d369146c9889606708759e510dd350773b36d9357",
+      "baseline_sha256": null,
+      "status": "added"
+    },
+    {
       "path": "src/quality/static_quality.py",
-      "current_sha256": "6669f69561eb47a25fe56b988a8bfa810c18015d78f73fd582cafc0f31585fb3",
+      "current_sha256": "375d372cafb2356d1aa36b04da716b6e8c4b58a6c96d56eef637bf4624f49aa7",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -7971,7 +7977,7 @@
     }
   ],
   "golden_count": 24,
-  "entrypoint_count": 1307,
+  "entrypoint_count": 1308,
   "categories": [
     {
       "name": "flask_url_method_endpoint_map",
@@ -12802,6 +12808,7 @@
     "entrypoint added: src/quality/architecture.py",
     "entrypoint added: src/quality/compatibility.py",
     "entrypoint added: src/quality/duplicates.py",
+    "entrypoint added: src/quality/git_env.py",
     "entrypoint added: src/quality/static_quality.py",
     "entrypoint changed: execution/_lib.py",
     "entrypoint changed: execution/backfill_earnings_surprises.py",
