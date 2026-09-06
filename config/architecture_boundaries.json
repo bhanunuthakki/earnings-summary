@@ -17,6 +17,7 @@
     "execution/audit_evidence_integrity.py",
     "execution/audit_gc_recovery.py",
     "execution/audit_kpi_semantics.py",
+    "execution/audit_quarterly_data_coverage.py",
     "execution/audit_segment_coverage.py",
     "execution/audit_segment_quarterly_coverage.py",
     "execution/audit_thesis_episode_clone.py",
