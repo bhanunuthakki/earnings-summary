@@ -67,7 +67,7 @@ class CurrentReceipts:
 
 
 _ROADMAP_NAME = "quality-9plus-roadmap.md"
-_ROADMAP_SHA256 = "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"
+_ROADMAP_SHA256 = "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"  # pragma: allowlist secret -- artifact digest
 _ROADMAP_BASELINE_LINES = frozenset((*range(15, 37), *range(40, 44)))
 
 

@@ -65,7 +65,9 @@ def database_state_sha256(database: Path) -> str:
                 continue
             columns = [str(row[1]) for row in connection.execute(f'PRAGMA table_info("{name}")')]
             order_by = ", ".join(f'"{column}"' for column in columns)
-            rows = connection.execute(f'SELECT * FROM "{name}" ORDER BY {order_by}').fetchall()
+            rows = connection.execute(
+                f'SELECT * FROM "{name}" ORDER BY {order_by}'  # nosec B608 -- identifiers come from SQLite schema metadata
+            ).fetchall()
             normalized_rows: list[list[object]] = []
             for row in rows:
                 values: list[object] = []

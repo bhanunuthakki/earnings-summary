@@ -22,15 +22,9 @@ DUPLICATE_RECEIPT = "docs/quality/duplicates-ratchet.json"
 LIFECYCLE_RECEIPT = "docs/quality/lifecycle-baseline.json"
 FUNCTION_LIFECYCLE_RECEIPT = "docs/quality/function-lifecycle-baseline.json"
 RECONCILIATION_RECEIPT = "docs/quality/reconciliation-baseline.json"
-FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256 = (
-    "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089"
-)
-FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256 = (
-    "0884b3b69e8a30294487242e43032c2068759776bf9658c9f83407482f850f8b"
-)
-FROZEN_RECONCILIATION_ROADMAP_SHA256 = (
-    "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"
-)
+FROZEN_RECONCILIATION_CLAIM_MANIFEST_SHA256 = "dc556fa92d2b98be7344e98057fd67db22aafaf677908cb6a3d5ce3528eed089"  # pragma: allowlist secret -- artifact digest
+FROZEN_RECONCILIATION_CLAIM_CONTENT_SHA256 = "172cc62b7f956f8421fcb730a65e538278ec50c1d0f478874fdf2fc5b053537d"  # pragma: allowlist secret -- artifact digest
+FROZEN_RECONCILIATION_ROADMAP_SHA256 = "b1fcd67d60783085faddb67e045e28d0b654a3ae2052dec2d4aea0da418bad1c"  # pragma: allowlist secret -- artifact digest
 PERFORMANCE_RECEIPT = ".tmp/quality/test-ci-performance/full-suite-8c7dc0c3/receipt.json"
 EXPECTED_SCC_CUTS = 30
 MANDATORY_LOC_ROOTS = (
@@ -64,11 +58,9 @@ LOC_TARGET_CAPS = {
     "src/pipeline/portfolio_panel.py": 200,
 }
 TYPE_DEBT_AUTHORITY_PATH = "docs/quality/type-debt-membership-authority.json"
-TYPE_DEBT_AUTHORITY_SHA256 = "9cb0bab9c95e2e6793325394c55abf3f6be9c3d397de9e6a2325997c99136a64"
+TYPE_DEBT_AUTHORITY_SHA256 = "9cb0bab9c95e2e6793325394c55abf3f6be9c3d397de9e6a2325997c99136a64"  # pragma: allowlist secret -- artifact digest
 TYPE_DEBT_EVIDENCE_ALGORITHM = "pyright-generalDiagnostics/v1"
-FROZEN_TYPE_DEBT_AUTHORITY_SHA256 = (
-    "b8f77169df0721539b2d5b2718bde0e4fdb828d3b54f70e4f6ae05ad61b88ad8"
-)
+FROZEN_TYPE_DEBT_AUTHORITY_SHA256 = "b8f77169df0721539b2d5b2718bde0e4fdb828d3b54f70e4f6ae05ad61b88ad8"  # pragma: allowlist secret -- artifact digest
 FROZEN_TYPE_DEBT_TOTALS = {"total": 4192, "archived": 175, "all": 4367}
 
 # Train 0 froze one specific performance run.  The receipt is intentionally
@@ -76,14 +68,12 @@ FROZEN_TYPE_DEBT_TOTALS = {"total": 4192, "archived": 175, "all": 4367}
 # the freeze into an editable bag of self-attested numbers.  These identities
 # are the locally approved authority for this historical snapshot; when the
 # receipt is present we additionally verify its bytes and fields.
-FROZEN_PERFORMANCE_RECEIPT_SHA256 = (
-    "72e2629b68cb70fb40d01321c425aa5db7dbd74cc28ae831b614b90590a3c7a8"
-)
+FROZEN_PERFORMANCE_RECEIPT_SHA256 = "72e2629b68cb70fb40d01321c425aa5db7dbd74cc28ae831b614b90590a3c7a8"  # pragma: allowlist secret -- artifact digest
 FROZEN_PERFORMANCE: dict[str, object] = {
     "schema_version": "test-ci-performance/v2",
-    "revision": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",
-    "source_sha256": "a4181b2effa3387fa1918e2e1f3d817e1dbca311f30f68f6035237240cb75675",
-    "cohort_sha256": "bd2a31afb89053f0bd13bbd6514274beefb24e90425cac9f73669385ec348156",
+    "revision": "8c7dc0c3560eddf20d9375c428f8dc795625dcb6",  # pragma: allowlist secret -- Git revision
+    "source_sha256": "a4181b2effa3387fa1918e2e1f3d817e1dbca311f30f68f6035237240cb75675",  # pragma: allowlist secret -- artifact digest
+    "cohort_sha256": "bd2a31afb89053f0bd13bbd6514274beefb24e90425cac9f73669385ec348156",  # pragma: allowlist secret -- artifact digest
     "process_wall_seconds": 952.1505841249891,
     "paired": False,
     "evidence_status": "hold",

@@ -263,6 +263,15 @@ def canonical_test_universe(root: Path) -> tuple[str, ...]:
 
 def trusted_selected_files(universe: tuple[str, ...], args: argparse.Namespace) -> tuple[str, ...]:
     """Run the trusted selector once against the canonical full universe."""
+    environment = {
+        name: value for name, value in os.environ.items() if name in _SAFE_PARENT_ENVIRONMENT
+    }
+    validated_preload = _validated_sqlite_preload(
+        getattr(args, "sqlite_preload", None),
+        getattr(args, "sqlite_preload_sha256", None),
+    )
+    if validated_preload is not None:
+        environment["LD_PRELOAD"] = validated_preload
     selected = subprocess.run(
         managed_python_argv(
             PROJECT_ROOT,
@@ -281,6 +290,7 @@ def trusted_selected_files(universe: tuple[str, ...], args: argparse.Namespace) 
         input=("\n".join(universe) + "\n").encode(),
         capture_output=True,
         check=False,
+        env=environment,
     )
     if selected.returncode != 0:
         raise SystemExit("canonical CI shard selection failed")

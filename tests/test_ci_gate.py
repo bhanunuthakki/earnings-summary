@@ -67,6 +67,169 @@ def test_unrelated_documentation_change_does_not_run_quality_ratchets(helper: Mo
     assert helper.classify_paths(["docs/architecture.md"])["quality"] is False
 
 
+def test_pyright_baseline_establishment_is_source_config_and_version_bound(
+    helper: ModuleType,
+) -> None:
+    head: dict[str, object] = {
+        "version": "1.1.411",
+        "generalDiagnostics": [
+            {
+                "severity": "error",
+                "file": "/repo/src/example.py",
+                "message": "example",
+                "rule": "reportArgumentType",
+            }
+        ],
+        "summary": {"errorCount": 1},
+    }
+    pyright_diagnostic: dict[str, object] = {
+        "tool": "pyright",
+        "count": 1,
+        "version": "pyright 1.1.411",
+        "version_hash": "40c7560256cc8f524e955d3d620dae6e10b672651c9918bf032a9069babf086f",  # pragma: allowlist secret -- artifact digest
+        "diagnostics_by_directory": {"src": 1},
+        "diagnostics_by_rule": {"reportArgumentType": 1},
+    }
+    pyright_exclusions: dict[str, object] = {
+        "tool.pyright.include": [
+            ".github/scripts",
+            "alembic",
+            "cron",
+            "evals",
+            "execution",
+            "instruction_tests",
+            "scripts",
+            "src",
+            "tests",
+        ],
+        "tool.pyright.exclude": [".cache", ".tmp", "scratch"],
+    }
+    baseline: dict[str, object] = {
+        "schema_version": "bha-120.v2",
+        "status": "PASS",
+        "violations": [],
+        "source_hash": "source",
+        "config_hash": "config",
+        "current_exclusions": pyright_exclusions,
+        "diagnostics": [pyright_diagnostic],
+    }
+
+    assert (
+        helper.pyright_baseline_errors(
+            head,
+            baseline,
+            head_root=Path("/repo"),
+            source_hash="source",
+            config_hash="config",
+        )
+        == []
+    )
+    assert "source hash is stale" in " ".join(
+        helper.pyright_baseline_errors(
+            head,
+            baseline,
+            head_root=Path("/repo"),
+            source_hash="changed",
+            config_hash="config",
+        )
+    )
+    assert "error count differs" in " ".join(
+        helper.pyright_baseline_errors(
+            head,
+            {
+                **baseline,
+                "diagnostics": [{**pyright_diagnostic, "count": 2}],
+            },
+            head_root=Path("/repo"),
+            source_hash="source",
+            config_hash="config",
+        )
+    )
+    assert "configuration hash is stale" in " ".join(
+        helper.pyright_baseline_errors(
+            head,
+            baseline,
+            head_root=Path("/repo"),
+            source_hash="source",
+            config_hash="changed",
+        )
+    )
+    cases: list[tuple[dict[str, object], str]] = [
+        ({**baseline, "status": "HOLD"}, "not an accepted"),
+        ({**baseline, "violations": ["stale"]}, "contract violations"),
+        (
+            {
+                **baseline,
+                "diagnostics": [{**pyright_diagnostic, "version": "pyright 0.0.0"}],
+            },
+            "version differs",
+        ),
+        (
+            {
+                **baseline,
+                "current_exclusions": {
+                    **pyright_exclusions,
+                    "tool.pyright.include": ["src"],
+                },
+            },
+            "does not cover every active Python root",
+        ),
+        (
+            {
+                **baseline,
+                "current_exclusions": {
+                    **pyright_exclusions,
+                    "tool.pyright.exclude": ["src/example.py"],
+                },
+            },
+            "source-file Pyright exclusion",
+        ),
+        (
+            {
+                **baseline,
+                "diagnostics": [
+                    {
+                        **pyright_diagnostic,
+                        "diagnostics_by_directory": {"wrong": 1},
+                    }
+                ],
+            },
+            "directory counts differ",
+        ),
+        (
+            {
+                **baseline,
+                "diagnostics": [
+                    {
+                        **pyright_diagnostic,
+                        "diagnostics_by_rule": {"wrong": 1},
+                    }
+                ],
+            },
+            "rule counts differ",
+        ),
+    ]
+    for changed, expected in cases:
+        assert expected in " ".join(
+            helper.pyright_baseline_errors(
+                head,
+                changed,
+                head_root=Path("/repo"),
+                source_hash="source",
+                config_hash="config",
+            )
+        )
+    assert "must be JSON objects" in " ".join(
+        helper.pyright_baseline_errors(
+            [],
+            baseline,
+            head_root=Path("/repo"),
+            source_hash="source",
+            config_hash="config",
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("path", "python"),
     [
@@ -344,8 +507,16 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "dorny/paths-filter" not in workflow
     assert 'git diff --name-only --no-renames -z "$base...$head"' in workflow
     assert 'git diff --name-only --no-renames -z "$PUSH_BEFORE_SHA" "$CURRENT_SHA"' in workflow
-    assert 'pyright --outputjson > "$head_json" 2>/dev/null || true' in workflow
+    assert (
+        'pyright --pythonpath "$(command -v python)" --outputjson > "$head_json" 2>/dev/null || true'
+        in workflow
+    )
+    assert 'cp pyproject.toml "$wt/pyproject.toml"' not in workflow
     assert "ci_gate.py pyright-diff" in workflow
+    assert "ci_gate.py pyright-baseline" in workflow
+    assert 'git cat-file -e "$base:docs/quality/static-baseline.json"' in workflow
+    assert "the established static-quality baseline was deleted" in workflow
+    assert "base and HEAD both lack the required static-quality baseline" in workflow
     assert (
         'pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"' in workflow
     )
@@ -380,6 +551,7 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     )
     assert "Run quality ratchets" in workflow
     assert "make quality-ratchets" in workflow
+    assert "docs[\\\\/]quality[\\\\/].*\\.json" in workflow
     assert "trusted_loader" in workflow
     assert "python -m pytest --collect-only -q --disable-warnings" in population_step
     assert "-n 2" not in population_step

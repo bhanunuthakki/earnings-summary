@@ -242,20 +242,20 @@
     }
   ],
   "counts": {
-    "protected": 11772,
-    "referenced": 15755,
-    "unknown": 6416,
+    "protected": 11773,
+    "referenced": 15758,
+    "unknown": 6418,
     "unreferenced-static-candidate": 15
   },
   "files_failed": [],
   "files_scanned": 2472,
-  "inventory_hash": "d1a1179cb33bd670e96e3cde252b9ca74c3068c9e63a8f84109e4e13893ea590",
+  "inventory_hash": "836f0115c75156776a8c0f8aea6a6aef04d1887b06f6cb248195ed2026748898",
   "parser_version": "python-ast-3.11-v3",
-  "revision": "1815fc96f4b2b9f107cd27d4a11c25d202b253ab",
+  "revision": "b445b86ff924253b0528dd97add210cfd0dea460",
   "schema_version": "bha-109.v1",
   "status": "PASS",
-  "symbol_count": 33958,
-  "tracked_tree_hash": "e7d315aa4d3782b3c01954cd522cc0d22fb3c1eaf5e874bd6f06d5f49151acb2",
+  "symbol_count": 33964,
+  "tracked_tree_hash": "4cdff6f01fee19bd301998b80ba22b666089f8ce495711bc16a1e5ab41ff0fb3",
   "unknown_hazard_counts": {
     "class-method-dispatch": 563,
     "cli-entrypoint": 414,
@@ -268,14 +268,14 @@
     "dunder-protocol": 142,
     "dynamic:__import__": 5,
     "dynamic:exec": 1,
-    "dynamic:getattr": 297,
+    "dynamic:getattr": 298,
     "dynamic:locals": 1,
-    "dynamic:setattr": 2017,
+    "dynamic:setattr": 2018,
     "dynamic:unbounded-reflection-in-module": 1288,
     "dynamic:vars": 18,
-    "public-module-symbol": 3715,
-    "string-or-reflection-reference": 3109,
-    "test-fixture-or-helper": 3027
+    "public-module-symbol": 3716,
+    "string-or-reflection-reference": 3110,
+    "test-fixture-or-helper": 3028
   },
   "unknown_symbols": [
     {
@@ -286,11 +286,11 @@
         "public-module-symbol",
         "string-or-reflection-reference"
       ],
-      "end_line": 358,
-      "fingerprint": "1a88dc0fae13a41af5f5f2712b7b4c0b9ed07eb986973de46ebeb073e1cd9895",
+      "end_line": 477,
+      "fingerprint": "87fd53b367789b21cc5df25a695ac273c74681cde6487823a8bead5315b4528e",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -300,11 +300,11 @@
         "execution/analyze_filing_intelligence.py:357"
       ],
       "kind": "function",
-      "line": 348,
-      "loc": 11,
+      "line": 465,
+      "loc": 13,
       "path": ".github/scripts/ci_gate.py",
       "qualified_name": ".github.scripts.ci_gate.main",
-      "source_hash": "f7ff0e4a5833ecac7967e13d45400779b1d7cff86a2a1105d0c878b2e04f8edc",
+      "source_hash": "4746bb9d341d1a6524c7f6eea990180f0104b731451b190b602a8d6ba8088890",
       "visibility": "public"
     },
     {
@@ -388,7 +388,7 @@
       "fingerprint": "be981226f386c787004f53bf6c2abc24b532fe2f6090f0edaa964ed6357a254b",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -417,7 +417,7 @@
       "fingerprint": "533d2c2b6b3a53619ad84f662e465528a566ee2bca06dbb91ff0335a02ead286",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -474,7 +474,7 @@
       "fingerprint": "e7ee1f057a00a6b437d4f879a3217c27b6b4424443e42c4ee714c7021c6bf90d",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -552,7 +552,7 @@
       "fingerprint": "d6872f03972fbbbf1256c404760b446ceed557bf07015936a79e61c38aa63e62",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -630,7 +630,7 @@
       "fingerprint": "1af65948b7898bc13845d65ff85309278d6010bf127fb74b47ad09f9bf8166ef",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -687,7 +687,7 @@
       "fingerprint": "c42bc26e1daf680aabd3029ffe4a96fd80964f663085c5da01c56369e24c6243",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -716,7 +716,7 @@
       "fingerprint": "09095a71d6426040806ae113eb2bd6c476a5ea36b264594002386d1d975f2b61",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -768,7 +768,7 @@
       "fingerprint": "4df4b90538dd1aea4720923a20159880377dd1d3b00016f3ed912e8303bc9726",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -943,7 +943,7 @@
       "fingerprint": "b8b3818d28406bc905200540d542b391efec6016cd800a8dc9236ba8090a3cb6",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -972,7 +972,7 @@
       "fingerprint": "e8b073dda4f9e1ad66c8e0c30e23cd7e990226df4988fef333b97eca72ebddba",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1001,7 +1001,7 @@
       "fingerprint": "20ed0bda5036d661df847acffc244f09459819313596ae5de8aee300a1dc2157",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1030,7 +1030,7 @@
       "fingerprint": "5b4f014f54f611b5b61488ad4be190b98b0e40bb377b53dde7efb407ae922304",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1059,7 +1059,7 @@
       "fingerprint": "856e22d3061f5eff9963f749c7311588f260da383f4954fa24f3490156115e36",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1088,7 +1088,7 @@
       "fingerprint": "fb26fab33a4f50181bb7a61c3deb1577f8f6afeba1a721ee345058d33040e8c9",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1118,7 +1118,7 @@
         "execution/audit_ask_retrieval_cutover.py:154",
         "execution/backfill_recorded_subject_bindings.py:53",
         "execution/benchmark_data_infrastructure.py:113",
-        "execution/benchmark_performance_workload.py:146",
+        "execution/benchmark_performance_workload.py:150",
         "execution/bootstrap_issuer_reporting_registry.py:106",
         "execution/bootstrap_sec_former_ticker.py:150",
         "execution/bootstrap_sec_fund_registry.py:175",
@@ -1164,7 +1164,7 @@
       "fingerprint": "7180d4918382b7d638be9331463721dbc6e437e7b32a65663a4a7d21789fe795",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1193,7 +1193,7 @@
       "fingerprint": "ffcb38e879091d6483dc307f964dd58281179aa966c6e5c6fb2b75cba380deab",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1250,7 +1250,7 @@
       "fingerprint": "b7255d696cd3d714d7bf226d1a1fb5c66a3cd7636ae461490475760a2de258b5",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1334,7 +1334,7 @@
       "fingerprint": "b3be989033368051e1462c0926c93d91c547a383696b40a604be0a23118c4fbd",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1363,7 +1363,7 @@
       "fingerprint": "a118d08063e626e14f8a5f93027385a8b8f449939845fd4b78ac09f1d82d6a71",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1392,7 +1392,7 @@
       "fingerprint": "ac79e14d9493dcd8d67d23b2676c87c96ba86badb5100edb61e126ed9a9c30a5",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1421,7 +1421,7 @@
       "fingerprint": "de79b245283a0fe595b681d35d1b656359a5d3531bd30574189cd8f29813ceec",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1564,7 +1564,7 @@
       "fingerprint": "521a5198a08fbf80afdccda73ce4729b2c6617871e82d0f07bfcd524341d574e",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1593,7 +1593,7 @@
       "fingerprint": "ec8a370c602c8e36b4d28dfcedaa2dea221e8ba6d1f8462d5a0af3d81359780c",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1622,7 +1622,7 @@
       "fingerprint": "570848ea781a14f05d1795b1ec3f7ce90ab16a2050af898b0b8e8688f1e2abd1",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1705,7 +1705,7 @@
       "fingerprint": "228fe40ab8be86dccdb3725af244fe0aee43256e047af1db278456840e02d31a",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1761,7 +1761,7 @@
       "fingerprint": "a06ff14b7a56568a1a08cef162d246629a70c5f6b062f77fdf0e857a14d4902d",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1839,7 +1839,7 @@
       "fingerprint": "0810c5aede3b939438e7b33ccaad222c4326441e4c6740bccedbb772658f70de",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1896,7 +1896,7 @@
       "fingerprint": "e425a4a33bb23f3af36f9d82355cf15ee9e34a026afad85920e310116b6949e1",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1925,7 +1925,7 @@
       "fingerprint": "8f7ea6156a698d487cde737613725553d231ef1f4088592136db26aac2627f29",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1954,7 +1954,7 @@
       "fingerprint": "0c096e69d0554792997bb2937482ee5da3050c1def6a28e23da73cc8bb0a2b7e",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -1983,7 +1983,7 @@
       "fingerprint": "bf81cf899aa22763445a5b6b1d6a581589326f75d3e849ac4a17741b4e6526b3",
       "inbound_static_ref_count": 922,
       "inbound_static_refs": [
-        ".github/scripts/ci_gate.py:362",
+        ".github/scripts/ci_gate.py:481",
         "cron/backup_db.py:329",
         "cron/job_runtime.py:14",
         "cron/migrate_legacy_backups.py:75",
@@ -2001,7 +2001,7 @@
       "visibility": "public"
     }
   ],
-  "unknown_total": 6416,
+  "unknown_total": 6418,
   "violations": [],
   "worktree_dirty": true
 }

@@ -550,7 +550,7 @@ jobs:
           set -euo pipefail
           head_json="$RUNNER_TEMP/pyright-head.json"
           base_json="$RUNNER_TEMP/pyright-base.json"
-          pyright --outputjson > "$head_json" 2>/dev/null || true
+          pyright --pythonpath "$(command -v python)" --outputjson > "$head_json" 2>/dev/null || true
           base="${{ steps.base.outputs.ref }}"
           wt="$RUNNER_TEMP/base-pyright"
           # Clear any stale worktree path from a retried job, then REQUIRE the
@@ -566,14 +566,29 @@ jobs:
           fi
           cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
           trap cleanup EXIT
-          (cd "$wt" && pyright --outputjson > "$base_json" 2>/dev/null) || true
+          (cd "$wt" && pyright --pythonpath "$(command -v python)" --outputjson > "$base_json" 2>/dev/null) || true
           git worktree remove --force "$wt" 2>/dev/null || true
           trap - EXIT
-          python .github/scripts/ci_gate.py pyright-diff \
-            --base-json "$base_json" \
-            --head-json "$head_json" \
-            --base-root "$wt" \
-            --head-root "$GITHUB_WORKSPACE"
+          if git cat-file -e "$base:docs/quality/static-baseline.json" 2>/dev/null; then
+            if [ ! -f docs/quality/static-baseline.json ]; then
+              echo "::error::the established static-quality baseline was deleted"
+              exit 1
+            fi
+            python .github/scripts/ci_gate.py pyright-diff \
+              --base-json "$base_json" \
+              --head-json "$head_json" \
+              --base-root "$wt" \
+              --head-root "$GITHUB_WORKSPACE"
+          else
+            if [ ! -f docs/quality/static-baseline.json ]; then
+              echo "::error::base and HEAD both lack the required static-quality baseline"
+              exit 1
+            fi
+            python .github/scripts/ci_gate.py pyright-baseline \
+              --head-json "$head_json" \
+              --baseline docs/quality/static-baseline.json \
+              --repo-root "$GITHUB_WORKSPACE"
+          fi
 
   security:
     needs: [changes]
@@ -615,7 +630,7 @@ jobs:
           git ls-files -z |
           xargs -0 detect-secrets-hook
           --exclude-files
-          '^(?:data[\\/]fmp_canary_manifest\.json|evals[\\/]receipts[\\/].*|docs[\\/]hardening[\\/].*|config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
+          '^(?:data[\\/]fmp_canary_manifest\.json|evals[\\/]receipts[\\/].*|docs[\\/]hardening[\\/].*|docs[\\/]quality[\\/].*\.json|config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
       - name: Generate CycloneDX SBOM
         id: sbom
         continue-on-error: true

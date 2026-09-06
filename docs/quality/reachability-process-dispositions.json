@@ -5,9 +5,9 @@
     "schema_version": "operational-reachability/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "d137fa87b641ffbba1a867f5599f94f05f8d6e940493ec94ac488b4f71895eec"
+      "source_sha256": "9b4506f7dfa4b3e1b10ca3fa06d90544858e6a9176d5ac51e79d5c28fc234c06"
     }
   },
   "scope": {
@@ -101,8 +101,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 266,
-      "fingerprint": "f92d107839a0973ec60fed8077ee342d420bef29abfe21e0841d90c2af889594",
+      "line": 275,
+      "fingerprint": "6b48a44c8066886d257d65615eeaa19758ab427c69f8e56c90318ee71753da8b",
       "disposition": "internal_python_target",
       "target": ".github/scripts/ci_gate.py",
       "command_family": "managed Python child",
@@ -110,8 +110,8 @@
     },
     {
       "path": "execution/capture_test_ci_performance.py",
-      "line": 532,
-      "fingerprint": "51b4d5526ce01a1d4e1b1d213ed8b47e29d586eb04ca48287f6e0016d486e3d6",
+      "line": 542,
+      "fingerprint": "804177a9587d597085b3dbf737085f53788e17e9787082df969118ed57e1f97f",
       "disposition": "closed_command_set",
       "target": "pytest over the frozen cohort",
       "command_family": "schema-validated pytest argv",
@@ -795,8 +795,8 @@
     },
     {
       "path": "src/quality/performance_source_analysis.py",
-      "line": 163,
-      "fingerprint": "fad154c02124ec331e43e4369aed19aa6c363507b3352fe5aa6d10ba3f0e689a",
+      "line": 161,
+      "fingerprint": "0a50aea96f71e9042073869a3b3bfefe9f84d05f3c50bd15c5382a7364a4043e",
       "disposition": "internal_python_target",
       "target": "execution/analyze_code_duplicates.py",
       "command_family": "managed Python child",
@@ -858,8 +858,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 604,
-      "fingerprint": "4b3336f38e8b01c6fee280ba2490ba74a064dc0eb36a25dd279e4e1f948d33a4",
+      "line": 642,
+      "fingerprint": "69f7db630ee7c85feb988503161db1554e64539c2fb64550c081820dfef7b745",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "test-only managed Python child",
@@ -867,8 +867,8 @@
     },
     {
       "path": "tests/test_collect_paired_ci_performance.py",
-      "line": 659,
-      "fingerprint": "717c72a21a08a87e92a8734b7205a01f751a822108e6261d4521c6e2c8fa9fc8",
+      "line": 697,
+      "fingerprint": "82f2f4481df4e7b620ccda4aafdb555a00274976d7a01cb85c6ae9d680097a5a",
       "disposition": "internal_python_target",
       "target": "execution/capture_test_ci_performance.py",
       "command_family": "test-only managed Python child",

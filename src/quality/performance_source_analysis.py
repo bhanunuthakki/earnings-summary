@@ -40,10 +40,8 @@ from .performance_support import (
 # replace the scanner process used to produce the receipt.
 _TRUSTED_SCANNER_RELATIVE_PATH = Path("execution/analyze_code_duplicates.py")
 _TRUSTED_SCANNER_IMPLEMENTATION_RELATIVE_PATH = Path("src/quality/duplicates.py")
-_TRUSTED_SCANNER_WRAPPER_SHA256 = "a58155146ef2042cf01ef0073f7e7e4423306ff23accf6773cd3da43b323b7d9"
-_TRUSTED_SCANNER_IMPLEMENTATION_SHA256 = (
-    "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e"
-)
+_TRUSTED_SCANNER_WRAPPER_SHA256 = "a58155146ef2042cf01ef0073f7e7e4423306ff23accf6773cd3da43b323b7d9"  # pragma: allowlist secret -- artifact digest
+_TRUSTED_SCANNER_IMPLEMENTATION_SHA256 = "00e368ea7988c87450670b6ed4c7463953e51bf38779292f344d46c8f4e4552e"  # pragma: allowlist secret -- artifact digest
 
 
 def paired_source_analysis(

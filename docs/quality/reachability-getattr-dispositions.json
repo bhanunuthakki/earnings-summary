@@ -6,9 +6,9 @@
     "schema_version": "operational-reachability/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "d137fa87b641ffbba1a867f5599f94f05f8d6e940493ec94ac488b4f71895eec"
+      "source_sha256": "9b4506f7dfa4b3e1b10ca3fa06d90544858e6a9176d5ac51e79d5c28fc234c06"
     }
   },
   "scope": {

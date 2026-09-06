@@ -13,13 +13,14 @@ import json
 import re
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Literal
+from xml.etree.ElementTree import ParseError
 
+from defusedxml import ElementTree
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-PARSER_VERSION = "1.2.0"
+PARSER_VERSION = "1.2.1"
 # Parser provenance is compared as part of the semantic lifecycle receipt.
 # Record the supported interpreter contract rather than the runtime's patch or
 # minor version, which would make equivalent receipts stale across clean clones.
@@ -926,8 +927,8 @@ def build_graph(repo_root: str | Path, touched: set[str] | None = None) -> Reach
                 )
         elif suffix == ".xml":
             try:
-                xml = ET.fromstring(text.lstrip("\ufeff"))
-            except ET.ParseError as exc:
+                xml = ElementTree.fromstring(text.lstrip("\ufeff"))
+            except ParseError as exc:
                 diagnostics.append(
                     Diagnostic(path=rel, message=f"XML parse error: {exc}", kind="parse_error")
                 )

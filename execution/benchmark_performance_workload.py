@@ -106,7 +106,11 @@ def _integrity(root: Path) -> tuple[int, str | None, int, float, int, int]:
             rows = 0
             for table in summary.tables_present:
                 quoted = '"' + table.replace('"', '""') + '"'
-                rows += int(connection.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0])
+                rows += int(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM {quoted}"  # nosec B608 -- SQLite-quoted schema identifier
+                    ).fetchone()[0]
+                )
             schema_object_count = _schema_object_count(database)
         finally:
             connection.close()

@@ -362,6 +362,44 @@ def test_capture_rejects_unvalidated_sqlite_preload(tmp_path: Path) -> None:
         )
 
 
+def test_trusted_selector_propagates_only_validated_sqlite_preload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preload = tmp_path / "libsqlite3.so.0"
+    preload.write_bytes(b"verified library")
+    digest = preload_digest(preload)
+    observed: dict[str, object] = {}
+
+    def fake_validate(value: str | None, expected_sha256: str | None) -> str:
+        assert value == str(preload)
+        assert expected_sha256 == digest
+        return str(preload)
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        del args
+        observed.update(kwargs)
+        return subprocess.CompletedProcess([], 0, b"tests/test_smoke.py\n", b"")
+
+    monkeypatch.setattr(capture, "_validated_sqlite_preload", fake_validate)
+    monkeypatch.setattr(capture.subprocess, "run", fake_run)
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-propagate")
+    args = argparse.Namespace(
+        source_shard=1,
+        source_shards=1,
+        split_count=1,
+        split_part=0,
+        sqlite_preload=str(preload),
+        sqlite_preload_sha256=digest,
+    )
+
+    assert capture.trusted_selected_files(("tests/test_smoke.py",), args) == (
+        "tests/test_smoke.py",
+    )
+    environment = cast(dict[str, str], observed["env"])
+    assert environment["LD_PRELOAD"] == str(preload)
+    assert "GITHUB_TOKEN" not in environment
+
+
 def test_preload_digest_detects_post_validation_mutation(tmp_path: Path) -> None:
     preload = tmp_path / "libsqlite3.so.0"
     preload.write_bytes(b"verified library")
