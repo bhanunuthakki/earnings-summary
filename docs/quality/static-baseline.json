@@ -2753,7 +2753,7 @@
       "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 2,
-      "receipt_path": ".tmp/static_quality/df4ace4dc1f840641ef306eb/ruff-check.json",
+      "receipt_path": ".tmp/static_quality/f49c074ba757c8488294b14f/ruff-check.json",
       "diagnostics_by_directory": {
         "src/user_state": 2
       },
@@ -2774,7 +2774,7 @@
       "version": "ruff 0.16.6",
       "exit_status": 1,
       "count": 62,
-      "receipt_path": ".tmp/static_quality/df4ace4dc1f840641ef306eb/ruff-format.txt",
+      "receipt_path": ".tmp/static_quality/f49c074ba757c8488294b14f/ruff-format.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {},
       "command_hash": "62634b823b2b67de03247f0145b144d6c7a87de3c1ed3ab7cf778f1a1f258208",
@@ -2791,7 +2791,7 @@
       "version": "pyright 1.1.411",
       "exit_status": 1,
       "count": 3234,
-      "receipt_path": ".tmp/static_quality/df4ace4dc1f840641ef306eb/pyright.json",
+      "receipt_path": ".tmp/static_quality/f49c074ba757c8488294b14f/pyright.json",
       "diagnostics_by_directory": {
         "execution": 183,
         "src": 354,
@@ -2849,7 +2849,7 @@
       "version": "n/a",
       "exit_status": 0,
       "count": 628,
-      "receipt_path": ".tmp/static_quality/df4ace4dc1f840641ef306eb/source-ignore-comments.txt",
+      "receipt_path": ".tmp/static_quality/f49c074ba757c8488294b14f/source-ignore-comments.txt",
       "diagnostics_by_directory": {},
       "diagnostics_by_rule": {
         "# type: ignore": 254,
@@ -2933,10 +2933,10 @@
     "active files excluded by Pyright: execution/build_bank_dcf.py, execution/build_fintech_sotp.py, execution/build_holdco_sotp.py, execution/build_meli_platform_dcf.py, execution/build_nu_platform_dcf.py, execution/build_redesigned_dcf.py, execution/dcf_opus_assumptions.py, execution/import_owner_capacity.py, src/integrations/wealthplan_capacity.py",
     "active files outside Pyright include roots: .github/scripts/ci_gate.py, alembic/env.py, cron/backup_db.py, cron/job_runtime.py, cron/migrate_legacy_backups.py, cron/restore_db.py, evals/structural/test_provider_blind_evals.py, instruction_tests/test_instruction_contracts.py, scripts/check_architecture_boundaries.py, scripts/check_design_sync.py, scripts/gen_design_conformance_debt.py, scripts/gen_design_controls.py, scripts/gen_design_tokens.py"
   ],
-  "scoped_commit": "b4b2f8932be5547d285057e5a6ddf57175adc420",
-  "source_hash": "e91c65e46c1d872bd613ae5d1cd918d5a119c90f456da95df098a81ceb586c7e",
+  "scoped_commit": "b035a647a3420d9ec34c1006168e679309aa627e",
+  "source_hash": "c7baf628ea299c8fe20d48065df528f9f1ba2c0fe7ebb9fef0df6bbc9f52822f",
   "config_hash": "b891fcf46bcf6f907a9a66e341166346777a4389563d69d1137f9f52f15e76ec",
-  "receipt_identity": "df4ace4dc1f840641ef306eb",
+  "receipt_identity": "f49c074ba757c8488294b14f",
   "runtime": {
     "implementation": "CPython",
     "python_version": "3.14.7",

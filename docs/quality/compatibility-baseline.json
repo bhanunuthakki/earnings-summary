@@ -1,8 +1,8 @@
 {
   "schema_version": "quality-compatibility/v1",
   "baseline_revision": "09d35d1a2785ff7e6a218031eb43952781be3a93",
-  "current_revision": "b4b2f8932be5547d285057e5a6ddf57175adc420",
-  "source_sha256": "a72735dcabb0db88bd24c7077410ccc89ac765c91963819f0b3b465172aa0a8f",
+  "current_revision": "b035a647a3420d9ec34c1006168e679309aa627e",
+  "source_sha256": "5f2c1bdf2cc0de6efdd0d8baf54d34048d03865ab7c3cb572e08b16e787701e7",
   "baseline_sha256": "bf4d8bf0a0d5d9020052f332655fa74c9c967b5fa08a3d362a189c50f712878b",
   "legacy_route_golden": [
     {
@@ -6327,7 +6327,7 @@
     },
     {
       "path": "src/quality/compatibility.py",
-      "current_sha256": "82d17fdad804067957f7d8210ef41c39e524bf3a4b9990df0087f76cd401b607",
+      "current_sha256": "62e1f9f203a3e53c8b7719db5de7928b54887e622b1ed629df0efe208c5789fc",
       "baseline_sha256": null,
       "status": "added"
     },
@@ -6339,7 +6339,7 @@
     },
     {
       "path": "src/quality/static_quality.py",
-      "current_sha256": "3f517603e3feb5457699dc771d7a5d7e537c6085809840851012f25c6db756c3",
+      "current_sha256": "6669f69561eb47a25fe56b988a8bfa810c18015d78f73fd582cafc0f31585fb3",
       "baseline_sha256": null,
       "status": "added"
     },
