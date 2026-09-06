@@ -13,6 +13,12 @@ cat >"$bin_dir/git" <<'EOF'
 #!/bin/sh
 case "$*" in
   "rev-parse --show-toplevel") printf '%s\n' "$TEST_REPO_ROOT" ;;
+  "rev-parse --local-env-vars")
+    if [ "${FAKE_FAIL_LOCAL_ENV:-0}" = "1" ]; then
+      exit 1
+    fi
+    printf '%s\n' GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_CONFIG GIT_OBJECT_DIRECTORY
+    ;;
   "merge-base HEAD origin/main") printf '%s\n' base ;;
   *"diff --name-only"*"instruction_tests/test_*.py"*) printf '%s\n' instruction_tests/test_instruction_contracts.py ;;
   *"diff --name-only"*) printf '%s\n' src/models/documents.py ;;
@@ -27,12 +33,23 @@ cat >"$bin_dir/fake-python" <<'EOF'
 printf '%s\n' "$*" >>"$TEST_PYTHON_LOG"
 if [ "${FAKE_FAIL_MODULE:-}" = "ruff" ] && [ "$*" = "-m ruff --version" ]; then exit 1; fi
 if [ "${FAKE_FAIL_MODULE:-}" = "pytest" ] && [ "$*" = "-m pytest --version" ]; then exit 1; fi
+case "$*" in
+  "-m pytest -q"*)
+    if env | grep -Eq '^GIT_(DIR|WORK_TREE|INDEX_FILE|CONFIG|OBJECT_DIRECTORY)='; then
+      printf 'pytest inherited repository-local Git environment\n' >&2
+      exit 1
+    fi
+    ;;
+esac
 exit 0
 EOF
 chmod +x "$bin_dir/fake-python"
 
 run_hook() {
   TEST_REPO_ROOT="$repo_root" TEST_PYTHON_LOG="$log" \
+    GIT_DIR="$tmp_dir/poison.git" GIT_WORK_TREE="$tmp_dir/poison-worktree" \
+    GIT_INDEX_FILE="$tmp_dir/poison.index" GIT_CONFIG="$tmp_dir/poison.config" \
+    GIT_OBJECT_DIRECTORY="$tmp_dir/poison-objects" \
     PATH="$bin_dir:/usr/bin:/bin" PYTHON_BIN="$bin_dir/fake-python" \
     "$hook" >/dev/null 2>"$tmp_dir/stderr"
 }
@@ -52,6 +69,14 @@ if TEST_REPO_ROOT="$repo_root" TEST_PYTHON_LOG="$log" FAKE_FAIL_MODULE=pytest \
   exit 1
 fi
 grep -q 'PRE-PUSH FAILED at:.*-m pytest --version' "$tmp_dir/stderr"
+
+if TEST_REPO_ROOT="$repo_root" TEST_PYTHON_LOG="$log" FAKE_FAIL_LOCAL_ENV=1 \
+  PATH="$bin_dir:/usr/bin:/bin" PYTHON_BIN="$bin_dir/fake-python" \
+  "$hook" >/dev/null 2>"$tmp_dir/stderr"; then
+  printf 'expected local Git environment discovery failure to fail closed\n' >&2
+  exit 1
+fi
+grep -q 'PRE-PUSH FAILED: unable to resolve repository-local Git environment variables' "$tmp_dir/stderr"
 
 : >"$log"
 FAST_PUSH=1 run_hook

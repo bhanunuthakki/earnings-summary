@@ -199,6 +199,11 @@ def _persist_ingested_coverage(
     return persisted
 
 
+# Public typed seam for the migration-coverage contract test.  Keep the
+# implementation private to the ingestion orchestration surface.
+persist_ingested_coverage = _persist_ingested_coverage
+
+
 def _candidate_caches(surprise_dir: Path, restrict_ticker: str | None) -> list[Path]:
     if not surprise_dir.exists():
         return []

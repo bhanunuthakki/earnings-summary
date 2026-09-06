@@ -1,0 +1,672 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+from collections import Counter
+from collections.abc import Sequence
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+import quality.roadmap_freeze as roadmap_freeze
+import quality.roadmap_freeze_inventory as roadmap_inventory
+import quality.static_quality as static_quality
+from quality.reachability import build_graph
+from quality.roadmap_freeze import RoadmapFreeze, validate_freeze
+
+ROOT = Path(__file__).resolve().parents[1]
+ARTIFACT = ROOT / "docs/quality/roadmap-freeze.json"
+TYPE_IGNORE_KEY = "# type: ignore"
+
+
+@pytest.mark.parametrize(
+    ("path", "receipt", "expected_commit", "expected_scope"),
+    (
+        (
+            "receipt.json",
+            {"revision": "a" * 40, "worktree_dirty": True},
+            "a" * 40,
+            "WORKTREE",
+        ),
+        ("receipt.json", {"revision": "a" * 40}, "a" * 40, "COMMIT"),
+        (
+            roadmap_freeze.ARCHITECTURE_RECEIPT,
+            {"scoped_revision": "WORKTREE", "scoped_commit": "b" * 40},
+            "b" * 40,
+            "WORKTREE",
+        ),
+        (roadmap_freeze.STATIC_RECEIPT, {"scoped_commit": "c" * 40}, "c" * 40, "WORKTREE"),
+        (roadmap_freeze.TEST_DB_RECEIPT, {"scoped_commit": "d" * 40}, "d" * 40, "WORKTREE"),
+        (
+            roadmap_freeze.DUPLICATE_RECEIPT,
+            {"scoped_revision": "WORKTREE", "commit_hash": "e" * 40},
+            "e" * 40,
+            "WORKTREE",
+        ),
+        (roadmap_freeze.LIFECYCLE_RECEIPT, {"revision": "f" * 40}, "f" * 40, "WORKTREE"),
+        (
+            roadmap_freeze.FUNCTION_LIFECYCLE_RECEIPT,
+            {"revision": "g" * 40},
+            "g" * 40,
+            "WORKTREE",
+        ),
+        (roadmap_freeze.RECONCILIATION_RECEIPT, {"revision": "h" * 40}, "h" * 40, "WORKTREE"),
+        (
+            roadmap_freeze.TYPE_DEBT_AUTHORITY_PATH,
+            {"revision": "i" * 40},
+            "i" * 40,
+            "WORKTREE",
+        ),
+        (
+            roadmap_freeze.PERFORMANCE_RECEIPT,
+            {"revision": "j" * 40, "worktree_dirty": True},
+            "j" * 40,
+            "COMMIT",
+        ),
+    ),
+)
+def test_evidence_ref_resolves_receipt_scope(
+    tmp_path: Path,
+    path: str,
+    receipt: dict[str, object],
+    expected_commit: str,
+    expected_scope: str,
+) -> None:
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(receipt), encoding="utf-8")
+
+    evidence = roadmap_freeze.evidence_ref(tmp_path, path, receipt)
+
+    assert evidence.scoped_commit == expected_commit
+    assert evidence.scope == expected_scope
+
+
+def test_checked_freeze_has_exact_cutset_and_actual_migration_cohort() -> None:
+    freeze = RoadmapFreeze.model_validate_json(ARTIFACT.read_text(encoding="utf-8"))
+
+    assert len(freeze.scc_cut_edges) == 30
+    assert freeze.issue_train_matrix == {
+        "BHA-104": "Train 1",
+        "BHA-105": "Train 2",
+        "BHA-106": "Train 3",
+        "BHA-107": "Train 4",
+        "BHA-108": "Train 5",
+        "BHA-109": "Train 6",
+        "BHA-110": "Train 7",
+        "BHA-111": "Train 8",
+    }
+    assert [slice_.estimated_prs for slice_ in freeze.cleanup_slices] == [
+        22,
+        20,
+        9,
+        11,
+        67,
+        12,
+        12,
+        2,
+    ]
+    assert freeze.estimate_totals.total_estimated_prs == 155
+    assert freeze.estimate_totals.critical_path_calendar_weeks == 57
+    assert {
+        "execution/comments_server.py",
+        "src/pipeline/portfolio_panel.py",
+    }.issubset({row.path for row in freeze.selected_loc_crossings})
+    assert len(freeze.selected_loc_crossings) == 56
+    assert freeze.target_arithmetic.migration_builders_baseline == 172
+    assert freeze.target_arithmetic.migration_builders_to_convert == 112
+    assert freeze.target_arithmetic.full_suite_gap_seconds == pytest.approx(442.151, abs=0.001)
+    dispositions = Counter(
+        (row.taxonomy, row.disposition) for row in freeze.migration_builder_dispositions
+    )
+    assert sum(dispositions.values()) == 172
+    assert sum(count for key, count in dispositions.items() if key[1] == "retain_candidate") == 60
+    assert sum(count for key, count in dispositions.items() if key[1] == "convert_candidate") == 112
+    assert dispositions["seeded-upgrade", "convert_candidate"] == 57
+    assert dispositions["direct-historical", "convert_candidate"] == 24
+    assert dispositions["archived-graph", "convert_candidate"] == 7
+    assert dispositions["direct-downgrade", "convert_candidate"] == 24
+    assert dispositions["direct-downgrade", "retain_candidate"] == 58
+    assert dispositions["archived-graph", "retain_candidate"] == 1
+    assert dispositions["custom-bootstrap", "retain_candidate"] == 1
+    assert {slice_.issue for slice_ in freeze.cleanup_slices} == set(freeze.issue_train_matrix)
+    static = json.loads((ROOT / roadmap_freeze.STATIC_RECEIPT).read_text(encoding="utf-8"))
+    expected_static_total, _ = roadmap_inventory.static_quality(static)
+    suppression_row = next(
+        row for row in static["diagnostics"] if row["tool"] == "source-ignore-comments"
+    )
+    assert freeze.suppression_retirement.baseline == suppression_row["count"]
+    assert freeze.suppression_retirement.target == 0
+    assert (
+        freeze.suppression_retirement.source_rule_counts == suppression_row["diagnostics_by_rule"]
+    )
+    assert freeze.function_lifecycle.candidate_count >= 0
+    assert freeze.target_arithmetic.static_quality_baseline == expected_static_total
+    lifecycle_slice = next(row for row in freeze.cleanup_slices if row.issue == "BHA-109")
+    assert lifecycle_slice.candidate_count == freeze.function_lifecycle.candidate_count
+    lifecycle_mapping = next(
+        row for row in freeze.budget_mappings if row.item_id == "anchor:lifecycle-pruning"
+    )
+    assert lifecycle_mapping.candidate_count == freeze.function_lifecycle.candidate_count
+    assert lifecycle_mapping.units == 1
+    assert any(row.item_kind == "suppression" for row in freeze.budget_mappings)
+
+
+def test_quality_readme_counts_are_sourced_from_checked_receipts() -> None:
+    readme = (ROOT / "docs/quality/README.md").read_text(encoding="utf-8")
+    architecture = json.loads(
+        (ROOT / roadmap_freeze.ARCHITECTURE_RECEIPT).read_text(encoding="utf-8")
+    )
+    metrics = cast(dict[str, object], architecture["metrics"])
+    duplicates = json.loads((ROOT / roadmap_freeze.DUPLICATE_RECEIPT).read_text(encoding="utf-8"))
+    exact = cast(dict[str, object], duplicates["exact_totals"])
+    near = cast(dict[str, object], duplicates["near_miss_totals"])
+    static = json.loads((ROOT / roadmap_freeze.STATIC_RECEIPT).read_text(encoding="utf-8"))
+    static_total, static_components = roadmap_inventory.static_quality(static)
+    static_diagnostics = cast(list[dict[str, object]], static["diagnostics"])
+    pyright = next(row for row in static_diagnostics if row.get("tool") == "pyright")
+    by_directory = cast(dict[str, object], pyright["diagnostics_by_directory"])
+    archived_pyright = sum(
+        value
+        for key, value in by_directory.items()
+        if key.startswith("alembic/versions_archived") and isinstance(value, int)
+    )
+    test_db = json.loads((ROOT / roadmap_freeze.TEST_DB_RECEIPT).read_text(encoding="utf-8"))
+    lifecycle = json.loads((ROOT / roadmap_freeze.LIFECYCLE_RECEIPT).read_text(encoding="utf-8"))
+    function_lifecycle = json.loads(
+        (ROOT / roadmap_freeze.FUNCTION_LIFECYCLE_RECEIPT).read_text(encoding="utf-8")
+    )
+    reconciliation = json.loads(
+        (ROOT / roadmap_freeze.RECONCILIATION_RECEIPT).read_text(encoding="utf-8")
+    )
+    freeze = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    reachability = cast(dict[str, object], freeze["reachability"])
+
+    expected_fragments = (
+        f"- {metrics['executable_modules']:,} executable modules and "
+        f"{metrics['total_noncomment_loc']:,} non-comment lines.",
+        f"- {metrics['modules_over_1000_loc']:,} modules above 1,000 lines, "
+        f"{metrics['modules_over_2000_loc']:,} above 2,000, and "
+        f"{metrics['modules_at_least_3000_loc']:,} at or above 3,000.",
+        f"- {metrics['scc_count']:,} import cycles spanning "
+        f"{metrics['scc_module_count']:,} modules; the largest contains "
+        f"{metrics['largest_scc']:,} modules.",
+        f"- {exact['groups']:,} exact normalized-AST clone groups covering "
+        f"{exact['duplicated_loc']:,} body lines.",
+        f"- {near['groups']:,} near-miss groups covering {near['duplicated_loc']:,} body lines.",
+        f"- {static_components['ruff']:,} whole-tree Ruff findings, "
+        f"{static_components['ruff-format']:,} format findings, "
+        f"{static_components['pyright-active']:,} active strict-Pyright",
+        f"  diagnostics, {archived_pyright:,} separately retained archived-migration diagnostics, and",
+        f"  {static_components['source-ignore-comments']:,} suppression directives.",
+        f"- {len(test_db['database_builders']):,} database-builder occurrences across "
+        f"{len(test_db['tracked_test_files']):,} tracked test files are",
+        "- The operational graph has no parse failures, unresolved targets, stale",
+        f"  dispositions, or unknown production edges. The remaining "
+        f"{reachability['unknown_edges']:,} unknown edges",
+        f"- The lifecycle receipt classifies all "
+        f"{sum(cast(dict[str, int], lifecycle['counts']).values()):,} candidates with zero omissions,",
+        f"- The function-lifecycle receipt validates as `PASS` for "
+        f"{function_lifecycle['symbol_count']:,} symbols:",
+        f"  {function_lifecycle['counts']['protected']:,} protected, "
+        f"{function_lifecycle['counts']['referenced']:,} referenced, "
+        f"{function_lifecycle['counts']['unknown']:,} unknown, and "
+        f"{function_lifecycle['counts']['unreferenced-static-candidate']:,} conservative",
+        f"- The roadmap reconciliation receipt covers "
+        f"{len(reconciliation['claims']):,} named claims: "
+        f"{reconciliation['scored_claims']:,} are reproduced",
+        f"- The roadmap-freeze artifact itself validates as "
+        f"`{freeze['artifact_acceptance_status']}`; program feasibility",
+        f"  remains `{freeze['program_feasibility_status']}`",
+    )
+    assert static_total == sum(static_components.values())
+    assert all(fragment in readme for fragment in expected_fragments)
+
+
+def test_validator_proves_cutset_and_allows_missing_historical_perf_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    original_is_file = Path.is_file
+
+    def pretend_historical_receipt_is_missing(path: Path) -> bool:
+        if path == ROOT / roadmap_freeze.PERFORMANCE_RECEIPT:
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", pretend_historical_receipt_is_missing)
+    candidate = tmp_path / "roadmap-freeze.json"
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+
+    freeze = validate_freeze(ROOT, candidate)
+
+    assert freeze.status == "HOLD"
+    assert freeze.performance_snapshot.paired is False
+
+
+def test_validator_rejects_forged_performance_when_historical_receipt_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["performance_snapshot"].update(
+        {
+            "revision": "f" * 40,
+            "process_wall_seconds": 500.0,
+            "paired": True,
+            "evidence_status": "pass",
+            "network_isolation": "proven",
+        }
+    )
+    payload["evidence"]["performance"].update(
+        {"sha256": "0" * 64, "scoped_commit": "f" * 40, "scope": "WORKTREE"}
+    )
+    original_is_file = Path.is_file
+
+    def pretend_historical_receipt_is_missing(path: Path) -> bool:
+        if path.resolve() == (ROOT / roadmap_freeze.PERFORMANCE_RECEIPT).resolve():
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", pretend_historical_receipt_is_missing)
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_tampered_performance_path(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["evidence"]["performance"]["path"] = "tampered-performance.json"
+    _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("path", "docs/quality/forged-reconciliation.json"),
+        ("sha256", "0" * 64),
+        ("status", "HOLD"),
+        ("claims_count", 95),
+        ("violations", ["forged reconciliation claim"]),
+    ),
+)
+def test_validator_rejects_tampered_reconciliation_evidence(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["reconciliation"][field] = value
+    if field == "claims_count":
+        payload["reconciliation"]["scored_claims"] = 29
+    _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("graph_sha256", "0" * 64),
+        ("parser", {"name": "forged", "version": "0", "python": "0"}),
+    ),
+)
+def test_validator_rejects_tampered_reachability_evidence(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["reachability"][field] = value
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rebuilds_reachability_without_ignored_graph_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    original_is_file = Path.is_file
+    graph_path = (ROOT / ".tmp/quality/reachability-check.json").resolve()
+
+    def hide_ignored_graph(path: Path) -> bool:
+        if path.resolve() == graph_path:
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", hide_ignored_graph)
+    candidate = tmp_path / "roadmap-freeze.json"
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    freeze = validate_freeze(ROOT, candidate)
+    assert freeze.reachability.production_unknown_edges == 0
+
+
+def test_reachability_runtime_roots_are_the_production_unknown_authority(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "execution").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "execution" / "main.py").write_text("getattr(module, name)\n", encoding="utf-8")
+    (tmp_path / "src" / "arbitrary.py").write_text("getattr(module, name)\n", encoding="utf-8")
+    (tmp_path / "scripts" / "arbitrary.py").write_text("getattr(module, name)\n", encoding="utf-8")
+    (tmp_path / "reconstruction_manifest.json").write_text(
+        '{"entrypoint": "execution/main.py"}\n', encoding="utf-8"
+    )
+    graph = build_graph(tmp_path)
+    assert "execution/main.py" in graph.roots
+    assert "reconstruction_manifest.json" in graph.roots
+    assert "src/arbitrary.py" not in graph.roots
+    assert "scripts/arbitrary.py" not in graph.roots
+    assert {edge.source for edge in graph.unknown_edges} == {
+        "execution/main.py",
+        "src/arbitrary.py",
+        "scripts/arbitrary.py",
+    }
+
+
+def test_validator_rejects_tampered_function_lifecycle_evidence(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["function_lifecycle"]["inventory_hash"] = "0" * 64
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_stale_function_lifecycle_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    persisted = roadmap_inventory.load_inventory(ROOT / roadmap_freeze.FUNCTION_LIFECYCLE_RECEIPT)
+    stale = persisted.model_copy(update={"tracked_tree_hash": "0" * 64})
+
+    def stale_inventory(_root: Path) -> roadmap_inventory.FunctionLifecycleInventory:
+        return stale
+
+    monkeypatch.setattr(roadmap_inventory, "build_inventory", stale_inventory)
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_accepts_clean_clone_without_ignored_quality_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    original_is_file = Path.is_file
+    ignored_quality_root = (ROOT / ".tmp").resolve()
+
+    def hide_ignored_quality_state(path: Path) -> bool:
+        if path.resolve().is_relative_to(ignored_quality_root):
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", hide_ignored_quality_state)
+    candidate = tmp_path / "roadmap-freeze.json"
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    freeze = validate_freeze(ROOT, candidate)
+    assert freeze.function_lifecycle.candidate_count >= 0
+
+
+def _assert_rejected(tmp_path: Path, payload: dict[str, object]) -> None:
+    candidate = tmp_path / "roadmap-freeze.json"
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        validate_freeze(ROOT, candidate)
+
+
+def test_validator_rejects_tampered_builder_cohort(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["migration_builder_dispositions"].pop()
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_tampered_type_cluster(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["type_debt_clusters"][0]["count"] += 1
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_self_hashed_forged_type_cluster_membership(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["type_debt_clusters"][0]["source_zone"] = "forged"
+    payload["type_debt_clusters_sha256"] = hashlib.sha256(
+        json.dumps(payload["type_debt_clusters"], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    _assert_rejected(tmp_path, payload)
+
+
+def test_type_debt_membership_uses_tracked_authority_when_raw_receipt_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    static = roadmap_inventory.read_json(ROOT, roadmap_freeze.STATIC_RECEIPT)
+    diagnostics = cast(list[dict[str, object]], static["diagnostics"])
+    pyright = next(row for row in diagnostics if row.get("tool") == "pyright")
+    receipt_path = pyright.get("receipt_path")
+    assert isinstance(receipt_path, str)
+    raw_path = (ROOT / receipt_path).resolve()
+    original_is_file = Path.is_file
+
+    def hide_raw_pyright(path: Path) -> bool:
+        return False if path.resolve() == raw_path else original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", hide_raw_pyright)
+    totals, clusters = roadmap_inventory.type_debt(ROOT, static)
+    assert totals == roadmap_freeze.FROZEN_TYPE_DEBT_TOTALS
+    assert len(clusters) == 61
+
+
+def test_type_debt_evidence_digest_ignores_pyright_runtime_metadata(tmp_path: Path) -> None:
+    receipt = tmp_path / "pyright.json"
+    static: dict[str, object] = {
+        "diagnostics": [{"tool": "pyright", "receipt_path": "pyright.json"}]
+    }
+    rows = [
+        {
+            "file": str(tmp_path / "src/app.py"),
+            "severity": "error",
+            "message": 'Type of "value" is unknown',
+            "range": {
+                "start": {"line": 3, "character": 0},
+                "end": {"line": 3, "character": 5},
+            },
+            "rule": "reportUnknownVariableType",
+        }
+    ]
+    receipt.write_text(
+        json.dumps({"version": "1.1.411", "time": "first", "generalDiagnostics": rows}),
+        encoding="utf-8",
+    )
+    first_raw_sha256 = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    _, first_clusters = roadmap_inventory.type_debt(tmp_path, static)
+    receipt.write_text(
+        json.dumps(
+            {
+                "version": "1.1.411",
+                "time": "second",
+                "summary": {"timeInSec": 99.0},
+                "generalDiagnostics": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    second_raw_sha256 = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    _, second_clusters = roadmap_inventory.type_debt(tmp_path, static)
+
+    assert first_raw_sha256 != second_raw_sha256
+    assert first_clusters == second_clusters
+    assert first_clusters[0].evidence_sha256 != first_raw_sha256
+
+
+def test_validator_rejects_changed_pyright_diagnostic_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    static = roadmap_inventory.read_json(ROOT, roadmap_freeze.STATIC_RECEIPT)
+    diagnostics = cast(list[dict[str, object]], static["diagnostics"])
+    pyright = next(row for row in diagnostics if row.get("tool") == "pyright")
+    receipt_path = pyright.get("receipt_path")
+    assert isinstance(receipt_path, str)
+    raw_path = (ROOT / receipt_path).resolve()
+    original_read_text = Path.read_text
+    original_is_file = Path.is_file
+
+    # The raw Pyright receipt is intentionally ignored and absent in a clean
+    # clone.  Materialize the smallest synthetic receipt at the filesystem
+    # boundary so this regression remains hermetic while still exercising the
+    # validator's raw-membership path.
+    synthetic_raw = json.dumps(
+        {
+            "generalDiagnostics": [
+                {
+                    "file": "src/forged.py",
+                    "severity": "error",
+                    "message": "forged diagnostic membership",
+                    "rule": "reportUnknownVariableType",
+                    "range": {
+                        "start": {"line": 1, "character": 0},
+                        "end": {"line": 1, "character": 1},
+                    },
+                }
+            ]
+        }
+    )
+
+    def raw_is_file(path: Path) -> bool:
+        if path.resolve() == raw_path:
+            return True
+        return original_is_file(path)
+
+    def tamper_membership(
+        path: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        if path.resolve() == raw_path:
+            return synthetic_raw
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "is_file", raw_is_file)
+    monkeypatch.setattr(Path, "read_text", tamper_membership)
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_changed_estimate_matrix_even_when_totals_reconcile(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["cleanup_slices"][0]["estimated_prs"] -= 6
+    payload["cleanup_slices"][0]["estimated_calendar_weeks"] -= 1
+    payload["estimate_totals"]["total_estimated_prs"] = 150
+    payload["estimate_totals"]["critical_path_calendar_weeks"] = 56
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_tampered_scc_source_path(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["scc_cut_edges"][0]["source_path"] = "tampered.py"
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_tampered_issue_train_mapping(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["issue_train_matrix"]["BHA-104"] = "Train 8"
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_mutated_mandatory_loc_cap(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    crossings = cast(list[dict[str, object]], payload["selected_loc_crossings"])
+    root = next(row for row in crossings if row.get("path") == "execution/comments_server.py")
+    root["target_cap"] = 601
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_train_dependency_reordering(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    deps = payload["train_plan"][2]["depends_on"]
+    payload["train_plan"][2]["depends_on"] = list(reversed(deps))
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_budget_mapping_omission_and_overlap(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["budget_mappings"].pop()
+    payload["budget_mappings"].append(dict(payload["budget_mappings"][0]))
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_status_or_closure_drift(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["artifact_acceptance_status"] = "HOLD"
+    payload["bha115_closure"]["rejudge_required"] = False
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_forged_pass_status_and_empty_hold_reasons(tmp_path: Path) -> None:
+    """A top-level PASS cannot override the performance and closure evidence."""
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["status"] = "PASS"
+    payload["program_feasibility_status"] = "PASS"
+    payload["hold_reasons"] = []
+
+    _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("baseline", "target", "source_rule_counts"),
+)
+def test_validator_rejects_suppression_retirement_drift(tmp_path: Path, field: str) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    suppression = payload["suppression_retirement"]
+    if field == "baseline":
+        suppression[field] -= 1
+    elif field == "target":
+        suppression[field] = 1
+    else:
+        suppression[field] = {TYPE_IGNORE_KEY: suppression["baseline"]}
+    _assert_rejected(tmp_path, payload)
+
+
+def test_validator_rejects_static_quality_denominator_drift(tmp_path: Path) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    payload["target_arithmetic"]["static_quality_baseline"] += 1
+    _assert_rejected(tmp_path, payload)
+
+
+@pytest.mark.parametrize("field", ("source_hash", "config_hash"))
+def test_validator_rejects_stale_static_scanner_input_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    static = json.loads((ROOT / roadmap_freeze.STATIC_RECEIPT).read_text(encoding="utf-8"))
+    current = (static["source_hash"], static["config_hash"])
+    stale = ("0" * 64, current[1]) if field == "source_hash" else (current[0], "0" * 64)
+
+    def stale_hashes(_root: Path) -> tuple[str, str]:
+        return stale
+
+    monkeypatch.setattr(roadmap_freeze, "_scanner_input_hashes", stale_hashes)
+
+    _assert_rejected(tmp_path, payload)
+
+
+def test_static_scanner_input_hashes_cover_migrations_and_config_without_tools(
+    tmp_path: Path,
+) -> None:
+    files = (
+        "src/app.py",
+        "alembic/versions/0001_initial_schema.py",
+        "alembic/versions_archived/0000_baseline.py",
+    )
+    for path in files:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"# {path}\n", encoding="utf-8")
+    config = tmp_path / "pyproject.toml"
+    config.write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
+
+    def run(command: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
+        calls.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0, "\n".join(files), "")
+
+    first_source, first_config = static_quality.scanner_input_hashes(tmp_path, run)
+    (tmp_path / files[1]).write_text("# changed migration\n", encoding="utf-8")
+    second_source, second_config = static_quality.scanner_input_hashes(tmp_path, run)
+    config.write_text("[tool.ruff]\nline-length = 120\n", encoding="utf-8")
+    third_source, third_config = static_quality.scanner_input_hashes(tmp_path, run)
+
+    assert first_source != second_source
+    assert first_config == second_config
+    assert second_source == third_source
+    assert second_config != third_config
+    assert calls == [("git", "ls-files", "--", "*.py")] * 3

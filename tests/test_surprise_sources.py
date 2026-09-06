@@ -20,12 +20,12 @@ import pytest
 from surprise_sources import (
     SurpriseHit,
     SurpriseSource,
-    _surprise_pct,  # pyright: ignore[reportPrivateUsage] - direct unit seam
-    _to_decimal,  # pyright: ignore[reportPrivateUsage] - direct unit seam
     default_sources,
     fetch_surprises_with_fallback,
     fetch_surprises_with_outcomes,
     fmp_earnings_calendar_records,
+    surprise_pct,
+    to_decimal,
     yfinance_earnings_dates_records,
 )
 
@@ -63,39 +63,39 @@ def test_dispatcher_retains_exact_per_provider_misses() -> None:
 
 
 def test_to_decimal_none_returns_none() -> None:
-    assert _to_decimal(None) is None
+    assert to_decimal(None) is None
 
 
 def test_to_decimal_bool_returns_none() -> None:
     """bool is an int subclass — must be rejected explicitly to avoid True→1.0."""
-    assert _to_decimal(True) is None
-    assert _to_decimal(False) is None
+    assert to_decimal(True) is None
+    assert to_decimal(False) is None
 
 
 def test_to_decimal_int_and_float() -> None:
-    assert _to_decimal(5) == Decimal("5")
-    assert _to_decimal(1.55) == Decimal("1.55")
+    assert to_decimal(5) == Decimal("5")
+    assert to_decimal(1.55) == Decimal("1.55")
 
 
 def test_to_decimal_string_numeric() -> None:
-    assert _to_decimal("3.14") == Decimal("3.14")
-    assert _to_decimal("  -2.0 ") == Decimal("-2.0")
+    assert to_decimal("3.14") == Decimal("3.14")
+    assert to_decimal("  -2.0 ") == Decimal("-2.0")
 
 
 def test_to_decimal_empty_string() -> None:
-    assert _to_decimal("") is None
-    assert _to_decimal("   ") is None
+    assert to_decimal("") is None
+    assert to_decimal("   ") is None
 
 
 def test_to_decimal_garbage_string() -> None:
-    assert _to_decimal("not a number") is None
+    assert to_decimal("not a number") is None
 
 
 def test_to_decimal_nan_and_inf() -> None:
     """NaN/Inf must not propagate into Decimal arithmetic downstream."""
-    assert _to_decimal(float("nan")) is None
-    assert _to_decimal(float("inf")) is None
-    assert _to_decimal(float("-inf")) is None
+    assert to_decimal(float("nan")) is None
+    assert to_decimal(float("inf")) is None
+    assert to_decimal(float("-inf")) is None
 
 
 # --- _surprise_pct ----------------------------------------------------------
@@ -103,22 +103,22 @@ def test_to_decimal_nan_and_inf() -> None:
 
 def test_surprise_pct_positive_beat() -> None:
     # actual 1.55, estimate 1.40 -> +10.71%
-    pct = _surprise_pct(Decimal("1.55"), Decimal("1.40"))
+    pct = surprise_pct(Decimal("1.55"), Decimal("1.40"))
     assert pct == Decimal("10.71")
 
 
 def test_surprise_pct_miss() -> None:
-    pct = _surprise_pct(Decimal("1.40"), Decimal("1.55"))
+    pct = surprise_pct(Decimal("1.40"), Decimal("1.55"))
     assert pct == Decimal("-9.68")
 
 
 def test_surprise_pct_zero_estimate_returns_none() -> None:
-    assert _surprise_pct(Decimal("1.00"), Decimal("0")) is None
+    assert surprise_pct(Decimal("1.00"), Decimal("0")) is None
 
 
 def test_surprise_pct_none_inputs_return_none() -> None:
-    assert _surprise_pct(None, Decimal("1")) is None
-    assert _surprise_pct(Decimal("1"), None) is None
+    assert surprise_pct(None, Decimal("1")) is None
+    assert surprise_pct(Decimal("1"), None) is None
 
 
 def test_surprise_pct_negative_estimate_sign_preserved() -> None:
@@ -127,7 +127,7 @@ def test_surprise_pct_negative_estimate_sign_preserved() -> None:
     Without abs() in the denominator, the sign would flip and the beat would
     read as a miss.
     """
-    pct = _surprise_pct(Decimal("-0.30"), Decimal("-0.50"))
+    pct = surprise_pct(Decimal("-0.30"), Decimal("-0.50"))
     assert pct == Decimal("40.00")
 
 

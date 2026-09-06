@@ -55,9 +55,21 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
+from execution import fetch_qa_transcript as fetch_qa_transcript_module  # noqa: E402
+from execution.fetch_qa_transcript import (  # noqa: E402
+    SOURCES as TRANSCRIPT_SOURCES,
+)
+from execution.fetch_qa_transcript import (  # noqa: E402
+    FetchQaAttemptStatus,
+    FetchQaSpec,
+    FetchQaStatus,
+    fetch_qa,
+)
 from llm.prompt_versions import prompt_version_for  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from pipeline.commitment_scan_receipts import (  # noqa: E402
@@ -91,23 +103,6 @@ from runtime.python_process import managed_python_prefix  # noqa: E402
 from transcripts.acquisition_semantics import (  # noqa: E402
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
 )
-
-# Sibling scripts in execution/ — needed when this module is imported (e.g.
-# from tests) rather than run directly via `python execution/backfill_transcripts.py`.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import fetch_qa_transcript as fetch_qa_transcript_module  # type: ignore[import-not-found]  # noqa: E402
-from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
-    SOURCES as TRANSCRIPT_SOURCES,
-)
-from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
-    FetchQaAttemptStatus,
-    FetchQaSpec,
-    FetchQaStatus,
-    fetch_qa,
-)
-
-import db  # noqa: E402
 
 _RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 _PROCESSED_DIR = PROJECT_ROOT / "transcripts" / "processed"

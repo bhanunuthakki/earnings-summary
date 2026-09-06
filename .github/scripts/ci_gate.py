@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections import Counter
@@ -25,6 +26,11 @@ CODE_PREFIXES = (
     ".github/workflows/",
     ".github/scripts/",
 )
+QUALITY_PREFIXES = (
+    "docs/quality/",
+    ".github/workflows/",
+    ".github/scripts/",
+)
 CODE_ROOT_FILES = {
     ".bandit-baseline.json",
     ".pre-commit-config.yaml",
@@ -36,12 +42,13 @@ CODE_ROOT_FILES = {
     "requirements.txt",
     "directives/design_language.md",
 }
+QUALITY_ROOT_FILES = {"Makefile"}
 PYTHON_ROOT_FILES = {"pyproject.toml", "requirements.lock"}
 DOCUMENTATION_SUFFIXES = {".md", ".rst"}
 CONDITIONAL_JOBS = {
     "tests": "code",
     "design": "code",
-    "quality": "python",
+    "quality": "quality",
     "typecheck": "python",
     "security": "code",
 }
@@ -58,6 +65,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
 
     code = False
     python = False
+    quality = False
     for raw_path in paths:
         path = _normalize(raw_path)
         if not path:
@@ -65,9 +73,11 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         known_code_path = path in CODE_ROOT_FILES or path.startswith(CODE_PREFIXES)
         is_code = known_code_path or Path(path).suffix.lower() not in DOCUMENTATION_SUFFIXES
         is_python = path in PYTHON_ROOT_FILES or path.endswith(".py")
+        is_quality = is_python or path in QUALITY_ROOT_FILES or path.startswith(QUALITY_PREFIXES)
         code = code or is_code
         python = python or is_python
-    return {"code": code, "python": python}
+        quality = quality or is_quality
+    return {"code": code, "python": python, "quality": quality}
 
 
 def select_test_files(
@@ -94,7 +104,9 @@ def select_test_files(
     return selected
 
 
-def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> list[str]:
+def gate_failures(
+    *, code: bool, python: bool, quality: bool, results: Mapping[str, str]
+) -> list[str]:
     """Explain every terminal result that makes the aggregate gate unsafe."""
 
     failures: list[str] = []
@@ -108,7 +120,11 @@ def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> li
         if result not in TERMINAL_SUCCESS_RESULTS:
             failures.append(f"{job_name} finished with {result or 'missing result'}")
 
-    required_groups = {"code": code, "python": python}
+    required_groups = {
+        "code": code,
+        "python": python,
+        "quality": quality or python,
+    }
     for job_name, group in CONDITIONAL_JOBS.items():
         result = results.get(job_name, "")
         if required_groups[group] and result in TERMINAL_SUCCESS_RESULTS and result != "success":
@@ -216,6 +232,118 @@ def _pyright_count_command() -> int:
     return 0
 
 
+def pyright_baseline_errors(
+    head_payload: object,
+    baseline_payload: object,
+    *,
+    head_root: Path,
+    source_hash: str,
+    config_hash: str,
+) -> list[str]:
+    """Validate the one-time, source-bound expanded Pyright baseline."""
+    if not isinstance(head_payload, Mapping) or not isinstance(baseline_payload, Mapping):
+        return ["Pyright baseline inputs must be JSON objects"]
+    head = cast(Mapping[object, object], head_payload)
+    baseline = cast(Mapping[object, object], baseline_payload)
+    failures: list[str] = []
+    if baseline.get("schema_version") != "bha-120.v2" or baseline.get("status") != "PASS":
+        failures.append("static-quality baseline is not an accepted bha-120.v2 receipt")
+    if baseline.get("violations") != []:
+        failures.append("static-quality baseline contains contract violations")
+    if baseline.get("source_hash") != source_hash:
+        failures.append("static-quality baseline source hash is stale")
+    if baseline.get("config_hash") != config_hash:
+        failures.append("static-quality baseline configuration hash is stale")
+    exclusions = baseline.get("current_exclusions")
+    exclusion_map: Mapping[str, object] = (
+        cast(Mapping[str, object], exclusions) if isinstance(exclusions, Mapping) else {}
+    )
+    expected_include = [
+        ".github/scripts",
+        "alembic",
+        "cron",
+        "evals",
+        "execution",
+        "instruction_tests",
+        "scripts",
+        "src",
+        "tests",
+    ]
+    if exclusion_map.get("tool.pyright.include") != expected_include:
+        failures.append("static-quality baseline does not cover every active Python root")
+    raw_excludes_value = exclusion_map.get("tool.pyright.exclude")
+    raw_excludes = (
+        cast(list[object], raw_excludes_value) if isinstance(raw_excludes_value, list) else None
+    )
+    if raw_excludes is None or any(
+        not isinstance(value, str) or value.endswith(".py") for value in raw_excludes
+    ):
+        failures.append("static-quality baseline contains a source-file Pyright exclusion")
+    diagnostics = baseline.get("diagnostics")
+    rows = cast(list[object], diagnostics) if isinstance(diagnostics, list) else []
+    pyright_rows = [
+        cast(Mapping[object, object], row)
+        for row in rows
+        if isinstance(row, Mapping) and row.get("tool") == "pyright"
+    ]
+    if len(pyright_rows) != 1:
+        failures.append("static-quality baseline must contain one Pyright receipt")
+        return failures
+    receipt = pyright_rows[0]
+    try:
+        observed_count = pyright_error_count(head)
+        fingerprints = _pyright_error_fingerprints(head, root=head_root)
+    except ValueError as exc:
+        failures.append(str(exc))
+        return failures
+    if receipt.get("count") != observed_count:
+        failures.append(
+            "Pyright error count differs from the source-bound static-quality baseline "
+            f"({receipt.get('count')} != {observed_count})"
+        )
+    version = head.get("version")
+    if not isinstance(version, str) or receipt.get("version") != f"pyright {version}":
+        failures.append("Pyright version differs from the static-quality baseline")
+    elif receipt.get("version_hash") != hashlib.sha256(f"pyright {version}".encode()).hexdigest():
+        failures.append("Pyright version hash differs from the static-quality baseline")
+    by_directory = Counter(Path(path).parent.as_posix() for path, _rule, _message in fingerprints)
+    by_rule = Counter(rule or "None" for _path, rule, _message in fingerprints)
+    if receipt.get("diagnostics_by_directory") != dict(sorted(by_directory.items())):
+        failures.append("Pyright directory counts differ from the static-quality baseline")
+    if receipt.get("diagnostics_by_rule") != dict(sorted(by_rule.items())):
+        failures.append("Pyright rule counts differ from the static-quality baseline")
+    return failures
+
+
+def _pyright_baseline_command(args: argparse.Namespace) -> int:
+    try:
+        with args.head_json.open(encoding="utf-8") as head_file:
+            head_payload = json.load(head_file)
+        with args.baseline.open(encoding="utf-8") as baseline_file:
+            baseline_payload = json.load(baseline_file)
+        repo_root = args.repo_root.resolve()
+        sys.path.insert(0, str(repo_root / "src"))
+        from quality.static_quality import scanner_input_hashes
+
+        source_hash, config_hash = scanner_input_hashes(repo_root)
+        failures = pyright_baseline_errors(
+            head_payload,
+            baseline_payload,
+            head_root=repo_root,
+            source_hash=source_hash,
+            config_hash=config_hash,
+        )
+    except (ImportError, OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"::error::invalid Pyright baseline: {exc}", file=sys.stderr)
+        return 1
+    for failure in failures:
+        print(f"::error::{failure}")
+    if failures:
+        return 1
+    print("Accepted source-bound Pyright baseline establishment.")
+    return 0
+
+
 def _pyright_diff_command(args: argparse.Namespace) -> int:
     try:
         with args.base_json.open(encoding="utf-8") as base_file:
@@ -273,9 +401,12 @@ def _classify_command(github_output: Path) -> int:
     paths = [path.decode("utf-8", errors="surrogateescape") for path in raw_paths if path]
     groups = classify_paths(paths)
     with github_output.open("a", encoding="utf-8", newline="\n") as output:
-        for name in ("code", "python"):
+        for name in ("code", "python", "quality"):
             print(f"{name}={str(groups[name]).lower()}", file=output)
-    print(f"Changed paths: {len(paths)}; code={groups['code']}; python={groups['python']}")
+    print(
+        f"Changed paths: {len(paths)}; code={groups['code']}; "
+        f"python={groups['python']}; quality={groups['quality']}"
+    )
     return 0
 
 
@@ -289,7 +420,9 @@ def _verify_command(args: argparse.Namespace) -> int:
         "typecheck": args.typecheck_result,
         "security": args.security_result,
     }
-    failures = gate_failures(code=args.code, python=args.python, results=results)
+    failures = gate_failures(
+        code=args.code, python=args.python, quality=args.quality, results=results
+    )
     for failure in failures:
         print(f"::error::{failure}")
     if failures:
@@ -308,9 +441,14 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
+    verify.add_argument("--quality", type=_parse_bool, required=True)
     for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     subparsers.add_parser("pyright-count")
+    pyright_baseline = subparsers.add_parser("pyright-baseline")
+    pyright_baseline.add_argument("--head-json", type=Path, required=True)
+    pyright_baseline.add_argument("--baseline", type=Path, required=True)
+    pyright_baseline.add_argument("--repo-root", type=Path, required=True)
     pyright_diff = subparsers.add_parser("pyright-diff")
     pyright_diff.add_argument("--base-json", type=Path, required=True)
     pyright_diff.add_argument("--head-json", type=Path, required=True)
@@ -330,6 +468,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _classify_command(args.github_output)
     if args.command == "pyright-count":
         return _pyright_count_command()
+    if args.command == "pyright-baseline":
+        return _pyright_baseline_command(args)
     if args.command == "pyright-diff":
         return _pyright_diff_command(args)
     if args.command == "select-tests":

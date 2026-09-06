@@ -37,6 +37,7 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
       python: ${{ steps.classify.outputs.python }}
+      quality: ${{ steps.classify.outputs.quality }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -147,12 +148,22 @@ jobs:
           gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
             "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
             -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
-          echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
+          echo "CI_SQLITE_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
           LD_PRELOAD="$sqlite_dir/libsqlite3.so.0" python - <<'PY'
           import sqlite3
 
           assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
           PY
+      - name: Pin trusted CI identities
+        id: trusted
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "harness_sha256=$(sha256sum execution/capture_test_ci_performance.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "selector_sha256=$(sha256sum .github/scripts/ci_gate.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "plugin_sha256=$(sha256sum src/quality/pytest_performance_plugin.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "capture_python_sha256=$(python -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.executable).resolve().read_bytes()).hexdigest())')" >> "$GITHUB_OUTPUT"
+          echo "sqlite_preload_sha256=$(sha256sum "$CI_SQLITE_PRELOAD" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -167,12 +178,13 @@ jobs:
         # init_db() + alembic, not `alembic upgrade head` alone — the 0000
         # baseline assumes the legacy init_db tables — so we skip it here.)
         run: mkdir -p data
-      - name: Run test-suite shard
+      - name: Prepare trusted canonical test population
+        id: population
         shell: bash
         run: |
           set -euo pipefail
-          # Browser canaries have one authoritative owner below: Design Sync,
-          # which installs the hash-locked Playwright adapter and Chromium.
+          # Select the matrix partition once, then freeze its files and node
+          # IDs for the production capture harness.
           mapfile -t all_files < <(
             find tests -type f -name 'test_*.py' \
               | grep -v '^tests/test_design_computed_canary.py$' \
@@ -190,13 +202,128 @@ jobs:
             echo "::error::test shard ${{ matrix.label }} selected no files"
             exit 1
           fi
-          printf 'Shard %s/8: %s files\n' '${{ matrix.label }}' "${#selected[@]}"
-          # --durations: `pytest -q` emits only dots, so when a shard stalls the
-          # log shows a multi-minute gap between two dot rows and NOTHING about
-          # which test caused it (this is what made the 2026-07-31 shard-6 kills
-          # undiagnosable). The slowest-test table costs nothing and makes the
-          # next occurrence attributable.
-          pytest -q -n 2 --dist=loadfile --durations=25 "${selected[@]}"
+          population_dir="$RUNNER_TEMP/ci-population"
+          mkdir -p "$population_dir"
+          cat > "$population_dir/ci_population_plugin.py" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          import pytest
+
+          @pytest.hookimpl(trylast=True)
+          def pytest_collection_finish(session: object) -> None:
+              if os.environ.get("PYTEST_XDIST_WORKER"):
+                  return
+              items = getattr(session, "items", ())
+              node_ids = sorted(str(item.nodeid) for item in items)
+              Path(os.environ["CI_POPULATION_NODES"]).write_text(
+                  json.dumps(node_ids, separators=(",", ":")) + "\n", encoding="utf-8"
+              )
+          PY
+          nodes="$population_dir/nodes.json"
+          mapfile -t trusted_loader < <(
+            python - "$population_dir" "$GITHUB_WORKSPACE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          from execution.capture_test_ci_performance import trusted_plugin_loader
+
+          module, loader = trusted_plugin_loader(Path(sys.argv[1]), Path(sys.argv[2]))
+          print(module)
+          print(loader)
+          PY
+          )
+          if (( ${#trusted_loader[@]} != 2 )); then
+            echo "::error::trusted pytest loader identity is unavailable"
+            exit 1
+          fi
+          env -i \
+              PATH="$PATH" HOME="$HOME" CI=1 GITHUB_ACTIONS=1 \
+              NO_NETWORK=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+              PYTHONPATH="$population_dir" LD_PRELOAD="$CI_SQLITE_PRELOAD" \
+              CI_POPULATION_NODES="$nodes" \
+              python -m pytest --collect-only -q --disable-warnings \
+              -p "${trusted_loader[0]}" -p ci_population_plugin \
+              "${selected[@]}"
+          population="$population_dir/expected-population.json"
+          POPULATION_PATH="$population" POPULATION_NODES="$nodes" \
+          POPULATION_SOURCE_SHARD='${{ matrix.source_shard }}' \
+          POPULATION_SOURCE_SHARDS=8 POPULATION_SPLIT_COUNT='${{ matrix.split_count }}' \
+          POPULATION_SPLIT_PART='${{ matrix.split_part }}' \
+          POPULATION_SELECTOR_SHA256='${{ steps.trusted.outputs.selector_sha256 }}' \
+          python - "${selected[@]}" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          selected = sys.argv[1:]
+          node_payload = json.loads(Path(os.environ["POPULATION_NODES"]).read_text())
+          if not isinstance(node_payload, list) or not all(
+              isinstance(node, str) for node in node_payload
+          ):
+              raise SystemExit("canonical node population is invalid")
+          if node_payload != sorted(node_payload) or len(node_payload) != len(set(node_payload)):
+              raise SystemExit("canonical node population is not sorted and unique")
+          nodes = node_payload
+          if not nodes or any(node.split("::", 1)[0] not in selected for node in nodes):
+              raise SystemExit("canonical node population does not belong to selected files")
+          payload = {
+              "schema_version": "ci-population/v1",
+              "cohort": "ci-shard",
+              "test_files": selected,
+              "node_ids": nodes,
+              "source_shard": int(os.environ["POPULATION_SOURCE_SHARD"]),
+              "source_shards": int(os.environ["POPULATION_SOURCE_SHARDS"]),
+              "split_count": int(os.environ["POPULATION_SPLIT_COUNT"]),
+              "split_part": int(os.environ["POPULATION_SPLIT_PART"]),
+              "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "selector_sha256": os.environ["POPULATION_SELECTOR_SHA256"],
+          }
+          encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+          Path(os.environ["POPULATION_PATH"]).write_text(encoded + "\n", encoding="utf-8")
+          PY
+          echo "population=$population" >> "$GITHUB_OUTPUT"
+          echo "population_sha256=$(python -c 'import hashlib, json, pathlib, sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); encoded=json.dumps(payload, sort_keys=True, separators=(",", ":")); print(hashlib.sha256(encoded.encode()).hexdigest())' "$population")" >> "$GITHUB_OUTPUT"
+          nodes_count=$(python -c 'import json, pathlib, sys; print(len(json.loads(pathlib.Path(sys.argv[1]).read_text())))' "$nodes")
+          printf 'Shard %s/8: %s files, %s nodes\n' '${{ matrix.label }}' "${#selected[@]}" "$nodes_count"
+      - name: Run test-suite shard with production harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python execution/capture_test_ci_performance.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --cohort ci-shard \
+            --source-shard '${{ matrix.source_shard }}' \
+            --source-shards 8 \
+            --split-count '${{ matrix.split_count }}' \
+            --split-part '${{ matrix.split_part }}' \
+            --cache-state unknown \
+            --expected-population "${{ steps.population.outputs.population }}" \
+            --expected-population-sha256 "${{ steps.population.outputs.population_sha256 }}" \
+            --trusted-harness-sha256 "${{ steps.trusted.outputs.harness_sha256 }}" \
+            --trusted-selector-sha256 "${{ steps.trusted.outputs.selector_sha256 }}" \
+            --trusted-plugin-sha256 "${{ steps.trusted.outputs.plugin_sha256 }}" \
+            --capture-python-sha256 "${{ steps.trusted.outputs.capture_python_sha256 }}" \
+            --sqlite-preload "$CI_SQLITE_PRELOAD" \
+            --sqlite-preload-sha256 "${{ steps.trusted.outputs.sqlite_preload_sha256 }}" \
+            --fragments-dir "$RUNNER_TEMP/test-ci-performance/${{ matrix.label }}" \
+            --receipt ".tmp/quality/test-ci-performance/${{ matrix.label }}/receipt.json"
+      - name: Upload raw test CI performance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-ci-performance-${{ matrix.label }}
+          path: |
+            .tmp/quality/test-ci-performance/${{ matrix.label }}/receipt.json
+            ${{ runner.temp }}/test-ci-performance/${{ matrix.label }}/**/worker-*.json
+            ${{ runner.temp }}/test-ci-performance/${{ matrix.label }}/**/pytest.stdout
+            ${{ runner.temp }}/test-ci-performance/${{ matrix.label }}/**/pytest.stderr
+          if-no-files-found: error
 
   design:
     name: Design Sync
@@ -277,7 +404,7 @@ jobs:
 
   quality:
     needs: [changes]
-    if: ${{ needs.changes.outputs.python == 'true' }}
+    if: ${{ needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -293,6 +420,8 @@ jobs:
         run: |
           pip install --require-hashes -r requirements.lock
           pip install -e .[dev]
+      - name: Exercise pre-push hook
+        run: sh .githooks/test_pre_push.sh
       - name: LLM eval coverage - no new registered gaps
         # Provider-free registry check: adding a purpose to either LLM_MODELS
         # or prompt_versions must include a real quality eval in the same PR.
@@ -325,6 +454,11 @@ jobs:
             echo "Changed Python files:"
             echo "$changed"
           fi
+      - name: Run quality ratchets
+        env:
+          BASE: ${{ steps.changed.outputs.base }}
+          PYTHON_BIN: python
+        run: make quality-ratchets
       - name: ruff format (no NEW misformatting on changed lines)
         # Diff-aware format gate, mirroring the lint gate below. The repo carries
         # a large pre-existing `ruff format` backlog (247 files of tooling drift),
@@ -384,7 +518,11 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.13"
+          # Keep bootstrap comparison on the dependency-resolution runtime used
+          # by inventory_static_quality. Pyright still analyzes Python 3.11
+          # semantics from pyproject.toml; this interpreter supplies installed
+          # package metadata, which differs across Python 3.13 and 3.14.
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Install dependencies
@@ -395,7 +533,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
+          # Keep optional IR imports resolvable exactly as they were when the
+          # source-bound static receipt was generated. Browser binaries are not
+          # needed for type analysis.
+          pip install "pyright==1.1.411" "playwright==1.62.0" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
       - name: Resolve base ref
         id: base
         run: |
@@ -416,7 +557,7 @@ jobs:
           set -euo pipefail
           head_json="$RUNNER_TEMP/pyright-head.json"
           base_json="$RUNNER_TEMP/pyright-base.json"
-          pyright --outputjson > "$head_json" 2>/dev/null || true
+          pyright --pythonpath "$(command -v python)" --outputjson > "$head_json" 2>/dev/null || true
           base="${{ steps.base.outputs.ref }}"
           wt="$RUNNER_TEMP/base-pyright"
           # Clear any stale worktree path from a retried job, then REQUIRE the
@@ -432,14 +573,29 @@ jobs:
           fi
           cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
           trap cleanup EXIT
-          (cd "$wt" && pyright --outputjson > "$base_json" 2>/dev/null) || true
+          (cd "$wt" && pyright --pythonpath "$(command -v python)" --outputjson > "$base_json" 2>/dev/null) || true
           git worktree remove --force "$wt" 2>/dev/null || true
           trap - EXIT
-          python .github/scripts/ci_gate.py pyright-diff \
-            --base-json "$base_json" \
-            --head-json "$head_json" \
-            --base-root "$wt" \
-            --head-root "$GITHUB_WORKSPACE"
+          if git cat-file -e "$base:docs/quality/static-baseline.json" 2>/dev/null; then
+            if [ ! -f docs/quality/static-baseline.json ]; then
+              echo "::error::the established static-quality baseline was deleted"
+              exit 1
+            fi
+            python .github/scripts/ci_gate.py pyright-diff \
+              --base-json "$base_json" \
+              --head-json "$head_json" \
+              --base-root "$wt" \
+              --head-root "$GITHUB_WORKSPACE"
+          else
+            if [ ! -f docs/quality/static-baseline.json ]; then
+              echo "::error::base and HEAD both lack the required static-quality baseline"
+              exit 1
+            fi
+            python .github/scripts/ci_gate.py pyright-baseline \
+              --head-json "$head_json" \
+              --baseline docs/quality/static-baseline.json \
+              --repo-root "$GITHUB_WORKSPACE"
+          fi
 
   security:
     needs: [changes]
@@ -481,7 +637,7 @@ jobs:
           git ls-files -z |
           xargs -0 detect-secrets-hook
           --exclude-files
-          '^(?:data[\\/]fmp_canary_manifest\.json|evals[\\/]receipts[\\/].*|docs[\\/]hardening[\\/].*|config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
+          '^(?:data[\\/]fmp_canary_manifest\.json|evals[\\/]receipts[\\/].*|docs[\\/]hardening[\\/].*|docs[\\/]quality[\\/].*\.json|config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
       - name: Generate CycloneDX SBOM
         id: sbom
         continue-on-error: true
@@ -526,6 +682,7 @@ jobs:
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
+          QUALITY_CHANGED: ${{ needs.changes.outputs.quality || 'false' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           PUBLIC_BOUNDARY_RESULT: ${{ needs.public-boundary.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
@@ -537,6 +694,7 @@ jobs:
           python .github/scripts/ci_gate.py verify
           --code "$CODE_CHANGED"
           --python "$PYTHON_CHANGED"
+          --quality "$QUALITY_CHANGED"
           --changes-result "$CHANGES_RESULT"
           --public-boundary-result "$PUBLIC_BOUNDARY_RESULT"
           --tests-result "$TESTS_RESULT"

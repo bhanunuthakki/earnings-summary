@@ -152,6 +152,12 @@ def _surprise_pct(actual: Decimal | None, estimate: Decimal | None) -> Decimal |
     return pct.quantize(Decimal("0.01"))
 
 
+# Public typed seams for the coercion/math contract tests.  The dispatcher
+# continues to use the private helpers internally.
+to_decimal = _to_decimal
+surprise_pct = _surprise_pct
+
+
 # --- FMP source -------------------------------------------------------------
 
 

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -463,6 +465,24 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 _DB_TEMPLATES: dict[tuple[str, str, str, bool], Path] = {}
 
 
+def _record_test_ci_fixture_timing(kind: str, started: float) -> None:
+    """Emit opt-in raw fixture timing without coupling tests to quality code."""
+    destination = os.environ.get("TEST_CI_PERFORMANCE_FRAGMENT_DIR")
+    if not destination:
+        return
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "controller")
+    path = Path(destination) / f"fixture-{worker}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps({"kind": kind, "seconds": max(0.0, time.perf_counter() - started)})
+                + "\n"
+            )
+    except OSError:
+        return
+
+
 @pytest.fixture(scope="session")
 def migrated_db(
     tmp_path_factory: pytest.TempPathFactory,
@@ -534,7 +554,9 @@ def migrated_db(
             config = _config(template, archived=archived)
             if archived and stamp not in {"base", "head", "heads"}:
                 command.stamp(config, stamp)
+            build_started = time.perf_counter()
             command.upgrade(config, target)
+            _record_test_ci_fixture_timing("migrated-db-template-build", build_started)
             if reanchor_to_active_head:
                 from alembic.script import ScriptDirectory
 
@@ -547,7 +569,9 @@ def migrated_db(
                     connection.execute("UPDATE alembic_version SET version_num=?", (active_head,))
             _DB_TEMPLATES[key] = template
         dest.parent.mkdir(parents=True, exist_ok=True)
+        copy_started = time.perf_counter()
         shutil.copyfile(template, dest)
+        _record_test_ci_fixture_timing("migrated-db-template-copy", copy_started)
         return dest
 
     return build

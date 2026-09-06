@@ -768,6 +768,17 @@ def _classify_artifact(
     return "actionable", sorted(set(reasons))
 
 
+# Public, typed seams for the direct contract tests below.  The implementation
+# helpers remain private so the audit's orchestration surface stays narrow.
+season_target = _season_target
+attempts_are_sufficient = _attempts_are_sufficient
+reason_matches_status = _reason_matches_status
+transcript_authorization_keys = _transcript_authorization_keys
+latest_disposition = _latest_disposition
+surprise_evidence = _surprise_evidence
+classify_artifact = _classify_artifact
+
+
 def audit_cohort(
     conn: sqlite3.Connection,
     *,

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
+from transcripts.receipt_sqlite import register_transcript_receipt_sqlite_functions
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 _FORBIDDEN_MAC_CHECKOUT_DB = (
@@ -175,8 +176,6 @@ def _register_transcript_receipt_function(
     *,
     database_path: str,
 ) -> None:
-    from pipeline.transcript_acquisition import register_transcript_receipt_sqlite_functions
-
     register_transcript_receipt_sqlite_functions(conn, database_path=database_path)
 
 
