@@ -17,7 +17,7 @@ from execution import apply_kpi_semantic_refresh as refresh
 from execution import record_kpi_repair_judgment as record_judgment
 from execution.backup_restore_readiness_receipt import BackupRestoreReadinessReceipt
 from execution.fetch_windows_review_bundle import WindowsReviewPins
-from models.facts import FactLocator, LocatorKind, Unit
+from models.facts import Currency, FactLocator, LocatorKind, Unit
 from operations.kpi_repair_receipts import (
     KpiRepairAttemptReceipt,
     KpiRepairJudgeReceipt,
@@ -31,6 +31,19 @@ from operations.review_bundle import (
     ReviewObservation,
     ReviewScheduler,
     ReviewSchema,
+)
+from pipeline.kpi_definition_revisions import (
+    IssuerKpiDefinitionRevision,
+    KpiCurrencyDisposition,
+    KpiDefinitionComparabilityDisposition,
+    KpiDefinitionComparabilityRevision,
+    KpiDefinitionLifecycle,
+    KpiDefinitionPeriodKind,
+    KpiDefinitionRelationKind,
+    KpiDefinitionStatus,
+    KpiDefinitionTextStatus,
+    KpiStockFlowBehavior,
+    KpiUnitFamily,
 )
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 from pipeline.kpi_semantics import (
@@ -191,6 +204,82 @@ def _manifest() -> refresh.RefreshManifest:
     )
 
 
+def _v7_definition(**changes: object) -> IssuerKpiDefinitionRevision:
+    values: dict[str, object] = {
+        "kpi_definition_revision_id": "definition-total-customers-r1",
+        "idempotency_key": "definition:nu:total-customers:r1",
+        "kpi_definition_id": 1,
+        "reporting_entity_id": "entity-nu",
+        "revision": 1,
+        "status": KpiDefinitionStatus.ADMITTED,
+        "lifecycle": KpiDefinitionLifecycle.ACTIVE,
+        "reported_label": "Total customers",
+        "reported_definition_text": "Total customers",
+        "definition_text_status": KpiDefinitionTextStatus.VERBATIM,
+        "period_kind": KpiDefinitionPeriodKind.INSTANT,
+        "stock_flow_behavior": KpiStockFlowBehavior.STOCK,
+        "unit_family": KpiUnitFamily.CURRENCY,
+        "unit_key": Unit.MILLIONS,
+        "unit_scale": KpiUnitScale.MILLIONS,
+        "currency_disposition": KpiCurrencyDisposition.EXPLICIT,
+        "currency": Currency.USD,
+        "accounting_basis": KpiAccountingBasis.MANAGEMENT,
+        "consolidation_scope": KpiConsolidationScope.CONSOLIDATED,
+        "dimensions": {},
+        "source_document_version_id": "document-v2",
+        "source_evidence_node_id": "node-2",
+        "source_locator": SOURCE_EVIDENCE_LOCATOR.model_dump(mode="json"),
+        "reviewed_by": "owner",
+        "effective_at": datetime(2024, 12, 31, tzinfo=UTC),
+        "knowledge_at": NOW,
+        "recorded_at": NOW,
+    }
+    values.update(changes)
+    return IssuerKpiDefinitionRevision.model_validate(values)
+
+
+def _v7_manifest(**entry_changes: object) -> refresh.RefreshManifest:
+    definition = _v7_definition()
+    entry = _entry(
+        currency=Currency.USD,
+        definition_revision=definition,
+        expected_definition_head_id=None,
+        expected_definition_revision=0,
+        **entry_changes,
+    )
+    return refresh.RefreshManifest(
+        schema_version="kpi_semantic_refresh.v7",
+        user_id="bhanu",
+        logical_idempotency_key="nu:2024q4:total-customers:definition-review:v1",
+        reviewer="owner",
+        knowledge_at=NOW,
+        review_bundle_sha256="d" * 64,
+        expected_schema_revision="0038_add_kpi_definition_revisions",
+        backup_restore_evidence_id="e" * 64,
+        entries=(entry,),
+    )
+
+
+def _v7_relation() -> KpiDefinitionComparabilityRevision:
+    return KpiDefinitionComparabilityRevision(
+        comparability_revision_id="relation-prior-new-r1",
+        idempotency_key="relation:prior:new:r1",
+        predecessor_definition_revision_id="prior-definition-r1",
+        successor_definition_revision_id="definition-total-customers-r1",
+        revision=1,
+        relation_kind=KpiDefinitionRelationKind.RENAMED,
+        disposition=KpiDefinitionComparabilityDisposition.CONTINUOUS,
+        reason_code="issuer_disclosed_rename",
+        reviewed_by="owner",
+        source_document_version_id="document-v2",
+        source_evidence_node_id="node-2",
+        source_locator=SOURCE_EVIDENCE_LOCATOR.model_dump(mode="json"),
+        effective_at=datetime(2024, 12, 31, tzinfo=UTC),
+        knowledge_at=NOW,
+        recorded_at=NOW,
+    )
+
+
 def test_manifest_binds_locator_excerpt_and_expected_row_effects() -> None:
     entry = _entry()
     stale_schema = _manifest().model_dump(mode="json")
@@ -261,10 +350,34 @@ def test_manifest_binds_locator_excerpt_and_expected_row_effects() -> None:
         refresh.RefreshManifest.model_validate(missing_v6_state)
 
 
+def test_v7_manifest_rejects_duplicate_relation_identity_and_pair() -> None:
+    relation = _v7_relation()
+    with pytest.raises(ValidationError, match="comparability revision identities"):
+        _v7_manifest(comparability_revisions=(relation, relation))
+
+    reversed_relation = relation.model_copy(
+        update={
+            "comparability_revision_id": "relation-new-prior-r1",
+            "idempotency_key": "relation:new:prior:r1",
+            "predecessor_definition_revision_id": relation.successor_definition_revision_id,
+            "successor_definition_revision_id": relation.predecessor_definition_revision_id,
+        }
+    )
+    with pytest.raises(ValidationError, match="comparability pairs"):
+        _v7_manifest(comparability_revisions=(relation, reversed_relation))
+
+
 def test_v5_manifest_serialization_and_hash_match_predecessor_contract(tmp_path: Path) -> None:
     manifest = _manifest()
     legacy_entry = _entry().model_dump(mode="json")
     legacy_entry.pop("predecessor_resolution_state")
+    for field in (
+        "expected_definition_head_id",
+        "expected_definition_revision",
+        "definition_revision",
+        "comparability_revisions",
+    ):
+        legacy_entry.pop(field)
     expected_payload = {
         "schema_version": "kpi_semantic_refresh.v5",
         "user_id": "bhanu",
@@ -472,6 +585,47 @@ def test_attempt_and_sol_receipts_are_content_addressed_and_tamper_evident() -> 
     tampered["verdict"] = "BLOCK"
     with pytest.raises(ValidationError, match="hash mismatch"):
         KpiRepairJudgeReceipt.model_validate(tampered)
+
+
+def test_v3_attempt_receipt_records_exact_definition_effects_without_changing_v2() -> None:
+    legacy = seal_attempt(
+        attempt_id="1" * 32,
+        logical_idempotency_key_sha256="2" * 64,
+        manifest_sha256="3" * 64,
+        review_bundle_sha256="4" * 64,
+        backup_restore_evidence_id="5" * 64,
+        executor_code_sha256="6" * 64,
+        mode="apply",
+        state="applied",
+        started_at=NOW,
+        completed_at=NOW,
+        validated_entries=1,
+        inserted_fact_rows=0,
+        inserted_context_rows=1,
+        blocker_codes=(),
+        result_fact_head_ids=(10,),
+    )
+    definition = seal_attempt(
+        **legacy.model_dump(mode="python", exclude={"schema_version", "content_sha256"}),
+        inserted_definition_rows=1,
+        inserted_comparability_rows=0,
+        result_definition_revision_ids=("definition-r1",),
+        result_definition_commitment_sha256s=("7" * 64,),
+    )
+
+    assert legacy.schema_version == "kpi_repair_attempt.v2"
+    legacy_payload = json.loads(legacy.model_dump_json())
+    assert "inserted_definition_rows" not in legacy_payload
+    assert "result_definition_revision_ids" not in legacy_payload
+    assert definition.schema_version == "kpi_repair_attempt.v3"
+    assert definition.inserted_definition_rows == 1
+    assert definition.result_definition_revision_ids == ("definition-r1",)
+    assert definition.result_definition_commitment_sha256s == ("7" * 64,)
+
+    tampered = definition.model_dump(mode="json")
+    tampered["result_definition_commitment_sha256s"] = ["8" * 64]
+    with pytest.raises(ValidationError, match="hash mismatch"):
+        KpiRepairAttemptReceipt.model_validate(tampered)
 
 
 @pytest.mark.parametrize(
@@ -992,9 +1146,123 @@ def test_marker_replay_rejects_unrelated_canonical_head(
     monkeypatch.setattr(refresh, "current_kpi_semantic_context", _current_context)
     monkeypatch.setattr(refresh, "_validate_source_binding", _source_nu)
     with pytest.raises(refresh.RepairBlockedError, match="replay_fact_postcondition_mismatch"):
-        refresh._verify_replay(conn, manifest=_manifest(), result_heads=(12,))
-    refresh._verify_replay(conn, manifest=_manifest(), result_heads=(11,))
+        refresh._verify_replay(
+            conn,
+            manifest=_manifest(),
+            result_heads=(12,),
+            result_definition_revision_ids=(None,),
+            result_definition_commitment_sha256s=(None,),
+        )
+    refresh._verify_replay(
+        conn,
+        manifest=_manifest(),
+        result_heads=(11,),
+        result_definition_revision_ids=(None,),
+        result_definition_commitment_sha256s=(None,),
+    )
     conn.close()
+
+
+def test_v7_marker_replay_requires_exact_definition_identity_and_commitment() -> None:
+    manifest = _v7_manifest()
+    definition = manifest.entries[0].definition_revision
+    assert definition is not None
+    conn = sqlite3.connect(":memory:")
+
+    with pytest.raises(
+        refresh.RepairBlockedError,
+        match="idempotency_marker_definition_binding_mismatch",
+    ):
+        refresh._verify_replay(
+            conn,
+            manifest=manifest,
+            result_heads=(10,),
+            result_definition_revision_ids=(definition.kpi_definition_revision_id,),
+            result_definition_commitment_sha256s=("f" * 64,),
+        )
+    with pytest.raises(
+        refresh.RepairBlockedError,
+        match="idempotency_marker_definition_binding_mismatch",
+    ):
+        refresh._verify_replay(
+            conn,
+            manifest=manifest,
+            result_heads=(10,),
+            result_definition_revision_ids=("unrelated-definition",),
+            result_definition_commitment_sha256s=(definition.commitment_sha256,),
+        )
+    conn.close()
+
+
+def test_v2_marker_is_bound_to_exact_sealed_apply_receipt(tmp_path: Path) -> None:
+    manifest = _v7_manifest()
+    definition = manifest.entries[0].definition_revision
+    assert definition is not None
+    logical_sha = hashlib.sha256(manifest.logical_idempotency_key.encode()).hexdigest()
+    receipt = seal_attempt(
+        attempt_id="1" * 32,
+        logical_idempotency_key_sha256=logical_sha,
+        manifest_sha256=manifest.content_sha256(),
+        review_bundle_sha256=manifest.review_bundle_sha256,
+        backup_restore_evidence_id=manifest.backup_restore_evidence_id,
+        executor_code_sha256="2" * 64,
+        mode="apply",
+        state="applied",
+        started_at=NOW,
+        completed_at=NOW,
+        validated_entries=1,
+        inserted_fact_rows=1,
+        inserted_context_rows=1,
+        inserted_definition_rows=1,
+        inserted_comparability_rows=0,
+        blocker_codes=(),
+        result_fact_head_ids=(11,),
+        result_definition_revision_ids=(definition.kpi_definition_revision_id,),
+        result_definition_commitment_sha256s=(definition.commitment_sha256,),
+    )
+    attempts = tmp_path / "attempts"
+    attempts.mkdir()
+    (attempts / f"{receipt.attempt_id}.json").write_text(receipt.model_dump_json())
+    marker: dict[str, object] = {
+        "schema_version": "kpi_repair_idempotency.v2",
+        "apply_attempt_id": receipt.attempt_id,
+        "logical_idempotency_key_sha256": logical_sha,
+        "manifest_sha256": manifest.content_sha256(),
+        "apply_receipt_sha256": receipt.content_sha256,
+        "inserted_definition_rows": 1,
+        "inserted_comparability_rows": 0,
+        "result_fact_head_ids": [11],
+        "result_definition_revision_ids": [definition.kpi_definition_revision_id],
+        "result_definition_commitment_sha256s": [definition.commitment_sha256],
+    }
+
+    assert refresh._validate_v2_idempotency_marker(
+        marker,
+        receipt_root=tmp_path,
+        logical_key_sha256=logical_sha,
+        manifest_sha256=manifest.content_sha256(),
+    ) == (
+        (11,),
+        (definition.kpi_definition_revision_id,),
+        (definition.commitment_sha256,),
+    )
+
+    marker["inserted_definition_rows"] = 9
+    with pytest.raises(refresh.RepairBlockedError, match="apply_receipt_mismatch"):
+        refresh._validate_v2_idempotency_marker(
+            marker,
+            receipt_root=tmp_path,
+            logical_key_sha256=logical_sha,
+            manifest_sha256=manifest.content_sha256(),
+        )
+    marker["apply_attempt_id"] = "../outside"
+    with pytest.raises(refresh.RepairBlockedError, match="apply_attempt_invalid"):
+        refresh._validate_v2_idempotency_marker(
+            marker,
+            receipt_root=tmp_path,
+            logical_key_sha256=logical_sha,
+            manifest_sha256=manifest.content_sha256(),
+        )
 
 
 def test_bind_existing_fails_when_exact_fact_cannot_resolve(
@@ -1018,8 +1286,9 @@ def test_bind_existing_fails_when_exact_fact_cannot_resolve(
         context: KpiSemanticContext,
         reviewed_by: str = "pipeline",
         knowledge_at: datetime | None = None,
+        kpi_definition_revision_id: str | None = None,
     ) -> int:
-        del kpi_fact_id, context, reviewed_by, knowledge_at
+        del kpi_fact_id, context, reviewed_by, knowledge_at, kpi_definition_revision_id
         return 1
 
     monkeypatch.setattr(refresh, "persist_kpi_semantic_context", persist_context)
@@ -1187,9 +1456,17 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         _validated_entry,
     )
 
-    def simulated_apply(connection: sqlite3.Connection, **_kwargs: object) -> tuple[int, int, int]:
+    def simulated_apply(connection: sqlite3.Connection, **_kwargs: object) -> refresh._EntryEffect:
         connection.execute("INSERT INTO dry_run_probe VALUES ('would-write')")
-        return 1, 1, 11
+        return refresh._EntryEffect(
+            inserted_fact_rows=1,
+            inserted_context_rows=1,
+            inserted_definition_rows=0,
+            inserted_comparability_rows=0,
+            fact_head_id=11,
+            definition_revision_id=None,
+            definition_commitment_sha256=None,
+        )
 
     monkeypatch.setattr(refresh, "_apply_entry", simulated_apply)
 
@@ -1275,12 +1552,12 @@ def test_dry_run_rejects_corrupted_snapshot_clone_before_open(
         pytest.fail("corrupted clone must not be yielded for opening")
 
 
+@pytest.mark.parametrize("capture_definition", [False, True])
 def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run(
-    migrated_db: Callable[..., Path], tmp_path: Path
+    migrated_db: Callable[..., Path], tmp_path: Path, capture_definition: bool
 ) -> None:
     db_path = migrated_db(tmp_path / "same-source-kpi-repair.db")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = refresh.open_db(db_path)
     try:
         conn.execute(
             "INSERT INTO documents "
@@ -1307,6 +1584,19 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
         conn.execute(
             "INSERT INTO issuer_entities VALUES (?,?,?,?)",
             ("issuer-nu", "issuer:nu", "operating_company", NOW.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO reporting_entities "
+            "(reporting_entity_id,idempotency_key,issuer_id,reporting_entity_kind,"
+            "display_name,created_at) VALUES (?,?,?,?,?,?)",
+            (
+                "reporting-nu",
+                "reporting:nu",
+                "issuer-nu",
+                "legal_registrant",
+                "Nu Holdings Ltd.",
+                NOW.isoformat(),
+            ),
         )
         conn.execute(
             "INSERT INTO evidence_content_blobs VALUES (?,?,?,?,?)",
@@ -1437,6 +1727,23 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
         )
         locator_payload = locator.to_json()
         assert locator_payload is not None
+        entry_changes: dict[str, object] = {}
+        if capture_definition:
+            entry_changes.update(
+                definition_revision=_v7_definition(
+                    kpi_definition_id=641,
+                    reporting_entity_id="reporting-nu",
+                    unit_family=KpiUnitFamily.COUNT,
+                    unit_key=Unit.COUNT,
+                    currency_disposition=KpiCurrencyDisposition.NOT_APPLICABLE,
+                    currency=None,
+                    source_document_version_id="document-nu-q4",
+                    source_evidence_node_id="node-nu-q4",
+                    source_locator=json.loads(locator_json),
+                ),
+                expected_definition_head_id=None,
+                expected_definition_revision=0,
+            )
         entry = _entry(
             predecessor_resolution_state="quarantined_legacy",
             old_fact_id=42175,
@@ -1454,9 +1761,21 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             value="114200000",
             unit=Unit.COUNT,
             locator=locator,
+            **entry_changes,
         )
-        manifest = _manifest().model_copy(
-            update={"schema_version": "kpi_semantic_refresh.v6", "entries": (entry,)}
+        manifest = refresh.RefreshManifest.model_validate(
+            _manifest()
+            .model_copy(
+                update={
+                    "schema_version": (
+                        "kpi_semantic_refresh.v7"
+                        if capture_definition
+                        else "kpi_semantic_refresh.v6"
+                    ),
+                    "entries": (entry,),
+                }
+            )
+            .model_dump(mode="json")
         )
         conn.commit()
         old_before = tuple(
@@ -1479,7 +1798,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             set(),
             owner_tickers=frozenset({"NU"}),
         )
-        _, _, dry_run_id = refresh._apply_entry(
+        dry_run_effect = refresh._apply_entry(
             conn,
             manifest=manifest,
             entry=entry,
@@ -1490,10 +1809,11 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             conn,
             manifest=manifest,
             entry=entry,
-            head_id=dry_run_id,
+            head_id=dry_run_effect.fact_head_id,
         )
         conn.rollback()
         assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 0
         assert (
             tuple(
                 conn.execute(
@@ -1549,18 +1869,19 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             set(),
             owner_tickers=frozenset({"NU"}),
         )
-        _, _, new_id = refresh._apply_entry(
+        applied_effect = refresh._apply_entry(
             conn,
             manifest=manifest,
             entry=entry,
             row=row,
             source_type=source_type,
         )
+        new_id = applied_effect.fact_head_id
         refresh._validate_applied_entry_postcondition(
             conn,
             manifest=manifest,
             entry=entry,
-            head_id=new_id,
+            head_id=applied_effect.fact_head_id,
         )
         conn.commit()
         successor = conn.execute(
@@ -1572,6 +1893,12 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
         assert semantic is not None
         assert semantic.reviewed_by == "owner"
         assert semantic.knowledge_at == NOW
+        assert semantic.kpi_definition_revision_id == (
+            "definition-total-customers-r1" if capture_definition else None
+        )
+        assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == int(
+            capture_definition
+        )
         observation = conn.execute(
             "SELECT observation.numeric_value,observation.evidence_node_id,"
             "revision.fact_table,revision.fact_row_id "

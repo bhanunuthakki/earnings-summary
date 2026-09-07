@@ -17,10 +17,18 @@ import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal, Self, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -37,6 +45,10 @@ from execution.apply_kpi_semantic_refresh import (  # noqa: E402
 )
 from models.facts import Currency, Unit  # noqa: E402
 from operations.kpi_semantic_review_export import KpiSemanticReviewExport  # noqa: E402
+from pipeline.kpi_definition_revisions import (  # noqa: E402
+    IssuerKpiDefinitionRevision,
+    KpiDefinitionComparabilityRevision,
+)
 from pipeline.kpi_semantic_review import (  # noqa: E402
     QUARANTINED_PREDECESSOR_SCOPE_REASON,
     KpiEvidenceCandidate,
@@ -75,6 +87,10 @@ class ReviewedKpiSemanticDecision(BaseModel):
     currency: Currency | None = None
     context: KpiSemanticContext
     semantic_evidence: SemanticEvidenceQuotes
+    expected_definition_head_id: str | None = Field(default=None, min_length=1, max_length=128)
+    expected_definition_revision: int = Field(default=0, ge=0)
+    definition_revision: IssuerKpiDefinitionRevision | None = None
+    comparability_revisions: tuple[KpiDefinitionComparabilityRevision, ...] = ()
 
     @model_validator(mode="after")
     def _admission_is_explicit(self) -> Self:
@@ -84,7 +100,27 @@ class ReviewedKpiSemanticDecision(BaseModel):
             raise ValueError("reviewed semantic decision must be admitted")
         if self.context.source_value_text is not None:
             raise ValueError("source value text is derived from the selected evidence candidate")
+        if (self.expected_definition_head_id is None) != (self.expected_definition_revision == 0):
+            raise ValueError("definition head and revision-zero expectations conflict")
         return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_versioned_contract(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        serialized = handler(self)
+        if not isinstance(serialized, dict):
+            raise TypeError("reviewed KPI decision serializer must return an object")
+        payload = cast("dict[str, object]", serialized).copy()
+        if self.definition_revision is None:
+            for field in (
+                "expected_definition_head_id",
+                "expected_definition_revision",
+                "definition_revision",
+                "comparability_revisions",
+            ):
+                payload.pop(field, None)
+        return payload
 
 
 class KpiSemanticRefreshDecisionBatch(BaseModel):
@@ -92,7 +128,9 @@ class KpiSemanticRefreshDecisionBatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_refresh_decisions.v2"]
+    schema_version: Literal[
+        "kpi_semantic_refresh_decisions.v2", "kpi_semantic_refresh_decisions.v3"
+    ]
     review_export_sha256: str = Field(pattern=_SHA256)
     review_batch_sha256: str = Field(pattern=_SHA256)
     reviewer: str = Field(min_length=1, max_length=128)
@@ -117,7 +155,96 @@ class KpiSemanticRefreshDecisionBatch(BaseModel):
         fact_ids = [decision.fact_id for decision in self.decisions]
         if len(set(fact_ids)) != len(fact_ids):
             raise ValueError("decision batch repeats a fact")
+        if self.schema_version == "kpi_semantic_refresh_decisions.v3":
+            if any(decision.definition_revision is None for decision in self.decisions):
+                raise ValueError("v3 decisions require complete reviewed definition capture")
+            definitions = [
+                decision.definition_revision
+                for decision in self.decisions
+                if decision.definition_revision is not None
+            ]
+            relations = [
+                relation
+                for decision in self.decisions
+                for relation in decision.comparability_revisions
+            ]
+            duplicate_checks: tuple[tuple[list[object], str], ...] = (
+                (
+                    [definition.kpi_definition_revision_id for definition in definitions],
+                    "definition revision identities",
+                ),
+                (
+                    [definition.idempotency_key for definition in definitions],
+                    "definition idempotency keys",
+                ),
+                (
+                    [definition.commitment_sha256 for definition in definitions],
+                    "definition commitments",
+                ),
+                (
+                    [relation.comparability_revision_id for relation in relations],
+                    "comparability revision identities",
+                ),
+                (
+                    [relation.idempotency_key for relation in relations],
+                    "comparability idempotency keys",
+                ),
+                (
+                    [relation.commitment_sha256 for relation in relations],
+                    "comparability commitments",
+                ),
+                (
+                    [
+                        frozenset(
+                            (
+                                relation.predecessor_definition_revision_id,
+                                relation.successor_definition_revision_id,
+                            )
+                        )
+                        for relation in relations
+                    ],
+                    "comparability pairs",
+                ),
+            )
+            for values, label in duplicate_checks:
+                if len(values) != len(set(values)):
+                    raise ValueError(f"v3 decisions repeat {label}")
+        elif any(
+            decision.definition_revision is not None
+            or decision.comparability_revisions
+            or decision.expected_definition_head_id is not None
+            or decision.expected_definition_revision != 0
+            for decision in self.decisions
+        ):
+            raise ValueError("v2 decisions cannot carry definition capture")
         return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _v3_fields_are_explicit(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = cast(dict[str, object], value)
+        if payload.get("schema_version") != "kpi_semantic_refresh_decisions.v3":
+            return payload
+        raw_decisions = payload.get("decisions")
+        if not isinstance(raw_decisions, (list, tuple)):
+            return payload
+        if any(
+            not isinstance(decision, ReviewedKpiSemanticDecision)
+            and (
+                not isinstance(decision, dict)
+                or not {
+                    "expected_definition_head_id",
+                    "expected_definition_revision",
+                    "definition_revision",
+                    "comparability_revisions",
+                }.issubset(cast(dict[str, object], decision))
+            )
+            for decision in cast(list[object] | tuple[object, ...], raw_decisions)
+        ):
+            raise ValueError("v3 decisions require explicit definition capture fields")
+        return payload
 
 
 def _semantic_quotes(decision: ReviewedKpiSemanticDecision) -> tuple[str, ...]:
@@ -318,6 +445,10 @@ def _entry_for_decision(
         locator=locator,
         context=decision.context,
         semantic_evidence=decision.semantic_evidence,
+        expected_definition_head_id=decision.expected_definition_head_id,
+        expected_definition_revision=decision.expected_definition_revision,
+        definition_revision=decision.definition_revision,
+        comparability_revisions=decision.comparability_revisions,
         expected_inserted_fact_rows=0 if decision.action == "bind_existing" else 1,
         expected_inserted_context_rows=1,
     )
@@ -390,11 +521,14 @@ def build_kpi_semantic_refresh_manifest(
         except RepairBlockedError as exc:
             raise ValueError(f"reviewed decision failed guarded validation: {exc.code}") from None
         entries.append(entry)
-    manifest_schema = (
-        "kpi_semantic_refresh.v6"
-        if any(entry.predecessor_resolution_state == "quarantined_legacy" for entry in entries)
-        else "kpi_semantic_refresh.v5"
-    )
+    if decisions.schema_version == "kpi_semantic_refresh_decisions.v3":
+        manifest_schema = "kpi_semantic_refresh.v7"
+    else:
+        manifest_schema = (
+            "kpi_semantic_refresh.v6"
+            if any(entry.predecessor_resolution_state == "quarantined_legacy" for entry in entries)
+            else "kpi_semantic_refresh.v5"
+        )
     return RefreshManifest(
         schema_version=manifest_schema,
         user_id=review_export.user_id,

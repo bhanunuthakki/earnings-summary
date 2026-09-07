@@ -6,9 +6,17 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic_core import to_jsonable_python
 
 _SHA256 = r"^[0-9a-f]{64}$"
@@ -56,7 +64,9 @@ class _Receipt(BaseModel):
 
 
 class KpiRepairAttemptReceipt(_Receipt):
-    schema_version: Literal["kpi_repair_attempt.v2"] = "kpi_repair_attempt.v2"
+    schema_version: Literal["kpi_repair_attempt.v2", "kpi_repair_attempt.v3"] = (
+        "kpi_repair_attempt.v2"
+    )
     attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     logical_idempotency_key_sha256: str = Field(pattern=_SHA256)
     manifest_sha256: str = Field(pattern=_SHA256)
@@ -70,8 +80,12 @@ class KpiRepairAttemptReceipt(_Receipt):
     validated_entries: int = Field(ge=0)
     inserted_fact_rows: int = Field(ge=0)
     inserted_context_rows: int = Field(ge=0)
+    inserted_definition_rows: int = Field(default=0, ge=0)
+    inserted_comparability_rows: int = Field(default=0, ge=0)
     blocker_codes: tuple[str, ...] = ()
     result_fact_head_ids: tuple[int, ...] = ()
+    result_definition_revision_ids: tuple[str | None, ...] = ()
+    result_definition_commitment_sha256s: tuple[str | None, ...] = ()
     content_sha256: str = Field(pattern=_SHA256)
 
     @field_validator("started_at", "completed_at")
@@ -83,10 +97,52 @@ class KpiRepairAttemptReceipt(_Receipt):
 
     @model_validator(mode="after")
     def _hash_matches(self) -> KpiRepairAttemptReceipt:
+        if self.schema_version == "kpi_repair_attempt.v2":
+            if (
+                self.inserted_definition_rows != 0
+                or self.inserted_comparability_rows != 0
+                or self.result_definition_revision_ids
+                or self.result_definition_commitment_sha256s
+            ):
+                raise ValueError("v2 repair receipts cannot carry definition effects")
+        elif len(self.result_definition_revision_ids) != len(self.result_fact_head_ids) or len(
+            self.result_definition_commitment_sha256s
+        ) != len(self.result_fact_head_ids):
+            raise ValueError("v3 repair receipt definition results must align with fact heads")
+        for revision_id, commitment in zip(
+            self.result_definition_revision_ids,
+            self.result_definition_commitment_sha256s,
+            strict=True,
+        ):
+            if (revision_id is None) != (commitment is None):
+                raise ValueError("definition result identity and commitment must both be present")
+            if commitment is not None and (
+                len(commitment) != 64
+                or any(character not in "0123456789abcdef" for character in commitment)
+            ):
+                raise ValueError("definition result commitment must be a lowercase SHA-256")
         payload = self.model_dump(mode="json", exclude={"content_sha256"})
         if self.content_sha256 != canonical_sha256(payload):
             raise ValueError("KPI repair attempt receipt hash mismatch")
         return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_versioned_contract(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        serialized = handler(self)
+        if not isinstance(serialized, dict):
+            raise TypeError("KPI repair receipt serializer must return an object")
+        payload = cast("dict[str, object]", serialized).copy()
+        if self.schema_version == "kpi_repair_attempt.v2":
+            for field in (
+                "inserted_definition_rows",
+                "inserted_comparability_rows",
+                "result_definition_revision_ids",
+                "result_definition_commitment_sha256s",
+            ):
+                payload.pop(field, None)
+        return payload
 
 
 class KpiRepairJudgeReceipt(_Receipt):
@@ -194,7 +250,18 @@ class KpiDispositionJudgeReceipt(_Receipt):
 
 
 def seal_attempt(**values: object) -> KpiRepairAttemptReceipt:
-    payload = {"schema_version": "kpi_repair_attempt.v2", **values}
+    v3_fields = {
+        "inserted_definition_rows",
+        "inserted_comparability_rows",
+        "result_definition_revision_ids",
+        "result_definition_commitment_sha256s",
+    }
+    schema_version = (
+        "kpi_repair_attempt.v3"
+        if any(field in values for field in v3_fields)
+        else "kpi_repair_attempt.v2"
+    )
+    payload = {"schema_version": schema_version, **values}
     return KpiRepairAttemptReceipt.model_validate(
         {**payload, "content_sha256": canonical_sha256(payload)}
     )
