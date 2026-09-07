@@ -351,7 +351,7 @@ def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mut
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="crash-safe-replay",
-        expected_schema_revision="0037_commitment_scan_segment_coverage",
+        expected_schema_revision="0038_add_kpi_definition_revisions",
         review_bundle_sha256="d" * 64,
         backup_restore_evidence_id="e" * 64,
         knowledge_at=NOW,
