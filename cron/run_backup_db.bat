@@ -32,11 +32,12 @@ call "%PROJECT_ROOT%\cron\run_python.bat" "backup_db" "db-backup" cron\backup_db
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto done
 
-REM A completed same-day invocation is an intentional idempotent no-op. It
-REM emitted no new snapshot, so file GC remains unauthorized, but Scheduler
-REM must retain the successful exit instead of reporting a false failure.
+REM A completed same-day invocation emitted no new snapshot, so file GC remains
+REM unauthorized. It must still retry the headless upload of the newest verified
+REM local artifact: otherwise a transient Drive failure after snapshot creation
+REM can never repair itself because every Scheduler retry is already_done.
 powershell -NoProfile -Command "if (Select-String -LiteralPath '%LOG_FILE%' -Pattern 'status.+already_done' -Quiet) { exit 0 } else { exit 1 }"
-if not errorlevel 1 goto done
+if not errorlevel 1 goto find_existing_receipt
 
 REM Destructive file retention is authorized only after THIS invocation proves
 REM it produced an encrypted snapshot that still exists. A zero exit alone is
@@ -48,11 +49,23 @@ if not defined BACKUP_RECEIPT (
   set "RC=1"
   goto done
 )
+set "ALLOW_FILE_GC=1"
+goto upload
+
+:find_existing_receipt
+set "BACKUP_RECEIPT="
+for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$line = Get-ChildItem -LiteralPath '%LOG_DIR%' -Filter 'backup_db_*.log' -File | Sort-Object LastWriteTime -Descending | ForEach-Object { Get-Content -LiteralPath $_.FullName | Where-Object { $_ -like 'OK backup -> *.gz.enc*' } | Select-Object -Last 1 } | Select-Object -First 1; if (-not $line) { exit 1 }; $path = $line -replace '^OK backup ->\s*','' -replace '\s+\([^)]*\)\s+retained=.*$',''; if ($path -notlike '*.gz.enc' -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { exit 1 }; Write-Output $path"`) do set "BACKUP_RECEIPT=%%p"
+if not defined BACKUP_RECEIPT (
+  echo ERROR: already_done retry could not locate a verified encrypted backup receipt.>> "%LOG_FILE%"
+  set "RC=1"
+  goto done
+)
 
 REM Publish through the Drive API with the existing least-privilege OAuth token.
 REM This runs headlessly and therefore does not depend on Google Drive for desktop
 REM or an interactive Windows session. Routine runs upload only the newest immutable
 REM artifact in each backup set; activation seeds the retained history once.
+:upload
 for %%I in ("%BACKUP_RECEIPT%") do set "BACKUP_DIR=%%~dpI"
 call "%PROJECT_ROOT%\cron\run_python.bat" "backup-drive-upload" "backup-drive-upload" execution\upload_drive_backups.py --source-dir "%BACKUP_DIR%" --pattern "portfolio.db.*.gz.enc" --folder "earnings-summary-db-backups" --backup-set "portfolio-db" --retain 14 --latest-only >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
@@ -61,6 +74,8 @@ if not "%RC%"=="0" goto done
 call "%PROJECT_ROOT%\cron\run_python.bat" "backup-drive-upload" "backup-drive-upload" execution\upload_drive_backups.py --source-dir "%BACKUP_DIR%" --pattern "portfolio_gc_archive.db.*.gz.enc" --folder "earnings-summary-db-backups" --backup-set "portfolio-gc-archive" --retain 6 --allow-empty --latest-only >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto done
+
+if not defined ALLOW_FILE_GC goto done
 
 call "%PROJECT_ROOT%\cron\run_python.bat" "backup-file-gc" "backup-file-gc" execution\backup_file_gc.py --root "%PROJECT_ROOT%" --apply >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"

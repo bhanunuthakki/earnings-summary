@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,8 +22,10 @@ class Call:
 class UploadCall:
     def __init__(self, result: dict[str, Any]) -> None:
         self.result = result
+        self.retry_counts: list[int] = []
 
-    def next_chunk(self) -> tuple[None, dict[str, Any]]:
+    def next_chunk(self, *, num_retries: int = 0) -> tuple[None, dict[str, Any]]:
+        self.retry_counts.append(num_retries)
         return None, self.result
 
 
@@ -30,6 +33,7 @@ class Files:
     def __init__(self) -> None:
         self.items: list[dict[str, Any]] = []
         self.deleted: list[str] = []
+        self.upload_calls: list[UploadCall] = []
 
     def list(self, **kwargs: Any) -> Call:
         del kwargs
@@ -43,9 +47,11 @@ class Files:
         if media_body is None:
             self.items.append(item)
             return Call(item)
-        item["size"] = str(Path(media_body.path).stat().st_size)
+        item.update(media_receipt(media_body.path))
         self.items.append(item)
-        return UploadCall(item)
+        upload = UploadCall(item)
+        self.upload_calls.append(upload)
+        return upload
 
     def update(
         self, *, body: dict[str, Any], media_body: Media, fields: str, **kwargs: Any
@@ -54,8 +60,10 @@ class Files:
         file_id = str(kwargs["fileId"])
         item = next(value for value in self.items if value["id"] == file_id)
         item.update(body)
-        item["size"] = str(Path(media_body.path).stat().st_size)
-        return UploadCall(item)
+        item.update(media_receipt(media_body.path))
+        upload = UploadCall(item)
+        self.upload_calls.append(upload)
+        return upload
 
     def delete(self, **kwargs: Any) -> Call:
         file_id = str(kwargs["fileId"])
@@ -78,6 +86,14 @@ class Media:
         self.path = path
 
 
+def media_receipt(path: str) -> dict[str, str]:
+    payload = Path(path).read_bytes()
+    return {
+        "size": str(len(payload)),
+        "md5Checksum": hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+    }
+
+
 def fake_media_upload(path: str | Path, **kwargs: Any) -> Media:
     del kwargs
     return Media(str(path))
@@ -98,7 +114,15 @@ def test_upload_is_idempotent_and_prunes_only_owned_set(tmp_path: Path, monkeypa
 
     assert uploader.upload_file(drive, folder, first, backup_set="portfolio") == "created"
     assert uploader.upload_file(drive, folder, first, backup_set="portfolio") == "unchanged"
+    next(item for item in drive.files_api.items if item.get("name") == first.name)[
+        "md5Checksum"
+    ] = "corrupt-remote-receipt"
+    assert uploader.upload_file(drive, folder, first, backup_set="portfolio") == "updated"
     assert uploader.upload_file(drive, folder, second, backup_set="portfolio") == "created"
+    assert all(
+        call.retry_counts == [uploader.UPLOAD_CHUNK_RETRIES]
+        for call in drive.files_api.upload_calls
+    )
     drive.files_api.items.append(
         {"id": "foreign", "name": "notes.txt", "appProperties": {"backup_owner": "other"}}
     )

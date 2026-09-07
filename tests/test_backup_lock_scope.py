@@ -113,19 +113,26 @@ def test_scheduler_backup_publishes_encrypted_artifacts_headlessly() -> None:
     )
 
 
-def test_scheduler_backup_treats_completed_idempotent_retry_as_successful_noop() -> None:
-    """A completed same-day invocation is healthy, but must not trigger GC.
+def test_scheduler_backup_retries_upload_after_completed_idempotent_snapshot() -> None:
+    """A completed same-day invocation repairs upload but must not trigger GC.
 
     ``backup_db.py`` emits a stable ``already_done`` JSON receipt and exits
-    zero when run accounting deduplicates a completed backup.  Task Scheduler
-    retries must preserve that success without pretending a new snapshot was
-    created or authorizing destructive file retention.
+    zero when run accounting deduplicates a completed backup. Task Scheduler
+    retries must locate the prior encrypted receipt and retry Drive publication
+    without pretending a new snapshot was created or authorizing file GC.
     """
     text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace").lower()
 
     backup_index = text.index("cron\\backup_db.py")
     already_done_index = text.index("already_done")
-    receipt_index = text.index("ok backup ->")
+    recovery_index = text.index("\n:find_existing_receipt")
+    receipt_index = text.index("ok backup ->", recovery_index)
+    upload_index = text.index("\n:upload")
     gc_index = text.index("execution\\backup_file_gc.py")
-    assert backup_index < already_done_index < receipt_index < gc_index
-    assert "if not errorlevel 1 goto done" in text[already_done_index:receipt_index]
+    assert (
+        backup_index < already_done_index < recovery_index < receipt_index < upload_index < gc_index
+    )
+    assert (
+        "if not errorlevel 1 goto find_existing_receipt" in text[already_done_index:recovery_index]
+    )
+    assert "if not defined allow_file_gc goto done" in text[upload_index:gc_index]

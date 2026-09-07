@@ -27,6 +27,7 @@ from log_redact import redact
 FOLDER_MIME = "application/vnd.google-apps.folder"
 BACKUP_OWNER = "earnings-summary-headless-backup"
 DEFAULT_ROOT_FOLDER = "Windows headless backups"
+UPLOAD_CHUNK_RETRIES = 5
 
 
 def _quoted(value: str) -> str:
@@ -39,7 +40,7 @@ def _children(drive: Any, parent_id: str) -> list[dict[str, Any]]:
         .list(
             q=f"'{_quoted(parent_id)}' in parents and trashed = false",
             spaces="drive",
-            fields="files(id,name,mimeType,size,appProperties)",
+            fields="files(id,name,mimeType,size,md5Checksum,appProperties)",
             pageSize=1000,
         )
         .execute()
@@ -86,10 +87,22 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _md5(path: Path) -> str:
+    # Drive exposes md5Checksum for ordinary binary files.  SHA-256 remains the
+    # app-owned identity marker, while MD5 is used only as an independent
+    # transport-integrity receipt for the bytes Drive actually stored.
+    digest = hashlib.md5(usedforsecurity=False)
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def upload_file(drive: Any, folder_id: str, path: Path, *, backup_set: str) -> str:
     if not path.is_file():
         raise FileNotFoundError(path)
     checksum = _sha256(path)
+    transport_checksum = _md5(path)
     size = path.stat().st_size
     visible = [item for item in _children(drive, folder_id) if item.get("name") == path.name]
     if len(visible) > 1:
@@ -107,7 +120,11 @@ def upload_file(drive: Any, folder_id: str, path: Path, *, backup_set: str) -> s
             remote_properties = {
                 str(key): value for key, value in cast(dict[object, object], raw_properties).items()
             }
-        if remote_properties.get("sha256") == checksum and int(remote.get("size", -1)) == size:
+        if (
+            remote_properties.get("sha256") == checksum
+            and int(remote.get("size", -1)) == size
+            and remote.get("md5Checksum") == transport_checksum
+        ):
             return "unchanged"
 
     media = media_file_upload(path, resumable=True, chunksize=8 * 1024 * 1024)
@@ -116,22 +133,28 @@ def upload_file(drive: Any, folder_id: str, path: Path, *, backup_set: str) -> s
             fileId=str(visible[0]["id"]),
             body={"appProperties": properties},
             media_body=media,
-            fields="id,name,size,appProperties",
+            fields="id,name,size,md5Checksum,appProperties",
         )
         outcome = "updated"
     else:
         request = drive.files().create(
             body={"name": path.name, "parents": [folder_id], "appProperties": properties},
             media_body=media,
-            fields="id,name,size,appProperties",
+            fields="id,name,size,md5Checksum,appProperties",
         )
         outcome = "created"
 
     response = None
     while response is None:
-        _, response = request.next_chunk()
+        # googleapiclient applies randomized exponential backoff for resumable
+        # chunk failures when num_retries is non-zero.  This matters most for
+        # the multi-gigabyte weekly scratch archive: one transient 5xx or
+        # connection reset must not discard hours of completed transfer.
+        _, response = request.next_chunk(num_retries=UPLOAD_CHUNK_RETRIES)
     if int(response.get("size", -1)) != size:
         raise RuntimeError(f"Drive size verification failed for {path.name}")
+    if response.get("md5Checksum") != transport_checksum:
+        raise RuntimeError(f"Drive content checksum verification failed for {path.name}")
     if (response.get("appProperties") or {}).get("sha256") != checksum:
         raise RuntimeError(f"Drive checksum receipt missing for {path.name}")
     return outcome
