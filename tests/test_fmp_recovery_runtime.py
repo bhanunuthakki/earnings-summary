@@ -56,7 +56,7 @@ from provenance.financial_fact_resolution import (
 )
 
 REVISION = "0008_add_fmp_recovery"
-ACTIVE_REVISION = "0037_commitment_scan_segment_coverage"
+ACTIVE_REVISION = "0038_add_kpi_definition_revisions"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
 CONTENT = "c" * 64
 

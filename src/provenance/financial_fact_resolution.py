@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -235,7 +236,7 @@ def rehydrate_document_fact_observations(
         content_sha256=content_sha256,
         inserted_count=0,
     )
-    rows = conn.execute(
+    rows = conn.execute(  # nosec B608 -- generated concept placeholders contain no caller SQL; values stay bound
         DOCUMENT_FACT_REHYDRATION_SQL,
         (document_id, document_id),
     ).fetchall()
@@ -292,6 +293,10 @@ class CanonicalFactRelation:
 
     def __str__(self) -> str:
         return self.sql
+
+
+class HistoricalFactAuthorityUnavailableError(RuntimeError):
+    """The immutable fact-resolution ledger cannot answer an as-known read."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +381,153 @@ def canonical_fact_relation(
         extra={"fact_table": fact_table, "selection_mode": relation.selection_mode},
     )
     return relation
+
+
+def canonical_fact_row_ids_as_known(
+    conn: sqlite3.Connection,
+    *,
+    fact_table: FactTable,
+    effective_at: datetime,
+    known_at: datetime,
+    concept_keys: Sequence[str] = (),
+) -> tuple[int, ...]:
+    """Return exact fact rows selected by the latest resolution known at a cutoff.
+
+    The current resolved views intentionally have no time parameter. Historical
+    consumers must instead select from the immutable resolution ledger and its
+    exact observation link. A partial or pre-cutover schema cannot reconstruct
+    that past state and therefore fails explicitly rather than reading current
+    truth as if it were historical.
+    """
+
+    if fact_table not in _TABLES:
+        raise ValueError(f"unsupported fact table: {fact_table}")
+    required_columns = {
+        "fact_observation_revisions": {
+            "fact_table",
+            "fact_row_id",
+            "fact_revision",
+            "observation_id",
+            "logical_key",
+            "source_document_id",
+            "locator_json",
+            "captured_at",
+        },
+        "fact_resolution_outcomes": {
+            "resolution_id",
+            "resolution_status",
+            "recorded_at",
+        },
+        "observation_resolution_revisions": {
+            "resolution_id",
+            "logical_key",
+            "revision",
+            "selected_observation_id",
+            "knowledge_cutoff",
+            "effective_at",
+            "recorded_at",
+        },
+        "reported_observations": {
+            "observation_id",
+            "ticker",
+            "concept_key",
+            "period_end",
+            "fiscal_period_type",
+            "numeric_value",
+            "currency",
+            "unit",
+            "available_at",
+            "recorded_at",
+        },
+    }
+    if any(
+        not _object_exists(conn, table, object_type="table")
+        or not columns.issubset(
+            {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}  # nosec B608
+        )
+        for table, columns in required_columns.items()
+    ):
+        raise HistoricalFactAuthorityUnavailableError(
+            "immutable fact-resolution history is unavailable"
+        )
+    if known_at.tzinfo is None or effective_at.tzinfo is None:
+        raise ValueError("fact-resolution cutoffs must be timezone-aware")
+    cutoff = known_at.isoformat()
+    effective_cutoff = effective_at.isoformat()
+    parameters: dict[str, object] = {
+        "fact_table": fact_table,
+        "cutoff": cutoff,
+        "effective_cutoff": effective_cutoff,
+    }
+    concept_predicate = ""
+    if concept_keys:
+        concept_names: list[str] = []
+        for index, concept_key in enumerate(concept_keys):
+            name = f"concept_key_{index}"
+            concept_names.append(f":{name}")
+            parameters[name] = concept_key
+        concept_predicate = f"AND observation.concept_key IN ({','.join(concept_names)}) "
+    rows = conn.execute(
+        "SELECT resolution.logical_key,resolution.revision,outcome.resolution_status,"  # nosec B608 -- only generated named placeholders are interpolated; values stay bound
+        "link.fact_row_id,link.fact_revision,link.source_document_id,link.locator_json,"
+        "link.captured_at,observation.ticker,observation.concept_key,"
+        "observation.period_end,observation.fiscal_period_type,"
+        "observation.numeric_value,observation.currency,observation.unit "
+        "FROM observation_resolution_revisions resolution "
+        "JOIN fact_resolution_outcomes outcome "
+        "ON outcome.resolution_id=resolution.resolution_id "
+        "JOIN fact_observation_revisions link "
+        "ON link.observation_id=resolution.selected_observation_id "
+        "JOIN reported_observations observation "
+        "ON observation.observation_id=resolution.selected_observation_id "
+        "WHERE link.fact_table=:fact_table "
+        + concept_predicate
+        + "AND datetime(observation.period_end)<=datetime(:effective_cutoff) "
+        "AND datetime(resolution.knowledge_cutoff)<=datetime(:cutoff) "
+        "AND datetime(resolution.effective_at)<=datetime(:cutoff) "
+        "AND datetime(resolution.recorded_at)<=datetime(:cutoff) "
+        "AND datetime(outcome.recorded_at)<=datetime(:cutoff) "
+        "AND datetime(link.captured_at)<=datetime(:cutoff) "
+        "AND datetime(observation.available_at)<=datetime(:cutoff) "
+        "AND datetime(observation.recorded_at)<=datetime(:cutoff) "
+        "ORDER BY resolution.logical_key,resolution.revision",
+        parameters,
+    ).fetchall()
+    latest_by_key: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        if not isinstance(row, sqlite3.Row):
+            raise HistoricalFactAuthorityUnavailableError(
+                "fact-resolution history requires sqlite3.Row"
+            )
+        latest_by_key[str(row["logical_key"])] = row
+    fact_ids: list[int] = []
+    for row in latest_by_key.values():
+        if str(row["resolution_status"]) != "resolved":
+            continue
+        fact_row_id = int(row["fact_row_id"])
+        fact = _fact_row(conn, fact_table, fact_row_id)
+        immutable_matches = (
+            str(row["ticker"]).upper() == str(fact["ticker"]).upper()
+            and str(row["concept_key"]) == _concept_key(fact_table, fact)
+            and _datetime(row["period_end"], field="observation period_end")
+            == _datetime(fact["period_end"], field="fact period_end")
+            and str(row["fiscal_period_type"])
+            == _observation_period_type(str(fact["fiscal_period_type"]))
+            and _canonical_decimal(row["numeric_value"]) == _canonical_decimal(fact["value"])
+            and str(row["unit"]) == str(fact["unit"])
+            and int(row["source_document_id"]) == int(fact["source_doc_id"])
+            and _optional_text(row["locator_json"]) == _optional_text(fact["locator"])
+            and (
+                fact_table == "kpi_facts"
+                or _optional_text(row["currency"]) == _optional_text(fact["currency"])
+            )
+        )
+        if not immutable_matches:
+            raise HistoricalFactAuthorityUnavailableError(
+                "selected immutable observation differs from its mutable compatibility row"
+            )
+        fact_ids.append(fact_row_id)
+    return tuple(sorted(fact_ids))
 
 
 def execute_fact_cutover(

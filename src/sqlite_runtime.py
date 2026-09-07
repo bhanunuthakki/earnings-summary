@@ -139,6 +139,7 @@ def connect_sqlite(
         conn = sqlite3.connect(resolved, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
 
     try:
+        register_sqlite_integrity_functions(conn)
         _register_scope_identity_function(conn)
         _register_transcript_receipt_function(conn, database_path=resolved)
         _apply_connection_policy(conn)
@@ -153,6 +154,22 @@ def connect_sqlite(
         conn.close()
         raise
     return conn
+
+
+def register_sqlite_integrity_functions(conn: sqlite3.Connection) -> None:
+    """Install shared deterministic functions used by schema integrity guards."""
+
+    from provenance.source_fact_publication import digest_text
+
+    def fact_sha256(value: object) -> str:
+        return digest_text(str(value))
+
+    conn.create_function(
+        "fact_sha256",
+        1,
+        fact_sha256,
+        deterministic=True,
+    )
 
 
 def _register_scope_identity_function(conn: sqlite3.Connection) -> None:
