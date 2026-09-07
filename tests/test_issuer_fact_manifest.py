@@ -944,6 +944,95 @@ def _reseal_v2(
     )
 
 
+def test_v2_rejects_far_future_review_authority_before_database_access(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = migrated_db(tmp_path / "v2-future-review.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    register_sqlite_integrity_functions(conn)
+    try:
+        _document(conn)
+        manifest = _v2_manifest(_seed_v2_authority(conn))
+        conn.commit()
+        original = manifest.reviewed_kpi_definition_captures[0]
+        future_capture = ReviewedKpiDefinitionCapture.model_validate(
+            {
+                **original.model_dump(mode="json"),
+                "knowledge_at": "2099-01-01T00:00:00Z",
+            }
+        )
+        future_manifest = _reseal_v2(manifest, (future_capture,))
+        import pipeline.issuer_fact_manifest as issuer_manifest_module
+        import pipeline.kpi_source_review as source_review
+        import pipeline.restatement_detector as restatement_detector
+
+        monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+        monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+
+        def fail_database_validation(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("future review reached database validation")
+
+        monkeypatch.setattr(
+            issuer_manifest_module,
+            "validate_issuer_fact_manifest_against_sqlite",
+            fail_database_validation,
+        )
+
+        with pytest.raises(ValueError, match="review knowledge_at is from the future"):
+            apply_issuer_fact_manifest(conn, future_manifest, apply=True)
+
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("relation_knowledge_at", "relation_recorded_at"),
+    [
+        (
+            datetime(2026, 8, 6, tzinfo=UTC),
+            datetime(2026, 8, 6, tzinfo=UTC),
+        ),
+        (
+            datetime(2026, 8, 5, tzinfo=UTC),
+            datetime(2026, 8, 6, tzinfo=UTC),
+        ),
+    ],
+)
+def test_v2_relation_clocks_cannot_exceed_the_enclosing_review_capture(
+    relation_knowledge_at: datetime,
+    relation_recorded_at: datetime,
+) -> None:
+    manifest = _v2_manifest(EvidenceLocator(slide_number=3))
+    original = manifest.reviewed_kpi_definition_captures[0]
+    relation = KpiDefinitionComparabilityRevision(
+        comparability_revision_id="relation-future-of-capture",
+        idempotency_key="relation:future-of-capture",
+        predecessor_definition_revision_id="definition-prior-r1",
+        successor_definition_revision_id=original.definition_revision.kpi_definition_revision_id,
+        revision=1,
+        relation_kind=KpiDefinitionRelationKind.RENAMED,
+        disposition=KpiDefinitionComparabilityDisposition.CONTINUOUS,
+        reason_code="issuer_disclosed_rename",
+        reviewed_by=original.reviewer,
+        source_document_version_id=original.evidence_document_version_id,
+        source_evidence_node_id=original.evidence_node_id,
+        source_locator=original.definition_revision.source_locator,
+        effective_at=datetime(2026, 6, 30, tzinfo=UTC),
+        knowledge_at=relation_knowledge_at,
+        recorded_at=relation_recorded_at,
+    )
+
+    with pytest.raises(ValueError, match="comparability revision is not bound"):
+        ReviewedKpiDefinitionCapture.model_validate(
+            {
+                **original.model_dump(mode="json"),
+                "comparability_revisions": [relation.model_dump(mode="json")],
+            }
+        )
+
+
 def test_v1_canonical_hash_and_null_definition_binding_are_frozen(
     migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1070,6 +1159,43 @@ def test_v1_replay_cannot_downgrade_a_reviewed_same_document_binding(
         assert {
             table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in before
         } == before
+    finally:
+        conn.close()
+
+
+def test_v1_replay_rejects_reviewed_document_population_after_root_display_rename(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = migrated_db(tmp_path / "v1-cannot-bypass-binding-with-root-rename.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    register_sqlite_integrity_functions(conn)
+    try:
+        _document(conn)
+        reviewed_manifest = _v2_manifest(_seed_v2_authority(conn))
+        conn.commit()
+        import pipeline.kpi_source_review as source_review
+        import pipeline.restatement_detector as restatement_detector
+
+        monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+        monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        apply_issuer_fact_manifest(conn, reviewed_manifest, apply=True)
+        conn.execute("UPDATE kpi_definitions SET name='Renamed registry display' WHERE id=6401")
+        conn.commit()
+        definition_count = conn.execute("SELECT COUNT(*) FROM kpi_definitions").fetchone()[0]
+
+        with pytest.raises(ValueError, match="v1 cannot attest"):
+            apply_issuer_fact_manifest(conn, _manifest(), apply=True)
+
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT COUNT(*) FROM kpi_definitions").fetchone()[0] == definition_count
+        )
+        semantic = conn.execute(
+            "SELECT kpi_definition_revision_id FROM kpi_fact_semantic_contexts "
+            "WHERE supersedes_context_id IS NULL"
+        ).fetchall()
+        assert [row[0] for row in semantic] == ["definition-meli-tpv-r1"]
     finally:
         conn.close()
 

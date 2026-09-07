@@ -72,6 +72,7 @@ from pipeline.segment_junction_writer import write_segment_facts_junction
 from provenance.evidence_ledger import EvidenceLocator
 
 MAX_EXTRACTED_AT_FUTURE_SKEW = timedelta(minutes=5)
+MAX_REVIEW_KNOWLEDGE_AT_FUTURE_SKEW = timedelta(minutes=5)
 _APPLY_SAVEPOINT = "apply_issuer_fact_manifest"
 
 
@@ -202,6 +203,11 @@ class ReviewedKpiDefinitionCapture(BaseModel):
                 raise ValueError("comparability evidence does not match the reviewed capture")
             if relation.reviewed_by != self.reviewer:
                 raise ValueError("comparability reviewer does not match reviewed capture")
+            if (
+                relation.knowledge_at > self.knowledge_at
+                or relation.recorded_at > self.knowledge_at
+            ):
+                raise ValueError("comparability revision is not bound to the reviewed capture")
         return self
 
 
@@ -420,6 +426,25 @@ def parse_issuer_fact_manifest(value: object) -> IssuerFactManifestAny:
     """Parse exactly one supported manifest version without upgrading legacy bytes."""
 
     return _ISSUER_FACT_MANIFEST_ADAPTER.validate_python(value)
+
+
+def validate_issuer_fact_manifest_knowledge_time(
+    manifest: IssuerFactManifestAny,
+    *,
+    now: datetime,
+) -> None:
+    """Reject future reviewed authority before it becomes a persistence cutoff."""
+
+    if now.tzinfo is None:
+        raise ValueError("issuer manifest validation clock must be timezone-aware")
+    if not isinstance(manifest, IssuerFactManifestV2):
+        return
+    latest_allowed = now.astimezone(UTC) + MAX_REVIEW_KNOWLEDGE_AT_FUTURE_SKEW
+    if any(
+        capture.knowledge_at.astimezone(UTC) > latest_allowed
+        for capture in manifest.reviewed_kpi_definition_captures
+    ):
+        raise ValueError("review knowledge_at is from the future")
 
 
 class IssuerManifestApplyResult(BaseModel):
@@ -661,6 +686,23 @@ def _assert_reviewed_capture_against_sqlite(
 def _assert_kpi_replays_compatible(
     conn: sqlite3.Connection, manifest: IssuerFactManifestAny
 ) -> None:
+    if isinstance(manifest, IssuerFactManifest):
+        reviewed_rows = conn.execute(
+            "SELECT id FROM kpi_facts WHERE ticker=? AND source_doc_id=? "
+            "AND date(period_end)=? AND fiscal_period_type=?",
+            (
+                manifest.ticker.upper(),
+                manifest.source_doc_id,
+                manifest.period_end.isoformat(),
+                manifest.fiscal_period_type.value,
+            ),
+        ).fetchall()
+        for reviewed_row in reviewed_rows:
+            semantic = current_kpi_semantic_context(conn, kpi_fact_id=int(reviewed_row["id"]))
+            if semantic is not None and semantic.kpi_definition_revision_id is not None:
+                raise ValueError(
+                    "issuer_fact_manifest.v1 cannot attest an existing reviewed definition binding"
+                )
     rows = conn.execute(
         _ISSUER_MANIFEST_KPI_REPLAY_SQL,
         (
@@ -817,6 +859,7 @@ def validate_issuer_fact_manifest_against_sqlite(
     cannot claim semantics different from the canonical SQLite rows.
     """
     manifest = parse_issuer_fact_manifest(manifest.model_dump(mode="json"))
+    validate_issuer_fact_manifest_knowledge_time(manifest, now=datetime.now(UTC))
     _source_document(conn, manifest)
     _assert_kpi_replays_compatible(conn, manifest)
     _assert_segment_replays_compatible(conn, manifest)
@@ -956,6 +999,7 @@ def apply_issuer_fact_manifest(
     # ``model_copy(update=...)``.  Re-parse at the public boundary so dry-run
     # and apply enforce the same closed schema.
     manifest = parse_issuer_fact_manifest(manifest.model_dump(mode="json", warnings=False))
+    validate_issuer_fact_manifest_knowledge_time(manifest, now=datetime.now(UTC))
     validate_issuer_fact_manifest_against_sqlite(conn, manifest)
     if not apply:
         return IssuerManifestApplyResult(applied=False, manifest_sha256=manifest.manifest_sha256)
