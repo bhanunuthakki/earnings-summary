@@ -100,6 +100,7 @@
     "execution/cleanup_condition_alerts.py",
     "execution/cleanup_material_news_alerts.py",
     "execution/collect_approved_ir_observations.py",
+    "execution/collect_evidence_bundle.py",
     "execution/collect_operations_runtime_observations.py",
     "execution/comments_server.py",
     "execution/compare_backends.py",

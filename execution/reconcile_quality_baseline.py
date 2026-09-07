@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -14,13 +15,17 @@ from quality.atomic_write import write_text_atomic  # noqa: E402
 from quality.roadmap_reconciliation import (  # noqa: E402
     ROADMAP_CANDIDATES,
     SOURCE_PATHS,
+    StagedManifestError,
     reconcile,
+    reconcile_staged_subject,
 )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--repo-root", "--root", dest="repo_root", type=Path, default=Path.cwd())
+    p.add_argument("--repo-root", "--root", dest="repo_root", type=Path, default=None)
+    p.add_argument("--subject-root", type=Path, default=None)
+    p.add_argument("--staged-manifest", type=Path, default=None)
     p.add_argument("--output", type=Path, default=None)
     return p.parse_args(argv)
 
@@ -46,10 +51,112 @@ def _output_is_protected(output: Path, root: Path) -> bool:
     return False
 
 
+def _staged_resolved_for_alias(manifest: Path) -> list[Path]:
+    try:
+        raw = manifest.read_bytes()
+    except OSError:
+        return []
+    try:
+        payload: object = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    payload_dict = cast(dict[object, object], payload)
+    try:
+        base = manifest.parent.resolve()
+    except OSError:
+        return []
+    out: list[Path] = []
+    for value in payload_dict.values():
+        if not isinstance(value, dict):
+            continue
+        value_dict = cast(dict[object, object], value)
+        rel = value_dict.get("path")
+        if not isinstance(rel, str) or not rel or len(rel) > 300:
+            continue
+        candidate = Path(rel)
+        if candidate.is_absolute():
+            continue
+        if ".." in candidate.parts:
+            continue
+        try:
+            out.append((base / candidate).resolve())
+        except OSError:
+            continue
+    return out
+
+
+def _output_is_protected_staged(output: Path, subject: Path, manifest: Path) -> bool:
+    try:
+        resolved_output = output.resolve()
+    except OSError:
+        return True
+    try:
+        if manifest.resolve() == resolved_output:
+            return True
+    except OSError:
+        pass
+    try:
+        if manifest.samefile(output):
+            return True
+    except OSError:
+        pass
+    for staged in _staged_resolved_for_alias(manifest):
+        if staged == resolved_output:
+            return True
+        try:
+            if staged.samefile(output):
+                return True
+        except OSError:
+            continue
+    return _output_is_protected(output, subject)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        root = args.repo_root.resolve()
+        staged_mode = args.staged_manifest is not None or args.subject_root is not None
+        if staged_mode:
+            if args.staged_manifest is None or args.subject_root is None:
+                sys.stderr.write(
+                    json.dumps({"error": "staged_mode_requires_subject_and_manifest"}) + "\n"
+                )
+                return 1
+            if args.repo_root is not None:
+                sys.stderr.write(json.dumps({"error": "mutually_exclusive_roots"}) + "\n")
+                return 1
+            try:
+                subject = args.subject_root.resolve()
+            except OSError as exc:
+                sys.stderr.write(json.dumps({"error": type(exc).__name__}) + "\n")
+                return 1
+            if not subject.is_dir():
+                sys.stderr.write(json.dumps({"error": "repo_root_missing"}) + "\n")
+                return 1
+            manifest: Path = args.staged_manifest
+            if args.output is not None and _output_is_protected_staged(
+                args.output, subject, manifest
+            ):
+                sys.stderr.write(json.dumps({"error": "output_aliases_protected_input"}) + "\n")
+                return 1
+            try:
+                result = reconcile_staged_subject(subject, manifest)
+            except StagedManifestError:
+                sys.stderr.write(json.dumps({"error": "staged_manifest_invalid"}) + "\n")
+                return 1
+            payload = result.model_dump_json(indent=2) + "\n"
+            if args.output is not None:
+                try:
+                    write_text_atomic(args.output, payload)
+                except OSError as exc:
+                    sys.stderr.write(json.dumps({"error": type(exc).__name__}) + "\n")
+                    return 1
+            else:
+                sys.stdout.write(payload)
+            return 0 if result.status == "PASS" else 2
+        root_arg: Path | None = args.repo_root
+        root = (root_arg if root_arg is not None else Path.cwd()).resolve()
         if not root.is_dir():
             sys.stderr.write(json.dumps({"error": "repo_root_missing"}) + "\n")
             return 1

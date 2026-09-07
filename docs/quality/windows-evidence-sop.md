@@ -14,6 +14,7 @@ a database, and never inspects checkout data beyond tracked source bytes.
    lowercase hex 40/64), repository path, and command version first.
 2. Confirm a clean relevant tree: `tests`, `instruction_tests`, and the
    scanner closure (`src/quality/test_db_patterns.py`,
+   `src/quality/test_db_invocations.py`, `src/quality/test_db_models.py`,
    `src/quality/git_env.py`, `execution/audit_test_db_patterns.py`). Any
    relevant dirty path or Git uncertainty is HOLD; stop and escalate.
 3. Run the source-only audit and keep its JSON receipt with provenance:
@@ -33,6 +34,12 @@ a database, and never inspects checkout data beyond tracked source bytes.
 - `admission_status` is always HOLD with
   `disposition_and_ratchet_deferred`. A HOLD, missing receipt, or uncertain
   provenance is not a pass; escalate to the repository owner.
+- An accepted raw HOLD (for example a declared exit 2 semantic HOLD) describes collection only and never implies admission.
+  It is typed-valid collection evidence, not score admission or
+  conversion authority.
 
 Receipt template: approver, capture_date_utc, scoped_commit, scanner_sha256,
 source_sha256, receipt_command.
+Persisted producer argv, including the concrete interpreter used, is execution
+provenance and not a cross-host replay command; the output-file
+declaration/path contract is portable.

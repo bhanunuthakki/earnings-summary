@@ -23,6 +23,9 @@ from quality.test_db_patterns import audit_test_db_patterns
 _RunGit = Callable[[Path, tuple[str, ...]], bytes]
 
 
+_ALEMBIC_UPGRADE_CANONICAL = "alembic.command." + "upgrade"
+
+
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         ["git", "-C", str(root), *args],
@@ -53,6 +56,8 @@ def _closure(root: Path) -> None:
         "src/quality/test_db_patterns.py",
         "src/quality/git_env.py",
         "execution/audit_test_db_patterns.py",
+        "src/quality/test_db_invocations.py",
+        "src/quality/test_db_models.py",
     ):
         src = Path(__file__).resolve().parents[1] / name
         dst = root / name
@@ -89,6 +94,34 @@ def test_git_env_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     root = _repo(tmp_path / "iso", {"tests/test_a.py": "x = 1\n"})
     rep = audit_test_db_patterns(root)
     assert rep.collection_status == "COMPLETE"
+
+
+def test_expires_naive_rejected_and_aware_preserved() -> None:
+    from quality.test_db_invocations import normalize_conversions
+
+    template: dict[str, object] = {
+        "invocation_id": "abc",
+        "path": "tests/test_c.py",
+        "locator": {"start_line": 1, "start_col": 0, "end_line": 1, "end_col": 5},
+        "source_sha256": "a" * 64,
+        "parity_receipt": ".tmp/quality/parity-001.json",
+        "owner_issue": "BHA-147",
+        "reason": "retain-with-parity",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+    }
+    items, malformed = normalize_conversions([dict(template)])
+    assert not malformed
+    assert items[0].expires_at.tzinfo is not None
+    zulu = dict(template)
+    zulu["expires_at"] = "2099-01-01T00:00:00Z"
+    zulu_items, zulu_malformed = normalize_conversions([zulu])
+    assert not zulu_malformed
+    assert zulu_items[0].expires_at.tzinfo is not None
+    naive = dict(template)
+    naive["expires_at"] = "2099-01-01T00:00:00"
+    naive_items, naive_malformed = normalize_conversions([naive])
+    assert naive_malformed
+    assert naive_items == ()
 
 
 def test_tracked_nested_untracked_ignored(tmp_path: Path) -> None:
@@ -246,6 +279,8 @@ def test_closure_git_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         "--",
         "execution/audit_test_db_patterns.py",
         "src/quality/git_env.py",
+        "src/quality/test_db_invocations.py",
+        "src/quality/test_db_models.py",
         "src/quality/test_db_patterns.py",
     )
     cases = (
@@ -253,19 +288,24 @@ def test_closure_git_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
             "duplicate",
             b"execution/audit_test_db_patterns.py\x00"
             b"execution/audit_test_db_patterns.py\x00"
-            b"src/quality/git_env.py\x00src/quality/test_db_patterns.py\x00",
+            b"src/quality/git_env.py\x00"
+            b"src/quality/test_db_invocations.py\x00"
+            b"src/quality/test_db_models.py\x00src/quality/test_db_patterns.py\x00",
             "duplicate-path",
         ),
         (
             "missing",
-            b"src/quality/git_env.py\x00src/quality/test_db_patterns.py\x00",
+            b"src/quality/git_env.py\x00"
+            b"src/quality/test_db_invocations.py\x00"
+            b"src/quality/test_db_models.py\x00src/quality/test_db_patterns.py\x00",
             "closure-untracked",
         ),
         (
             "noncanonical",
             b"./src/quality/git_env.py\x00"
             b"execution/audit_test_db_patterns.py\x00"
-            b"src/quality/test_db_patterns.py\x00",
+            b"src/quality/test_db_invocations.py\x00"
+            b"src/quality/test_db_models.py\x00src/quality/test_db_patterns.py\x00",
             "invalid-path",
         ),
     )
@@ -285,6 +325,12 @@ def test_dirty_states(tmp_path: Path) -> None:
     rep = audit_test_db_patterns(root2)
     assert rep.collection_note == "dirty-tree"
     assert rep.violations == ("dirty-tree",)
+    root3 = _repo(tmp_path / "f3", {"tests/test_a.py": "x = 1\n"})
+    (root3 / "src/quality/test_db_invocations.py").write_text("# dirty\n", encoding="utf-8")
+    assert audit_test_db_patterns(root3).collection_note == "dirty-tree"
+    root4 = _repo(tmp_path / "f4", {"tests/test_a.py": "x = 1\n"})
+    (root4 / "src/quality/test_db_models.py").write_text("# dirty\n", encoding="utf-8")
+    assert audit_test_db_patterns(root4).collection_note == "dirty-tree"
 
 
 def test_scanner_identity_changes_only_after_committed_helper_change(tmp_path: Path) -> None:
@@ -304,6 +350,24 @@ def test_scanner_identity_changes_only_after_committed_helper_change(tmp_path: P
     assert cross.collection_status == "HOLD"
     assert cross.collection_note == "scanner-closure-mismatch"
     assert cross.violations == ("scanner-closure-mismatch",)
+    for helper_rel in (
+        "src/quality/test_db_invocations.py",
+        "src/quality/test_db_models.py",
+    ):
+        helper_root = _repo(tmp_path / helper_rel.replace("/", "-"), {"tests/test_a.py": "x = 1\n"})
+        helper_target = helper_root / helper_rel
+        helper_target.write_text(
+            helper_target.read_text(encoding="utf-8") + "# committed change\n", encoding="utf-8"
+        )
+        assert audit_test_db_patterns(helper_root).collection_note in (
+            "dirty-tree",
+            "scanner-closure-mismatch",
+        )
+        assert _git(helper_root, "add", helper_rel).returncode == 0
+        assert _git(helper_root, "commit", "-qm", "change helper").returncode == 0
+        helper_cross = audit_test_db_patterns(helper_root)
+        assert helper_cross.collection_status == "HOLD"
+        assert helper_cross.collection_note == "scanner-closure-mismatch"
     proc = subprocess.run(
         [sys.executable, str(root / "execution/audit_test_db_patterns.py"), "--root", str(root)],
         capture_output=True,
@@ -789,12 +853,22 @@ def test_cli_unexpected_audit_exception_is_redacted(
     }
 
 
-def test_closure_unreadable_is_fixed_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "closure_rel",
+    [
+        "src/quality/test_db_invocations.py",
+        "src/quality/test_db_models.py",
+        "src/quality/test_db_patterns.py",
+    ],
+)
+def test_closure_unreadable_is_fixed_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, closure_rel: str
+) -> None:
     root = _repo(tmp_path / "closure-unreadable", {"tests/test_a.py": "x = 1\n"})
     original = Path.read_bytes
 
     def failing_read(self: Path) -> bytes:
-        if self == root / "src/quality/test_db_patterns.py":
+        if self == root / closure_rel:
             raise OSError("SENTINEL_SECRET")
         return original(self)
 
@@ -822,6 +896,8 @@ def test_dirty_status_malformed_output_holds(
         "instruction_tests",
         "execution/audit_test_db_patterns.py",
         "src/quality/git_env.py",
+        "src/quality/test_db_invocations.py",
+        "src/quality/test_db_models.py",
         "src/quality/test_db_patterns.py",
     )
     cases = (
@@ -884,6 +960,8 @@ def test_cli_serialization_failure_is_redacted(
 @pytest.mark.parametrize(
     ("relative_path", "expected_note"),
     [
+        ("src/quality/test_db_invocations.py", "closure-unreadable"),
+        ("src/quality/test_db_models.py", "closure-unreadable"),
         ("src/quality/test_db_patterns.py", "closure-unreadable"),
         ("tests/test_a.py", ""),
     ],
@@ -924,3 +1002,905 @@ def test_post_read_identity_change_fails_closed(
             ),
         )
         assert report.violations == (f"parse_error:{relative_path}:0",)
+
+
+def _invocations_by_path(report: scanner.TestDbAudit) -> dict[str, list[scanner.BuilderInvocation]]:
+    grouped: dict[str, list[scanner.BuilderInvocation]] = {}
+    for invocation in report.builder_invocations:
+        grouped.setdefault(invocation.path, []).append(invocation)
+    return grouped
+
+
+def _write_valid_receipt(
+    root: Path, receipt_ref: str, invocation: scanner.BuilderInvocation
+) -> None:
+    target = root / receipt_ref
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(
+            {
+                "schema_version": "test-db-parity/v1",
+                "status": "PASS",
+                "invocation_id": invocation.invocation_id,
+                "path": invocation.path,
+                "locator": {
+                    "start_line": invocation.locator.start_line,
+                    "start_col": invocation.locator.start_col,
+                    "end_line": invocation.locator.end_line,
+                    "end_col": invocation.locator.end_col,
+                },
+                "source_sha256": invocation.source_sha256,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _conversion_for(
+    invocation: scanner.BuilderInvocation,
+    root: Path | None = None,
+    *,
+    receipt: str = ".tmp/quality/parity-001.json",
+    issue: str = "BHA-147",
+    reason: str = "retain-with-parity",
+    expires: str = "2099-01-01T00:00:00+00:00",
+) -> scanner.InvocationConversion:
+    from datetime import UTC, datetime
+
+    text = expires.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    if root is not None:
+        _write_valid_receipt(root, receipt, invocation)
+    return scanner.InvocationConversion.model_validate(
+        {
+            "invocation_id": invocation.invocation_id,
+            "path": invocation.path,
+            "locator": {
+                "start_line": invocation.locator.start_line,
+                "start_col": invocation.locator.start_col,
+                "end_line": invocation.locator.end_line,
+                "end_col": invocation.locator.end_col,
+            },
+            "source_sha256": invocation.source_sha256,
+            "parity_receipt": receipt,
+            "owner_issue": issue,
+            "reason": reason,
+            "expires_at": parsed,
+        }
+    )
+
+
+def test_invocation_direct_and_alias_identities(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-direct",
+        {
+            "tests/test_direct_upgrade.py": (
+                "from alembic.command import upgrade\ndef make_db(cfg):\n    upgrade(cfg, 'head')\n"
+            ),
+            "tests/test_alias_upgrade.py": (
+                "import alembic.command as ac\ndef make_db(cfg):\n    ac.upgrade(cfg, 'head')\n"
+            ),
+            "tests/test_from_module_alias.py": (
+                "from alembic import command as cmd\n"
+                "def make_db(cfg):\n"
+                "    cmd.stamp(cfg, 'head')\n"
+            ),
+            "tests/test_import_alias_downgrade.py": (
+                "from alembic.command import downgrade as dg\n"
+                "def make_db(cfg):\n"
+                "    dg(cfg, 'base')\n"
+            ),
+            "tests/test_migrated.py": ("def test_x(migrated_db):\n    migrated_db('head')\n"),
+            "tests/test_exec.py": (
+                "def make_db(conn):\n    conn.executescript('CREATE TABLE x (id INTEGER)')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    assert report.collection_status == "COMPLETE"
+    grouped = _invocations_by_path(report)
+    assert grouped["tests/test_direct_upgrade.py"][0].canonical_identity == (
+        _ALEMBIC_UPGRADE_CANONICAL
+    )
+    assert grouped["tests/test_direct_upgrade.py"][0].observed_call == "upgrade"
+    assert grouped["tests/test_alias_upgrade.py"][0].canonical_identity == (
+        _ALEMBIC_UPGRADE_CANONICAL
+    )
+    assert grouped["tests/test_alias_upgrade.py"][0].observed_call == "ac.upgrade"
+    assert grouped["tests/test_from_module_alias.py"][0].canonical_identity == (
+        "alembic.command.stamp"
+    )
+    assert grouped["tests/test_import_alias_downgrade.py"][0].canonical_identity == (
+        "alembic.command.downgrade"
+    )
+    assert grouped["tests/test_migrated.py"][0].canonical_identity == "migrated_db"
+    assert grouped["tests/test_exec.py"][0].canonical_identity == "connection.executescript"
+    for invocation in report.builder_invocations:
+        assert invocation.disposition == "RETAIN"
+        assert invocation.factory is not None
+        assert invocation.source_sha256 is not None
+        assert invocation.locator.start_line >= 1
+        assert invocation.locator.end_line >= invocation.locator.start_line
+
+
+def test_invocation_dynamic_hold_and_unresolved(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-dynamic",
+        {
+            "tests/test_dyn.py": (
+                "import alembic.command as ac\n"
+                "def make_db(cfg):\n"
+                "    getattr(ac, 'upgrade')(cfg, 'head')\n"
+            ),
+            "tests/test_bare.py": ("def make_db(cfg):\n    upgrade(cfg, 'head')\n"),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    grouped = _invocations_by_path(report)
+    assert len(grouped["tests/test_dyn.py"]) >= 1
+    assert all(item.canonical_identity is None for item in grouped["tests/test_dyn.py"])
+    assert all(item.disposition == "HOLD" for item in grouped["tests/test_dyn.py"])
+    assert all(item.taxonomy == "unclassified" for item in grouped["tests/test_dyn.py"])
+    assert grouped["tests/test_bare.py"][0].canonical_identity is None
+    assert grouped["tests/test_bare.py"][0].disposition == "HOLD"
+
+
+def test_invocation_multiple_and_multiline_locators(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-multi",
+        {
+            "tests/test_multi.py": (
+                "from alembic.command import upgrade\n"
+                "def make_db(cfg):\n"
+                "    upgrade(cfg, 'head')\n"
+                "    upgrade(\n"
+                "        cfg,\n"
+                "        'head',\n"
+                "    )\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    items = _invocations_by_path(report)["tests/test_multi.py"]
+    assert len(items) == 2
+    first, second = items
+    assert (first.locator.start_line, first.locator.end_line) == (3, 3)
+    assert second.locator.start_line == 4
+    assert second.locator.end_line == 7
+    assert second.locator.end_col > 0
+    assert first.invocation_id != second.invocation_id
+    assert first.locator != second.locator
+
+
+def test_invocation_fingerprints_match_raw(tmp_path: Path) -> None:
+    import hashlib
+
+    files = {
+        "tests/test_fp.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n",
+    }
+    root = _repo(tmp_path / "inv-fp", files)
+    report = audit_test_db_patterns(root)
+    raw = (root / "tests/test_fp.py").read_bytes()
+    expected = hashlib.sha256(raw).hexdigest()
+    assert len(report.builder_invocations) == 1
+    assert report.builder_invocations[0].source_sha256 == expected
+
+
+def test_invocation_valid_convert(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-convert",
+        {
+            "tests/test_c.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    assert base.builder_invocations[0].disposition == "RETAIN"
+    conversion = _conversion_for(base.builder_invocations[0], root)
+    converted = audit_test_db_patterns(root, (conversion,))
+    assert converted.builder_invocations[0].disposition == "CONVERT"
+    assert converted.raw_audit_status == base.raw_audit_status
+    assert "upgrade(cfg" not in converted.model_dump_json()
+
+
+def test_invocation_convert_missing_expired_stale_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-hold",
+        {
+            "tests/test_h.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    target = base.builder_invocations[0]
+    assert _conversion_for(target, receipt="").invocation_id == target.invocation_id
+    cases = [
+        _conversion_for(target, receipt=""),
+        _conversion_for(target, issue=""),
+        _conversion_for(target, reason=""),
+        _conversion_for(target, expires="2000-01-01T00:00:00+00:00"),
+    ]
+    for conversion in cases:
+        report = audit_test_db_patterns(root, (conversion,))
+        assert report.builder_invocations[0].disposition == "HOLD"
+    stale_locator = _conversion_for(target)
+    stale_locator = stale_locator.model_copy(
+        update={
+            "locator": target.locator.model_copy(update={"start_col": target.locator.start_col + 1})
+        }
+    )
+    assert audit_test_db_patterns(root, (stale_locator,)).builder_invocations[0].disposition == (
+        "HOLD"
+    )
+    stale_sha = _conversion_for(target).model_copy(update={"source_sha256": "0" * 64})
+    assert audit_test_db_patterns(root, (stale_sha,)).builder_invocations[0].disposition == "HOLD"
+    stale_path = _conversion_for(target).model_copy(update={"path": "tests/other.py"})
+    assert audit_test_db_patterns(root, (stale_path,)).builder_invocations[0].disposition == "HOLD"
+
+
+def test_invocation_cli_serialization(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _repo(
+        tmp_path / "inv-cli",
+        {
+            "tests/test_cli.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    assert cli.main(["--root", str(root)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "builder_invocations" in payload
+    assert len(payload["builder_invocations"]) == 1
+    entry = payload["builder_invocations"][0]
+    assert entry["canonical_identity"] == _ALEMBIC_UPGRADE_CANONICAL
+    assert entry["disposition"] == "RETAIN"
+    assert entry["locator"]["start_line"] >= 1
+    assert entry["locator"]["end_line"] >= entry["locator"]["start_line"]
+    assert entry["source_sha256"] is not None
+    assert entry["invocation_id"] is not None
+    assert "upgrade(cfg" not in json.dumps(payload)
+    base = audit_test_db_patterns(root)
+    conversion = _conversion_for(base.builder_invocations[0], root)
+    _write_valid_receipt(root, ".tmp/quality/parity-1.json", base.builder_invocations[0])
+    disp_file = root / "disps.json"
+    disp_file.write_text(
+        json.dumps(
+            [
+                {
+                    "invocation_id": conversion.invocation_id,
+                    "path": conversion.path,
+                    "locator": {
+                        "start_line": conversion.locator.start_line,
+                        "start_col": conversion.locator.start_col,
+                        "end_line": conversion.locator.end_line,
+                        "end_col": conversion.locator.end_col,
+                    },
+                    "source_sha256": conversion.source_sha256,
+                    "parity_receipt": ".tmp/quality/parity-1.json",
+                    "owner_issue": "BHA-147",
+                    "reason": "ok",
+                    "expires_at": "2099-01-01T00:00:00+00:00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert cli.main(["--root", str(root), "--dispositions", str(disp_file)]) == 0
+    payload2 = json.loads(capsys.readouterr().out)
+    assert payload2["builder_invocations"][0]["disposition"] == "CONVERT"
+    naive_payload = json.loads(disp_file.read_text(encoding="utf-8"))
+    naive_payload[0]["expires_at"] = "2099-01-01T00:00:00"
+    disp_file.write_text(json.dumps(naive_payload), encoding="utf-8")
+    assert cli.main(["--root", str(root), "--dispositions", str(disp_file)]) != 0
+
+
+def test_conservative_unresolved_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-conservative",
+        {
+            "tests/test_bare_migrated.py": "def make_db():\n    migrated_db('head')\n",
+            "tests/test_arbitrary_exec.py": "def make_db():\n    obj.executescript('x')\n",
+            "tests/test_arbitrary_create.py": "def make_db():\n    obj.create_all(e)\n",
+            "tests/test_shadow_migrated.py": (
+                "def make_db(migrated_db):\n    migrated_db = 1\n    migrated_db('head')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    grouped = _invocations_by_path(report)
+    assert grouped["tests/test_bare_migrated.py"][0].canonical_identity is None
+    assert grouped["tests/test_bare_migrated.py"][0].disposition == "HOLD"
+    assert grouped["tests/test_arbitrary_exec.py"][0].canonical_identity is None
+    assert grouped["tests/test_arbitrary_exec.py"][0].disposition == "HOLD"
+    assert grouped["tests/test_arbitrary_create.py"][0].canonical_identity is None
+    assert grouped["tests/test_arbitrary_create.py"][0].disposition == "HOLD"
+    assert len(grouped["tests/test_shadow_migrated.py"]) == 1
+
+
+def test_shadowed_import_binding_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-shadow-import",
+        {
+            "tests/test_bare_alembic.py": f"def m(cfg):\n    {_ALEMBIC_UPGRADE_CANONICAL}(cfg, 'h')\n",
+            "tests/test_shadow_module.py": (
+                "import alembic.command as ac\ndef m(cfg):\n    ac = 1\n    ac.upgrade(cfg, 'h')\n"
+            ),
+            "tests/test_shadow_direct.py": (
+                "from alembic.command import upgrade\n"
+                "def m(cfg):\n"
+                "    upgrade = 1\n"
+                "    upgrade(cfg, 'h')\n"
+            ),
+            "tests/test_module_rebind.py": (
+                "import alembic.command as ac\nac = 1\ndef m(cfg):\n    ac.upgrade(cfg, 'h')\n"
+            ),
+            "tests/test_literal_conn.py": "def m():\n    connection.executescript('x')\n",
+            "tests/test_literal_meta.py": "def m():\n    metadata.create_all(e)\n",
+        },
+    )
+    report = audit_test_db_patterns(root)
+    grouped = _invocations_by_path(report)
+    assert grouped["tests/test_bare_alembic.py"][0].canonical_identity is None
+    assert grouped["tests/test_bare_alembic.py"][0].disposition == "HOLD"
+    assert grouped["tests/test_shadow_module.py"][0].canonical_identity is None
+    assert grouped["tests/test_shadow_direct.py"][0].canonical_identity is None
+    assert grouped["tests/test_module_rebind.py"][0].canonical_identity is None
+    assert grouped["tests/test_literal_conn.py"][0].canonical_identity is None
+    assert grouped["tests/test_literal_meta.py"][0].canonical_identity is None
+
+
+def test_dynamic_alias_and_import_chain_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-dyn-full",
+        {
+            "tests/test_alias.py": (
+                "import alembic.command as ac\n"
+                "def m(cfg):\n"
+                "    fn = getattr(ac, 'upgrade')\n"
+                "    fn(cfg, 'h')\n"
+            ),
+            "tests/test_getattr_var.py": (
+                "import alembic.command as ac\ndef m(cfg, name):\n    getattr(ac, name)(cfg, 'h')\n"
+            ),
+            "tests/test_chain.py": (
+                "def m(cfg):\n"
+                "    __import__('alembic.command').upgrade(cfg, 'h')\n"
+                "    import_module('alembic.command').upgrade(cfg, 'h')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    grouped = _invocations_by_path(report)
+    assert any(
+        item.canonical_identity is None and item.disposition == "HOLD"
+        for item in grouped["tests/test_alias.py"]
+    )
+    assert len(grouped["tests/test_alias.py"]) >= 2
+    assert grouped["tests/test_getattr_var.py"][0].canonical_identity is None
+    assert grouped["tests/test_getattr_var.py"][0].disposition == "HOLD"
+    assert len(grouped["tests/test_chain.py"]) == 2
+    assert all(item.disposition == "HOLD" for item in grouped["tests/test_chain.py"])
+    assert all(item.canonical_identity is None for item in grouped["tests/test_chain.py"])
+    assert "upgrade(cfg" not in report.model_dump_json()
+
+
+def test_conversion_canonical_boundary_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-boundary",
+        {
+            "tests/test_c.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    target = base.builder_invocations[0]
+    assert base.builder_invocations[0].disposition == "RETAIN"
+    good = _conversion_for(target, root)
+    assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "CONVERT"
+    bad_cases = [
+        _conversion_for(target, receipt="parity-001"),
+        _conversion_for(target, receipt="evidence/parity.txt"),
+        _conversion_for(target, receipt="/tmp/evil.json"),
+        _conversion_for(target, receipt="../evil.json"),
+        _conversion_for(target, receipt=".tmp/quality/parity idea.json"),
+        _conversion_for(target, issue="bha-147"),
+        _conversion_for(target, issue="BHA147"),
+        _conversion_for(target, issue=" BHA-147"),
+        _conversion_for(target, reason=""),
+        _conversion_for(target, reason=" x "),
+    ]
+    for bad in bad_cases:
+        assert audit_test_db_patterns(root, (bad,)).builder_invocations[0].disposition == "HOLD"
+    naive = good.model_copy(update={"expires_at": good.expires_at.replace(tzinfo=None)})
+    assert audit_test_db_patterns(root, (naive,)).builder_invocations[0].disposition == "HOLD"
+
+
+def test_conversion_malformed_dict_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-malformed",
+        {
+            "tests/test_c.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    target = base.builder_invocations[0]
+    valid_dict = {
+        "invocation_id": target.invocation_id,
+        "path": target.path,
+        "locator": {
+            "start_line": target.locator.start_line,
+            "start_col": target.locator.start_col,
+            "end_line": target.locator.end_line,
+            "end_col": target.locator.end_col,
+        },
+        "source_sha256": target.source_sha256,
+        "parity_receipt": ".tmp/quality/parity-001.json",
+        "owner_issue": "BHA-147",
+        "reason": "retain-with-parity",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+    }
+    _write_valid_receipt(root, ".tmp/quality/parity-001.json", target)
+    converted = audit_test_db_patterns(root, [valid_dict])
+    assert converted.builder_invocations[0].disposition == "CONVERT"
+    malformed = audit_test_db_patterns(root, [{"invocation_id": "x"}])
+    assert malformed.builder_invocations[0].disposition == "HOLD"
+    mixed = audit_test_db_patterns(root, ["not-a-mapping"])
+    assert mixed.builder_invocations[0].disposition == "HOLD"
+
+
+def test_parity_receipt_binding_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-receipt",
+        {
+            "tests/test_c.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    target = base.builder_invocations[0]
+    good = _conversion_for(target, root)
+    assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "CONVERT"
+    receipt_ref = ".tmp/quality/parity-001.json"
+    receipt_path = root / receipt_ref
+    valid_text = receipt_path.read_text(encoding="utf-8")
+    valid_obj = json.loads(valid_text)
+
+    def check(mutated: str | None, convert: scanner.InvocationConversion | None = None) -> None:
+        if mutated is not None:
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(mutated, encoding="utf-8")
+        conv = convert if convert is not None else good
+        assert audit_test_db_patterns(root, (conv,)).builder_invocations[0].disposition == "HOLD"
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(valid_text, encoding="utf-8")
+
+    receipt_path.unlink()
+    assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "HOLD"
+    receipt_path.write_text(valid_text, encoding="utf-8")
+    check("{not-json")
+    check(
+        '{"schema_version": "test-db-parity/v1", "status": "PASS", "invocation_id": "x", "path": "y", "locator": {"start_line": 1, "start_col": 0, "end_line": 1, "end_col": 1}, "source_sha256": "z", "schema_version": "dup"}'
+    )
+    for key, bad in [
+        ("schema_version", "other/v1"),
+        ("status", "FAIL"),
+        ("invocation_id", "0" * 16),
+        ("path", "tests/other.py"),
+        ("source_sha256", "0" * 64),
+    ]:
+        obj = dict(valid_obj)
+        obj[key] = bad
+        check(json.dumps(obj))
+    obj = dict(valid_obj)
+    loc = dict(obj["locator"])
+    loc["start_col"] = loc["start_col"] + 1
+    obj["locator"] = loc
+    check(json.dumps(obj))
+
+
+def test_parity_receipt_filesystem_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-receipt-fs",
+        {
+            "tests/test_c.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    target = base.builder_invocations[0]
+    good = _conversion_for(target, root)
+    assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "CONVERT"
+    receipt_path = root / ".tmp/quality/parity-001.json"
+    valid_text = receipt_path.read_text(encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text(valid_text, encoding="utf-8")
+    receipt_path.unlink()
+    try:
+        os.symlink(str(outside), receipt_path)
+        assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "HOLD"
+    finally:
+        receipt_path.unlink(missing_ok=True)
+    receipt_path.write_text(valid_text, encoding="utf-8")
+    receipt_path.unlink()
+    receipt_path.mkdir(parents=True, exist_ok=True)
+    assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "HOLD"
+    receipt_path.rmdir()
+    receipt_path.write_text(valid_text, encoding="utf-8")
+    try:
+        extra = root / ".tmp/quality/parity-hard.json"
+        extra.write_text(valid_text, encoding="utf-8")
+        try:
+            os.link(extra, root / ".tmp/quality/parity-hard2.json")
+            hard = _conversion_for(target, root, receipt=".tmp/quality/parity-hard2.json")
+            assert (
+                audit_test_db_patterns(root, (hard,)).builder_invocations[0].disposition == "HOLD"
+            )
+        except OSError:
+            pytest.skip("hardlink unsupported")
+    finally:
+        receipt_path.write_text(valid_text, encoding="utf-8")
+
+
+def test_conversion_duplicate_unreferenced_noncanonical_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-convert-gaps",
+        {
+            "tests/test_c.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    target = base.builder_invocations[0]
+    valid = _conversion_for(target)
+    dup = audit_test_db_patterns(root, (valid, valid))
+    assert dup.builder_invocations[0].disposition == "HOLD"
+    unknown = _conversion_for(target).model_copy(update={"invocation_id": "unreferenced-id"})
+    mixed = audit_test_db_patterns(root, (valid, unknown))
+    assert mixed.builder_invocations[0].disposition == "HOLD"
+    assert mixed.builder_invocations[0].canonical_identity is not None
+    for bad in (
+        _conversion_for(target, receipt=" parity-001 "),
+        _conversion_for(target, issue=" BHA-147 "),
+        _conversion_for(target, reason=" retain "),
+    ):
+        assert audit_test_db_patterns(root, (bad,)).builder_invocations[0].disposition == "HOLD"
+
+
+def test_lambda_comprehension_class_direct_shadow_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-scope-shadow",
+        {
+            "tests/test_lambda_shadow.py": (
+                "import alembic.command as ac\nf = lambda ac: ac.upgrade(cfg, 'h')\n"
+            ),
+            "tests/test_comp_shadow.py": (
+                "import alembic.command as ac\n"
+                "def m(modules):\n"
+                "    return [ac.upgrade(x, 'h') for ac in modules]\n"
+            ),
+            "tests/test_class_direct.py": (
+                "import alembic.command as ac\n"
+                "class C:\n"
+                "    ac = object()\n"
+                "    x = ac.upgrade(cfg, 'h')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    assert report.collection_status == "COMPLETE"
+    grouped = _invocations_by_path(report)
+    assert grouped["tests/test_lambda_shadow.py"][0].canonical_identity is None
+    assert grouped["tests/test_lambda_shadow.py"][0].disposition == "HOLD"
+    assert grouped["tests/test_comp_shadow.py"][0].canonical_identity is None
+    assert grouped["tests/test_comp_shadow.py"][0].disposition == "HOLD"
+    assert grouped["tests/test_class_direct.py"][0].canonical_identity is None
+    assert grouped["tests/test_class_direct.py"][0].disposition == "HOLD"
+
+
+def test_class_nested_method_and_ordinary_function_retain(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-scope-retain",
+        {
+            "tests/test_nested_method.py": (
+                "import alembic.command as ac\n"
+                "class C:\n"
+                "    ac = object()\n"
+                "    def m(self, cfg):\n"
+                "        ac.upgrade(cfg, 'h')\n"
+            ),
+            "tests/test_ordinary.py": (
+                "import alembic.command as ac\ndef m(cfg):\n    ac.upgrade(cfg, 'h')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    assert report.collection_status == "COMPLETE"
+    grouped = _invocations_by_path(report)
+    assert grouped["tests/test_nested_method.py"][0].canonical_identity == (
+        _ALEMBIC_UPGRADE_CANONICAL
+    )
+    assert grouped["tests/test_nested_method.py"][0].disposition == "RETAIN"
+    assert grouped["tests/test_ordinary.py"][0].canonical_identity == _ALEMBIC_UPGRADE_CANONICAL
+    assert grouped["tests/test_ordinary.py"][0].disposition == "RETAIN"
+
+
+def test_function_later_binding_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-later",
+        {
+            "tests/test_later_assign_module.py": (
+                "import alembic.command as ac\n"
+                "def m(cfg):\n"
+                "    ac.upgrade(cfg, 'h')\n"
+                "    ac = object()\n"
+            ),
+            "tests/test_later_assign_direct.py": (
+                "from alembic.command import upgrade\n"
+                "def m(cfg):\n"
+                "    upgrade(cfg, 'h')\n"
+                "    upgrade = object()\n"
+            ),
+            "tests/test_later_for.py": (
+                "import alembic.command as ac\n"
+                "def m(cfg):\n"
+                "    ac.upgrade(cfg, 'h')\n"
+                "    for ac in []:\n"
+                "        pass\n"
+            ),
+            "tests/test_later_with.py": (
+                "import alembic.command as ac\n"
+                "def m(cfg):\n"
+                "    ac.upgrade(cfg, 'h')\n"
+                "    with open('x') as ac:\n"
+                "        pass\n"
+            ),
+            "tests/test_legit_retain.py": (
+                "import alembic.command as ac\ndef m(cfg):\n    ac.upgrade(cfg, 'h')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    assert report.collection_status == "COMPLETE"
+    grouped = _invocations_by_path(report)
+    for path in (
+        "tests/test_later_assign_module.py",
+        "tests/test_later_assign_direct.py",
+        "tests/test_later_for.py",
+        "tests/test_later_with.py",
+    ):
+        assert grouped[path][0].canonical_identity is None, path
+        assert grouped[path][0].disposition == "HOLD", path
+    assert grouped["tests/test_legit_retain.py"][0].canonical_identity == (
+        _ALEMBIC_UPGRADE_CANONICAL
+    )
+    assert grouped["tests/test_legit_retain.py"][0].disposition == "RETAIN"
+
+
+def test_factory_subscript_getattr_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-unresolved",
+        {
+            "tests/test_factory.py": "def m():\n    factory().executescript('x')\n",
+            "tests/test_subscript.py": "def m(conns):\n    conns[0].executescript('x')\n",
+            "tests/test_getattr_call.py": (
+                "import alembic.command as command\n"
+                "def m(cfg):\n"
+                "    getattr(command, 'upgrade')(cfg, 'h')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    grouped = _invocations_by_path(report)
+    factory = grouped["tests/test_factory.py"]
+    assert len(factory) == 1
+    assert factory[0].canonical_identity is None
+    assert factory[0].disposition == "HOLD"
+    subscript = grouped["tests/test_subscript.py"]
+    assert len(subscript) == 1
+    assert subscript[0].canonical_identity is None
+    assert subscript[0].disposition == "HOLD"
+    dynamic = grouped["tests/test_getattr_call.py"]
+    assert len(dynamic) == 1
+    assert dynamic[0].canonical_identity is None
+    assert dynamic[0].disposition == "HOLD"
+
+
+def test_simple_transitive_alias_retain(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-alias-retain",
+        {
+            "tests/test_module_simple.py": (
+                "from alembic.command import upgrade\n"
+                "alias = upgrade\n"
+                "def m(cfg):\n"
+                "    alias(cfg, 'h')\n"
+            ),
+            "tests/test_module_chain.py": (
+                "from alembic.command import upgrade\n"
+                "first = upgrade\n"
+                "second = first\n"
+                "def m(cfg):\n"
+                "    second(cfg, 'h')\n"
+            ),
+            "tests/test_local_simple.py": (
+                "from alembic.command import upgrade\n"
+                "def m(cfg):\n"
+                "    alias = upgrade\n"
+                "    alias(cfg, 'h')\n"
+            ),
+            "tests/test_local_chain.py": (
+                "from alembic.command import upgrade\n"
+                "def m(cfg):\n"
+                "    first = upgrade\n"
+                "    second = first\n"
+                "    second(cfg, 'h')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    grouped = _invocations_by_path(report)
+    for path in (
+        "tests/test_module_simple.py",
+        "tests/test_module_chain.py",
+        "tests/test_local_simple.py",
+        "tests/test_local_chain.py",
+    ):
+        items = grouped[path]
+        assert len(items) == 1
+        assert items[0].canonical_identity == _ALEMBIC_UPGRADE_CANONICAL
+        assert items[0].disposition == "RETAIN"
+
+
+def test_alias_conservative_no_false_retain(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-alias-hold",
+        {
+            "tests/test_use_before.py": (
+                "from alembic.command import upgrade\n"
+                "def m(cfg):\n"
+                "    alias(cfg, 'h')\n"
+                "    alias = upgrade\n"
+            ),
+            "tests/test_later_rebind.py": (
+                "from alembic.command import upgrade\n"
+                "def m(cfg):\n"
+                "    alias = upgrade\n"
+                "    alias(cfg, 'h')\n"
+                "    alias = 1\n"
+            ),
+            "tests/test_param_shadow.py": (
+                "from alembic.command import upgrade\n"
+                "alias = upgrade\n"
+                "def m(alias):\n"
+                "    alias(cfg, 'h')\n"
+            ),
+            "tests/test_ambiguous.py": (
+                "from alembic.command import upgrade\n"
+                "from alembic.command import stamp\n"
+                "alias = upgrade\n"
+                "alias = stamp\n"
+                "def m(cfg):\n"
+                "    alias(cfg, 'h')\n"
+            ),
+            "tests/test_unrelated.py": "def m(cfg):\n    ordinary(cfg, 'h')\n",
+            "tests/test_nested_attr.py": (
+                "from alembic.command import upgrade\n"
+                "class C:\n"
+                "    other = upgrade\n"
+                "    def m(self, cfg):\n"
+                "        other(cfg, 'h')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    grouped = _invocations_by_path(report)
+    assert "tests/test_unrelated.py" not in grouped
+    nested = grouped["tests/test_nested_attr.py"]
+    assert len(nested) == 1
+    assert nested[0].canonical_identity is None
+    assert nested[0].disposition == "HOLD"
+    for path in (
+        "tests/test_use_before.py",
+        "tests/test_later_rebind.py",
+        "tests/test_param_shadow.py",
+        "tests/test_ambiguous.py",
+    ):
+        items = grouped[path]
+        assert len(items) == 1
+        assert items[0].canonical_identity is None, path
+        assert items[0].disposition == "HOLD", path
+
+
+def test_parity_receipt_required_fields_hold(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-receipt-required",
+        {
+            "tests/test_c.py": "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg,'h')\n"
+        },
+    )
+    base = audit_test_db_patterns(root)
+    target = base.builder_invocations[0]
+    receipt_ref = ".tmp/quality/parity-001.json"
+    good = _conversion_for(target, root, receipt=receipt_ref)
+    assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "CONVERT"
+    receipt_path = root / receipt_ref
+    valid_text = receipt_path.read_text(encoding="utf-8")
+    valid_obj = json.loads(valid_text)
+    assert valid_obj["schema_version"] == "test-db-parity/v1"
+    assert valid_obj["status"] == "PASS"
+    for key in ("schema_version", "status"):
+        mutated = dict(valid_obj)
+        del mutated[key]
+        receipt_path.write_text(json.dumps(mutated), encoding="utf-8")
+        assert audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "HOLD", (
+            key
+        )
+        receipt_path.write_text(valid_text, encoding="utf-8")
+        assert (
+            audit_test_db_patterns(root, (good,)).builder_invocations[0].disposition == "CONVERT"
+        ), key
+
+
+def test_builder_attribute_alias_retain(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-build-alias",
+        {
+            "tests/test_exec_alias.py": (
+                "def m(conn):\n    build = conn.executescript\n"
+                "    build('CREATE TABLE x (id INTEGER)')\n"
+            ),
+            "tests/test_create_alias.py": (
+                "def m(metadata):\n    build = metadata.create_all\n    build(e)\n"
+            ),
+            "tests/test_migrated_alias.py": (
+                "def m(migrated_db):\n    build = migrated_db\n    build('head')\n"
+            ),
+            "tests/test_two_hop.py": (
+                "def m(conn):\n    tmp = conn.executescript\n"
+                "    build = tmp\n"
+                "    build('CREATE TABLE x (id INTEGER)')\n"
+            ),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    assert report.collection_status == "COMPLETE"
+    grouped = _invocations_by_path(report)
+    expected = {
+        "tests/test_exec_alias.py": "connection.executescript",
+        "tests/test_create_alias.py": "metadata.create_all",
+        "tests/test_migrated_alias.py": "migrated_db",
+        "tests/test_two_hop.py": "connection.executescript",
+    }
+    for path, canonical in expected.items():
+        items = grouped[path]
+        assert len(items) == 1, path
+        assert items[0].canonical_identity == canonical, path
+        assert items[0].disposition == "RETAIN", path
+
+
+def test_builder_attribute_alias_hold_and_no_row(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path / "inv-build-alias-hold",
+        {
+            "tests/test_use_before.py": (
+                "def m(conn):\n    build('x')\n    build = conn.executescript\n"
+            ),
+            "tests/test_rebind.py": (
+                "def m(conn):\n    build = conn.executescript\n    build('x')\n    build = 1\n"
+            ),
+            "tests/test_competing.py": (
+                "def m(conn, metadata):\n    build = conn.executescript\n"
+                "    build = metadata.create_all\n    build(e)\n"
+            ),
+            "tests/test_unsupported.py": ("def m(client):\n    build = client.call\n    build()\n"),
+        },
+    )
+    report = audit_test_db_patterns(root)
+    assert report.collection_status == "COMPLETE"
+    grouped = _invocations_by_path(report)
+    for path in (
+        "tests/test_use_before.py",
+        "tests/test_rebind.py",
+        "tests/test_competing.py",
+    ):
+        items = grouped[path]
+        assert len(items) == 1, path
+        assert items[0].canonical_identity is None, path
+        assert items[0].disposition == "HOLD", path
+    assert grouped.get("tests/test_unsupported.py", []) == []

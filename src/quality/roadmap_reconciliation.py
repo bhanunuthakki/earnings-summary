@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -101,6 +103,60 @@ VIOLATION_CAP = 20
 VIOLATION_TEXT_CAP = 200
 _HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 _TEST_SUBJECT_COMMIT = "a" * 40
+
+StagedKey = Literal["architecture", "duplicates", "static", "test_db", "reachability", "roadmap"]
+STAGED_KEYS: tuple[StagedKey, ...] = (
+    "architecture",
+    "duplicates",
+    "static",
+    "test_db",
+    "reachability",
+    "roadmap",
+)
+_STAGED_JSON_KEYS: tuple[SourceKey, ...] = (
+    "architecture",
+    "duplicates",
+    "static",
+    "test_db",
+    "reachability",
+)
+
+
+class StagedManifestEntry(Strict):
+    path: str = Field(min_length=1, max_length=300)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class StagedManifestModel(Strict):
+    architecture: StagedManifestEntry
+    duplicates: StagedManifestEntry
+    static: StagedManifestEntry
+    test_db: StagedManifestEntry
+    reachability: StagedManifestEntry
+    roadmap: StagedManifestEntry
+
+
+class StagedManifestError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class _StagedFileSnapshot:
+    resolved: Path
+    data: bytes
+    dev: int
+    ino: int
+
+
+@dataclass(frozen=True)
+class _StagedLoad:
+    staged_root: Path | None
+    entries: dict[StagedKey, StagedManifestEntry]
+    snapshots: dict[StagedKey, _StagedFileSnapshot]
+    manifest_data: bytes | None
+    manifest_dev: int | None
+    manifest_ino: int | None
+    violations: tuple[str, ...]
 
 
 def _is_hex40(value: str | None) -> bool:
@@ -824,11 +880,507 @@ def reconcile(root: Path) -> ReconciliationReceipt:
     )
 
 
+def _lstat_regular(path: Path) -> os.stat_result | None:
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    return st
+
+
+def _staged_commit_of(key: SourceKey, parsed: BaseModel) -> str | None:
+    if key == "architecture" and isinstance(parsed, ArchitectureReceipt):
+        return parsed.scoped_commit
+    if key == "duplicates" and isinstance(parsed, DuplicateInventory):
+        return parsed.commit_hash
+    if key == "static" and isinstance(parsed, StaticQualityInventory):
+        return parsed.scoped_commit
+    if key == "test_db" and isinstance(parsed, TestDbAudit):
+        return parsed.scoped_commit
+    if key == "reachability" and isinstance(parsed, ReachabilityGraph):
+        return parsed.subject_commit
+    return None
+
+
+def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _StagedLoad:
+    violations: list[str] = []
+    entries: dict[StagedKey, StagedManifestEntry] = {}
+    snapshots: dict[StagedKey, _StagedFileSnapshot] = {}
+    manifest_data: bytes | None = None
+    manifest_dev: int | None = None
+    manifest_ino: int | None = None
+    try:
+        manifest_lexical = manifest_path
+        if manifest_lexical.is_symlink():
+            violations.append("staged manifest is invalid")
+            return _StagedLoad(None, entries, snapshots, None, None, None, tuple(violations))
+        manifest_stat = _lstat_regular(manifest_lexical)
+        if manifest_stat is None:
+            violations.append("staged manifest is unavailable")
+            return _StagedLoad(None, entries, snapshots, None, None, None, tuple(violations))
+        try:
+            raw_manifest = manifest_lexical.read_bytes()
+        except OSError:
+            violations.append("staged manifest is unavailable")
+            return _StagedLoad(None, entries, snapshots, None, None, None, tuple(violations))
+        manifest_data = raw_manifest
+        manifest_dev = manifest_stat.st_dev
+        manifest_ino = manifest_stat.st_ino
+    except OSError:
+        violations.append("staged manifest is unavailable")
+        return _StagedLoad(None, entries, snapshots, None, None, None, tuple(violations))
+    try:
+        _validate_unique_json_keys(manifest_data)
+    except (ValueError, UnicodeDecodeError):
+        violations.append("staged manifest has duplicate keys")
+        return _StagedLoad(
+            None, entries, snapshots, manifest_data, manifest_dev, manifest_ino, tuple(violations)
+        )
+    try:
+        model = StagedManifestModel.model_validate_json(manifest_data)
+    except (ValidationError, ValueError, UnicodeDecodeError):
+        violations.append("staged manifest shape is invalid")
+        return _StagedLoad(
+            None, entries, snapshots, manifest_data, manifest_dev, manifest_ino, tuple(violations)
+        )
+    parsed_entries: dict[StagedKey, StagedManifestEntry] = {
+        "architecture": model.architecture,
+        "duplicates": model.duplicates,
+        "static": model.static,
+        "test_db": model.test_db,
+        "reachability": model.reachability,
+        "roadmap": model.roadmap,
+    }
+    entries = parsed_entries
+    try:
+        staged_root = manifest_path.parent.resolve()
+    except OSError:
+        violations.append("staged manifest is invalid")
+        return _StagedLoad(
+            None, entries, snapshots, manifest_data, manifest_dev, manifest_ino, tuple(violations)
+        )
+    if staged_root == subject_resolved:
+        violations.append("staged root overlaps subject")
+        return _StagedLoad(
+            staged_root,
+            entries,
+            snapshots,
+            manifest_data,
+            manifest_dev,
+            manifest_ino,
+            tuple(violations),
+        )
+    try:
+        if staged_root.is_relative_to(subject_resolved) or subject_resolved.is_relative_to(
+            staged_root
+        ):
+            violations.append("staged root overlaps subject")
+            return _StagedLoad(
+                staged_root,
+                entries,
+                snapshots,
+                manifest_data,
+                manifest_dev,
+                manifest_ino,
+                tuple(violations),
+            )
+    except OSError:
+        violations.append("staged manifest is invalid")
+        return _StagedLoad(
+            staged_root,
+            entries,
+            snapshots,
+            manifest_data,
+            manifest_dev,
+            manifest_ino,
+            tuple(violations),
+        )
+    declared_paths = [entries[k].path for k in STAGED_KEYS]
+    if len(set(declared_paths)) != len(declared_paths):
+        violations.append("staged inputs share the same path")
+    for key in STAGED_KEYS:
+        rel = entries[key].path
+        rel_path = Path(rel)
+        if rel_path.is_absolute():
+            violations.append(f"staged input path escapes staged root: {key}")
+            continue
+        if any(part in ("..",) for part in rel_path.parts):
+            violations.append(f"staged input path escapes staged root: {key}")
+            continue
+        lexical = staged_root / rel_path
+        try:
+            if lexical.is_symlink():
+                violations.append(f"staged input is not a regular file: {key}")
+                continue
+            resolved = lexical.resolve()
+        except OSError:
+            violations.append(f"staged input is unavailable: {key}")
+            continue
+        if resolved != lexical:
+            violations.append(f"staged input is not a regular file: {key}")
+            continue
+        try:
+            resolved.relative_to(staged_root)
+        except ValueError:
+            violations.append(f"staged input path escapes staged root: {key}")
+            continue
+        try:
+            if resolved.is_relative_to(subject_resolved):
+                violations.append(f"staged input overlaps subject: {key}")
+                continue
+        except OSError:
+            violations.append(f"staged input is unavailable: {key}")
+            continue
+        st = _lstat_regular(lexical)
+        if st is None:
+            violations.append(f"staged input is not a regular file: {key}")
+            continue
+        try:
+            data = lexical.read_bytes()
+        except OSError:
+            violations.append(f"staged input is unavailable: {key}")
+            continue
+        try:
+            restat = os.lstat(lexical)
+        except OSError:
+            violations.append(f"staged input changed during collection: {key}")
+            continue
+        if (restat.st_dev, restat.st_ino) != (st.st_dev, st.st_ino):
+            violations.append(f"staged input changed during collection: {key}")
+            continue
+        if stat.S_ISLNK(restat.st_mode) or not stat.S_ISREG(restat.st_mode):
+            violations.append(f"staged input is not a regular file: {key}")
+            continue
+        snapshots[key] = _StagedFileSnapshot(
+            resolved=resolved, data=data, dev=st.st_dev, ino=st.st_ino
+        )
+    if len(snapshots) == len(STAGED_KEYS):
+        seen_resolved = {snapshots[k].resolved for k in STAGED_KEYS}
+        if len(seen_resolved) != len(STAGED_KEYS):
+            violations.append("staged inputs share the same file")
+        seen_ino = {(snapshots[k].dev, snapshots[k].ino) for k in STAGED_KEYS}
+        if len(seen_ino) != len(STAGED_KEYS):
+            violations.append("staged inputs share the same file")
+    return _StagedLoad(
+        staged_root,
+        entries,
+        snapshots,
+        manifest_data,
+        manifest_dev,
+        manifest_ino,
+        tuple(violations),
+    )
+
+
+def _admit_staged_one(
+    key: SourceKey,
+    raw: bytes,
+    current: BaseModel,
+    subject_commit: str | None,
+) -> tuple[bool, Evidence | None, str, BaseModel | None]:
+    model: type[BaseModel] = {
+        "architecture": ArchitectureReceipt,
+        "duplicates": DuplicateInventory,
+        "static": StaticQualityInventory,
+        "test_db": TestDbAudit,
+        "reachability": ReachabilityGraph,
+    }[key]
+    try:
+        _validate_unique_json_keys(raw)
+        parsed = model.model_validate_json(raw)
+    except (ValidationError, ValueError, UnicodeDecodeError):
+        return False, None, "receipt failed its typed schema", None
+    problem = _status_ok(key, parsed)
+    if problem is not None:
+        return False, None, problem, parsed
+    embedded = _staged_commit_of(key, parsed)
+    if subject_commit is None or not _is_hex40(subject_commit):
+        return False, None, "staged receipt commit does not match subject", parsed
+    if embedded != subject_commit:
+        return False, None, "staged receipt commit does not match subject", parsed
+    try:
+        if _normalized(parsed, key) != _normalized(current, key):
+            return (
+                False,
+                None,
+                "receipt does not exactly reproduce the fresh generator result",
+                parsed,
+            )
+    except (ValueError, TypeError):
+        return False, None, "receipt comparison failed", parsed
+    return True, None, "", parsed
+
+
+def _build_staged_receipt(
+    subject_resolved: Path,
+    current: CurrentReceipts,
+    subject_commit: str | None,
+    worktree_dirty: bool | None,
+    manifest_path: Path,
+    extra_violations: tuple[str, ...] = (),
+) -> tuple[ReconciliationReceipt, _StagedLoad]:
+    violations: list[str] = []
+    if not _is_hex40(subject_commit):
+        violations.append("git HEAD subject is unavailable or invalid")
+    if worktree_dirty is None:
+        violations.append("git worktree state is unavailable")
+    elif worktree_dirty:
+        violations.append("git worktree is dirty")
+    violations.extend(extra_violations)
+    load = _load_staged_for_subject(subject_resolved, manifest_path)
+    violations.extend(load.violations)
+    cur: dict[SourceKey, BaseModel] = {
+        "architecture": current.architecture,
+        "duplicates": current.duplicates,
+        "static": current.static,
+        "test_db": current.test_db,
+        "reachability": current.reachability,
+    }
+    locators = {
+        "architecture": "$.metrics",
+        "duplicates": "$.exact_totals",
+        "static": "$.diagnostics",
+        "test_db": "$.database_builders",
+        "reachability": "$.edges",
+    }
+    admitted: dict[SourceKey, bool] = {}
+    evidences: dict[SourceKey, Evidence | None] = {}
+    rejections: dict[SourceKey, str] = {}
+    raws: dict[SourceKey, bytes | None] = {}
+    for key in _STAGED_JSON_KEYS:
+        snap = load.snapshots.get(cast(StagedKey, key))
+        entry = load.entries.get(cast(StagedKey, key))
+        if snap is None or entry is None:
+            admitted[key] = False
+            evidences[key] = None
+            if key not in rejections:
+                rejections[key] = "staged receipt is missing"
+            raws[key] = None
+            continue
+        actual_sha = hashlib.sha256(snap.data).hexdigest()
+        if actual_sha != entry.sha256:
+            admitted[key] = False
+            evidences[key] = None
+            rejections[key] = "staged receipt hash mismatch"
+            raws[key] = snap.data
+            violations.append(f"inadmissible staged receipt {key}: hash mismatch")
+            continue
+        ok, _, rej, _parsed = _admit_staged_one(key, snap.data, cur[key], subject_commit)
+        raws[key] = snap.data
+        if ok:
+            admitted[key] = True
+            evidences[key] = Evidence(path=entry.path, sha256=actual_sha, locator=locators[key])
+        else:
+            admitted[key] = False
+            evidences[key] = None
+            rejections[key] = rej
+            violations.append(f"inadmissible staged receipt {key}: {rej}")
+    roadmap_raw: bytes | None = None
+    roadmap_lines: list[str] = []
+    roadmap_decode_error = False
+    roadmap_rel = ""
+    roadmap_hash = ""
+    roadmap_hash_mismatch = False
+    roadmap_entry = load.entries.get("roadmap")
+    roadmap_snap = load.snapshots.get("roadmap")
+    if roadmap_snap is None or roadmap_entry is None:
+        violations.append("staged roadmap is missing")
+    else:
+        roadmap_raw = roadmap_snap.data
+        roadmap_rel = roadmap_entry.path
+        actual_roadmap_sha = hashlib.sha256(roadmap_raw).hexdigest()
+        if actual_roadmap_sha != roadmap_entry.sha256:
+            violations.append("inadmissible staged roadmap: hash mismatch")
+            roadmap_hash_mismatch = True
+            roadmap_raw = roadmap_snap.data
+            roadmap_lines = []
+            roadmap_decode_error = False
+            roadmap_hash = actual_roadmap_sha
+        else:
+            roadmap_hash = actual_roadmap_sha
+            try:
+                roadmap_lines = roadmap_raw.decode("utf-8").splitlines()
+                roadmap_decode_error = False
+            except UnicodeDecodeError:
+                roadmap_lines = []
+                roadmap_decode_error = True
+                violations.append("roadmap source is not valid UTF-8")
+    roadmap_ok = (
+        roadmap_raw is not None
+        and not roadmap_decode_error
+        and roadmap_entry is not None
+        and not roadmap_hash_mismatch
+    )
+    if roadmap_ok and roadmap_raw is not None:
+        for fact in roadmap_facts():
+            nums = fact_line_numbers(fact, roadmap_lines)
+            if len(nums) != 1:
+                violations.append(f"roadmap locator is missing or ambiguous: {fact.name}")
+            elif fact.provisional is not None and not _roadmap_value_matches(
+                fact, roadmap_lines[nums[0] - 1]
+            ):
+                violations.append(f"roadmap provisional value mismatch: {fact.name}")
+    elif (
+        (roadmap_raw is None or roadmap_decode_error)
+        and not any(v.startswith("roadmap source") for v in violations)
+        and not any(
+            v.startswith("staged roadmap") or v.startswith("inadmissible staged roadmap")
+            for v in violations
+        )
+    ):
+        violations.append("roadmap source is missing")
+    claims_roadmap_ok = bool(roadmap_ok) and not any(v.startswith("roadmap ") for v in violations)
+    claims = build_claims(
+        current,
+        admitted,
+        evidences,
+        claims_roadmap_ok,
+        roadmap_raw,
+        roadmap_rel,
+        roadmap_hash,
+        roadmap_lines,
+        rejections,
+    )
+    names = [c.name for c in claims]
+    if len(set(names)) != len(names) or len(names) != len(roadmap_facts()):
+        violations.append("roadmap claim set is incomplete or duplicated")
+    for claim in claims:
+        ok_shape = (
+            claim.verdict in ("verified", "corrected")
+            and claim.observed is not None
+            and claim.evidence is not None
+            and claim.provisional_evidence is not None
+        )
+        if claim.scored_eligible != ok_shape:
+            violations.append(f"claim eligibility is inconsistent: {claim.name}")
+        if claim.verdict == "rejected" and claim.scored_eligible:
+            violations.append(f"rejected claim must be unscored: {claim.name}")
+    bounded = bound_violations(sorted(set(violations)))
+    status: Literal["PASS", "HOLD"] = "PASS" if not bounded else "HOLD"
+    scored = sum(1 for c in claims if c.scored_eligible)
+    rejected = sum(1 for c in claims if c.verdict == "rejected")
+    if scored + rejected != len(claims):
+        bounded = bound_violations([*bounded, "claim counts are inconsistent"])
+        status = "HOLD"
+    receipt = ReconciliationReceipt(
+        status=status,
+        claims=tuple(claims),
+        scored_claims=scored,
+        rejected_claims=rejected,
+        subject_commit=subject_commit,
+        worktree_dirty=worktree_dirty,
+        source_hash=deterministic_source_hash(raws, roadmap_raw),
+        roadmap_source=Evidence(
+            path=roadmap_rel,
+            sha256=roadmap_hash,
+            locator="baseline section",
+        )
+        if claims_roadmap_ok and roadmap_hash != ""
+        else None,
+        claim_manifest_sha256=claim_manifest_hash(),
+        violations=bounded,
+    )
+    return receipt, load
+
+
+def _verify_staged_stable(load: _StagedLoad, manifest_path: Path) -> tuple[str, ...]:
+    problems: list[str] = []
+    if load.manifest_data is None or load.manifest_dev is None or load.manifest_ino is None:
+        return tuple(problems)
+    try:
+        st = os.lstat(manifest_path)
+        if (st.st_dev, st.st_ino) != (load.manifest_dev, load.manifest_ino):
+            problems.append("staged manifest changed during collection")
+            return tuple(problems)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            problems.append("staged manifest changed during collection")
+            return tuple(problems)
+        current_manifest = manifest_path.read_bytes()
+        if current_manifest != load.manifest_data:
+            problems.append("staged manifest changed during collection")
+    except OSError:
+        problems.append("staged manifest changed during collection")
+        return tuple(problems)
+    for key in STAGED_KEYS:
+        snap = load.snapshots.get(key)
+        if snap is None:
+            continue
+        try:
+            if snap.resolved.is_symlink():
+                problems.append(f"staged input changed during collection: {key}")
+                continue
+            st2 = os.lstat(snap.resolved)
+            if (st2.st_dev, st2.st_ino) != (snap.dev, snap.ino):
+                problems.append(f"staged input changed during collection: {key}")
+                continue
+            if stat.S_ISLNK(st2.st_mode) or not stat.S_ISREG(st2.st_mode):
+                problems.append(f"staged input changed during collection: {key}")
+                continue
+            current_data = snap.resolved.read_bytes()
+            if current_data != snap.data:
+                problems.append(f"staged input changed during collection: {key}")
+        except OSError:
+            problems.append(f"staged input changed during collection: {key}")
+    return tuple(problems)
+
+
+def reconcile_staged_subject(
+    subject_root: Path, staged_manifest_path: Path
+) -> ReconciliationReceipt:
+    """Reconcile fresh subject measurements against hash-bound staged inputs."""
+    subject_resolved = subject_root.resolve()
+    if not subject_resolved.is_dir():
+        raise StagedManifestError("invalid subject root")
+    manifest_resolved = staged_manifest_path
+    before = _git_state(subject_resolved)
+    current = _fresh_receipts(subject_resolved)
+    middle = _git_state(subject_resolved)
+    middle_subject = middle[0] if _is_hex40(middle[0]) else None
+    draft, load = _build_staged_receipt(
+        subject_resolved,
+        current,
+        middle_subject,
+        middle[1],
+        manifest_resolved,
+        _git_state_violations(before, middle),
+    )
+    final = _git_state(subject_resolved)
+    stable_problems = _verify_staged_stable(load, manifest_resolved)
+    collection_violations = (
+        *_git_state_violations(before, middle, final),
+        *stable_problems,
+    )
+    if not collection_violations:
+        return draft
+    combined = bound_violations(sorted(set(draft.violations) | set(collection_violations)))
+    final_subject = final[0] if _is_hex40(final[0]) else None
+    return ReconciliationReceipt(
+        status="HOLD",
+        claims=draft.claims,
+        scored_claims=draft.scored_claims,
+        rejected_claims=draft.rejected_claims,
+        subject_commit=final_subject,
+        worktree_dirty=final[1],
+        source_hash=draft.source_hash,
+        roadmap_source=draft.roadmap_source,
+        claim_manifest_sha256=draft.claim_manifest_sha256,
+        violations=combined,
+    )
+
+
 __all__ = [
     "SOURCE_PATHS",
+    "STAGED_KEYS",
     "CurrentReceipts",
     "ReconciliationReceipt",
+    "StagedManifestEntry",
+    "StagedManifestError",
     "claim_manifest_hash",
     "reconcile",
+    "reconcile_staged_subject",
     "roadmap_facts",
 ]
