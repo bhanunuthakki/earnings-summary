@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import subprocess
 from collections.abc import Sequence
@@ -9,7 +11,7 @@ import pytest
 
 from quality import static_quality
 from quality.git_env import clean_local_git_env, is_git_executable
-from quality.static_quality import InventoryFailure, inventory
+from quality.static_quality import DiagnosticSummary, InventoryFailure, inventory
 
 
 def _is_tracked_files_command(command: Sequence[str]) -> bool:
@@ -469,3 +471,76 @@ def test_cli_returns_hold_for_hidden_active_file(
 
     monkeypatch.setattr(static_quality, "inventory", fake_inventory)
     assert static_quality.main(["--repo-root", str(tmp_path)]) == 2
+
+
+def test_pyright_receipt_matches_joined_stdout_stderr(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir(parents=True)
+    (tmp_path / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    stdout = '{"generalDiagnostics":[]}'
+    stderr = "pyright-stderr-line"
+
+    def run(command: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
+        if _is_tracked_files_command(command):
+            return subprocess.CompletedProcess(
+                command, 0, _tracked_files_payload(["src/app.py"]), ""
+            )
+        if list(command[:3]) == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, "head\n", "")
+        if command[-1:] == ["--version"]:
+            return subprocess.CompletedProcess(command, 0, "tool 1\n", "")
+        if str(command[0]).endswith("pyright"):
+            return subprocess.CompletedProcess(command, 0, stdout, stderr)
+        return subprocess.CompletedProcess(command, 0, "[]" if "format" not in command else "", "")
+
+    result = inventory(tmp_path, run)
+    pyright = next(item for item in result.diagnostics if item.tool == "pyright")
+    expected = (stdout + "\n" + stderr).encode("utf-8")
+    assert (tmp_path / pyright.receipt_path).read_bytes() == expected
+    assert base64.b64decode(pyright.receipt_base64, validate=True) == expected
+    assert pyright.receipt_bytes == len(expected)
+    assert pyright.receipt_sha256 == hashlib.sha256(expected).hexdigest()
+
+
+def test_diagnostic_receipt_tamper_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir(parents=True)
+    (tmp_path / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    stdout = '{"generalDiagnostics":[]}'
+    stderr = "pyright-stderr-line"
+
+    def run(command: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
+        if _is_tracked_files_command(command):
+            return subprocess.CompletedProcess(
+                command, 0, _tracked_files_payload(["src/app.py"]), ""
+            )
+        if list(command[:3]) == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, "head\n", "")
+        if command[-1:] == ["--version"]:
+            return subprocess.CompletedProcess(command, 0, "tool 1\n", "")
+        if str(command[0]).endswith("pyright"):
+            return subprocess.CompletedProcess(command, 0, stdout, stderr)
+        return subprocess.CompletedProcess(command, 0, "[]" if "format" not in command else "", "")
+
+    result = inventory(tmp_path, run)
+    pyright = next(item for item in result.diagnostics if item.tool == "pyright")
+    good = pyright.model_dump(mode="json")
+    tampered_base64 = dict(good)
+    tail = "AA" if not str(good["receipt_base64"]).endswith("AA") else "BB"
+    tampered_base64["receipt_base64"] = str(good["receipt_base64"])[:-2] + tail
+    with pytest.raises(ValueError):
+        DiagnosticSummary.model_validate(tampered_base64)
+    tampered_hash = dict(good)
+    tampered_hash["receipt_sha256"] = "0" * 64
+    with pytest.raises(ValueError):
+        DiagnosticSummary.model_validate(tampered_hash)
+    tampered_bytes = dict(good)
+    tampered_bytes["receipt_bytes"] = int(good["receipt_bytes"]) + 1
+    with pytest.raises(ValueError):
+        DiagnosticSummary.model_validate(tampered_bytes)
+    tampered_invalid = dict(good)
+    tampered_invalid["receipt_base64"] = "!!!"
+    with pytest.raises(ValueError):
+        DiagnosticSummary.model_validate(tampered_invalid)
+    tampered_long = dict(good)
+    tampered_long["receipt_base64"] = "A" * (static_quality.MAX_RECEIPT_BASE64_LEN + 1)
+    with pytest.raises(ValueError):
+        DiagnosticSummary.model_validate(tampered_long)

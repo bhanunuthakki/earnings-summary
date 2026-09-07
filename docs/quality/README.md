@@ -97,3 +97,108 @@ python execution/reconcile_quality_baseline.py \
 The lifecycle CLI never regenerates the graph. A missing, malformed, or
 stale `.tmp/quality/reachability-check.json` is an expected operational
 error (`LifecycleError`, exit 1). A dirty worktree is never `PASS`.
+
+## Exact-subject evidence bundle (BHA-147)
+
+Phase A collects hash-bound raw producer bytes in ignored staging without
+claiming bundle identity. Phase B byte-preserves allowlisted
+`docs/quality/*.json` sources and mints deterministic
+`quality-score-admission/v1` receipts. Scoring stays owned by
+`src/quality/scoring.py`; this layer never scores.
+
+```bash
+python execution/collect_evidence_bundle.py --mode collect \
+  --repo-root . --staging-dir .tmp/quality/evidence-bundle
+python execution/collect_evidence_bundle.py --mode assemble \
+  --repo-root . --staging-dir .tmp/quality/evidence-bundle \
+  --output-dir docs/quality
+# after committing only allowed JSON evidence:
+python execution/collect_evidence_bundle.py --mode validate \
+  --repo-root . --subject <40-hex> --bundle <40-hex>
+python execution/collect_evidence_bundle.py --mode record \
+  --repo-root . --bundle <40-hex> --output .tmp/quality/score-evidence.json
+```
+
+Collector properties:
+
+- Brackets exact 40-hex `HEAD`/`HEAD^{tree}` and full
+  `status --porcelain --untracked-files=all` cleanliness before and after.
+  Any dirty tree, HEAD/tree race, or unavailable identity is typed `HOLD`
+  with bounded violations.
+- Records per artifact the subject commit/tree, generator path/hash/version
+  or exact argv (no shell), native scope label (e.g. `WORKTREE` preserved),
+  embedded subject, schema, exact raw-bytes SHA-256, and
+  collection status. Raw Pyright/timing bytes are preserved verbatim.
+- Staging must live under ignored `.tmp/` and never embeds a bundle commit.
+  Manifest integrity (`manifest_hash`) is computed over the manifest with
+  `manifest_hash` excluded, so it is not self-referential.
+- Tests inject a `runner(argv, repo_root)`; real use invokes existing local
+  CLIs without a shell and never touches production DB or network.
+- Default collection has eight typed producers including test-db and
+  lifecycle. Accepted exit codes are declared and recorded; exit 2 may
+  mean successfully captured semantic HOLD. Acquisition completeness,
+  typed bundle validity, per-slot admission, and score outcome stay
+  distinct: typed-valid HOLD bytes are preserved verbatim, while
+  typed-invalid bytes or acquisition failure are typed HOLD.
+
+Assembler properties:
+
+- Consumes only the verified Phase A manifest plus staged bytes, rechecks
+  SHA-256 stability, byte-preserves sources into the explicit canonical
+  allowlist, and mints receipts for exactly the 14 non-architecture
+  `SCORE_BLOCKS` and 10 `HARD_GATES`. Each receipt binds the subject, the
+  registered generator `src/quality/admission_policy.py` at its exact
+  subject hash, and only policy-required available typed sources excluding
+  itself (empty only for fail-closed unadmitted slots).
+- Typed-valid `HOLD` sources still assemble `COMPLETE` but yield fail
+  admissions; honest source `HOLD` never becomes admission `PASS`.
+  Insufficient proof for a score slot yields a fail admission whose cited
+  source tuple may be empty; that does not by itself make an otherwise
+  complete typed collection bundle `HOLD`. Assembly `HOLD`s for a
+  declared collection source that failed or is absent from its
+  manifest/staging contract, typed-invalid source bytes, or unknown
+  registry/path/schema material. Only three narrow rules can currently pass;
+  the other 21 stay deliberately unadmitted until dedicated evidence
+  exists. This honest fail-closed phase is not a 9+ claim.
+- Writes are atomic and require a repo-contained canonical relative path
+  that is a non-symlink regular single-link file with exact binding;
+  direct, symlink, hard-link, or escape aliases are rejected.
+  `subject..bundle` diff must contain only allowed JSON, subject must be
+  ancestor of bundle, bundle must be ancestor of
+  `refs/remotes/origin/main`, and no bundled JSON may embed the bundle
+  SHA. Bundle identity is recorded only after commit in an ignored external
+  `ScoreEvidence` manifest; a discarded pre-squash SHA cannot verify.
+
+### Staged exact-subject reconciliation
+
+```bash
+python execution/reconcile_quality_baseline.py \
+  --subject-root <subject-dir> --staged-manifest <manifest.json> \
+  --output .tmp/quality/roadmap-reconciliation-staged.json
+```
+
+Staged mode uses hash-bound explicit receipt inputs via `--subject-root` +
+`--staged-manifest` (both required, mutually exclusive with `--repo-root`); it never regenerates the graph. Any mismatch/tamper/stale/mixed subject HOLD applies: forged, stale, or mixed-subject receipts stay `HOLD`, and an output aliasing a protected input or the manifest is rejected.
+
+### Direct-builder invocation dispositions
+
+```bash
+python execution/audit_test_db_patterns.py \
+  --root . --dispositions .tmp/quality/invocation-conversions.json \
+ --output .tmp/quality/test-db.json
+```
+
+RETAIN default holds without `--dispositions`. CONVERT only with exact
+source locator/hash plus an offline strict parity receipt holding
+`schema_version` `test-db-parity/v1`, literal `PASS`, `invocation_id`,
+`path`, `locator` (`start_line/start_col/end_line/end_col`), and matching
+`source_sha256`; the conversion record separately holds the
+`parity_receipt` path, canonical `owner_issue`/`reason`, and
+timezone-aware future `expires_at`. Unresolved/dynamic HOLD applies to
+unresolved or dynamic invocations.
+
+### Durable disposition
+
+no surface change — preserves the existing quality-measurement/score-evidence contract; no Operations registry field, scheduler task, service, operator action, or runtime panel is added.
+
+collection/assembly/validation/record are manual local-only non-production operations. `.tmp` is ignored external staging with no network or production DB. post-commit validation/ScoreEvidence recording are caller-owned, and failures remain HOLD/errors.

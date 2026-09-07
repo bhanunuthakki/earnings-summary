@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -26,6 +28,7 @@ from quality.roadmap_reconciliation import (
     ReconciliationReceipt,
     SourceKey,
     claim_manifest_hash,
+    reconcile_staged_subject,
     reconcile_with_receipts_for_testing,
     roadmap_facts,
 )
@@ -125,6 +128,7 @@ def _dup(groups: int = 140, funcs: int = 397) -> DuplicateInventory:
 
 def _static(ruff: int = 2, pyright: int = 27924) -> StaticQualityInventory:
     def diag(tool: str, count: int) -> DiagnosticSummary:
+        raw = f"{tool}:{count}".encode()
         return DiagnosticSummary(
             tool=tool,
             command=[tool],
@@ -134,6 +138,9 @@ def _static(ruff: int = 2, pyright: int = 27924) -> StaticQualityInventory:
             receipt_path=".tmp/x.json",
             command_hash="f" * 64,
             version_hash="f" * 64,
+            receipt_sha256=hashlib.sha256(raw).hexdigest(),
+            receipt_bytes=len(raw),
+            receipt_base64=base64.b64encode(raw).decode("ascii"),
         )
 
     return StaticQualityInventory(
@@ -879,3 +886,396 @@ def test_cli_output_late_swap_is_replaced_atomically(
     assert protected.read_bytes() == before
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "PASS"
     assert not os.path.samefile(protected, output)
+
+
+def _write_staged_manifest(staged_dir: Path, cur: CurrentReceipts, roadmap_text: str) -> Path:
+    import hashlib as _hashlib
+
+    staged_dir.mkdir(parents=True, exist_ok=True)
+    mapping: dict[str, str] = {
+        "architecture": cur.architecture.model_dump_json(indent=2) + "\n",
+        "duplicates": cur.duplicates.model_dump_json(indent=2) + "\n",
+        "static": cur.static.model_dump_json(indent=2) + "\n",
+        "test_db": cur.test_db.model_dump_json(indent=2) + "\n",
+        "reachability": cur.reachability.model_dump_json(indent=2) + "\n",
+        "roadmap": roadmap_text,
+    }
+    filenames = {
+        "architecture": "architecture.json",
+        "duplicates": "duplicates.json",
+        "static": "static.json",
+        "test_db": "test_db.json",
+        "reachability": "reachability.json",
+        "roadmap": "roadmap.md",
+    }
+    manifest: dict[str, dict[str, str]] = {}
+    for key, payload in mapping.items():
+        target = staged_dir / filenames[key]
+        target.write_text(payload, encoding="utf-8")
+        digest = _hashlib.sha256(target.read_bytes()).hexdigest()
+        manifest[key] = {"path": filenames[key], "sha256": digest}
+    manifest_path = staged_dir / "staged-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return manifest_path
+
+
+def _roadmap_text() -> str:
+    return "\n".join(ROADMAP_LINES[f.name] for f in roadmap_facts()) + "\n"
+
+
+def _staged_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cur: CurrentReceipts
+) -> tuple[Path, Path]:
+    subject = tmp_path / "subject"
+    subject.mkdir(parents=True, exist_ok=True)
+    staged = tmp_path / "staged"
+    manifest = _write_staged_manifest(staged, cur, _roadmap_text())
+
+    def fake_fresh(root: Path) -> CurrentReceipts:
+        assert root == subject.resolve()
+        return cur
+
+    def clean_state(_root: Path) -> tuple[str | None, bool | None]:
+        return "a" * 40, False
+
+    import quality.roadmap_reconciliation as rr
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", clean_state)
+    return subject, manifest
+
+
+def test_staged_valid_separate_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    res = reconcile_staged_subject(subject, manifest)
+    assert res.status == "PASS"
+    assert res.subject_commit == "a" * 40
+    assert res.worktree_dirty is False
+    assert res.roadmap_source is not None
+
+
+def test_staged_never_uses_testing_seam(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    assert rr.reconcile_staged_subject is not rr.reconcile_with_receipts_for_testing
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    res = reconcile_staged_subject(subject, manifest)
+    assert res.status == "PASS"
+
+
+def test_staged_hash_mismatch_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    payload: dict[str, dict[str, str]] = json.loads(manifest.read_text(encoding="utf-8"))
+    assert isinstance(payload["static"]["sha256"], str)
+    payload["static"]["sha256"] = "0" * 64
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_roadmap_hash_mismatch_rejects_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    target = tmp_path / "staged" / "roadmap.md"
+    target.write_text(target.read_text(encoding="utf-8") + "tampered\n", encoding="utf-8")
+    res = reconcile_staged_subject(subject, manifest)
+    assert res.status == "HOLD"
+    assert any("inadmissible staged roadmap: hash mismatch" in v for v in res.violations)
+    assert res.roadmap_source is None
+    assert all(c.verdict == "rejected" for c in res.claims)
+    assert not any(c.scored_eligible for c in res.claims)
+    assert all(c.provisional_evidence is None for c in res.claims)
+
+
+def test_staged_schema_and_status_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    import hashlib as _hashlib
+
+    target = tmp_path / "staged" / "static.json"
+    bad = json.loads(target.read_text(encoding="utf-8"))
+    bad["status"] = "HOLD"
+    target.write_text(json.dumps(bad), encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["static"]["sha256"] = _hashlib.sha256(target.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_manifest_shape_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    del payload["roadmap"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+    manifest.write_text(
+        '{"architecture": {"path": "x", "sha256": "' + "0" * 64 + '"}}', encoding="utf-8"
+    )
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_duplicate_keys_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    raw = manifest.read_text(encoding="utf-8")
+    dup = raw.replace(
+        '"architecture"',
+        '"architecture", "architecture": {"path": "x", "sha256": "'
+        + "0" * 64
+        + '"}, "architecture"',
+        1,
+    )
+    manifest.write_text(dup, encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_duplicate_paths_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    import hashlib as _hashlib
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["duplicates"]["path"] = payload["architecture"]["path"]
+    payload["duplicates"]["sha256"] = payload["architecture"]["sha256"]
+    _ = _hashlib.sha256(b"x").hexdigest()
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_path_escape_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roadmap"]["path"] = "../escape.md"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+    payload2 = json.loads(manifest.read_text(encoding="utf-8"))
+    payload2["roadmap"]["path"] = "/abs/path.md"
+    manifest.write_text(json.dumps(payload2), encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_commit_mismatch_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    import hashlib as _hashlib
+
+    target = tmp_path / "staged" / "architecture.json"
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload["scoped_commit"] = "b" * 40
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["architecture"]["sha256"] = _hashlib.sha256(target.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    res = reconcile_staged_subject(subject, manifest)
+    assert res.status == "HOLD"
+    assert any("commit" in v for v in res.violations)
+
+
+def test_staged_mixed_subject_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    other = _current(architecture=_arch(nmod=1300))
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, other)
+    import quality.roadmap_reconciliation as rr
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return cur
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_dirty_subject_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    cur = _current()
+    subject = tmp_path / "subject"
+    subject.mkdir(parents=True, exist_ok=True)
+    staged = tmp_path / "staged"
+    manifest = _write_staged_manifest(staged, cur, _roadmap_text())
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return cur
+
+    def fake_git_state(_root: Path) -> tuple[str, bool]:
+        return ("a" * 40, True)
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", fake_git_state)
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_changing_subject_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    cur = _current()
+    subject = tmp_path / "subject"
+    subject.mkdir(parents=True, exist_ok=True)
+    staged = tmp_path / "staged"
+    manifest = _write_staged_manifest(staged, cur, _roadmap_text())
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return cur
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    states = iter([("a" * 40, False), ("a" * 40, False), ("b" * 40, False)])
+
+    def fake_git_state(_root: Path) -> tuple[str, bool]:
+        return next(states)
+
+    monkeypatch.setattr(rr, "_git_state", fake_git_state)
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_symlink_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    target = tmp_path / "staged" / "static.json"
+    raw = target.read_bytes()
+    target.unlink()
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(raw)
+    target.symlink_to(outside)
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_hardlink_duplicate_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    import hashlib as _hashlib
+
+    arch = tmp_path / "staged" / "architecture.json"
+    dup = tmp_path / "staged" / "duplicates.json"
+    dup.unlink()
+    os.link(arch, dup)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["duplicates"]["sha256"] = _hashlib.sha256(dup.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_replacement_race_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    cur = _current()
+    subject = tmp_path / "subject"
+    subject.mkdir(parents=True, exist_ok=True)
+    staged = tmp_path / "staged"
+    manifest = _write_staged_manifest(staged, cur, _roadmap_text())
+
+    def racing_fresh(root: Path) -> CurrentReceipts:
+        (staged / "reachability.json").write_text("{}\n", encoding="utf-8")
+        return cur
+
+    monkeypatch.setattr(rr, "_fresh_receipts", racing_fresh)
+
+    def fake_git_state(_root: Path) -> tuple[str, bool]:
+        return ("a" * 40, False)
+
+    monkeypatch.setattr(rr, "_git_state", fake_git_state)
+    assert reconcile_staged_subject(subject, manifest).status == "HOLD"
+
+
+def test_staged_cli_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    cur = _current()
+    subject = tmp_path / "subject"
+    subject.mkdir(parents=True, exist_ok=True)
+    staged = tmp_path / "staged"
+    manifest = _write_staged_manifest(staged, cur, _roadmap_text())
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return cur
+
+    def fake_git_state(_root: Path) -> tuple[str, bool]:
+        return ("a" * 40, False)
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", fake_git_state)
+    assert (
+        cli_module.main(["--subject-root", str(subject), "--staged-manifest", str(manifest)]) == 0
+    )
+    capsys.readouterr()
+    assert cli_module.main(["--subject-root", str(subject)]) == 1
+    capsys.readouterr()
+    assert (
+        cli_module.main(
+            [
+                "--repo-root",
+                str(subject),
+                "--subject-root",
+                str(subject),
+                "--staged-manifest",
+                str(manifest),
+            ]
+        )
+        == 1
+    )
+    capsys.readouterr()
+
+
+def test_staged_cli_output_alias_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    cur = _current()
+    subject = tmp_path / "subject"
+    subject.mkdir(parents=True, exist_ok=True)
+    staged = tmp_path / "staged"
+    manifest = _write_staged_manifest(staged, cur, _roadmap_text())
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return cur
+
+    def fake_git_state(_root: Path) -> tuple[str, bool]:
+        return ("a" * 40, False)
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", fake_git_state)
+    staged_input = staged / "architecture.json"
+    rc = cli_module.main(
+        [
+            "--subject-root",
+            str(subject),
+            "--staged-manifest",
+            str(manifest),
+            "--output",
+            str(staged_input),
+        ]
+    )
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "output_aliases_protected_input" in captured.err
+    alias = tmp_path / "alias.json"
+    alias.hardlink_to(staged_input)
+    rc2 = cli_module.main(
+        ["--subject-root", str(subject), "--staged-manifest", str(manifest), "--output", str(alias)]
+    )
+    assert rc2 == 1
+    capsys.readouterr()
+
+
+def test_legacy_repo_root_still_compatible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cur = _current()
+    _seed(tmp_path, cur)
+    good = reconcile_with_receipts_for_testing(tmp_path, cur)
+
+    def fake_reconcile(_root: Path) -> ReconciliationReceipt:
+        return good
+
+    monkeypatch.setattr(cli_module, "reconcile", fake_reconcile)
+    assert cli_module.main(["--repo-root", str(tmp_path)]) == 0
+    capsys.readouterr()
