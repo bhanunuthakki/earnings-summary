@@ -5,6 +5,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path, PureWindowsPath
 
+import pytest
+
 from scheduler_manifest import (
     TaskManifest,
     TaskSpec,
@@ -29,6 +31,17 @@ EXPECTED_DISABLED_TASKS = {
     r"\earnings-summary\refresh_ir_kpis",
     r"\earnings-summary\scan_ir_transcripts",
 }
+
+
+def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "task_manifest.json"
+    manifest_path.write_text(
+        '{"version": 1, "version": 1, "namespace": "\\\\earnings-summary", "tasks": []}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key: version"):
+        load_manifest(manifest_path)
 
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:

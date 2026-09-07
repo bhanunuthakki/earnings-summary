@@ -79,3 +79,21 @@ capture is in memory. `COMPLETE` means only that raw collection finished; it
 does not make dirty-tree or revision-scoped evidence admissible. Successful
 collection is always admission `HOLD` because causal and paired performance
 evidence is deferred; receipts belong under ignored `.tmp/` paths.
+
+## Lifecycle/reconciliation reproduction
+
+Lifecycle inventory and roadmap reconciliation are fail-closed producers.
+Reachability is a prerequisite input, not a silent side effect:
+
+```bash
+python execution/build_operational_reachability.py \
+  --output .tmp/quality/reachability-check.json
+python execution/classify_operational_lifecycle.py \
+  --output .tmp/quality/lifecycle-inventory.json
+python execution/reconcile_quality_baseline.py \
+  --output .tmp/quality/roadmap-reconciliation.json
+```
+
+The lifecycle CLI never regenerates the graph. A missing, malformed, or
+stale `.tmp/quality/reachability-check.json` is an expected operational
+error (`LifecycleError`, exit 1). A dirty worktree is never `PASS`.
