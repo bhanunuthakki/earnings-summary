@@ -25,11 +25,27 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from models.facts import Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
-from provenance.financial_fact_resolution import canonical_fact_relation
+from pipeline.kpi_definition_revisions import (
+    KpiDefinitionComparabilityDisposition,
+    KpiDefinitionLifecycle,
+    KpiDefinitionStatus,
+    kpi_definition_comparability_as_known,
+    kpi_definition_revision_as_known,
+    kpi_definition_revision_by_id,
+)
+from provenance.financial_fact_resolution import (
+    HistoricalFactAuthorityUnavailableError,
+    canonical_fact_relation,
+    canonical_fact_row_ids_as_known,
+)
 
 # kpi_facts.fiscal_period_type values that denote a quarterly observation. The
 # §3 chart cadence is quarterly, so the chart loader measures richness over
@@ -43,6 +59,497 @@ QUARTERLY_FACT_PERIOD_TYPES: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4")
 # KPI series aligns with the annual line-item axis. Consumers select these rows
 # when a definition's reporting_cadence is 'annual' (see reporting_cadence_for).
 ANNUAL_FACT_PERIOD_TYPES: tuple[str, ...] = ("FY", "annual")
+
+_REVISION_DEFINITION_COLUMNS = frozenset(
+    {
+        "kpi_definition_revision_id",
+        "idempotency_key",
+        "kpi_definition_id",
+        "reporting_entity_id",
+        "scope_security_id",
+        "revision",
+        "supersedes_definition_revision_id",
+        "status",
+        "lifecycle",
+        "reported_label",
+        "reported_definition_text",
+        "definition_text_status",
+        "period_kind",
+        "stock_flow_behavior",
+        "unit_family",
+        "unit_key",
+        "unit_scale",
+        "currency_disposition",
+        "currency",
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions_json",
+        "source_document_version_id",
+        "source_evidence_node_id",
+        "source_locator_json",
+        "source_locator_sha256",
+        "reason_code",
+        "reviewed_by",
+        "commitment_json",
+        "commitment_sha256",
+        "effective_at",
+        "knowledge_at",
+        "recorded_at",
+    }
+)
+_REVISION_COMPARABILITY_COLUMNS = frozenset(
+    {
+        "comparability_revision_id",
+        "idempotency_key",
+        "predecessor_definition_revision_id",
+        "successor_definition_revision_id",
+        "revision",
+        "supersedes_comparability_revision_id",
+        "relation_kind",
+        "disposition",
+        "reason_code",
+        "reviewed_by",
+        "source_document_version_id",
+        "source_evidence_node_id",
+        "source_locator_json",
+        "source_locator_sha256",
+        "commitment_json",
+        "commitment_sha256",
+        "effective_at",
+        "knowledge_at",
+        "recorded_at",
+    }
+)
+_REVISION_CONTEXT_COLUMNS = frozenset(
+    {
+        "id",
+        "kpi_fact_id",
+        "supersedes_context_id",
+        "metric_name_as_reported",
+        "reported_period_end",
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions_json",
+        "unit_scale",
+        "status",
+        "knowledge_at",
+        "created_at",
+        "kpi_definition_revision_id",
+    }
+)
+_REVISION_FACT_COLUMNS = frozenset(
+    {
+        "id",
+        "ticker",
+        "period_end",
+        "fiscal_period_type",
+        "kpi_definition_id",
+        "value",
+        "currency",
+        "unit",
+        "source_doc_id",
+        "confidence",
+        "extracted_by",
+        "locator",
+        "computed_from",
+    }
+)
+
+
+class KpiRevisionSeriesStatus(StrEnum):
+    ELIGIBLE = "eligible"
+    ELIGIBLE_WITH_BREAK = "eligible_with_break"
+    LEGACY_UNBOUND = "legacy_unbound"
+    QUARANTINED_DEFINITION = "quarantined_definition"
+    DISCONTINUED = "discontinued"
+    HISTORICAL_FACT_AUTHORITY_UNAVAILABLE = "historical_fact_authority_unavailable"
+
+
+class KpiRevisionSeriesExclusionReason(StrEnum):
+    LEGACY_UNBOUND = "legacy_unbound"
+    MISSING_SEMANTIC_HEAD = "missing_semantic_head"
+    SEMANTIC_NOT_ADMITTED = "semantic_not_admitted"
+    QUARANTINED_DEFINITION = "quarantined_definition"
+    DISCONTINUED_DEFINITION = "discontinued_definition"
+    DEFINITION_CONTEXT_MISMATCH = "definition_context_mismatch"
+    NO_EXPLICIT_COMPARABILITY = "no_explicit_comparability"
+    NOT_COMPARABLE = "not_comparable"
+    HISTORICAL_FACT_AUTHORITY_UNAVAILABLE = "historical_fact_authority_unavailable"
+
+
+class KpiRevisionSeriesBreak(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    comparability_revision_id: str = Field(min_length=1, max_length=128)
+    related_definition_revision_id: str = Field(min_length=1, max_length=128)
+    relation_kind: str = Field(min_length=1, max_length=32)
+
+
+class KpiRevisionSeriesExclusion(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reason: KpiRevisionSeriesExclusionReason
+    count: int = Field(gt=0)
+
+
+class KpiRevisionSeriesResolution(BaseModel):
+    """Shadow result; legacy readers do not consume this in BHA-100 slice one."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: KpiRevisionSeriesStatus
+    kpi_definition_id: int = Field(gt=0)
+    anchor_definition_revision_id: str | None = None
+    included_definition_revision_ids: tuple[str, ...] = ()
+    eligible_fact_ids: tuple[int, ...] = ()
+    breaks: tuple[KpiRevisionSeriesBreak, ...] = ()
+    exclusions: tuple[KpiRevisionSeriesExclusion, ...] = ()
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
+    return frozenset(str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _database_datetime(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def _unbound_revision_resolution(kpi_definition_id: int) -> KpiRevisionSeriesResolution:
+    return KpiRevisionSeriesResolution(
+        status=KpiRevisionSeriesStatus.LEGACY_UNBOUND,
+        kpi_definition_id=kpi_definition_id,
+        exclusions=(
+            KpiRevisionSeriesExclusion(
+                reason=KpiRevisionSeriesExclusionReason.LEGACY_UNBOUND,
+                count=1,
+            ),
+        ),
+    )
+
+
+def _historical_authority_unavailable_resolution(
+    kpi_definition_id: int,
+    *,
+    anchor_definition_revision_id: str | None = None,
+    included_definition_revision_ids: tuple[str, ...] = (),
+    breaks: tuple[KpiRevisionSeriesBreak, ...] = (),
+) -> KpiRevisionSeriesResolution:
+    return KpiRevisionSeriesResolution(
+        status=KpiRevisionSeriesStatus.HISTORICAL_FACT_AUTHORITY_UNAVAILABLE,
+        kpi_definition_id=kpi_definition_id,
+        anchor_definition_revision_id=anchor_definition_revision_id,
+        included_definition_revision_ids=included_definition_revision_ids,
+        breaks=breaks,
+        exclusions=(
+            KpiRevisionSeriesExclusion(
+                reason=KpiRevisionSeriesExclusionReason.HISTORICAL_FACT_AUTHORITY_UNAVAILABLE,
+                count=1,
+            ),
+        ),
+    )
+
+
+def _context_matches_revision(row: sqlite3.Row, revision_id: str) -> bool:
+    return (
+        str(row["definition_revision_id"]) == revision_id
+        and int(row["definition_root_id"]) == int(row["kpi_definition_id"])
+        and str(row["reported_period_end"])[:10] == str(row["fact_period_end"])[:10]
+        and str(row["definition_reported_label"]) == str(row["metric_name_as_reported"])
+        and str(row["definition_accounting_basis"]) == str(row["accounting_basis"])
+        and str(row["definition_consolidation_scope"]) == str(row["consolidation_scope"])
+        and str(row["definition_dimensions_json"]) == str(row["dimensions_json"])
+        and str(row["definition_unit_scale"]) == str(row["unit_scale"])
+        and str(row["definition_unit_key"]) == str(row["fact_unit"])
+        and row["definition_currency"] == row["fact_currency"]
+        and str(row["definition_currency_disposition"])
+        == ("explicit" if row["fact_currency"] is not None else "not_applicable")
+    )
+
+
+def resolve_revision_aware_kpi_series(
+    conn: sqlite3.Connection,
+    *,
+    kpi_definition_id: int,
+    effective_at: datetime,
+    known_at: datetime,
+) -> KpiRevisionSeriesResolution:
+    """Resolve in one caller-aware SQLite read snapshot."""
+
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        return _resolve_revision_aware_kpi_series(
+            conn,
+            kpi_definition_id=kpi_definition_id,
+            effective_at=effective_at,
+            known_at=known_at,
+        )
+    finally:
+        if owns_snapshot:
+            conn.rollback()
+
+
+def _resolve_revision_aware_kpi_series(
+    conn: sqlite3.Connection,
+    *,
+    kpi_definition_id: int,
+    effective_at: datetime,
+    known_at: datetime,
+) -> KpiRevisionSeriesResolution:
+    """Resolve an exact revision series for shadow comparison only.
+
+    Membership is anchored by integer registry identity and direct reviewed
+    comparability rows. Names are never read, normalized, or used to widen the
+    result. Missing rollout bindings return an explicit ``legacy_unbound``.
+    """
+
+    definition_columns = _table_columns(conn, "kpi_definition_revisions")
+    if not definition_columns:
+        return _unbound_revision_resolution(kpi_definition_id)
+    if (
+        not _REVISION_DEFINITION_COLUMNS.issubset(definition_columns)
+        or not _REVISION_CONTEXT_COLUMNS.issubset(
+            _table_columns(conn, "kpi_fact_semantic_contexts")
+        )
+        or not _REVISION_COMPARABILITY_COLUMNS.issubset(
+            _table_columns(conn, "kpi_definition_comparability_revisions")
+        )
+        or not _REVISION_FACT_COLUMNS.issubset(_table_columns(conn, "kpi_facts"))
+    ):
+        return _historical_authority_unavailable_resolution(kpi_definition_id)
+    anchor = kpi_definition_revision_as_known(
+        conn,
+        kpi_definition_id=kpi_definition_id,
+        effective_at=effective_at,
+        known_at=known_at,
+    )
+    if anchor is None:
+        return _unbound_revision_resolution(kpi_definition_id)
+    anchor_id = anchor.kpi_definition_revision_id
+    if anchor.status is KpiDefinitionStatus.QUARANTINED:
+        return KpiRevisionSeriesResolution(
+            status=KpiRevisionSeriesStatus.QUARANTINED_DEFINITION,
+            kpi_definition_id=kpi_definition_id,
+            anchor_definition_revision_id=anchor_id,
+        )
+    if anchor.lifecycle is KpiDefinitionLifecycle.DISCONTINUED:
+        return KpiRevisionSeriesResolution(
+            status=KpiRevisionSeriesStatus.DISCONTINUED,
+            kpi_definition_id=kpi_definition_id,
+            anchor_definition_revision_id=anchor_id,
+        )
+
+    pair_rows = conn.execute(
+        "SELECT DISTINCT predecessor_definition_revision_id,successor_definition_revision_id "
+        "FROM kpi_definition_comparability_revisions "
+        "WHERE predecessor_definition_revision_id=? OR successor_definition_revision_id=?",
+        (anchor_id, anchor_id),
+    ).fetchall()
+    disposition_by_revision: dict[str, KpiDefinitionComparabilityDisposition] = {}
+    included_ids = {anchor_id}
+    related_ids: set[str] = set()
+    breaks: list[KpiRevisionSeriesBreak] = []
+    for pair in pair_rows:
+        predecessor_id = str(pair[0])
+        successor_id = str(pair[1])
+        related_id = successor_id if predecessor_id == anchor_id else predecessor_id
+        relation = kpi_definition_comparability_as_known(
+            conn,
+            first_definition_revision_id=anchor_id,
+            second_definition_revision_id=related_id,
+            effective_at=effective_at,
+            known_at=known_at,
+        )
+        if relation is None:
+            continue
+        related = kpi_definition_revision_by_id(
+            conn,
+            kpi_definition_revision_id=related_id,
+        )
+        if (
+            related is None
+            or related.status is not KpiDefinitionStatus.ADMITTED
+            or related.lifecycle is not KpiDefinitionLifecycle.ACTIVE
+            or related.effective_at > effective_at
+            or related.knowledge_at > known_at
+            or related.recorded_at > known_at
+        ):
+            continue
+        related_ids.add(related_id)
+        disposition_by_revision[related_id] = relation.disposition
+        if relation.disposition in {
+            KpiDefinitionComparabilityDisposition.CONTINUOUS,
+            KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK,
+        }:
+            included_ids.add(related_id)
+        if relation.disposition is KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK:
+            breaks.append(
+                KpiRevisionSeriesBreak(
+                    comparability_revision_id=relation.comparability_revision_id,
+                    related_definition_revision_id=related_id,
+                    relation_kind=relation.relation_kind.value,
+                )
+            )
+
+    same_root_rows = conn.execute(
+        "SELECT kpi_definition_revision_id FROM kpi_definition_revisions "
+        "WHERE kpi_definition_id=? AND datetime(effective_at)<=datetime(?) "
+        "AND datetime(knowledge_at)<=datetime(?) "
+        "AND datetime(recorded_at)<=datetime(?)",
+        (
+            kpi_definition_id,
+            effective_at.isoformat(),
+            known_at.isoformat(),
+            known_at.isoformat(),
+        ),
+    ).fetchall()
+    candidate_revision_ids = related_ids | {str(row[0]) for row in same_root_rows} | {anchor_id}
+    candidate_roots = {kpi_definition_id}
+    for revision_id in related_ids:
+        related = kpi_definition_revision_by_id(conn, kpi_definition_revision_id=revision_id)
+        if related is None:
+            raise RuntimeError("eligible related KPI definition disappeared")
+        candidate_roots.add(related.kpi_definition_id)
+    root_placeholders = ",".join("?" for _ in candidate_roots)
+    try:
+        canonical_fact_ids = canonical_fact_row_ids_as_known(
+            conn,
+            fact_table="kpi_facts",
+            effective_at=effective_at,
+            known_at=known_at,
+            concept_keys=tuple(f"kpi_definition:{root_id}" for root_id in sorted(candidate_roots)),
+        )
+    except HistoricalFactAuthorityUnavailableError:
+        return _historical_authority_unavailable_resolution(
+            kpi_definition_id,
+            anchor_definition_revision_id=anchor_id,
+            included_definition_revision_ids=tuple(sorted(included_ids)),
+            breaks=tuple(sorted(breaks, key=lambda item: item.related_definition_revision_id)),
+        )
+    fact_id_predicate = "0"
+    fact_id_parameters: tuple[object, ...] = ()
+    if canonical_fact_ids:
+        fact_id_predicate = ",".join("?" for _ in canonical_fact_ids)
+        fact_id_predicate = f"fact.id IN ({fact_id_predicate})"
+        fact_id_parameters = tuple(canonical_fact_ids)
+    fact_rows = conn.execute(
+        "SELECT fact.id,fact.kpi_definition_id,fact.period_end AS fact_period_end,"
+        "fact.unit AS fact_unit,"
+        "fact.currency AS fact_currency,context.status AS context_status,"
+        "context.metric_name_as_reported,context.reported_period_end,context.accounting_basis,"
+        "context.consolidation_scope,context.dimensions_json,context.unit_scale,"
+        "context.kpi_definition_revision_id,"
+        "definition.kpi_definition_revision_id AS definition_revision_id,"
+        "definition.kpi_definition_id AS definition_root_id,"
+        "definition.status AS definition_status,definition.lifecycle AS definition_lifecycle,"
+        "definition.reported_label AS definition_reported_label,"
+        "definition.accounting_basis AS definition_accounting_basis,"
+        "definition.consolidation_scope AS definition_consolidation_scope,"
+        "definition.dimensions_json AS definition_dimensions_json,"
+        "definition.unit_scale AS definition_unit_scale,"
+        "definition.unit_key AS definition_unit_key,"
+        "definition.currency AS definition_currency,"
+        "definition.currency_disposition AS definition_currency_disposition,"
+        "definition.effective_at AS definition_effective_at,"
+        "definition.knowledge_at AS definition_knowledge_at,"
+        "definition.recorded_at AS definition_recorded_at "
+        "FROM kpi_facts fact "
+        "LEFT JOIN kpi_fact_semantic_contexts context ON context.kpi_fact_id=fact.id "
+        "AND datetime(context.knowledge_at)<=datetime(?) "
+        "AND datetime(context.created_at)<=datetime(?) "
+        "AND NOT EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts context_successor "
+        "WHERE context_successor.supersedes_context_id=context.id "
+        "AND datetime(context_successor.knowledge_at)<=datetime(?) "
+        "AND datetime(context_successor.created_at)<=datetime(?)) "
+        "LEFT JOIN kpi_definition_revisions definition ON "
+        "definition.kpi_definition_revision_id=context.kpi_definition_revision_id "
+        f"WHERE {fact_id_predicate} "  # nosec B608 -- integer ids from canonical resolver
+        "AND datetime(fact.period_end)<=datetime(?) "
+        f"AND fact.kpi_definition_id IN ({root_placeholders}) ORDER BY fact.id",  # nosec B608
+        (
+            known_at.isoformat(),
+            known_at.isoformat(),
+            known_at.isoformat(),
+            known_at.isoformat(),
+            *fact_id_parameters,
+            effective_at.isoformat(),
+            *sorted(candidate_roots),
+        ),
+    ).fetchall()
+    eligible_fact_ids: list[int] = []
+    exclusion_counts: dict[KpiRevisionSeriesExclusionReason, int] = {}
+
+    def exclude(reason: KpiRevisionSeriesExclusionReason) -> None:
+        exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+
+    for row in fact_rows:
+        if row["context_status"] is None:
+            exclude(KpiRevisionSeriesExclusionReason.MISSING_SEMANTIC_HEAD)
+            continue
+        if str(row["context_status"]) != "admitted":
+            exclude(KpiRevisionSeriesExclusionReason.SEMANTIC_NOT_ADMITTED)
+            continue
+        if row["kpi_definition_revision_id"] is None:
+            exclude(KpiRevisionSeriesExclusionReason.LEGACY_UNBOUND)
+            continue
+        if (
+            row["definition_revision_id"] is not None
+            and row["definition_currency"] != row["fact_currency"]
+        ):
+            return _historical_authority_unavailable_resolution(
+                kpi_definition_id,
+                anchor_definition_revision_id=anchor_id,
+                included_definition_revision_ids=tuple(sorted(included_ids)),
+                breaks=tuple(sorted(breaks, key=lambda item: item.related_definition_revision_id)),
+            )
+        revision_id = str(row["kpi_definition_revision_id"])
+        if revision_id not in candidate_revision_ids or row["definition_revision_id"] is None:
+            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH)
+            continue
+        if str(row["definition_status"]) != "admitted":
+            exclude(KpiRevisionSeriesExclusionReason.QUARANTINED_DEFINITION)
+            continue
+        if str(row["definition_lifecycle"]) == "discontinued":
+            exclude(KpiRevisionSeriesExclusionReason.DISCONTINUED_DEFINITION)
+            continue
+        if (
+            _database_datetime(row["definition_knowledge_at"]) > known_at
+            or _database_datetime(row["definition_recorded_at"]) > known_at
+            or _database_datetime(row["definition_effective_at"]) > effective_at
+        ):
+            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH)
+            continue
+        if not _context_matches_revision(row, revision_id):
+            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH)
+            continue
+        if revision_id in included_ids:
+            eligible_fact_ids.append(int(row["id"]))
+            continue
+        disposition = disposition_by_revision.get(revision_id)
+        exclude(
+            KpiRevisionSeriesExclusionReason.NOT_COMPARABLE
+            if disposition is KpiDefinitionComparabilityDisposition.NOT_COMPARABLE
+            else KpiRevisionSeriesExclusionReason.NO_EXPLICIT_COMPARABILITY
+        )
+    exclusions = tuple(
+        KpiRevisionSeriesExclusion(reason=reason, count=count)
+        for reason, count in sorted(exclusion_counts.items(), key=lambda item: item[0].value)
+    )
+    return KpiRevisionSeriesResolution(
+        status=(
+            KpiRevisionSeriesStatus.ELIGIBLE_WITH_BREAK
+            if breaks
+            else KpiRevisionSeriesStatus.ELIGIBLE
+        ),
+        kpi_definition_id=kpi_definition_id,
+        anchor_definition_revision_id=anchor_id,
+        included_definition_revision_ids=tuple(sorted(included_ids)),
+        eligible_fact_ids=tuple(eligible_fact_ids),
+        breaks=tuple(sorted(breaks, key=lambda item: item.related_definition_revision_id)),
+        exclusions=exclusions,
+    )
 
 
 def normalize_kpi_name(name: str) -> str:

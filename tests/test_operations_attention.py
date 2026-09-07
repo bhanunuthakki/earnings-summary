@@ -29,7 +29,7 @@ from operations.attention import (
 from operations.models import OperationsRegistry, OperationsSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0037_commitment_scan_segment_coverage"
+HEAD = "0038_add_kpi_definition_revisions"
 NOW = datetime(2026, 8, 24, 18, 0, tzinfo=UTC)
 
 

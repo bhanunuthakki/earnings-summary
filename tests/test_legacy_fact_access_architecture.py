@@ -168,6 +168,26 @@ class _TransitionalReadExemption:
 # immutable observations can be captured atomically. Keep it outside the
 # frozen reader-debt count, but make both its scope and deletion gate executable.
 _TRANSITIONAL_READ_EXEMPTIONS = {
+    "src/compute/kpi_resolver.py": (
+        _TransitionalReadExemption(
+            function_name="_resolve_revision_aware_kpi_series",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after the shadow revision resolver consumes an immutable canonical "
+                "KPI projection carrying the exact definition and semantic context binding."
+            ),
+        ),
+    ),
+    "src/pipeline/kpi_semantics.py": (
+        _TransitionalReadExemption(
+            function_name="_validate_definition_binding",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after KPI semantic admission validates definition bindings against "
+                "the canonical source-fact projection instead of the legacy compatibility row."
+            ),
+        ),
+    ),
     "src/pipeline/kpi_semantic_review.py": (
         _TransitionalReadExemption(
             function_name="build_quarantined_kpi_correction_review",

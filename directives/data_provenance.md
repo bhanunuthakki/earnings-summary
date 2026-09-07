@@ -27,7 +27,52 @@ Every row in `documents` must have `(source_type, doc_type, file_path, sha256, f
 
 LLM-extracted documents must carry `parent_document_id` pointing at the primary document the LLM read from.
 
-### 2.1 Fiscal-period stamping drift (off-cycle-FYE issuers)
+### 2.1 Issuer KPI definition lineage
+
+An issuer-reported KPI value is decision-grade only when its current
+`kpi_fact_semantic_contexts` head binds one admitted **Issuer KPI Definition Revision**. The
+revision preserves the issuer's exact label and definition wording, effective and knowledge times,
+reporting entity, source document version and evidence node, locator, period kind, stock/flow
+behavior, accounting basis, consolidation scope, dimensions, and the same unit/currency authority
+used by the fact. The binding must be the exact revision selected by effective time, knowledge
+time, recorded time, and revision order for that fact period; an older merely eligible revision
+cannot substitute for it. During compatibility rollout a null binding is explicitly `legacy_unbound`; it
+remains readable by legacy paths but cannot enter the revision-aware series.
+
+`kpi_definitions` remains the stable registry and owner-configuration anchor. Its mutable display
+name, unit, cadence, thresholds, and source-routing fields do not establish semantic continuity.
+Normalized labels remain discovery aids only. They never create a definition revision, a rename,
+or series membership.
+
+Observations bound to different revisions may share a series only through a current, direct,
+source-evidenced **KPI Definition Comparability Revision** at the requested effective and knowledge
+cutoffs. Every non-anchor revision needs its own disposition against the anchor; continuity is not
+inferred transitively. Renames require exact source evidence, same-label/different-economics rows
+remain separate, splits and combinations cannot be continuous, and a currency change must surface
+as a comparability break or remain not comparable. `continuous` also requires identical existing
+unit authority and presentation scale until the owning resolver carries and proves exact value
+normalization; cross-family, ratio/percent, or scale continuity is never inferred. Continuous
+membership also requires equal period kind, stock/flow behavior, accounting basis, consolidation
+scope, and dimensions. `redefined`, `recast`, `restated`, split, and combined relations require a
+break or non-comparable disposition. A selected `discontinued` revision is terminal
+for that cutoff and cannot fall back to an older active revision.
+
+Revision-aware historical reads select fact rows from the immutable observation-resolution ledger
+at the same knowledge cutoff used for definitions and semantic heads. The selected observation,
+its observation-to-fact capture time, and the semantic head's knowledge and immutable creation
+times must all be visible by that cutoff. Before returning a legacy fact id, the resolver proves
+that every resolver-used mutable compatibility field still equals the selected immutable
+observation/link; the exact bound definition supplies the immutable currency expectation. That
+proof and all definition/context consumption occur inside one SQLite read snapshot, while a
+caller-owned transaction remains under caller control. A current resolved view is not historical
+evidence. If that proof or the complete resolution ledger is
+unavailable, the shadow resolver returns `historical_fact_authority_unavailable` and admits no rows.
+
+This issuer-definition lifecycle is upstream of the existing source-independent Canonical Metric
+ontology. Cross-company or cross-source comparison still requires the existing Canonical Metric
+mapping and binding records; the KPI lifecycle does not duplicate or bypass them.
+
+### 2.2 Fiscal-period stamping drift (off-cycle-FYE issuers)
 
 `(ticker, period_end)` matching (used by `src/provenance/llm_extracted_parent.py::resolve_parent` and any other exact-date join across `documents`) is only reliable if every ingestion path stamps `period_end` on the **same fiscal calendar** for a given ticker. Multiple independent modules each hardcode their own per-ticker "which tickers have a non-December fiscal year end" override table, keyed off filename conventions like `<TICKER>_Q<N>_<YYYY>` — and those tables can drift out of sync, silently mis-stamping `period_end` for tickers missing from one table but present in another. This is **not** the same failure mode as a genuinely-missing source document (§2's `parent_document_id` can legitimately stay NULL when no primary doc was ever fetched) — it produces an *orphan that looks unresolvable but has a perfectly good source sitting one calendar-quarter away*.
 

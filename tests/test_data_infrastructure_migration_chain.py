@@ -13,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import migration_schema_targets
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0037_commitment_scan_segment_coverage"
+HEAD = "0038_add_kpi_definition_revisions"
 SCHEDULE_CLASS_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 RETAINED_TABLES = {
     "archive_generations",
@@ -41,6 +41,8 @@ RETAINED_TABLES = {
     "position_sizing_intent_withdrawals",
     "position_sizing_intent_supersessions",
     "investment_profile_label_reviews",
+    "kpi_definition_comparability_revisions",
+    "kpi_definition_revisions",
 }
 
 

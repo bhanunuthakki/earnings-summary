@@ -372,6 +372,20 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Not to be confused with.** A **Source Taxonomy Component** or a fact value; a Canonical Metric defines intended economic meaning, while source facts remain independent assertions.
 **Subsumes.** Normalized economic metric and analytical metric.
 
+## Issuer KPI Definition Revision
+
+**Definition.** An append-only, bitemporal record of one issuer's verbatim KPI label and stated definition, with its exact reporting entity, effective and knowledge times, source document and locator, period behavior, scope, basis, dimensions, and existing unit/currency semantics. A fact binds the exact effective revision selected as known at its semantic cutoff; an older merely eligible revision cannot substitute. A revision describes what the issuer reported; a missing or quarantined revision cannot support a decision-grade KPI series.
+**Lives in.** `kpi_definition_revisions`, `src/pipeline/kpi_definition_revisions.py`, and the exact `kpi_definition_revision_id` binding on the current `kpi_fact_semantic_contexts` head.
+**Not to be confused with.** A **Canonical Metric Definition Revision**, which defines a source-independent analytical identity. Issuer KPI revisions retain source wording and never create cross-company identity by themselves.
+**Subsumes.** Issuer KPI rename history, stated-definition history, discontinuation state, and source-qualified legacy `kpi_definitions.name`/`unit` meaning.
+
+## KPI Definition Comparability Revision
+
+**Definition.** An append-only, bitemporal, source-evidenced disposition between two exact Issuer KPI Definition Revisions. It records rename, redefinition, recast, restatement, split, or combination lineage and states whether the pair is continuous, comparable with an explicit break, or not comparable.
+**Lives in.** `kpi_definition_comparability_revisions` and `src/pipeline/kpi_definition_revisions.py`; the shared KPI resolver consumes only direct current dispositions at the requested effective and knowledge cutoffs.
+**Not to be confused with.** Label normalization, alias search, or Canonical Metric mapping. A similar label proves nothing, every included non-anchor revision needs its own direct disposition, and currency, dimensional-family, unit-key, unnormalized presentation-scale, period, stock/flow, basis, scope, or dimension changes cannot be continuous. Redefinitions, recasts, and restatements require an explicit break or non-comparable disposition.
+**Subsumes.** KPI rename links and revision-to-revision comparability decisions.
+
 ## Canonical Axis
 
 **Definition.** A stable source-independent dimension axis identity that may be used in Canonical Metric Cells only after explicit source-axis admission.

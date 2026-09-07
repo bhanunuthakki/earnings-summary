@@ -3,13 +3,50 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.facts import Currency, FactLocator, Unit
+from pipeline.kpi_definition_revisions import (
+    IssuerKpiDefinitionRevision,
+    KpiDefinitionComparabilityRevision,
+    persist_kpi_definition_comparability_revision,
+    persist_kpi_definition_revision,
+)
 from pipeline.kpi_semantics import KpiSemanticContext, persist_kpi_semantic_context
 from provenance.financial_fact_resolution import require_exact_canonical_fact_row
+
+
+@contextmanager
+def _source_review_transaction(conn: sqlite3.Connection):
+    """Keep the caller's final commit/rollback boundary intact.
+
+    The semantic-refresh executor intentionally commits only after every entry
+    and postcondition passes, and rolls a dry run back. Releasing an outermost
+    SQLite savepoint would commit an idle connection prematurely, so an idle
+    writer starts one transaction here and leaves its successful boundary to
+    the caller. Existing transactions receive a nested savepoint.
+    """
+
+    nested = conn.in_transaction
+    if nested:
+        conn.execute("SAVEPOINT source_reviewed_kpi_supersession")
+    else:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except Exception:
+        if nested:
+            conn.execute("ROLLBACK TO SAVEPOINT source_reviewed_kpi_supersession")
+            conn.execute("RELEASE SAVEPOINT source_reviewed_kpi_supersession")
+        else:
+            conn.rollback()
+        raise
+    if nested:
+        conn.execute("RELEASE SAVEPOINT source_reviewed_kpi_supersession")
 
 
 def require_canonical_kpi_resolution(
@@ -42,6 +79,8 @@ def insert_source_reviewed_kpi_supersession(
     reviewer: str,
     knowledge_at: datetime,
     context: KpiSemanticContext,
+    definition_revision: IssuerKpiDefinitionRevision | None = None,
+    comparability_revisions: Sequence[KpiDefinitionComparabilityRevision] = (),
 ) -> int:
     """Append exactly one governed successor, independent of filing chronology.
 
@@ -51,64 +90,87 @@ def insert_source_reviewed_kpi_supersession(
     """
     if knowledge_at.tzinfo is None:
         raise ValueError("source-reviewed KPI knowledge_at must be timezone-aware")
-    predecessor = conn.execute(
-        "SELECT ticker,period_end,fiscal_period_type,kpi_definition_id FROM kpi_facts WHERE id=?",
-        (predecessor_id,),
-    ).fetchone()
-    if predecessor is None:
-        raise ValueError("source-reviewed KPI predecessor is missing")
-    successor = conn.execute(
-        "SELECT id FROM kpi_facts WHERE supersedes_id=? ORDER BY id DESC LIMIT 1",
-        (predecessor_id,),
-    ).fetchone()
-    actual_head = predecessor_id if successor is None else int(successor[0])
-    if actual_head != expected_head_id or expected_head_id != predecessor_id:
-        raise ValueError("source-reviewed KPI predecessor is not the exact current head")
-    locator_json = locator.to_json()
-    if locator_json is None:
-        raise ValueError("source-reviewed KPI correction requires a concrete locator")
-    cursor = conn.execute(
-        "INSERT INTO kpi_facts "
-        "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,currency,"
-        "source_doc_id,confidence,extracted_by,supersedes_id,locator,source_excerpt) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            str(predecessor["ticker"]).upper(),
-            predecessor["period_end"],
-            predecessor["fiscal_period_type"],
-            predecessor["kpi_definition_id"],
-            str(value),
-            unit.value,
-            None if currency is None else currency.value,
-            source_doc_id,
-            1.0,
-            f"source_review:{reviewer}",
-            predecessor_id,
-            locator_json,
-            source_excerpt,
-        ),
-    )
-    if cursor.lastrowid is None:
-        raise RuntimeError("source-reviewed KPI supersession did not return an identity")
-    new_id = int(cursor.lastrowid)
-    context_id = persist_kpi_semantic_context(
-        conn,
-        kpi_fact_id=new_id,
-        context=context,
-        reviewed_by=reviewer,
-        knowledge_at=knowledge_at,
-    )
-    if context_id is None:
-        raise RuntimeError("source-reviewed KPI semantic context table is unavailable")
-    _ = record_restatement_observation(
-        conn,
-        fact_table=KPI_FACTS,
-        superseded_id=predecessor_id,
-        new_value=value,
-    )
-    require_canonical_kpi_resolution(
-        conn,
-        fact_row_id=new_id,
-        knowledge_cutoff=knowledge_at,
-    )
-    return new_id
+    if definition_revision is None and comparability_revisions:
+        raise ValueError("comparability capture requires an exact definition revision")
+    if definition_revision is not None and (
+        definition_revision.knowledge_at > knowledge_at
+        or definition_revision.recorded_at > knowledge_at
+    ):
+        raise ValueError("fact review cannot predate its definition revision")
+    with _source_review_transaction(conn):
+        predecessor = conn.execute(
+            "SELECT ticker,period_end,fiscal_period_type,kpi_definition_id "
+            "FROM kpi_facts WHERE id=?",
+            (predecessor_id,),
+        ).fetchone()
+        if predecessor is None:
+            raise ValueError("source-reviewed KPI predecessor is missing")
+        successor = conn.execute(
+            "SELECT id FROM kpi_facts WHERE supersedes_id=? ORDER BY id DESC LIMIT 1",
+            (predecessor_id,),
+        ).fetchone()
+        actual_head = predecessor_id if successor is None else int(successor[0])
+        if actual_head != expected_head_id or expected_head_id != predecessor_id:
+            raise ValueError("source-reviewed KPI predecessor is not the exact current head")
+        binding_id: str | None = None
+        if definition_revision is not None:
+            if int(predecessor["kpi_definition_id"]) != definition_revision.kpi_definition_id:
+                raise ValueError("definition revision root does not match the KPI fact lifecycle")
+            persisted_definition = persist_kpi_definition_revision(conn, definition_revision)
+            binding_id = persisted_definition.kpi_definition_revision_id
+            for relation in comparability_revisions:
+                if binding_id not in {
+                    relation.predecessor_definition_revision_id,
+                    relation.successor_definition_revision_id,
+                }:
+                    raise ValueError("comparability capture must relate the captured definition")
+                _ = persist_kpi_definition_comparability_revision(conn, relation)
+        locator_json = locator.to_json()
+        if locator_json is None:
+            raise ValueError("source-reviewed KPI correction requires a concrete locator")
+        cursor = conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,currency,"
+            "source_doc_id,confidence,extracted_by,supersedes_id,locator,source_excerpt) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                str(predecessor["ticker"]).upper(),
+                predecessor["period_end"],
+                predecessor["fiscal_period_type"],
+                predecessor["kpi_definition_id"],
+                str(value),
+                unit.value,
+                None if currency is None else currency.value,
+                source_doc_id,
+                1.0,
+                f"source_review:{reviewer}",
+                predecessor_id,
+                locator_json,
+                source_excerpt,
+            ),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("source-reviewed KPI supersession did not return an identity")
+        new_id = int(cursor.lastrowid)
+        context_id = persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=new_id,
+            context=context,
+            reviewed_by=reviewer,
+            knowledge_at=knowledge_at,
+            kpi_definition_revision_id=binding_id,
+        )
+        if context_id is None:
+            raise RuntimeError("source-reviewed KPI semantic context table is unavailable")
+        _ = record_restatement_observation(
+            conn,
+            fact_table=KPI_FACTS,
+            superseded_id=predecessor_id,
+            new_value=value,
+        )
+        require_canonical_kpi_resolution(
+            conn,
+            fact_row_id=new_id,
+            knowledge_cutoff=knowledge_at,
+        )
+        return new_id

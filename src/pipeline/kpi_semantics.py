@@ -220,6 +220,7 @@ class KpiSemanticContextRevision(BaseModel):
     kpi_fact_id: int = Field(gt=0)
     revision: int = Field(gt=0)
     supersedes_context_id: int | None = Field(default=None, gt=0)
+    kpi_definition_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
     context: KpiSemanticContext
     reviewed_by: str = Field(min_length=1, max_length=128)
     knowledge_at: datetime
@@ -243,6 +244,156 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 def _columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
     return frozenset(str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
+class _DefinitionBindingUnspecified:
+    pass
+
+
+_DEFINITION_BINDING_UNSPECIFIED = _DefinitionBindingUnspecified()
+
+
+def _database_datetime(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def _canonical_dimensions(value: dict[str, str]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _fact_source_issuer(conn: sqlite3.Connection, *, source_doc_id: int) -> str | None:
+    if _table_exists(conn, "v_legacy_document_evidence_bindings_current"):
+        row = conn.execute(
+            "SELECT document.issuer_id FROM v_legacy_document_evidence_bindings_current binding "
+            "JOIN evidence_document_versions document "
+            "ON document.document_version_id=binding.document_version_id "
+            "WHERE binding.legacy_document_id=? LIMIT 1",
+            (source_doc_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row[0])
+    if _table_exists(conn, "evidence_document_versions"):
+        row = conn.execute(
+            "SELECT issuer_id FROM evidence_document_versions WHERE legacy_document_id=? "
+            "ORDER BY version_sequence DESC LIMIT 1",
+            (source_doc_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row[0])
+    return None
+
+
+def _validate_definition_binding(
+    conn: sqlite3.Connection,
+    *,
+    kpi_fact_id: int,
+    definition_revision_id: str,
+    context: KpiSemanticContext,
+    knowledge_at: datetime,
+) -> None:
+    if not _table_exists(conn, "kpi_definition_revisions"):
+        raise ValueError("KPI definition revision table is unavailable")
+    cursor = conn.execute(
+        "SELECT definition.kpi_definition_id,definition.reporting_entity_id,"
+        "definition.status,definition.lifecycle,definition.reported_label,"
+        "definition.accounting_basis,definition.consolidation_scope,"
+        "definition.dimensions_json,definition.unit_key,definition.unit_scale,"
+        "definition.currency_disposition,definition.currency,definition.effective_at,"
+        "definition.knowledge_at,definition.recorded_at,entity.issuer_id "
+        "FROM kpi_definition_revisions definition "
+        "JOIN reporting_entities entity "
+        "ON entity.reporting_entity_id=definition.reporting_entity_id "
+        "WHERE definition.kpi_definition_revision_id=?",
+        (definition_revision_id,),
+    )
+    definition = cursor.fetchone()
+    if definition is None:
+        raise ValueError("KPI definition revision binding target is missing")
+    definition_row = (
+        dict(definition)
+        if isinstance(definition, sqlite3.Row)
+        else {
+            str(column[0]): value
+            for column, value in zip(cursor.description or (), definition, strict=True)
+        }
+    )
+    fact_cursor = conn.execute(
+        "SELECT kpi_definition_id,period_end,unit,currency,source_doc_id FROM kpi_facts WHERE id=?",
+        (kpi_fact_id,),
+    )
+    fact = fact_cursor.fetchone()
+    if fact is None:
+        raise ValueError("KPI definition revision binding requires an existing fact")
+    fact_row = (
+        dict(fact)
+        if isinstance(fact, sqlite3.Row)
+        else {
+            str(column[0]): value
+            for column, value in zip(fact_cursor.description or (), fact, strict=True)
+        }
+    )
+    if int(str(definition_row["kpi_definition_id"])) != int(str(fact_row["kpi_definition_id"])):
+        raise ValueError("KPI definition revision root does not match the fact")
+    definition_effective = _database_datetime(definition_row["effective_at"])
+    fact_effective = _database_datetime(fact_row["period_end"])
+    if definition_effective > fact_effective:
+        raise ValueError("KPI definition revision is not effective for the fact period")
+    if _database_datetime(definition_row["knowledge_at"]) > knowledge_at:
+        raise ValueError("KPI semantic context predates its definition revision")
+    if _database_datetime(definition_row["recorded_at"]) > knowledge_at:
+        raise ValueError("KPI semantic context predates the recorded definition revision")
+    selected = conn.execute(
+        "SELECT kpi_definition_revision_id FROM kpi_definition_revisions "
+        "WHERE kpi_definition_id=? "
+        "AND datetime(effective_at)<=datetime(?) "
+        "AND datetime(knowledge_at)<=datetime(?) "
+        "AND datetime(recorded_at)<=datetime(?) "
+        "ORDER BY datetime(effective_at) DESC,datetime(knowledge_at) DESC,revision DESC "
+        "LIMIT 1",
+        (
+            fact_row["kpi_definition_id"],
+            fact_row["period_end"],
+            knowledge_at.isoformat(),
+            knowledge_at.isoformat(),
+        ),
+    ).fetchone()
+    if selected is None or str(selected[0]) != definition_revision_id:
+        raise ValueError("KPI fact must bind the exact effective definition revision as known")
+    if context.status is not KpiSemanticStatus.ADMITTED:
+        raise ValueError("only admitted KPI semantic contexts can bind a definition revision")
+    if (
+        context.reported_period_end is None
+        or context.reported_period_end != _database_datetime(fact_row["period_end"]).date()
+    ):
+        raise ValueError("KPI definition revision binding period does not match the fact")
+    if str(definition_row["status"]) != "admitted":
+        raise ValueError("KPI facts cannot bind a quarantined definition revision")
+    if str(definition_row["lifecycle"]) != "active":
+        raise ValueError("KPI facts cannot bind a discontinued definition revision")
+    exact_context = {
+        "accounting_basis": context.accounting_basis.value,
+        "consolidation_scope": context.consolidation_scope.value,
+        "dimensions_json": _canonical_dimensions(context.dimensions),
+        "reported_label": context.metric_name_as_reported,
+        "unit_scale": context.unit_scale.value,
+    }
+    if any(str(definition_row[key]) != value for key, value in exact_context.items()):
+        raise ValueError("KPI definition revision does not match the semantic context")
+    if str(definition_row["unit_key"]) != str(fact_row["unit"]):
+        raise ValueError("KPI definition revision unit does not match the fact")
+    fact_currency = None if fact_row["currency"] is None else str(fact_row["currency"])
+    definition_currency = (
+        None if definition_row["currency"] is None else str(definition_row["currency"])
+    )
+    if definition_currency != fact_currency:
+        raise ValueError("KPI definition revision currency does not match the fact")
+    expected_disposition = "explicit" if fact_currency is not None else "not_applicable"
+    if str(definition_row["currency_disposition"]) != expected_disposition:
+        raise ValueError("KPI definition revision currency disposition does not match the fact")
+    fact_issuer = _fact_source_issuer(conn, source_doc_id=int(str(fact_row["source_doc_id"])))
+    if fact_issuer is None or fact_issuer != str(definition_row["issuer_id"]):
+        raise ValueError("KPI definition revision and fact source issuer must agree")
 
 
 def _context_payload(context: KpiSemanticContext) -> tuple[object, ...]:
@@ -346,6 +497,12 @@ def current_kpi_semantic_context(
             if has_revisions and row["supersedes_context_id"] is not None
             else None
         ),
+        kpi_definition_revision_id=(
+            None
+            if "kpi_definition_revision_id" not in columns
+            or row["kpi_definition_revision_id"] is None
+            else str(row["kpi_definition_revision_id"])
+        ),
         context=_context_from_row(row, has_lane=has_lane),
         reviewed_by=(str(row["reviewed_by"]) if "reviewed_by" in columns else "legacy"),
         knowledge_at=(
@@ -363,12 +520,25 @@ def persist_kpi_semantic_context(
     context: KpiSemanticContext,
     reviewed_by: str = "pipeline",
     knowledge_at: datetime | None = None,
+    kpi_definition_revision_id: str | _DefinitionBindingUnspecified | None = (
+        _DEFINITION_BINDING_UNSPECIFIED
+    ),
 ) -> int | None:
     """Append a semantic-context revision, or return the idempotent current id."""
     table = "kpi_fact_semantic_contexts"
     if not _table_exists(conn, table):
         return None
     columns = _columns(conn, table)
+    observed = knowledge_at or datetime.now(UTC)
+    if observed.tzinfo is None:
+        raise ValueError("semantic context knowledge_at must be timezone-aware")
+    has_definition_binding = "kpi_definition_revision_id" in columns
+    if (
+        not isinstance(kpi_definition_revision_id, _DefinitionBindingUnspecified)
+        and kpi_definition_revision_id is not None
+        and not has_definition_binding
+    ):
+        raise ValueError("KPI semantic context schema cannot store a definition revision")
     if context.status is KpiSemanticStatus.ADMITTED:
         fact_columns = (
             _columns(conn, "kpi_facts") if _table_exists(conn, "kpi_facts") else frozenset[str]()
@@ -424,7 +594,27 @@ def persist_kpi_semantic_context(
     has_revisions = {"revision", "supersedes_context_id"}.issubset(columns)
     has_lane = "publication_lane" in columns
     current = current_kpi_semantic_context(conn, kpi_fact_id=kpi_fact_id)
-    if current is not None and current.context == context:
+    desired_definition_revision_id = (
+        current.kpi_definition_revision_id
+        if isinstance(kpi_definition_revision_id, _DefinitionBindingUnspecified)
+        and current is not None
+        else None
+        if isinstance(kpi_definition_revision_id, _DefinitionBindingUnspecified)
+        else kpi_definition_revision_id
+    )
+    if desired_definition_revision_id is not None:
+        _validate_definition_binding(
+            conn,
+            kpi_fact_id=kpi_fact_id,
+            definition_revision_id=desired_definition_revision_id,
+            context=context,
+            knowledge_at=observed,
+        )
+    if (
+        current is not None
+        and current.context == context
+        and current.kpi_definition_revision_id == desired_definition_revision_id
+    ):
         return current.id
     if not has_revisions and current is not None:
         raise ValueError("KPI fact semantic context conflicts with immutable persisted context")
@@ -466,11 +656,11 @@ def persist_kpi_semantic_context(
         insert_fields.append("reviewed_by")
         values.append(reviewed_by)
     if "knowledge_at" in columns:
-        observed = knowledge_at or datetime.now(UTC)
-        if observed.tzinfo is None:
-            raise ValueError("semantic context knowledge_at must be timezone-aware")
         insert_fields.append("knowledge_at")
         values.append(observed.astimezone(UTC).isoformat().replace("+00:00", "Z"))
+    if has_definition_binding:
+        insert_fields.append("kpi_definition_revision_id")
+        values.append(desired_definition_revision_id)
     placeholders = ",".join("?" for _ in values)
     cursor = conn.execute(
         f"INSERT INTO {table} ({','.join(insert_fields)}) VALUES ({placeholders})",  # nosec B608
