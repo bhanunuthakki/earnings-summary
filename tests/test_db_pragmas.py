@@ -113,12 +113,9 @@ def test_get_connection_rejects_exact_mac_checkout_path(
 def test_mac_checkout_case_alias_is_rejected_before_side_effects(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Case-folded aliases cannot bypass any direct SQLite entry point."""
+    """A case-folded database-name alias cannot bypass a direct entry point."""
     forbidden = PROJECT_ROOT / "data" / "portfolio.db"
-    alternate_parts = list(forbidden.parts)
-    assert alternate_parts[1] == "Applications"
-    alternate_parts[1] = "applications"
-    alternate = Path(*alternate_parts)
+    alternate = forbidden.with_name(forbidden.name.upper())
     assert alternate != forbidden
 
     monkeypatch.setattr(db, "PROJECT_ROOT", str(tmp_path))
