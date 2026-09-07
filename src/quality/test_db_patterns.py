@@ -11,42 +11,53 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from quality.git_env import clean_local_git_env
+from quality.test_db_invocations import (
+    apply_conversions as _apply_conversions,
+)
+from quality.test_db_invocations import (
+    collect_invocations as _collect_invocations,
+)
+from quality.test_db_invocations import (
+    normalize_conversions as _normalize_conversions,
+)
+from quality.test_db_models import (
+    BuilderClassification as BuilderClassification,
+)
+from quality.test_db_models import (
+    BuilderIdentity as BuilderIdentity,
+)
+from quality.test_db_models import (
+    BuilderInvocation as BuilderInvocation,
+)
+from quality.test_db_models import (
+    CollectionNote as CollectionNote,
+)
+from quality.test_db_models import (
+    Disposition as Disposition,
+)
+from quality.test_db_models import (
+    Evidence as Evidence,
+)
+from quality.test_db_models import (
+    FindingEvidence as FindingEvidence,
+)
+from quality.test_db_models import (
+    InvocationConversion as InvocationConversion,
+)
+from quality.test_db_models import (
+    PatternFinding as PatternFinding,
+)
+from quality.test_db_models import (
+    SourceLocator as SourceLocator,
+)
+from quality.test_db_models import (
+    Taxonomy as Taxonomy,
+)
+from quality.test_db_models import (
+    TestDbAudit as TestDbAudit,
+)
 
-Taxonomy = Literal[
-    "direct-downgrade",
-    "archived-graph",
-    "seeded-upgrade",
-    "direct-historical",
-    "custom-bootstrap",
-    "performance-volume",
-    "hand-DDL-unit-schema",
-    "cached-current-head",
-    "unclassified",
-]
-Evidence = Literal[
-    "call:downgrade",
-    "call:upgrade",
-    "call:stamp",
-    "call:create_all",
-    "call:executescript",
-    "call:migrated_db",
-    "sql:create table",
-    "sql:alter table",
-    "sql:create index",
-    "sql:create trigger",
-    "text:archived",
-    "text:seed",
-    "text:historical",
-    "text:bootstrap",
-    "text:volume",
-    "text:cached-head",
-]
-FindingEvidence = Literal[
-    "temporary-fixture", "checkout-default", "read-error", "invalid-utf8", "syntax-error"
-]
 HoldReason = Literal[
     "git-unavailable",
     "git-nonzero",
@@ -63,64 +74,13 @@ HoldReason = Literal[
     "invalid-porcelain",
     "scanner-closure-mismatch",
 ]
-CollectionNote = Literal[
-    "",
-    "git-unavailable",
-    "git-nonzero",
-    "invalid-head",
-    "invalid-git-utf8",
-    "invalid-git-framing",
-    "invalid-path",
-    "duplicate-path",
-    "empty-scope",
-    "missing-path",
-    "closure-untracked",
-    "closure-unreadable",
-    "dirty-tree",
-    "invalid-porcelain",
-    "scanner-closure-mismatch",
-]
-_STRICT = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-
-class PatternFinding(BaseModel):
-    model_config = _STRICT
-    path: str
-    line: int
-    kind: Literal["forbidden_checkout_default", "explicit_fixture", "parse_error"]
-    evidence: FindingEvidence
-
-
-class BuilderClassification(BaseModel):
-    model_config = _STRICT
-    path: str
-    taxonomy: Taxonomy
-    evidence: tuple[Evidence, ...]
-
-
-class TestDbAudit(BaseModel):
-    model_config = _STRICT
-    schema_version: Literal["test-db-patterns/v1"] = "test-db-patterns/v1"
-    scoped_commit: str
-    scanner_sha256: str
-    source_sha256: str
-    collection_status: Literal["COMPLETE", "HOLD"]
-    collection_note: CollectionNote = ""
-    raw_audit_status: Literal["PASS", "HOLD"]
-    admission_status: Literal["HOLD"] = "HOLD"
-    admission_reason: Literal["disposition_and_ratchet_deferred"] = (
-        "disposition_and_ratchet_deferred"
-    )
-    tracked_test_files: tuple[str, ...] = Field(default_factory=tuple)
-    database_builders: tuple[BuilderClassification, ...] = Field(default_factory=tuple)
-    counts_by_taxonomy: dict[str, int] = Field(default_factory=dict)
-    findings: tuple[PatternFinding, ...] = Field(default_factory=tuple)
-    violations: tuple[str, ...] = Field(default_factory=tuple)
 
 
 _CLOSURE = (
     "execution/audit_test_db_patterns.py",
     "src/quality/git_env.py",
+    "src/quality/test_db_invocations.py",
+    "src/quality/test_db_models.py",
     "src/quality/test_db_patterns.py",
 )
 _ROOTS = ("tests", "instruction_tests")
@@ -746,7 +706,21 @@ def _hold_receipt(note: HoldReason) -> TestDbAudit:
     )
 
 
-def audit_test_db_patterns(root: Path) -> TestDbAudit:
+def audit_test_db_patterns(
+    root: Path,
+    dispositions: tuple[object, ...] | list[object] | None = None,
+    *,
+    conversions: tuple[object, ...] | list[object] | None = None,
+    explicit_dispositions: tuple[object, ...] | list[object] | None = None,
+) -> TestDbAudit:
+    effective: tuple[InvocationConversion, ...] = tuple()
+    malformed_input = False
+    if dispositions is not None:
+        effective, malformed_input = _normalize_conversions(dispositions)
+    elif conversions is not None:
+        effective, malformed_input = _normalize_conversions(conversions)
+    elif explicit_dispositions is not None:
+        effective, malformed_input = _normalize_conversions(explicit_dispositions)
     try:
         repo = root.resolve()
     except OSError:
@@ -768,6 +742,7 @@ def audit_test_db_patterns(root: Path) -> TestDbAudit:
     source_digest = hashlib.sha256()
     findings: list[PatternFinding] = []
     builders: list[BuilderClassification] = []
+    invocations: list[BuilderInvocation] = []
     for path in paths:
         source_digest.update(path.encode("utf-8") + b"\x00")
         try:
@@ -795,6 +770,8 @@ def audit_test_db_patterns(root: Path) -> TestDbAudit:
             continue
         lowered = text.lower()
         base = _builder_evidence(tree)
+        file_sha = hashlib.sha256(raw).hexdigest()
+        invocations.extend(_collect_invocations(path, tree, file_sha))
         if base:
             enriched = _enrich_evidence(lowered, path, base)
             builders.append(
@@ -816,6 +793,14 @@ def audit_test_db_patterns(root: Path) -> TestDbAudit:
     except _HoldError as hold:
         return _hold_receipt(hold.note)
     builders_sorted = sorted(builders, key=lambda b: b.path)
+    decided = _apply_conversions(invocations, effective, repo)
+    if malformed_input:
+        decided = [
+            item.model_copy(update={"disposition": "HOLD"})
+            if item.canonical_identity is not None
+            else item
+            for item in decided
+        ]
     counts: dict[str, int] = {}
     for item in builders_sorted:
         counts[item.taxonomy] = counts.get(item.taxonomy, 0) + 1
@@ -839,4 +824,17 @@ def audit_test_db_patterns(root: Path) -> TestDbAudit:
         counts_by_taxonomy=dict(sorted(counts.items())),
         findings=tuple(sorted(findings, key=lambda f: (f.path, f.line, f.kind))),
         violations=tuple(sorted(violations)),
+        builder_invocations=tuple(
+            sorted(
+                decided,
+                key=lambda item: (
+                    item.path,
+                    item.locator.start_line,
+                    item.locator.start_col,
+                    item.locator.end_line,
+                    item.locator.end_col,
+                    item.invocation_id,
+                ),
+            )
+        ),
     )

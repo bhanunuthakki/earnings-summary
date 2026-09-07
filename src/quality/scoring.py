@@ -7,11 +7,35 @@ import hashlib
 import json
 import subprocess
 import sys
-from pathlib import Path, PurePosixPath
-from typing import Literal
+from pathlib import Path
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from quality.admission_policy import (
+    RUNTIME_POLICY_SHA256 as _RUNTIME_POLICY_SHA256,
+)
+from quality.admission_policy import (
+    SOURCE_PATHS as _SOURCE_PATHS,
+)
+from quality.admission_policy import (
+    ParsedSource as _ParsedSource,
+)
+from quality.admission_policy import (
+    SourceName as _SourceName,
+)
+from quality.admission_policy import (
+    evaluate_slot as _evaluate_slot,
+)
+from quality.admission_policy import (
+    parse_source as _parse_source,
+)
+from quality.admission_policy import (
+    required_paths as _required_paths,
+)
+from quality.admission_policy import (
+    verify_registry as _verify_registry,
+)
 from quality.architecture import (
     COMPOSITION_ROOTS,
     ArchitectureMetrics,
@@ -21,12 +45,21 @@ from quality.architecture import (
     build_architecture_receipt,
     compare_architecture,
 )
+from quality.evidence_path_policy import (
+    admission_path_for as _admission_path_for,
+)
+from quality.evidence_path_policy import (
+    is_canonical_generator_path as _is_canonical_generator_path,
+)
+from quality.evidence_path_policy import (
+    is_canonical_receipt_path as _is_canonical_receipt_path,
+)
 from quality.git_env import clean_local_git_env
 
 SCORE_RESULT_SCHEMA = "quality-score-result-v1"
 SCORE_EVIDENCE_SCHEMA = "quality-score-evidence-v1"
 ADMISSION_SCHEMA = "quality-score-admission/v1"
-ADMISSION_GENERATOR_PATH = "src/quality/roadmap_reconciliation.py"
+ADMISSION_GENERATOR_PATH = "src/quality/admission_policy.py"
 DECLARATIVE_EXCEPTION_CAP = 3
 DIAGNOSTIC_ITEM_CAP = 20
 DIAGNOSTIC_TEXT_CAP = 200
@@ -34,42 +67,6 @@ _HEX40 = r"^[0-9a-f]{40}$"
 _HEX64 = r"^[0-9a-f]{64}$"
 
 EvidenceState = Literal["pass", "fail", "missing"]
-
-
-def _is_canonical_receipt_path(value: str) -> bool:
-    if not value or value.startswith("/") or "\\" in value:
-        return False
-    try:
-        parts = PurePosixPath(value).parts
-    except Exception:
-        return False
-    if len(parts) < 3 or value != str(PurePosixPath(value)):
-        return False
-    if parts[0] != "docs" or parts[1] != "quality":
-        return False
-    if any(p in ("..", ".", "") for p in parts):
-        return False
-    if ".." in value.split("/"):
-        return False
-    return value.endswith(".json")
-
-
-def _is_canonical_generator_path(value: str) -> bool:
-    if not value or value.startswith("/") or "\\" in value:
-        return False
-    try:
-        parts = PurePosixPath(value).parts
-    except Exception:
-        return False
-    if value != str(PurePosixPath(value)):
-        return False
-    if any(p in ("..", ".", "") for p in parts):
-        return False
-    if ".." in value.split("/"):
-        return False
-    if not value.endswith(".py"):
-        return False
-    return value.startswith("src/quality/") or value.startswith("execution/")
 
 
 class EvidenceEntry(StrictModel):
@@ -107,7 +104,7 @@ class AdmissionReceipt(StrictModel):
     subject_commit: str = Field(pattern=_HEX40)
     generator_path: str
     generator_sha256: str = Field(pattern=_HEX64)
-    sources: tuple[AdmissionSource, ...] = Field(min_length=1)
+    sources: tuple[AdmissionSource, ...] = Field(min_length=0)
 
     @model_validator(mode="after")
     def _check_admission(self) -> AdmissionReceipt:
@@ -116,6 +113,8 @@ class AdmissionReceipt(StrictModel):
         paths = [s.path for s in self.sources]
         if len(set(paths)) != len(paths):
             raise ValueError("duplicate source paths")
+        if self.state == "pass" and len(self.sources) == 0:
+            raise ValueError("pass requires nonempty sources")
         object.__setattr__(self, "subject_commit", self.subject_commit.lower())
         object.__setattr__(self, "generator_sha256", self.generator_sha256.lower())
         return self
@@ -251,6 +250,15 @@ def _bound_diagnostics(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
         return bounded
     summary = f"{len(values) - DIAGNOSTIC_ITEM_CAP + 1} additional diagnostics omitted"
     return (*bounded[:-1], summary)
+
+
+def _reject_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError(f"duplicate JSON key: {k}")
+        out[k] = v
+    return out
 
 
 def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
@@ -414,6 +422,8 @@ class _AdmissionVerifier:
         scoped_commit: str,
     ) -> tuple[Literal["pass", "fail"] | None, str]:
         try:
+            if not _verify_registry():
+                return None, "admission registry mismatch"
             subject, subject_err = self._subject_commit(scoped_commit)
             if subject is None:
                 return None, subject_err or "subject commit does not resolve exactly"
@@ -425,13 +435,27 @@ class _AdmissionVerifier:
                 if bundle_err == "bundle commit does not resolve exactly":
                     return None, bundle_err
                 return None, bundle_err or "evidence-only diff is unverifiable"
+            expected_path = _admission_path_for(expected_kind, expected_key)
+            if entry.receipt_path != expected_path or entry.receipt_path not in changed:
+                return None, "admission receipt path mismatch"
             raw = self._show(entry.bundle_commit.lower(), entry.receipt_path)
             if raw is None:
                 return None, "admission receipt is missing in bundle"
             if hashlib.sha256(raw).hexdigest() != entry.sha256:
                 return None, "admission receipt SHA-256 mismatch"
             try:
-                admission = AdmissionReceipt.model_validate_json(raw)
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return None, "admission receipt schema is invalid"
+            try:
+                payload: object = json.loads(text, object_pairs_hook=_reject_pairs)
+            except ValueError:
+                return None, "admission receipt schema is invalid"
+            if not isinstance(payload, dict):
+                return None, "admission receipt schema is invalid"
+            payload = cast("dict[str, object]", payload)
+            try:
+                admission = AdmissionReceipt.model_validate(payload)
             except (UnicodeDecodeError, ValueError, ValidationError):
                 return None, "admission receipt schema is invalid"
             if admission.kind != expected_kind:
@@ -445,8 +469,11 @@ class _AdmissionVerifier:
             generator = self._show(subject, admission.generator_path)
             if generator is None:
                 return None, "generator is missing at subject"
-            if hashlib.sha256(generator).hexdigest() != admission.generator_sha256:
+            _subject_gen = hashlib.sha256(generator).hexdigest()
+            if _subject_gen != admission.generator_sha256:
                 return None, "generator hash mismatch"
+            if _RUNTIME_POLICY_SHA256.lower() != _subject_gen.lower():
+                return None, "runtime admission policy differs from subject generator"
             for source in admission.sources:
                 if source.path == entry.receipt_path:
                     return None, "admission receipt cannot cite itself"
@@ -455,14 +482,52 @@ class _AdmissionVerifier:
                     return None, "source receipt is missing in bundle"
                 if hashlib.sha256(source_bytes).hexdigest() != source.sha256:
                     return None, "source receipt hash mismatch"
+            try:
+                req_paths = _required_paths(expected_key)
+            except ValueError:
+                return None, "admission key mismatch"
+            path_to_source: dict[str, _SourceName] = {v: k for k, v in _SOURCE_PATHS.items()}
+            parsed: dict[_SourceName, _ParsedSource] = {}
+            for req_path in req_paths:
+                blob = self._show(entry.bundle_commit.lower(), req_path)
+                if blob is None:
+                    continue
+                req_name = path_to_source.get(req_path)
+                if req_name is None:
+                    return None, "source receipt is not registered"
                 try:
-                    source_payload = json.loads(source_bytes.decode("utf-8"))
-                except (UnicodeDecodeError, ValueError):
-                    return None, "source receipt is not valid JSON"
-                if not isinstance(source_payload, dict):
-                    return None, "source receipt has invalid schema"
-                if source_payload.get("schema_version") != source.schema_version:
+                    item = _parse_source(req_name, blob, admission.subject_commit)
+                except ValueError:
+                    return None, "source receipt is not registered"
+                if not item.typed_valid:
+                    return None, "source receipt is typed-invalid"
+                parsed[req_name] = item
+            typed_paths: set[str] = {_SOURCE_PATHS[n] for n in parsed}
+            expected_set = set(req_paths) & typed_paths
+            claimed_set = {s.path for s in admission.sources}
+            if claimed_set != expected_set:
+                return None, "admission sources are forged"
+            if tuple(sorted(claimed_set)) != tuple(s.path for s in admission.sources):
+                return None, "admission sources are unsorted"
+            for source in admission.sources:
+                req_name2 = path_to_source.get(source.path)
+                if req_name2 is None:
+                    return None, "admission sources are forged"
+                if req_name2 not in parsed:
+                    return None, "admission sources are forged"
+                live = parsed[req_name2]
+                if live.sha256 != source.sha256:
+                    return None, "source receipt hash mismatch"
+                if live.schema_version != source.schema_version:
                     return None, "source receipt schema mismatch"
+                if live.path != source.path:
+                    return None, "source receipt path mismatch"
+            try:
+                expected_state = _evaluate_slot(expected_key, parsed)
+            except ValueError:
+                return None, "admission verification failed"
+            if admission.state != expected_state:
+                return None, "admission state is forged"
             return admission.state, "immutable admission verified"
         except (OSError, RuntimeError, ValueError):
             return None, "admission verification failed"
@@ -475,6 +540,8 @@ def score_quality(
     repo_root: Path | None = None,
 ) -> QualityScoreReceipt:
     validate_registry()
+    if not _verify_registry():
+        raise ValueError("admission registry mismatch")
     root = repo_root or Path(__file__).resolve().parents[2]
     verifier = _AdmissionVerifier(root)
     trusted_architecture, subject_tree_matches = _rebuild_claimed_architecture(root, architecture)

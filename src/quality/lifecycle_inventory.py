@@ -149,20 +149,20 @@ def _load_graph(root: Path) -> tuple[ReachabilityGraph, str]:
         graph = ReachabilityGraph.model_validate(graph_payload)
     except (OSError, ValidationError, ValueError, UnicodeDecodeError) as exc:
         raise LifecycleError(f"invalid typed reachability graph: {exc}") from exc
-    if graph.hold:
-        raise LifecycleError("typed reachability graph is on HOLD")
+    if graph.collection_status != "COMPLETE":
+        raise LifecycleError(f"typed reachability collection incomplete: {graph.collection_status}")
     try:
         fresh = build_graph(root)
     except ReachabilityCollectionError as exc:
         raise LifecycleError(f"typed reachability collection failed: {exc}") from exc
+    if fresh.collection_status != "COMPLETE":
+        raise LifecycleError(f"typed reachability collection incomplete: {fresh.collection_status}")
     if (
         graph.source_manifest_sha256 != fresh.source_manifest_sha256
         or graph.scanner_sha256 != fresh.scanner_sha256
         or graph.parser != fresh.parser
     ):
         raise LifecycleError("typed reachability graph is stale for the current worktree")
-    if fresh.hold:
-        raise LifecycleError("fresh current-worktree reachability graph is on HOLD")
     if graph.model_dump(mode="json") != fresh.model_dump(mode="json"):
         raise LifecycleError("typed reachability graph is stale for the current worktree")
     return graph, hashlib.sha256(raw).hexdigest()
@@ -246,6 +246,10 @@ def build_inventory(root: Path) -> LifecycleInventory:
     policy, policy_ev = _load_policy(root)
     task_by_xml = {t.xml: t for t in manifest.tasks}
     violations: list[str] = []
+    if graph.hold:
+        violations.append("typed reachability graph is on HOLD")
+        violations.extend(graph.collection_reasons)
+        violations.extend(graph.closure_reasons)
     try:
         policy_expired = date.fromisoformat(policy.review_on) < date.today()
     except ValueError:

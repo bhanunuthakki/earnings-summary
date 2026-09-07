@@ -1418,3 +1418,34 @@ def test_cli_late_hardlink_swap_is_replaced_atomically(
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "PASS"
     assert not output.is_symlink()
     assert not os.path.samefile(protected, output)
+
+
+def test_held_typed_graph_reports_typed_hold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repo(tmp_path)
+    graph_path = repo / ".tmp/quality/reachability-check.json"
+    payload = build_graph(repo).model_dump(mode="json")
+    payload["hold"] = True
+    payload["collection_reasons"] = ["held collection reason"]
+    payload["closure_reasons"] = ["held closure reason"]
+    held = ReachabilityGraph.model_validate(payload)
+    _w(graph_path, held.model_dump_json(indent=2))
+
+    def held_graph(_root: Path) -> ReachabilityGraph:
+        return held
+
+    monkeypatch.setattr(lifecycle_inventory_module, "build_graph", held_graph)
+
+    inventory = build_inventory(repo)
+    assert inventory.status == "HOLD"
+    assert "typed reachability graph is on HOLD" in inventory.violations
+    assert "held collection reason" in inventory.violations
+    assert "held closure reason" in inventory.violations
+
+    output = repo / ".tmp/held-inventory.json"
+    assert cli_main(["--repo-root", str(repo), "--output", str(output)]) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "HOLD"
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "HOLD"

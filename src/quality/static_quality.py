@@ -7,6 +7,8 @@ files; command output is retained as an evidence receipt under ``.tmp``.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import fnmatch
 import hashlib
 import io
@@ -22,12 +24,14 @@ from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from quality.git_env import clean_local_git_env, is_git_executable
 
 MAX_EXCEPTIONS = 3
 MAX_STDOUT_BYTES = 100_000
+MAX_RECEIPT_BYTES = 5_000_000
+MAX_RECEIPT_BASE64_LEN = 6_666_668
 PROJECT_PYTHON_TOKEN = "<project-python>"
 CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 
@@ -44,6 +48,23 @@ class DiagnosticSummary(BaseModel):
     diagnostics_by_rule: dict[str, int] = Field(default_factory=dict)
     command_hash: str
     version_hash: str
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt_bytes: int = Field(ge=0, le=MAX_RECEIPT_BYTES)
+    receipt_base64: str = Field(max_length=MAX_RECEIPT_BASE64_LEN)
+
+    @model_validator(mode="after")
+    def _verify_receipt(self: DiagnosticSummary) -> DiagnosticSummary:
+        try:
+            raw = base64.b64decode(self.receipt_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("invalid receipt_base64") from exc
+        if len(raw) != self.receipt_bytes:
+            raise ValueError("receipt_bytes mismatch")
+        if hashlib.sha256(raw).hexdigest() != self.receipt_sha256:
+            raise ValueError("receipt_sha256 mismatch")
+        if len(self.receipt_base64) != (self.receipt_bytes + 2) // 3 * 4:
+            raise ValueError("receipt_base64 length mismatch")
+        return self
 
 
 class RuntimeIdentity(BaseModel):
@@ -56,7 +77,7 @@ class RuntimeIdentity(BaseModel):
 
 class StaticQualityInventory(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: str = "bha-120.v2"
+    schema_version: str = "bha-120.v3"
     repo_root: str
     tracked_python_files: int
     active: list[str]
@@ -140,6 +161,18 @@ def _version(executable: str, root: Path, runner: CommandRunner) -> str:
     if result.returncode or not result.stdout.strip():
         raise InventoryFailure(f"required tool unavailable: {executable}")
     return result.stdout.strip().splitlines()[0]
+
+
+def _write_receipt(path: Path, text: str) -> tuple[str, int, str]:
+    data = text.encode("utf-8")
+    if len(data) > MAX_RECEIPT_BYTES:
+        raise InventoryFailure("static-quality receipt exceeds size limit")
+    try:
+        path.write_bytes(data)
+    except OSError as exc:
+        raise InventoryFailure(f"unable to write static-quality receipt: {path.name}") from exc
+    encoded = base64.b64encode(data).decode("ascii")
+    return hashlib.sha256(data).hexdigest(), len(data), encoded
 
 
 def _sha(value: str) -> str:
@@ -264,6 +297,9 @@ def _summary(
     version: str,
     receipt: Path,
     root: Path,
+    receipt_sha256: str,
+    receipt_bytes: int,
+    receipt_base64: str,
 ) -> DiagnosticSummary:
     rows = _json_diagnostics(result.stdout, tool) if tool in {"ruff", "pyright"} else []
     by_dir: Counter[str] = Counter()
@@ -290,6 +326,9 @@ def _summary(
         diagnostics_by_rule=dict(sorted(by_rule.items())),
         command_hash=_sha("\0".join(logical_command)),
         version_hash=_sha(version),
+        receipt_sha256=receipt_sha256,
+        receipt_bytes=receipt_bytes,
+        receipt_base64=receipt_base64,
     )
 
 
@@ -369,13 +408,8 @@ def inventory(
                 f"{tool} command failed ({result.returncode}): {' '.join(command)}"
             )
         receipt = receipt_dir / name
-        try:
-            receipt.write_text(
-                result.stdout + ("\n" + result.stderr if result.stderr else ""),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            raise InventoryFailure(f"unable to write static-quality receipt: {name}") from exc
+        text = result.stdout + ("\n" + result.stderr if result.stderr else "")
+        digest, size, encoded = _write_receipt(receipt, text)
         if name == "ruff-format.txt":
             count = len(
                 re.findall(
@@ -395,10 +429,15 @@ def inventory(
                     receipt_path=receipt.relative_to(root).as_posix(),
                     command_hash=_sha("\0".join(logical_command)),
                     version_hash=_sha(version),
+                    receipt_sha256=digest,
+                    receipt_bytes=size,
+                    receipt_base64=encoded,
                 )
             )
         else:
-            diagnostics.append(_summary(tool, command, result, version, receipt, root))
+            diagnostics.append(
+                _summary(tool, command, result, version, receipt, root, digest, size, encoded)
+            )
     suppressions: dict[str, dict[str, int]] = {}
     for path in files:
         try:
@@ -411,13 +450,8 @@ def inventory(
     type_ignores = sum(counts["# type: ignore"] for counts in suppressions.values())
     pyright_ignores = sum(counts["# pyright: ignore"] for counts in suppressions.values())
     ignore_receipt = receipt_dir / "source-ignore-comments.txt"
-    try:
-        ignore_receipt.write_text(
-            f"# type: ignore: {type_ignores}\n# pyright: ignore: {pyright_ignores}\n",
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        raise InventoryFailure("unable to write suppression receipt") from exc
+    ignore_text = f"# type: ignore: {type_ignores}\n# pyright: ignore: {pyright_ignores}\n"
+    ignore_digest, ignore_size, ignore_encoded = _write_receipt(ignore_receipt, ignore_text)
     diagnostics.append(
         DiagnosticSummary(
             tool="source-ignore-comments",
@@ -432,6 +466,9 @@ def inventory(
             },
             command_hash=_sha("tracked-source-scan"),
             version_hash=_sha("n/a"),
+            receipt_sha256=ignore_digest,
+            receipt_bytes=ignore_size,
+            receipt_base64=ignore_encoded,
         )
     )
     exclusion_map: dict[str, list[str]] = {}

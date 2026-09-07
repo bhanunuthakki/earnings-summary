@@ -16,6 +16,7 @@ from quality.architecture import (
     analyze_sources,
     build_architecture_receipt,
 )
+from quality.evidence_path_policy import admission_path_for
 from quality.git_env import clean_local_git_env
 from quality.scoring import (
     ADMISSION_GENERATOR_PATH,
@@ -30,7 +31,9 @@ from quality.scoring import (
 )
 
 GEN_PATH = ADMISSION_GENERATOR_PATH
-GEN_BODY = "def check(value: int) -> int:\n    return value + 1\n"
+GEN_BODY = (Path(__file__).resolve().parents[1] / ADMISSION_GENERATOR_PATH).read_text(
+    encoding="utf-8"
+)
 SOURCE_REF = "docs/quality/upstream.json"
 SOURCE_SCHEMA = "test-upstream/v1"
 SOURCE_BODY = b'{"schema_version":"test-upstream/v1","status":"PASS"}\n'
@@ -83,6 +86,16 @@ class HermeticRepo:
         self, kind: str, key: str, state: str, subject: str | None = None
     ) -> dict[str, object]:
         subj = subject or self.subject
+        if state == "fail":
+            sources: list[dict[str, object]] = []
+        else:
+            sources = [
+                {
+                    "path": SOURCE_REF,
+                    "sha256": SOURCE_SHA,
+                    "schema_version": SOURCE_SCHEMA,
+                }
+            ]
         return {
             "schema_version": ADMISSION_SCHEMA,
             "kind": kind,
@@ -91,13 +104,7 @@ class HermeticRepo:
             "subject_commit": subj,
             "generator_path": GEN_PATH,
             "generator_sha256": self.gen_sha,
-            "sources": [
-                {
-                    "path": SOURCE_REF,
-                    "sha256": SOURCE_SHA,
-                    "schema_version": SOURCE_SCHEMA,
-                }
-            ],
+            "sources": sources,
         }
 
     def commit_bundle(
@@ -132,7 +139,7 @@ class HermeticRepo:
         for key, _label, _points in SCORE_BLOCKS:
             if key.startswith("elegance."):
                 continue
-            rel = f"docs/quality/block-{key.replace('.', '-')}.json"
+            rel = admission_path_for("block", key)
             raw = self.receipts[rel]
             blocks[key] = EvidenceEntry(
                 receipt_path=rel,
@@ -143,7 +150,7 @@ class HermeticRepo:
                 pass  # state lives inside receipt; rebuilt by caller variant
         hard: dict[str, EvidenceEntry] = {}
         for key in HARD_GATES:
-            rel = f"docs/quality/gate-{key.replace('_', '-')}.json"
+            rel = admission_path_for("hard_gate", key)
             raw = self.receipts[rel]
             hard[key] = EvidenceEntry(
                 receipt_path=rel, sha256=hashlib.sha256(raw).hexdigest(), bundle_commit=self.bundle
@@ -179,11 +186,11 @@ def _commit_admission_bundle(
     for key, _l, _p in SCORE_BLOCKS:
         if key.startswith("elegance."):
             continue
-        payloads[f"docs/quality/block-{key.replace('.', '-')}.json"] = repo.admission(
+        payloads[admission_path_for("block", key)] = repo.admission(
             "block", key, "fail" if key in block_fails else "pass"
         )
     for key in HARD_GATES:
-        payloads[f"docs/quality/gate-{key.replace('_', '-')}.json"] = repo.admission(
+        payloads[admission_path_for("hard_gate", key)] = repo.admission(
             "hard_gate", key, "fail" if key in gate_fails else "pass"
         )
     repo.commit_bundle(payloads)
@@ -234,8 +241,9 @@ def test_admission_model_rejects_bad_paths_hashes_duplicates() -> None:
         AdmissionReceipt.model_validate({**good, "generator_path": "/tmp/evil.py"})
     with pytest.raises(ValidationError):
         AdmissionReceipt.model_validate({**good, "generator_sha256": "zz"})
+    AdmissionReceipt.model_validate({**good, "state": "fail", "sources": []})
     with pytest.raises(ValidationError):
-        AdmissionReceipt.model_validate({**good, "sources": []})
+        AdmissionReceipt.model_validate({**good, "state": "pass", "sources": []})
     with pytest.raises(ValidationError):
         AdmissionReceipt.model_validate(
             {
@@ -309,25 +317,71 @@ def test_admission_rejects_unregistered_generator_and_self_source(
     assert result.verdict == "HOLD"
 
 
-def test_verified_100_pass(tmp_path: Path) -> None:
+def test_old_roadmap_path_cannot_substitute(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    architecture = _arch(repo)
+    evidence = repo.evidence()
+    key = "maintainability.static_quality"
+    entry = evidence.blocks[key]
+    payload = repo.admission("block", key, "pass")
+    payload["generator_path"] = "src/quality/roadmap_reconciliation.py"
+    payload["generator_sha256"] = hashlib.sha256(b"old-roadmap\n").hexdigest()
+    _replace_bundle_receipt(repo, entry.receipt_path, payload)
+    replacement = EvidenceEntry(
+        receipt_path=entry.receipt_path,
+        sha256=hashlib.sha256(repo.receipts[entry.receipt_path]).hexdigest(),
+        bundle_commit=repo.bundle,
+    )
+    result = score_quality(
+        architecture,
+        evidence.model_copy(update={"blocks": {**evidence.blocks, key: replacement}}),
+        None,
+        repo.root,
+    )
+    assert next(item for item in result.blocks if item.key == key).state == "missing"
+    assert result.verdict == "HOLD"
+
+
+def test_adversarial_generic_source_awards_only_architecture(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     result = score_quality(_arch(repo), repo.evidence(), None, repo.root)
-    assert result.score_points == 100 and result.verdict == "PASS"
+    assert result.score_points == 25 and result.verdict == "HOLD"
+    non_arch = [b for b in result.blocks if not b.key.startswith("elegance.")]
+    assert len(non_arch) == 14
+    assert all(b.state == "missing" and b.awarded == 0 for b in non_arch)
+    assert sum(b.awarded for b in result.blocks if b.key.startswith("elegance.")) == 25
 
 
-def test_verified_90_pass(tmp_path: Path) -> None:
+def test_adversarial_generic_source_with_declared_fail_still_hold(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, block_fails={"efficiency.integrity_audit"})
     result = score_quality(_arch(repo), repo.evidence(), None, repo.root)
-    assert result.score_points == 90 and result.verdict == "PASS"
+    assert result.score_points == 25 and result.verdict == "HOLD"
+    failed = next(b for b in result.blocks if b.key == "efficiency.integrity_audit")
+    assert failed.state == "fail" and failed.awarded == 0
+    others = [b for b in result.blocks if not b.key.startswith("elegance.")]
+    others = [b for b in others if b.key != "efficiency.integrity_audit"]
+    assert all(b.state == "missing" and b.awarded == 0 for b in others)
 
 
-def test_verified_89_fail(tmp_path: Path) -> None:
+def test_adversarial_generic_source_with_two_declared_fails_still_hold(
+    tmp_path: Path,
+) -> None:
     repo = _make_repo(
         tmp_path,
         block_fails={"maintainability.static_quality", "maintainability.sustainable_tests"},
     )
     r89 = score_quality(_arch(repo), repo.evidence(), None, repo.root)
-    assert r89.score_points == 89 and r89.verdict == "FAIL"
+    assert r89.score_points == 25 and r89.verdict == "HOLD"
+    for key in ("maintainability.static_quality", "maintainability.sustainable_tests"):
+        block = next(b for b in r89.blocks if b.key == key)
+        assert block.state == "fail" and block.awarded == 0
+    missing_passes = [
+        b
+        for b in r89.blocks
+        if not b.key.startswith("elegance.")
+        and b.key not in ("maintainability.static_quality", "maintainability.sustainable_tests")
+    ]
+    assert missing_passes and all(b.state == "missing" for b in missing_passes)
 
 
 def test_ordinary_failed_block_zero(tmp_path: Path) -> None:
@@ -336,7 +390,10 @@ def test_ordinary_failed_block_zero(tmp_path: Path) -> None:
     key = "maintainability.static_quality"
     block = next(b for b in result.blocks if b.key == key)
     assert block.state == "fail" and block.awarded == 0
-    assert result.score_points == 92
+    assert result.score_points == 25
+    assert result.verdict == "HOLD"
+    forged = [b for b in result.blocks if not b.key.startswith("elegance.") and b.key != key]
+    assert forged and all(b.state == "missing" and b.awarded == 0 for b in forged)
 
 
 def test_missing_evidence_hold(tmp_path: Path) -> None:
@@ -354,7 +411,11 @@ def test_missing_evidence_hold(tmp_path: Path) -> None:
 def test_hard_gate_fail(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, gate_fails={HARD_GATES[0]})
     result = score_quality(_arch(repo), repo.evidence(), None, repo.root)
-    assert result.verdict == "FAIL" and HARD_GATES[0] in result.hard_gate_failures
+    assert result.verdict == "HOLD" and HARD_GATES[0] in result.hard_gate_failures
+    assert result.hard_gate_missing
+    assert result.score_points == 25
+    forged_blocks = [b for b in result.blocks if not b.key.startswith("elegance.")]
+    assert forged_blocks and all(b.state == "missing" for b in forged_blocks)
 
 
 def _hold_for_tamper(tmp_path: Path, mode: str) -> None:
@@ -477,6 +538,34 @@ def test_untrusted_receipt_hold(tmp_path: Path, mode: str) -> None:
     _hold_for_tamper(tmp_path, mode)
 
 
+def test_receipt_path_must_match_canonical_admission_path(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    architecture = _arch(repo)
+    evidence = repo.evidence()
+    target = "maintainability.static_quality"
+    control = "maintainability.duplication"
+    before = score_quality(architecture, evidence, None, repo.root)
+    control_before = next(item for item in before.blocks if item.key == control)
+    swapped_path = admission_path_for("block", control)
+    assert swapped_path != admission_path_for("block", target)
+    tampered = evidence.blocks[target].model_copy(update={"receipt_path": swapped_path})
+    after = score_quality(
+        architecture,
+        evidence.model_copy(update={"blocks": {**evidence.blocks, target: tampered}}),
+        None,
+        repo.root,
+    )
+    target_after = next(item for item in after.blocks if item.key == target)
+    assert target_after.state == "missing"
+    assert "admission receipt path mismatch" in target_after.reason
+    assert after.verdict == "HOLD"
+    control_after = next(item for item in after.blocks if item.key == control)
+    assert (control_after.state, control_after.awarded) == (
+        control_before.state,
+        control_before.awarded,
+    )
+
+
 def test_noncanonical_path_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValidationError):
         EvidenceEntry(receipt_path="/tmp/evil.json", sha256="ab" * 32, bundle_commit="ab" * 20)
@@ -498,9 +587,13 @@ def test_unknown_keys_fail_closed(tmp_path: Path) -> None:
         receipt_path="docs/quality/extra.json", sha256="ab" * 32, bundle_commit=repo.bundle
     )
     ev2 = ev.model_copy(update={"blocks": {**ev.blocks, "bogus.block": extra}})
-    assert score_quality(arch, ev2, None, repo.root).verdict == "FAIL"
+    result2 = score_quality(arch, ev2, None, repo.root)
+    assert result2.verdict == "HOLD"
+    assert "unknown score block: bogus.block" in result2.hard_gate_failures
     ev3 = ev.model_copy(update={"hard_gates": {**ev.hard_gates, "bogus_gate": extra}})
-    assert score_quality(arch, ev3, None, repo.root).verdict == "FAIL"
+    result3 = score_quality(arch, ev3, None, repo.root)
+    assert result3.verdict == "HOLD"
+    assert "unknown hard gate: bogus_gate" in result3.hard_gate_failures
 
 
 def test_architecture_regression(tmp_path: Path) -> None:
@@ -517,7 +610,9 @@ def test_architecture_regression(tmp_path: Path) -> None:
     _commit_admission_bundle(repo)
     grown = _arch(repo)
     result = score_quality(grown, repo.evidence(), base, repo.root)
-    assert result.verdict == "FAIL" and result.architecture_regressions
+    assert result.verdict == "HOLD" and result.architecture_regressions
+    assert result.score_points == 25
+    assert result.hard_gate_missing
 
 
 def test_architecture_blocks_need_no_caller_pass(tmp_path: Path) -> None:
@@ -527,7 +622,9 @@ def test_architecture_blocks_need_no_caller_pass(tmp_path: Path) -> None:
     # Architecture elegance blocks are recomputed; evidence omits them entirely.
     assert not any(k.startswith("elegance.") for k in ev.blocks)
     result = score_quality(arch, ev, None, repo.root)
-    assert result.score_points == 100
+    assert result.score_points == 25
+    assert result.verdict == "HOLD"
+    assert all(b.state == "missing" for b in result.blocks if not b.key.startswith("elegance."))
 
 
 def test_forged_architecture_metrics_hold_and_cannot_change_points(tmp_path: Path) -> None:
@@ -537,7 +634,7 @@ def test_forged_architecture_metrics_hold_and_cannot_change_points(tmp_path: Pat
     forged_sources["src/oversized.py"] = "\n".join(f"x{i}={i}" for i in range(1002))
     forged = architecture.model_copy(update={"metrics": analyze_sources(forged_sources)})
     result = score_quality(forged, repo.evidence(), None, repo.root)
-    assert result.score_points == 100
+    assert result.score_points == 25
     assert result.verdict == "HOLD"
     assert "architecture_subject_tree" in result.hard_gate_missing
 
@@ -558,7 +655,8 @@ def test_clean_worktree_can_match_exact_subject(tmp_path: Path) -> None:
     _run(repo.root, "checkout", "-q", repo.subject)
     architecture = build_architecture_receipt(repo.root, "WORKTREE")
     result = score_quality(architecture, repo.evidence(), None, repo.root)
-    assert result.verdict == "PASS"
+    assert result.verdict == "HOLD"
+    assert result.score_points == 25
     assert "architecture_subject_tree" not in result.hard_gate_missing
 
 
@@ -588,8 +686,8 @@ def test_shared_context_git_call_bound(tmp_path: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(mod, "_git", _counting)
     result = score_quality(arch, ev, None, repo.root)
-    assert result.verdict == "PASS" and result.score_points == 100
-    assert calls <= 40, f"expected shared bundle/blob context, got {calls} git calls"
+    assert result.verdict == "HOLD" and result.score_points == 25
+    assert calls <= 48, f"expected shared bundle/blob context, got {calls} git calls"
 
 
 def test_admission_git_reads_ignore_inherited_repo_context(
@@ -601,14 +699,15 @@ def test_admission_git_reads_ignore_inherited_repo_context(
     architecture = _arch(repo)
     evidence = repo.evidence()
     result = score_quality(architecture, evidence, None, repo.root)
-    assert result.verdict == "PASS"
+    assert result.verdict == "HOLD"
+    assert result.score_points == 25
 
 
 def test_no_database(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     assert list(repo.root.rglob("*.db")) == [] and list(repo.root.rglob("*.sqlite")) == []
     result = score_quality(_arch(repo), repo.evidence(), None, repo.root)
-    assert result.verdict == "PASS"
+    assert result.verdict == "HOLD" and result.score_points == 25
 
 
 def test_direct_cli_and_boundary_registration() -> None:
@@ -683,3 +782,16 @@ def test_ratchet_cli_rejects_dirty_worktree_claim(tmp_path: Path) -> None:
         "event": "architecture_measurement_failed",
         "error_type": "ValueError",
     }
+
+
+def test_runtime_policy_drift_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import quality.admission_policy as _policy
+    import quality.scoring as _scoring
+
+    repo = _make_repo(tmp_path)
+    monkeypatch.setattr(_policy, "RUNTIME_POLICY_SHA256", "0" * 64)
+    monkeypatch.setattr(_scoring, "_RUNTIME_POLICY_SHA256", "0" * 64)
+    result = score_quality(_arch(repo), repo.evidence(), None, repo.root)
+    assert result.verdict == "HOLD"
+    assert result.score_points == 25
+    assert all(b.state == "missing" for b in result.blocks if not b.key.startswith("elegance."))
