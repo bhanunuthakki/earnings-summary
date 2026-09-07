@@ -85,6 +85,10 @@ reconstructs historical insertion counts from row existence. Earlier v5/v6 manif
 write an explicit null definition binding; they remain `legacy_unbound` rather than inheriting a
 definition from current database state.
 
+During this transition, bind-existing source review reads the legacy KPI row only to verify its
+registry root and exact no-successor head. This two-read guard retires when source-reviewed binding
+uses the immutable canonical projection for both identity and head validation.
+
 ### 2.2 Fiscal-period stamping drift (off-cycle-FYE issuers)
 
 `(ticker, period_end)` matching (used by `src/provenance/llm_extracted_parent.py::resolve_parent` and any other exact-date join across `documents`) is only reliable if every ingestion path stamps `period_end` on the **same fiscal calendar** for a given ticker. Multiple independent modules each hardcode their own per-ticker "which tickers have a non-December fiscal year end" override table, keyed off filename conventions like `<TICKER>_Q<N>_<YYYY>` — and those tables can drift out of sync, silently mis-stamping `period_end` for tickers missing from one table but present in another. This is **not** the same failure mode as a genuinely-missing source document (§2's `parent_document_id` can legitimately stay NULL when no primary doc was ever fetched) — it produces an *orphan that looks unresolvable but has a perfectly good source sitting one calendar-quarter away*.
