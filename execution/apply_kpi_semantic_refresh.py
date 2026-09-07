@@ -18,6 +18,7 @@ import sys
 import tempfile
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -67,6 +68,15 @@ from operations.review_bundle import (  # noqa: E402
     database_lineage_identity,
     review_code_identity,
 )
+from pipeline.kpi_definition_revisions import (  # noqa: E402
+    IssuerKpiDefinitionRevision,
+    KpiDefinitionComparabilityRevision,
+    current_kpi_definition_comparability_revision,
+    current_kpi_definition_revision,
+    kpi_definition_revision_by_id,
+    validate_kpi_definition_comparability_candidate,
+    validate_kpi_definition_revision_candidate,
+)
 from pipeline.kpi_semantic_review import (  # noqa: E402
     KpiEvidenceLocatorCoordinates,
     fact_locator_from_evidence_coordinates,
@@ -84,6 +94,7 @@ from pipeline.kpi_semantics import (  # noqa: E402
     validate_admitted_unit_scale,
 )
 from pipeline.kpi_source_review import (  # noqa: E402
+    bind_source_reviewed_kpi_definition,
     insert_source_reviewed_kpi_supersession,
     require_canonical_kpi_resolution,
 )
@@ -207,6 +218,10 @@ class RefreshEntry(BaseModel):
     locator: FactLocator
     context: KpiSemanticContext
     semantic_evidence: SemanticEvidenceQuotes
+    expected_definition_head_id: str | None = Field(default=None, min_length=1, max_length=128)
+    expected_definition_revision: int = Field(default=0, ge=0)
+    definition_revision: IssuerKpiDefinitionRevision | None = None
+    comparability_revisions: tuple[KpiDefinitionComparabilityRevision, ...] = ()
     expected_inserted_fact_rows: Literal[0, 1]
     expected_inserted_context_rows: Literal[1] = 1
 
@@ -250,13 +265,37 @@ class RefreshEntry(BaseModel):
             raise ValueError("dimension evidence values must exactly match semantic dimensions")
         if set(evidence.dimension_quotes) != set(self.context.dimensions):
             raise ValueError("dimension evidence quote keys must match semantic dimensions")
+        if (self.expected_definition_head_id is None) != (self.expected_definition_revision == 0):
+            raise ValueError("definition head and revision-zero expectations conflict")
+        if self.definition_revision is not None:
+            definition = self.definition_revision
+            if definition.kpi_definition_id <= 0:
+                raise ValueError("reviewed definition requires its canonical KPI root")
+            if definition.reported_label != self.context.metric_name_as_reported:
+                raise ValueError("definition label must match the reviewed semantic context")
+            if definition.unit_key != self.unit:
+                raise ValueError("definition unit must match the reviewed fact unit")
+            if definition.unit_scale is not self.context.unit_scale:
+                raise ValueError("definition scale must match the reviewed semantic context")
+            if definition.accounting_basis is not self.context.accounting_basis:
+                raise ValueError("definition basis must match the reviewed semantic context")
+            if definition.consolidation_scope is not self.context.consolidation_scope:
+                raise ValueError("definition scope must match the reviewed semantic context")
+            if definition.dimensions != self.context.dimensions:
+                raise ValueError("definition dimensions must match the reviewed semantic context")
+            if definition.currency != self.currency:
+                raise ValueError("definition currency must match the reviewed fact currency")
         return self
 
 
 class RefreshManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_refresh.v5", "kpi_semantic_refresh.v6"]
+    schema_version: Literal[
+        "kpi_semantic_refresh.v5",
+        "kpi_semantic_refresh.v6",
+        "kpi_semantic_refresh.v7",
+    ]
     user_id: str = Field(min_length=1, max_length=128)
     logical_idempotency_key: str = Field(min_length=1, max_length=256)
     reviewer: str = Field(min_length=1, max_length=128)
@@ -268,11 +307,12 @@ class RefreshManifest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _v6_requires_explicit_predecessor_resolution_state(cls, value: object) -> object:
+    def _version_requires_explicit_entry_fields(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
         payload = cast(dict[str, object], value)
-        if payload.get("schema_version") != "kpi_semantic_refresh.v6":
+        schema_version = payload.get("schema_version")
+        if schema_version not in {"kpi_semantic_refresh.v6", "kpi_semantic_refresh.v7"}:
             return payload
         raw_entries = payload.get("entries")
         if not isinstance(raw_entries, (list, tuple)):
@@ -286,6 +326,20 @@ class RefreshManifest(BaseModel):
             raise ValueError(
                 "kpi_semantic_refresh.v6 requires predecessor_resolution_state on every entry"
             )
+        if schema_version == "kpi_semantic_refresh.v7" and any(
+            not isinstance(entry, RefreshEntry)
+            and (
+                not isinstance(entry, dict)
+                or not {
+                    "expected_definition_head_id",
+                    "expected_definition_revision",
+                    "definition_revision",
+                    "comparability_revisions",
+                }.issubset(cast(dict[str, object], entry))
+            )
+            for entry in entries
+        ):
+            raise ValueError("kpi_semantic_refresh.v7 requires complete definition capture fields")
         return payload
 
     @model_validator(mode="after")
@@ -294,6 +348,85 @@ class RefreshManifest(BaseModel):
             entry.predecessor_resolution_state != "canonical_current" for entry in self.entries
         ):
             raise ValueError("kpi_semantic_refresh.v5 supports canonical-current predecessors only")
+        if self.schema_version == "kpi_semantic_refresh.v7":
+            if any(entry.definition_revision is None for entry in self.entries):
+                raise ValueError("kpi_semantic_refresh.v7 requires a reviewed definition revision")
+            for entry in self.entries:
+                definition = entry.definition_revision
+                if definition is None:
+                    continue
+                if (
+                    definition.reviewed_by != self.reviewer
+                    or definition.knowledge_at > self.knowledge_at
+                    or definition.recorded_at > self.knowledge_at
+                ):
+                    raise ValueError("definition revision is not bound to the manifest review")
+                for relation in entry.comparability_revisions:
+                    if (
+                        relation.reviewed_by != self.reviewer
+                        or relation.knowledge_at > self.knowledge_at
+                        or relation.recorded_at > self.knowledge_at
+                    ):
+                        raise ValueError(
+                            "comparability revision is not bound to the manifest review"
+                        )
+            definitions = [
+                entry.definition_revision
+                for entry in self.entries
+                if entry.definition_revision is not None
+            ]
+            relations = [
+                relation for entry in self.entries for relation in entry.comparability_revisions
+            ]
+            duplicate_checks: tuple[tuple[list[object], str], ...] = (
+                (
+                    [definition.kpi_definition_revision_id for definition in definitions],
+                    "definition revision identities",
+                ),
+                (
+                    [definition.idempotency_key for definition in definitions],
+                    "definition idempotency keys",
+                ),
+                (
+                    [definition.commitment_sha256 for definition in definitions],
+                    "definition commitments",
+                ),
+                (
+                    [relation.comparability_revision_id for relation in relations],
+                    "comparability revision identities",
+                ),
+                (
+                    [relation.idempotency_key for relation in relations],
+                    "comparability idempotency keys",
+                ),
+                (
+                    [relation.commitment_sha256 for relation in relations],
+                    "comparability commitments",
+                ),
+                (
+                    [
+                        frozenset(
+                            (
+                                relation.predecessor_definition_revision_id,
+                                relation.successor_definition_revision_id,
+                            )
+                        )
+                        for relation in relations
+                    ],
+                    "comparability pairs",
+                ),
+            )
+            for values, label in duplicate_checks:
+                if len(values) != len(set(values)):
+                    raise ValueError(f"v7 manifest repeats {label}")
+        elif any(
+            entry.definition_revision is not None
+            or entry.comparability_revisions
+            or entry.expected_definition_head_id is not None
+            or entry.expected_definition_revision != 0
+            for entry in self.entries
+        ):
+            raise ValueError("legacy refresh manifests cannot carry definition capture")
         return self
 
     @model_serializer(mode="wrap")
@@ -304,8 +437,6 @@ class RefreshManifest(BaseModel):
         if not isinstance(serialized, dict):
             raise TypeError("refresh manifest serializer must return an object")
         payload = cast(dict[str, object], serialized)
-        if self.schema_version != "kpi_semantic_refresh.v5":
-            return payload
         raw_entries = payload.get("entries")
         if not isinstance(raw_entries, (list, tuple)):
             raise TypeError("refresh manifest entries must serialize as an array")
@@ -315,7 +446,16 @@ class RefreshManifest(BaseModel):
             if not isinstance(raw_entry, dict):
                 raise TypeError("refresh manifest entries must serialize as objects")
             entry = cast(dict[str, object], raw_entry).copy()
-            entry.pop("predecessor_resolution_state", None)
+            if self.schema_version == "kpi_semantic_refresh.v5":
+                entry.pop("predecessor_resolution_state", None)
+            if self.schema_version != "kpi_semantic_refresh.v7":
+                for field in (
+                    "expected_definition_head_id",
+                    "expected_definition_revision",
+                    "definition_revision",
+                    "comparability_revisions",
+                ):
+                    entry.pop(field, None)
             entries.append(entry)
         return {**payload, "entries": entries}
 
@@ -655,6 +795,62 @@ def _validate_entry(
         raise RepairBlockedError("source_issuer_mismatch")
     if str(row["definition_unit"]) != entry.unit.value:
         raise RepairBlockedError("definition_unit_mismatch")
+    definition = entry.definition_revision
+    if definition is not None:
+        if definition.kpi_definition_id != definition_id:
+            raise RepairBlockedError("definition_revision_root_mismatch")
+        current_definition = current_kpi_definition_revision(conn, kpi_definition_id=definition_id)
+        actual_definition_head = (
+            None if current_definition is None else current_definition.kpi_definition_revision_id
+        )
+        actual_definition_revision = (
+            0 if current_definition is None else current_definition.revision
+        )
+        if (actual_definition_head, actual_definition_revision) != (
+            entry.expected_definition_head_id,
+            entry.expected_definition_revision,
+        ):
+            raise RepairBlockedError("definition_revision_head_changed")
+        evidence = conn.execute(
+            "SELECT run.document_version_id,node.locator_json "
+            "FROM evidence_nodes node JOIN evidence_extraction_runs run "
+            "ON run.extraction_run_id=node.extraction_run_id WHERE node.node_id=?",
+            (entry.evidence_node_id,),
+        ).fetchone()
+        if evidence is None:
+            raise RepairBlockedError("definition_evidence_missing")
+        try:
+            source_locator = json.loads(str(evidence["locator_json"]))
+        except json.JSONDecodeError as exc:
+            raise RepairBlockedError("definition_evidence_locator_invalid") from exc
+        if (
+            definition.source_document_version_id != str(evidence["document_version_id"])
+            or definition.source_evidence_node_id != entry.evidence_node_id
+            or definition.source_locator != source_locator
+        ):
+            raise RepairBlockedError("definition_evidence_binding_mismatch")
+        for relation in entry.comparability_revisions:
+            if (
+                relation.source_document_version_id != definition.source_document_version_id
+                or relation.source_evidence_node_id != definition.source_evidence_node_id
+                or relation.source_locator != definition.source_locator
+            ):
+                raise RepairBlockedError("comparability_evidence_binding_mismatch")
+        try:
+            validate_kpi_definition_revision_candidate(
+                conn,
+                definition,
+                expected_definition_head_id=entry.expected_definition_head_id,
+                expected_definition_revision=entry.expected_definition_revision,
+            )
+            for relation in entry.comparability_revisions:
+                validate_kpi_definition_comparability_candidate(
+                    conn,
+                    relation,
+                    proposed_definition=definition,
+                )
+        except (sqlite3.Error, ValueError, RuntimeError) as exc:
+            raise RepairBlockedError("definition_lineage_validation_failed") from exc
     if entry.action == "bind_existing":
         if entry.source_doc_id != int(row["source_doc_id"]):
             raise RepairBlockedError("bind_source_does_not_match_fact")
@@ -667,6 +863,17 @@ def _validate_entry(
 validate_refresh_entry = _validate_entry
 
 
+@dataclass(frozen=True, slots=True)
+class _EntryEffect:
+    inserted_fact_rows: int
+    inserted_context_rows: int
+    inserted_definition_rows: int
+    inserted_comparability_rows: int
+    fact_head_id: int
+    definition_revision_id: str | None
+    definition_commitment_sha256: str | None
+
+
 def _apply_entry(
     conn: sqlite3.Connection,
     *,
@@ -674,27 +881,106 @@ def _apply_entry(
     entry: RefreshEntry,
     row: sqlite3.Row,
     source_type: SourceType,
-) -> tuple[int, int, int]:
+) -> _EntryEffect:
     persisted_context = _context_for_entry(entry)
-    if entry.action == "bind_existing":
-        context_id = persist_kpi_semantic_context(
+    definition = entry.definition_revision
+    definition_ids_before = {
+        definition.kpi_definition_revision_id
+        for definition in (() if definition is None else (definition,))
+        if kpi_definition_revision_by_id(
             conn,
-            kpi_fact_id=entry.old_fact_id,
-            context=persisted_context,
-            reviewed_by=manifest.reviewer,
-            knowledge_at=manifest.knowledge_at,
+            kpi_definition_revision_id=definition.kpi_definition_revision_id,
         )
-        if context_id is None:
-            raise RepairBlockedError("semantic_context_insert_unavailable")
-        try:
-            require_canonical_kpi_resolution(
+        is not None
+    }
+    relation_ids_before = {
+        relation.comparability_revision_id
+        for relation in entry.comparability_revisions
+        if conn.execute(
+            "SELECT 1 FROM kpi_definition_comparability_revisions "
+            "WHERE comparability_revision_id=?",
+            (relation.comparability_revision_id,),
+        ).fetchone()
+        is not None
+    }
+
+    def definition_effect_counts() -> tuple[int, int]:
+        definition_ids_after = {
+            candidate.kpi_definition_revision_id
+            for candidate in (() if definition is None else (definition,))
+            if kpi_definition_revision_by_id(
                 conn,
-                fact_row_id=entry.old_fact_id,
-                knowledge_cutoff=manifest.knowledge_at,
+                kpi_definition_revision_id=candidate.kpi_definition_revision_id,
             )
-        except (sqlite3.Error, ValueError, RuntimeError) as exc:
-            raise RepairBlockedError("canonical_fact_resolution_failed") from exc
-        return 0, 1, entry.old_fact_id
+            is not None
+        }
+        relation_ids_after = {
+            relation.comparability_revision_id
+            for relation in entry.comparability_revisions
+            if conn.execute(
+                "SELECT 1 FROM kpi_definition_comparability_revisions "
+                "WHERE comparability_revision_id=?",
+                (relation.comparability_revision_id,),
+            ).fetchone()
+            is not None
+        }
+        return (
+            len(definition_ids_after - definition_ids_before),
+            len(relation_ids_after - relation_ids_before),
+        )
+
+    if entry.action == "bind_existing":
+        if definition is None:
+            context_id = persist_kpi_semantic_context(
+                conn,
+                kpi_fact_id=entry.old_fact_id,
+                context=persisted_context,
+                reviewed_by=manifest.reviewer,
+                knowledge_at=manifest.knowledge_at,
+                kpi_definition_revision_id=None,
+            )
+            if context_id is None:
+                raise RepairBlockedError("semantic_context_insert_unavailable")
+            try:
+                require_canonical_kpi_resolution(
+                    conn,
+                    fact_row_id=entry.old_fact_id,
+                    knowledge_cutoff=manifest.knowledge_at,
+                )
+            except (sqlite3.Error, ValueError, RuntimeError) as exc:
+                raise RepairBlockedError("canonical_fact_resolution_failed") from exc
+        else:
+            try:
+                _ = bind_source_reviewed_kpi_definition(
+                    conn,
+                    fact_id=entry.old_fact_id,
+                    expected_fact_head_id=entry.expected_fact_head_id,
+                    expected_definition_head_id=entry.expected_definition_head_id,
+                    expected_definition_revision=entry.expected_definition_revision,
+                    reviewer=manifest.reviewer,
+                    knowledge_at=manifest.knowledge_at,
+                    context=persisted_context,
+                    definition_revision=definition,
+                    comparability_revisions=entry.comparability_revisions,
+                )
+            except RepairBlockedError:
+                raise
+            except (sqlite3.Error, ValueError, RuntimeError) as exc:
+                raise RepairBlockedError("source_reviewed_definition_binding_failed") from exc
+        inserted_definitions, inserted_relations = definition_effect_counts()
+        return _EntryEffect(
+            inserted_fact_rows=0,
+            inserted_context_rows=1,
+            inserted_definition_rows=inserted_definitions,
+            inserted_comparability_rows=inserted_relations,
+            fact_head_id=entry.old_fact_id,
+            definition_revision_id=(
+                None if definition is None else definition.kpi_definition_revision_id
+            ),
+            definition_commitment_sha256=(
+                None if definition is None else definition.commitment_sha256
+            ),
+        )
     del source_type
     try:
         new_fact_id = insert_source_reviewed_kpi_supersession(
@@ -710,13 +996,30 @@ def _apply_entry(
             reviewer=manifest.reviewer,
             knowledge_at=manifest.knowledge_at,
             context=persisted_context,
+            definition_revision=definition,
+            comparability_revisions=entry.comparability_revisions,
+            expected_definition_head_id=entry.expected_definition_head_id,
+            expected_definition_revision=(
+                None if definition is None else entry.expected_definition_revision
+            ),
         )
     except (sqlite3.Error, ValueError, RuntimeError) as exc:
         raise RepairBlockedError("source_reviewed_supersession_failed") from exc
     context = current_kpi_semantic_context(conn, kpi_fact_id=new_fact_id)
     if context is None or context.context != persisted_context:
         raise RepairBlockedError("semantic_context_postcondition_failed")
-    return 1, 1, new_fact_id
+    inserted_definitions, inserted_relations = definition_effect_counts()
+    return _EntryEffect(
+        inserted_fact_rows=1,
+        inserted_context_rows=1,
+        inserted_definition_rows=inserted_definitions,
+        inserted_comparability_rows=inserted_relations,
+        fact_head_id=new_fact_id,
+        definition_revision_id=(
+            None if definition is None else definition.kpi_definition_revision_id
+        ),
+        definition_commitment_sha256=(None if definition is None else definition.commitment_sha256),
+    )
 
 
 def _require_canonical_result_heads(
@@ -809,8 +1112,44 @@ def _validate_applied_entry_postcondition(
         or context.context != _context_for_entry(entry)
         or context.reviewed_by != manifest.reviewer
         or context.knowledge_at != manifest.knowledge_at
+        or context.kpi_definition_revision_id
+        != (
+            None
+            if entry.definition_revision is None
+            else entry.definition_revision.kpi_definition_revision_id
+        )
     ):
         raise RepairBlockedError("replay_semantic_context_changed")
+    definition = entry.definition_revision
+    if definition is not None:
+        persisted_definition = kpi_definition_revision_by_id(
+            conn,
+            kpi_definition_revision_id=definition.kpi_definition_revision_id,
+        )
+        current_definition = current_kpi_definition_revision(
+            conn, kpi_definition_id=definition.kpi_definition_id
+        )
+        if (
+            persisted_definition is None
+            or persisted_definition.commitment_sha256 != definition.commitment_sha256
+            or current_definition is None
+            or current_definition.kpi_definition_revision_id
+            != definition.kpi_definition_revision_id
+        ):
+            raise RepairBlockedError("replay_definition_revision_changed")
+        for relation in entry.comparability_revisions:
+            persisted_relation = current_kpi_definition_comparability_revision(
+                conn,
+                predecessor_definition_revision_id=relation.predecessor_definition_revision_id,
+                successor_definition_revision_id=relation.successor_definition_revision_id,
+            )
+            if (
+                persisted_relation is None
+                or persisted_relation.comparability_revision_id
+                != relation.comparability_revision_id
+                or persisted_relation.commitment_sha256 != relation.commitment_sha256
+            ):
+                raise RepairBlockedError("replay_comparability_revision_changed")
     if entry.predecessor_resolution_state != "quarantined_legacy":
         return
     predecessor = conn.execute(
@@ -838,9 +1177,26 @@ def _verify_replay(
     *,
     manifest: RefreshManifest,
     result_heads: tuple[int, ...],
+    result_definition_revision_ids: tuple[str | None, ...],
+    result_definition_commitment_sha256s: tuple[str | None, ...],
 ) -> None:
     if len(result_heads) != len(manifest.entries):
         raise RepairBlockedError("idempotency_marker_result_shape_mismatch")
+    expected_definition_ids = tuple(
+        None
+        if entry.definition_revision is None
+        else entry.definition_revision.kpi_definition_revision_id
+        for entry in manifest.entries
+    )
+    expected_definition_commitments = tuple(
+        None if entry.definition_revision is None else entry.definition_revision.commitment_sha256
+        for entry in manifest.entries
+    )
+    if (
+        result_definition_revision_ids != expected_definition_ids
+        or result_definition_commitment_sha256s != expected_definition_commitments
+    ):
+        raise RepairBlockedError("idempotency_marker_definition_binding_mismatch")
     for entry, head_id in zip(manifest.entries, result_heads, strict=True):
         if entry.action == "bind_existing" and head_id != entry.old_fact_id:
             raise RepairBlockedError("idempotency_marker_result_head_mismatch")
@@ -880,6 +1236,71 @@ def _detect_applied_postcondition(
             return None
         heads.append(head_id)
     return tuple(heads)
+
+
+def _validate_v2_idempotency_marker(
+    prior: dict[str, object],
+    *,
+    receipt_root: Path,
+    logical_key_sha256: str,
+    manifest_sha256: str,
+) -> tuple[tuple[int, ...], tuple[str | None, ...], tuple[str | None, ...]]:
+    """Bind marker claims to one exact sealed apply/recovery attempt receipt."""
+
+    attempt_id = prior.get("apply_attempt_id")
+    if (
+        not isinstance(attempt_id, str)
+        or len(attempt_id) != 32
+        or any(character not in "0123456789abcdef" for character in attempt_id)
+    ):
+        raise RepairBlockedError("idempotency_marker_apply_attempt_invalid")
+    receipt_path = receipt_root / "attempts" / f"{attempt_id}.json"
+    try:
+        apply_receipt = KpiRepairAttemptReceipt.model_validate_json(
+            receipt_path.read_text(encoding="utf-8")
+        )
+        result_heads = tuple(
+            TypeAdapter(list[int]).validate_python(prior.get("result_fact_head_ids"))
+        )
+        result_definition_ids = tuple(
+            TypeAdapter(list[str | None]).validate_python(
+                prior.get("result_definition_revision_ids")
+            )
+        )
+        result_definition_commitments = tuple(
+            TypeAdapter(list[str | None]).validate_python(
+                prior.get("result_definition_commitment_sha256s")
+            )
+        )
+    except (OSError, ValueError):
+        raise RepairBlockedError("idempotency_marker_apply_receipt_invalid") from None
+    marker_definition_rows = prior.get("inserted_definition_rows")
+    marker_comparability_rows = prior.get("inserted_comparability_rows")
+    if (
+        type(marker_definition_rows) is not int
+        or type(marker_comparability_rows) is not int
+        or marker_definition_rows < 0
+        or marker_comparability_rows < 0
+    ):
+        raise RepairBlockedError("idempotency_marker_result_shape_mismatch")
+    if (
+        prior.get("logical_idempotency_key_sha256") != logical_key_sha256
+        or prior.get("manifest_sha256") != manifest_sha256
+        or prior.get("apply_receipt_sha256") != apply_receipt.content_sha256
+        or apply_receipt.attempt_id != attempt_id
+        or apply_receipt.schema_version != "kpi_repair_attempt.v3"
+        or apply_receipt.mode != "apply"
+        or apply_receipt.state not in {"applied", "replayed"}
+        or apply_receipt.logical_idempotency_key_sha256 != logical_key_sha256
+        or apply_receipt.manifest_sha256 != manifest_sha256
+        or apply_receipt.result_fact_head_ids != result_heads
+        or apply_receipt.result_definition_revision_ids != result_definition_ids
+        or apply_receipt.result_definition_commitment_sha256s != result_definition_commitments
+        or apply_receipt.inserted_definition_rows != marker_definition_rows
+        or apply_receipt.inserted_comparability_rows != marker_comparability_rows
+    ):
+        raise RepairBlockedError("idempotency_marker_apply_receipt_mismatch")
+    return result_heads, result_definition_ids, result_definition_commitments
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -946,6 +1367,10 @@ def main(argv: list[str] | None = None) -> int:
             inserted_context_rows=0,
             blocker_codes=(f"invalid_input_{type(exc).__name__}",),
             result_fact_head_ids=(),
+            inserted_definition_rows=0,
+            inserted_comparability_rows=0,
+            result_definition_revision_ids=(),
+            result_definition_commitment_sha256s=(),
         )
         receipt_path = receipt_root / "attempts" / f"{attempt_id}.json"
         _write_content_addressed(receipt_path, receipt.model_dump_json(indent=2))
@@ -965,7 +1390,11 @@ def main(argv: list[str] | None = None) -> int:
     blocker_codes: tuple[str, ...] = ()
     fact_rows = 0
     context_rows = 0
+    definition_rows = 0
+    comparability_rows = 0
     result_heads: tuple[int, ...] = ()
+    result_definition_ids: tuple[str | None, ...] = ()
+    result_definition_commitments: tuple[str | None, ...] = ()
     state: Literal["passed", "applied", "replayed", "blocked", "failed"] = "failed"
     publish_marker = False
     marker = receipt_root / "by_logical_key" / f"{logical_key_sha}.json"
@@ -1014,6 +1443,10 @@ def main(argv: list[str] | None = None) -> int:
                 or judge.review_bundle_sha256 != manifest.review_bundle_sha256
                 or judge.executor_code_sha256 != executor_code_sha
                 or judge.purpose != "kpi_source_repair"
+                or (
+                    manifest.schema_version == "kpi_semantic_refresh.v7"
+                    and judge.rubric_version != "kpi-semantic-refresh-v7"
+                )
             ):
                 raise RepairBlockedError("judge_receipt_not_authorizing")
         with JobLock(
@@ -1049,20 +1482,52 @@ def main(argv: list[str] | None = None) -> int:
                     now=datetime.now(UTC),
                     max_review_age=timedelta(seconds=args.max_review_age_seconds),
                 )
+                conn.execute("BEGIN IMMEDIATE")
                 if args.apply and marker.exists():
                     prior = json.loads(marker.read_text(encoding="utf-8"))
-                    if prior.get("manifest_sha256") != manifest_sha:
+                    if (
+                        prior.get("manifest_sha256") != manifest_sha
+                        or prior.get("logical_idempotency_key_sha256") != logical_key_sha
+                    ):
                         raise RepairBlockedError("logical_idempotency_key_conflict")
-                    try:
-                        validated_heads = TypeAdapter(list[int]).validate_python(
-                            prior.get("result_fact_head_ids")
+                    marker_schema = prior.get("schema_version")
+                    if marker_schema == "kpi_repair_idempotency.v1":
+                        if manifest.schema_version == "kpi_semantic_refresh.v7":
+                            raise RepairBlockedError(
+                                "idempotency_marker_definition_binding_missing"
+                            )
+                        try:
+                            result_heads = tuple(
+                                TypeAdapter(list[int]).validate_python(
+                                    prior.get("result_fact_head_ids")
+                                )
+                            )
+                        except ValueError:
+                            raise RepairBlockedError(
+                                "idempotency_marker_result_shape_mismatch"
+                            ) from None
+                        result_definition_ids = tuple(None for _ in manifest.entries)
+                        result_definition_commitments = tuple(None for _ in manifest.entries)
+                    elif marker_schema == "kpi_repair_idempotency.v2":
+                        (
+                            result_heads,
+                            result_definition_ids,
+                            result_definition_commitments,
+                        ) = _validate_v2_idempotency_marker(
+                            prior,
+                            receipt_root=receipt_root,
+                            logical_key_sha256=logical_key_sha,
+                            manifest_sha256=manifest_sha,
                         )
-                    except ValueError:
-                        raise RepairBlockedError(
-                            "idempotency_marker_result_shape_mismatch"
-                        ) from None
-                    result_heads = tuple(validated_heads)
-                    _verify_replay(conn, manifest=manifest, result_heads=result_heads)
+                    else:
+                        raise RepairBlockedError("idempotency_marker_schema_unknown")
+                    _verify_replay(
+                        conn,
+                        manifest=manifest,
+                        result_heads=result_heads,
+                        result_definition_revision_ids=result_definition_ids,
+                        result_definition_commitment_sha256s=result_definition_commitments,
+                    )
                     state = "replayed"
                     conn.rollback()
                 else:
@@ -1073,6 +1538,18 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     if recovered_heads is not None:
                         result_heads = recovered_heads
+                        result_definition_ids = tuple(
+                            None
+                            if entry.definition_revision is None
+                            else entry.definition_revision.kpi_definition_revision_id
+                            for entry in manifest.entries
+                        )
+                        result_definition_commitments = tuple(
+                            None
+                            if entry.definition_revision is None
+                            else entry.definition_revision.commitment_sha256
+                            for entry in manifest.entries
+                        )
                         state = "replayed"
                         publish_marker = True
                         conn.rollback()
@@ -1099,19 +1576,25 @@ def main(argv: list[str] | None = None) -> int:
                             for entry in manifest.entries
                         ]
                         heads: list[int] = []
+                        definition_ids: list[str | None] = []
+                        definition_commitments: list[str | None] = []
                         for entry, (row, source_type) in zip(
                             manifest.entries, validated, strict=True
                         ):
-                            inserted_facts, inserted_contexts, head = _apply_entry(
+                            effect = _apply_entry(
                                 conn,
                                 manifest=manifest,
                                 entry=entry,
                                 row=row,
                                 source_type=source_type,
                             )
-                            fact_rows += inserted_facts
-                            context_rows += inserted_contexts
-                            heads.append(head)
+                            fact_rows += effect.inserted_fact_rows
+                            context_rows += effect.inserted_context_rows
+                            definition_rows += effect.inserted_definition_rows
+                            comparability_rows += effect.inserted_comparability_rows
+                            heads.append(effect.fact_head_id)
+                            definition_ids.append(effect.definition_revision_id)
+                            definition_commitments.append(effect.definition_commitment_sha256)
                         if fact_rows != sum(
                             e.expected_inserted_fact_rows for e in manifest.entries
                         ):
@@ -1121,6 +1604,8 @@ def main(argv: list[str] | None = None) -> int:
                         ):
                             raise RepairBlockedError("context_row_effect_total_mismatch")
                         result_heads = tuple(heads)
+                        result_definition_ids = tuple(definition_ids)
+                        result_definition_commitments = tuple(definition_commitments)
                         _require_canonical_result_heads(conn, result_heads=result_heads)
                         if args.apply:
                             conn.commit()
@@ -1161,8 +1646,12 @@ def main(argv: list[str] | None = None) -> int:
         else 0,
         inserted_fact_rows=fact_rows,
         inserted_context_rows=context_rows,
+        inserted_definition_rows=definition_rows,
+        inserted_comparability_rows=comparability_rows,
         blocker_codes=blocker_codes,
         result_fact_head_ids=result_heads,
+        result_definition_revision_ids=result_definition_ids,
+        result_definition_commitment_sha256s=result_definition_commitments,
     )
     receipt_path = receipt_root / "attempts" / f"{attempt_id}.json"
     _write_content_addressed(receipt_path, receipt.model_dump_json(indent=2))
@@ -1172,11 +1661,16 @@ def main(argv: list[str] | None = None) -> int:
             marker,
             json.dumps(
                 {
-                    "schema_version": "kpi_repair_idempotency.v1",
+                    "schema_version": "kpi_repair_idempotency.v2",
+                    "apply_attempt_id": receipt.attempt_id,
                     "logical_idempotency_key_sha256": logical_key_sha,
                     "manifest_sha256": manifest_sha,
                     "apply_receipt_sha256": receipt.content_sha256,
+                    "inserted_definition_rows": definition_rows,
+                    "inserted_comparability_rows": comparability_rows,
                     "result_fact_head_ids": list(result_heads),
+                    "result_definition_revision_ids": list(result_definition_ids),
+                    "result_definition_commitment_sha256s": list(result_definition_commitments),
                 },
                 sort_keys=True,
                 indent=2,

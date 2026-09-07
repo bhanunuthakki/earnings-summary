@@ -46,7 +46,10 @@ from pipeline.kpi_semantics import (
     current_kpi_semantic_context,
     persist_kpi_semantic_context,
 )
-from pipeline.kpi_source_review import insert_source_reviewed_kpi_supersession
+from pipeline.kpi_source_review import (
+    bind_source_reviewed_kpi_definition,
+    insert_source_reviewed_kpi_supersession,
+)
 
 NOW = datetime(2026, 9, 6, 18, tzinfo=UTC)
 EFFECTIVE = datetime(2024, 1, 1, tzinfo=UTC)
@@ -1213,6 +1216,8 @@ def test_source_reviewed_capture_rolls_back_definition_fact_and_context_together
             knowledge_at=NOW,
             context=_context(),
             definition_revision=_definition(),
+            expected_definition_head_id=None,
+            expected_definition_revision=0,
         )
 
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
@@ -1222,6 +1227,114 @@ def test_source_reviewed_capture_rolls_back_definition_fact_and_context_together
         conn.execute("SELECT COUNT(*) FROM kpi_definition_comparability_revisions").fetchone()[0]
         == 0
     )
+
+
+def test_source_reviewed_supersession_requires_reviewed_definition_head() -> None:
+    conn = _database()
+    predecessor_id = _fact(conn)
+    conn.commit()
+
+    with pytest.raises(ValueError, match="explicit expected head"):
+        insert_source_reviewed_kpi_supersession(
+            conn,
+            predecessor_id=predecessor_id,
+            expected_head_id=predecessor_id,
+            value=Decimal("13.0"),
+            unit=Unit.ACTUAL,
+            currency=Currency.USD,
+            source_doc_id=10,
+            locator=FactLocator(pdf_page=7),
+            source_excerpt="Monthly ARPAC was $13.0",
+            reviewer="owner",
+            knowledge_at=NOW,
+            context=_context(),
+            definition_revision=_definition(),
+        )
+
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 0
+
+
+def test_source_reviewed_bind_existing_is_atomic_and_requires_exact_definition_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _database()
+    fact_id = _fact(conn)
+    conn.commit()
+
+    def fail_resolution(*_: object, **__: object) -> None:
+        raise RuntimeError("forced canonical-resolution failure")
+
+    monkeypatch.setattr(source_review_module, "require_canonical_kpi_resolution", fail_resolution)
+    with pytest.raises(RuntimeError, match="forced canonical-resolution failure"):
+        bind_source_reviewed_kpi_definition(
+            conn,
+            fact_id=fact_id,
+            expected_fact_head_id=fact_id,
+            expected_definition_head_id=None,
+            expected_definition_revision=0,
+            reviewer="owner",
+            knowledge_at=NOW,
+            context=_context(),
+            definition_revision=_definition(),
+        )
+
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_fact_semantic_contexts").fetchone()[0] == 0
+
+    monkeypatch.setattr(source_review_module, "require_canonical_kpi_resolution", _no_effect)
+    current = persist_kpi_definition_revision(conn, _definition())
+    with pytest.raises(ValueError, match="head changed"):
+        bind_source_reviewed_kpi_definition(
+            conn,
+            fact_id=fact_id,
+            expected_fact_head_id=fact_id,
+            expected_definition_head_id=None,
+            expected_definition_revision=0,
+            reviewer="owner",
+            knowledge_at=NOW,
+            context=_context(),
+            definition_revision=_definition(
+                kpi_definition_revision_id="definition-r2",
+                idempotency_key="definition-key-r2",
+                revision=2,
+                supersedes_definition_revision_id=current.kpi_definition_revision_id,
+            ),
+        )
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_fact_semantic_contexts").fetchone()[0] == 0
+
+
+def test_source_reviewed_bind_existing_replays_exactly_and_rejects_changed_commitment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _database()
+    fact_id = _fact(conn)
+    conn.commit()
+    monkeypatch.setattr(source_review_module, "require_canonical_kpi_resolution", _no_effect)
+
+    def bind(definition: IssuerKpiDefinitionRevision) -> int:
+        return bind_source_reviewed_kpi_definition(
+            conn,
+            fact_id=fact_id,
+            expected_fact_head_id=fact_id,
+            expected_definition_head_id=None,
+            expected_definition_revision=0,
+            reviewer="owner",
+            knowledge_at=NOW,
+            context=_context(),
+            definition_revision=definition,
+        )
+
+    assert bind(_definition()) == fact_id
+    assert bind(_definition()) == fact_id
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_fact_semantic_contexts").fetchone()[0] == 1
+
+    with pytest.raises(ValueError, match="identity conflicts"):
+        bind(_definition(reported_definition_text="Conflicting reviewed definition."))
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_fact_semantic_contexts").fetchone()[0] == 1
 
 
 def test_source_reviewed_idle_connection_stays_rollbackable_for_dry_run(
@@ -1258,7 +1371,7 @@ def test_source_reviewed_idle_connection_stays_rollbackable_for_dry_run(
         _no_effect,
     )
 
-    _ = insert_source_reviewed_kpi_supersession(
+    new_fact_id = insert_source_reviewed_kpi_supersession(
         conn,
         predecessor_id=predecessor_id,
         expected_head_id=predecessor_id,
@@ -1273,6 +1386,8 @@ def test_source_reviewed_idle_connection_stays_rollbackable_for_dry_run(
         context=_context(),
         definition_revision=second,
         comparability_revisions=(relation,),
+        expected_definition_head_id=first.kpi_definition_revision_id,
+        expected_definition_revision=first.revision,
     )
     assert conn.in_transaction
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 2
@@ -1281,6 +1396,9 @@ def test_source_reviewed_idle_connection_stays_rollbackable_for_dry_run(
         conn.execute("SELECT COUNT(*) FROM kpi_definition_comparability_revisions").fetchone()[0]
         == 1
     )
+    bound_context = current_kpi_semantic_context(conn, kpi_fact_id=new_fact_id)
+    assert bound_context is not None
+    assert bound_context.kpi_definition_revision_id == second.kpi_definition_revision_id
 
     conn.rollback()
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
@@ -1324,6 +1442,8 @@ def test_second_source_review_entry_failure_allows_manifest_rollback(
             knowledge_at=NOW,
             context=_context(),
             definition_revision=_definition(),
+            expected_definition_head_id=None,
+            expected_definition_revision=0,
         )
 
     try:

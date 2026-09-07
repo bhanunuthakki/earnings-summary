@@ -13,6 +13,8 @@ from models.facts import Currency, FactLocator, Unit
 from pipeline.kpi_definition_revisions import (
     IssuerKpiDefinitionRevision,
     KpiDefinitionComparabilityRevision,
+    current_kpi_definition_revision,
+    kpi_definition_revision_by_id,
     persist_kpi_definition_comparability_revision,
     persist_kpi_definition_revision,
 )
@@ -65,6 +67,140 @@ def require_canonical_kpi_resolution(
     )
 
 
+def _require_definition_head(
+    conn: sqlite3.Connection,
+    *,
+    kpi_definition_id: int,
+    expected_definition_head_id: str | None,
+    expected_definition_revision: int,
+) -> None:
+    current = current_kpi_definition_revision(conn, kpi_definition_id=kpi_definition_id)
+    actual = (
+        None if current is None else current.kpi_definition_revision_id,
+        0 if current is None else current.revision,
+    )
+    if actual != (expected_definition_head_id, expected_definition_revision):
+        raise ValueError("KPI definition revision head changed after source review")
+
+
+def _persist_definition_capture(
+    conn: sqlite3.Connection,
+    *,
+    kpi_definition_id: int,
+    definition_revision: IssuerKpiDefinitionRevision,
+    expected_definition_head_id: str | None,
+    expected_definition_revision: int,
+    comparability_revisions: Sequence[KpiDefinitionComparabilityRevision],
+) -> str:
+    if kpi_definition_id != definition_revision.kpi_definition_id:
+        raise ValueError("definition revision root does not match the KPI fact lifecycle")
+    replay = kpi_definition_revision_by_id(
+        conn,
+        kpi_definition_revision_id=definition_revision.kpi_definition_revision_id,
+    )
+    if replay is not None:
+        if replay.commitment_sha256 != definition_revision.commitment_sha256:
+            raise ValueError("definition revision identity conflicts with reviewed content")
+        expected_predecessor = definition_revision.supersedes_definition_revision_id
+        expected_predecessor_revision = definition_revision.revision - 1
+        if (expected_definition_head_id, expected_definition_revision) != (
+            expected_predecessor,
+            expected_predecessor_revision,
+        ):
+            raise ValueError("reviewed definition predecessor expectation is inconsistent")
+        current = current_kpi_definition_revision(conn, kpi_definition_id=kpi_definition_id)
+        if (
+            current is None
+            or current.kpi_definition_revision_id != replay.kpi_definition_revision_id
+        ):
+            raise ValueError("KPI definition revision head changed after source review")
+        binding_id = replay.kpi_definition_revision_id
+        for relation in comparability_revisions:
+            if binding_id not in {
+                relation.predecessor_definition_revision_id,
+                relation.successor_definition_revision_id,
+            }:
+                raise ValueError("comparability capture must relate the captured definition")
+            _ = persist_kpi_definition_comparability_revision(conn, relation)
+        return binding_id
+    _require_definition_head(
+        conn,
+        kpi_definition_id=kpi_definition_id,
+        expected_definition_head_id=expected_definition_head_id,
+        expected_definition_revision=expected_definition_revision,
+    )
+    persisted = persist_kpi_definition_revision(conn, definition_revision)
+    binding_id = persisted.kpi_definition_revision_id
+    for relation in comparability_revisions:
+        if binding_id not in {
+            relation.predecessor_definition_revision_id,
+            relation.successor_definition_revision_id,
+        }:
+            raise ValueError("comparability capture must relate the captured definition")
+        _ = persist_kpi_definition_comparability_revision(conn, relation)
+    return binding_id
+
+
+def bind_source_reviewed_kpi_definition(
+    conn: sqlite3.Connection,
+    *,
+    fact_id: int,
+    expected_fact_head_id: int,
+    expected_definition_head_id: str | None,
+    expected_definition_revision: int,
+    reviewer: str,
+    knowledge_at: datetime,
+    context: KpiSemanticContext,
+    definition_revision: IssuerKpiDefinitionRevision,
+    comparability_revisions: Sequence[KpiDefinitionComparabilityRevision] = (),
+) -> int:
+    """Atomically bind one existing canonical fact to an exact reviewed definition."""
+    if knowledge_at.tzinfo is None:
+        raise ValueError("source-reviewed KPI knowledge_at must be timezone-aware")
+    if (
+        definition_revision.knowledge_at > knowledge_at
+        or definition_revision.recorded_at > knowledge_at
+    ):
+        raise ValueError("fact review cannot predate its definition revision")
+    with _source_review_transaction(conn):
+        fact = conn.execute(
+            "SELECT kpi_definition_id FROM kpi_facts WHERE id=?", (fact_id,)
+        ).fetchone()
+        if fact is None:
+            raise ValueError("source-reviewed KPI fact is missing")
+        successor = conn.execute(
+            "SELECT id FROM kpi_facts WHERE supersedes_id=? ORDER BY id DESC LIMIT 1",
+            (fact_id,),
+        ).fetchone()
+        actual_head = fact_id if successor is None else int(successor[0])
+        if actual_head != expected_fact_head_id or expected_fact_head_id != fact_id:
+            raise ValueError("source-reviewed KPI fact is not the exact current head")
+        binding_id = _persist_definition_capture(
+            conn,
+            kpi_definition_id=int(fact["kpi_definition_id"]),
+            definition_revision=definition_revision,
+            expected_definition_head_id=expected_definition_head_id,
+            expected_definition_revision=expected_definition_revision,
+            comparability_revisions=comparability_revisions,
+        )
+        context_id = persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=fact_id,
+            context=context,
+            reviewed_by=reviewer,
+            knowledge_at=knowledge_at,
+            kpi_definition_revision_id=binding_id,
+        )
+        if context_id is None:
+            raise RuntimeError("source-reviewed KPI semantic context table is unavailable")
+        require_canonical_kpi_resolution(
+            conn,
+            fact_row_id=fact_id,
+            knowledge_cutoff=knowledge_at,
+        )
+        return fact_id
+
+
 def insert_source_reviewed_kpi_supersession(
     conn: sqlite3.Connection,
     *,
@@ -81,6 +217,8 @@ def insert_source_reviewed_kpi_supersession(
     context: KpiSemanticContext,
     definition_revision: IssuerKpiDefinitionRevision | None = None,
     comparability_revisions: Sequence[KpiDefinitionComparabilityRevision] = (),
+    expected_definition_head_id: str | None = None,
+    expected_definition_revision: int | None = None,
 ) -> int:
     """Append exactly one governed successor, independent of filing chronology.
 
@@ -92,6 +230,10 @@ def insert_source_reviewed_kpi_supersession(
         raise ValueError("source-reviewed KPI knowledge_at must be timezone-aware")
     if definition_revision is None and comparability_revisions:
         raise ValueError("comparability capture requires an exact definition revision")
+    if definition_revision is None and expected_definition_revision is not None:
+        raise ValueError("definition-head expectation requires a definition revision")
+    if definition_revision is not None and expected_definition_revision is None:
+        raise ValueError("definition capture requires an explicit expected head")
     if definition_revision is not None and (
         definition_revision.knowledge_at > knowledge_at
         or definition_revision.recorded_at > knowledge_at
@@ -114,17 +256,16 @@ def insert_source_reviewed_kpi_supersession(
             raise ValueError("source-reviewed KPI predecessor is not the exact current head")
         binding_id: str | None = None
         if definition_revision is not None:
-            if int(predecessor["kpi_definition_id"]) != definition_revision.kpi_definition_id:
-                raise ValueError("definition revision root does not match the KPI fact lifecycle")
-            persisted_definition = persist_kpi_definition_revision(conn, definition_revision)
-            binding_id = persisted_definition.kpi_definition_revision_id
-            for relation in comparability_revisions:
-                if binding_id not in {
-                    relation.predecessor_definition_revision_id,
-                    relation.successor_definition_revision_id,
-                }:
-                    raise ValueError("comparability capture must relate the captured definition")
-                _ = persist_kpi_definition_comparability_revision(conn, relation)
+            if expected_definition_revision is None:
+                raise RuntimeError("validated definition head expectation disappeared")
+            binding_id = _persist_definition_capture(
+                conn,
+                kpi_definition_id=int(predecessor["kpi_definition_id"]),
+                definition_revision=definition_revision,
+                expected_definition_head_id=expected_definition_head_id,
+                expected_definition_revision=expected_definition_revision,
+                comparability_revisions=comparability_revisions,
+            )
         locator_json = locator.to_json()
         if locator_json is None:
             raise ValueError("source-reviewed KPI correction requires a concrete locator")

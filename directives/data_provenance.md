@@ -72,6 +72,23 @@ This issuer-definition lifecycle is upstream of the existing source-independent 
 ontology. Cross-company or cross-source comparison still requires the existing Canonical Metric
 mapping and binding records; the KPI lifecycle does not duplicate or bypass them.
 
+The manual source-review executor is the first owning definition-capture route. A
+`kpi_semantic_refresh.v7` manifest is built only from a
+`kpi_semantic_refresh_decisions.v3` review artifact and carries the complete reviewed definition,
+its exact expected head, and any direct comparability revisions. Bind-existing and supersession
+actions persist the definition effects and exact semantic-context binding in the same transaction
+as the fact action. Attempt receipt v3 counts only rows written by that attempt and retains the
+resulting definition identities and commitments. Idempotency marker v2 binds its counts and results
+to the exact sealed apply or recovery receipt. A post-commit recovery that performs no write reports
+zero inserted rows while separately proving the complete durable result commitments; it never
+reconstructs historical insertion counts from row existence. Earlier v5/v6 manifests preserve their canonical bytes and always
+write an explicit null definition binding; they remain `legacy_unbound` rather than inheriting a
+definition from current database state.
+
+During this transition, bind-existing source review reads the legacy KPI row only to verify its
+registry root and exact no-successor head. This two-read guard retires when source-reviewed binding
+uses the immutable canonical projection for both identity and head validation.
+
 ### 2.2 Fiscal-period stamping drift (off-cycle-FYE issuers)
 
 `(ticker, period_end)` matching (used by `src/provenance/llm_extracted_parent.py::resolve_parent` and any other exact-date join across `documents`) is only reliable if every ingestion path stamps `period_end` on the **same fiscal calendar** for a given ticker. Multiple independent modules each hardcode their own per-ticker "which tickers have a non-December fiscal year end" override table, keyed off filename conventions like `<TICKER>_Q<N>_<YYYY>` — and those tables can drift out of sync, silently mis-stamping `period_end` for tickers missing from one table but present in another. This is **not** the same failure mode as a genuinely-missing source document (§2's `parent_document_id` can legitimately stay NULL when no primary doc was ever fetched) — it produces an *orphan that looks unresolvable but has a perfectly good source sitting one calendar-quarter away*.

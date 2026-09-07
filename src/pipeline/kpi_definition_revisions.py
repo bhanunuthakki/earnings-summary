@@ -597,6 +597,210 @@ def _validate_source_evidence(
     return str(evidence["issuer_id"])
 
 
+def validate_kpi_definition_revision_candidate(
+    conn: sqlite3.Connection,
+    revision: IssuerKpiDefinitionRevision,
+    *,
+    expected_definition_head_id: str | None,
+    expected_definition_revision: int,
+) -> None:
+    """Read-validate one proposed definition against the exact current lifecycle."""
+
+    if (
+        conn.execute(
+            "SELECT 1 FROM kpi_definitions WHERE id=?", (revision.kpi_definition_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError("definition revision root is missing")
+    if (
+        conn.execute(
+            "SELECT 1 FROM kpi_definition_revisions WHERE kpi_definition_revision_id=? ",
+            (revision.kpi_definition_revision_id,),
+        ).fetchone()
+        is not None
+    ):
+        raise ValueError("definition revision identity is already persisted")
+    if (
+        conn.execute(
+            "SELECT 1 FROM kpi_definition_revisions WHERE idempotency_key=?",
+            (revision.idempotency_key,),
+        ).fetchone()
+        is not None
+    ):
+        raise ValueError("definition revision idempotency key is already persisted")
+    revision_issuer = _validate_source_evidence(
+        conn,
+        reporting_entity_id=revision.reporting_entity_id,
+        scope_security_id=revision.scope_security_id,
+        source_document_version_id=revision.source_document_version_id,
+        source_evidence_node_id=revision.source_evidence_node_id,
+        source_locator_json=revision.source_locator_json,
+        source_locator_sha256=revision.source_locator_sha256,
+        knowledge_at=revision.knowledge_at,
+        recorded_at=revision.recorded_at,
+    )
+    current = current_kpi_definition_revision(conn, kpi_definition_id=revision.kpi_definition_id)
+    actual_head = None if current is None else current.kpi_definition_revision_id
+    actual_revision = 0 if current is None else current.revision
+    if (actual_head, actual_revision) != (
+        expected_definition_head_id,
+        expected_definition_revision,
+    ):
+        raise ValueError("KPI definition revision head changed after source review")
+    if (
+        revision.revision != expected_definition_revision + 1
+        or revision.supersedes_definition_revision_id != expected_definition_head_id
+    ):
+        raise ValueError("definition revision does not extend the exact current head")
+    if current is not None and (
+        revision.knowledge_at < current.knowledge_at or revision.recorded_at < current.recorded_at
+    ):
+        raise ValueError("definition revision clocks cannot precede the current head")
+    if current is not None:
+        current_issuer = conn.execute(
+            "SELECT issuer_id FROM reporting_entities WHERE reporting_entity_id=?",
+            (current.reporting_entity_id,),
+        ).fetchone()
+        if current_issuer is None or str(current_issuer[0]) != revision_issuer:
+            raise ValueError("definition revisions cannot cross issuer boundaries")
+
+
+def validate_kpi_definition_comparability_candidate(
+    conn: sqlite3.Connection,
+    revision: KpiDefinitionComparabilityRevision,
+    *,
+    proposed_definition: IssuerKpiDefinitionRevision | None = None,
+) -> None:
+    """Read-validate one direct relation, optionally against one proposed definition."""
+
+    if (
+        conn.execute(
+            "SELECT 1 FROM kpi_definition_comparability_revisions "
+            "WHERE comparability_revision_id=?",
+            (revision.comparability_revision_id,),
+        ).fetchone()
+        is not None
+    ):
+        raise ValueError("comparability revision identity is already persisted")
+    if (
+        conn.execute(
+            "SELECT 1 FROM kpi_definition_comparability_revisions WHERE idempotency_key=?",
+            (revision.idempotency_key,),
+        ).fetchone()
+        is not None
+    ):
+        raise ValueError("comparability idempotency key is already persisted")
+
+    proposed_id = (
+        None if proposed_definition is None else proposed_definition.kpi_definition_revision_id
+    )
+    if proposed_id is not None and proposed_id not in {
+        revision.predecessor_definition_revision_id,
+        revision.successor_definition_revision_id,
+    }:
+        raise ValueError("comparability capture must relate the captured definition")
+
+    def definition_by_id(definition_id: str) -> IssuerKpiDefinitionRevision | None:
+        if proposed_definition is not None and definition_id == proposed_id:
+            return proposed_definition
+        return _definition_by_id(conn, definition_id)
+
+    predecessor = definition_by_id(revision.predecessor_definition_revision_id)
+    successor = definition_by_id(revision.successor_definition_revision_id)
+    if predecessor is None or successor is None:
+        raise ValueError("comparability requires two definition revisions")
+    predecessor_issuer = _validate_source_evidence(
+        conn,
+        reporting_entity_id=predecessor.reporting_entity_id,
+        scope_security_id=predecessor.scope_security_id,
+        source_document_version_id=predecessor.source_document_version_id,
+        source_evidence_node_id=predecessor.source_evidence_node_id,
+        source_locator_json=predecessor.source_locator_json,
+        source_locator_sha256=predecessor.source_locator_sha256,
+        knowledge_at=predecessor.knowledge_at,
+        recorded_at=predecessor.recorded_at,
+    )
+    successor_issuer = _validate_source_evidence(
+        conn,
+        reporting_entity_id=successor.reporting_entity_id,
+        scope_security_id=successor.scope_security_id,
+        source_document_version_id=successor.source_document_version_id,
+        source_evidence_node_id=successor.source_evidence_node_id,
+        source_locator_json=successor.source_locator_json,
+        source_locator_sha256=successor.source_locator_sha256,
+        knowledge_at=successor.knowledge_at,
+        recorded_at=successor.recorded_at,
+    )
+    relation_issuer = _validate_source_evidence(
+        conn,
+        reporting_entity_id=successor.reporting_entity_id,
+        scope_security_id=successor.scope_security_id,
+        source_document_version_id=revision.source_document_version_id,
+        source_evidence_node_id=revision.source_evidence_node_id,
+        source_locator_json=revision.source_locator_json,
+        source_locator_sha256=revision.source_locator_sha256,
+        knowledge_at=revision.knowledge_at,
+        recorded_at=revision.recorded_at,
+    )
+    if len({predecessor_issuer, successor_issuer, relation_issuer}) != 1:
+        raise ValueError("comparability cannot cross issuer boundaries")
+    if max(predecessor.knowledge_at, successor.knowledge_at) > revision.knowledge_at:
+        raise ValueError("comparability knowledge cannot predate either definition revision")
+    if max(predecessor.recorded_at, successor.recorded_at) > revision.recorded_at:
+        raise ValueError("comparability recording cannot predate either definition revision")
+    if revision.disposition is KpiDefinitionComparabilityDisposition.CONTINUOUS and (
+        predecessor.unit_family != successor.unit_family
+        or predecessor.unit_key != successor.unit_key
+        or predecessor.unit_scale != successor.unit_scale
+    ):
+        raise ValueError(
+            "a unit or presentation-scale change requires an explicit comparability break"
+        )
+    if revision.disposition is KpiDefinitionComparabilityDisposition.CONTINUOUS and (
+        predecessor.period_kind != successor.period_kind
+        or predecessor.stock_flow_behavior != successor.stock_flow_behavior
+        or predecessor.accounting_basis != successor.accounting_basis
+        or predecessor.consolidation_scope != successor.consolidation_scope
+        or predecessor.dimensions != successor.dimensions
+    ):
+        raise ValueError("a semantic-axis change requires an explicit comparability break")
+    if revision.disposition is KpiDefinitionComparabilityDisposition.CONTINUOUS and (
+        predecessor.currency_disposition != successor.currency_disposition
+        or predecessor.currency != successor.currency
+    ):
+        raise ValueError("a currency change requires an explicit comparability break")
+    reverse = conn.execute(
+        "SELECT 1 FROM kpi_definition_comparability_revisions "
+        "WHERE predecessor_definition_revision_id=? "
+        "AND successor_definition_revision_id=? LIMIT 1",
+        (
+            revision.successor_definition_revision_id,
+            revision.predecessor_definition_revision_id,
+        ),
+    ).fetchone()
+    if reverse is not None:
+        raise ValueError("reversed comparability pair already exists")
+    current = current_kpi_definition_comparability_revision(
+        conn,
+        predecessor_definition_revision_id=revision.predecessor_definition_revision_id,
+        successor_definition_revision_id=revision.successor_definition_revision_id,
+    )
+    if revision.revision == 1:
+        if current is not None:
+            raise ValueError("comparability revision 1 conflicts with an existing lifecycle")
+    elif (
+        current is None
+        or current.comparability_revision_id != revision.supersedes_comparability_revision_id
+        or current.revision + 1 != revision.revision
+    ):
+        raise ValueError("comparability revision does not supersede the exact current head")
+    if current is not None and (
+        revision.knowledge_at < current.knowledge_at or revision.recorded_at < current.recorded_at
+    ):
+        raise ValueError("comparability clocks cannot precede the current head")
+
+
 def persist_kpi_definition_revision(
     conn: sqlite3.Connection, revision: IssuerKpiDefinitionRevision
 ) -> IssuerKpiDefinitionRevision:
@@ -617,48 +821,17 @@ def persist_kpi_definition_revision(
             ):
                 raise ValueError("definition idempotency key conflicts with persisted content")
             return _definition_from_row(replay)
-        if (
-            conn.execute(
-                "SELECT 1 FROM kpi_definitions WHERE id=?", (revision.kpi_definition_id,)
-            ).fetchone()
-            is None
-        ):
-            raise ValueError("definition revision root is missing")
-        revision_issuer = _validate_source_evidence(
-            conn,
-            reporting_entity_id=revision.reporting_entity_id,
-            scope_security_id=revision.scope_security_id,
-            source_document_version_id=revision.source_document_version_id,
-            source_evidence_node_id=revision.source_evidence_node_id,
-            source_locator_json=revision.source_locator_json,
-            source_locator_sha256=revision.source_locator_sha256,
-            knowledge_at=revision.knowledge_at,
-            recorded_at=revision.recorded_at,
-        )
         current = current_kpi_definition_revision(
             conn, kpi_definition_id=revision.kpi_definition_id
         )
-        if revision.revision == 1:
-            if current is not None:
-                raise ValueError("definition revision 1 conflicts with an existing lifecycle")
-        elif (
-            current is None
-            or current.kpi_definition_revision_id != revision.supersedes_definition_revision_id
-            or current.revision + 1 != revision.revision
-        ):
-            raise ValueError("definition revision does not supersede the exact current head")
-        if current is not None and (
-            revision.knowledge_at < current.knowledge_at
-            or revision.recorded_at < current.recorded_at
-        ):
-            raise ValueError("definition revision clocks cannot precede the current head")
-        if current is not None:
-            current_issuer = conn.execute(
-                "SELECT issuer_id FROM reporting_entities WHERE reporting_entity_id=?",
-                (current.reporting_entity_id,),
-            ).fetchone()
-            if current_issuer is None or str(current_issuer[0]) != revision_issuer:
-                raise ValueError("definition revisions cannot cross issuer boundaries")
+        validate_kpi_definition_revision_candidate(
+            conn,
+            revision,
+            expected_definition_head_id=(
+                None if current is None else current.kpi_definition_revision_id
+            ),
+            expected_definition_revision=0 if current is None else current.revision,
+        )
         values: tuple[object, ...] = (
             revision.kpi_definition_revision_id,
             revision.idempotency_key,
@@ -771,100 +944,7 @@ def persist_kpi_definition_comparability_revision(
             ):
                 raise ValueError("comparability idempotency key conflicts with persisted content")
             return _comparability_from_row(replay)
-        predecessor = _definition_by_id(conn, revision.predecessor_definition_revision_id)
-        successor = _definition_by_id(conn, revision.successor_definition_revision_id)
-        if predecessor is None or successor is None:
-            raise ValueError("comparability requires two persisted definition revisions")
-        predecessor_issuer = _validate_source_evidence(
-            conn,
-            reporting_entity_id=predecessor.reporting_entity_id,
-            scope_security_id=predecessor.scope_security_id,
-            source_document_version_id=predecessor.source_document_version_id,
-            source_evidence_node_id=predecessor.source_evidence_node_id,
-            source_locator_json=predecessor.source_locator_json,
-            source_locator_sha256=predecessor.source_locator_sha256,
-            knowledge_at=predecessor.knowledge_at,
-            recorded_at=predecessor.recorded_at,
-        )
-        successor_issuer = _validate_source_evidence(
-            conn,
-            reporting_entity_id=successor.reporting_entity_id,
-            scope_security_id=successor.scope_security_id,
-            source_document_version_id=successor.source_document_version_id,
-            source_evidence_node_id=successor.source_evidence_node_id,
-            source_locator_json=successor.source_locator_json,
-            source_locator_sha256=successor.source_locator_sha256,
-            knowledge_at=successor.knowledge_at,
-            recorded_at=successor.recorded_at,
-        )
-        relation_issuer = _validate_source_evidence(
-            conn,
-            reporting_entity_id=successor.reporting_entity_id,
-            scope_security_id=successor.scope_security_id,
-            source_document_version_id=revision.source_document_version_id,
-            source_evidence_node_id=revision.source_evidence_node_id,
-            source_locator_json=revision.source_locator_json,
-            source_locator_sha256=revision.source_locator_sha256,
-            knowledge_at=revision.knowledge_at,
-            recorded_at=revision.recorded_at,
-        )
-        if len({predecessor_issuer, successor_issuer, relation_issuer}) != 1:
-            raise ValueError("comparability cannot cross issuer boundaries")
-        if max(predecessor.knowledge_at, successor.knowledge_at) > revision.knowledge_at:
-            raise ValueError("comparability knowledge cannot predate either definition revision")
-        if max(predecessor.recorded_at, successor.recorded_at) > revision.recorded_at:
-            raise ValueError("comparability recording cannot predate either definition revision")
-        if revision.disposition is KpiDefinitionComparabilityDisposition.CONTINUOUS and (
-            predecessor.unit_family != successor.unit_family
-            or predecessor.unit_key != successor.unit_key
-            or predecessor.unit_scale != successor.unit_scale
-        ):
-            raise ValueError(
-                "a unit or presentation-scale change requires an explicit comparability break"
-            )
-        if revision.disposition is KpiDefinitionComparabilityDisposition.CONTINUOUS and (
-            predecessor.period_kind != successor.period_kind
-            or predecessor.stock_flow_behavior != successor.stock_flow_behavior
-            or predecessor.accounting_basis != successor.accounting_basis
-            or predecessor.consolidation_scope != successor.consolidation_scope
-            or predecessor.dimensions != successor.dimensions
-        ):
-            raise ValueError("a semantic-axis change requires an explicit comparability break")
-        if revision.disposition is KpiDefinitionComparabilityDisposition.CONTINUOUS and (
-            predecessor.currency_disposition != successor.currency_disposition
-            or predecessor.currency != successor.currency
-        ):
-            raise ValueError("a currency change requires an explicit comparability break")
-        reverse = conn.execute(
-            "SELECT 1 FROM kpi_definition_comparability_revisions "
-            "WHERE predecessor_definition_revision_id=? "
-            "AND successor_definition_revision_id=? LIMIT 1",
-            (
-                revision.successor_definition_revision_id,
-                revision.predecessor_definition_revision_id,
-            ),
-        ).fetchone()
-        if reverse is not None:
-            raise ValueError("reversed comparability pair already exists")
-        current = current_kpi_definition_comparability_revision(
-            conn,
-            predecessor_definition_revision_id=revision.predecessor_definition_revision_id,
-            successor_definition_revision_id=revision.successor_definition_revision_id,
-        )
-        if revision.revision == 1:
-            if current is not None:
-                raise ValueError("comparability revision 1 conflicts with an existing lifecycle")
-        elif (
-            current is None
-            or current.comparability_revision_id != revision.supersedes_comparability_revision_id
-            or current.revision + 1 != revision.revision
-        ):
-            raise ValueError("comparability revision does not supersede the exact current head")
-        if current is not None and (
-            revision.knowledge_at < current.knowledge_at
-            or revision.recorded_at < current.recorded_at
-        ):
-            raise ValueError("comparability clocks cannot precede the current head")
+        validate_kpi_definition_comparability_candidate(conn, revision)
         values: tuple[object, ...] = (
             revision.comparability_revision_id,
             revision.idempotency_key,

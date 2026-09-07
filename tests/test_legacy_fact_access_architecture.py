@@ -168,6 +168,16 @@ class _TransitionalReadExemption:
 # immutable observations can be captured atomically. Keep it outside the
 # frozen reader-debt count, but make both its scope and deletion gate executable.
 _TRANSITIONAL_READ_EXEMPTIONS = {
+    "src/pipeline/kpi_source_review.py": (
+        _TransitionalReadExemption(
+            function_name="bind_source_reviewed_kpi_definition",
+            read_count=2,
+            retirement_criterion=(
+                "Retire after source-reviewed KPI binding uses the immutable canonical "
+                "projection instead of legacy identity and head guards."
+            ),
+        ),
+    ),
     "src/compute/kpi_resolver.py": (
         _TransitionalReadExemption(
             function_name="_resolve_revision_aware_kpi_series",
@@ -367,7 +377,11 @@ def test_transitional_legacy_reader_exemptions_are_narrow_and_retirable() -> Non
         assert (ROOT / relative).is_file()
         assert len(exemptions) == 1
         exemption = exemptions[0]
-        assert exemption.read_count == 1
+        if relative == "src/pipeline/kpi_source_review.py":
+            assert exemption.function_name == "bind_source_reviewed_kpi_definition"
+            assert exemption.read_count == 2
+        else:
+            assert exemption.read_count == 1
         assert exemption.retirement_criterion.startswith("Retire after ")
         # _legacy_read_count also proves the exact named top-level function
         # still owns precisely the approved read count.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -22,17 +23,35 @@ from execution.build_kpi_semantic_refresh_manifest import (
     build_kpi_semantic_refresh_manifest,
     write_refresh_manifest,
 )
-from models.facts import FactLocator, LocatorKind
+from models.facts import Currency, FactLocator, LocatorKind, Unit
 from operations.kpi_semantic_review_export import (
     KpiSemanticReviewExport,
     payload_sha256,
     seal_kpi_semantic_review_export,
+)
+from pipeline.kpi_definition_revisions import (
+    IssuerKpiDefinitionRevision,
+    KpiCurrencyDisposition,
+    KpiDefinitionComparabilityDisposition,
+    KpiDefinitionComparabilityRevision,
+    KpiDefinitionLifecycle,
+    KpiDefinitionPeriodKind,
+    KpiDefinitionRelationKind,
+    KpiDefinitionStatus,
+    KpiDefinitionTextStatus,
+    KpiStockFlowBehavior,
+    KpiUnitFamily,
 )
 from pipeline.kpi_semantic_review import (
     KpiEvidenceLocatorCoordinates,
     KpiSemanticReviewBatch,
     build_kpi_semantic_review_batch,
     build_quarantined_kpi_correction_review,
+)
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiUnitScale,
 )
 from provenance.evidence_ledger import EvidenceLocator
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
@@ -105,12 +124,20 @@ def _database() -> sqlite3.Connection:
         );
         CREATE TABLE evidence_document_versions(
             document_version_id TEXT,legacy_document_id INTEGER,version_sequence INTEGER,
-            blob_sha256 TEXT,ticker TEXT
+            blob_sha256 TEXT,ticker TEXT,observation_id TEXT,issuer_id TEXT,recorded_at TEXT
         );
         INSERT INTO evidence_document_versions VALUES (
             'doc-v1',2,1,
-            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','NU'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','NU',
+            'observation-v1','issuer-nu','2026-08-30T12:00:00+00:00'
         );
+        CREATE TABLE evidence_source_observations(observation_id TEXT,retrieved_at TEXT);
+        INSERT INTO evidence_source_observations VALUES (
+            'observation-v1','2026-08-30T12:00:00+00:00'
+        );
+        CREATE TABLE reporting_entities(reporting_entity_id TEXT,issuer_id TEXT);
+        INSERT INTO reporting_entities VALUES ('issuer-nu','issuer-nu');
+        CREATE TABLE securities(security_id TEXT,issuer_id TEXT);
         CREATE TABLE evidence_extraction_runs(
             extraction_run_id TEXT,document_version_id TEXT,input_sha256 TEXT,
             extractor_name TEXT,extractor_config_sha256 TEXT,extractor_code_version TEXT,
@@ -118,11 +145,33 @@ def _database() -> sqlite3.Connection:
         );
         CREATE TABLE evidence_nodes(
             node_id TEXT,extraction_run_id TEXT,node_kind TEXT,text TEXT,
-            locator_json TEXT,locator_sha256 TEXT,supersedes_node_id TEXT
+            locator_json TEXT,locator_sha256 TEXT,supersedes_node_id TEXT,recorded_at TEXT
         );
         CREATE TABLE v_legacy_document_evidence_bindings_current(
             legacy_document_id INTEGER,document_version_id TEXT,evidence_node_id TEXT,
             scope_content_sha256 TEXT
+        );
+        CREATE TABLE kpi_definition_revisions(
+            kpi_definition_revision_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            kpi_definition_id INTEGER NOT NULL,
+            reporting_entity_id TEXT NOT NULL,
+            scope_security_id TEXT,
+            revision INTEGER NOT NULL,
+            supersedes_definition_revision_id TEXT UNIQUE,
+            status TEXT NOT NULL,lifecycle TEXT NOT NULL,
+            reported_label TEXT NOT NULL,reported_definition_text TEXT,
+            definition_text_status TEXT NOT NULL,period_kind TEXT NOT NULL,
+            stock_flow_behavior TEXT NOT NULL,unit_family TEXT NOT NULL,
+            unit_key TEXT NOT NULL,unit_scale TEXT NOT NULL,
+            currency_disposition TEXT NOT NULL,currency TEXT,
+            accounting_basis TEXT NOT NULL,consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL,source_document_version_id TEXT NOT NULL,
+            source_evidence_node_id TEXT NOT NULL,source_locator_json TEXT NOT NULL,
+            source_locator_sha256 TEXT NOT NULL,reason_code TEXT,reviewed_by TEXT NOT NULL,
+            commitment_json TEXT NOT NULL,commitment_sha256 TEXT NOT NULL,
+            effective_at TEXT NOT NULL,knowledge_at TEXT NOT NULL,recorded_at TEXT NOT NULL,
+            UNIQUE(kpi_definition_id,revision)
         );
         """
     )
@@ -140,10 +189,26 @@ def _database() -> sqlite3.Connection:
         ),
     )
     conn.executemany(
-        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?,NULL)",
+        "INSERT INTO evidence_nodes VALUES (?,?,?,?,?,?,NULL,?)",
         (
-            ("document-node", "run-1", "document", "", LOCATOR_JSON, LOCATOR_SHA),
-            ("page-7", "run-1", "pdf_page", SOURCE_TEXT, LOCATOR_JSON, LOCATOR_SHA),
+            (
+                "document-node",
+                "run-1",
+                "document",
+                "",
+                LOCATOR_JSON,
+                LOCATOR_SHA,
+                NOW.isoformat(),
+            ),
+            (
+                "page-7",
+                "run-1",
+                "pdf_page",
+                SOURCE_TEXT,
+                LOCATOR_JSON,
+                LOCATOR_SHA,
+                NOW.isoformat(),
+            ),
         ),
     )
     conn.execute(
@@ -258,6 +323,105 @@ def _decision(
     return ReviewedKpiSemanticDecision.model_validate(values)
 
 
+def _definition(**changes: object) -> IssuerKpiDefinitionRevision:
+    values: dict[str, object] = {
+        "kpi_definition_revision_id": "definition-total-customers-r1",
+        "idempotency_key": "definition:nu:total-customers:r1",
+        "kpi_definition_id": 1,
+        "reporting_entity_id": "issuer-nu",
+        "revision": 1,
+        "status": KpiDefinitionStatus.ADMITTED,
+        "lifecycle": KpiDefinitionLifecycle.ACTIVE,
+        "reported_label": "Total customers",
+        "reported_definition_text": "Total customers",
+        "definition_text_status": KpiDefinitionTextStatus.VERBATIM,
+        "period_kind": KpiDefinitionPeriodKind.INSTANT,
+        "stock_flow_behavior": KpiStockFlowBehavior.STOCK,
+        "unit_family": KpiUnitFamily.COUNT,
+        "unit_key": Unit.COUNT,
+        "unit_scale": KpiUnitScale.MILLIONS,
+        "currency_disposition": KpiCurrencyDisposition.NOT_APPLICABLE,
+        "currency": None,
+        "accounting_basis": KpiAccountingBasis.MANAGEMENT,
+        "consolidation_scope": KpiConsolidationScope.CONSOLIDATED,
+        "dimensions": {},
+        "source_document_version_id": "doc-v1",
+        "source_evidence_node_id": "page-7",
+        "source_locator": json.loads(LOCATOR_JSON),
+        "reviewed_by": "owner",
+        "effective_at": datetime(2024, 12, 31, tzinfo=UTC),
+        "knowledge_at": NOW,
+        "recorded_at": NOW,
+    }
+    values.update(changes)
+    return IssuerKpiDefinitionRevision.model_validate(values)
+
+
+def _relation(**changes: object) -> KpiDefinitionComparabilityRevision:
+    values: dict[str, object] = {
+        "comparability_revision_id": "relation-prior-new-r1",
+        "idempotency_key": "relation:prior:new:r1",
+        "predecessor_definition_revision_id": "prior-definition-r1",
+        "successor_definition_revision_id": "definition-total-customers-r1",
+        "revision": 1,
+        "relation_kind": KpiDefinitionRelationKind.RENAMED,
+        "disposition": KpiDefinitionComparabilityDisposition.CONTINUOUS,
+        "reason_code": "issuer_disclosed_rename",
+        "reviewed_by": "owner",
+        "source_document_version_id": "doc-v1",
+        "source_evidence_node_id": "page-7",
+        "source_locator": json.loads(LOCATOR_JSON),
+        "effective_at": datetime(2024, 12, 31, tzinfo=UTC),
+        "knowledge_at": NOW,
+        "recorded_at": NOW,
+    }
+    values.update(changes)
+    return KpiDefinitionComparabilityRevision.model_validate(values)
+
+
+def _seed_definition_head(
+    conn: sqlite3.Connection, definition: IssuerKpiDefinitionRevision
+) -> None:
+    conn.execute(
+        "INSERT INTO kpi_definition_revisions VALUES (" + ",".join("?" for _ in range(33)) + ")",
+        (
+            definition.kpi_definition_revision_id,
+            definition.idempotency_key,
+            definition.kpi_definition_id,
+            definition.reporting_entity_id,
+            definition.scope_security_id,
+            definition.revision,
+            definition.supersedes_definition_revision_id,
+            definition.status.value,
+            definition.lifecycle.value,
+            definition.reported_label,
+            definition.reported_definition_text,
+            definition.definition_text_status.value,
+            definition.period_kind.value,
+            definition.stock_flow_behavior.value,
+            definition.unit_family.value,
+            str(definition.unit_key),
+            definition.unit_scale.value,
+            definition.currency_disposition.value,
+            None if definition.currency is None else definition.currency.value,
+            definition.accounting_basis.value,
+            definition.consolidation_scope.value,
+            json.dumps(definition.dimensions, sort_keys=True, separators=(",", ":")),
+            definition.source_document_version_id,
+            definition.source_evidence_node_id,
+            definition.source_locator_json,
+            definition.source_locator_sha256,
+            definition.reason_code,
+            definition.reviewed_by,
+            definition.commitment_json,
+            definition.commitment_sha256,
+            definition.effective_at.isoformat(),
+            definition.knowledge_at.isoformat(),
+            definition.recorded_at.isoformat(),
+        ),
+    )
+
+
 def _decisions(
     review_export: KpiSemanticReviewExport, **decision_changes: object
 ) -> KpiSemanticRefreshDecisionBatch:
@@ -308,6 +472,149 @@ def test_builds_deterministic_source_bound_refresh_manifest(tmp_path: Path) -> N
     before = output.read_bytes()
     write_refresh_manifest(output, second)
     assert output.read_bytes() == before
+
+
+def test_v3_builds_v7_with_complete_reviewed_definition_capture(tmp_path: Path) -> None:
+    conn = _database()
+    review_export = _export(_review(conn, tmp_path))
+    legacy = _decisions(review_export)
+    payload = legacy.model_dump(mode="json")
+    payload["schema_version"] = "kpi_semantic_refresh_decisions.v3"
+    decision = payload["decisions"][0]
+    assert isinstance(decision, dict)
+    decision.update(
+        {
+            "expected_definition_head_id": None,
+            "expected_definition_revision": 0,
+            "definition_revision": _definition().model_dump(mode="json"),
+            "comparability_revisions": [],
+        }
+    )
+    reviewed = KpiSemanticRefreshDecisionBatch.model_validate(payload)
+
+    manifest = build_kpi_semantic_refresh_manifest(
+        conn,
+        repo_root=tmp_path,
+        review_export=review_export,
+        decisions=reviewed,
+        now=NOW,
+    )
+
+    assert manifest.schema_version == "kpi_semantic_refresh.v7"
+    entry = manifest.entries[0]
+    assert entry.expected_definition_head_id is None
+    assert entry.expected_definition_revision == 0
+    definition = entry.definition_revision
+    assert definition == _definition()
+    assert definition is not None
+    assert definition.currency_disposition is KpiCurrencyDisposition.NOT_APPLICABLE
+    assert definition.currency is None
+
+    decision["comparability_revisions"] = [_relation().model_dump(mode="json")]
+    with pytest.raises(ValueError, match="definition_lineage_validation_failed"):
+        build_kpi_semantic_refresh_manifest(
+            conn,
+            repo_root=tmp_path,
+            review_export=review_export,
+            decisions=KpiSemanticRefreshDecisionBatch.model_validate(payload),
+            now=NOW,
+        )
+
+
+def test_v3_requires_explicit_reviewed_definition_fields_and_currency_semantics() -> None:
+    incomplete = {
+        "schema_version": "kpi_semantic_refresh_decisions.v3",
+        "review_export_sha256": "a" * 64,
+        "review_batch_sha256": "b" * 64,
+        "reviewer": "owner",
+        "logical_idempotency_key": "nu:definition-review:v1",
+        "knowledge_at": NOW.isoformat(),
+        "review_bundle_sha256": REVIEW_SHA,
+        "expected_schema_revision": "0038_add_kpi_definition_revisions",
+        "backup_restore_evidence_id": BACKUP_SHA,
+        "decisions": [_decision(KpiSemanticReviewBatch.model_construct()).model_dump(mode="json")],
+    }
+    with pytest.raises(ValidationError, match="explicit definition capture fields"):
+        KpiSemanticRefreshDecisionBatch.model_validate(incomplete)
+
+    with pytest.raises(ValidationError, match="explicit currency"):
+        _definition(
+            unit_family=KpiUnitFamily.CURRENCY,
+            unit_key=Unit.ACTUAL,
+            unit_scale=KpiUnitScale.NONE,
+            currency_disposition=KpiCurrencyDisposition.UNKNOWN,
+            currency=Currency.USD,
+        )
+
+    duplicated = incomplete.copy()
+    duplicated_decision = _decision(KpiSemanticReviewBatch.model_construct()).model_dump(
+        mode="json"
+    )
+    duplicated_decision.update(
+        {
+            "expected_definition_head_id": None,
+            "expected_definition_revision": 0,
+            "definition_revision": _definition().model_dump(mode="json"),
+            "comparability_revisions": [
+                _relation().model_dump(mode="json"),
+                _relation().model_dump(mode="json"),
+            ],
+        }
+    )
+    duplicated["decisions"] = [duplicated_decision]
+    with pytest.raises(ValidationError, match="comparability revision identities"):
+        KpiSemanticRefreshDecisionBatch.model_validate(duplicated)
+
+
+@pytest.mark.parametrize(
+    ("prepare_database", "definition", "expected"),
+    [
+        (False, _definition(source_locator={"page_number": 8}), "evidence_binding_mismatch"),
+        (True, _definition(), "definition_revision_head_changed"),
+        (
+            False,
+            _definition(
+                kpi_definition_revision_id="definition-total-customers-r3",
+                idempotency_key="definition:nu:total-customers:r3",
+                revision=3,
+                supersedes_definition_revision_id="unrelated-definition-r2",
+            ),
+            "definition_lineage_validation_failed",
+        ),
+    ],
+)
+def test_v3_rejects_wrong_definition_evidence_and_stale_head(
+    tmp_path: Path,
+    prepare_database: bool,
+    definition: IssuerKpiDefinitionRevision,
+    expected: str,
+) -> None:
+    conn = _database()
+    if prepare_database:
+        _seed_definition_head(conn, _definition())
+    review_export = _export(_review(conn, tmp_path))
+    legacy = _decisions(review_export)
+    payload = legacy.model_dump(mode="json")
+    payload["schema_version"] = "kpi_semantic_refresh_decisions.v3"
+    decision = payload["decisions"][0]
+    assert isinstance(decision, dict)
+    decision.update(
+        {
+            "expected_definition_head_id": None,
+            "expected_definition_revision": 0,
+            "definition_revision": definition.model_dump(mode="json"),
+            "comparability_revisions": [],
+        }
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        build_kpi_semantic_refresh_manifest(
+            conn,
+            repo_root=tmp_path,
+            review_export=review_export,
+            decisions=KpiSemanticRefreshDecisionBatch.model_validate(payload),
+            now=NOW,
+        )
 
 
 def test_builds_quarantined_predecessor_supersession_without_admitting_old_fact(
