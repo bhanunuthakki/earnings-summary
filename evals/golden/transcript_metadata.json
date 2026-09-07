@@ -1,6 +1,6 @@
 {
   "purpose": "transcript_metadata",
-  "notes": "Mode-A golden set for identify_transcript_metadata (llm_evals_plan PR 4). Synthetic cover-page snippets; expected is the exact TICKER_QX_YYYY string (or UNKNOWN). Deterministic compare — no judge: an exact-format string is either right or wrong.",
+  "notes": "Mode-A golden set for identify_transcript_metadata (llm_evals_plan PR 4). Synthetic cover-page snippets; expected is the exact TICKER_QX_YYYY string (or UNKNOWN). Deterministic compare — no judge: an exact-format string is either right or wrong. tm-005 and tm-006 are synthetic contract fixtures for a non-calendar fiscal header and genuinely ambiguous metadata.",
   "cases": [
     {
       "id": "tm-001-plain-cover",
@@ -20,6 +20,16 @@
     {
       "id": "tm-004-not-a-transcript",
       "text": "Chocolate chip cookie recipe. Preheat the oven to 375F. Cream the butter and both sugars until fluffy, then beat in the eggs and vanilla. Fold in the flour, baking soda, and salt, then the chocolate chips. Bake 9 to 11 minutes.",
+      "expected": "UNKNOWN"
+    },
+    {
+      "id": "tm-005-non-calendar-fiscal-header",
+      "text": "Veeva Systems Inc. (NYSE: VEEV)\nFirst Quarter Fiscal 2026 Earnings Conference Call\nJune 4, 2025\n\nOperator: Welcome to Veeva's first quarter fiscal 2026 earnings call. Peter Gassner, Chief Executive Officer: Thank you for joining us.",
+      "expected": "VEEV_Q1_2026"
+    },
+    {
+      "id": "tm-006-ambiguous-metadata",
+      "text": "Quarterly earnings call transcript\n\nOperator: Welcome to today's results discussion. Management will review revenue, margins, and the outlook. Please submit questions through the operator.",
       "expected": "UNKNOWN"
     }
   ]

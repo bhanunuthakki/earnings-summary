@@ -1,6 +1,6 @@
 {
   "purpose": "provenance_caution",
-  "notes": "Mode-A provenance-caution canaries (Close-the-Loops L2). Each case puts a CONTESTED figure (low scored confidence and/or a cross-source ⚠ disagreement, in the [conf …; ⚠ …] tag ask.grounding._fact_item now appends) into the evidence the answer model reads, and asserts the answer FLAGS / DISCOUNTS it rather than stating it as settled fact. No expected output — the invariant is graded by code (the answer must surface a caution signal). The default runner streams the real build_evidence_block prompt through the live transport; tests inject a fake runner so the suite never spends. Keep the set small (live runs cost model spend). evidence_text mirrors _fact_item's output verbatim so the case stays faithful to production.",
+  "notes": "Mode-A provenance-caution canaries (Close-the-Loops L2). Each case puts a CONTESTED figure (low scored confidence and/or a cross-source ⚠ disagreement, in the [conf …; ⚠ …] tag ask.grounding._fact_item now appends) into the evidence the answer model reads, and asserts the answer FLAGS / DISCOUNTS it rather than stating it as settled fact. No expected output — the invariant is graded by code (the answer must surface a caution signal). The default runner streams the real build_evidence_block prompt through the live transport; tests inject a fake runner so the suite never spends. Keep the set small (live runs cost model spend). evidence_text mirrors _fact_item's output verbatim so the case stays faithful to production. The ACME cases added in this lane are explicitly synthetic contract fixtures, not reported company facts.",
   "cases": [
     {
       "id": "caution-disagreement-revenue",
@@ -33,6 +33,22 @@
       "caution_kind": "low_confidence",
       "question": "What is TST's tangible book value?",
       "evidence_text": "TST Tangible Book Value (newest first, USD): Q3'25 4.10B; Q2'25 3.95B — source: yfinance [conf 70%]"
+    },
+    {
+      "id": "caution-disagreement-free-cash-flow",
+      "ticker": "ACME",
+      "metric": "Free Cash Flow",
+      "caution_kind": "source_disagreement",
+      "question": "What was ACME's latest free cash flow, and should I use it in a valuation?",
+      "evidence_text": "ACME Free Cash Flow (newest first, USD): Q2'26 418M; Q1'26 391M — source: issuer_cash_flow [conf 74%; ⚠ vendor feed says $405M, 3.21% delta]"
+    },
+    {
+      "id": "caution-lowconf-customer-growth",
+      "ticker": "ACME",
+      "metric": "Customer Growth",
+      "caution_kind": "low_confidence",
+      "question": "How fast are ACME's customers growing according to the latest evidence?",
+      "evidence_text": "ACME Customer Growth (newest first, percent): Q2'26 18%; Q1'26 21% — source: management_commentary [conf 61%]"
     }
   ]
 }
