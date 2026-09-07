@@ -700,7 +700,7 @@ def test_migration_retains_legacy_receipt_but_does_not_admit_it_as_complete(
         )
         conn.commit()
 
-    command.upgrade(_config(path), "head")
+    migrated_db(path, target="head", upgrade_existing=True)
     with sqlite3.connect(path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -809,7 +809,7 @@ def test_valid_legacy_receipt_requires_reaudit_and_is_not_automatically_queued(
             ),
         )
         conn.commit()
-    command.upgrade(_config(path), "head")
+    migrated_db(path, target="head", upgrade_existing=True)
     with sqlite3.connect(path) as conn:
         conn.row_factory = sqlite3.Row
         coverage = commitment_scan_coverage(
@@ -1012,7 +1012,7 @@ def test_unsealed_legacy_acquisition_is_invalid_and_excluded_from_automatic_queu
             ),
         )
         conn.commit()
-    command.upgrade(_config(path), "head")
+    migrated_db(path, target="head", upgrade_existing=True)
 
     changed_text = "new authorized source text"
     processed = tmp_path / "transcripts" / "processed" / "ACME_Q2_2026.txt"

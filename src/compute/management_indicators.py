@@ -104,8 +104,9 @@ def _resolve_indicator_source(
     speaker = "ts.speaker" if "speaker" in columns else "NULL"
     time_code = "ts.time_code_start" if "time_code_start" in columns else "NULL"
     transcripts = selected_transcripts_relation(conn)
-    anchor = conn.execute(
-        "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"
+    # nosec B608 -- table/column fragments are fixed schema identifiers selected above.
+    anchor = conn.execute(  # nosec B608
+        "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"  # nosec B608
         + speaker
         + ","
         + time_code
@@ -132,8 +133,9 @@ def _resolve_indicator_source(
             raise ValueError(
                 "management indicator source excerpt must occur in its anchored transcript segment"
             )
-        candidates = conn.execute(
-            "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"
+        # nosec B608 -- table/column fragments are fixed schema identifiers selected above.
+        candidates = conn.execute(  # nosec B608
+            "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"  # nosec B608
             + speaker
             + ","
             + time_code

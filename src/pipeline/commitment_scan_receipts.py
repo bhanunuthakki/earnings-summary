@@ -18,8 +18,8 @@ from provenance.selection import selected_transcripts_relation
 _TRANSCRIPT_NAME = re.compile(r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})$")
 _OBSERVATION_SCHEMA = "commitment-segment-observations@1"
 _LEGACY_MANIFEST = '{"schema_version":"legacy-unobserved@0","segments":[]}'
-_LEGACY_MANIFEST_SHA256 = "462e7c3d4eb4e810994e1692e3a50c32b4ddf230ee4c7c9690d81f053fa3d929"
-_EMPTY_SOURCE_SHA256 = "6367e24ff1e38f3e3e590763053263ca9db7d36126e99e65caba76cb9fea37e4"
+_LEGACY_MANIFEST_SHA256 = "462e7c3d4eb4e810994e1692e3a50c32b4ddf230ee4c7c9690d81f053fa3d929"  # pragma: allowlist secret -- deterministic manifest digest, not a credential
+_EMPTY_SOURCE_SHA256 = "6367e24ff1e38f3e3e590763053263ca9db7d36126e99e65caba76cb9fea37e4"  # pragma: allowlist secret -- deterministic empty-source digest, not a credential
 
 
 @dataclass(frozen=True)
@@ -934,8 +934,9 @@ def current_commitment_scan_receipt(
     )
     params: tuple[object, ...] = (transcript_id, prompt_version)
     if cutoff_at is None:
-        rows = conn.execute(
-            "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"
+        # nosec B608 -- query structure and schema fragments are fixed identifiers.
+        rows = conn.execute(  # nosec B608
+            "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"  # nosec B608
             "transcript_sha256,prompt_version,n_extracted,output_manifest_json,"
             "output_manifest_sha256"
             + coverage_columns
@@ -946,8 +947,9 @@ def current_commitment_scan_receipt(
         ).fetchall()
     else:
         params += (cutoff_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),)
-        rows = conn.execute(
-            "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"
+        # nosec B608 -- query structure and schema fragments are fixed identifiers.
+        rows = conn.execute(  # nosec B608
+            "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"  # nosec B608
             "transcript_sha256,prompt_version,n_extracted,output_manifest_json,"
             "output_manifest_sha256"
             + coverage_columns
@@ -1059,8 +1061,9 @@ def commitment_scan_coverage(
     if cutoff_at is not None:
         cutoff_clause = " AND datetime(recorded_at)<=datetime(?)"
         params += (cutoff_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),)
-    rows = conn.execute(
-        "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"
+    # nosec B608 -- cutoff_clause is selected from a fixed internal predicate.
+    rows = conn.execute(  # nosec B608
+        "SELECT receipt_id,transcript_id,document_id,transcript_acquisition_receipt_id,"  # nosec B608
         "transcript_sha256,prompt_version,n_extracted,output_manifest_json,"
         "output_manifest_sha256,observed_segments_json,observed_segments_sha256,"
         "observed_source_sha256,recorded_at FROM commitment_scan_receipts "
@@ -1106,8 +1109,9 @@ def commitment_scan_coverage(
         if cutoff_at is not None:
             log_cutoff = " AND datetime(scanned_at)<=datetime(?)"
             log_params += (cutoff_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),)
-        legacy_log = conn.execute(
-            "SELECT 1 FROM commitment_scan_log WHERE transcript_id=? "
+        # nosec B608 -- log_cutoff is selected from a fixed internal predicate.
+        legacy_log = conn.execute(  # nosec B608
+            "SELECT 1 FROM commitment_scan_log WHERE transcript_id=? "  # nosec B608
             "AND (prompt_version=? OR prompt_version IS NULL)" + log_cutoff + " LIMIT 1",
             log_params,
         ).fetchone()

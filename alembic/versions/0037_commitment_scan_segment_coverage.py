@@ -12,8 +12,8 @@ branch_labels = None
 depends_on = None
 
 _LEGACY_MANIFEST = '{"schema_version":"legacy-unobserved@0","segments":[]}'
-_LEGACY_MANIFEST_SHA256 = "462e7c3d4eb4e810994e1692e3a50c32b4ddf230ee4c7c9690d81f053fa3d929"
-_EMPTY_SOURCE_SHA256 = "6367e24ff1e38f3e3e590763053263ca9db7d36126e99e65caba76cb9fea37e4"
+_LEGACY_MANIFEST_SHA256 = "462e7c3d4eb4e810994e1692e3a50c32b4ddf230ee4c7c9690d81f053fa3d929"  # pragma: allowlist secret -- deterministic manifest digest, not a credential
+_EMPTY_SOURCE_SHA256 = "6367e24ff1e38f3e3e590763053263ca9db7d36126e99e65caba76cb9fea37e4"  # pragma: allowlist secret -- deterministic empty-source digest, not a credential
 
 
 def _create_receipt_table() -> None:
