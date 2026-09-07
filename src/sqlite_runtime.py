@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+import time
 import unicodedata
 from enum import StrEnum
 from pathlib import Path
@@ -17,6 +18,7 @@ from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
+_WAL_TRANSITION_RETRY_INTERVAL_S = 0.01
 _FORBIDDEN_MAC_CHECKOUT_DB = (
     Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
 ).resolve()
@@ -146,7 +148,7 @@ def connect_sqlite(
             # instead of being misreported as an empty result set.
             require_current_for_write(conn)
         if role is SQLiteConnectionRole.WRITER:
-            _apply_writer_policy(conn)
+            _apply_writer_policy(conn, require_wal=resolved != ":memory:")
     except Exception:
         conn.close()
         raise
@@ -195,9 +197,100 @@ def _apply_connection_policy(conn: sqlite3.Connection) -> None:
     conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
 
 
-def _apply_writer_policy(conn: sqlite3.Connection) -> None:
+def _pragma_journal_mode(conn: sqlite3.Connection, *, wal: bool = False) -> str:
+    statement = "PRAGMA journal_mode = WAL" if wal else "PRAGMA journal_mode"
+    row = conn.execute(statement).fetchone()
+    if row is None:
+        raise sqlite3.OperationalError("SQLite did not report a journal mode")
+    return str(row[0]).casefold()
+
+
+def _raise_wal_transition_timeout(
+    *, busy_error: sqlite3.OperationalError | None, observed_mode: str
+) -> None:
+    if busy_error is not None:
+        raise busy_error
+    raise sqlite3.OperationalError(
+        "SQLite did not enter WAL journal mode within the configured busy timeout "
+        f"(last mode={observed_mode})"
+    )
+
+
+def _apply_remaining_busy_timeout(
+    conn: sqlite3.Connection,
+    *,
+    deadline: float,
+    busy_error: sqlite3.OperationalError | None,
+    observed_mode: str,
+) -> None:
+    remaining_ms = int((deadline - time.monotonic()) * 1000)
+    if remaining_ms <= 0:
+        _raise_wal_transition_timeout(
+            busy_error=busy_error,
+            observed_mode=observed_mode,
+        )
+    conn.execute(f"PRAGMA busy_timeout = {remaining_ms}")
+
+
+def _establish_wal_within_busy_timeout(conn: sqlite3.Connection) -> None:
+    timeout_row = conn.execute("PRAGMA busy_timeout").fetchone()
+    if timeout_row is None:
+        raise sqlite3.OperationalError("SQLite did not report its busy timeout")
+    configured_timeout_ms = int(timeout_row[0])
+    deadline = time.monotonic() + configured_timeout_ms / 1000
+    last_busy_error: sqlite3.OperationalError | None = None
+    observed_mode = "unknown"
+
+    try:
+        while True:
+            _apply_remaining_busy_timeout(
+                conn,
+                deadline=deadline,
+                busy_error=last_busy_error,
+                observed_mode=observed_mode,
+            )
+            try:
+                observed_mode = _pragma_journal_mode(conn)
+            except sqlite3.OperationalError as error:
+                if getattr(error, "sqlite_errorname", "") != "SQLITE_BUSY":
+                    raise
+                last_busy_error = error
+            else:
+                if observed_mode == "wal":
+                    return
+                last_busy_error = None
+                _apply_remaining_busy_timeout(
+                    conn,
+                    deadline=deadline,
+                    busy_error=last_busy_error,
+                    observed_mode=observed_mode,
+                )
+                try:
+                    observed_mode = _pragma_journal_mode(conn, wal=True)
+                except sqlite3.OperationalError as error:
+                    if getattr(error, "sqlite_errorname", "") != "SQLITE_BUSY":
+                        raise
+                    last_busy_error = error
+                else:
+                    if observed_mode == "wal":
+                        return
+                    last_busy_error = None
+
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0:
+                _raise_wal_transition_timeout(
+                    busy_error=last_busy_error,
+                    observed_mode=observed_mode,
+                )
+            time.sleep(min(_WAL_TRANSITION_RETRY_INTERVAL_S, remaining_s))
+    finally:
+        conn.execute(f"PRAGMA busy_timeout = {configured_timeout_ms}")
+
+
+def _apply_writer_policy(conn: sqlite3.Connection, *, require_wal: bool = True) -> None:
     """Apply database-wide settings permitted only to a writer."""
-    conn.execute("PRAGMA journal_mode = WAL")
+    if require_wal:
+        _establish_wal_within_busy_timeout(conn)
     conn.execute("PRAGMA synchronous = NORMAL")
 
 

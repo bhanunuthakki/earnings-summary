@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -79,6 +82,341 @@ def test_connection_enforces_integrity_and_concurrency_policy(tmp_path: Path) ->
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_concurrent_writer_connections_share_initial_wal_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "initial-delete-mode.db"
+    with sqlite3.connect(path) as raw:
+        raw.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        assert raw.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+
+    transition_barrier = threading.Barrier(2)
+    busy_observed = threading.Event()
+    real_connect: Callable[..., sqlite3.Connection] = sqlite3.connect
+
+    class CoordinatedTransitionConnection(sqlite3.Connection):
+        synchronized = False
+
+        def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+            if args:
+                raise AssertionError("coordinated connection received parameterized SQL")
+            is_wal_transition = sql.strip().casefold().replace(" ", "") == "pragmajournal_mode=wal"
+            if not is_wal_transition or self.synchronized:
+                return super().execute(sql)
+            self.synchronized = True
+            transition_barrier.wait(timeout=5)
+            # SQLite may bypass a busy handler to avoid a lock cycle. Remove
+            # the wait from this first attempt so the real DELETE-to-WAL lock
+            # conflict deterministically exercises immediate-BUSY handling.
+            super().execute("PRAGMA busy_timeout=0")
+            try:
+                cursor = super().execute(sql)
+            except sqlite3.OperationalError as error:
+                if error.sqlite_errorname == "SQLITE_BUSY":
+                    busy_observed.set()
+                raise
+            assert busy_observed.wait(timeout=5)
+            return cursor
+
+    def synchronized_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = CoordinatedTransitionConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", synchronized_connect)
+    modes: list[str] = []
+    failures: list[BaseException] = []
+
+    def connect_writer() -> None:
+        try:
+            conn = connect_sqlite(
+                path,
+                role=SQLiteConnectionRole.WRITER,
+                schema_preflight=False,
+            )
+        except BaseException as error:  # pragma: no cover - failure is asserted below
+            failures.append(error)
+            return
+        try:
+            modes.append(str(conn.execute("PRAGMA journal_mode").fetchone()[0]))
+        finally:
+            conn.close()
+
+    first = threading.Thread(target=connect_writer)
+    second = threading.Thread(target=connect_writer)
+    first.start()
+    second.start()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert not failures
+    assert modes == ["wal", "wal"]
+
+
+def test_established_wal_writer_does_not_repeat_mode_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "established-wal.db"
+    with sqlite3.connect(path) as raw:
+        raw.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        assert raw.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+
+    real_connect: Callable[..., sqlite3.Connection] = sqlite3.connect
+    transition_attempts: list[str] = []
+
+    def guarded_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)
+
+        def authorize(
+            action_code: int,
+            pragma_name: str | None,
+            pragma_value: str | None,
+            database_name: str | None,
+            trigger_name: str | None,
+        ) -> int:
+            del database_name, trigger_name
+            if (
+                action_code == sqlite3.SQLITE_PRAGMA
+                and pragma_name == "journal_mode"
+                and pragma_value == "WAL"
+            ):
+                transition_attempts.append(pragma_value)
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        conn.set_authorizer(authorize)
+        return conn
+
+    monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", guarded_connect)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=False,
+    )
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+    finally:
+        conn.close()
+    assert transition_attempts == []
+
+
+def test_wal_transition_rechecks_when_sqlite_returns_old_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "old-mode-result.db"
+
+    class OldModeOnceConnection(sqlite3.Connection):
+        wal_attempts = 0
+
+        def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+            if args:
+                raise AssertionError("old-mode connection received parameterized SQL")
+            is_wal_transition = sql.strip().casefold().replace(" ", "") == "pragmajournal_mode=wal"
+            if is_wal_transition:
+                self.wal_attempts += 1
+                if self.wal_attempts == 1:
+                    return super().execute("PRAGMA journal_mode")
+            return super().execute(sql)
+
+    real_connect: Callable[..., sqlite3.Connection] = sqlite3.connect
+
+    def old_mode_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = OldModeOnceConnection
+        return real_connect(*args, **kwargs)
+
+    with sqlite3.connect(path) as raw:
+        raw.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+    monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", old_mode_connect)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=False,
+    )
+    try:
+        assert isinstance(conn, OldModeOnceConnection)
+        assert conn.wal_attempts == 2
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("clock_after_read", "expected_set_timeout_ms"),
+    [(29.0, 1_000), (30.0, None)],
+)
+def test_wal_transition_refreshes_budget_before_mode_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    clock_after_read: float,
+    expected_set_timeout_ms: int | None,
+) -> None:
+    path = tmp_path / "slow-journal-read.db"
+    with sqlite3.connect(path) as raw:
+        raw.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+
+    clock = [0.0]
+    set_timeouts: list[int] = []
+    real_connect: Callable[..., sqlite3.Connection] = sqlite3.connect
+
+    class DelayedReadConnection(sqlite3.Connection):
+        delayed_read = False
+
+        def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+            if args:
+                raise AssertionError("delayed-read connection received parameterized SQL")
+            normalized = sql.strip().casefold().replace(" ", "")
+            if normalized == "pragmajournal_mode" and not self.delayed_read:
+                self.delayed_read = True
+                cursor = super().execute(sql)
+                clock[0] = clock_after_read
+                return cursor
+            if normalized == "pragmajournal_mode=wal":
+                set_timeouts.append(int(super().execute("PRAGMA busy_timeout").fetchone()[0]))
+            return super().execute(sql)
+
+    def delayed_read_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = DelayedReadConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite_runtime.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", delayed_read_connect)
+
+    if expected_set_timeout_ms is None:
+        with pytest.raises(sqlite3.OperationalError, match="within the configured busy timeout"):
+            connect_sqlite(
+                path,
+                role=SQLiteConnectionRole.WRITER,
+                schema_preflight=False,
+            )
+        assert set_timeouts == []
+        return
+
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=False,
+    )
+    try:
+        assert set_timeouts == [expected_set_timeout_ms]
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+    finally:
+        conn.close()
+
+
+def test_wal_transition_uses_one_busy_budget_and_restores_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "locked-delete-mode.db"
+    with sqlite3.connect(path) as raw:
+        raw.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+
+    blocker = sqlite3.connect(path)
+    real_connect: Callable[..., sqlite3.Connection] = sqlite3.connect
+    timeout_at_close: list[int] = []
+
+    class TimeoutTrackingConnection(sqlite3.Connection):
+        def close(self) -> None:
+            timeout_at_close.append(int(self.execute("PRAGMA busy_timeout").fetchone()[0]))
+            super().close()
+
+    def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = TimeoutTrackingConnection
+        return real_connect(*args, **kwargs)
+
+    try:
+        blocker.execute("BEGIN")
+        blocker.execute("SELECT * FROM sample").fetchall()
+        monkeypatch.setattr(sqlite_runtime, "SQLITE_BUSY_TIMEOUT_MS", 25)
+        monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", tracking_connect)
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="database is locked") as raised:
+            connect_sqlite(
+                path,
+                role=SQLiteConnectionRole.WRITER,
+                schema_preflight=False,
+            )
+        elapsed = time.monotonic() - started
+
+        assert raised.value.sqlite_errorname == "SQLITE_BUSY"
+        assert elapsed < 0.5
+        assert timeout_at_close == [25]
+        assert blocker.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    finally:
+        blocker.close()
+
+
+def test_wal_transition_does_not_retry_non_busy_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "denied-delete-mode.db"
+    with sqlite3.connect(path) as raw:
+        raw.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+
+    real_connect: Callable[..., sqlite3.Connection] = sqlite3.connect
+    transition_attempts: list[str] = []
+    timeout_at_close: list[int] = []
+
+    class TimeoutTrackingConnection(sqlite3.Connection):
+        def close(self) -> None:
+            timeout_at_close.append(int(self.execute("PRAGMA busy_timeout").fetchone()[0]))
+            super().close()
+
+    def denied_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = TimeoutTrackingConnection
+        conn = real_connect(*args, **kwargs)
+
+        def authorize(
+            action_code: int,
+            pragma_name: str | None,
+            pragma_value: str | None,
+            database_name: str | None,
+            trigger_name: str | None,
+        ) -> int:
+            del database_name, trigger_name
+            if (
+                action_code == sqlite3.SQLITE_PRAGMA
+                and pragma_name == "journal_mode"
+                and pragma_value == "WAL"
+            ):
+                transition_attempts.append(pragma_value)
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        conn.set_authorizer(authorize)
+        return conn
+
+    monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", denied_connect)
+    started = time.monotonic()
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=False,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5
+    assert transition_attempts == ["WAL"]
+    assert timeout_at_close == [30_000]
+
+
+def test_writer_preserves_supported_in_memory_journal_mode() -> None:
+    conn = connect_sqlite(
+        ":memory:",
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=False,
+    )
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "memory"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
     finally:
         conn.close()
 
