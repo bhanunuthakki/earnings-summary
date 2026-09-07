@@ -153,8 +153,19 @@ def _mapping(value: object, label: str) -> Mapping[str, object]:
     return output
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
 def load_manifest(path: Path) -> TaskManifest:
-    raw: object = json.loads(path.read_text(encoding="utf-8"))
+    raw: object = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_keys
+    )
     root = _mapping(raw, "manifest")
     version = root.get("version")
     if not isinstance(version, int) or isinstance(version, bool) or version != MANIFEST_VERSION:
