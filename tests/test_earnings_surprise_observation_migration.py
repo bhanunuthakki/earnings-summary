@@ -21,7 +21,7 @@ from execution.ingest_earnings_surprises import (
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0036_add_data_coverage_dispositions"
+ACTIVE_HEAD = "0037_commitment_scan_segment_coverage"
 
 
 def _config(path: Path) -> Config:

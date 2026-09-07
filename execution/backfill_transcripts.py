@@ -61,7 +61,9 @@ from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
 from llm.prompt_versions import prompt_version_for  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from pipeline.commitment_scan_receipts import (  # noqa: E402
-    current_commitment_scan_receipt,
+    CommitmentScanCoverage,
+    CommitmentScanCoverageState,
+    commitment_scan_coverage,
     current_transcript_scan_binding,
 )
 from pipeline.data_coverage_dispositions import (  # noqa: E402
@@ -787,15 +789,12 @@ def _run_extract(
     return proc.returncode
 
 
-def _commitment_scan_evidence(
+def _commitment_scan_coverage(
     ticker: str, year: int, quarter: int, fye_month: int
-) -> TranscriptEvidence | None:
-    """Return exact durable evidence that the period's transcript was scanned."""
+) -> CommitmentScanCoverage | None:
+    """Classify the selected period's current, historical, or missing scan evidence."""
 
     period_end = quarter_end_date(year, quarter, fye_month).isoformat()
-    transcript_evidence = _ingested_evidence(ticker, year, quarter, fye_month)
-    if transcript_evidence is None:
-        return None
     conn = db.get_connection()
     try:
         relation = selected_transcripts_relation(conn).sql
@@ -807,27 +806,39 @@ def _commitment_scan_evidence(
         ).fetchall()
         if len(transcripts) != 1:
             return None
-        receipt = current_commitment_scan_receipt(
+        return commitment_scan_coverage(
             conn,
             transcript_id=int(transcripts[0]["id"]),
             prompt_version=prompt_version_for("saydo_commitment_extract"),
         )
-        if receipt is None:
-            return None
-        expected_transcript_receipt = transcript_evidence.reference.removeprefix(
-            "transcript-receipt:"
-        )
-        if (
-            receipt.binding.transcript_acquisition_receipt_id != expected_transcript_receipt
-            or receipt.binding.transcript_sha256 != transcript_evidence.sha256
-        ):
-            return None
-        return TranscriptEvidence(
-            reference=f"commitment-scan-receipt:{receipt.receipt_id}",
-            sha256=receipt.receipt_id,
-        )
     finally:
         conn.close()
+
+
+def _commitment_scan_evidence(
+    ticker: str, year: int, quarter: int, fye_month: int
+) -> TranscriptEvidence | None:
+    """Return exact durable evidence that the period's transcript was scanned."""
+
+    transcript_evidence = _ingested_evidence(ticker, year, quarter, fye_month)
+    if transcript_evidence is None:
+        return None
+    coverage = _commitment_scan_coverage(ticker, year, quarter, fye_month)
+    if coverage is None or coverage.state is not CommitmentScanCoverageState.COMPLETE:
+        return None
+    receipt = coverage.receipt
+    if receipt is None:
+        return None
+    expected_transcript_receipt = transcript_evidence.reference.removeprefix("transcript-receipt:")
+    if (
+        receipt.binding.transcript_acquisition_receipt_id != expected_transcript_receipt
+        or receipt.binding.transcript_sha256 != transcript_evidence.sha256
+    ):
+        return None
+    return TranscriptEvidence(
+        reference=f"commitment-scan-receipt:{receipt.receipt_id}",
+        sha256=receipt.receipt_id,
+    )
 
 
 def _transcript_id_for_period(
@@ -876,14 +887,15 @@ def _commitment_scan_targets(
                     f"{_qlabel(year, quarter)}: commitment scan selection failed: {exc}"
                 )
                 continue
-            if (
-                transcript_id is not None
-                and (_ingested_evidence(result.ticker, year, quarter, result.fye_month) is not None)
-                and (
-                    _commitment_scan_evidence(result.ticker, year, quarter, result.fye_month)
-                    is None
-                )
+            if transcript_id is not None and (
+                _ingested_evidence(result.ticker, year, quarter, result.fye_month) is not None
             ):
+                coverage = _commitment_scan_coverage(result.ticker, year, quarter, result.fye_month)
+                if coverage is None or coverage.state not in {
+                    CommitmentScanCoverageState.SOURCE_CHANGED_MISSING,
+                    CommitmentScanCoverageState.NEVER_SCANNED_MISSING,
+                }:
+                    continue
                 pending.append(
                     CommitmentScanTarget(
                         ticker=result.ticker,
@@ -965,6 +977,7 @@ def _persist_commitment_scan_coverage(
     for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
         label = _qlabel(year, quarter)
         evidence = _commitment_scan_evidence(result.ticker, year, quarter, result.fye_month)
+        scan_coverage = _commitment_scan_coverage(result.ticker, year, quarter, result.fye_month)
         transcript_exists = _transcript_rows_exist(result.ticker, year, quarter, result.fye_month)
         transcript_evidence = _ingested_evidence(result.ticker, year, quarter, result.fye_month)
         attempt_provider = "governed_llm"
@@ -972,6 +985,15 @@ def _persist_commitment_scan_coverage(
             status = CoverageDispositionStatus.SATISFIED
             reason = "commitment_scan_evidence_present"
             attempt_status = CoverageAttemptStatus.EVIDENCE_PRESENT
+            retry_after = None
+        elif scan_coverage is not None and scan_coverage.state in {
+            CommitmentScanCoverageState.LEGACY_UNOBSERVED_REAUDIT_REQUIRED,
+            CommitmentScanCoverageState.INVALID_REAUDIT_REQUIRED,
+        }:
+            status = CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING
+            reason = scan_coverage.state.value
+            attempt_status = CoverageAttemptStatus.FAILED
+            attempt_provider = "legacy_commitment_scan"
             retry_after = None
         elif not transcript_exists:
             status = CoverageDispositionStatus.SOURCE_UNAVAILABLE

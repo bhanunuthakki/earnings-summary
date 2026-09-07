@@ -71,11 +71,16 @@ from compute.say_do_extractor import (  # noqa: E402
     TranscriptExtractionManifest,
     extract_for_transcript,
     record_scan,
+    scan_log_schema_available,
     transcripts_pending_extraction,
     transcripts_without_scan_receipt,
 )
 from llm.prompt_versions import prompt_version_for  # noqa: E402
-from llm_client import call_llm  # noqa: E402
+from llm_client import call_llm, is_hard_stop  # noqa: E402
+from pipeline.commitment_scan_receipts import (  # noqa: E402
+    current_transcript_scan_binding,
+    scan_receipt_schema_available,
+)
 from pipeline.queries import open_db  # noqa: E402
 from provenance.selection import selected_transcripts_relation  # noqa: E402
 
@@ -127,8 +132,8 @@ def _governed_llm_call(ticker: str) -> Callable[[str], str]:
 def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
     """Return transcripts (one row per transcript) that --auto would target.
 
-    Mirrors transcripts_pending_extraction's selection (no commitments and
-    never scanned) but carries segment counts for the human-readable listing."""
+    Uses the shared typed coverage selector and carries segment counts for the
+    human-readable listing."""
     pending = {tid for tid, _tk, _pe in transcripts_pending_extraction(conn, ticker=ticker)}
     if not pending:
         return []
@@ -176,11 +181,11 @@ def _resolve_auto_targets(
             return []
         return [(int(row["id"]), row["ticker"])]
 
-    pending = (
-        transcripts_without_scan_receipt(conn, ticker=ticker)
-        if rescan_unreceipted
-        else transcripts_pending_extraction(conn, ticker=ticker)
-    )
+    # Both automatic modes use the same immutable typed-coverage authority.
+    # ``rescan_unreceipted`` remains a CLI compatibility spelling; deliberate
+    # historical work is selected with an explicit transcript identity.
+    _ = rescan_unreceipted
+    pending = transcripts_without_scan_receipt(conn, ticker=ticker)
     targets = [(tid, tk) for tid, tk, _ in pending]
     if max_n > 0:
         targets = targets[:max_n]
@@ -209,8 +214,17 @@ def _run_auto(
     version = prompt_version_for(PURPOSE)
     for tid, tk in targets:
         try:
-            manifest = extract_for_transcript(conn, tid, llm_call=_governed_llm_call(tk))
+            if not scan_receipt_schema_available(conn):
+                raise RuntimeError("commitment scan segment manifest schema is unavailable")
+            if not scan_log_schema_available(conn):
+                raise RuntimeError("commitment scan log schema is unavailable")
+            initial_binding = current_transcript_scan_binding(conn, tid)
+            if initial_binding is None:
+                raise ValueError("current transcript lacks exact authorized acquisition evidence")
+            scan_result = extract_for_transcript(conn, tid, llm_call=_governed_llm_call(tk))
         except Exception as e:  # surface in report rather than abort the batch
+            if is_hard_stop(e):
+                raise
             # No scan marker on failure: a parse/call error is retryable
             # tomorrow, unlike a real zero-commitment scan.
             log.warning("extract failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
@@ -225,7 +239,7 @@ def _run_auto(
             )
             continue
 
-        n_extracted = len(manifest.commitments) + len(manifest.indicators)
+        n_extracted = len(scan_result.commitments) + len(scan_result.indicators)
         if dry_run:
             results.append(
                 {
@@ -237,47 +251,16 @@ def _run_auto(
             )
             continue
 
-        if n_extracted == 0:
-            try:
-                record_scan(
-                    conn,
-                    tid,
-                    n_extracted=0,
-                    prompt_version=version,
-                    commitment_ids=(),
-                    management_indicator_ids=(),
-                )
-            except Exception as e:
-                conn.rollback()
-                log.warning("scan receipt failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
-                results.append(
-                    {
-                        "transcript_id": tid,
-                        "ticker": tk,
-                        "extracted": 0,
-                        "inserted": 0,
-                        "error": f"{type(e).__name__}: {e}"[:200],
-                    }
-                )
-                continue
-            results.append(
-                {
-                    "transcript_id": tid,
-                    "ticker": tk,
-                    "extracted": 0,
-                    "inserted": 0,
-                }
-            )
-            continue
-
         try:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             # Stage novel indicators first. If migration 0031 is absent (or
             # a source-bound observation cannot persist), no completion
             # marker may be written and the transcript remains retryable.
             indicator_ids = persist_indicators(
-                conn, ManagementIndicatorExtractionManifest(indicators=manifest.indicators)
+                conn, ManagementIndicatorExtractionManifest(indicators=scan_result.indicators)
             )
-            ids = [_persist_commitment_idempotently(conn, item) for item in manifest.commitments]
+            ids = [_persist_commitment_idempotently(conn, item) for item in scan_result.commitments]
             record_scan(
                 conn,
                 tid,
@@ -285,7 +268,10 @@ def _run_auto(
                 prompt_version=version,
                 commitment_ids=ids,
                 management_indicator_ids=indicator_ids,
+                observed_segments=scan_result.observed_segments,
+                expected_binding=initial_binding,
             )
+            conn.commit()
         except Exception as e:
             conn.rollback()
             log.warning("persist failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
@@ -333,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--rescan-unreceipted",
         action="store_true",
-        help="--auto only: scan current transcripts lacking commitment_scan_log, even with legacy commitments",
+        help="--auto compatibility alias; eligibility always uses typed scan coverage",
     )
     parser.add_argument(
         "--transcript-id",

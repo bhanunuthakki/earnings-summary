@@ -26,7 +26,8 @@ from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
 from earnings_surprise_store import verify_persisted_observation_row  # noqa: E402
 from llm.prompt_versions import prompt_version_for  # noqa: E402
 from pipeline.commitment_scan_receipts import (  # noqa: E402
-    current_commitment_scan_receipt,
+    CommitmentScanCoverageState,
+    commitment_scan_coverage,
 )
 from pipeline.data_coverage_dispositions import (  # noqa: E402
     COMMITMENT_SCAN_POLICY_NAME,
@@ -201,7 +202,7 @@ def _attempts_are_sufficient(
             )
         ) or (
             artifact_kind is CoverageArtifactKind.COMMITMENT_SCAN
-            and providers == {"transcript_prerequisite"}
+            and providers in ({"transcript_prerequisite"}, {"legacy_commitment_scan"})
             and statuses == {CoverageAttemptStatus.FAILED}
         )
     if reason_code == "reacquired_transcript_conflicts_with_canonical_bytes":
@@ -266,7 +267,13 @@ def _reason_matches_status(
         (
             CoverageArtifactKind.COMMITMENT_SCAN,
             CoverageDispositionStatus.REPAIR_EVIDENCE_MISSING,
-        ): frozenset({"transcript_evidence_prerequisite_missing"}),
+        ): frozenset(
+            {
+                "transcript_evidence_prerequisite_missing",
+                "legacy_unobserved_reaudit_required",
+                "invalid_scan_evidence_reaudit_required",
+            }
+        ),
         (
             CoverageArtifactKind.COMMITMENT_SCAN,
             CoverageDispositionStatus.OPERATIONAL_ERROR,
@@ -641,25 +648,31 @@ def _commitment_scan_evidence(
             "output_manifest_sha256": None,
             "evidence_reference": None,
             "evidence_sha256": None,
+            "coverage_state": CommitmentScanCoverageState.INVALID_REAUDIT_REQUIRED.value,
         }
     current_prompt = prompt_version_for("saydo_commitment_extract")
-    receipt = current_commitment_scan_receipt(
+    coverage = commitment_scan_coverage(
         conn,
         transcript_id=transcript_id,
         prompt_version=current_prompt,
         cutoff_at=cutoff_at,
     )
-    if receipt is None:
+    receipt = coverage.receipt
+    if coverage.state is not CommitmentScanCoverageState.COMPLETE or receipt is None:
+        legacy_id = coverage.legacy_receipt_id
         return {
             "complete": False,
-            "verification_reason_codes": ["current_prompt_scan_receipt_missing_or_invalid"],
+            "verification_reason_codes": [coverage.state.value],
             "transcript_id": transcript_id,
-            "receipt_id": None,
+            "receipt_id": legacy_id,
             "prompt_version": current_prompt,
-            "n_extracted": None,
+            "n_extracted": coverage.legacy_n_extracted,
             "output_manifest_sha256": None,
-            "evidence_reference": None,
-            "evidence_sha256": None,
+            "evidence_reference": (
+                None if legacy_id is None else f"legacy-commitment-scan-receipt:{legacy_id}"
+            ),
+            "evidence_sha256": legacy_id,
+            "coverage_state": coverage.state.value,
         }
     return {
         "complete": True,
@@ -671,6 +684,7 @@ def _commitment_scan_evidence(
         "output_manifest_sha256": receipt.output_manifest_sha256,
         "evidence_reference": f"commitment-scan-receipt:{receipt.receipt_id}",
         "evidence_sha256": receipt.receipt_id,
+        "coverage_state": coverage.state.value,
     }
 
 
