@@ -209,7 +209,10 @@ def test_apply_cli_parses_and_commits_reviewed_v2_manifest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from tests.test_issuer_fact_manifest import build_v2_cli_fixture
+    from tests.test_issuer_fact_manifest import (
+        build_v2_cli_fixture,
+        canonical_payload_without_ledger,
+    )
 
     db_path = migrated_db(tmp_path / "manifest-v2-apply.db")
     conn = sqlite3.connect(db_path)
@@ -225,7 +228,11 @@ def test_apply_cli_parses_and_commits_reviewed_v2_manifest(
     import pipeline.restatement_detector as restatement_detector
 
     monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
-    monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+    monkeypatch.setattr(
+        source_review,
+        "require_exact_canonical_kpi_fact_payload",
+        canonical_payload_without_ledger,
+    )
     monkeypatch.setattr(
         sys,
         "argv",

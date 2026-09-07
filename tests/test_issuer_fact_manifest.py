@@ -52,12 +52,40 @@ from pipeline.kpi_semantics import (
     KpiSemanticStatus,
     KpiUnitScale,
 )
+from pipeline.kpi_source_review import insert_source_reviewed_kpi_capture
 from provenance.evidence_ledger import EvidenceLocator
+from provenance.financial_fact_resolution import CanonicalKpiFactPayload
 from sqlite_runtime import register_sqlite_integrity_functions
 
 
 def _noop_resolve(*_args: object, **_kwargs: object) -> None:
     return None
+
+
+def canonical_payload_without_ledger(
+    conn: sqlite3.Connection, *, fact_row_id: int, knowledge_cutoff: datetime
+) -> CanonicalKpiFactPayload:
+    del knowledge_cutoff
+    row = conn.execute(
+        "SELECT id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,currency,"
+        "source_doc_id,extracted_by,locator,source_excerpt FROM kpi_facts WHERE id=?",
+        (fact_row_id,),
+    ).fetchone()
+    assert row is not None
+    return CanonicalKpiFactPayload(
+        fact_row_id=int(row["id"]),
+        ticker=str(row["ticker"]),
+        period_end=str(row["period_end"]),
+        fiscal_period_type=str(row["fiscal_period_type"]),
+        kpi_definition_id=int(row["kpi_definition_id"]),
+        value=Decimal(str(row["value"])),
+        unit=str(row["unit"]),
+        currency=None if row["currency"] is None else str(row["currency"]),
+        source_document_id=int(row["source_doc_id"]),
+        extracted_by=None if row["extracted_by"] is None else str(row["extracted_by"]),
+        locator_json=None if row["locator"] is None else str(row["locator"]),
+        source_excerpt=(None if row["source_excerpt"] is None else str(row["source_excerpt"])),
+    )
 
 
 def _no_segment_write(*_args: object, **_kwargs: object) -> tuple[int, int]:
@@ -94,6 +122,26 @@ def _document(
     # this manifest boundary is reached.
     conn.execute("DROP TRIGGER IF EXISTS trg_kpi_facts_observation_insert")
     conn.execute("DROP TRIGGER IF EXISTS trg_kpi_facts_observation_update")
+
+
+def _document_with_fact_resolution(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO documents "
+        "(id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
+        "fetch_status,raw_bytes_size) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            9001,
+            "MELI",
+            "ir_doc",
+            "ir_presentation",
+            "2026-06-30",
+            "fixture.pdf",
+            "a" * 64,
+            "2026-08-05T00:00:00Z",
+            "fetched",
+            10,
+        ),
+    )
 
 
 def _manifest(*, sha: str = "a" * 64) -> IssuerFactManifest:
@@ -969,6 +1017,11 @@ def test_v2_rejects_far_future_review_authority_before_database_access(
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
 
         def fail_database_validation(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("future review reached database validation")
@@ -1036,8 +1089,11 @@ def test_v2_relation_clocks_cannot_exceed_the_enclosing_review_capture(
 def test_v1_canonical_hash_and_null_definition_binding_are_frozen(
     migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert _manifest().manifest_sha256 == (
-        "7e82a188d73b5c81f893f1e5200764987d31c0acab2ea5294c05578458f17c56"
+    assert (
+        _manifest().manifest_sha256
+        == (
+            "7e82a188d73b5c81f893f1e5200764987d31c0acab2ea5294c05578458f17c56"  # pragma: allowlist secret -- fixed v1 public manifest digest
+        )
     )
     db_path = migrated_db(tmp_path / "v1-null-binding.db")
     conn = sqlite3.connect(db_path)
@@ -1073,6 +1129,11 @@ def test_v2_apply_and_receipt_replay_preserve_exact_reviewed_commitments(
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
         manifest = _v2_manifest(locator)
 
         first = apply_issuer_fact_manifest(conn, manifest, apply=True)
@@ -1126,6 +1187,11 @@ def test_v1_replay_cannot_downgrade_a_reviewed_same_document_binding(
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
         apply_issuer_fact_manifest(conn, manifest, apply=True)
         conn.commit()
         v1 = IssuerFactManifest.model_validate(
@@ -1163,6 +1229,71 @@ def test_v1_replay_cannot_downgrade_a_reviewed_same_document_binding(
         conn.close()
 
 
+def test_source_reviewed_capture_rejects_wrong_canonical_replay_payload_and_rolls_back(
+    migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    db_path = migrated_db(tmp_path / "reviewed-api-canonical-replay.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    register_sqlite_integrity_functions(conn)
+    try:
+        _document_with_fact_resolution(conn)
+        locator = _seed_v2_authority(conn)
+        manifest = _v2_manifest(locator)
+        fact = manifest.values[0]
+        capture = manifest.reviewed_kpi_definition_captures[0]
+        conn.commit()
+
+        def insert(source_excerpt: str) -> None:
+            _ = insert_source_reviewed_kpi_capture(
+                conn,
+                ticker=manifest.ticker,
+                period_end=datetime.combine(manifest.period_end, datetime.min.time(), tzinfo=UTC),
+                fiscal_period_type=manifest.fiscal_period_type,
+                source_doc_id=manifest.source_doc_id,
+                kpi_definition_id=capture.expected_kpi_definition_id,
+                expected_definition_name=fact.canonical_name,
+                value=fact.value,
+                unit=fact.unit,
+                currency=fact.currency,
+                locator=fact.locator,
+                source_excerpt=source_excerpt,
+                reviewer=capture.reviewer,
+                knowledge_at=capture.knowledge_at,
+                context=capture.context,
+                definition_revision=capture.definition_revision,
+                comparability_revisions=capture.comparability_revisions,
+                expected_definition_head_id=capture.expected_definition_head_id,
+                expected_definition_revision=capture.expected_definition_revision,
+            )
+
+        expected_excerpt = "Total Payment Volume 1,000"
+        insert(expected_excerpt)
+        conn.commit()
+        before = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "kpi_facts",
+                "kpi_fact_semantic_contexts",
+                "kpi_definition_revisions",
+                "observation_resolution_revisions",
+            )
+        }
+
+        with pytest.raises(ValueError, match="persisted fact commitment"):
+            insert("Conflicting replay excerpt 1,000")
+
+        assert not conn.in_transaction
+        assert {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in before
+        } == before
+        assert (
+            conn.execute("SELECT source_excerpt FROM kpi_facts").fetchone()[0] == expected_excerpt
+        )
+    finally:
+        conn.close()
+
+
 def test_v1_replay_rejects_reviewed_document_population_after_root_display_rename(
     migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1179,6 +1310,11 @@ def test_v1_replay_rejects_reviewed_document_population_after_root_display_renam
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
         apply_issuer_fact_manifest(conn, reviewed_manifest, apply=True)
         conn.execute("UPDATE kpi_definitions SET name='Renamed registry display' WHERE id=6401")
         conn.commit()
@@ -1264,6 +1400,11 @@ def test_v2_apply_and_replay_count_an_exact_comparability_decision(
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
 
         first = apply_issuer_fact_manifest(conn, reviewed_manifest, apply=True)
         second = apply_issuer_fact_manifest(conn, reviewed_manifest, apply=True)
@@ -1338,6 +1479,11 @@ def test_v2_failure_after_fact_and_segment_work_rolls_back_all_effects(
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
 
         def fail_receipt(*_args: object, **_kwargs: object) -> object:
             raise RuntimeError("injected receipt failure")
@@ -1380,6 +1526,11 @@ def test_v2_success_preserves_caller_owned_transaction_boundary(
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
         conn.execute("BEGIN")
         conn.execute("CREATE TABLE caller_v2_state (value TEXT NOT NULL)")
         conn.execute("INSERT INTO caller_v2_state VALUES ('preserve-me')")
@@ -1419,6 +1570,11 @@ def test_v2_receipt_rejects_rehashed_forged_definition_binding(
 
         monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
         monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+        monkeypatch.setattr(
+            source_review,
+            "require_exact_canonical_kpi_fact_payload",
+            canonical_payload_without_ledger,
+        )
         manifest = _v2_manifest(locator)
         result = apply_issuer_fact_manifest(conn, manifest, apply=True)
         assert result.receipt is not None

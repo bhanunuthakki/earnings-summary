@@ -21,10 +21,15 @@ from pipeline.kpi_definition_revisions import (
 )
 from pipeline.kpi_persistence import (
     ExactDefinitionPersistResult,
+    normalize_source_excerpt,
     persist_kpi_value_at_exact_definition,
 )
 from pipeline.kpi_semantics import KpiSemanticContext, persist_kpi_semantic_context
-from provenance.financial_fact_resolution import require_exact_canonical_fact_row
+from provenance.financial_fact_resolution import (
+    CanonicalKpiFactPayload,
+    require_exact_canonical_fact_row,
+    require_exact_canonical_kpi_fact_payload,
+)
 
 
 @contextmanager
@@ -158,6 +163,39 @@ class SourceReviewedKpiCaptureResult:
     definition_revision_id: str
 
 
+def _assert_exact_reviewed_kpi_payload(
+    payload: CanonicalKpiFactPayload,
+    *,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: FiscalPeriodType,
+    source_doc_id: int,
+    kpi_definition_id: int,
+    value: Decimal,
+    unit: Unit,
+    currency: Currency | None,
+    locator: FactLocator,
+    source_excerpt: str | None,
+    extracted_by: str,
+) -> None:
+    locator_json = locator.to_json()
+    expected_currency = None if currency is None else currency.value
+    if locator_json is None or (
+        payload.ticker.upper() != ticker.upper()
+        or datetime.fromisoformat(payload.period_end).date() != period_end.date()
+        or payload.fiscal_period_type != fiscal_period_type.value
+        or payload.kpi_definition_id != kpi_definition_id
+        or payload.value != value
+        or payload.unit != unit.value
+        or payload.currency != expected_currency
+        or payload.source_document_id != source_doc_id
+        or payload.extracted_by != extracted_by
+        or payload.locator_json != locator_json
+        or payload.source_excerpt != normalize_source_excerpt(source_excerpt)
+    ):
+        raise ValueError("reviewed KPI replay conflicts with persisted fact commitment")
+
+
 def insert_source_reviewed_kpi_capture(
     conn: sqlite3.Connection,
     *,
@@ -214,6 +252,7 @@ def insert_source_reviewed_kpi_capture(
             expected_definition_revision=expected_definition_revision,
             comparability_revisions=comparability_revisions,
         )
+        extracted_by = f"source_review:{reviewer}:issuer_manifest_v2"
         fact_result: ExactDefinitionPersistResult = persist_kpi_value_at_exact_definition(
             conn,
             ticker=ticker,
@@ -231,12 +270,26 @@ def insert_source_reviewed_kpi_capture(
             reviewed_by=reviewer,
             knowledge_at=knowledge_at,
             kpi_definition_revision_id=binding_id,
-            extracted_by=f"source_review:{reviewer}:issuer_manifest_v2",
+            extracted_by=extracted_by,
         )
-        require_canonical_kpi_resolution(
+        payload = require_exact_canonical_kpi_fact_payload(
             conn,
             fact_row_id=fact_result.fact_id,
             knowledge_cutoff=knowledge_at,
+        )
+        _assert_exact_reviewed_kpi_payload(
+            payload,
+            ticker=ticker,
+            period_end=period_end,
+            fiscal_period_type=fiscal_period_type,
+            source_doc_id=source_doc_id,
+            kpi_definition_id=kpi_definition_id,
+            value=value,
+            unit=unit,
+            currency=currency,
+            locator=locator,
+            source_excerpt=source_excerpt,
+            extracted_by=extracted_by,
         )
         return SourceReviewedKpiCaptureResult(
             fact_id=fact_result.fact_id,

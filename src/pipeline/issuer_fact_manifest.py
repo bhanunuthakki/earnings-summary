@@ -525,7 +525,7 @@ def _canonical_stored_locator(raw: object, *, fact_name: str) -> str:
 _ISSUER_MANIFEST_KPI_REPLAY_SQL = (
     "SELECT kf.id, kf.kpi_definition_id, kd.name, kf.value, kf.unit, kf.currency, "
     "kf.locator, kf.source_excerpt FROM kpi_facts kf "
-    "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+    "LEFT JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
     "WHERE kf.ticker = ? AND kf.source_doc_id = ? "
     "AND date(kf.period_end) = ? AND kf.fiscal_period_type = ?"
 )
@@ -686,23 +686,6 @@ def _assert_reviewed_capture_against_sqlite(
 def _assert_kpi_replays_compatible(
     conn: sqlite3.Connection, manifest: IssuerFactManifestAny
 ) -> None:
-    if isinstance(manifest, IssuerFactManifest):
-        reviewed_rows = conn.execute(
-            "SELECT id FROM kpi_facts WHERE ticker=? AND source_doc_id=? "
-            "AND date(period_end)=? AND fiscal_period_type=?",
-            (
-                manifest.ticker.upper(),
-                manifest.source_doc_id,
-                manifest.period_end.isoformat(),
-                manifest.fiscal_period_type.value,
-            ),
-        ).fetchall()
-        for reviewed_row in reviewed_rows:
-            semantic = current_kpi_semantic_context(conn, kpi_fact_id=int(reviewed_row["id"]))
-            if semantic is not None and semantic.kpi_definition_revision_id is not None:
-                raise ValueError(
-                    "issuer_fact_manifest.v1 cannot attest an existing reviewed definition binding"
-                )
     rows = conn.execute(
         _ISSUER_MANIFEST_KPI_REPLAY_SQL,
         (
@@ -712,6 +695,15 @@ def _assert_kpi_replays_compatible(
             manifest.fiscal_period_type.value,
         ),
     ).fetchall()
+    if isinstance(manifest, IssuerFactManifest):
+        for row in rows:
+            semantic = current_kpi_semantic_context(conn, kpi_fact_id=int(row["id"]))
+            if semantic is not None and semantic.kpi_definition_revision_id is not None:
+                raise ValueError(
+                    "issuer_fact_manifest.v1 cannot attest an existing reviewed definition binding"
+                )
+    if any(row["name"] is None for row in rows):
+        raise ValueError("same-document KPI definition root is missing")
     captures = _capture_by_identity(manifest) if isinstance(manifest, IssuerFactManifestV2) else {}
     for value in manifest.values:
         if value.kind is not IssuerManifestFactKind.KPI:

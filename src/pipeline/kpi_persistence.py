@@ -33,6 +33,7 @@ from pipeline.kpi_semantics import (
     KpiSemanticContext,
     KpiSemanticStatus,
     KpiUnitScale,
+    current_kpi_semantic_context,
     normalize_source_numeric,
     parse_source_numeric,
     persist_kpi_semantic_context,
@@ -415,6 +416,27 @@ def _magnitude_guard_violation(
     return None
 
 
+def _persist_semantic_context_with_effect(
+    conn: sqlite3.Connection,
+    *,
+    kpi_fact_id: int,
+    context: KpiSemanticContext,
+    reviewed_by: str,
+    knowledge_at: datetime | None,
+    kpi_definition_revision_id: str | None,
+) -> tuple[int | None, bool]:
+    before = current_kpi_semantic_context(conn, kpi_fact_id=kpi_fact_id)
+    context_id = persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=kpi_fact_id,
+        context=context,
+        reviewed_by=reviewed_by,
+        knowledge_at=knowledge_at,
+        kpi_definition_revision_id=kpi_definition_revision_id,
+    )
+    return context_id, context_id is not None and (before is None or before.id != context_id)
+
+
 def _insert_kpi_fact(
     conn: sqlite3.Connection,
     *,
@@ -434,10 +456,11 @@ def _insert_kpi_fact(
     kpi_definition_revision_id: str | None = None,
     semantic_reviewed_by: str = "pipeline",
     semantic_knowledge_at: datetime | None = None,
-) -> tuple[int | None, bool]:
+) -> tuple[int | None, bool, int | None, bool]:
     """Insert one kpi_facts row, routed through the restatement detector.
 
-    Returns ``(fact_id, inserted)``. ``inserted`` is false on the
+    Returns ``(fact_id, inserted, semantic_context_id, semantic_context_inserted)``.
+    ``inserted`` is false on the
     no-op path: same source_doc_id replay under the post-0059
     `uq_kpi_facts_provenance` (or same logical key under the legacy
     `uq_kpi_facts_logical`).
@@ -449,10 +472,14 @@ def _insert_kpi_fact(
     survives for time-travel queries.
     """
 
+    semantic_context_id: int | None = None
+    semantic_context_inserted = False
+
     def persist_semantic_context_before_resolution(fact_id: int) -> None:
+        nonlocal semantic_context_id, semantic_context_inserted
         if semantic_context is None:
             return
-        _ = persist_kpi_semantic_context(
+        semantic_context_id, semantic_context_inserted = _persist_semantic_context_with_effect(
             conn,
             kpi_fact_id=fact_id,
             context=semantic_context,
@@ -485,7 +512,7 @@ def _insert_kpi_fact(
             conn, fact_table=KPI_FACTS, superseded_id=superseded_id, new_value=value
         )
     if new_id is not None:
-        return new_id, True
+        return new_id, True, semantic_context_id, semantic_context_inserted
     existing = conn.execute(
         "SELECT id FROM kpi_facts WHERE ticker=? AND period_end=? "
         "AND fiscal_period_type=? AND kpi_definition_id=? AND source_doc_id=? "
@@ -499,8 +526,13 @@ def _insert_kpi_fact(
         ),
     ).fetchone()
     if existing is None:
-        return None, False
-    return int(existing["id"] if hasattr(existing, "keys") else existing[0]), False
+        return None, False, None, False
+    return (
+        int(existing["id"] if hasattr(existing, "keys") else existing[0]),
+        False,
+        None,
+        False,
+    )
 
 
 def purge_duplicate_kpi_facts(conn: sqlite3.Connection) -> int:
@@ -647,8 +679,9 @@ def persist_kpi_value_at_exact_definition(
 ) -> ExactDefinitionPersistResult:
     """Persist one reviewed value without name-based registry lookup or root creation.
 
-    The caller owns definition-revision admission. This seam proves the selected
-    registry root and writes the fact plus its exact semantic binding only.
+    The caller owns definition-revision admission and the canonical payload proof.
+    This write-only seam proves the selected registry root and writes the fact plus
+    its exact semantic binding.
     """
 
     definition = conn.execute(
@@ -676,29 +709,7 @@ def persist_kpi_value_at_exact_definition(
     locator_json = locator.to_json()
     if locator_json is None:
         raise ValueError("reviewed KPI capture requires a concrete locator")
-    existing_fact = conn.execute(
-        "SELECT id FROM kpi_facts WHERE ticker=? AND period_end=? "
-        "AND fiscal_period_type=? AND kpi_definition_id=? AND source_doc_id=? "
-        "ORDER BY id DESC LIMIT 1",
-        (
-            ticker.upper(),
-            period_end,
-            fiscal_period_type.value,
-            kpi_definition_id,
-            source_doc_id,
-        ),
-    ).fetchone()
-    before_context_count = (
-        0
-        if existing_fact is None
-        else int(
-            conn.execute(
-                "SELECT COUNT(*) FROM kpi_fact_semantic_contexts WHERE kpi_fact_id=?",
-                (int(existing_fact["id"] if hasattr(existing_fact, "keys") else existing_fact[0]),),
-            ).fetchone()[0]
-        )
-    )
-    fact_id, inserted = _insert_kpi_fact(
+    fact_id, inserted, semantic_context_id, semantic_context_inserted = _insert_kpi_fact(
         conn,
         ticker=ticker,
         period_end=period_end,
@@ -719,28 +730,8 @@ def persist_kpi_value_at_exact_definition(
     )
     if fact_id is None:
         raise RuntimeError("reviewed KPI persistence did not resolve a fact identity")
-    fact_row = conn.execute(
-        "SELECT ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,currency,"
-        "source_doc_id,extracted_by,locator,source_excerpt FROM kpi_facts WHERE id=?",
-        (fact_id,),
-    ).fetchone()
-    expected_currency = None if currency is None else currency.value
-    if fact_row is None or (
-        str(fact_row["ticker"]).upper() != ticker.upper()
-        or datetime.fromisoformat(str(fact_row["period_end"])).date() != period_end.date()
-        or str(fact_row["fiscal_period_type"]) != fiscal_period_type.value
-        or int(fact_row["kpi_definition_id"]) != kpi_definition_id
-        or Decimal(str(fact_row["value"])) != value
-        or str(fact_row["unit"]) != unit.value
-        or fact_row["currency"] != expected_currency
-        or int(fact_row["source_doc_id"]) != source_doc_id
-        or fact_row["extracted_by"] != extracted_by
-        or fact_row["locator"] != locator_json
-        or fact_row["source_excerpt"] != normalize_source_excerpt(source_excerpt)
-    ):
-        raise ValueError("reviewed KPI replay conflicts with persisted fact commitment")
     if not inserted:
-        context_id = persist_kpi_semantic_context(
+        semantic_context_id, semantic_context_inserted = _persist_semantic_context_with_effect(
             conn,
             kpi_fact_id=fact_id,
             context=context,
@@ -748,17 +739,12 @@ def persist_kpi_value_at_exact_definition(
             knowledge_at=knowledge_at,
             kpi_definition_revision_id=kpi_definition_revision_id,
         )
-        if context_id is None:
-            raise RuntimeError("reviewed KPI semantic context table is unavailable")
-    after_context_count = int(
-        conn.execute(
-            "SELECT COUNT(*) FROM kpi_fact_semantic_contexts WHERE kpi_fact_id=?", (fact_id,)
-        ).fetchone()[0]
-    )
+    if semantic_context_id is None:
+        raise RuntimeError("reviewed KPI semantic context table is unavailable")
     return ExactDefinitionPersistResult(
         fact_id=fact_id,
         inserted=inserted,
-        semantic_context_inserted=after_context_count > before_context_count,
+        semantic_context_inserted=semantic_context_inserted,
     )
 
 
@@ -913,7 +899,7 @@ def persist_manifest(
                     "reason_code": "magnitude_jump",
                 }
             )
-        fact_id, was_inserted = _insert_kpi_fact(
+        fact_id, was_inserted, _, _ = _insert_kpi_fact(
             conn,
             ticker=manifest.ticker,
             period_end=manifest.period_end,
