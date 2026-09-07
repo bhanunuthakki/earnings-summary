@@ -224,16 +224,156 @@ def _managed_service_names(text: str, path: str, violations: list[str]) -> list[
     except SyntaxError as exc:
         violations.append(f"managed service registry could not be parsed: {path}:{exc.lineno or 1}")
         return []
+
+    def target_binds_managed_service(target: ast.AST) -> bool:
+        return any(
+            isinstance(node, ast.Name) and node.id == "ManagedService" for node in ast.walk(target)
+        )
+
+    def contains_alias_reference(value: ast.AST) -> bool:
+        direct_constructor_names = {
+            id(node.func)
+            for node in ast.walk(value)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ManagedService"
+        }
+        return any(
+            isinstance(node, ast.Name)
+            and node.id == "ManagedService"
+            and id(node) not in direct_constructor_names
+            for node in ast.walk(value)
+        )
+
+    def managed_service_binding_line(node: ast.AST) -> int | None:
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == "ManagedService":
+            return node.lineno
+        if isinstance(node, ast.MatchMapping) and node.rest == "ManagedService":
+            return node.lineno
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and "ManagedService" in node.names:
+            return node.lineno
+        if isinstance(node, ast.ExceptHandler) and node.name == "ManagedService":
+            return node.lineno
+        return None
+
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    has_direct_constructor_call = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ManagedService"
+        for node in ast.walk(tree)
+    )
+    unsupported_lines: set[int] = set()
+    top_level_binding_lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "ManagedService":
+            unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.ImportFrom):
+            for imported in node.names:
+                if imported.name == "*" and has_direct_constructor_call:
+                    unsupported_lines.add(node.lineno)
+                binds_direct_name = (imported.asname or imported.name) == "ManagedService"
+                if (
+                    imported.name == "ManagedService"
+                    and imported.asname is None
+                    and parents.get(node) is tree
+                ):
+                    top_level_binding_lines.append(node.lineno)
+                if (
+                    imported.name == "ManagedService"
+                    and (imported.asname is not None or parents.get(node) is not tree)
+                ) or (imported.name != "ManagedService" and binds_direct_name):
+                    unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.Import):
+            if any(
+                (item.asname or item.name.split(".", 1)[0]) == "ManagedService"
+                for item in node.names
+            ):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.Assign):
+            if any(target_binds_managed_service(target) for target in node.targets) or (
+                contains_alias_reference(node.value)
+            ):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.AnnAssign):
+            if target_binds_managed_service(node.target) or (
+                node.value is not None and contains_alias_reference(node.value)
+            ):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.AugAssign):
+            if target_binds_managed_service(node.target):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.NamedExpr):
+            if target_binds_managed_service(node.target) or contains_alias_reference(node.value):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            if target_binds_managed_service(node.target):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.comprehension):
+            if target_binds_managed_service(node.target):
+                unsupported_lines.add(node.target.lineno)
+        elif isinstance(node, ast.withitem):
+            if node.optional_vars is not None and target_binds_managed_service(node.optional_vars):
+                unsupported_lines.add(node.optional_vars.lineno)
+        elif isinstance(node, ast.Delete):
+            if any(target_binds_managed_service(target) for target in node.targets):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.arg) and node.arg == "ManagedService":
+            unsupported_lines.add(node.lineno)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "ManagedService" or any(
+                contains_alias_reference(default)
+                for default in (*node.args.defaults, *node.args.kw_defaults)
+                if default is not None
+            ):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.Lambda):
+            if any(
+                contains_alias_reference(default)
+                for default in (*node.args.defaults, *node.args.kw_defaults)
+                if default is not None
+            ):
+                unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.ClassDef):
+            if any(contains_alias_reference(base) for base in node.bases):
+                unsupported_lines.add(node.lineno)
+            elif node.name == "ManagedService":
+                if parents.get(node) is tree:
+                    top_level_binding_lines.append(node.lineno)
+                else:
+                    unsupported_lines.add(node.lineno)
+        elif isinstance(node, ast.Match) and contains_alias_reference(node.subject):
+            unsupported_lines.add(node.subject.lineno)
+        elif (binding_line := managed_service_binding_line(node)) is not None:
+            unsupported_lines.add(binding_line)
+
+    if top_level_binding_lines:
+        first_binding = min(top_level_binding_lines)
+        if len(top_level_binding_lines) > 1:
+            unsupported_lines.update(top_level_binding_lines)
+        unsupported_lines.update(
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ManagedService"
+            and node.lineno < first_binding
+        )
+
+    if unsupported_lines:
+        violations.extend(
+            f"unsupported managed service alias or binding: {path}:{lineno}"
+            for lineno in sorted(unsupported_lines)
+        )
+        return []
+
     spots: list[tuple[str, int]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        fn = (
-            node.func.id
-            if isinstance(node.func, ast.Name)
-            else (node.func.attr if isinstance(node.func, ast.Attribute) else "")
-        )
-        if fn != "ManagedService":
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ManagedService"
+        ):
             continue
         vals = {k.arg: _literal(k.value) for k in node.keywords if k.arg}
         name = vals.get("name")
@@ -383,9 +523,10 @@ def _scheduled_command_targets(line: str) -> tuple[set[str], str | None]:
     command = (command_match.group(1) or command_match.group(2) or "").replace("\\", "/")
     wrapper_match = _WRAP_REF.search(command)
     wrapper = wrapper_match.group(1).replace("\\", "/") if wrapper_match else None
-    leaf = command.rsplit("/", 1)[-1].strip("%$").lower()
+    leaf = command.rsplit("/", 1)[-1].lower()
     python_launcher = (
-        re.fullmatch(r"(?:python(?:_exe|3(?:\.\d+)?)?(?:\.exe)?|py(?:\.exe)?)", leaf) is not None
+        leaf in {"%python_exe%", "$python"}
+        or re.fullmatch(r"(?:python(?:_exe|3(?:\.\d+)?)?(?:\.exe)?|py(?:\.exe)?)", leaf) is not None
     )
     if wrapper is None and not python_launcher:
         return set(), None

@@ -26,7 +26,11 @@ from quality.lifecycle import (
     lifecycle_evidence_fields,
     validate_inventory,
 )
-from quality.lifecycle_discovery import route_entries
+from quality.lifecycle_discovery import (
+    route_entries,
+    scheduled_targets,
+    service_entries,
+)
 from quality.reachability import ReachabilityGraph, build_graph
 from scheduler_manifest import TaskManifest
 
@@ -307,6 +311,118 @@ def test_managed_service_spacing_is_inventoried(tmp_path: Path) -> None:
     services = {e.identifier for e in inventory.entries if e.kind == "service"}
     assert services == {"svc-a", "svc-b"}
     assert inventory.coverage["omissions"] == 0
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "from runtime import ManagedService as ServiceAlias\nServiceAlias(name='svc-imported')\n",
+        "Alias = ManagedService\nAlias2 = Alias\nAlias2(name='svc-chained')\n",
+        "C: object = ManagedService\nC(name='omitted')\n",
+        "def register() -> None:\n"
+        "    from runtime import ManagedService as NestedAlias\n"
+        "    NestedAlias(name='svc-nested')\n",
+        "Alias, other = ManagedService, object\nAlias(name='svc-destructured')\n",
+        "Alias = ManagedService if enabled else object\nAlias(name='svc-conditional')\n",
+        "Alias(name='svc-before')\nAlias = ManagedService\n",
+        "Alias = ManagedService\nAlias = object\nAlias(name='phantom')\n",
+        "ManagedService = ordinary_factory\nManagedService(name='svc-constructor-rebound')\n",
+        "def register():\n"
+        "    from runtime import ManagedService as C\n"
+        "def other(C):\n"
+        "    C(name='phantom')\n",
+        "Alias = ManagedService\ndef register(Alias):\n    Alias(name='svc-shadowed')\n",
+        "def register(ManagedService):\n    ManagedService(name='svc-shadowed')\n",
+        "runtime.ManagedService(name='svc-qualified')\n",
+        "C = runtime.ManagedService\nC(name='svc-qualified-alias')\n",
+        "match ManagedService:\n    case C:\n        C(name='omitted')\n",
+        "match ordinary_factory:\n"
+        "    case ManagedService:\n"
+        "        ManagedService(name='phantom')\n",
+        "match ordinary_factory:\n"
+        "    case [*ManagedService]:\n"
+        "        ManagedService(name='phantom')\n",
+        "match ordinary_factory:\n"
+        "    case {'key': _, **ManagedService}:\n"
+        "        ManagedService(name='phantom')\n",
+        "ManagedService(name='svc-before-class')\nclass ManagedService:\n    pass\n",
+        "ManagedService(name='svc-before-import')\nfrom runtime import ManagedService\n",
+        "from runtime import ManagedService\n"
+        "class ManagedService:\n"
+        "    pass\n"
+        "ManagedService(name='svc-ambiguous')\n",
+        "from runtime import ManagedService\n"
+        "from other import ManagedService\n"
+        "ManagedService(name='svc-ambiguous')\n",
+        'from runtime import *\nManagedService(name="svc-star")\n',
+        'class ServiceAlias(ManagedService):\n    pass\n\nServiceAlias(name="svc-subclass")\n',
+    ),
+)
+def test_managed_service_alias_or_ambiguous_binding_holds(tmp_path: Path, source: str) -> None:
+    path = "src/runtime/service_registry.py"
+    _w(tmp_path / path, source)
+    violations: list[str] = []
+
+    assert service_entries(tmp_path, path, source, violations) == []
+    assert any("managed service" in violation for violation in violations)
+
+
+def test_managed_service_alias_hold_is_conservative_when_unused(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _w(repo / "src/runtime/service_registry.py", "Alias = ManagedService\n")
+    _git(repo, "add", ".")
+    _refresh(repo)
+
+    inventory = build_inventory(repo)
+
+    assert inventory.status == "HOLD"
+    assert any("managed service" in violation for violation in inventory.violations)
+
+
+def test_unrelated_name_keyword_call_is_not_service_evidence(tmp_path: Path) -> None:
+    source = "service_formatter = make_formatter()\nservice_formatter(name='ordinary')\n"
+    path = "src/runtime/service_registry.py"
+    _w(tmp_path / path, source)
+    violations: list[str] = []
+
+    assert service_entries(tmp_path, path, source, violations) == []
+    assert violations == []
+
+
+def test_scheduled_python_launcher_tokens_are_bounded(tmp_path: Path) -> None:
+    wrapper = "cron/launcher.bat"
+    for launcher in ("python3.11", "py -3.11", "%PYTHON_EXE%", "$PYTHON"):
+        _w(tmp_path / wrapper, f"{launcher} -m execution.entry\n")
+        targets, _ = scheduled_targets(tmp_path, {wrapper}, {wrapper})
+        assert targets == {"execution/entry.py"}
+    for launcher in ("python$$", "%%%%python%%%%"):
+        _w(tmp_path / wrapper, f"{launcher} -m execution.entry\n")
+        targets, _ = scheduled_targets(tmp_path, {wrapper}, {wrapper})
+        assert targets == set()
+
+
+def test_sealed_receipt_path_escape_and_missing_file_hold(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _w(repo / "execution/backfill_job.py", "if __name__ == '__main__':\n    pass\n")
+    outside_receipt = tmp_path / "outside.json"
+    _w(outside_receipt, '{"status": "PASS"}\n')
+    _w(repo / "docs/receipt.json", '{"status": "PASS"}\n')
+    (repo / "docs/linked.json").symlink_to(outside_receipt)
+    _git(repo, "add", ".")
+    _refresh(repo)
+    for receipt in (
+        "../outside.json",
+        str(outside_receipt),
+        "docs/linked.json",
+        "missing.json",
+    ):
+        with pytest.raises(LifecycleError, match="repository file"):
+            lifecycle_evidence_fields(
+                path="execution/backfill_job.py",
+                text=f"# lifecycle: completion=sealed:{receipt}\n",
+                disposition="one-shot-completed",
+                root=repo,
+            )
 
 
 def test_missing_malformed_stale_graph(tmp_path: Path) -> None:
