@@ -26,7 +26,7 @@ from operations.attention_store import (
     OperatorActionRequest,
     execute_operator_action,
 )
-from sqlite_runtime import SQLiteConnectionRole
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 NOW = datetime(2026, 8, 24, 19, 0, tzinfo=UTC)
 FINGERPRINT = "b" * 64
@@ -46,7 +46,8 @@ FINDING_ID = derive_finding_id(
 @pytest.fixture
 def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     path = migrated_db(tmp_path / "attention-actions.db")
-    with sqlite3.connect(path) as conn:
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    try:
         conn.execute(
             """
             INSERT INTO operations_attention_findings(
@@ -70,6 +71,9 @@ def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
                 NOW.isoformat(),
             ),
         )
+        conn.commit()
+    finally:
+        conn.close()
     return path
 
 
@@ -335,14 +339,35 @@ def test_writer_uses_schema_preflight_and_unknown_finding_fails_closed(
         ).fetchone() == (0,)
 
 
-def test_concurrent_same_request_serializes_to_one_apply_and_one_replay(db_path: Path) -> None:
-    barrier = threading.Barrier(2)
+def test_concurrent_same_request_serializes_to_one_apply_and_one_replay(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_barrier = threading.Barrier(2)
+    transaction_barrier = threading.Barrier(2)
     results: list[ActionResultState] = []
     failures: list[BaseException] = []
 
+    real_connect = attention_store.connect_sqlite
+
+    def synchronized_connect(
+        path: Path | str,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        conn = real_connect(path, role=role, schema_preflight=schema_preflight)
+        try:
+            transaction_barrier.wait(timeout=5)
+        except BaseException:
+            conn.close()
+            raise
+        return conn
+
+    monkeypatch.setattr(attention_store, "connect_sqlite", synchronized_connect)
+
     def run() -> None:
         try:
-            barrier.wait(timeout=5)
+            start_barrier.wait(timeout=5)
             results.append(
                 execute_operator_action(
                     _request(key="parallel"), actor="owner.bhanu", db_path=db_path
@@ -358,6 +383,8 @@ def test_concurrent_same_request_serializes_to_one_apply_and_one_replay(db_path:
     first.join(timeout=10)
     second.join(timeout=10)
 
+    assert not first.is_alive()
+    assert not second.is_alive()
     assert not failures
     assert sorted(results) == [ActionResultState.APPLIED, ActionResultState.REPLAYED]
     with sqlite3.connect(db_path) as conn:

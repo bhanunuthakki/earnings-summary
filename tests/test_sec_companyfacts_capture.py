@@ -552,7 +552,7 @@ def test_current_schema_companyfacts_fact_admission_is_ordered(
         ):
             assert forbidden not in receipt_keys
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
-            "0036_add_data_coverage_dispositions"
+            "0037_commitment_scan_segment_coverage"
         )
         snapshot_documents = conn.execute(
             "SELECT id, doc_type, accession_number, sha256 FROM documents"

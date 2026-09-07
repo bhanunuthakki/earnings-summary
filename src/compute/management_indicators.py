@@ -97,14 +97,20 @@ def _resolve_indicator_source(
     anchor_segment_id: int,
     ticker: str,
     source_excerpt: str,
+    allow_legacy_segment_rebind: bool = False,
 ) -> _ResolvedIndicatorSource:
     """Bind an extracted excerpt to exactly one segment of the named issuer's transcript."""
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcript_segments)")}
     speaker = "ts.speaker" if "speaker" in columns else "NULL"
     time_code = "ts.time_code_start" if "time_code_start" in columns else "NULL"
     transcripts = selected_transcripts_relation(conn)
-    anchor = conn.execute(
-        "SELECT tr.document_id, tr.id, tr.ticker, d.ticker "  # nosec B608
+    # nosec B608 -- table/column fragments are fixed schema identifiers selected above.
+    anchor = conn.execute(  # nosec B608
+        "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"  # nosec B608
+        + speaker
+        + ","
+        + time_code
+        + ",ts.text "  # nosec B608
         "FROM transcript_segments ts JOIN " + transcripts.sql + " tr ON tr.id=ts.transcript_id "
         "JOIN documents d ON d.id=tr.document_id "
         "WHERE ts.id=?",
@@ -120,30 +126,42 @@ def _resolve_indicator_source(
             f"indicator ticker={expected_ticker} does not match transcript/document ticker "
             f"{transcript_ticker}/{document_ticker}"
         )
-    rows = conn.execute(
-        "SELECT ts.id, ts.seq, "  # nosec B608
-        + speaker
-        + ", "
-        + time_code
-        + ", ts.text "
-        "FROM transcript_segments ts WHERE ts.transcript_id=? ORDER BY ts.seq, ts.id",
-        (int(anchor[1]),),
-    ).fetchall()
     excerpt = _normalized_source_text(source_excerpt)
-    matches = [row for row in rows if excerpt in _normalized_source_text(str(row[4]))]
-    if len(matches) != 1:
-        raise ValueError(
-            "management indicator source excerpt must match exactly one transcript segment; "
-            f"matched={len(matches)}"
-        )
-    match = matches[0]
+    resolved = anchor
+    if excerpt not in _normalized_source_text(str(anchor[8])):
+        if not allow_legacy_segment_rebind:
+            raise ValueError(
+                "management indicator source excerpt must occur in its anchored transcript segment"
+            )
+        # nosec B608 -- table/column fragments are fixed schema identifiers selected above.
+        candidates = conn.execute(  # nosec B608
+            "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"  # nosec B608
+            + speaker
+            + ","
+            + time_code
+            + ",ts.text "  # nosec B608
+            "FROM transcript_segments ts JOIN " + transcripts.sql + " tr ON tr.id=ts.transcript_id "
+            "JOIN documents d ON d.id=tr.document_id "
+            "WHERE tr.id=? ORDER BY ts.seq,ts.id",
+            (int(anchor[1]),),
+        ).fetchall()
+        matches = [
+            candidate
+            for candidate in candidates
+            if excerpt in _normalized_source_text(str(candidate[8]))
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "management indicator source excerpt must match exactly one transcript segment"
+            )
+        resolved = matches[0]
     return _ResolvedIndicatorSource(
-        source_doc_id=int(anchor[0]),
-        transcript_id=int(anchor[1]),
-        transcript_segment_id=int(match[0]),
-        segment_sequence=int(match[1]),
-        speaker=_optional_text(match[2]),
-        time_code_start=_optional_text(match[3]),
+        source_doc_id=int(resolved[0]),
+        transcript_id=int(resolved[1]),
+        transcript_segment_id=int(resolved[4]),
+        segment_sequence=int(resolved[5]),
+        speaker=_optional_text(resolved[6]),
+        time_code_start=_optional_text(resolved[7]),
     )
 
 
@@ -201,7 +219,12 @@ def _canonical_payload(
     )
 
 
-def persist_indicator(conn: sqlite3.Connection, *, indicator: ManagementIndicatorInput) -> int:
+def persist_indicator(
+    conn: sqlite3.Connection,
+    *,
+    indicator: ManagementIndicatorInput,
+    allow_legacy_segment_rebind: bool = False,
+) -> int:
     """Persist one pending-review indicator, or return its idempotent replay id.
 
     The staging schema is mandatory: silently discarding a novel observation
@@ -218,6 +241,7 @@ def persist_indicator(conn: sqlite3.Connection, *, indicator: ManagementIndicato
         anchor_segment_id=indicator.transcript_segment_id,
         ticker=indicator.ticker,
         source_excerpt=indicator.source_excerpt,
+        allow_legacy_segment_rebind=allow_legacy_segment_rebind,
     )
     if indicator.speaker is not None and indicator.speaker.strip() != (source.speaker or ""):
         raise ValueError("indicator speaker does not match the source transcript segment")

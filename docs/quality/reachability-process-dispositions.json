@@ -23,8 +23,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_ingest builds a fixed execution/ingest_transcripts_state.py command with managed_python_prefix.",
-      "fingerprint": "07e6f7de16ab867d669de32826637eab48846587935c8ec0ff48d7d36d98688e",
-      "line": 756,
+      "fingerprint": "5d805b02856f50ded312b890211f72a16e6654f1dbb99a867586896bf73f26f6",
+      "line": 758,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/ingest_transcripts_state.py"
@@ -33,8 +33,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_extract builds a fixed execution/extract_commitments_from_transcript.py command with managed_python_prefix.",
-      "fingerprint": "f08c9ae3a71fa0425da13817bd4b4d8816a339d93f89e8b0f970c3bdd3ac796b",
-      "line": 786,
+      "fingerprint": "70733fc10bed8b117346199801e3d6985e1cd3147004346a228fe409a40eae43",
+      "line": 788,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -205,8 +205,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "onboard_one runs only the four fixed managed-Python onboard, eval, DCF, and commitment scripts.",
-      "fingerprint": "4c945c86df06434faf6a72e89edb97e37f77e1b97390fb3c1d3b6cc8186b9e15",
-      "line": 313,
+      "fingerprint": "f94015ba289ae1b840bfab075689f5439c7b837ec74d8cbd10cecf8439c55473",
+      "line": 336,
       "path": "execution/onboard_pending_tickers.py",
       "targets": [
         "execution/onboard_ticker.py",
@@ -782,13 +782,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "f7f1dc169da6d175a60f9a8daa74b820bbed715e39bfed77a40acee261b633a2",
+      "source_sha256": "23598e8bfb8b3a70275662acd824b8c1e246b2f635732f50f4097629b0b95dfa",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "7da253fe59b74abf5566f26708540a53e3100bf7d84e197fd29234a8f1a55e80"
+    "source_manifest_sha256": "55fdbbfca0c0c1e9eefa0d5372c98ab7645874252909db42cf585dd52f8f4cde"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }

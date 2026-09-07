@@ -41,9 +41,9 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from compute.management_indicators import (
     IndicatorRecurrence,
@@ -55,9 +55,14 @@ from compute.say_do import CommitmentExtractionManifest, CommitmentInput
 from compute.thesis_evaluator import Comparator
 from models.facts import Unit
 from pipeline.commitment_scan_receipts import (
+    CommitmentScanCoverageState,
+    ObservedTranscriptSegment,
+    TranscriptScanBinding,
+    TranscriptSegmentVersion,
     append_commitment_scan_receipt,
-    current_commitment_scan_receipt,
-    scan_receipt_table_available,
+    commitment_scan_coverage,
+    observe_transcript_segment,
+    scan_receipt_schema_available,
 )
 from provenance.selection import selected_transcripts_relation
 
@@ -106,6 +111,8 @@ class _LLMCommitment(BaseModel):
     after injecting ticker/period_made/segment_id from TranscriptContext.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     kpi_name: str = Field(min_length=1, max_length=200)
     comparator: Comparator
     target_value: Decimal
@@ -113,9 +120,18 @@ class _LLMCommitment(BaseModel):
     period_target: datetime
     narrative: str = Field(min_length=1, max_length=1000)
 
+    @field_validator("target_value", mode="before")
+    @classmethod
+    def _reject_boolean_target(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("target_value must be numeric, not boolean")
+        return value
+
 
 class _LLMManagementIndicator(BaseModel):
     """Novel source measurement that must remain outside the KPI catalog."""
+
+    model_config = ConfigDict(extra="forbid")
 
     raw_label: str = Field(min_length=1, max_length=256)
     value: Decimal
@@ -124,14 +140,21 @@ class _LLMManagementIndicator(BaseModel):
     recurrence: IndicatorRecurrence = IndicatorRecurrence.UNKNOWN
     source_excerpt: str = Field(min_length=1, max_length=2000)
 
+    @field_validator("value", mode="before")
+    @classmethod
+    def _reject_boolean_value(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("value must be numeric, not boolean")
+        return value
+
 
 class _LLMResponse(BaseModel):
     """Top-level shape we expect the model to return."""
 
-    commitments: list[_LLMCommitment] = Field(default_factory=list[_LLMCommitment])
-    novel_indicators: list[_LLMManagementIndicator] = Field(
-        default_factory=list[_LLMManagementIndicator]
-    )
+    model_config = ConfigDict(extra="forbid")
+
+    commitments: list[_LLMCommitment]
+    novel_indicators: list[_LLMManagementIndicator]
 
 
 class TranscriptExtractionManifest(CommitmentExtractionManifest):
@@ -140,6 +163,20 @@ class TranscriptExtractionManifest(CommitmentExtractionManifest):
     indicators: list[ManagementIndicatorInput] = Field(
         default_factory=list[ManagementIndicatorInput]
     )
+
+
+class TranscriptScanResult(TranscriptExtractionManifest):
+    """Complete multi-segment result with extraction-produced coverage evidence."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    observed_segments: tuple[ObservedTranscriptSegment, ...]
+
+
+@dataclass(frozen=True)
+class _TranscriptSegmentInput:
+    text: str
+    source: TranscriptSegmentVersion
 
 
 def fetch_kpi_catalog(conn: sqlite3.Connection, ticker: str) -> list[tuple[str, str]]:
@@ -160,21 +197,62 @@ def fetch_kpi_catalog(conn: sqlite3.Connection, ticker: str) -> list[tuple[str, 
 def fetch_transcript_text_and_segment(
     conn: sqlite3.Connection, transcript_id: int
 ) -> tuple[str, int, datetime] | None:
-    """Return (text, segment_id, period_end) for the longest segment, or None."""
-    transcripts = selected_transcripts_relation(conn)
-    cur = conn.execute(
-        f"SELECT t.period_end, ts.id AS segment_id, ts.text "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        f"FROM {transcripts} t JOIN transcript_segments ts ON ts.transcript_id = t.id "
-        "WHERE t.id = ? ORDER BY length(ts.text) DESC LIMIT 1",
+    """Return the longest segment for compatibility with legacy callers."""
+    segments = fetch_transcript_segments(conn, transcript_id)
+    return max(segments, key=lambda item: len(item[0])) if segments else None
+
+
+def fetch_transcript_segments(
+    conn: sqlite3.Connection, transcript_id: int
+) -> list[tuple[str, int, datetime]]:
+    """Return every selected transcript segment in deterministic source order."""
+    return [
+        (
+            item.text,
+            item.source.segment_id,
+            datetime.fromisoformat(item.source.period_end),
+        )
+        for item in _fetch_transcript_segment_inputs(conn, transcript_id)
+    ]
+
+
+def _fetch_transcript_segment_inputs(
+    conn: sqlite3.Connection, transcript_id: int
+) -> tuple[_TranscriptSegmentInput, ...]:
+    transcripts = selected_transcripts_relation(conn).sql
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcript_segments)")}
+    speaker = "ts.speaker" if "speaker" in columns else "NULL"
+    time_start = "ts.time_code_start" if "time_code_start" in columns else "NULL"
+    time_end = "ts.time_code_end" if "time_code_end" in columns else "NULL"
+    rows = conn.execute(
+        "SELECT t.id,t.document_id,t.period_end,ts.id,ts.seq,"
+        + speaker
+        + ","
+        + time_start
+        + ","
+        + time_end
+        + ",ts.text "
+        f"FROM {transcripts} AS t JOIN transcript_segments AS ts ON ts.transcript_id=t.id "  # nosec B608
+        "WHERE t.id=? ORDER BY ts.seq,ts.id",
         (transcript_id,),
+    ).fetchall()
+    return tuple(
+        _TranscriptSegmentInput(
+            text=str(row[8]),
+            source=observe_transcript_segment(
+                transcript_id=int(row[0]),
+                source_document_id=int(row[1]),
+                period_end=row[2],
+                segment_id=int(row[3]),
+                sequence=int(row[4]),
+                speaker=row[5],
+                time_code_start=row[6],
+                time_code_end=row[7],
+                text=str(row[8]),
+            ),
+        )
+        for row in rows
     )
-    row = cur.fetchone()
-    if row is None:
-        return None
-    period_end = row["period_end"]
-    if isinstance(period_end, str):
-        period_end = datetime.fromisoformat(period_end)
-    return (row["text"], int(row["segment_id"]), period_end)
 
 
 def _segment_source_metadata(conn: sqlite3.Connection, segment_id: int) -> tuple[int, str | None]:
@@ -209,18 +287,37 @@ def scan_log_available(conn: sqlite3.Connection) -> bool:
     return available
 
 
+def scan_log_schema_available(conn: sqlite3.Connection) -> bool:
+    """Return whether the full completion-marker schema is writable."""
+
+    if not scan_log_available(conn):
+        return False
+    table_info = conn.execute("PRAGMA table_info(commitment_scan_log)").fetchall()
+    columns = {str(row[1]) for row in table_info}
+    if not {"id", "transcript_id", "scanned_at", "n_extracted", "prompt_version"} <= columns:
+        return False
+    unique_targets = {
+        tuple(
+            str(column[0])
+            for column in conn.execute("SELECT name FROM pragma_index_info(?)", (str(index[1]),))
+        )
+        for index in conn.execute("PRAGMA index_list(commitment_scan_log)")
+        if bool(index[2]) and not bool(index[4])
+    }
+    return ("transcript_id",) in unique_targets
+
+
 def transcripts_pending_extraction(
     conn: sqlite3.Connection, ticker: str | None = None
 ) -> list[tuple[int, str, datetime]]:
-    """Return [(transcript_id, ticker, period_end), ...] for transcripts worth
-    an extraction LLM call. Optional --ticker filter.
+    """Return pending transcripts, using typed coverage on the active schema.
 
-    A transcript is pending iff ALL of:
-      - it has no management_commitments rows yet;
-      - it has no commitment_scan_log row (or is being re-run after a prompt
-        version reset). Novel/one-off management indicators may be relevant
-        even when the ticker has no existing KPI catalog, so catalog absence
-        must not suppress a transcript scan."""
+    The historical output/log heuristic remains only as read compatibility for
+    pre-receipt schemas. Current automatic writers share the immutable coverage
+    classifier through ``transcripts_without_scan_receipt``.
+    """
+    if scan_receipt_schema_available(conn):
+        return transcripts_without_scan_receipt(conn, ticker=ticker)
     transcripts = selected_transcripts_relation(conn)
     sql = (
         f"SELECT t.id, t.ticker, t.period_end FROM {transcripts} t "  # nosec B608 -- trusted internal SQL shape; values remain bound
@@ -262,7 +359,7 @@ def transcripts_without_scan_receipt(
         params = (ticker.upper(),)
     sql += " ORDER BY t.ticker,t.period_end DESC"
     rows = conn.execute(sql, params).fetchall()
-    receipts_available = scan_receipt_table_available(conn)
+    receipts_available = scan_receipt_schema_available(conn)
     if receipts_available:
         from llm.prompt_versions import prompt_version_for
 
@@ -273,15 +370,16 @@ def transcripts_without_scan_receipt(
     for row in rows:
         transcript_id = int(row["id"])
         if receipts_available:
-            already_scanned = (
-                current_commitment_scan_receipt(
-                    conn,
-                    transcript_id=transcript_id,
-                    prompt_version=current_prompt_version,
-                )
-                is not None
+            coverage = commitment_scan_coverage(
+                conn,
+                transcript_id=transcript_id,
+                prompt_version=current_prompt_version,
             )
-        else:
+            already_scanned = coverage.state not in {
+                CommitmentScanCoverageState.SOURCE_CHANGED_MISSING,
+                CommitmentScanCoverageState.NEVER_SCANNED_MISSING,
+            }
+        elif scan_log_available(conn):
             already_scanned = (
                 conn.execute(
                     "SELECT 1 FROM commitment_scan_log WHERE transcript_id=?",
@@ -289,6 +387,8 @@ def transcripts_without_scan_receipt(
                 ).fetchone()
                 is not None
             )
+        else:
+            already_scanned = False
         if already_scanned:
             continue
         period_end = row["period_end"]
@@ -310,15 +410,22 @@ def record_scan(
     prompt_version: str | None = None,
     commitment_ids: Sequence[int] = (),
     management_indicator_ids: Sequence[int] = (),
+    observed_segments: Sequence[ObservedTranscriptSegment] | None = None,
+    expected_binding: TranscriptScanBinding | None = None,
 ) -> None:
-    """Persist "this transcript was scanned" so zero-commitment transcripts
-    are never re-scanned. No-op (with the scan_log_available warning) on a
-    pre-0129 DB. ``prompt_version`` is recorded so a future prompt bump can
-    invalidate the receipt. At current schema head, completion is additionally
-    sealed in an append-only receipt bound to current transcript evidence and
-    an immutable output manifest."""
-    if not scan_log_available(conn):
-        return
+    """Atomically persist the mutable scan index and exact immutable receipt.
+
+    Current writers require both active schemas and typed segment observations;
+    legacy databases remain readable but cannot manufacture new completion.
+    """
+    if not scan_log_schema_available(conn):
+        raise RuntimeError("commitment scan log schema is unavailable")
+    if not scan_receipt_schema_available(conn):
+        raise RuntimeError("commitment scan segment manifest schema is unavailable")
+    if prompt_version is None:
+        raise ValueError("prompt_version is required for an immutable scan receipt")
+    if n_extracted != len(commitment_ids) + len(management_indicator_ids):
+        raise ValueError("n_extracted does not match the exact scan output identities")
     scanned_at = datetime.now(UTC).replace(tzinfo=None).isoformat()
     conn.execute(
         "INSERT INTO commitment_scan_log (transcript_id, scanned_at, n_extracted, prompt_version) "
@@ -329,19 +436,15 @@ def record_scan(
         "  prompt_version = excluded.prompt_version",
         (transcript_id, scanned_at, n_extracted, prompt_version),
     )
-    if scan_receipt_table_available(conn):
-        if prompt_version is None:
-            raise ValueError("prompt_version is required for an immutable scan receipt")
-        if n_extracted != len(commitment_ids) + len(management_indicator_ids):
-            raise ValueError("n_extracted does not match the exact scan output identities")
-        append_commitment_scan_receipt(
-            conn,
-            transcript_id=transcript_id,
-            prompt_version=prompt_version,
-            commitment_ids=commitment_ids,
-            management_indicator_ids=management_indicator_ids,
-        )
-    conn.commit()
+    append_commitment_scan_receipt(
+        conn,
+        transcript_id=transcript_id,
+        prompt_version=prompt_version,
+        commitment_ids=commitment_ids,
+        management_indicator_ids=management_indicator_ids,
+        observed_segments=observed_segments,
+        expected_binding=expected_binding,
+    )
 
 
 def build_extraction_prompt(
@@ -436,13 +539,24 @@ def parse_llm_response(
     - Raises CommitmentParseError when the text isn't JSON or the top-level
       shape fails Pydantic — a malformed response is a model failure, not a
       "no commitments" result, and must stay distinguishable from one.
-    - Drops individual commitments whose downstream CommitmentInput
-      construction fails (e.g. unparseable target_value).
+    - Rejects the entire segment response when any output is invalid. Partial
+      parsing cannot be represented as successful segment coverage.
     """
     cleaned = _FENCE_RX.sub("", json_text).strip()
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        payload_object: dict[str, object] = {}
+        for key, value in pairs:
+            if key in payload_object:
+                raise ValueError(f"duplicate JSON key: {key}")
+            payload_object[key] = value
+        return payload_object
+
     try:
-        payload = json.loads(cleaned)
+        payload = json.loads(cleaned, object_pairs_hook=reject_duplicate_keys)
     except json.JSONDecodeError as e:
+        raise CommitmentParseError(f"LLM response is not valid JSON: {e}") from e
+    except ValueError as e:
         raise CommitmentParseError(f"LLM response is not valid JSON: {e}") from e
 
     try:
@@ -450,50 +564,43 @@ def parse_llm_response(
     except ValidationError as e:
         raise CommitmentParseError(f"LLM response failed schema validation: {e}") from e
 
-    commitments: list[CommitmentInput] = []
-    for raw in response.commitments:
-        try:
-            commitments.append(
-                CommitmentInput(
-                    ticker=context.ticker.upper(),
-                    period_made=context.period_made,
-                    transcript_segment_id=context.transcript_segment_id,
-                    period_target=raw.period_target,
-                    kpi_name=raw.kpi_name,
-                    comparator=raw.comparator,
-                    target_value=raw.target_value,
-                    unit=raw.unit,
-                    narrative=raw.narrative,
-                )
-            )
-        except (ValidationError, InvalidOperation) as e:
-            log.warning(
-                "Dropping commitment (kpi_name=%r) due to validation error: %s",
-                raw.kpi_name,
-                e,
-            )
-    indicators: list[ManagementIndicatorInput] = []
     if response.novel_indicators and context.source_doc_id is None:
         raise CommitmentParseError("novel indicators require a transcript source document")
-    for raw in response.novel_indicators:
-        try:
-            indicators.append(
-                ManagementIndicatorInput(
-                    ticker=context.ticker.upper(),
-                    transcript_segment_id=context.transcript_segment_id,
-                    raw_label=raw.raw_label,
-                    value=raw.value,
-                    unit=raw.unit,
-                    scope=raw.scope,
-                    recurrence=raw.recurrence,
-                    # The persistence boundary derives the speaker from the
-                    # uniquely matched verbatim source segment.
-                    speaker=None,
-                    source_excerpt=raw.source_excerpt,
-                )
+    try:
+        commitments = [
+            CommitmentInput(
+                ticker=context.ticker.upper(),
+                period_made=context.period_made,
+                transcript_segment_id=context.transcript_segment_id,
+                period_target=raw.period_target,
+                kpi_name=raw.kpi_name,
+                comparator=raw.comparator,
+                target_value=raw.target_value,
+                unit=raw.unit,
+                narrative=raw.narrative,
             )
-        except (ValidationError, InvalidOperation) as e:
-            log.warning("Dropping novel management indicator due to validation error: %s", e)
+            for raw in response.commitments
+        ]
+        indicators = [
+            ManagementIndicatorInput(
+                ticker=context.ticker.upper(),
+                transcript_segment_id=context.transcript_segment_id,
+                raw_label=raw.raw_label,
+                value=raw.value,
+                unit=raw.unit,
+                scope=raw.scope,
+                recurrence=raw.recurrence,
+                # The persistence boundary derives the speaker from this
+                # exact anchor (or a unique segment for legacy callers).
+                speaker=None,
+                source_excerpt=raw.source_excerpt,
+            )
+            for raw in response.novel_indicators
+        ]
+    except ValidationError as exc:
+        raise CommitmentParseError(
+            f"LLM response failed promoted output validation: {exc}"
+        ) from exc
     return TranscriptExtractionManifest(commitments=commitments, indicators=indicators)
 
 
@@ -502,7 +609,7 @@ def extract_for_transcript(
     transcript_id: int,
     *,
     llm_call: Callable[[str], str],
-) -> TranscriptExtractionManifest:
+) -> TranscriptScanResult:
     """Orchestrator: pull transcript, build prompt, call LLM, parse, return manifest.
 
     `llm_call` is injected so tests can stub the LLM. Production callers pass
@@ -526,53 +633,90 @@ def extract_for_transcript(
         raise ValueError(f"transcript_id={transcript_id} not found")
     ticker = row["ticker"]
 
-    transcript_data = fetch_transcript_text_and_segment(conn, transcript_id)
-    if transcript_data is None:
+    transcript_segments = _fetch_transcript_segment_inputs(conn, transcript_id)
+    if not transcript_segments:
         raise ValueError(f"transcript_id={transcript_id} has no transcript_segments rows")
-    text, segment_id, period_end = transcript_data
-    source_doc_id, speaker = _segment_source_metadata(conn, segment_id)
-    catalog = fetch_kpi_catalog(conn, ticker)
-
-    prompt = build_extraction_prompt(
-        ticker=ticker,
-        transcript_text=text,
-        kpi_catalog=catalog,
-        period_made=period_end,
+    oversized = next(
+        (item for item in transcript_segments if len(item.text) > MAX_TRANSCRIPT_CHARS), None
     )
-    context = TranscriptContext(
-        ticker=ticker,
-        period_made=period_end,
-        transcript_segment_id=segment_id,
-        source_doc_id=source_doc_id,
-        speaker=speaker,
-    )
-
-    def parse_and_validate(response: str) -> TranscriptExtractionManifest:
-        manifest = parse_llm_response(response, context=context)
-        try:
-            for indicator in manifest.indicators:
-                validate_indicator_source_binding(conn, indicator=indicator)
-        except ValueError as exc:
-            raise CommitmentParseError(
-                f"novel indicator source evidence failed exact segment binding: {exc}"
-            ) from exc
-        return manifest
-
-    response_text = llm_call(prompt)
-    try:
-        return parse_and_validate(response_text)
-    except CommitmentParseError as first_exc:
-        validation_error = str(first_exc)
-        log.warning(
-            "transcript_id=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
-            transcript_id,
-            ticker,
-            validation_error,
+    if oversized is not None:
+        raise CommitmentParseError(
+            f"transcript_id={transcript_id} segment_id={oversized.source.segment_id} exceeds "
+            f"the {MAX_TRANSCRIPT_CHARS:,}-character complete-coverage limit"
         )
-    retry_text = llm_call(
-        _RETRY_PREAMBLE
-        + f"VALIDATION ERROR: {validation_error}\n"
-        + "Copy each novel indicator source_excerpt exactly from the transcript.\n\n"
-        + prompt
+    catalog = fetch_kpi_catalog(conn, ticker)
+    commitments: list[CommitmentInput] = []
+    indicators: list[ManagementIndicatorInput] = []
+    observed_segments: list[ObservedTranscriptSegment] = []
+    for segment in transcript_segments:
+        text = segment.text
+        source = segment.source
+        segment_id = source.segment_id
+        period_end = datetime.fromisoformat(source.period_end)
+        prompt = build_extraction_prompt(
+            ticker=ticker,
+            transcript_text=text,
+            kpi_catalog=catalog,
+            period_made=period_end,
+        )
+        context = TranscriptContext(
+            ticker=ticker,
+            period_made=period_end,
+            transcript_segment_id=segment_id,
+            source_doc_id=source.source_document_id,
+            speaker=source.speaker,
+        )
+
+        def parse_and_validate(
+            response: str, *, segment_context: TranscriptContext = context
+        ) -> TranscriptExtractionManifest:
+            manifest = parse_llm_response(response, context=segment_context)
+            try:
+                for indicator in manifest.indicators:
+                    validate_indicator_source_binding(conn, indicator=indicator)
+            except ValueError as exc:
+                raise CommitmentParseError(
+                    f"novel indicator source evidence failed exact segment binding: {exc}"
+                ) from exc
+            return manifest
+
+        response_text = llm_call(prompt)
+        try:
+            manifest = parse_and_validate(response_text)
+        except CommitmentParseError as first_exc:
+            validation_error = str(first_exc)
+            log.warning(
+                "transcript_id=%d segment_id=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
+                transcript_id,
+                segment_id,
+                ticker,
+                validation_error,
+            )
+            retry_text = llm_call(
+                _RETRY_PREAMBLE
+                + f"VALIDATION ERROR: {validation_error}\n"
+                + "Copy each novel indicator source_excerpt exactly from the transcript.\n\n"
+                + prompt
+            )
+            manifest = parse_and_validate(retry_text)
+        commitments.extend(manifest.commitments)
+        indicators.extend(manifest.indicators)
+        commitment_count = len(manifest.commitments)
+        indicator_count = len(manifest.indicators)
+        observed_segments.append(
+            ObservedTranscriptSegment(
+                source=source,
+                disposition=(
+                    "parsed_no_output"
+                    if commitment_count + indicator_count == 0
+                    else "parsed_with_output"
+                ),
+                commitment_count=commitment_count,
+                indicator_count=indicator_count,
+            )
+        )
+    return TranscriptScanResult(
+        commitments=commitments,
+        indicators=indicators,
+        observed_segments=tuple(observed_segments),
     )
-    return parse_and_validate(retry_text)

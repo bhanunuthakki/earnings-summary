@@ -183,7 +183,7 @@ def test_indicator_requires_matching_issuer_and_verbatim_segment() -> None:
     try:
         with pytest.raises(ValueError, match="does not match transcript/document ticker"):
             persist_indicator(conn, indicator=_indicator().model_copy(update={"ticker": "OTHER"}))
-        with pytest.raises(ValueError, match="must match exactly one transcript segment"):
+        with pytest.raises(ValueError, match="must occur in its anchored transcript segment"):
             persist_indicator(
                 conn,
                 indicator=_indicator().model_copy(
@@ -213,7 +213,9 @@ def test_indicator_resolves_the_exact_supporting_segment() -> None:
                 "speaker": None,
             }
         )
-        indicator_id = persist_indicator(conn, indicator=indicator)
+        indicator_id = persist_indicator(
+            conn, indicator=indicator, allow_legacy_segment_rebind=True
+        )
         row = conn.execute(
             "SELECT transcript_segment_id,speaker,source_locator_json "
             "FROM management_indicator_observations WHERE id=?",

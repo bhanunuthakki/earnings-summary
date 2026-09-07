@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Never
 
 import pytest
 
+from compute.management_indicators import ManagementIndicatorSchemaError
 from compute.say_do import persist_manifest
 from compute.say_do_extractor import (
     MAX_TRANSCRIPT_CHARS,
@@ -117,10 +121,106 @@ def _seed_transcript(
 
 def _seed_kpi_def(conn: sqlite3.Connection, ticker: str, name: str, unit: str = "percent") -> None:
     conn.execute(
-        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES (?, ?, ?)",
-        (ticker, name, unit),
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) VALUES (?, ?, ?, ?)",
+        (ticker, name, unit, "transcript"),
     )
     conn.commit()
+
+
+def _active_conn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    *,
+    ticker: str,
+    text: str,
+    period_end: str = "2025-12-31",
+) -> tuple[sqlite3.Connection, int]:
+    path = migrated_db(tmp_path / f"{ticker.lower()}-active.db")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    filename = f"{ticker}_Q4_2025.txt"
+    conn.execute(
+        "INSERT INTO documents "
+        "(ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
+        "VALUES (?,'ir_doc','ir_transcript',?,?,?,'ok',?)",
+        (ticker, f"transcripts/processed/{filename}", digest, "2026-01-15", len(text.encode())),
+    )
+    document_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO transcripts "
+        "(document_id,ticker,call_date,fiscal_period_type,period_end,source,is_active,is_current,"
+        "recorded_at) VALUES (?,?,?,'Q4',?,'issuer_ir',1,1,?)",
+        (document_id, ticker, "2026-01-15", period_end, "2026-01-15"),
+    )
+    transcript_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO transcript_segments "
+        "(transcript_id,seq,speaker,time_code_start,time_code_end,text) "
+        "VALUES (?,0,'CEO','00:00:00',NULL,?)",
+        (transcript_id, text),
+    )
+    idempotency_key = "transcript:" + "1" * 64
+    contract_sha = "2" * 64
+    authorization = {
+        "idempotency_key": idempotency_key,
+        "request": {
+            "canonical_ticker": ticker,
+            "document_type": "earnings_call_transcript",
+            "fiscal_quarter": 4,
+            "fiscal_year": 2025,
+            "provider": "issuer_ir",
+            "source_regime_identity": {"contract_sha256": contract_sha, "regime": "combined"},
+            "source_type": "ir_doc",
+        },
+        "schema_version": "transcript-acquisition-authorization@1",
+        "status": "authorized",
+    }
+    artifact = {
+        "authorization": authorization,
+        "canonical_document_path": f"transcripts/raw/{filename}",
+        "document_id": document_id,
+        "schema_version": "authorized-transcript-artifact@1",
+        "source_url": None,
+        "staged": {"sha256": digest, "size_bytes": len(text.encode())},
+    }
+    artifact_json = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
+    receipt_id = hashlib.sha256(artifact_json.encode()).hexdigest()
+    for trigger in (
+        "trg_transcript_acquisition_receipts_validate",
+        "trg_transcript_acquisition_receipts_stored_target_binding",
+        "trg_transcript_acquisition_receipts_document_binding",
+    ):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")  # nosec B608 -- test constant
+    conn.execute(
+        "INSERT INTO transcript_acquisition_receipts "
+        "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
+        "canonical_document_path,artifact_sha256,artifact_size_bytes,source_url,provider,"
+        "source_type,document_type,source_regime,source_regime_contract_sha256,"
+        "authorization_json,artifact_json,recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            receipt_id,
+            idempotency_key,
+            document_id,
+            ticker,
+            2025,
+            4,
+            f"transcripts/raw/{filename}",
+            digest,
+            len(text.encode()),
+            None,
+            "issuer_ir",
+            "ir_doc",
+            "earnings_call_transcript",
+            "combined",
+            contract_sha,
+            json.dumps(authorization, sort_keys=True, separators=(",", ":")),
+            artifact_json,
+            "2026-01-15T00:00:00Z",
+        ),
+    )
+    conn.commit()
+    return conn, transcript_id
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +314,12 @@ def test_transcripts_pending_extraction_excludes_scanned(
     transcript from the pending set (kills the daily re-scan loop)."""
     _seed_kpi_def(conn, "AMZN", "X")
     tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
-    record_scan(conn, tid, n_extracted=0, prompt_version="v1")
+    conn.execute(
+        "INSERT INTO commitment_scan_log "
+        "(transcript_id,scanned_at,n_extracted,prompt_version) VALUES (?,datetime('now'),0,'v1')",
+        (tid,),
+    )
+    conn.commit()
     assert transcripts_pending_extraction(conn) == []
 
 
@@ -229,29 +334,23 @@ def test_transcripts_pending_extraction_includes_no_catalog_tickers_for_novel_in
 def test_transcripts_pending_degrades_without_scan_log_table(
     conn: sqlite3.Connection,
 ) -> None:
-    """Pre-0129 DB (no commitment_scan_log): selection still works, scans
-    are silently unfiltered, record_scan is a warning no-op."""
+    """Legacy selection can inspect the schema, while the writer fails closed."""
     conn.execute("DROP TABLE commitment_scan_log")
     conn.commit()
     _seed_kpi_def(conn, "AMZN", "X")
     tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
     assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
-    record_scan(conn, tid, n_extracted=0)  # must not raise
+    with pytest.raises(RuntimeError, match="scan log schema"):
+        record_scan(conn, tid, n_extracted=0)
     assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
 
 
-def test_record_scan_upserts_on_repeat(conn: sqlite3.Connection) -> None:
+def test_record_scan_requires_exact_receipt_schema(conn: sqlite3.Connection) -> None:
     _seed_kpi_def(conn, "AMZN", "X")
     tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
-    record_scan(conn, tid, n_extracted=0, prompt_version="v1")
-    record_scan(conn, tid, n_extracted=2, prompt_version="v2")
-    row = conn.execute(
-        "SELECT n_extracted, prompt_version FROM commitment_scan_log WHERE transcript_id = ?",
-        (tid,),
-    ).fetchone()
-    assert (row["n_extracted"], row["prompt_version"]) == (2, "v2")
-    n = conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0]
-    assert n == 1
+    with pytest.raises(RuntimeError, match="segment manifest schema"):
+        record_scan(conn, tid, n_extracted=0, prompt_version="v1")
+    assert conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +423,8 @@ def test_parse_well_formed_response_produces_manifest() -> None:
           "period_target": "2026-03-31",
           "narrative": "We expect AWS to grow at least 20%."
         }
-      ]
+      ],
+      "novel_indicators": []
     }"""
     manifest = parse_llm_response(response, context=_CTX)
     assert len(manifest.commitments) == 1
@@ -337,7 +437,7 @@ def test_parse_well_formed_response_produces_manifest() -> None:
 
 
 def test_parse_strips_markdown_fences() -> None:
-    response = '```json\n{"commitments": []}\n```'
+    response = '```json\n{"commitments": [], "novel_indicators": []}\n```'
     manifest = parse_llm_response(response, context=_CTX)
     assert manifest.commitments == []
 
@@ -363,7 +463,8 @@ def test_markdown_wrapped_kpi_name_persists_plain(conn: sqlite3.Connection) -> N
           "period_target": "2026-03-31",
           "narrative": "We expect risk-adjusted NIM of at least 10%."
         }
-      ]
+      ],
+      "novel_indicators": []
     }"""
     manifest = parse_llm_response(response, context=ctx)
     assert manifest.commitments[0].kpi_name == "Risk-adj. NIM"
@@ -399,7 +500,7 @@ def test_parse_invalid_shape_raises() -> None:
 
 
 def test_parse_empty_commitments_array() -> None:
-    manifest = parse_llm_response('{"commitments": []}', context=_CTX)
+    manifest = parse_llm_response('{"commitments": [], "novel_indicators": []}', context=_CTX)
     assert manifest.commitments == []
 
 
@@ -427,7 +528,8 @@ def test_extract_for_transcript_end_to_end(conn: sqlite3.Connection) -> None:
             "unit": "percent",
             "period_target": "2026-03-31",
             "narrative": "We expect AWS to grow at least 20% next quarter."
-          }]
+          }],
+          "novel_indicators": []
         }"""
 
     manifest = extract_for_transcript(conn, transcript_id, llm_call=stub_llm)
@@ -443,7 +545,9 @@ def test_extract_for_transcript_end_to_end(conn: sqlite3.Connection) -> None:
 
 def test_extract_raises_for_unknown_transcript(conn: sqlite3.Connection) -> None:
     with pytest.raises(ValueError, match="not found"):
-        extract_for_transcript(conn, 9999, llm_call=lambda p: '{"commitments": []}')
+        extract_for_transcript(
+            conn, 9999, llm_call=lambda p: '{"commitments": [], "novel_indicators": []}'
+        )
 
 
 def test_extract_scans_empty_catalog_for_novel_indicators(conn: sqlite3.Connection) -> None:
@@ -547,7 +651,7 @@ def test_extract_retries_once_with_feedback_then_succeeds(
         prompts.append(prompt)
         if len(prompts) == 1:
             return "Sure! Here are the commitments you asked for:"
-        return '{"commitments": []}'
+        return '{"commitments": [], "novel_indicators": []}'
 
     manifest = extract_for_transcript(conn, transcript_id, llm_call=flaky_llm)
     assert manifest.commitments == []
@@ -580,6 +684,27 @@ def test_fetch_picks_longest_segment(conn: sqlite3.Connection) -> None:
     assert result is not None
     text, _segment_id, _period_end = result
     assert text == "longer text by far"
+
+
+def test_second_segment_failure_returns_no_partial_manifest(conn: sqlite3.Connection) -> None:
+    transcript_id, _ = _seed_transcript(conn, "AMZN", "first", "2025-12-31")
+    conn.execute(
+        "INSERT INTO transcript_segments (transcript_id, seq, text) VALUES (?, 1, ?)",
+        (transcript_id, "second"),
+    )
+    conn.commit()
+    calls = 0
+
+    def llm(_prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            return "not json"
+        return '{"commitments": [], "novel_indicators": []}'
+
+    with pytest.raises(CommitmentParseError):
+        extract_for_transcript(conn, transcript_id, llm_call=llm)
+    assert calls == 3  # first segment, second segment, retry
 
 
 def test_fetch_returns_none_when_no_segments(conn: sqlite3.Connection) -> None:
@@ -620,19 +745,23 @@ def _load_script() -> Any:
 
 
 def test_run_auto_routes_through_governed_call_llm(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The script must pass purpose= and ticker= on every LLM call (the
     _call_claude bypass made this the repo's largest anonymous cost line)."""
     mod = _load_script()
+    conn, tid = _active_conn(
+        tmp_path, migrated_db, ticker="AMZN", text="text", period_end="2025-12-31"
+    )
     _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
-    tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
 
     seen: list[dict[str, object]] = []
 
     def stub_call_llm(prompt: str, **kwargs: object) -> str:
         seen.append(dict(kwargs))
-        return '{"commitments": []}'
+        return '{"commitments": [], "novel_indicators": []}'
 
     monkeypatch.setattr(mod, "call_llm", stub_call_llm)
     report = mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=False)
@@ -646,6 +775,7 @@ def test_run_auto_routes_through_governed_call_llm(
         "SELECT n_extracted FROM commitment_scan_log WHERE transcript_id = ?", (tid,)
     ).fetchone()
     assert row is not None and row["n_extracted"] == 0
+    conn.close()
 
 
 def test_run_auto_dry_run_records_no_scan(
@@ -656,7 +786,7 @@ def test_run_auto_dry_run_records_no_scan(
     _seed_transcript(conn, "AMZN", "text", "2025-12-31")
 
     def stub_call_llm(prompt: str, **kwargs: object) -> str:
-        return '{"commitments": []}'
+        return '{"commitments": [], "novel_indicators": []}'
 
     monkeypatch.setattr(mod, "call_llm", stub_call_llm)
     mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=True)
@@ -665,12 +795,19 @@ def test_run_auto_dry_run_records_no_scan(
 
 
 def test_run_auto_unbound_indicator_after_retry_records_no_scan(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A transcript whose extraction failed must stay pending (retryable),
     and the failure must be visible in the run report."""
     mod = _load_script()
-    _seed_transcript(conn, "ZZZ", "We launched 42 new enterprise pilots.", "2025-12-31")
+    conn, _ = _active_conn(
+        tmp_path,
+        migrated_db,
+        ticker="ZZZ",
+        text="We launched 42 new enterprise pilots.",
+    )
 
     def stub_call_llm(prompt: str, **kwargs: object) -> str:
         return """{
@@ -692,15 +829,18 @@ def test_run_auto_unbound_indicator_after_retry_records_no_scan(
     assert report["failed_targets"] == 1
     n = conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0]
     assert n == 0
+    conn.close()
 
 
 def test_run_auto_scan_failure_rolls_back_extracted_rows(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The scan receipt and extracted observations are one atomic write set."""
     mod = _load_script()
+    conn, _ = _active_conn(tmp_path, migrated_db, ticker="AMZN", text="text")
     _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
-    _seed_transcript(conn, "AMZN", "text", "2025-12-31")
 
     def stub_call_llm(prompt: str, **kwargs: object) -> str:
         return """{
@@ -711,7 +851,8 @@ def test_run_auto_scan_failure_rolls_back_extracted_rows(
             "unit": "percent",
             "period_target": "2026-03-31",
             "narrative": "We expect AWS to grow at least 20%."
-          }]
+          }],
+          "novel_indicators": []
         }"""
 
     def fail_scan(*args: object, **kwargs: object) -> None:
@@ -727,14 +868,22 @@ def test_run_auto_scan_failure_rolls_back_extracted_rows(
     assert report["failed_targets"] == 1
     assert conn.execute("SELECT COUNT(*) FROM management_commitments").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0] == 0
+    conn.close()
 
 
 def test_run_auto_indicator_persistence_failure_records_no_scan(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A missing staging migration is visible and leaves the transcript pending."""
+    """A staging failure is visible and leaves the transcript pending."""
     mod = _load_script()
-    tid, _ = _seed_transcript(conn, "ZZZ", "We launched 42 new enterprise pilots.", "2025-12-31")
+    conn, tid = _active_conn(
+        tmp_path,
+        migrated_db,
+        ticker="ZZZ",
+        text="We launched 42 new enterprise pilots.",
+    )
 
     def stub_call_llm(prompt: str, **kwargs: object) -> str:
         return """{
@@ -749,7 +898,11 @@ def test_run_auto_indicator_persistence_failure_records_no_scan(
           }]
         }"""
 
+    def fail_indicator_persistence(*_args: object, **_kwargs: object) -> Never:
+        raise ManagementIndicatorSchemaError("forced staging failure")
+
     monkeypatch.setattr(mod, "call_llm", stub_call_llm)
+    monkeypatch.setattr(mod, "persist_indicators", fail_indicator_persistence)
     report = mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=False)
 
     results = report["results"]
@@ -760,6 +913,7 @@ def test_run_auto_indicator_persistence_failure_records_no_scan(
         "SELECT COUNT(*) FROM commitment_scan_log WHERE transcript_id=?", (tid,)
     ).fetchone()[0]
     assert n == 0
+    conn.close()
 
 
 def test_main_auto_returns_nonzero_when_any_target_failed(

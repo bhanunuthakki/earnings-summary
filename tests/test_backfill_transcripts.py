@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Never
@@ -565,6 +567,9 @@ def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
     def transcript_id(*_args: object) -> int:
         return 42
 
+    def pending_coverage(*_args: object) -> object:
+        return mod.CommitmentScanCoverage(mod.CommitmentScanCoverageState.NEVER_SCANNED_MISSING)
+
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
     monkeypatch.setattr(mod, "_transcript_id_for_period", transcript_id)
     monkeypatch.setattr(
@@ -573,6 +578,11 @@ def test_existing_unscanned_transcript_is_selected_even_without_new_fetch(
         exact_evidence,
     )
     monkeypatch.setattr(mod, "_commitment_scan_evidence", no_scan_evidence)
+    monkeypatch.setattr(
+        mod,
+        "_commitment_scan_coverage",
+        pending_coverage,
+    )
 
     assert mod._commitment_scan_targets([result], mod.date(2026, 9, 5), 1) == [
         mod.CommitmentScanTarget(
@@ -611,10 +621,18 @@ def test_commitment_scan_targets_exclude_out_of_window_unreceipted_transcript(
     def no_scan_evidence(*_args: object) -> None:
         return None
 
+    def pending_coverage(*_args: object) -> object:
+        return mod.CommitmentScanCoverage(mod.CommitmentScanCoverageState.NEVER_SCANNED_MISSING)
+
     monkeypatch.setattr(mod, "recent_fiscal_quarters", in_window)
     monkeypatch.setattr(mod, "_transcript_id_for_period", transcript_id)
     monkeypatch.setattr(mod, "_ingested_evidence", exact_evidence)
     monkeypatch.setattr(mod, "_commitment_scan_evidence", no_scan_evidence)
+    monkeypatch.setattr(
+        mod,
+        "_commitment_scan_coverage",
+        pending_coverage,
+    )
 
     targets = mod._commitment_scan_targets([result], mod.date(2026, 9, 5), 1)
 
@@ -651,7 +669,6 @@ def test_exact_commitment_scan_targets_continue_after_peer_failure(
 
     monkeypatch.setattr(mod, "_run_extract", run_extract)
     monkeypatch.setattr(mod, "_commitment_scan_evidence", scan_evidence)
-
     results = mod._run_commitment_scan_targets(tmp_path, targets, dry_run=False)
 
     assert invoked == [("BN", 1135), ("NU", 1136)]
@@ -701,6 +718,9 @@ def test_commitment_scan_disposition_preserves_missing_prerequisite_and_failures
     def scan_evidence(*_args: object) -> object | None:
         return transcript_evidence
 
+    def pending_coverage(*_args: object) -> object:
+        return mod.CommitmentScanCoverage(mod.CommitmentScanCoverageState.NEVER_SCANNED_MISSING)
+
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _q2_2026)
     monkeypatch.setattr(mod, "_transcript_rows_exist", transcript_rows_exist)
     monkeypatch.setattr(
@@ -709,6 +729,11 @@ def test_commitment_scan_disposition_preserves_missing_prerequisite_and_failures
         current_evidence,
     )
     monkeypatch.setattr(mod, "_commitment_scan_evidence", scan_evidence)
+    monkeypatch.setattr(
+        mod,
+        "_commitment_scan_coverage",
+        pending_coverage,
+    )
 
     def persist(**kwargs: Any) -> str:
         persisted.append(kwargs)
@@ -892,63 +917,117 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
 
 
 def test_ingested_and_scan_evidence_share_latest_valid_receipt_binding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     mod = _load_module()
-    from pipeline.commitment_scan_receipts import append_commitment_scan_receipt
+    from pipeline.commitment_scan_receipts import (
+        ObservedTranscriptSegment,
+        append_commitment_scan_receipt,
+        selected_segment_versions,
+    )
 
     processed = tmp_path / "transcripts" / "processed" / "BN_Q2_2026.txt"
     processed.parent.mkdir(parents=True)
     processed.write_text("authorized bound transcript", encoding="utf-8")
     digest = hashlib.sha256(processed.read_bytes()).hexdigest()
-    valid_artifact_json = '{"artifact":"bn-q2-2026-valid"}'
+    idempotency_key = "transcript:" + "1" * 64
+    contract_sha = "2" * 64
+    authorization = {
+        "idempotency_key": idempotency_key,
+        "request": {
+            "canonical_ticker": "BN",
+            "document_type": "earnings_call_transcript",
+            "fiscal_quarter": 2,
+            "fiscal_year": 2026,
+            "provider": "issuer_ir",
+            "source_regime_identity": {"contract_sha256": contract_sha, "regime": "combined"},
+            "source_type": "ir_doc",
+        },
+        "schema_version": "transcript-acquisition-authorization@1",
+        "status": "authorized",
+    }
+    valid_artifact_json = json.dumps(
+        {
+            "authorization": authorization,
+            "canonical_document_path": "transcripts/raw/BN_Q2_2026.txt",
+            "document_id": 7,
+            "schema_version": "authorized-transcript-artifact@1",
+            "source_url": None,
+            "staged": {"sha256": digest, "size_bytes": len(processed.read_bytes())},
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     valid_receipt_id = hashlib.sha256(valid_artifact_json.encode()).hexdigest()
-    db_path = tmp_path / "portfolio.db"
+    db_path = migrated_db(tmp_path / "portfolio.db")
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        CREATE TABLE documents (id INTEGER PRIMARY KEY,ticker TEXT,file_path TEXT,sha256 TEXT);
-        CREATE TABLE transcripts (
-            id INTEGER PRIMARY KEY,document_id INTEGER,ticker TEXT,
-            fiscal_period_type TEXT,period_end TEXT,is_current INTEGER
-        );
-        CREATE TABLE transcript_segments (id INTEGER PRIMARY KEY,transcript_id INTEGER);
-        CREATE TABLE transcript_acquisition_receipts (
-            receipt_id TEXT,document_id INTEGER,canonical_ticker TEXT,fiscal_year INTEGER,
-            fiscal_quarter INTEGER,canonical_document_path TEXT,artifact_sha256 TEXT,
-            provider TEXT,source_type TEXT,document_type TEXT,artifact_json TEXT,recorded_at TEXT
-        );
-        CREATE TABLE commitment_scan_receipts (
-            receipt_id TEXT PRIMARY KEY,transcript_id INTEGER,document_id INTEGER,
-            transcript_acquisition_receipt_id TEXT,transcript_sha256 TEXT,
-            prompt_version TEXT,n_extracted INTEGER,output_manifest_json TEXT,
-            output_manifest_sha256 TEXT,recorded_at TEXT
-        );
-        INSERT INTO documents VALUES (
-            7,'BN','transcripts/processed/BN_Q2_2026.txt','DIGEST'
-        );
-        INSERT INTO transcripts VALUES (1135,7,'BN','Q2','2026-06-30',1);
-        INSERT INTO transcript_segments VALUES (9,1135);
-        INSERT INTO transcript_acquisition_receipts VALUES (
-            'VALID_RECEIPT',NULL,'BN',2026,2,'transcripts/raw/BN_Q2_2026.txt','DIGEST',
-            'issuer_ir','ir_doc','earnings_call_transcript','VALID_ARTIFACT',
-            '2026-09-05T01:00:00Z'
-        );
-        INSERT INTO transcript_acquisition_receipts VALUES (
-            'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
-            NULL,'BN',2026,2,'transcripts/raw/BN_Q2_2026.txt','DIGEST',
-            'issuer_ir','ir_doc','earnings_call_transcript','{}',
-            '2026-09-05T02:00:00Z'
-        );
-        """.replace("DIGEST", digest)
-        .replace("VALID_RECEIPT", valid_receipt_id)
-        .replace("VALID_ARTIFACT", valid_artifact_json)
+    conn.execute(
+        "INSERT INTO documents "
+        "(id,ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
+        "VALUES (7,'BN','ir_doc','ir_transcript',?,?,?,'ok',?)",
+        ("transcripts/processed/BN_Q2_2026.txt", digest, "2026-07-01", len(processed.read_bytes())),
+    )
+    conn.execute(
+        "INSERT INTO transcripts "
+        "(id,document_id,ticker,call_date,fiscal_period_type,period_end,source,is_active,"
+        "is_current,recorded_at) VALUES (1135,7,'BN','2026-07-01','Q2','2026-06-30',"
+        "'issuer_ir',1,1,'2026-07-01')"
+    )
+    conn.execute(
+        "INSERT INTO transcript_segments "
+        "(id,transcript_id,seq,speaker,time_code_start,time_code_end,text) "
+        "VALUES (9,1135,0,'CEO','00:00:00',NULL,'authorized bound transcript')"
+    )
+    for trigger in (
+        "trg_transcript_acquisition_receipts_validate",
+        "trg_transcript_acquisition_receipts_stored_target_binding",
+        "trg_transcript_acquisition_receipts_document_binding",
+    ):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")  # nosec B608 -- test-owned constants
+    conn.execute(
+        "INSERT INTO transcript_acquisition_receipts "
+        "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
+        "canonical_document_path,artifact_sha256,artifact_size_bytes,source_url,provider,"
+        "source_type,document_type,source_regime,source_regime_contract_sha256,"
+        "authorization_json,artifact_json,recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            valid_receipt_id,
+            idempotency_key,
+            7,
+            "BN",
+            2026,
+            2,
+            "transcripts/raw/BN_Q2_2026.txt",
+            digest,
+            len(processed.read_bytes()),
+            None,
+            "issuer_ir",
+            "ir_doc",
+            "earnings_call_transcript",
+            "combined",
+            contract_sha,
+            json.dumps(authorization, sort_keys=True, separators=(",", ":")),
+            valid_artifact_json,
+            "2026-09-05T01:00:00Z",
+        ),
+    )
+    observed = tuple(
+        ObservedTranscriptSegment(
+            source=source,
+            disposition="parsed_no_output",
+            commitment_count=0,
+            indicator_count=0,
+        )
+        for source in selected_segment_versions(conn, 1135)
     )
     scan_receipt = append_commitment_scan_receipt(
         conn,
         transcript_id=1135,
         prompt_version=mod.prompt_version_for("saydo_commitment_extract"),
+        observed_segments=observed,
     )
     conn.commit()
     conn.close()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -53,6 +54,8 @@ from pipeline.kpi_semantic_dispositions import (
 )
 from pipeline.kpi_semantic_scope import scoped_kpi_definitions
 from pipeline.kpi_semantics import semantic_admission_sql
+from pipeline.queries import open_db
+from provenance.financial_fact_resolution import resolve_fact_row
 
 NOW = datetime(2026, 8, 30, 12, tzinfo=UTC)
 
@@ -214,10 +217,133 @@ def test_sol_disposition_judgment_is_bound_to_exact_dry_run_and_code(
     )
 
 
+def _seed_resolved_kpi_fact(conn: sqlite3.Connection) -> None:
+    """Seed one evidence-backed KPI fact through the current capture/resolution path."""
+    stamp = NOW.isoformat()
+    conn.execute("INSERT INTO tenants (id,created_at) VALUES ('owner',?)", (stamp,))
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker,name,list_type,user_id,archived_at) "
+        "VALUES ('NU','Nu Holdings','portfolio','owner',NULL)"
+    )
+    conn.execute(
+        "INSERT INTO documents "
+        "(id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
+        "fetch_status,raw_bytes_size,source_quality_tier) VALUES "
+        "(10,'NU','ir_doc','earnings_release','2024-12-31','ir_documents/NU/q4.pdf',"
+        "?,?, 'ok',1,'fmp_normalized')",
+        ("a" * 64, stamp),
+    )
+    conn.execute(
+        "INSERT INTO issuer_entities (issuer_id,idempotency_key,entity_kind,created_at) "
+        "VALUES ('issuer-nu','issuer:nu','operating_company',?)",
+        (stamp,),
+    )
+    conn.execute(
+        "INSERT INTO evidence_content_blobs "
+        "(sha256,byte_size,media_type,storage_uri,recorded_at) VALUES (?,?,?,?,?)",
+        ("a" * 64, 1, "text/html", "https://example.invalid/nu-q4", stamp),
+    )
+    conn.execute(
+        "INSERT INTO evidence_source_observations "
+        "(observation_id,idempotency_key,source_kind,source_url,blob_sha256,observed_at,"
+        "retrieved_at,retrieval_config_sha256,collector_code_version) VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "source-nu-q4",
+            "source:nu:q4",
+            "ir_document",
+            "https://example.invalid/nu-q4",
+            "a" * 64,
+            stamp,
+            stamp,
+            "b" * 64,
+            "test-v1",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO evidence_document_versions "
+        "(document_version_id,document_key,version_sequence,observation_id,blob_sha256,"
+        "issuer_id,ticker,document_type,form_type,period_end,language,legacy_document_id,"
+        "recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "document-nu-q4",
+            "document:nu:q4",
+            1,
+            "source-nu-q4",
+            "a" * 64,
+            "issuer-nu",
+            "NU",
+            "earnings_release",
+            "earnings_release",
+            "2024-12-31",
+            "en",
+            10,
+            stamp,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO evidence_extraction_runs "
+        "(extraction_run_id,idempotency_key,document_version_id,input_sha256,"
+        "extractor_name,extractor_config_sha256,extractor_code_version,output_sha256,"
+        "started_at,completed_at,outcome) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "run-nu-q4",
+            "run:nu:q4",
+            "document-nu-q4",
+            "a" * 64,
+            "test-extractor",
+            "c" * 64,
+            "test-v1",
+            "d" * 64,
+            stamp,
+            stamp,
+            "succeeded",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO evidence_nodes "
+        "(node_id,evidence_key,revision,extraction_run_id,parent_node_id,supersedes_node_id,"
+        "node_kind,text,locator_json,locator_sha256,recorded_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "root-nu-q4",
+            "root:nu:q4",
+            1,
+            "run-nu-q4",
+            None,
+            None,
+            "document",
+            "NU Q4 2024 earnings release.",
+            None,
+            None,
+            stamp,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+        "VALUES (990001,'NU','Total customers','count','ir_doc')"
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts "
+        "(id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,currency,"
+        "source_doc_id,confidence,extracted_by) "
+        "VALUES (990001,'NU','2024-12-31','Q4',990001,'114200000','count',NULL,10,1.0,'test')"
+    )
+    resolution = resolve_fact_row(
+        conn,
+        fact_table="kpi_facts",
+        fact_row_id=990001,
+        knowledge_cutoff=NOW,
+    )
+    assert resolution is not None
+    assert resolution.resolution_status == "resolved"
+
+
 def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = _db()
+    db_path = migrated_db(tmp_path / "portfolio.db")
+    source = open_db(db_path)
+    _seed_resolved_kpi_fact(source)
     repo = _repo(tmp_path)
     manifest = prepare_kpi_semantic_disposition_manifest(
         source,
@@ -225,16 +351,13 @@ def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mut
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="crash-safe-replay",
-        expected_schema_revision="0036_add_data_coverage_dispositions",
+        expected_schema_revision="0037_commitment_scan_segment_coverage",
         review_bundle_sha256="d" * 64,
         backup_restore_evidence_id="e" * 64,
         knowledge_at=NOW,
     )
     source.commit()
-    db_path = tmp_path / "portfolio.db"
-    persisted = sqlite3.connect(db_path)
-    source.backup(persisted)
-    persisted.close()
+    source.close()
     repo_root = Path(__file__).resolve().parents[1]
     code_sha = repair_executor_code_sha256(repo_root)
     review_bundle = OperationsReviewBundle.model_construct(

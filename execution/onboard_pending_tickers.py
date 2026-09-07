@@ -15,14 +15,10 @@ AND ANY of:
   - 0 rows in dcf_runs                       -> 'no_dcf_run'
     (analysis stage never ran)
   - has extractable transcripts but 0 management_commitments -> 'no_commitments'
-    (commitments never extracted from existing transcripts). "Extractable"
-    mirrors compute.say_do_extractor.transcripts_pending_extraction: at least
-    one transcript with no commitment_scan_log row (a recorded zero-commitment
-    scan is a durable outcome, not a retry candidate), and the ticker has a
-    kpi_definitions catalog (an empty catalog predetermines the extraction to
-    zero commitments). Without those two guards the queue flags tickers the
-    extractor will never target and re-runs a no-op subprocess hourly forever
-    (the 2026-07-16 MELI/AGX/DASH/FIGR eternal-churn).
+    (commitments never extracted from existing transcripts). On the active
+    schema, "extractable" uses the same typed immutable-coverage classifier as
+    the extractor. Legacy/invalid history stays out of automatic work, while a
+    valid changed source or genuinely never-scanned source remains eligible.
 
 Per-ticker work depends on pending_reason:
   - no_instrument_type / no_financial_facts / no_dcf_run:
@@ -37,8 +33,7 @@ Idempotent at every layer:
   - refresh_dcf seeds dcf/<TICKER>.xlsx if missing then re-runs the PV calc;
     skips with status='skipped' for tickers whose holdings JSON lacks WACC,
     leaving the dcf_runs row absent for those (no perpetual write churn).
-  - extract_commitments --auto skips transcripts that already have at least
-    one commitments row
+  - extract_commitments --auto uses the typed immutable scan-coverage state
 
 Recently-IPO'd backoff (apply_ipo_backoff):
   A ticker flagged `recently_ipod: true` in micro_thesis/holdings/<T>.json has
@@ -86,10 +81,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from compute.say_do_extractor import transcripts_without_scan_receipt  # noqa: E402
 from pipeline.cadence_policy import (  # noqa: E402
     ESTIMATED_FMP_CALLS_PER_ONBOARD,
     check_onboarding_budget,
 )
+from pipeline.commitment_scan_receipts import scan_receipt_schema_available  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from provenance.selection import selected_transcripts_relation  # noqa: E402
 from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
@@ -137,10 +134,11 @@ _SCAN_LOG_FILTER = (
 
 
 def _commitments_pending_predicate(conn: sqlite3.Connection, scan_log_exists: bool) -> str:
-    """The no_commitments arm, mirroring the extractor's own target selection
-    (compute.say_do_extractor.transcripts_pending_extraction). Any predicate
-    looser than the extractor's flags tickers whose --auto run returns
-    targets=0, and those churn as hourly no-op subprocesses forever."""
+    """Build the legacy/preliminary SQL no-commitments candidate arm.
+
+    ``find_pending_tickers`` replaces this arm with the shared typed coverage
+    result whenever the active immutable receipt schema is available.
+    """
     scan_filter = _SCAN_LOG_FILTER if scan_log_exists else ""
     transcripts_relation = selected_transcripts_relation(conn).sql
     return f"""(
@@ -211,8 +209,33 @@ def find_pending_tickers(db_path: Path) -> list[tuple[str, str]]:
     """Return [(ticker, pending_reason), ...] for every P+W ticker still missing onboard data."""
     conn = open_db(db_path)
     try:
-        cur = conn.execute(_pending_sql(conn, _scan_log_exists(conn)))
-        return [(row["ticker"], row["pending_reason"]) for row in cur.fetchall()]
+        rows = conn.execute(_pending_sql(conn, _scan_log_exists(conn))).fetchall()
+        if not scan_receipt_schema_available(conn):
+            return [(row["ticker"], row["pending_reason"]) for row in rows]
+
+        scan_tickers = {
+            ticker for _transcript_id, ticker, _period_end in transcripts_without_scan_receipt(conn)
+        }
+        reason_by_ticker = {
+            str(row["ticker"]): str(row["pending_reason"])
+            for row in rows
+            if row["pending_reason"] != _COMMITMENT_ONLY_REASON
+        }
+        ordered_tickers = [
+            str(row["ticker"])
+            for row in conn.execute(
+                f"SELECT ticker FROM tracked_companies "  # nosec B608 -- constant enum SQL
+                f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY added_at,ticker"
+            )
+        ]
+        return [
+            (
+                ticker,
+                reason_by_ticker.get(ticker, _COMMITMENT_ONLY_REASON),
+            )
+            for ticker in ordered_tickers
+            if ticker in reason_by_ticker or ticker in scan_tickers
+        ]
     finally:
         conn.close()
 

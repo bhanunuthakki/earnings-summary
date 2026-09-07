@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0036_add_data_coverage_dispositions"
+_ACTIVE_HEAD = "0037_commitment_scan_segment_coverage"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
