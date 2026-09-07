@@ -201,3 +201,47 @@ def test_apply_uses_writer_sqlite_and_commits_fact_with_coverage(
     assert output["coverage_receipts_created"] == 1
     assert connection_requests == [(SQLiteConnectionRole.WRITER, True)]
     assert _fact_counts(db_path) == (1, 0, 1)
+
+
+def test_apply_cli_parses_and_commits_reviewed_v2_manifest(
+    migrated_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from tests.test_issuer_fact_manifest import build_v2_cli_fixture
+
+    db_path = migrated_db(tmp_path / "manifest-v2-apply.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        manifest = build_v2_cli_fixture(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    manifest_path = tmp_path / "manifest-v2.json"
+    manifest_path.write_text(manifest.model_dump_json(), encoding="utf-8")
+    import pipeline.kpi_source_review as source_review
+    import pipeline.restatement_detector as restatement_detector
+
+    monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+    monkeypatch.setattr(source_review, "require_canonical_kpi_resolution", _noop_resolve)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(Path(cli.__file__).resolve()),
+            "--db",
+            str(db_path),
+            "--manifest",
+            str(manifest_path),
+            "--apply",
+        ],
+    )
+
+    assert cli.main() == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["applied"] is True
+    assert output["definition_revisions_inserted"] == 1
+    assert output["definition_revision_ids"] == ["definition-meli-tpv-r1"]

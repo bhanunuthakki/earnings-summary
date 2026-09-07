@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from datetime import UTC, date, datetime
@@ -26,13 +27,38 @@ from pipeline.issuer_document_coverage import (
     ExtractorFactPopulationFrame,
     IssuerFactKind,
 )
-from pipeline.issuer_fact_manifest import IssuerFactValue, IssuerManifestFactKind
+from pipeline.issuer_fact_manifest import (
+    IssuerFactValue,
+    IssuerManifestFactKind,
+    ReviewedKpiDefinitionCapture,
+)
 from pipeline.issuer_fact_manifest_producer import (
+    ReviewedKpiDefinitionCaptures,
     ReviewedSegmentValues,
     produce_issuer_fact_manifest,
 )
+from pipeline.kpi_definition_revisions import (
+    IssuerKpiDefinitionRevision,
+    KpiCurrencyDisposition,
+    KpiDefinitionLifecycle,
+    KpiDefinitionPeriodKind,
+    KpiDefinitionStatus,
+    KpiDefinitionTextStatus,
+    KpiStockFlowBehavior,
+    KpiUnitFamily,
+)
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+)
 from provenance import secure_file_install as install
+from provenance.evidence_ledger import EvidenceLocator
 
 _STAMP = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
 _PERIOD = date(2026, 6, 30)
@@ -151,6 +177,91 @@ def _frame() -> ExtractorFactPopulationFrame:
     )
 
 
+def _reviewed_captures() -> ReviewedKpiDefinitionCaptures:
+    captures: list[ReviewedKpiDefinitionCapture] = []
+    for index, kpi in enumerate(_legacy().values, start=1):
+        expected = _expected_kpi(index)
+        evidence_locator = EvidenceLocator(slide_number=index)
+        fact_locator = kpi.locator
+        assert isinstance(fact_locator, FactLocator)
+        locator_json = fact_locator.to_json()
+        assert locator_json is not None
+        context = KpiSemanticContext(
+            metric_name_as_reported=kpi.name,
+            reported_period_end=_PERIOD,
+            period_role=KpiPeriodRole.CURRENT,
+            publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+            accounting_basis=KpiAccountingBasis.MANAGEMENT,
+            consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+            dimensions={},
+            unit_scale=KpiUnitScale.MILLIONS,
+            source_value_text=str(index),
+            status=KpiSemanticStatus.ADMITTED,
+        )
+        definition = IssuerKpiDefinitionRevision(
+            kpi_definition_revision_id=f"definition-meli-{index}-r1",
+            idempotency_key=f"definition:meli:{index}:r1",
+            kpi_definition_id=1000 + index,
+            reporting_entity_id="entity-meli",
+            revision=1,
+            status=KpiDefinitionStatus.ADMITTED,
+            lifecycle=KpiDefinitionLifecycle.ACTIVE,
+            reported_label=kpi.name,
+            reported_definition_text=f"Definition for {kpi.name}.",
+            definition_text_status=KpiDefinitionTextStatus.VERBATIM,
+            period_kind=KpiDefinitionPeriodKind.DURATION,
+            stock_flow_behavior=KpiStockFlowBehavior.FLOW,
+            unit_family=KpiUnitFamily.CURRENCY,
+            unit_key=Unit.MILLIONS,
+            unit_scale=KpiUnitScale.MILLIONS,
+            currency_disposition=KpiCurrencyDisposition.EXPLICIT,
+            currency=Currency.USD,
+            accounting_basis=KpiAccountingBasis.MANAGEMENT,
+            consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+            dimensions={},
+            source_document_version_id="document-meli-v1",
+            source_evidence_node_id=f"node-meli-{index}",
+            source_locator=evidence_locator.model_dump(mode="json", exclude_none=True),
+            reviewed_by="owner",
+            effective_at=datetime.combine(_PERIOD, datetime.min.time(), tzinfo=UTC),
+            knowledge_at=_STAMP,
+            recorded_at=_STAMP,
+        )
+        captures.append(
+            ReviewedKpiDefinitionCapture(
+                fact_identity=expected.identity_key,
+                expected_kpi_definition_id=1000 + index,
+                expected_definition_head_id=None,
+                expected_definition_revision=0,
+                evidence_document_version_id="document-meli-v1",
+                evidence_node_id=f"node-meli-{index}",
+                evidence_locator_sha256=evidence_locator.canonical_sha256,
+                fact_locator_sha256=hashlib.sha256(locator_json.encode()).hexdigest(),
+                reviewer="owner",
+                knowledge_at=_STAMP,
+                context=context,
+                definition_revision=definition,
+            )
+        )
+    draft = ReviewedKpiDefinitionCaptures.model_construct(
+        ticker="MELI",
+        source_doc_id=9101,
+        source_doc_sha256=_SOURCE_SHA,
+        period_end=_PERIOD,
+        fiscal_period_type=FiscalPeriodType.Q2,
+        extracted_at=_STAMP,
+        reviewed_by="owner",
+        captures=tuple(captures),
+        content_sha256="0" * 64,
+    )
+    return ReviewedKpiDefinitionCaptures.model_validate(
+        {
+            **draft.model_dump(mode="json"),
+            "content_sha256": hashlib.sha256(draft.canonical_payload_json.encode()).hexdigest(),
+        }
+    )
+
+
 def test_meli_53_kpis_two_segments_and_six_rejections_close_61_expected() -> None:
     manifest = produce_issuer_fact_manifest(_legacy(), _frame(), _segments())
 
@@ -172,6 +283,62 @@ def test_meli_53_kpis_two_segments_and_six_rejections_close_61_expected() -> Non
         ("Commerce", "revenue", "billions", "USD"),
         ("Fintech", "revenue", "billions", "USD"),
     }
+
+
+def test_v2_producer_requires_and_seals_one_reviewed_capture_per_kpi() -> None:
+    reviewed = _reviewed_captures()
+    manifest = produce_issuer_fact_manifest(_legacy(), _frame(), _segments(), reviewed)
+
+    assert manifest.schema_version == "issuer_fact_manifest.v2"
+    assert manifest.reviewed_capture_set_sha256 == reviewed.content_sha256
+    assert len(manifest.reviewed_kpi_definition_captures) == 53
+
+    incomplete = reviewed.model_copy(update={"captures": reviewed.captures[:-1]})
+    incomplete_draft = incomplete.model_copy(update={"content_sha256": "0" * 64})
+    incomplete = incomplete.model_copy(
+        update={
+            "content_sha256": hashlib.sha256(
+                incomplete_draft.canonical_payload_json.encode()
+            ).hexdigest()
+        }
+    )
+    with pytest.raises(ValueError, match="exactly one reviewed definition capture"):
+        produce_issuer_fact_manifest(_legacy(), _frame(), _segments(), incomplete)
+
+
+def test_v2_segment_only_population_preserves_the_existing_segment_contract() -> None:
+    legacy = _legacy().model_copy(update={"values": []})
+    segments = _segments()
+    expected = tuple(value.expected() for value in segments.values)
+    frame = ExtractorFactPopulationFrame(
+        document_id=segments.source_doc_id,
+        ticker=segments.ticker,
+        expected=expected,
+        extracted_at=segments.extracted_at,
+    )
+    draft = ReviewedKpiDefinitionCaptures.model_construct(
+        ticker=segments.ticker,
+        source_doc_id=segments.source_doc_id,
+        source_doc_sha256=segments.source_doc_sha256,
+        period_end=segments.period_end,
+        fiscal_period_type=segments.fiscal_period_type,
+        extracted_at=segments.extracted_at,
+        reviewed_by="owner",
+        captures=(),
+        content_sha256="0" * 64,
+    )
+    reviewed = ReviewedKpiDefinitionCaptures.model_validate(
+        {
+            **draft.model_dump(mode="json"),
+            "content_sha256": hashlib.sha256(draft.canonical_payload_json.encode()).hexdigest(),
+        }
+    )
+
+    manifest = produce_issuer_fact_manifest(legacy, frame, segments, reviewed)
+
+    assert manifest.schema_version == "issuer_fact_manifest.v2"
+    assert manifest.reviewed_kpi_definition_captures == ()
+    assert {value.kind for value in manifest.values} == {IssuerManifestFactKind.SEGMENT}
 
 
 @pytest.mark.parametrize(
@@ -209,7 +376,7 @@ def test_producer_rejects_non_ir_legacy_manifest_before_conversion() -> None:
         produce_issuer_fact_manifest(non_ir, _frame(), _segments())
 
 
-def _cli_inputs(tmp_path: Path) -> tuple[list[str], Path]:
+def _cli_inputs(tmp_path: Path, *, reviewed: bool = False) -> tuple[list[str], Path]:
     legacy_path = tmp_path / "legacy.json"
     frame_path = tmp_path / "frame.json"
     segment_path = tmp_path / "segments.json"
@@ -219,20 +386,21 @@ def _cli_inputs(tmp_path: Path) -> tuple[list[str], Path]:
     )
     frame_path.write_text(_frame().model_dump_json(), encoding="utf-8")
     segment_path.write_text(_segments().model_dump_json(), encoding="utf-8")
-    return (
-        [
-            "produce_issuer_fact_manifest.py",
-            "--legacy-kpi-manifest",
-            str(legacy_path),
-            "--population-frame",
-            str(frame_path),
-            "--segment-values",
-            str(segment_path),
-            "--output",
-            str(output),
-        ],
-        output,
-    )
+    argv = [
+        "produce_issuer_fact_manifest.py",
+        "--legacy-kpi-manifest",
+        str(legacy_path),
+        "--population-frame",
+        str(frame_path),
+        "--segment-values",
+        str(segment_path),
+    ]
+    if reviewed:
+        reviewed_path = tmp_path / "reviewed-captures.json"
+        reviewed_path.write_text(_reviewed_captures().model_dump_json(), encoding="utf-8")
+        argv.extend(["--reviewed-kpi-definition-captures", str(reviewed_path)])
+    argv.extend(["--output", str(output)])
+    return (argv, output)
 
 
 def test_cli_publishes_canonical_output_and_exact_replay_is_deterministic(
@@ -251,6 +419,20 @@ def test_cli_publishes_canonical_output_and_exact_replay_is_deterministic(
     monkeypatch.setattr(sys, "argv", argv)
     assert cli.main() == 0
     assert output.read_text(encoding="utf-8") == rendered
+
+
+def test_cli_emits_v2_only_with_sealed_reviewed_capture_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv, output = _cli_inputs(tmp_path, reviewed=True)
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert cli.main() == 0
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "issuer_fact_manifest.v2"
+    assert payload["reviewed_capture_set_sha256"] == _reviewed_captures().content_sha256
+    assert json.loads(capsys.readouterr().out)["manifest_sha256"]
 
 
 def test_cli_never_exposes_partial_target_while_staged_write_is_incomplete(

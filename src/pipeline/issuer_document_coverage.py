@@ -31,7 +31,7 @@ from provenance.source_coverage import (
 from timeseries.loaders import reader_source_order_sql
 
 if TYPE_CHECKING:
-    from pipeline.issuer_fact_manifest import IssuerFactManifest
+    from pipeline.issuer_fact_manifest import IssuerFactManifestAny
 
 
 class IssuerFactKind(StrEnum):
@@ -281,7 +281,7 @@ class IssuerDocumentCoverageReceipt(_CoverageModel):
 
 def _parse_application_manifest_evidence(
     manifest_json: str, manifest_sha256: str
-) -> IssuerFactManifest:
+) -> IssuerFactManifestAny:
     """Validate canonical issuer-apply evidence without a module-load cycle."""
     if hashlib.sha256(manifest_json.encode("utf-8")).hexdigest() != manifest_sha256:
         raise ValueError("application manifest hash does not match manifest evidence")
@@ -293,10 +293,10 @@ def _parse_application_manifest_evidence(
         raise ValueError("application manifest evidence must be a JSON object")
     # issuer_fact_manifest owns the application model and imports this receipt
     # type. The lazy runtime import keeps that dependency acyclic at load time.
-    from pipeline.issuer_fact_manifest import IssuerFactManifest
+    from pipeline.issuer_fact_manifest import parse_issuer_fact_manifest
 
     try:
-        manifest = IssuerFactManifest.model_validate(cast("dict[str, object]", decoded))
+        manifest = parse_issuer_fact_manifest(cast("dict[str, object]", decoded))
     except ValueError as exc:
         raise ValueError(
             "application manifest evidence must satisfy the typed issuer manifest schema"

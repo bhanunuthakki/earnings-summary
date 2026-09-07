@@ -5,11 +5,12 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
 from credibility.observations import KPI_FACTS, record_restatement_observation
-from models.facts import Currency, FactLocator, Unit
+from models.facts import Currency, FactLocator, FiscalPeriodType, Unit
 from pipeline.kpi_definition_revisions import (
     IssuerKpiDefinitionRevision,
     KpiDefinitionComparabilityRevision,
@@ -17,6 +18,10 @@ from pipeline.kpi_definition_revisions import (
     kpi_definition_revision_by_id,
     persist_kpi_definition_comparability_revision,
     persist_kpi_definition_revision,
+)
+from pipeline.kpi_persistence import (
+    ExactDefinitionPersistResult,
+    persist_kpi_value_at_exact_definition,
 )
 from pipeline.kpi_semantics import KpiSemanticContext, persist_kpi_semantic_context
 from provenance.financial_fact_resolution import require_exact_canonical_fact_row
@@ -139,6 +144,111 @@ def _persist_definition_capture(
             raise ValueError("comparability capture must relate the captured definition")
         _ = persist_kpi_definition_comparability_revision(conn, relation)
     return binding_id
+
+
+@dataclass(frozen=True, slots=True)
+class SourceReviewedKpiCaptureResult:
+    """Measured durable effects of one reviewed batch-capture attempt."""
+
+    fact_id: int
+    fact_inserted: bool
+    semantic_context_inserted: bool
+    definition_revision_inserted: bool
+    comparability_revisions_inserted: int
+    definition_revision_id: str
+
+
+def insert_source_reviewed_kpi_capture(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: FiscalPeriodType,
+    source_doc_id: int,
+    kpi_definition_id: int,
+    expected_definition_name: str,
+    value: Decimal,
+    unit: Unit,
+    currency: Currency | None,
+    locator: FactLocator,
+    source_excerpt: str | None,
+    reviewer: str,
+    knowledge_at: datetime,
+    context: KpiSemanticContext,
+    definition_revision: IssuerKpiDefinitionRevision,
+    comparability_revisions: Sequence[KpiDefinitionComparabilityRevision],
+    expected_definition_head_id: str | None,
+    expected_definition_revision: int,
+) -> SourceReviewedKpiCaptureResult:
+    """Atomically insert one reviewed batch fact at its exact registry root."""
+
+    if knowledge_at.tzinfo is None:
+        raise ValueError("source-reviewed KPI knowledge_at must be timezone-aware")
+    if definition_revision.reviewed_by != reviewer:
+        raise ValueError("source-reviewed KPI reviewer must match its definition")
+    if (
+        definition_revision.knowledge_at > knowledge_at
+        or definition_revision.recorded_at > knowledge_at
+    ):
+        raise ValueError("fact review cannot predate its definition revision")
+    with _source_review_transaction(conn):
+        prior_definition = kpi_definition_revision_by_id(
+            conn,
+            kpi_definition_revision_id=definition_revision.kpi_definition_revision_id,
+        )
+        prior_relation_ids = {
+            relation.comparability_revision_id
+            for relation in comparability_revisions
+            if conn.execute(
+                "SELECT 1 FROM kpi_definition_comparability_revisions "
+                "WHERE comparability_revision_id=?",
+                (relation.comparability_revision_id,),
+            ).fetchone()
+            is not None
+        }
+        binding_id = _persist_definition_capture(
+            conn,
+            kpi_definition_id=kpi_definition_id,
+            definition_revision=definition_revision,
+            expected_definition_head_id=expected_definition_head_id,
+            expected_definition_revision=expected_definition_revision,
+            comparability_revisions=comparability_revisions,
+        )
+        fact_result: ExactDefinitionPersistResult = persist_kpi_value_at_exact_definition(
+            conn,
+            ticker=ticker,
+            period_end=period_end,
+            fiscal_period_type=fiscal_period_type,
+            source_doc_id=source_doc_id,
+            kpi_definition_id=kpi_definition_id,
+            expected_definition_name=expected_definition_name,
+            value=value,
+            unit=unit,
+            currency=currency,
+            locator=locator,
+            source_excerpt=source_excerpt,
+            context=context,
+            reviewed_by=reviewer,
+            knowledge_at=knowledge_at,
+            kpi_definition_revision_id=binding_id,
+            extracted_by=f"source_review:{reviewer}:issuer_manifest_v2",
+        )
+        require_canonical_kpi_resolution(
+            conn,
+            fact_row_id=fact_result.fact_id,
+            knowledge_cutoff=knowledge_at,
+        )
+        return SourceReviewedKpiCaptureResult(
+            fact_id=fact_result.fact_id,
+            fact_inserted=fact_result.inserted,
+            semantic_context_inserted=fact_result.semantic_context_inserted,
+            definition_revision_inserted=prior_definition is None,
+            comparability_revisions_inserted=sum(
+                relation.comparability_revision_id not in prior_relation_ids
+                for relation in comparability_revisions
+            ),
+            definition_revision_id=binding_id,
+        )
 
 
 def bind_source_reviewed_kpi_definition(

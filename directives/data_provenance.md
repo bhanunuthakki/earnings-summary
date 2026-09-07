@@ -89,6 +89,20 @@ During this transition, bind-existing source review reads the legacy KPI row onl
 registry root and exact no-successor head. This two-read guard retires when source-reviewed binding
 uses the immutable canonical projection for both identity and head validation.
 
+`issuer_fact_manifest.v2` is the batch capture route for the same reviewed authority. Its offline
+producer consumes a sealed `reviewed_kpi_definition_captures.v1` artifact and never reads or
+guesses database state. Every admitted KPI carries its exact fact identity, source document
+version, evidence node and locator hashes, expected registry root and exact definition head (or
+explicit no-head state), semantic context, definition revision, and direct comparability decisions.
+Application revalidates those commitments inside the write transaction and persists the definition,
+relations, fact, bound context, segments, and completeness receipt atomically. Replay verifies the
+complete durable commitment and reports only rows inserted by that attempt. Version 1 manifest
+bytes and hashes remain unchanged and its KPI contexts are explicitly null-bound (`legacy_unbound`).
+
+Generic extraction, FMP-derived KPI persistence, and semantic-disposition writers explicitly write
+null definition bindings. Direct legacy fact writers remain outside this batch slice and receive no
+authority to mint issuer-definition revisions; the later writer-retirement work owns their routing.
+
 ### 2.2 Fiscal-period stamping drift (off-cycle-FYE issuers)
 
 `(ticker, period_end)` matching (used by `src/provenance/llm_extracted_parent.py::resolve_parent` and any other exact-date join across `documents`) is only reliable if every ingestion path stamps `period_end` on the **same fiscal calendar** for a given ticker. Multiple independent modules each hardcode their own per-ticker "which tickers have a non-December fiscal year end" override table, keyed off filename conventions like `<TICKER>_Q<N>_<YYYY>` — and those tables can drift out of sync, silently mis-stamping `period_end` for tickers missing from one table but present in another. This is **not** the same failure mode as a genuinely-missing source document (§2's `parent_document_id` can legitimately stay NULL when no primary doc was ever fetched) — it produces an *orphan that looks unresolvable but has a perfectly good source sitting one calendar-quarter away*.

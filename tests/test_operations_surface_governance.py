@@ -56,3 +56,15 @@ def test_pull_request_template_requires_one_operations_impact_disposition() -> N
     assert "Existing dynamic projection remains truthful" in template
     assert "Surface/registry/freshness/action contract updated" in template
     assert "Select exactly one" in template
+
+
+def test_issuer_fact_manifest_v2_has_an_explicit_no_surface_change_disposition() -> None:
+    directive = (PROJECT_ROOT / "directives" / "operations_governance_surface.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "`issuer_fact_manifest.v2`" in directive
+    assert "canonical Operations registry" in " ".join(directive.split())
+    assert (
+        "no scheduled job, managed service, runtime-health claim, or operator control" in directive
+    )

@@ -7,6 +7,7 @@ SQLite, and it writes facts plus the coverage receipt in one transaction.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -16,8 +17,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from pipeline.issuer_fact_manifest import (  # noqa: E402
-    IssuerFactManifest,
     apply_issuer_fact_manifest,
+    parse_issuer_fact_manifest,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -32,7 +33,7 @@ def main() -> int:
         help="Persist facts and the coverage receipt; omitted means validation-only",
     )
     args = parser.parse_args()
-    manifest = IssuerFactManifest.model_validate_json(args.manifest.read_text(encoding="utf-8"))
+    manifest = parse_issuer_fact_manifest(json.loads(args.manifest.read_text(encoding="utf-8")))
     role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
     conn = connect_sqlite(
         args.db,

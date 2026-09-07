@@ -108,6 +108,7 @@ def _create_schema(conn: sqlite3.Connection, *, legacy_logical_unique: bool = Fa
             reason_code TEXT,
             reviewed_by TEXT NOT NULL,
             knowledge_at TEXT NOT NULL,
+            kpi_definition_revision_id TEXT,
             UNIQUE(kpi_fact_id, revision)
         );
         CREATE TABLE validation_issues (
@@ -293,6 +294,41 @@ def test_persist_manifest_dedupes_on_rerun(conn: sqlite3.Connection) -> None:
     second = persist_manifest(conn, run_id="r2", manifest=manifest)
     assert second.inserted == 0
     assert second.skipped_existing == 1
+
+
+def test_generic_manifest_replay_explicitly_clears_reviewed_definition_binding(
+    conn: sqlite3.Connection,
+) -> None:
+    manifest = KpiExtractionManifest(
+        ticker="MELI",
+        period_end=datetime(2024, 12, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=42,
+        primary_source=SourceType.IR_DOC,
+        values=[
+            KpiValue(
+                name="OpMargin",
+                value=Decimal("13.5"),
+                unit=Unit.PERCENT,
+                locator=_NO_LOCATOR,
+            )
+        ],
+    )
+    assert persist_manifest(conn, run_id="generic-first", manifest=manifest).inserted == 1
+    conn.execute(
+        "UPDATE kpi_fact_semantic_contexts SET kpi_definition_revision_id='reviewed-definition-r1'"
+    )
+
+    assert persist_manifest(conn, run_id="generic-replay", manifest=manifest).skipped_existing == 1
+
+    heads = conn.execute(
+        "SELECT revision,kpi_definition_revision_id FROM kpi_fact_semantic_contexts "
+        "ORDER BY revision"
+    ).fetchall()
+    assert [tuple(row) for row in heads] == [
+        (1, "reviewed-definition-r1"),
+        (2, None),
+    ]
 
 
 def test_persist_manifest_emits_validation_issue_on_out_of_range(conn: sqlite3.Connection) -> None:

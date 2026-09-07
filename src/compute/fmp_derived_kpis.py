@@ -1418,6 +1418,7 @@ def persist_derived_kpis(
                 kpi_fact_id=new_id,
                 context=_derived_semantic_context(row, tier_by_doc=tier_by_doc),
                 reviewed_by=f"deterministic:{extracted_by}",
+                kpi_definition_revision_id=None,
             )
         # L10: capture the restatement instead of discarding superseded_id.
         if superseded_id is not None:
