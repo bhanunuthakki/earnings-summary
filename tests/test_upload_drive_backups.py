@@ -11,10 +11,10 @@ import upload_drive_backups as uploader  # noqa: E402
 
 
 class Call:
-    def __init__(self, result: Any = None) -> None:
-        self.result = result or {}
+    def __init__(self, result: dict[str, Any] | None = None) -> None:
+        self.result: dict[str, Any] = result or {}
 
-    def execute(self) -> Any:
+    def execute(self) -> dict[str, Any]:
         return self.result
 
 
@@ -35,7 +35,9 @@ class Files:
         del kwargs
         return Call({"files": list(self.items)})
 
-    def create(self, *, body: dict[str, Any], media_body: Any = None, fields: str) -> Any:
+    def create(
+        self, *, body: dict[str, Any], media_body: Media | None = None, fields: str
+    ) -> Call | UploadCall:
         del fields
         item = {"id": f"id-{len(self.items)}", **body}
         if media_body is None:
@@ -46,7 +48,7 @@ class Files:
         return UploadCall(item)
 
     def update(
-        self, *, body: dict[str, Any], media_body: Any, fields: str, **kwargs: Any
+        self, *, body: dict[str, Any], media_body: Media, fields: str, **kwargs: Any
     ) -> UploadCall:
         del fields
         file_id = str(kwargs["fileId"])
@@ -76,11 +78,16 @@ class Media:
         self.path = path
 
 
+def fake_media_upload(path: str | Path, **kwargs: Any) -> Media:
+    del kwargs
+    return Media(str(path))
+
+
 def test_upload_is_idempotent_and_prunes_only_owned_set(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(
         uploader,
         "media_file_upload",
-        lambda path, **_kwargs: Media(str(path)),
+        fake_media_upload,
     )
     drive = Drive()
     folder = uploader.ensure_folder_path(drive, ["Windows headless backups", "portfolio"])
