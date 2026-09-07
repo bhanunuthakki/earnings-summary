@@ -123,6 +123,23 @@ class FactResolutionResult(_CutoverModel):
     created: bool
 
 
+class CanonicalKpiFactPayload(_CutoverModel):
+    """Exact durable KPI payload selected by the canonical fact resolver."""
+
+    fact_row_id: int = Field(gt=0)
+    ticker: str
+    period_end: str
+    fiscal_period_type: str
+    kpi_definition_id: int = Field(gt=0)
+    value: Decimal
+    unit: str
+    currency: str | None
+    source_document_id: int = Field(gt=0)
+    extracted_by: str | None
+    locator_json: str | None
+    source_excerpt: str | None
+
+
 class GovernedDocumentFactAdmission(_CutoverModel):
     """Canonical proof that one exact evidence-backed document owns admitted facts."""
 
@@ -852,6 +869,45 @@ def require_exact_canonical_fact_row(
         ):
             raise RuntimeError(f"{fact_table}.id {fact_row_id} is absent from canonical facts")
     return result
+
+
+def require_exact_canonical_kpi_fact_payload(
+    conn: sqlite3.Connection,
+    *,
+    fact_row_id: int,
+    knowledge_cutoff: datetime,
+) -> CanonicalKpiFactPayload:
+    """Resolve one exact KPI row and return its canonical durable payload."""
+
+    _ = require_exact_canonical_fact_row(
+        conn,
+        fact_table="kpi_facts",
+        fact_row_id=fact_row_id,
+        knowledge_cutoff=knowledge_cutoff,
+    )
+    canonical = canonical_fact_relation(conn, "kpi_facts")
+    row = conn.execute(
+        f"SELECT id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"  # nosec B608 -- resolver-owned relation
+        f"currency,source_doc_id,extracted_by,locator,source_excerpt FROM {canonical.sql} "  # nosec B608 -- resolver-owned relation
+        "WHERE id=?",
+        (fact_row_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"kpi_facts.id {fact_row_id} is absent from canonical facts")
+    return CanonicalKpiFactPayload(
+        fact_row_id=int(row["id"]),
+        ticker=str(row["ticker"]),
+        period_end=str(row["period_end"]),
+        fiscal_period_type=str(row["fiscal_period_type"]),
+        kpi_definition_id=int(row["kpi_definition_id"]),
+        value=Decimal(str(row["value"])),
+        unit=str(row["unit"]),
+        currency=None if row["currency"] is None else str(row["currency"]),
+        source_document_id=int(row["source_doc_id"]),
+        extracted_by=None if row["extracted_by"] is None else str(row["extracted_by"]),
+        locator_json=None if row["locator"] is None else str(row["locator"]),
+        source_excerpt=(None if row["source_excerpt"] is None else str(row["source_excerpt"])),
+    )
 
 
 def capture_fact_row_observation(
