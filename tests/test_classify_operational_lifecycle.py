@@ -1156,7 +1156,16 @@ def test_inventory_holds_when_revision_changes_during_collection(
         manifest = canonical_loader(root)
         _w(repo / "execution/late.py", "if __name__ == '__main__':\n    pass\n")
         _git(repo, "add", "execution/late.py")
-        _git(repo, "commit", "-m", "inject collection race")
+        _git(
+            repo,
+            "-c",
+            "user.name=F",
+            "-c",
+            "user.email=f@x.invalid",
+            "commit",
+            "-m",
+            "inject collection race",
+        )
         return manifest
 
     monkeypatch.setattr(lifecycle_inventory_module, "load_task_manifest", load_after_commit)
