@@ -214,7 +214,7 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
     receipts = receipt.legacy_route_golden
 
     assert len(receipts) == 24
-    assert sum(receipt.cases for receipt in receipts) == 288
+    assert sum(receipt.cases for receipt in receipts) == 296
     assert (
         next(
             receipt.cases

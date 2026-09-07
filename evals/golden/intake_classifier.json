@@ -1,6 +1,6 @@
 {
   "purpose": "intake_classifier",
-  "notes": "Mode-A golden set for classify_intake_document (llm_evals_plan PR 4). Each case carries the function's three inputs (filename, text excerpt, filename hint); expected pins ticker + doc_type + period_end. confidence/reasoning are free. Deterministic field compare — doc_type comes from a closed enum, period_end from the prompt's own fiscal mapping.",
+  "notes": "Mode-A golden set for classify_intake_document (llm_evals_plan PR 4). Each case carries the function's three inputs (filename, text excerpt, filename hint); expected pins ticker + doc_type + period_end. confidence/reasoning are free. Deterministic field compare — doc_type comes from a closed enum, period_end from the prompt's own fiscal mapping. ic-005 and ic-006 are synthetic contract fixtures for a conflicting filename hint and an explicit Veeva fiscal-year boundary.",
   "cases": [
     {
       "id": "ic-001-press-release",
@@ -29,6 +29,20 @@
       "hint": {},
       "text": "Alphabet Investor Day 2026\nMountain View — April 9, 2026\n\nSlide 2: Our multi-year framework\n- Search: AI Overviews monetization at scale\n- Cloud: path to $100B+ annual run-rate\n- Capital allocation: disciplined capex envelope of $90-95B\n\nSlide 3: Gemini across every surface\n[chart: tokens served per day, 2024-2026]\n\nSlide 4: Waymo expansion roadmap — 15 new metros by 2027\n\nSlide 5: Long-term operating margin framework",
       "expected": {"ticker": "GOOG", "doc_type": "ir_event", "period_end": "2026-04-09"}
+    },
+    {
+      "id": "ic-005-text-overrides-wrong-hint",
+      "filename": "NU_Q2_2025_results.pdf",
+      "hint": {"ticker": "NU", "quarter": 2, "year": 2025},
+      "text": "MercadoLibre, Inc. Reports Second Quarter 2025 Financial Results\n\nBuenos Aires, August 7, 2025 — MercadoLibre, Inc. (NASDAQ: MELI) announced results for the quarter ended June 30, 2025. Revenue and gross merchandise volume increased year over year.\n\nSecond Quarter 2025 Highlights:\n- Marketplace and fintech operations both grew during the quarter.",
+      "expected": {"ticker": "MELI", "doc_type": "ir_press_release", "period_end": "2025-06-30"}
+    },
+    {
+      "id": "ic-006-veeva-fiscal-year-end",
+      "filename": "veeva_q4_fy2026_results.pdf",
+      "hint": {},
+      "text": "Veeva Systems Inc. Announces Fourth Quarter Fiscal 2026 Financial Results\n\nPleasanton, California, March 11, 2026 — Veeva Systems (NYSE: VEEV) reported results for the fourth quarter of fiscal 2026, ended January 31, 2026. Revenue grew year over year and the company provided an outlook for fiscal 2027.\n\nFourth Quarter Fiscal 2026 Highlights:\n- Subscription services remained the primary source of revenue.",
+      "expected": {"ticker": "VEEV", "doc_type": "ir_press_release", "period_end": "2026-01-31"}
     }
   ]
 }
