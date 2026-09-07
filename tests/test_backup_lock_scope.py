@@ -105,6 +105,7 @@ def test_scheduler_backup_publishes_encrypted_artifacts_headlessly() -> None:
     text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace")
 
     assert "execution\\upload_drive_backups.py" in text
+    assert 'if "%BACKUP_DIR:~-1%"=="\\" set "BACKUP_DIR=%BACKUP_DIR:~0,-1%"' in text
     assert '--pattern "portfolio.db.*.gz.enc"' in text
     assert '--backup-set "portfolio-db" --retain 14 --latest-only' in text
     assert '--backup-set "portfolio-gc-archive" --retain 6 --allow-empty --latest-only' in text

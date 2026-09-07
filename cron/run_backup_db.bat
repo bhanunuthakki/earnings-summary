@@ -67,6 +67,10 @@ REM or an interactive Windows session. Routine runs upload only the newest immut
 REM artifact in each backup set; activation seeds the retained history once.
 :upload
 for %%I in ("%BACKUP_RECEIPT%") do set "BACKUP_DIR=%%~dpI"
+REM Python's Windows argv parser treats a trailing backslash before a closing
+REM quote as escaping that quote. Strip the separator so later options remain
+REM distinct arguments.
+if "%BACKUP_DIR:~-1%"=="\" set "BACKUP_DIR=%BACKUP_DIR:~0,-1%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "backup-drive-upload" "backup-drive-upload" execution\upload_drive_backups.py --source-dir "%BACKUP_DIR%" --pattern "portfolio.db.*.gz.enc" --folder "earnings-summary-db-backups" --backup-set "portfolio-db" --retain 14 --latest-only >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto done
