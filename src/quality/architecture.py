@@ -22,6 +22,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from quality.git_env import clean_local_git_env
+
 SCHEMA_VERSION = "architecture-measurement-v1"
 SOURCE_ROOTS = ("src/", "execution/")
 COMPOSITION_ROOTS = {
@@ -98,6 +100,7 @@ def _run(repo_root: Path, *args: str) -> str:
         check=False,
         capture_output=True,
         text=True,
+        env=clean_local_git_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(f"command failed ({args[0]} exit {result.returncode})")
@@ -110,6 +113,7 @@ def tracked_python_paths(repo_root: Path) -> tuple[str, ...]:
         cwd=repo_root,
         check=False,
         capture_output=True,
+        env=clean_local_git_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(f"git ls-files failed (exit {result.returncode})")
@@ -127,6 +131,7 @@ def _revision_sources(repo_root: Path, revision: str) -> dict[str, str]:
         cwd=repo_root,
         check=False,
         capture_output=True,
+        env=clean_local_git_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(f"git archive failed (exit {result.returncode})")
@@ -140,6 +145,20 @@ def _revision_sources(repo_root: Path, revision: str) -> dict[str, str]:
                 raise RuntimeError(f"git archive member is unreadable: {member.name}")
             sources[member.name] = extracted.read().decode("utf-8")
     return dict(sorted(sources.items()))
+
+
+def _source_sha256(sources: dict[str, str]) -> str:
+    digest = hashlib.sha256()
+    for path, source in sources.items():
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(source.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def source_sha256_for_revision(repo_root: Path, revision: str) -> str:
+    """Hash exact revision sources with the canonical receipt algorithm."""
+    return _source_sha256(_revision_sources(repo_root, revision))
 
 
 def _module_name(path: str) -> str:
@@ -397,13 +416,10 @@ def build_architecture_receipt(repo_root: Path, revision: str) -> ArchitectureRe
     if revision == "WORKTREE":
         paths = tracked_python_paths(repo_root)
         sources = {path: (repo_root / path).read_text(encoding="utf-8") for path in paths}
+        source_sha = _source_sha256(sources)
     else:
         sources = _revision_sources(repo_root, revision)
-    source_hasher = hashlib.sha256()
-    for path, source in sources.items():
-        source_hasher.update(path.encode("utf-8"))
-        source_hasher.update(b"\0")
-        source_hasher.update(source.encode("utf-8"))
+        source_sha = source_sha256_for_revision(repo_root, revision)
     scoped_commit = _run(
         repo_root, "git", "rev-parse", "HEAD" if revision == "WORKTREE" else revision
     ).strip()
@@ -412,7 +428,7 @@ def build_architecture_receipt(repo_root: Path, revision: str) -> ArchitectureRe
         scoped_revision=revision,
         scoped_commit=scoped_commit,
         scanner_sha256=scanner_hash,
-        source_sha256=source_hasher.hexdigest(),
+        source_sha256=source_sha,
         python_version=sys.version.split()[0],
         ast_version=f"python-{sys.version_info.major}.{sys.version_info.minor}",
         definitions={
