@@ -43,7 +43,7 @@ edge unknown and closure at `HOLD`.
 
 At this slice's source state, collection is `COMPLETE`, all 137 production
 unknown edges have reviewed dispositions, and production closure is `PASS`.
-The remaining 88 unknown edges comprise 87 test or instruction-test edges and
+The remaining 91 unknown edges comprise 90 test or instruction-test edges and
 one non-production-reachable source edge in `src/search/fact_projection.py`.
 They stay visible and cannot be traversed as reachability proof. A successful
 CLI exit still proves collection completion only. Reachability closure does not

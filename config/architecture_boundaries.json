@@ -331,6 +331,7 @@
     "execution/scan_ir_transcripts.py",
     "execution/schedule_pre_earnings_refresh.py",
     "execution/score_advisor_stances.py",
+    "execution/score_code_quality.py",
     "execution/seal_archive_generation.py",
     "execution/seed_entity_graph.py",
     "execution/seed_kpi_definitions.py",

@@ -181,7 +181,7 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    assert len(graph.unknown_edges) == 88
+    assert len(graph.unknown_edges) == 91
     assert [(edge.source, edge.line, edge.kind, edge.target) for edge in residual_source_edges] == [
         ("src/search/fact_projection.py", 1945, "getattr", "<dynamic attribute>")
     ]
