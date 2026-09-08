@@ -26,6 +26,7 @@ from compute.kpi_resolver import (
     KpiRevisionSeriesExclusionReason,
     KpiRevisionSeriesStatus,
     resolve_revision_aware_kpi_series,
+    revision_aware_kpi_schema_blockers,
     semantic_series_identity_sql,
 )
 from pipeline.kpi_semantics import semantic_admission_sql
@@ -513,9 +514,77 @@ def _schema_blockers(conn: sqlite3.Connection) -> tuple[str, ...]:
     }
     blockers: list[str] = []
     for table, columns in required.items():
-        if not _required_columns_available(conn, table, columns):
-            blockers.append(f"required_schema_unavailable:{table}")
-    return tuple(blockers)
+        observed = _table_columns(conn, table)
+        if not observed:
+            blockers.append(f"required_authority_unavailable:{table}")
+            continue
+        blockers.extend(
+            f"required_column_unavailable:{table}:{column}" for column in sorted(columns - observed)
+        )
+    if blockers:
+        return tuple(sorted(set(blockers)))
+
+    current_view = "v_kpi_facts_resolved_current"
+    current_view_type = _schema_object_type(conn, current_view)
+    has_resolution_ledger = _schema_object_type(conn, "fact_observation_revisions") == "table"
+    if has_resolution_ledger and current_view_type != "view":
+        blockers.append(f"required_authority_unavailable:{current_view}")
+    elif current_view_type == "view":
+        try:
+            current_columns = _table_columns(conn, current_view)
+        except sqlite3.OperationalError:
+            # SQLite resolves a view's dependencies during this PRAGMA.  Keep a
+            # broken canonical authority inside the typed unavailable receipt;
+            # errors from later population queries remain visible.
+            blockers.append(f"required_authority_invalid:{current_view}")
+        else:
+            blockers.extend(
+                f"required_column_unavailable:{current_view}:{column}"
+                for column in sorted(
+                    {"id", "ticker", "period_end", "kpi_definition_id"} - current_columns
+                )
+            )
+
+    semantic_table = "kpi_fact_semantic_contexts"
+    if _schema_object_type(conn, semantic_table) != "table":
+        blockers.append(f"required_authority_unavailable:{semantic_table}")
+    else:
+        semantic_columns = _table_columns(conn, semantic_table)
+        semantic_read_columns = {
+            "id",
+            "kpi_fact_id",
+            "revision",
+            "supersedes_context_id",
+            "metric_name_as_reported",
+            "accounting_basis",
+            "consolidation_scope",
+            "dimensions_json",
+            "unit_scale",
+            "status",
+            "publication_lane",
+            "knowledge_at",
+            "created_at",
+            "kpi_definition_revision_id",
+        }
+        blockers.extend(
+            f"required_column_unavailable:{semantic_table}:{column}"
+            for column in sorted(semantic_read_columns - semantic_columns)
+        )
+
+    blockers.extend(revision_aware_kpi_schema_blockers(conn))
+    return tuple(sorted(set(blockers)))
+
+
+def _schema_object_type(conn: sqlite3.Connection, name: str) -> str | None:
+    row = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name=? AND type IN ('table','view')",
+        (name,),
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
+    return frozenset(str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
 def _required_columns_available(

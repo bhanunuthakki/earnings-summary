@@ -229,6 +229,36 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
     return frozenset(str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
+def revision_aware_kpi_schema_blockers(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Describe an incomplete definition-revision read surface without querying it.
+
+    A database with no definition-revision table is the resolver's intentional
+    ``legacy_unbound`` path.  Once that table exists, every revision surface
+    below is required before the resolver can attribute a population.
+    """
+
+    definition_columns = _table_columns(conn, "kpi_definition_revisions")
+    if not definition_columns:
+        return ()
+    required = {
+        "kpi_definition_revisions": _REVISION_DEFINITION_COLUMNS,
+        "kpi_definition_comparability_revisions": _REVISION_COMPARABILITY_COLUMNS,
+        "kpi_fact_semantic_contexts": _REVISION_CONTEXT_COLUMNS,
+        "kpi_facts": _REVISION_FACT_COLUMNS,
+    }
+    blockers: list[str] = []
+    for table, required_columns in required.items():
+        observed_columns = _table_columns(conn, table)
+        if not observed_columns:
+            blockers.append(f"required_authority_unavailable:{table}")
+            continue
+        blockers.extend(
+            f"required_column_unavailable:{table}:{column}"
+            for column in sorted(required_columns - observed_columns)
+        )
+    return tuple(blockers)
+
+
 def _database_datetime(value: object) -> datetime:
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed

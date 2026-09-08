@@ -2044,3 +2044,144 @@ def test_shadow_census_distinguishes_observed_roster_from_unavailable_fact_schem
     assert "ROSTER" in result.active_portfolio_tickers
     assert result.population_observation_status == "unavailable"
     assert "active_portfolio_roster_empty" not in result.deterministic_blocking_reasons
+
+
+def test_shadow_census_reports_missing_current_fact_authority_as_unavailable(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = migrated_db(tmp_path / "shadow-census-missing-current-view.db")
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies(ticker,name,list_type,archived_at) "
+            "VALUES ('ROSTER','Roster Corp','portfolio',NULL)"
+        )
+        conn.execute(
+            "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) "
+            "VALUES ('ROSTER','Roster KPI','count','ir_doc')"
+        )
+        conn.execute("DROP VIEW v_kpi_facts_resolved_current")
+        conn.commit()
+        conn.execute("BEGIN")
+        original_row_factory = conn.row_factory
+
+        result = audit_kpi_revision_shadow_census(
+            conn,
+            effective_at=NOW,
+            known_at=NOW,
+            evaluated_at=NOW,
+            snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+        )
+
+        assert conn.in_transaction
+        assert conn.row_factory is original_row_factory
+        assert result.roster_observation_status == "observed"
+        assert result.active_portfolio_tickers == ("ROSTER",)
+        assert result.population_observation_status == "unavailable"
+        assert result.series == ()
+        assert result.deterministic_readiness is KpiRevisionCensusReadiness.BLOCKED
+        assert (
+            "required_authority_unavailable:v_kpi_facts_resolved_current"
+            in result.deterministic_blocking_reasons
+        )
+        assert result.activation_state == "hold"
+        assert result.receipt_sha256
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+
+
+def test_shadow_census_reports_partial_semantic_context_schema_as_unavailable(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = migrated_db(tmp_path / "shadow-census-partial-semantic-context.db")
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies(ticker,name,list_type,archived_at) "
+            "VALUES ('ROSTER','Roster Corp','portfolio',NULL)"
+        )
+        conn.execute(
+            "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) "
+            "VALUES ('ROSTER','Roster KPI','count','ir_doc')"
+        )
+        conn.execute("DROP TABLE kpi_fact_semantic_contexts")
+        conn.execute("CREATE TABLE kpi_fact_semantic_contexts(id INTEGER,kpi_fact_id INTEGER)")
+        conn.commit()
+        conn.execute("BEGIN")
+        original_row_factory = conn.row_factory
+
+        result = audit_kpi_revision_shadow_census(
+            conn,
+            effective_at=NOW,
+            known_at=NOW,
+            evaluated_at=NOW,
+            snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+        )
+
+        assert conn.in_transaction
+        assert conn.row_factory is original_row_factory
+        assert result.roster_observation_status == "observed"
+        assert result.active_portfolio_tickers == ("ROSTER",)
+        assert result.population_observation_status == "unavailable"
+        assert result.series == ()
+        assert result.deterministic_readiness is KpiRevisionCensusReadiness.BLOCKED
+        assert (
+            "required_column_unavailable:kpi_fact_semantic_contexts:status"
+            in result.deterministic_blocking_reasons
+        )
+        assert result.activation_state == "hold"
+        assert result.receipt_sha256
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+
+
+def test_shadow_census_reports_invalid_current_fact_view_as_unavailable(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = migrated_db(tmp_path / "shadow-census-invalid-current-view.db")
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies(ticker,name,list_type,archived_at) "
+            "VALUES ('ROSTER','Roster Corp','portfolio',NULL)"
+        )
+        conn.execute("DROP VIEW v_observation_resolution_current")
+        conn.commit()
+        conn.execute("BEGIN")
+        original_row_factory = conn.row_factory
+
+        result = audit_kpi_revision_shadow_census(
+            conn,
+            effective_at=NOW,
+            known_at=NOW,
+            evaluated_at=NOW,
+            snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+        )
+
+        assert conn.in_transaction
+        assert conn.row_factory is original_row_factory
+        assert result.roster_observation_status == "observed"
+        assert result.active_portfolio_tickers == ("ROSTER",)
+        assert result.population_observation_status == "unavailable"
+        assert result.series == ()
+        assert result.deterministic_readiness is KpiRevisionCensusReadiness.BLOCKED
+        assert (
+            "required_authority_invalid:v_kpi_facts_resolved_current"
+            in result.deterministic_blocking_reasons
+        )
+        assert result.activation_state == "hold"
+        assert result.receipt_sha256
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
