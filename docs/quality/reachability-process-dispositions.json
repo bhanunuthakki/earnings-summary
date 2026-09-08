@@ -688,6 +688,16 @@
       ]
     },
     {
+      "disposition": "closed_command_set",
+      "evidence": "_default_runner executes the immutable argv declared by the typed evidence artifact registry and fixed git metadata probes used to bind dependency context to the subject.",
+      "fingerprint": "a5ac9e4a92282feba248c54d2e4898f2fe0468b3b7ba029de396ca0ca2f1d7f8",
+      "line": 59,
+      "path": "src/quality/evidence_bundle_io.py",
+      "targets": [
+        "ArtifactSpec.command"
+      ]
+    },
+    {
       "disposition": "operator_supplied_process",
       "evidence": "run_benchmark_subprocess executes the operator-supplied benchmark argv.",
       "fingerprint": "a7a00b6582c387dc4d33143e851594d42e8d782d0fbaf51ffb5932e9b4f618cc",
@@ -705,16 +715,6 @@
       "path": "src/quality/performance_support.py",
       "targets": [
         "git"
-      ]
-    },
-    {
-      "disposition": "closed_command_set",
-      "evidence": "_default_runner executes the immutable argv declared by the typed evidence artifact registry and fixed git metadata probes used to bind dependency context to the subject.",
-      "fingerprint": "a5ac9e4a92282feba248c54d2e4898f2fe0468b3b7ba029de396ca0ca2f1d7f8",
-      "line": 59,
-      "path": "src/quality/evidence_bundle_io.py",
-      "targets": [
-        "ArtifactSpec.command"
       ]
     },
     {
@@ -807,19 +807,26 @@
       "targets": [
         ".github/scripts/quality_hash_filter.py"
       ]
+    },
+    {
+      "disposition": "closed_command_set",
+      "evidence": "The regression invokes only the fixed local reconciliation CLI with temporary Git subject and staged-manifest paths.",
+      "fingerprint": "65f67f50bbc9c1244ddf5dad81b269cb35803c6b892709b8beb25a3b6ac9e097",
+      "line": 1020,
+      "path": "tests/test_reconcile_quality_baseline.py"
     }
   ],
   "graph_provenance": {
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "2ab081f6e5078f831842e195b036e242f2175923af343d7f2e6399093cd981b1"
+      "source_sha256": "64d6903e9ff0d1abdd3449f3ba6e912481f311b725b01cc56814192e7d120c37",
+      "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "49e9a554e4e666c3964f2f05b3dfcd6e3f0591d5d1637ee540942cfeb2c887dd"
+    "source_manifest_sha256": "d4682ccbddeea55a665e453b113fb6bc069f63ae4a6b36a4faab004cc73d6502"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }
