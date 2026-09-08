@@ -1128,6 +1128,39 @@ def test_staged_claim_map_mutation_after_snapshot_is_detected(
     assert "staged roadmap claims changed during collection" in receipt.violations
 
 
+def test_staged_claim_map_hardlink_after_snapshot_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    subject = tmp_path / "subject"
+    subject.mkdir()
+    staged = tmp_path / "staged"
+    roadmap_raw = (ROOT / "docs" / "quality" / "quality-9plus-roadmap.md").read_bytes()
+    claim_map_raw = (ROOT / "config" / "quality_roadmap_claims.json").read_bytes()
+    manifest = _write_staged_manifest(staged, _current(), roadmap_raw.decode("utf-8"))
+    claim_map = _add_staged_claim_map(manifest, claim_map_raw)
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return _current()
+
+    calls = 0
+
+    def stable_until_final_state(_root: Path) -> tuple[str, bool]:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            os.link(claim_map, tmp_path / "outside-claim-map.json")
+        return "a" * 40, False
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", stable_until_final_state)
+    receipt = reconcile_staged_subject(subject, manifest)
+
+    assert receipt.status == "HOLD"
+    assert "staged roadmap claims changed during collection" in receipt.violations
+
+
 def test_staged_claim_map_alias_with_roadmap_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1158,6 +1191,23 @@ def test_staged_claim_map_alias_with_roadmap_is_rejected(
 
     assert receipt.status == "HOLD"
     assert "staged inputs share the same file" in receipt.violations
+
+
+def test_staged_required_file_hardlink_to_undeclared_outside_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    staged_static = tmp_path / "staged" / "static.json"
+    outside = tmp_path / "outside-static.json"
+    outside.write_bytes(staged_static.read_bytes())
+    staged_static.unlink()
+    os.link(outside, staged_static)
+
+    receipt = reconcile_staged_subject(subject, manifest)
+
+    assert receipt.status == "HOLD"
+    assert "staged input is not a regular file: static" in receipt.violations
 
 
 def test_staged_never_uses_testing_seam(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

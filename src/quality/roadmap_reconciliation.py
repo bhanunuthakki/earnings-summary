@@ -1013,6 +1013,8 @@ def _lstat_regular(path: Path) -> os.stat_result | None:
         return None
     if not stat.S_ISREG(st.st_mode):
         return None
+    if st.st_nlink != 1:
+        return None
     return st
 
 
@@ -1533,7 +1535,7 @@ def _verify_staged_stable(load: _StagedLoad, manifest_path: Path) -> tuple[str, 
         if (st.st_dev, st.st_ino) != (load.manifest_dev, load.manifest_ino):
             problems.append("staged manifest changed during collection")
             return tuple(problems)
-        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             problems.append("staged manifest changed during collection")
             return tuple(problems)
         current_manifest = manifest_path.read_bytes()
@@ -1554,7 +1556,7 @@ def _verify_staged_stable(load: _StagedLoad, manifest_path: Path) -> tuple[str, 
             if (st2.st_dev, st2.st_ino) != (snap.dev, snap.ino):
                 problems.append(f"staged input changed during collection: {key}")
                 continue
-            if stat.S_ISLNK(st2.st_mode) or not stat.S_ISREG(st2.st_mode):
+            if stat.S_ISLNK(st2.st_mode) or not stat.S_ISREG(st2.st_mode) or st2.st_nlink != 1:
                 problems.append(f"staged input changed during collection: {key}")
                 continue
             current_data = snap.resolved.read_bytes()
@@ -1576,6 +1578,7 @@ def _verify_staged_stable(load: _StagedLoad, manifest_path: Path) -> tuple[str, 
                         claims_snapshot.ino,
                     )
                     or not stat.S_ISREG(st2.st_mode)
+                    or st2.st_nlink != 1
                     or claims_snapshot.resolved.read_bytes() != claims_snapshot.data
                 ):
                     problems.append("staged roadmap claims changed during collection")
