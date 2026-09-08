@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest = args.input_manifest
         if not manifest.is_absolute():
             manifest = root / manifest
+        if ".." in manifest.parts or not manifest.resolve().is_relative_to(root):
+            raise ValueError("input manifest escapes repository")
         requested_output: Path | None = args.output
         output = None
         if requested_output is not None:

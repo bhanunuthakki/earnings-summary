@@ -21,7 +21,11 @@ def freeze_subject(tmp_path: Path) -> tuple[Path, Path, Path]:
     root.mkdir()
     (root / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
     checkout = Path(__file__).resolve().parents[1]
-    for relative in GENERATOR_PATHS:
+    for relative in (
+        *GENERATOR_PATHS,
+        "config/quality_roadmap_owners.json",
+        "docs/quality/quality-9plus-roadmap.md",
+    ):
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(checkout / relative, destination)
@@ -152,9 +156,47 @@ def test_dependency_loader_rejects_duplicate_manifest_keys(
         load_dependency_inputs(root, manifest)
 
 
+def test_cli_rejects_escaping_manifest_before_alias_enumeration(
+    freeze_subject: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _manifest, _source = freeze_subject
+    outside = root.parent / "outside.json"
+    outside.write_text("must not be read", encoding="utf-8")
+    reads: list[Path] = []
+
+    def forbidden_alias_read(path: Path) -> tuple[Path, ...]:
+        reads.append(path)
+        return ()
+
+    monkeypatch.setattr(cli, "staged_input_alias_paths", forbidden_alias_read)
+    assert (
+        cli.main(
+            [
+                "--repo-root",
+                str(root),
+                "--input-manifest",
+                str(outside),
+                "--output",
+                str(root / ".tmp" / "result.json"),
+            ]
+        )
+        == 1
+    )
+    assert reads == []
+
+
 @pytest.mark.parametrize(
     "field",
-    ["subject_commit", "subject_tree", "generator_sha256", "census", "source_hash", "oracle"],
+    [
+        "subject_commit",
+        "subject_tree",
+        "generator_sha256",
+        "census",
+        "source_hash",
+        "oracle",
+        "owner",
+    ],
 )
 def test_bundle_adapter_rejects_forged_index_fields(
     freeze_subject: tuple[Path, Path, Path],
@@ -185,6 +227,8 @@ def test_bundle_adapter_rejects_forged_index_fields(
         value["evidence"][0]["sha256"] = "f" * 64
     elif field == "oracle":
         value["evidence"][0]["oracle_status"] = "HOLD"
+    elif field == "owner":
+        value["owner_snapshot"]["owners"][0]["lane"] = "forged-lane"
     else:
         value["candidate_census"][0]["source_identity"] = "src/invented.py"
     with pytest.raises(ValueError):

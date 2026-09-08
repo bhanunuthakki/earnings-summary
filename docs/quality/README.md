@@ -207,7 +207,7 @@ collection/assembly/validation/record are manual local-only non-production opera
 ### Roadmap-freeze index (BHA-144)
 
 `execution/freeze_quality_roadmap.py` indexes exact-subject native evidence,
-confirmed owner routes and an optional reviewed plan. Collection runs this ninth
+declared owner routes and an optional reviewed plan. Collection runs this ninth
 producer after the eight evidence producers; dependency manifests bind fresh raw
 handoffs by path and SHA-256. Reconciliation uses the approved roadmap export at
 `docs/quality/quality-9plus-roadmap.md` and its typed claim map under `config/`.
@@ -215,7 +215,9 @@ Historical and provisional claims retain their qualifications.
 
 The freeze records the available candidate census and explicit missing producer
 reasons. Supplied plans retain candidate-to-intent ownership, dependencies,
-resource claims, acceptance test paths and exact evidence scopes. Required
+resource claims, acceptance test paths and exact evidence scopes. The retained raw
+plan and parsed plan are hash-bound; the owner map remains explicitly unverified
+without a typed approval binding. Required
 large-module reduction is derived from the current census and the 35-module
 target. Prospective crossings and distinct PR intents are separate counts;
 forecasts never count as delivered reductions. Protected composition-root

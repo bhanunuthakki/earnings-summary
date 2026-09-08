@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import subprocess
 from pathlib import Path
@@ -12,7 +13,7 @@ from quality.roadmap_freeze_inputs import (
     load_json_input,
     strict_json,
 )
-from quality.roadmap_freeze_models import FreezeCoverage, FreezeReceipt
+from quality.roadmap_freeze_models import FreezeCoverage, FreezeReceipt, WorkIntent
 
 
 def test_strict_json_rejects_duplicate_keys_and_nonfinite_numbers() -> None:
@@ -93,3 +94,22 @@ def test_same_bytes_replacement_fails_identity_recheck(tmp_path: Path) -> None:
 
     with pytest.raises(FreezeInputError, match="changed during freeze"):
         assert_unchanged(loaded)
+
+
+def test_set_like_intent_fields_reject_duplicates() -> None:
+    raw = {
+        "intent_id": "intent-one",
+        "owner_issue": "BHA-108",
+        "lane": "structure-request",
+        "action": "split",
+        "intended_outcome": "split one module",
+        "depends_on": [],
+        "resources": ["repo", "repo"],
+        "parallel_group": None,
+        "scope_sha256": "a" * 64,
+        "evidence_refs": ["architecture"],
+        "acceptance_tests": ["tests/test_contract.py"],
+        "candidate_ids": ["large-module:src/a.py"],
+    }
+    with pytest.raises(ValueError, match="resources must be unique"):
+        WorkIntent.model_validate_json(json.dumps(raw))

@@ -16,6 +16,8 @@ from quality.architecture import COMPOSITION_ROOTS, ArchitectureReceipt
 from quality.duplicates import DuplicateInventory
 from quality.git_env import clean_local_git_env
 from quality.lifecycle_models import LifecycleInventory
+from quality.performance_models import PerformanceReceipt
+from quality.reachability import ReachabilityGraph
 from quality.roadmap_freeze_inputs import (
     EVIDENCE_KEYS,
     FreezeInputError,
@@ -40,6 +42,8 @@ from quality.roadmap_freeze_models import (
     OwnerSnapshotIndex,
     WorkIntent,
 )
+from quality.roadmap_reconciliation import ReconciliationReceipt
+from quality.static_quality import StaticQualityInventory
 from quality.test_db_models import TestDbAudit
 
 GENERATOR_PATHS = (
@@ -58,6 +62,7 @@ POPULATION_EVIDENCE: dict[str, frozenset[EvidenceKey]] = {
     "deletion": frozenset({"lifecycle", "reachability"}),
     "admission": frozenset({"reconciliation"}),
 }
+NON_WORK_DISPOSITIONS = frozenset({"retain", "review", "exception"})
 
 
 def compute_scope_sha256(
@@ -133,18 +138,25 @@ def _schema(value: object) -> str | None:
 
 
 def _source_status(value: object) -> str | None:
-    for name in ("status", "collection_status", "raw_audit_status"):
-        raw = getattr(value, name, None)
-        if isinstance(raw, str):
-            return raw
+    if isinstance(
+        value,
+        (StaticQualityInventory, LifecycleInventory, PerformanceReceipt, ReconciliationReceipt),
+    ):
+        return value.status
+    if isinstance(value, (TestDbAudit, ReachabilityGraph)):
+        return value.collection_status
     return None
 
 
 def _subject(value: object) -> str | None:
-    for name in ("scoped_commit", "commit_hash", "subject_commit", "revision"):
-        raw = getattr(value, name, None)
-        if isinstance(raw, str) and len(raw) == 40:
-            return raw
+    if isinstance(value, (ArchitectureReceipt, StaticQualityInventory, TestDbAudit)):
+        return value.scoped_commit
+    if isinstance(value, DuplicateInventory):
+        return value.commit_hash
+    if isinstance(value, (ReachabilityGraph, ReconciliationReceipt)):
+        return value.subject_commit
+    if isinstance(value, (LifecycleInventory, PerformanceReceipt)):
+        return value.revision
     return None
 
 
@@ -262,6 +274,11 @@ def _plan_holds(
         else {}
     )
     resources = {item.resource_id: item for item in plan.resources}
+    admission_owners = (
+        {f"{item.kind}:{item.key}": item.issue_id for item in owners.admission_routes}
+        if owners
+        else {}
+    )
     for declared_owner in plan.owners:
         trusted_owner = owner_by_id.get(declared_owner.issue_id)
         if trusted_owner is None:
@@ -353,11 +370,29 @@ def _plan_holds(
             errors.append(f"candidate intent overlap: {candidate.candidate_id}")
         if candidate.owner_issue not in routes.get(candidate.population, set()):
             errors.append(f"owner is not routed for population: {candidate.candidate_id}")
+        if (
+            candidate.population == "admission"
+            and admission_owners.get(candidate.source_identity) != candidate.owner_issue
+        ):
+            errors.append(f"admission owner differs from exact route: {candidate.candidate_id}")
         expected_evidence = POPULATION_EVIDENCE[candidate.population]
         if frozenset(candidate.evidence_refs) != expected_evidence:
             errors.append(f"candidate evidence does not match population: {candidate.candidate_id}")
         if not intent or not expected_evidence.issubset(intent.evidence_refs):
             errors.append(f"intent lacks candidate evidence: {candidate.candidate_id}")
+        if intent and candidate.disposition not in NON_WORK_DISPOSITIONS:
+            expected_action = {
+                "large_module": candidate.disposition,
+                "duplicate_authority": "deduplicate",
+                "builder_invocation": candidate.disposition,
+                "type_cluster": "type_remediation",
+                "lifecycle": "lifecycle_review",
+                "deletion": "retire",
+                "admission": "admission_delivery",
+                "scc_cut": "cycle_cut",
+            }[candidate.population]
+            if intent.action != expected_action:
+                errors.append(f"candidate action contradicts disposition: {candidate.candidate_id}")
     missing = sorted(set(census_by_id) - set(candidate_by_id))
     if missing:
         holds.append(f"candidate census is unplanned ({len(missing)})")
@@ -411,7 +446,7 @@ def _plan_holds(
             if (
                 extra.owner_issue != row.owner_issue
                 or extra.lane != row.lane
-                or set(extra.depends_on) != set(row.dependencies)
+                or not ({row.covered_by, *row.dependencies}).issubset(extra.depends_on)
                 or set(extra.resources) != set(row.resources)
                 or not set(row.evidence_refs).issubset(extra.evidence_refs)
                 or extra.action != "root_reduction"
@@ -420,9 +455,7 @@ def _plan_holds(
     if errors:
         raise FreezeInputError(errors[0])
     actionable_ids = {
-        item.covered_by
-        for item in plan.candidates
-        if item.disposition in {"split", "deduplicate", "retire"} or item.population == "admission"
+        item.covered_by for item in plan.candidates if item.disposition not in NON_WORK_DISPOSITIONS
     } | {
         item.protected_root_covered_by
         for item in plan.candidates
@@ -522,9 +555,11 @@ def build_freeze(
         path = input_paths.get(key)
         if path is not None:
             loaded[key] = load_evidence(root, key, path, subject)
-    snapshot_path = owner_snapshot_path or root / "config/quality_roadmap_owners.json"
+    snapshot_path = owner_snapshot_path or Path("config/quality_roadmap_owners.json")
+    if not snapshot_path.is_absolute():
+        snapshot_path = root / snapshot_path
     snapshot_item: LoadedInput | None = None
-    if snapshot_path.exists():
+    if snapshot_path.exists() or snapshot_path.is_symlink():
         snapshot_item = load_owner_snapshot(root, snapshot_path, subject)
     reject_aliases([*loaded.values(), *([snapshot_item] if snapshot_item else [])])
     snapshot = cast(OwnerSnapshot, snapshot_item.value) if snapshot_item else None

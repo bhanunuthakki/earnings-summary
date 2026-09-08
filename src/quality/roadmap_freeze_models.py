@@ -69,6 +69,19 @@ class WorkIntent(StrictModel):
     acceptance_tests: tuple[str, ...] = Field(min_length=1)
     candidate_ids: tuple[str, ...] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def _unique_sets(self) -> WorkIntent:
+        for label, values in (
+            ("dependencies", self.depends_on),
+            ("resources", self.resources),
+            ("evidence refs", self.evidence_refs),
+            ("acceptance tests", self.acceptance_tests),
+            ("candidate IDs", self.candidate_ids),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"intent {label} must be unique")
+        return self
+
 
 class CandidateRow(StrictModel):
     candidate_id: str = Field(min_length=1, max_length=160, pattern=r"^[a-z0-9][a-z0-9_.:/-]*$")
@@ -98,6 +111,13 @@ class CandidateRow(StrictModel):
             self.baseline_noncomment_loc is not None or self.baseline_fan_out is not None
         ):
             raise ValueError("only large-module candidates carry architecture metrics")
+        for label, values in (
+            ("dependencies", self.dependencies),
+            ("resources", self.resources),
+            ("evidence refs", self.evidence_refs),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"candidate {label} must be unique")
         return self
 
 
@@ -137,10 +157,28 @@ class FreezePlan(StrictModel):
     performance: PerformancePlan
     capacity: CapacityPlan
 
+    @model_validator(mode="after")
+    def _unique_topology(self) -> FreezePlan:
+        for label, values in (
+            ("owners", tuple(item.issue_id for item in self.owners)),
+            ("resources", tuple(item.resource_id for item in self.resources)),
+            ("intents", tuple(item.intent_id for item in self.intents)),
+            ("candidates", tuple(item.candidate_id for item in self.candidates)),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"plan {label} must be unique")
+        return self
+
 
 class PopulationRoute(StrictModel):
     population: Population
     owner_issues: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_owners(self) -> PopulationRoute:
+        if len(self.owner_issues) != len(set(self.owner_issues)):
+            raise ValueError("population-route owners must be unique")
+        return self
 
 
 class AdmissionRoute(StrictModel):
@@ -148,6 +186,12 @@ class AdmissionRoute(StrictModel):
     key: str = Field(min_length=1, max_length=120)
     issue_id: str = Field(pattern=r"^BHA-[0-9]+$")
     delivery_issues: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _unique_delivery_issues(self) -> AdmissionRoute:
+        if len(self.delivery_issues) != len(set(self.delivery_issues)):
+            raise ValueError("admission delivery issues must be unique")
+        return self
 
 
 class OwnerSnapshot(StrictModel):
@@ -308,8 +352,7 @@ class FreezeReceipt(StrictModel):
             actionable = {
                 item.covered_by
                 for item in self.plan.candidates
-                if item.disposition in {"split", "deduplicate", "retire"}
-                or item.population == "admission"
+                if item.disposition not in {"retain", "review", "exception"}
             } | {
                 item.protected_root_covered_by
                 for item in self.plan.candidates
