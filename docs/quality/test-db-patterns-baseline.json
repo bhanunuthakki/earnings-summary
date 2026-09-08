@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "scoped_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
   "scanner_sha256": "cddc327b3942155835a5658de6f58b9333360c2cf4ab95c6b2c4286e678e131f",
-  "source_sha256": "6682a9d10feed62a848afb4f77e23a4cd4c1d3d37944d680da8998469d75e4b7",
+  "source_sha256": "1b7afec85ed794e485f738001eeb5751e40ebd531d46044fedf64c08b8c37809",
   "collection_status": "COMPLETE",
   "collection_note": "",
   "raw_audit_status": "HOLD",
@@ -96,6 +96,7 @@
     "tests/test_ask_viewspec_override_consistency.py",
     "tests/test_attribution.py",
     "tests/test_audit_data_cutover_readiness.py",
+    "tests/test_audit_kpi_revision_shadow_census.py",
     "tests/test_audit_quarterly_data_coverage.py",
     "tests/test_audit_segment_quarterly_coverage.py",
     "tests/test_audit_test_db_patterns.py",
@@ -362,6 +363,8 @@
     "tests/test_event_study.py",
     "tests/test_evidence_backfill.py",
     "tests/test_evidence_bundle.py",
+    "tests/test_evidence_bundle_cli_paths.py",
+    "tests/test_evidence_bundle_inputs.py",
     "tests/test_evidence_governance.py",
     "tests/test_evidence_integrity_audit.py",
     "tests/test_evidence_ledger.py",
@@ -810,6 +813,7 @@
     "tests/test_qa_roster.py",
     "tests/test_qa_roster_resilience.py",
     "tests/test_qualitative_conditions.py",
+    "tests/test_quality_hash_filter.py",
     "tests/test_query_criteria.py",
     "tests/test_reader_migration.py",
     "tests/test_reader_tier_selection.py",
@@ -878,6 +882,10 @@
     "tests/test_risk_snapshot_history.py",
     "tests/test_risk_snapshot_provenance.py",
     "tests/test_risk_snapshot_refresh.py",
+    "tests/test_roadmap_freeze.py",
+    "tests/test_roadmap_freeze_cli.py",
+    "tests/test_roadmap_freeze_inputs.py",
+    "tests/test_roadmap_source.py",
     "tests/test_row_validation.py",
     "tests/test_run_calibration_grading.py",
     "tests/test_run_calibration_scorecard.py",
@@ -1005,6 +1013,7 @@
     "tests/test_sqlite_runtime.py",
     "tests/test_sqlite_snapshot.py",
     "tests/test_squashed_seed_recovery_migration.py",
+    "tests/test_staged_evidence_aliases.py",
     "tests/test_stance_scoring.py",
     "tests/test_standing_rules_panel.py",
     "tests/test_standup.py",
@@ -1772,6 +1781,15 @@
         "sql:create table",
         "text:seed",
         "text:volume"
+      ]
+    },
+    {
+      "path": "tests/test_audit_kpi_revision_shadow_census.py",
+      "taxonomy": "custom-bootstrap",
+      "evidence": [
+        "sql:create table",
+        "text:bootstrap",
+        "text:seed"
       ]
     },
     {
@@ -4287,6 +4305,7 @@
       "evidence": [
         "call:migrated_db",
         "sql:create table",
+        "text:historical",
         "text:seed",
         "text:volume"
       ]
@@ -4404,6 +4423,7 @@
       "taxonomy": "custom-bootstrap",
       "evidence": [
         "call:executescript",
+        "call:migrated_db",
         "sql:alter table",
         "sql:create table",
         "text:historical",
@@ -8015,7 +8035,7 @@
   "counts_by_taxonomy": {
     "archived-graph": 37,
     "cached-current-head": 66,
-    "custom-bootstrap": 305,
+    "custom-bootstrap": 306,
     "direct-downgrade": 105,
     "direct-historical": 24,
     "hand-DDL-unit-schema": 95,
@@ -13644,8 +13664,8 @@
         "end_line": 132,
         "end_col": 62
       },
-      "source_sha256": "12e196c745dda5c17e0fa37157d51f8af72928b306b76e9d00a2a4a172d915ad",
-      "invocation_id": "ab2c7b37a263c92ec468e166fe01dd583e1b959b81fc6fda5fd6eaa023b65680",
+      "source_sha256": "a35e3ed68ced543a02191533d132d3d01244506886801c41a03c63ce9bd35b60",
+      "invocation_id": "8a8c38ba380361bffe9cbadb94c86feac45256d5ffd13d2af3cf27c086689350",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_default_validation_uses_read_only_sqlite_without_side_effects",
@@ -13661,11 +13681,28 @@
         "end_line": 174,
         "end_col": 57
       },
-      "source_sha256": "12e196c745dda5c17e0fa37157d51f8af72928b306b76e9d00a2a4a172d915ad",
-      "invocation_id": "4c69c3bee9d74809b4aa991b741e9f0412084689a8da319b2cd80d337a6bd5eb",
+      "source_sha256": "a35e3ed68ced543a02191533d132d3d01244506886801c41a03c63ce9bd35b60",
+      "invocation_id": "c7936a9cbf8446218bb7dced6544177a072f684e4a08689de99002de48daacec",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_apply_uses_writer_sqlite_and_commits_fact_with_coverage",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_apply_issuer_fact_manifest_cli.py",
+      "locator": {
+        "start_line": 217,
+        "start_col": 14,
+        "end_line": 217,
+        "end_col": 60
+      },
+      "source_sha256": "a35e3ed68ced543a02191533d132d3d01244506886801c41a03c63ce9bd35b60",
+      "invocation_id": "072176cb385b8bd67a7ee72f8e20742b01fdcd68e0b213bb5064e741529ba87f",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_apply_cli_parses_and_commits_reviewed_v2_manifest",
       "evidence": "call:migrated_db",
       "taxonomy": "cached-current-head",
       "disposition": "RETAIN"
@@ -25063,13 +25100,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 136,
+        "start_line": 210,
         "start_col": 14,
-        "end_line": 136,
+        "end_line": 210,
         "end_col": 50
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "98623c8397d5452e495e2070c1ab821a95c3efeb887e3d5da8d836c3fe4dfe5e",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "36c9651d9a6177f2adf83c342e5f0b5bc4adaec63f329605e44005cbd9142f98",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_dry_run_does_not_write",
@@ -25080,13 +25117,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 154,
+        "start_line": 229,
         "start_col": 14,
-        "end_line": 154,
+        "end_line": 229,
         "end_col": 48
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "f75fe94b6326aec748f3586809183e5c0fdd954aa4c7c6de60873f02545572f2",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "7a9ba71ac95cce1bf2db5b2a3fb77d6077ede17bf198912eef079479e945b220",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_apply_is_atomic_and_receipt_replays",
@@ -25097,13 +25134,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 202,
+        "start_line": 277,
         "start_col": 18,
-        "end_line": 202,
+        "end_line": 277,
         "end_col": 71
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "9f1cda6ed196623bfee4510c4071c56ae73ba0e1b17133955a2f3727cd0e9ac7",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "e0ae56532f8095ba5bfe863e97fbc2bc0b8fcac6ba3a33707ed3dd45167b28d5",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_receipt_hash_binds_canonical_application_manifest_across_clean_databases",
@@ -25114,13 +25151,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 230,
+        "start_line": 305,
         "start_col": 14,
-        "end_line": 230,
+        "end_line": 305,
         "end_col": 66
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "959b9902659133721ca7f7e1b37e6a59e29659ef6236ca586125d117d7d25180",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "4b7f3651883a7b5f7258ff8eb37c3ecb2c8896a1a97692d73379342bfd1bc87a",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_persistence_rejects_tampered_application_manifest_evidence",
@@ -25131,13 +25168,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 272,
+        "start_line": 347,
         "start_col": 14,
-        "end_line": 272,
+        "end_line": 347,
         "end_col": 76
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "af2b0bac5450a516dd5fbf25d6d77fa84f2dc407853a19aa02caa1e36cc489a1",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "a02f25380a65c2df8522a902a77767d523015f0975731d0c232abbc80dacf580",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_public_receipt_persistence_rejects_rehashed_value_and_locator_forgery",
@@ -25148,13 +25185,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 314,
+        "start_line": 389,
         "start_col": 14,
-        "end_line": 314,
+        "end_line": 389,
         "end_col": 77
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "c1271f3bea00f6c5bb0b0838058c3d6d2b3d3ed765171ff557c164e41ed6bf23",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "52d45034a4faec5ae050e36424731d18b38eda328ca55b07d1b5cdb8d43f121c",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_receipt_rejects_incomplete_or_incongruent_typed_manifest",
@@ -25165,13 +25202,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 386,
+        "start_line": 461,
         "start_col": 14,
-        "end_line": 386,
+        "end_line": 461,
         "end_col": 76
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "e46b6a2f34fd829f28c7f2917ce1cdc094ab0ca8dfeec6fc4ada3b8570ab33c5",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "67b0d4e71f4a879f81b76173dbd68b64439edbf0ae19d30c6d901faa31ca999c",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_receipt_rejection_reason_must_match_embedded_manifest",
@@ -25182,13 +25219,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 424,
+        "start_line": 499,
         "start_col": 14,
-        "end_line": 424,
+        "end_line": 499,
         "end_col": 51
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "4934c652314e732baa39eea3cb80d4f31a03d01d63cab6d9acad4c7c9baa2d0c",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "1e736408fdbce3c41ec7c605dce5b8b2950208f5d389bc0d5a1c175f3637d2f0",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_apply_rolls_back_kpi_when_segment_population_is_missing",
@@ -25199,13 +25236,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 449,
+        "start_line": 524,
         "start_col": 14,
-        "end_line": 449,
+        "end_line": 524,
         "end_col": 53
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "1e202fee59f51246fa14f13667c888253a2f7548f51cb5d1cee1504538910f45",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "72d61d0befcb1a2ae99a40e01d586548511eaa76c52c81309e104b4b6cdcde85",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_source_period_and_extraction_chronology_are_bound",
@@ -25216,13 +25253,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 491,
+        "start_line": 566,
         "start_col": 14,
-        "end_line": 491,
+        "end_line": 566,
         "end_col": 55
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "9e1cff6b3d2cc4f8de80bac83f05b9db4abec6ed19cdbf1d2b0cd3ae2da6d5b2",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "7d44df11f27fe76d7bdb2a52ba36ae793433a71c68af95502ff4b3df3c701b77",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_dry_run_revalidates_segment_dimension_type",
@@ -25233,13 +25270,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 513,
+        "start_line": 588,
         "start_col": 14,
-        "end_line": 513,
+        "end_line": 588,
         "end_col": 61
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "31903273921c12656c34e64dd761dba9697526f61107d76663d6934ac8e2dad3",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "636e3ed46edc39037ed92d52a5dec543ad76f632203475a201712e4985e10ebb",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_apply_failure_preserves_callers_existing_transaction",
@@ -25250,13 +25287,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 542,
+        "start_line": 617,
         "start_col": 14,
-        "end_line": 542,
+        "end_line": 617,
         "end_col": 55
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "eb6dbae992e58cf639e2187ffc3517275e80d53cbf40e71630184239d33fcd7d",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "5d46ffa141d6669cfaeaaae508029e0aab68c141545b5277736684e21cff5f48",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_same_document_kpi_value_conflict_rolls_back",
@@ -25267,13 +25304,13 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 599,
+        "start_line": 674,
         "start_col": 14,
-        "end_line": 599,
+        "end_line": 674,
         "end_col": 59
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "c11e0a48086055f9aaeac7145334163f82e0f91c978b068225621bd2b39f4e4d",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "8c62853346f94366f6c9d432f3f8659d26e71955e630a250601db52864fd5314",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_same_document_segment_value_conflict_cannot_create_duplicate_capture",
@@ -25284,16 +25321,203 @@
     {
       "path": "tests/test_issuer_fact_manifest.py",
       "locator": {
-        "start_line": 651,
+        "start_line": 726,
         "start_col": 14,
-        "end_line": 651,
+        "end_line": 726,
         "end_col": 49
       },
-      "source_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
-      "invocation_id": "fa4cfcfdfc06204356402bf863639bf982531a945c1b0647aa5f9491c45ddeef",
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "0633671e1e534e056961996bd32bbebf6493fd55a8165e55ca89202e2dbf6ad5",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_source_sha_tampering_is_rejected",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 998,
+        "start_col": 14,
+        "end_line": 998,
+        "end_col": 59
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "6fdee424733d2e76dd7f36554a043194095961d2d1f53c8c0daa2ff491242da4",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v2_rejects_far_future_review_authority_before_database_access",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1098,
+        "start_col": 14,
+        "end_line": 1098,
+        "end_col": 58
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "e437f05df55ca38e810d0e56250fb1fce6ea3672cd4af5af5642c4892e535c4f",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v1_canonical_hash_and_null_definition_binding_are_frozen",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1119,
+        "start_col": 14,
+        "end_line": 1119,
+        "end_col": 62
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "ff373f19eba5534f551b758ba37b47b8e25b379ec77646038e3ff773caa74147",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v2_apply_and_receipt_replay_preserve_exact_reviewed_commitments",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1177,
+        "start_col": 14,
+        "end_line": 1177,
+        "end_col": 65
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "7d08ff96887247985bd060e70a0366a6dda06c52dd8ce1db4e7987623d80a372",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v1_replay_cannot_downgrade_a_reviewed_same_document_binding",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1235,
+        "start_col": 14,
+        "end_line": 1235,
+        "end_col": 72
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "a97e4ed3a7e6ceb0d071966857a6e1bb2615c9d915bc49163caada77724bd88e",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_source_reviewed_capture_rejects_wrong_canonical_replay_payload_and_rolls_back",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1300,
+        "start_col": 14,
+        "end_line": 1300,
+        "end_col": 84
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "bc8bb3b8186bf8bdd9be1017ad416f9d7a030a9d287edc8a78e31149fb206a43",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v1_replay_rejects_reviewed_document_population_after_root_display_rename",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1344,
+        "start_col": 14,
+        "end_line": 1344,
+        "end_col": 68
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "f54d11e095603c2caeed22e3b6557aa13824c00f46f6b22a99d13446a467485c",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v2_apply_and_replay_count_an_exact_comparability_decision",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1435,
+        "start_col": 14,
+        "end_line": 1435,
+        "end_col": 56
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "07e6448d2e955c2e58476cb90c170f332adee197acb6c38f5fdddb13acd79786",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v2_stale_definition_head_rejects_every_transaction_effect",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1468,
+        "start_col": 14,
+        "end_line": 1468,
+        "end_col": 64
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "296c132222b84769cd809d4a443e8751ba96839d442e0211a26526ac9c9ac27d",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v2_failure_after_fact_and_segment_work_rolls_back_all_effects",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1516,
+        "start_col": 14,
+        "end_line": 1516,
+        "end_col": 64
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "20d83c585ae66f9cc80758cb3b26e9858370277eacda99ea9041763dbb2f071a",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v2_success_preserves_caller_owned_transaction_boundary",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_issuer_fact_manifest.py",
+      "locator": {
+        "start_line": 1560,
+        "start_col": 14,
+        "end_line": 1560,
+        "end_col": 60
+      },
+      "source_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
+      "invocation_id": "6edd6c99aab78c97d51e4b8d1c5b98c62dc11acb335660be85ceb7ec436aaf5a",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_v2_receipt_rejects_rehashed_forged_definition_binding",
       "evidence": "call:migrated_db",
       "taxonomy": "cached-current-head",
       "disposition": "RETAIN"
@@ -25794,19 +26018,138 @@
     {
       "path": "tests/test_kpi_definition_revisions.py",
       "locator": {
-        "start_line": 64,
+        "start_line": 69,
         "start_col": 4,
-        "end_line": 174,
+        "end_line": 179,
         "end_col": 5
       },
-      "source_sha256": "ae569c67e9d5d037250538ecc78922f55999ea58db1f86a330344789067dd533",
-      "invocation_id": "87a131290a14e9cd892675b9ef2b7b2bb7d9431aa88a14d47be4324fd051c9b9",
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "440ec4e33adbf9d5af0ca31d8d6c13d262ccf68869624b4a58f05d6b7642285b",
       "observed_call": "conn.executescript",
       "canonical_identity": null,
       "factory": "_database",
       "evidence": "call:executescript",
       "taxonomy": "unclassified",
       "disposition": "HOLD"
+    },
+    {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "locator": {
+        "start_line": 1870,
+        "start_col": 15,
+        "end_line": 1870,
+        "end_col": 71
+      },
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "aee6c9c2b1c2add96ff36155f47f927c48ef7e2be15b7db1e04d0331a3838eaa",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_shadow_census_uses_the_active_migrated_portfolio_roster",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "locator": {
+        "start_line": 1911,
+        "start_col": 15,
+        "end_line": 1911,
+        "end_col": 76
+      },
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "0ff01b2756263b1fcc80b3b306424525930c4f709b777b6aa71132416249c5e8",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_shadow_census_migrated_schema_keeps_base_fact_missing_resolution_authority",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "locator": {
+        "start_line": 1956,
+        "start_col": 15,
+        "end_line": 1956,
+        "end_col": 72
+      },
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "2904ca5fbf1e721fdd80ec5c14226b14affc3bf7f739ab478a2eab7633ff47b4",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_shadow_census_migrated_schema_blocks_unparseable_in_scope_period",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "locator": {
+        "start_line": 2022,
+        "start_col": 15,
+        "end_line": 2022,
+        "end_col": 77
+      },
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "83c88bcb4cb8c18dfe54a2e5e8726d367d36876699de681a6cddc66752eea2ed",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_shadow_census_distinguishes_observed_roster_from_unavailable_fact_schema",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "locator": {
+        "start_line": 2053,
+        "start_col": 15,
+        "end_line": 2053,
+        "end_col": 78
+      },
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "6b165416cd3df8c0fb0cd720b56560f7a5036157955e6d8444f895f9a5a536cb",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_shadow_census_reports_missing_current_fact_authority_as_unavailable",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "locator": {
+        "start_line": 2101,
+        "start_col": 15,
+        "end_line": 2101,
+        "end_col": 82
+      },
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "c15611f59287f78bb832c28b14a156d469a0095a6f5406ee2afb37aa1c4c3c5c",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_shadow_census_reports_partial_semantic_context_schema_as_unavailable",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "locator": {
+        "start_line": 2150,
+        "start_col": 15,
+        "end_line": 2150,
+        "end_col": 78
+      },
+      "source_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
+      "invocation_id": "0a179c0832345aae21e1dd4e87b06716220dfe52ca478a45aa5cc542454a5b6f",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "test_shadow_census_reports_invalid_current_fact_view_as_unavailable",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
     },
     {
       "path": "tests/test_kpi_extract_summaries.py",
@@ -32579,11 +32922,11 @@
       "locator": {
         "start_line": 61,
         "start_col": 4,
-        "end_line": 126,
+        "end_line": 127,
         "end_col": 5
       },
-      "source_sha256": "c13887986727e33688f63fb4b4eac679ffb2a2f5a11e0945ac532907e3e5a4dc",
-      "invocation_id": "1900ea61c8b1d4cea06bf5c2743bff83f022f109d2cb800e99ec553adbd43ec6",
+      "source_sha256": "f8dff663d0398c618911498475a7031448ac7992291d16532884d6225983f3cb",
+      "invocation_id": "80c0b3e90e33a575bad029ef6ec1101513e8f031f1be50e40e865f1e551a23ae",
       "observed_call": "conn.executescript",
       "canonical_identity": "connection.executescript",
       "factory": "_create_schema",

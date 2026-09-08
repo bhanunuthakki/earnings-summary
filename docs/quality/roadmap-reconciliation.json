@@ -128,11 +128,7 @@
       "observed": null,
       "verdict": "rejected",
       "scored_eligible": false,
-      "evidence": {
-        "path": ".tmp/quality/reachability-check.json",
-        "sha256": "29e997065fe4789defc8e11f6717f06d1d470fdb250b616eb896dd1613e88175",
-        "locator": "$.edges"
-      },
+      "evidence": null,
       "provisional_evidence": null,
       "note": "Roadmap source is missing or tampered."
     },
@@ -169,16 +165,14 @@
   ],
   "scored_claims": 0,
   "rejected_claims": 16,
-  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
   "worktree_dirty": false,
-  "source_hash": "723d1db332ebb4c161112ca53eef58c88878a278fa7248d4d2bf14d5d6360970",
+  "source_hash": "c49d3af72fdac8197d2e98719671d884ce1fcc760816db454ce1419d2746b39b",
   "roadmap_source": null,
-  "claim_manifest_sha256": "6c13fe7e1997fe90a0a568113c273740c187cfef00307e0efc123df308a876a6",
+  "claim_manifest_sha256": "31bd59868279a7d8addc20c497f5694e4796acb45b128ba12cc9bd820671d2f7",
   "violations": [
-    "inadmissible source receipt docs/quality/architecture-ratchet.json: receipt is missing",
-    "inadmissible source receipt docs/quality/duplicates-ratchet.json: receipt is missing",
-    "inadmissible source receipt docs/quality/static-baseline.json: receipt failed its typed schema",
-    "inadmissible source receipt docs/quality/test-db-patterns-baseline.json: receipt is missing",
-    "roadmap source is missing"
+    "staged roadmap claims is missing",
+    "staged roadmap is missing",
+    "staged root overlaps subject"
   ]
 }

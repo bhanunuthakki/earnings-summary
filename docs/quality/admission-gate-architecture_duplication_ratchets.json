@@ -3,18 +3,18 @@
   "kind": "hard_gate",
   "key": "architecture_duplication_ratchets",
   "state": "fail",
-  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/architecture-ratchet.json",
-      "sha256": "53033309efe06dbf8881eb240f8a0f490829d749d2f13bc0b3bbe698fb95b2ce",
+      "sha256": "a7eddb49fdc6ad4c447f039f6438caa0b445fc6b84c18b57430c47936c36110f",
       "schema_version": "architecture-measurement-v1"
     },
     {
       "path": "docs/quality/duplicates-ratchet.json",
-      "sha256": "d0992e539a5080c0820bd15e111bd7c9b86a58d9244fbd127c2923f0f8864404",
+      "sha256": "6579cc6e740ae72a2776456b5b745d406ba6c8e2598386fa3ac3fae69f46aee7",
       "schema_version": "1"
     }
   ]

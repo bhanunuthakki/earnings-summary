@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "scoped_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
   "scanner_sha256": "07c1c2265f5374df0c77f24b39471158dc8d81c0a9527406ba004047b4c11ffc",
-  "source_sha256": "a5a200fb2c02af6f13dc2d7844028cb1d62ef689b85c1f95d3db90deb6f0ddda",
+  "source_sha256": "c8f360f677c5f843752e37c311bd091d71d42d2c9d44a736134972c65e22a613",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1339,
-    "total_noncomment_loc": 499069,
+    "executable_modules": 1347,
+    "total_noncomment_loc": 503179,
     "modules_over_1000_loc": 96,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -133,9 +133,9 @@
         "path": "execution/apply_issuer_fact_manifest.py",
         "module": "execution.apply_issuer_fact_manifest",
         "lines": {
-          "physical": 51,
-          "nonblank": 42,
-          "noncomment": 42
+          "physical": 52,
+          "nonblank": 43,
+          "noncomment": 43
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -349,6 +349,21 @@
         "responsibilities": [],
         "public_functions": 3,
         "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "execution/audit_kpi_revision_shadow_census.py",
+        "module": "execution.audit_kpi_revision_shadow_census",
+        "lines": {
+          "physical": 68,
+          "nonblank": 60,
+          "noncomment": 60
+        },
+        "internal_fan_out": 3,
+        "responsibilities": [
+          "database"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "execution/audit_kpi_semantics.py",
@@ -1628,9 +1643,9 @@
         "path": "execution/collect_evidence_bundle.py",
         "module": "execution.collect_evidence_bundle",
         "lines": {
-          "physical": 98,
-          "nonblank": 88,
-          "noncomment": 88
+          "physical": 103,
+          "nonblank": 93,
+          "noncomment": 93
         },
         "internal_fan_out": 1,
         "responsibilities": [],
@@ -3190,6 +3205,19 @@
         "fully_annotated_public_functions": 5
       },
       {
+        "path": "execution/freeze_quality_roadmap.py",
+        "module": "execution.freeze_quality_roadmap",
+        "lines": {
+          "physical": 73,
+          "nonblank": 65,
+          "noncomment": 64
+        },
+        "internal_fan_out": 4,
+        "responsibilities": [],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
         "path": "execution/gc_restore.py",
         "module": "execution.gc_restore",
         "lines": {
@@ -4085,9 +4113,9 @@
         "path": "execution/produce_issuer_fact_manifest.py",
         "module": "execution.produce_issuer_fact_manifest",
         "lines": {
-          "physical": 95,
-          "nonblank": 75,
-          "noncomment": 75
+          "physical": 115,
+          "nonblank": 95,
+          "noncomment": 95
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -4294,15 +4322,12 @@
         "path": "execution/reconcile_quality_baseline.py",
         "module": "execution.reconcile_quality_baseline",
         "lines": {
-          "physical": 183,
-          "nonblank": 167,
-          "noncomment": 167
+          "physical": 148,
+          "nonblank": 134,
+          "noncomment": 134
         },
-        "internal_fan_out": 2,
-        "responsibilities": [
-          "filesystem",
-          "network"
-        ],
+        "internal_fan_out": 4,
+        "responsibilities": [],
         "public_functions": 2,
         "fully_annotated_public_functions": 2
       },
@@ -7736,9 +7761,9 @@
         "path": "src/compute/fmp_derived_kpis.py",
         "module": "compute.fmp_derived_kpis",
         "lines": {
-          "physical": 1532,
-          "nonblank": 1411,
-          "noncomment": 1336
+          "physical": 1533,
+          "nonblank": 1412,
+          "noncomment": 1337
         },
         "internal_fan_out": 11,
         "responsibilities": [
@@ -7847,17 +7872,34 @@
         "path": "src/compute/kpi_resolver.py",
         "module": "compute.kpi_resolver",
         "lines": {
-          "physical": 1265,
-          "nonblank": 1149,
-          "noncomment": 1089
+          "physical": 1348,
+          "nonblank": 1224,
+          "noncomment": 1164
         },
         "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 10,
-        "fully_annotated_public_functions": 10
+        "public_functions": 11,
+        "fully_annotated_public_functions": 11
+      },
+      {
+        "path": "src/compute/kpi_revision_shadow_census.py",
+        "module": "compute.kpi_revision_shadow_census",
+        "lines": {
+          "physical": 887,
+          "nonblank": 807,
+          "noncomment": 804
+        },
+        "internal_fan_out": 6,
+        "responsibilities": [
+          "database",
+          "filesystem",
+          "network"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/compute/management_indicators.py",
@@ -13193,24 +13235,25 @@
         "path": "src/pipeline/issuer_fact_manifest.py",
         "module": "pipeline.issuer_fact_manifest",
         "lines": {
-          "physical": 535,
-          "nonblank": 486,
-          "noncomment": 483
+          "physical": 1053,
+          "nonblank": 976,
+          "noncomment": 971
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 12,
         "responsibilities": [
-          "database"
+          "database",
+          "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/pipeline/issuer_fact_manifest_producer.py",
         "module": "pipeline.issuer_fact_manifest_producer",
         "lines": {
-          "physical": 167,
-          "nonblank": 148,
-          "noncomment": 148
+          "physical": 232,
+          "nonblank": 207,
+          "noncomment": 207
         },
         "internal_fan_out": 5,
         "responsibilities": [],
@@ -13269,17 +13312,17 @@
         "path": "src/pipeline/kpi_persistence.py",
         "module": "pipeline.kpi_persistence",
         "lines": {
-          "physical": 809,
-          "nonblank": 729,
-          "noncomment": 626
+          "physical": 950,
+          "nonblank": 859,
+          "noncomment": 756
         },
         "internal_fan_out": 12,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 7,
-        "fully_annotated_public_functions": 7
+        "public_functions": 8,
+        "fully_annotated_public_functions": 8
       },
       {
         "path": "src/pipeline/kpi_report_reference_dispositions.py",
@@ -13317,9 +13360,9 @@
         "path": "src/pipeline/kpi_semantic_dispositions.py",
         "module": "pipeline.kpi_semantic_dispositions",
         "lines": {
-          "physical": 394,
-          "nonblank": 365,
-          "noncomment": 365
+          "physical": 395,
+          "nonblank": 366,
+          "noncomment": 366
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -13381,16 +13424,16 @@
         "path": "src/pipeline/kpi_source_review.py",
         "module": "pipeline.kpi_source_review",
         "lines": {
-          "physical": 317,
-          "nonblank": 298,
-          "noncomment": 298
+          "physical": 480,
+          "nonblank": 453,
+          "noncomment": 453
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/pipeline/ledger_console_panel.py",
@@ -15090,9 +15133,9 @@
         "path": "src/provenance/financial_fact_resolution.py",
         "module": "provenance.financial_fact_resolution",
         "lines": {
-          "physical": 1807,
-          "nonblank": 1643,
-          "noncomment": 1640
+          "physical": 1863,
+          "nonblank": 1693,
+          "noncomment": 1690
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -15100,8 +15143,8 @@
           "filesystem",
           "network"
         ],
-        "public_functions": 10,
-        "fully_annotated_public_functions": 10
+        "public_functions": 11,
+        "fully_annotated_public_functions": 11
       },
       {
         "path": "src/provenance/foreign_issuer_bootstrap.py",
@@ -16046,11 +16089,11 @@
         "path": "src/quality/evidence_bundle_assemble.py",
         "module": "quality.evidence_bundle_assemble",
         "lines": {
-          "physical": 470,
-          "nonblank": 464,
-          "noncomment": 464
+          "physical": 512,
+          "nonblank": 506,
+          "noncomment": 506
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 6,
         "responsibilities": [
           "filesystem",
           "network"
@@ -16062,11 +16105,11 @@
         "path": "src/quality/evidence_bundle_collect.py",
         "module": "quality.evidence_bundle_collect",
         "lines": {
-          "physical": 576,
-          "nonblank": 556,
-          "noncomment": 556
+          "physical": 948,
+          "nonblank": 914,
+          "noncomment": 914
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "filesystem",
           "network",
@@ -16079,9 +16122,9 @@
         "path": "src/quality/evidence_bundle_io.py",
         "module": "quality.evidence_bundle_io",
         "lines": {
-          "physical": 561,
-          "nonblank": 506,
-          "noncomment": 506
+          "physical": 591,
+          "nonblank": 531,
+          "noncomment": 529
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -16089,16 +16132,16 @@
           "network",
           "process"
         ],
-        "public_functions": 1,
-        "fully_annotated_public_functions": 1
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/quality/evidence_bundle_models.py",
         "module": "quality.evidence_bundle_models",
         "lines": {
-          "physical": 254,
-          "nonblank": 215,
-          "noncomment": 215
+          "physical": 261,
+          "nonblank": 222,
+          "noncomment": 222
         },
         "internal_fan_out": 3,
         "responsibilities": [],
@@ -16109,11 +16152,11 @@
         "path": "src/quality/evidence_bundle_validate.py",
         "module": "quality.evidence_bundle_validate",
         "lines": {
-          "physical": 562,
-          "nonblank": 536,
-          "noncomment": 536
+          "physical": 576,
+          "nonblank": 550,
+          "noncomment": 550
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 6,
         "responsibilities": [
           "network"
         ],
@@ -16124,9 +16167,9 @@
         "path": "src/quality/evidence_path_policy.py",
         "module": "quality.evidence_path_policy",
         "lines": {
-          "physical": 51,
-          "nonblank": 41,
-          "noncomment": 41
+          "physical": 53,
+          "nonblank": 42,
+          "noncomment": 42
         },
         "internal_fan_out": 0,
         "responsibilities": [],
@@ -16269,21 +16312,97 @@
         "fully_annotated_public_functions": 4
       },
       {
-        "path": "src/quality/roadmap_reconciliation.py",
-        "module": "quality.roadmap_reconciliation",
+        "path": "src/quality/roadmap_freeze.py",
+        "module": "quality.roadmap_freeze",
         "lines": {
-          "physical": 1386,
-          "nonblank": 1278,
-          "noncomment": 1276
+          "physical": 671,
+          "nonblank": 630,
+          "noncomment": 630
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 11,
         "responsibilities": [
           "filesystem",
           "network",
           "process"
         ],
-        "public_functions": 12,
-        "fully_annotated_public_functions": 12
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "src/quality/roadmap_freeze_bundle.py",
+        "module": "quality.roadmap_freeze_bundle",
+        "lines": {
+          "physical": 170,
+          "nonblank": 153,
+          "noncomment": 153
+        },
+        "internal_fan_out": 5,
+        "responsibilities": [],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "src/quality/roadmap_freeze_inputs.py",
+        "module": "quality.roadmap_freeze_inputs",
+        "lines": {
+          "physical": 391,
+          "nonblank": 336,
+          "noncomment": 336
+        },
+        "internal_fan_out": 12,
+        "responsibilities": [
+          "filesystem",
+          "process"
+        ],
+        "public_functions": 10,
+        "fully_annotated_public_functions": 10
+      },
+      {
+        "path": "src/quality/roadmap_freeze_models.py",
+        "module": "quality.roadmap_freeze_models",
+        "lines": {
+          "physical": 412,
+          "nonblank": 363,
+          "noncomment": 363
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
+      },
+      {
+        "path": "src/quality/roadmap_reconciliation.py",
+        "module": "quality.roadmap_reconciliation",
+        "lines": {
+          "physical": 1563,
+          "nonblank": 1450,
+          "noncomment": 1446
+        },
+        "internal_fan_out": 7,
+        "responsibilities": [
+          "filesystem",
+          "network",
+          "process"
+        ],
+        "public_functions": 13,
+        "fully_annotated_public_functions": 13
+      },
+      {
+        "path": "src/quality/roadmap_source.py",
+        "module": "quality.roadmap_source",
+        "lines": {
+          "physical": 160,
+          "nonblank": 133,
+          "noncomment": 133
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "filesystem"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/quality/scoring.py",
