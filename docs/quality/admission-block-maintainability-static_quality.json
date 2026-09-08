@@ -1,0 +1,16 @@
+{
+  "schema_version": "quality-score-admission/v1",
+  "kind": "block",
+  "key": "maintainability.static_quality",
+  "state": "fail",
+  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "generator_path": "src/quality/admission_policy.py",
+  "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
+  "sources": [
+    {
+      "path": "docs/quality/static-baseline.json",
+      "sha256": "9659c66bfbac28591ff96191b66341df68f9ae581c75b76f7db2c36898e266f9",
+      "schema_version": "bha-120.v3"
+    }
+  ]
+}
