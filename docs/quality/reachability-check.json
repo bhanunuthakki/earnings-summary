@@ -1,7 +1,7 @@
 {
   "schema_version": "operational-reachability-raw/v1",
-  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
-  "source_manifest_sha256": "dec3122c48ac640014629d54422d9906dd09e9f6451d4a687ec4518a7c4d6c29",
+  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "source_manifest_sha256": "043eef3c9542a8b1fb7eb2dad6895b38de3b599736acb8814f7161f04fb04da4",
   "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
   "scanner_version": "1.2.1",
   "python_version": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]",
@@ -32,6 +32,7 @@
     ".githooks/test_pre_push.sh",
     ".github/pull_request_template.md",
     ".github/scripts/ci_gate.py",
+    ".github/scripts/quality_hash_filter.py",
     ".github/workflows/ci.yml",
     ".github/workflows/public-boundary.yml",
     ".gitignore",
@@ -354,6 +355,8 @@
     "config/architecture_boundaries.json",
     "config/filing_xbrl_processor_approval.json",
     "config/filing_xbrl_processor_bundle.json",
+    "config/quality_roadmap_claims.json",
+    "config/quality_roadmap_owners.json",
     "cron/SETUP_WINDOWS_SCHEDULER.md",
     "cron/TASKS.generated.md",
     "cron/apply_task_security_descriptor.ps1",
@@ -652,6 +655,7 @@
     "execution/audit_deleted_table_recovery.py",
     "execution/audit_evidence_integrity.py",
     "execution/audit_gc_recovery.py",
+    "execution/audit_kpi_revision_shadow_census.py",
     "execution/audit_kpi_semantics.py",
     "execution/audit_quarterly_data_coverage.py",
     "execution/audit_segment_coverage.py",
@@ -837,6 +841,7 @@
     "execution/fix_kpi_series.py",
     "execution/fmp_backpop.py",
     "execution/format_changed.py",
+    "execution/freeze_quality_roadmap.py",
     "execution/gc_restore.py",
     "execution/generate_ask_retrieval_production_scopes.py",
     "execution/generate_cron_artifacts.py",
@@ -1189,6 +1194,7 @@
     "src/compute/kpi_definition_units.py",
     "src/compute/kpi_extract_summaries.py",
     "src/compute/kpi_resolver.py",
+    "src/compute/kpi_revision_shadow_census.py",
     "src/compute/management_indicators.py",
     "src/compute/metrics_engine/__init__.py",
     "src/compute/metrics_engine/applicability.py",
@@ -1740,7 +1746,12 @@
     "src/quality/performance_models.py",
     "src/quality/performance_support.py",
     "src/quality/reachability.py",
+    "src/quality/roadmap_freeze.py",
+    "src/quality/roadmap_freeze_bundle.py",
+    "src/quality/roadmap_freeze_inputs.py",
+    "src/quality/roadmap_freeze_models.py",
     "src/quality/roadmap_reconciliation.py",
+    "src/quality/roadmap_source.py",
     "src/quality/scoring.py",
     "src/quality/static_quality.py",
     "src/quality/test_db_invocations.py",
@@ -2173,6 +2184,7 @@
     "tests/test_ask_viewspec_override_consistency.py",
     "tests/test_attribution.py",
     "tests/test_audit_data_cutover_readiness.py",
+    "tests/test_audit_kpi_revision_shadow_census.py",
     "tests/test_audit_quarterly_data_coverage.py",
     "tests/test_audit_segment_quarterly_coverage.py",
     "tests/test_audit_test_db_patterns.py",
@@ -2439,6 +2451,8 @@
     "tests/test_event_study.py",
     "tests/test_evidence_backfill.py",
     "tests/test_evidence_bundle.py",
+    "tests/test_evidence_bundle_cli_paths.py",
+    "tests/test_evidence_bundle_inputs.py",
     "tests/test_evidence_governance.py",
     "tests/test_evidence_integrity_audit.py",
     "tests/test_evidence_ledger.py",
@@ -2887,6 +2901,7 @@
     "tests/test_qa_roster.py",
     "tests/test_qa_roster_resilience.py",
     "tests/test_qualitative_conditions.py",
+    "tests/test_quality_hash_filter.py",
     "tests/test_query_criteria.py",
     "tests/test_reader_migration.py",
     "tests/test_reader_tier_selection.py",
@@ -2955,6 +2970,10 @@
     "tests/test_risk_snapshot_history.py",
     "tests/test_risk_snapshot_provenance.py",
     "tests/test_risk_snapshot_refresh.py",
+    "tests/test_roadmap_freeze.py",
+    "tests/test_roadmap_freeze_cli.py",
+    "tests/test_roadmap_freeze_inputs.py",
+    "tests/test_roadmap_source.py",
     "tests/test_row_validation.py",
     "tests/test_run_calibration_grading.py",
     "tests/test_run_calibration_scorecard.py",
@@ -3082,6 +3101,7 @@
     "tests/test_sqlite_runtime.py",
     "tests/test_sqlite_snapshot.py",
     "tests/test_squashed_seed_recovery_migration.py",
+    "tests/test_staged_evidence_aliases.py",
     "tests/test_stance_scoring.py",
     "tests/test_standing_rules_panel.py",
     "tests/test_standup.py",
@@ -3226,7 +3246,107 @@
       "reason": "quality evidence artifact"
     },
     {
+      "path": "docs/quality/admission-block-cleanup-deletion_proof.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-cleanup-lifecycle_inventory.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-cleanup-reachability_oracle.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-cleanup-reconstructability.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-cleanup-schema_ownership.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-efficiency-dcf_disposition.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-efficiency-integrity_audit.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-efficiency-request_path.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-efficiency-test_ci.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-maintainability-authorities.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-maintainability-duplication.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-maintainability-enforced_ratchets.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-maintainability-static_quality.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-block-maintainability-sustainable_tests.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-active_static_zero.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-architecture_duplication_ratchets.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-benchmark_contract.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-compatibility_parity.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-database_authority.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-deletion_evidence.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-network_consolidation_safety.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-owner_acceptance.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-repository_gates.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/admission-gate-touched_reachability_closure.json",
+      "reason": "quality evidence artifact"
+    },
+    {
       "path": "docs/quality/architecture-initial-09d35d1a.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/architecture-ratchet.json",
       "reason": "quality evidence artifact"
     },
     {
@@ -3238,7 +3358,27 @@
       "reason": "quality evidence artifact"
     },
     {
+      "path": "docs/quality/duplicates-ratchet.json",
+      "reason": "quality evidence artifact"
+    },
+    {
       "path": "docs/quality/lifecycle-dormant-policy.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/lifecycle-inventory.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/performance-baseline.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/quality-9plus-roadmap.md",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/reachability-check.json",
       "reason": "quality evidence artifact"
     },
     {
@@ -3254,7 +3394,15 @@
       "reason": "quality evidence artifact"
     },
     {
+      "path": "docs/quality/roadmap-reconciliation.json",
+      "reason": "quality evidence artifact"
+    },
+    {
       "path": "docs/quality/static-baseline.json",
+      "reason": "quality evidence artifact"
+    },
+    {
+      "path": "docs/quality/test-db-patterns-baseline.json",
       "reason": "quality evidence artifact"
     },
     {
@@ -3398,8 +3546,13 @@
       "error": null
     },
     {
+      "path": ".github/scripts/quality_hash_filter.py",
+      "content_sha256": "ad277ef733e1a373488127854fe38fa272fdfa06d864b3e4484256ca8a08fed3",
+      "error": null
+    },
+    {
       "path": ".github/workflows/ci.yml",
-      "content_sha256": "fc3b6bfe88590ecb7a8ca82b99207e92104985097db72ee92537c285d79ffbcf",
+      "content_sha256": "aefd08c593634b08a88d2946de3500ff52d1b8a26b422e93e996ec8d28058440",
       "error": null
     },
     {
@@ -3419,7 +3572,7 @@
     },
     {
       "path": ".pre-commit-config.yaml",
-      "content_sha256": "a1418422741622f7c8ce18fac93e2aea2286ce0c1c9992056729577e5106a43f",
+      "content_sha256": "89072ef6d0dc61a4ece5b6659149ea0a9e72886eec8e9633625fec04a1efd9eb",
       "error": null
     },
     {
@@ -4994,7 +5147,7 @@
     },
     {
       "path": "config/architecture_boundaries.json",
-      "content_sha256": "ebe77f2dfa235137cfe89881378bf7a12fc44d172c4423b113c0cd8b697c98fb",
+      "content_sha256": "c28ba86a73276657df019d53744f9c2305a35f50d2eb74504cb3b29108072aa2",
       "error": null
     },
     {
@@ -5005,6 +5158,16 @@
     {
       "path": "config/filing_xbrl_processor_bundle.json",
       "content_sha256": "bd6f2f8eece8b2c1916c220c5964f6fa6a3a0812daa9394e43db014eafec4de9",
+      "error": null
+    },
+    {
+      "path": "config/quality_roadmap_claims.json",
+      "content_sha256": "84d5c2d594fc68420bb8857ca2ff3a1ce2c81b2faa49d78589b86bc75809d31a",
+      "error": null
+    },
+    {
+      "path": "config/quality_roadmap_owners.json",
+      "content_sha256": "b03f7851ff5d909272501574abd2d6fd7415b4bb781b4a739dffdd36e0ba80a3",
       "error": null
     },
     {
@@ -5759,7 +5922,7 @@
     },
     {
       "path": "directives/data_provenance.md",
-      "content_sha256": "ecc6ac7c2d6953bfcc5d410b9e2bebadcd3f744b7bdf913d3f591db2df55cfd8",
+      "content_sha256": "483d406fd50c1b5f77d6e07807760d3bd869a65ff9274a728badc37948982acc",
       "error": null
     },
     {
@@ -5994,7 +6157,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "content_sha256": "55b187e7136f95254207867e344b44075724d862b91aab26e501963d52ab41b5",
+      "content_sha256": "0174a833de66f32c6ca37a1c2052de77091d914e87620bdb31ebad82d8fb14a7",
       "error": null
     },
     {
@@ -6429,7 +6592,7 @@
     },
     {
       "path": "execution/apply_issuer_fact_manifest.py",
-      "content_sha256": "aebf644c0f9f7a1b11c124cec4cd006f6fbef2103b015e21fbe6b45884a94b74",
+      "content_sha256": "f9c42250237ab53b4fdc0ce426c39fd9c4790b22ca0d669708898030c34ac751",
       "error": null
     },
     {
@@ -6495,6 +6658,11 @@
     {
       "path": "execution/audit_gc_recovery.py",
       "content_sha256": "9fc7d43ec53449d182033b34850cdea3f088ea2e4d3e32b8b0a9b206f79d242f",
+      "error": null
+    },
+    {
+      "path": "execution/audit_kpi_revision_shadow_census.py",
+      "content_sha256": "695e456dea7a40c78565cdca7f392f8c3d9e1a1b9911a90d01c6073c2d2dc3e4",
       "error": null
     },
     {
@@ -6919,7 +7087,7 @@
     },
     {
       "path": "execution/collect_evidence_bundle.py",
-      "content_sha256": "f96e9df3ca57b1b7688279e348a95e9cabec3c0b46dbee2573558acb2931fdf8",
+      "content_sha256": "b5f9e46aa3d7906a3dec446961e99157443b07c068a3e379851b4a72202619f0",
       "error": null
     },
     {
@@ -7423,6 +7591,11 @@
       "error": null
     },
     {
+      "path": "execution/freeze_quality_roadmap.py",
+      "content_sha256": "582d10c70be5b0dd077041d55da4097737ac8dcf09c9cf10351e0dd1e7cce453",
+      "error": null
+    },
+    {
       "path": "execution/gc_restore.py",
       "content_sha256": "2886de011c559daaedd4d9cbdd206121ea83931485cc1355cb6677cfc65b3ae6",
       "error": null
@@ -7719,7 +7892,7 @@
     },
     {
       "path": "execution/produce_issuer_fact_manifest.py",
-      "content_sha256": "1e38d50483e0786c44c23c50f78d543d5a84e79d54db24f18e6a17a6e3d0561b",
+      "content_sha256": "599a848c2a00c66794a5cc87c09a07d1a5b1b5f43fa4401a4871be719a15284f",
       "error": null
     },
     {
@@ -7789,7 +7962,7 @@
     },
     {
       "path": "execution/reconcile_quality_baseline.py",
-      "content_sha256": "b49893502c10572924f2d59c6582c99d7de08cf11ef254c6feda8aa5c22ea3b7",
+      "content_sha256": "4d715ef9b7bde34311ab1745c0a5805264c045a34faef2a1e7ea28e4f3261abf",
       "error": null
     },
     {
@@ -8594,7 +8767,7 @@
     },
     {
       "path": "pyproject.toml",
-      "content_sha256": "b891fcf46bcf6f907a9a66e341166346777a4389563d69d1137f9f52f15e76ec",
+      "content_sha256": "75509593a30d9face89886e2cbf00d2da7f0beea1cab05088b55bb100c09cafa",
       "error": null
     },
     {
@@ -9144,7 +9317,7 @@
     },
     {
       "path": "src/compute/fmp_derived_kpis.py",
-      "content_sha256": "9c241a30b5e0aedbece8cc1a7878251049a3907d2fa90abc907c3960b2b3b98c",
+      "content_sha256": "4af402b0e023895bf97e8e4977bf7cce22130e38774218fb91f24c206e212342",
       "error": null
     },
     {
@@ -9179,7 +9352,12 @@
     },
     {
       "path": "src/compute/kpi_resolver.py",
-      "content_sha256": "584eb46cf4f5ddd7064198666d17bdf25d73120ecea699ea94b0107e57c9621d",
+      "content_sha256": "daf46f50f4e45b04a0cf4e5b71fb0d6a75c71890b2c1c193762b8316fa723d8e",
+      "error": null
+    },
+    {
+      "path": "src/compute/kpi_revision_shadow_census.py",
+      "content_sha256": "1b752b566b8cbd605ba4971689d102e9eed418d58904b91860315dceb23adfc7",
       "error": null
     },
     {
@@ -10839,7 +11017,7 @@
     },
     {
       "path": "src/pipeline/document_completeness.py",
-      "content_sha256": "c5d2bfca60791e9748c76bdae9e98e7ec396e0bc3ebb71d125dea12416704d53",
+      "content_sha256": "23f9af2d6f54028d798513a8bd7fda7d6e56c9b8217187b83d30018b395564ce",
       "error": null
     },
     {
@@ -10934,7 +11112,7 @@
     },
     {
       "path": "src/pipeline/issuer_document_coverage.py",
-      "content_sha256": "c28d9fc7f0d339edc571f9045a7a3e55467ee2ccadf416a6ababb0ade698227a",
+      "content_sha256": "660fcf6a2a7f38a87fc1510ab63bf6b7ac719a1232a5700419935bbbf2ce63eb",
       "error": null
     },
     {
@@ -10944,12 +11122,12 @@
     },
     {
       "path": "src/pipeline/issuer_fact_manifest.py",
-      "content_sha256": "a000cd5071fbf95fd5b6ae489f8b7ddac49cb46eb004fdbdc98a9619b44583db",
+      "content_sha256": "8d7a04188f018d1f524ee3992f86d7e5d4b3bcc164bb9461a004ed4c7468f240",
       "error": null
     },
     {
       "path": "src/pipeline/issuer_fact_manifest_producer.py",
-      "content_sha256": "cff5c03f9a2bf0c252df427e58ff91398686d649eca977cc68c542ea42a8b1d4",
+      "content_sha256": "5f6255d6cd0433b97ec7d8b21391bba0c40da4b42b3b706847673816627a25ec",
       "error": null
     },
     {
@@ -10969,7 +11147,7 @@
     },
     {
       "path": "src/pipeline/kpi_persistence.py",
-      "content_sha256": "89e4e5ec766df9dcf917f93a17f3d1ea65a441b71ea75efa30a24a8defc69294",
+      "content_sha256": "2496a8232f91fc82d2b45b268da73810de9eabe68fe8035c1cbfc1f8b352cf21",
       "error": null
     },
     {
@@ -10984,7 +11162,7 @@
     },
     {
       "path": "src/pipeline/kpi_semantic_dispositions.py",
-      "content_sha256": "6e08f87f05a266bc2e239c181d1f5edf66b767559ed26c804f0d00642f5761c6",
+      "content_sha256": "df1d520fb41cd1cabeca98b1a46b92e2c6b5441889a7da399a439b19d5a806d4",
       "error": null
     },
     {
@@ -11004,7 +11182,7 @@
     },
     {
       "path": "src/pipeline/kpi_source_review.py",
-      "content_sha256": "e444f0df93c3390b82be045cb0c0dbbd1b61e468c76bb27120911c8d8225c0ee",
+      "content_sha256": "fbdd7084dc9776a9f7c0bdbad40eb2e04e21f305d23060dc0fda18476b45cd73",
       "error": null
     },
     {
@@ -11559,7 +11737,7 @@
     },
     {
       "path": "src/provenance/financial_fact_resolution.py",
-      "content_sha256": "fc1f38ceccd37994eb2419dbf1953424d76fba573afe5875861f7c83030fa6ee",
+      "content_sha256": "38d1bf337d1c436d418acb5c0f87187413c62e9f0bc6191f4b663ad8011e5b0e",
       "error": null
     },
     {
@@ -11864,32 +12042,32 @@
     },
     {
       "path": "src/quality/evidence_bundle_assemble.py",
-      "content_sha256": "014c2ec130ec8b8aac7d589a04efae50df387515a8598130c90468d77dc26ffb",
+      "content_sha256": "b73d3e0342d584e5920133f830bc1fb899b1021f73e89429535c5b85dd4afbcc",
       "error": null
     },
     {
       "path": "src/quality/evidence_bundle_collect.py",
-      "content_sha256": "113b4c75ef87aa3bd18ae137a12327f1e89ce858209a00d0adc8c037d4a7a5e5",
+      "content_sha256": "be44a10c0117563973fa22080d2088eeba96c3a7f699beea7a2dceb79785fda0",
       "error": null
     },
     {
       "path": "src/quality/evidence_bundle_io.py",
-      "content_sha256": "59912707066139a2919b6851a6686f70646db82fb054616b12c5207320652269",
+      "content_sha256": "9c295a1ef3d0e0fc485ab6d5eac24e153908920fd46633518915df0a7bc9778a",
       "error": null
     },
     {
       "path": "src/quality/evidence_bundle_models.py",
-      "content_sha256": "002bfd7ef560a9b5cdd95e54c5a41b2a0ab11aaa951deada33230e15045a4134",
+      "content_sha256": "4b5de1e2340113aeca639bb2ce936270fd14f5c09c8d62d2369493b20b7c3548",
       "error": null
     },
     {
       "path": "src/quality/evidence_bundle_validate.py",
-      "content_sha256": "3ac8b5a6a219e6a47c0e45b6792945aa1af39195bdf14024d85d642ad6478992",
+      "content_sha256": "ca07a5de117f11022202813c24455dd6d5082cc1628e822bd1c20c5d2f3e65bc",
       "error": null
     },
     {
       "path": "src/quality/evidence_path_policy.py",
-      "content_sha256": "c7698581cf082af105cad684155c0bd50a77ec3c254778aea07fe7dd31d84490",
+      "content_sha256": "45e811eab5b1f92f6825f058a266f2ca7bfba56ff99175778b43437baffa1a4a",
       "error": null
     },
     {
@@ -11938,8 +12116,33 @@
       "error": null
     },
     {
+      "path": "src/quality/roadmap_freeze.py",
+      "content_sha256": "60447b272060688b69e90c9642e6c2caf3b0d3a71e240754d0bb5e9ec881ccf0",
+      "error": null
+    },
+    {
+      "path": "src/quality/roadmap_freeze_bundle.py",
+      "content_sha256": "b4ade88e4f56a8cab5d14e1bbd726d9a6913dfab904569b643ba5cb0eb57a40a",
+      "error": null
+    },
+    {
+      "path": "src/quality/roadmap_freeze_inputs.py",
+      "content_sha256": "24eb01d6219818249e9adcbff94b16bdee3efe9d6b1a840414dd71b4f5655cef",
+      "error": null
+    },
+    {
+      "path": "src/quality/roadmap_freeze_models.py",
+      "content_sha256": "69f89b1edd3f325db077b68246ef35f37fcf47dea0391aa7c17433841aa39eff",
+      "error": null
+    },
+    {
       "path": "src/quality/roadmap_reconciliation.py",
-      "content_sha256": "4cc923ff0f73c141b039f1a2fd9a73e63089fb236b5364a3db8919ab4eee48db",
+      "content_sha256": "d0d549b485dbb12f86213fb630fbad2f675d0f9c636caeccaf783b6d0729e951",
+      "error": null
+    },
+    {
+      "path": "src/quality/roadmap_source.py",
+      "content_sha256": "a05d54e3c879d26300f8b7adcc65d103c77c08a3bae7e56dc653aaa72c5c6f29",
       "error": null
     },
     {
@@ -13899,7 +14102,7 @@
     },
     {
       "path": "tests/test_apply_issuer_fact_manifest_cli.py",
-      "content_sha256": "12e196c745dda5c17e0fa37157d51f8af72928b306b76e9d00a2a4a172d915ad",
+      "content_sha256": "a35e3ed68ced543a02191533d132d3d01244506886801c41a03c63ce9bd35b60",
       "error": null
     },
     {
@@ -14100,6 +14303,11 @@
     {
       "path": "tests/test_audit_data_cutover_readiness.py",
       "content_sha256": "687c27cecd5708a1e747a910be078ee412aed5c51ca21fc745d1d1bc1a085ec4",
+      "error": null
+    },
+    {
+      "path": "tests/test_audit_kpi_revision_shadow_census.py",
+      "content_sha256": "d69b28326c3da4c3cef7475f8661b806efdad2c3a638999116616b5813bb975a",
       "error": null
     },
     {
@@ -15429,7 +15637,17 @@
     },
     {
       "path": "tests/test_evidence_bundle.py",
-      "content_sha256": "195d0398f54c94edd1e0507a34af6f39e3ed51b38bf562c5b60355ba2cdda5a8",
+      "content_sha256": "11f4cbed847482d609105b6735c2839d7152f15073938d134ac70a06f337d755",
+      "error": null
+    },
+    {
+      "path": "tests/test_evidence_bundle_cli_paths.py",
+      "content_sha256": "cb952fb47579476a5176001f3f47866c38c6f50c4d903c0abd5e296ac5a60791",
+      "error": null
+    },
+    {
+      "path": "tests/test_evidence_bundle_inputs.py",
+      "content_sha256": "54dcee66a4dee61e980b9395dc9251700e07e687b830e5192cd267f5e8c78a4c",
       "error": null
     },
     {
@@ -16204,7 +16422,7 @@
     },
     {
       "path": "tests/test_issuer_fact_manifest.py",
-      "content_sha256": "7d669e81551ee56ad3f11ddbe74972ce17932da1cfebdb4037b02390e16940ac",
+      "content_sha256": "8f645a1759abd43e447773c7423f8bd8ab1db8aa5218bf882f433714443f155c",
       "error": null
     },
     {
@@ -16274,7 +16492,7 @@
     },
     {
       "path": "tests/test_kpi_definition_revisions.py",
-      "content_sha256": "ae569c67e9d5d037250538ecc78922f55999ea58db1f86a330344789067dd533",
+      "content_sha256": "70272164e274a006d19c56f4a2e15410038f2b165b70da2ded28be9c57d34fd1",
       "error": null
     },
     {
@@ -16404,7 +16622,7 @@
     },
     {
       "path": "tests/test_legacy_fact_access_architecture.py",
-      "content_sha256": "d8982628c68ea26b6dd647b559c3640e55f657e900903a8dcedfa02358923452",
+      "content_sha256": "c6caaa2a8dd18d9a3dd008222a758b71455f5feb88213ef3d88c2e4fe5699f6b",
       "error": null
     },
     {
@@ -17064,7 +17282,7 @@
     },
     {
       "path": "tests/test_operations_surface_governance.py",
-      "content_sha256": "7bb83ff8ae50ceb2cfa953928bc06b6d3dc4689f08dac705a403f0329fdb511d",
+      "content_sha256": "56843442b4d22b955b6e62f04e66a79ed07819a31aeb4d2f7bb6ed43b4707391",
       "error": null
     },
     {
@@ -17209,7 +17427,7 @@
     },
     {
       "path": "tests/test_pipeline_kpi_persistence.py",
-      "content_sha256": "c13887986727e33688f63fb4b4eac679ffb2a2f5a11e0945ac532907e3e5a4dc",
+      "content_sha256": "f8dff663d0398c618911498475a7031448ac7992291d16532884d6225983f3cb",
       "error": null
     },
     {
@@ -17549,7 +17767,7 @@
     },
     {
       "path": "tests/test_produce_issuer_fact_manifest.py",
-      "content_sha256": "a0e6d77712cb083aff4c59536aed87f0f9e2173adc79727a383cc1f8f2261c06",
+      "content_sha256": "0b982091fd99fb2f7c700a2172334bd4c2e30c95da1af6fe2f855fe5ca8d6c5b",
       "error": null
     },
     {
@@ -17670,6 +17888,11 @@
     {
       "path": "tests/test_qualitative_conditions.py",
       "content_sha256": "761b4483d7ec92e4a9c955a4aa22392de450d05664963e47b4e44aac21961876",
+      "error": null
+    },
+    {
+      "path": "tests/test_quality_hash_filter.py",
+      "content_sha256": "2e0222695a84d800b29bdb80e03aaf078f178684f053b0be4a1ec44b1537becd",
       "error": null
     },
     {
@@ -18010,6 +18233,26 @@
     {
       "path": "tests/test_risk_snapshot_refresh.py",
       "content_sha256": "51f76fe53bd15a9b4de44edaa97d5df7f7f18e8ef8ff06462ea592f721fdc067",
+      "error": null
+    },
+    {
+      "path": "tests/test_roadmap_freeze.py",
+      "content_sha256": "80a82e59bb9765b03e4ff75c5404abc53e9de1a482daac7c2b64099bcc8b4a62",
+      "error": null
+    },
+    {
+      "path": "tests/test_roadmap_freeze_cli.py",
+      "content_sha256": "2f785b8ee4bf890ac6748220dfd5edf96aa66033a68fd45371595082f8e6fac5",
+      "error": null
+    },
+    {
+      "path": "tests/test_roadmap_freeze_inputs.py",
+      "content_sha256": "a18b09014882479c1f127cc0fd9679806d3a87613afd62574964c4cd8faa674c",
+      "error": null
+    },
+    {
+      "path": "tests/test_roadmap_source.py",
+      "content_sha256": "06970344734f63ba51c291397e1aeec9d736d4d976ff18cac3b556e8d8e84426",
       "error": null
     },
     {
@@ -18645,6 +18888,11 @@
     {
       "path": "tests/test_squashed_seed_recovery_migration.py",
       "content_sha256": "c7fca2789ab5e5c2d93de23037206130f205f9de7fcd62273a8501fa0dd1c9e1",
+      "error": null
+    },
+    {
+      "path": "tests/test_staged_evidence_aliases.py",
+      "content_sha256": "2ee49f9a719fab0482447385ce943c632c50c64d9b1576b2f0d71c21b5963d9d",
       "error": null
     },
     {
@@ -19321,8 +19569,8 @@
     "name": "ast+xml+literal-scanner",
     "version": "1.2.1",
     "python": ">=3.11",
-    "source_sha256": "5f4a7a17d81e96082860e675690281a211204e9a2437a782b8fb3f85a9b5fb2a",
-    "dispositions_sha256": "157ba2f3a91c06da3b901e0562e05be49e0f3ab866862c8e596ae4b7713910e4"
+    "source_sha256": "810909d9cb3cf2338eb55c805c105b54ff1eb3127637bf726c5f583da48d91c7",
+    "dispositions_sha256": "c14cad46c928298e32fac975251e5f9463dcd9360f096935d9812958c186ae0d"
   },
   "nodes": [
     {
@@ -19407,6 +19655,10 @@
     },
     {
       "id": ".github/scripts/ci_gate.py",
+      "kind": "python"
+    },
+    {
+      "id": ".github/scripts/quality_hash_filter.py",
       "kind": "python"
     },
     {
@@ -20654,6 +20906,14 @@
       "kind": "json"
     },
     {
+      "id": "config/quality_roadmap_claims.json",
+      "kind": "json"
+    },
+    {
+      "id": "config/quality_roadmap_owners.json",
+      "kind": "json"
+    },
+    {
       "id": "cron/apply_task_security_descriptor.ps1",
       "kind": "wrapper"
     },
@@ -21674,6 +21934,10 @@
       "kind": "python"
     },
     {
+      "id": "execution/audit_kpi_revision_shadow_census.py",
+      "kind": "python"
+    },
+    {
       "id": "execution/audit_kpi_semantics.py",
       "kind": "python"
     },
@@ -22407,6 +22671,10 @@
     },
     {
       "id": "execution/format_changed.py",
+      "kind": "python"
+    },
+    {
+      "id": "execution/freeze_quality_roadmap.py",
       "kind": "python"
     },
     {
@@ -23699,6 +23967,10 @@
     },
     {
       "id": "src/compute/kpi_resolver.py",
+      "kind": "python"
+    },
+    {
+      "id": "src/compute/kpi_revision_shadow_census.py",
       "kind": "python"
     },
     {
@@ -25906,7 +26178,27 @@
       "kind": "python"
     },
     {
+      "id": "src/quality/roadmap_freeze.py",
+      "kind": "python"
+    },
+    {
+      "id": "src/quality/roadmap_freeze_bundle.py",
+      "kind": "python"
+    },
+    {
+      "id": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "python"
+    },
+    {
+      "id": "src/quality/roadmap_freeze_models.py",
+      "kind": "python"
+    },
+    {
       "id": "src/quality/roadmap_reconciliation.py",
+      "kind": "python"
+    },
+    {
+      "id": "src/quality/roadmap_source.py",
       "kind": "python"
     },
     {
@@ -27478,6 +27770,10 @@
       "kind": "python"
     },
     {
+      "id": "tests/test_audit_kpi_revision_shadow_census.py",
+      "kind": "python"
+    },
+    {
       "id": "tests/test_audit_quarterly_data_coverage.py",
       "kind": "python"
     },
@@ -28539,6 +28835,14 @@
     },
     {
       "id": "tests/test_evidence_bundle.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_evidence_bundle_cli_paths.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_evidence_bundle_inputs.py",
       "kind": "python"
     },
     {
@@ -30334,6 +30638,10 @@
       "kind": "python"
     },
     {
+      "id": "tests/test_quality_hash_filter.py",
+      "kind": "python"
+    },
+    {
       "id": "tests/test_query_criteria.py",
       "kind": "python"
     },
@@ -30603,6 +30911,22 @@
     },
     {
       "id": "tests/test_risk_snapshot_refresh.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_roadmap_freeze.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_roadmap_freeze_cli.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_roadmap_freeze_inputs.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_roadmap_source.py",
       "kind": "python"
     },
     {
@@ -31111,6 +31435,10 @@
     },
     {
       "id": "tests/test_squashed_seed_recovery_migration.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_staged_evidence_aliases.py",
       "kind": "python"
     },
     {
@@ -31766,6 +32094,26 @@
       "evidence": "external import typing",
       "confidence": "high",
       "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": ".github/scripts/quality_hash_filter.py",
+      "target": "<external:os>",
+      "kind": "import",
+      "evidence": "external import os",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": ".github/scripts/quality_hash_filter.py",
+      "target": "<external:re>",
+      "kind": "import",
+      "evidence": "external import re",
+      "confidence": "high",
+      "line": null,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -44260,6 +44608,26 @@
       "reviewed_disposition": null
     },
     {
+      "source": "config/quality_roadmap_claims.json",
+      "target": "a",
+      "kind": "python_entrypoint",
+      "evidence": "textual command entrypoint",
+      "confidence": "medium",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "config/quality_roadmap_claims.json",
+      "target": "modules",
+      "kind": "python_entrypoint",
+      "evidence": "textual command entrypoint",
+      "confidence": "medium",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
       "source": "cron/backup_db.py",
       "target": "<external:__future__>",
       "kind": "import",
@@ -47911,6 +48279,16 @@
     },
     {
       "source": "directives/operations_governance_surface.md",
+      "target": "execution/audit_kpi_revision_shadow_census.py",
+      "kind": "directive",
+      "evidence": "directive path reference",
+      "confidence": "medium",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "directives/operations_governance_surface.md",
       "target": "src/operations/registry.py",
       "kind": "directive",
       "evidence": "directive path reference",
@@ -49221,11 +49599,21 @@
     },
     {
       "source": "execution/apply_issuer_fact_manifest.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/apply_issuer_fact_manifest.py",
       "target": "<external:pathlib>",
       "kind": "import",
       "evidence": "external import pathlib",
       "confidence": "high",
-      "line": 11,
+      "line": 12,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -49245,7 +49633,7 @@
       "kind": "import",
       "evidence": "from pipeline.issuer_fact_manifest",
       "confidence": "high",
-      "line": 18,
+      "line": 19,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -49255,7 +49643,7 @@
       "kind": "import",
       "evidence": "from sqlite_runtime",
       "confidence": "high",
-      "line": 22,
+      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -51036,6 +51424,76 @@
       "evidence": "from runtime.job_runtime",
       "confidence": "high",
       "line": 26,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/audit_kpi_revision_shadow_census.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/audit_kpi_revision_shadow_census.py",
+      "target": "<external:datetime>",
+      "kind": "import",
+      "evidence": "external import datetime",
+      "confidence": "high",
+      "line": 5,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/audit_kpi_revision_shadow_census.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 6,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/audit_kpi_revision_shadow_census.py",
+      "target": "execution/_lib.py",
+      "kind": "import",
+      "evidence": "from execution._lib",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/audit_kpi_revision_shadow_census.py",
+      "target": "execution/_lib.py",
+      "kind": "import",
+      "evidence": "from _lib",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/audit_kpi_revision_shadow_census.py",
+      "target": "src/compute/kpi_revision_shadow_census.py",
+      "kind": "import",
+      "evidence": "from compute.kpi_revision_shadow_census",
+      "confidence": "high",
+      "line": 13,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/audit_kpi_revision_shadow_census.py",
+      "target": "src/sqlite_runtime.py",
+      "kind": "import",
+      "evidence": "from sqlite_runtime",
+      "confidence": "high",
+      "line": 17,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -80830,6 +81288,86 @@
       "reviewed_disposition": null
     },
     {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "<external:argparse>",
+      "kind": "import",
+      "evidence": "external import argparse",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "<external:sys>",
+      "kind": "import",
+      "evidence": "external import sys",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "src/quality/evidence_bundle_io.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_bundle_io",
+      "confidence": "high",
+      "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "src/quality/roadmap_freeze.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze",
+      "confidence": "high",
+      "line": 13,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "src/quality/roadmap_freeze_bundle.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_bundle",
+      "confidence": "high",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/freeze_quality_roadmap.py",
+      "target": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_inputs",
+      "confidence": "high",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
       "source": "execution/gc_restore.py",
       "target": "<external:__future__>",
       "kind": "import",
@@ -88035,7 +88573,7 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_persistence",
       "confidence": "high",
-      "line": 26,
+      "line": 27,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -88045,7 +88583,7 @@
       "kind": "import",
       "evidence": "from provenance.secure_file_install",
       "confidence": "high",
-      "line": 27,
+      "line": 28,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -89371,19 +89909,19 @@
     },
     {
       "source": "execution/reconcile_quality_baseline.py",
-      "target": "<external:typing>",
+      "target": "src/quality/atomic_write.py",
       "kind": "import",
-      "evidence": "external import typing",
+      "evidence": "from quality.atomic_write",
       "confidence": "high",
-      "line": 9,
+      "line": 13,
       "unknown": false,
       "reviewed_disposition": null
     },
     {
       "source": "execution/reconcile_quality_baseline.py",
-      "target": "src/quality/atomic_write.py",
+      "target": "src/quality/evidence_bundle_io.py",
       "kind": "import",
-      "evidence": "from quality.atomic_write",
+      "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
       "line": 14,
       "unknown": false,
@@ -89396,6 +89934,16 @@
       "evidence": "from quality.roadmap_reconciliation",
       "confidence": "high",
       "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/reconcile_quality_baseline.py",
+      "target": "src/quality/roadmap_source.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_source",
+      "confidence": "high",
+      "line": 22,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -122115,7 +122663,7 @@
       "kind": "import",
       "evidence": "from compute.metrics_engine.registry",
       "confidence": "high",
-      "line": 912,
+      "line": 995,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -122166,6 +122714,236 @@
       "evidence": "from provenance.financial_fact_resolution",
       "confidence": "high",
       "line": 44,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:dataclasses>",
+      "kind": "import",
+      "evidence": "external import dataclasses",
+      "confidence": "high",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:datetime>",
+      "kind": "import",
+      "evidence": "external import datetime",
+      "confidence": "high",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:enum>",
+      "kind": "import",
+      "evidence": "external import enum",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:pydantic>",
+      "kind": "import",
+      "evidence": "external import pydantic",
+      "confidence": "high",
+      "line": 20,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:pydantic_core>",
+      "kind": "import",
+      "evidence": "external import pydantic_core",
+      "confidence": "high",
+      "line": 21,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:sqlite3>",
+      "kind": "import",
+      "evidence": "external import sqlite3",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 18,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/compute/kpi_resolver.py",
+      "kind": "import",
+      "evidence": "from compute.kpi_resolver",
+      "confidence": "high",
+      "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/compute/kpi_resolver.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/pipeline/kpi_semantics.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_semantics",
+      "confidence": "high",
+      "line": 32,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/pipeline/kpi_semantics.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 32,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/provenance/financial_fact_resolution.py",
+      "kind": "import",
+      "evidence": "from provenance.financial_fact_resolution",
+      "confidence": "high",
+      "line": 33,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/provenance/financial_fact_resolution.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 33,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/provenance/verifier_identity.py",
+      "kind": "import",
+      "evidence": "from provenance.verifier_identity",
+      "confidence": "high",
+      "line": 34,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/provenance/verifier_identity.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 34,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/sqlite_runtime.py",
+      "kind": "import",
+      "evidence": "from sqlite_runtime",
+      "confidence": "high",
+      "line": 35,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/sqlite_runtime.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 35,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/sqlite_snapshot.py",
+      "kind": "import",
+      "evidence": "from sqlite_snapshot",
+      "confidence": "high",
+      "line": 36,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/kpi_revision_shadow_census.py",
+      "target": "src/sqlite_snapshot.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 36,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159391,11 +160169,51 @@
     },
     {
       "source": "src/pipeline/issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_definition_revisions.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_definition_revisions",
+      "confidence": "high",
+      "line": 41,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/issuer_fact_manifest.py",
       "target": "src/pipeline/kpi_persistence.py",
       "kind": "import",
       "evidence": "from pipeline.kpi_persistence",
       "confidence": "high",
-      "line": 41,
+      "line": 50,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_semantic_review.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_semantic_review",
+      "confidence": "high",
+      "line": 56,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_semantics.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_semantics",
+      "confidence": "high",
+      "line": 60,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 67,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159405,7 +160223,17 @@
       "kind": "import",
       "evidence": "from pipeline.segment_junction_writer",
       "confidence": "high",
-      "line": 47,
+      "line": 71,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/issuer_fact_manifest.py",
+      "target": "src/provenance/evidence_ledger.py",
+      "kind": "import",
+      "evidence": "from provenance.evidence_ledger",
+      "confidence": "high",
+      "line": 72,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159425,7 +160253,27 @@
       "kind": "import",
       "evidence": "external import datetime",
       "confidence": "high",
-      "line": 12,
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/issuer_fact_manifest_producer.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/issuer_fact_manifest_producer.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159435,7 +160283,7 @@
       "kind": "import",
       "evidence": "external import pydantic",
       "confidence": "high",
-      "line": 15,
+      "line": 17,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159445,7 +160293,7 @@
       "kind": "import",
       "evidence": "external import typing",
       "confidence": "high",
-      "line": 13,
+      "line": 15,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159455,7 +160303,7 @@
       "kind": "import",
       "evidence": "from models.documents",
       "confidence": "high",
-      "line": 17,
+      "line": 19,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159465,7 +160313,7 @@
       "kind": "import",
       "evidence": "from models.facts",
       "confidence": "high",
-      "line": 18,
+      "line": 20,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159475,7 +160323,7 @@
       "kind": "import",
       "evidence": "from pipeline.issuer_document_coverage",
       "confidence": "high",
-      "line": 19,
+      "line": 21,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159485,7 +160333,7 @@
       "kind": "import",
       "evidence": "from pipeline.issuer_fact_manifest",
       "confidence": "high",
-      "line": 20,
+      "line": 22,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -159495,7 +160343,7 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_persistence",
       "confidence": "high",
-      "line": 25,
+      "line": 30,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -160045,7 +160893,7 @@
       "kind": "import",
       "evidence": "from pipeline.locators",
       "confidence": "high",
-      "line": 624,
+      "line": 763,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -160055,7 +160903,7 @@
       "kind": "import",
       "evidence": "from pipeline.restatement_detector",
       "confidence": "high",
-      "line": 41,
+      "line": 42,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -160065,7 +160913,7 @@
       "kind": "import",
       "evidence": "from pipeline.validation_issue_store",
       "confidence": "high",
-      "line": 535,
+      "line": 573,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -160951,11 +161799,21 @@
     },
     {
       "source": "src/pipeline/kpi_source_review.py",
+      "target": "<external:dataclasses>",
+      "kind": "import",
+      "evidence": "external import dataclasses",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/kpi_source_review.py",
       "target": "<external:datetime>",
       "kind": "import",
       "evidence": "external import datetime",
       "confidence": "high",
-      "line": 8,
+      "line": 9,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -160965,7 +161823,7 @@
       "kind": "import",
       "evidence": "external import decimal",
       "confidence": "high",
-      "line": 9,
+      "line": 10,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -160985,7 +161843,7 @@
       "kind": "import",
       "evidence": "from credibility.observations",
       "confidence": "high",
-      "line": 11,
+      "line": 12,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -160995,7 +161853,7 @@
       "kind": "import",
       "evidence": "from models.facts",
       "confidence": "high",
-      "line": 12,
+      "line": 13,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -161005,7 +161863,17 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_definition_revisions",
       "confidence": "high",
-      "line": 13,
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/pipeline/kpi_source_review.py",
+      "target": "src/pipeline/kpi_persistence.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_persistence",
+      "confidence": "high",
+      "line": 22,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -161015,7 +161883,7 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_semantics",
       "confidence": "high",
-      "line": 21,
+      "line": 27,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -161025,7 +161893,7 @@
       "kind": "import",
       "evidence": "from provenance.financial_fact_resolution",
       "confidence": "high",
-      "line": 22,
+      "line": 28,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -185415,7 +186283,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 436,
+      "line": 478,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -185961,11 +186829,51 @@
     },
     {
       "source": "src/quality/evidence_bundle_assemble.py",
+      "target": "src/quality/evidence_path_policy.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_path_policy",
+      "confidence": "high",
+      "line": 91,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_assemble.py",
+      "target": "src/quality/evidence_path_policy.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 91,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_assemble.py",
+      "target": "src/quality/roadmap_freeze_bundle.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_bundle",
+      "confidence": "high",
+      "line": 92,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_assemble.py",
+      "target": "src/quality/roadmap_freeze_bundle.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 92,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_assemble.py",
       "target": "src/quality/scoring.py",
       "kind": "import",
       "evidence": "from quality.scoring",
       "confidence": "high",
-      "line": 91,
+      "line": 93,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -185975,7 +186883,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 91,
+      "line": 93,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -185985,7 +186893,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 218,
+      "line": 456,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186091,21 +186999,11 @@
     },
     {
       "source": "src/quality/evidence_bundle_collect.py",
-      "target": "src/quality/evidence_bundle_io.py",
+      "target": "<external:typing>",
       "kind": "import",
-      "evidence": "from quality.evidence_bundle_io",
+      "evidence": "external import typing",
       "confidence": "high",
-      "line": 15,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/quality/evidence_bundle_collect.py",
-      "target": "src/quality/evidence_bundle_io.py",
-      "kind": "import",
-      "evidence": "from quality.evidence_bundle_io",
-      "confidence": "high",
-      "line": 19,
+      "line": 14,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186115,7 +187013,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 22,
+      "line": 16,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186125,7 +187023,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 25,
+      "line": 20,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186135,7 +187033,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 28,
+      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186145,7 +187043,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 31,
+      "line": 26,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186155,7 +187053,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 34,
+      "line": 29,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186165,7 +187063,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 37,
+      "line": 32,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186175,7 +187073,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 40,
+      "line": 35,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186185,7 +187083,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 43,
+      "line": 38,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186195,7 +187093,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 46,
+      "line": 41,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186205,7 +187103,27 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 49,
+      "line": 44,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_collect.py",
+      "target": "src/quality/evidence_bundle_io.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_bundle_io",
+      "confidence": "high",
+      "line": 47,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_collect.py",
+      "target": "src/quality/evidence_bundle_io.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_bundle_io",
+      "confidence": "high",
+      "line": 50,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186215,7 +187133,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 15,
+      "line": 16,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186225,7 +187143,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 19,
+      "line": 20,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186235,7 +187153,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 22,
+      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186245,7 +187163,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 25,
+      "line": 26,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186255,7 +187173,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 28,
+      "line": 29,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186265,7 +187183,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 31,
+      "line": 32,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186275,7 +187193,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 34,
+      "line": 35,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186285,7 +187203,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 37,
+      "line": 38,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186295,7 +187213,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 40,
+      "line": 41,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186305,7 +187223,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 43,
+      "line": 44,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186315,7 +187233,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 46,
+      "line": 47,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186325,7 +187243,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 49,
+      "line": 50,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186335,7 +187253,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_models",
       "confidence": "high",
-      "line": 52,
+      "line": 53,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186345,7 +187263,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_models",
       "confidence": "high",
-      "line": 60,
+      "line": 61,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186355,7 +187273,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 52,
+      "line": 53,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186365,7 +187283,27 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 60,
+      "line": 61,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_collect.py",
+      "target": "src/quality/evidence_path_policy.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_path_policy",
+      "confidence": "high",
+      "line": 64,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_collect.py",
+      "target": "src/quality/evidence_path_policy.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 64,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -186393,7 +187331,7 @@
       "source": "src/quality/evidence_bundle_io.py",
       "target": "<dynamic process entrypoint>",
       "kind": "unknown",
-      "evidence": "subprocess/runpy expression; reviewed as closed_command_set in docs/quality/reachability-process-dispositions.json: _default_runner executes only the immutable argv declared by the typed evidence artifact registry.",
+      "evidence": "subprocess/runpy expression; reviewed as closed_command_set in docs/quality/reachability-process-dispositions.json: _default_runner executes the immutable argv declared by the typed evidence artifact registry and fixed git metadata probes used to bind dependency context to the subject.",
       "confidence": "medium",
       "line": 59,
       "unknown": false,
@@ -186555,7 +187493,7 @@
       "kind": "getattr",
       "evidence": "dynamic getattr expression; reviewed as schema_field in docs/quality/reachability-getattr-dispositions.json: getattr normalizes only the fixed commit and tree fields declared by EvidenceBundleManifest.",
       "confidence": "medium",
-      "line": 231,
+      "line": 238,
       "unknown": false,
       "reviewed_disposition": "schema_field"
     },
@@ -186645,7 +187583,7 @@
       "kind": "import",
       "evidence": "from quality.scoring",
       "confidence": "high",
-      "line": 18,
+      "line": 19,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -187131,11 +188069,51 @@
     },
     {
       "source": "src/quality/evidence_bundle_validate.py",
+      "target": "src/quality/evidence_path_policy.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_path_policy",
+      "confidence": "high",
+      "line": 78,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_validate.py",
+      "target": "src/quality/evidence_path_policy.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 78,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_validate.py",
+      "target": "src/quality/roadmap_freeze_bundle.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_bundle",
+      "confidence": "high",
+      "line": 79,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_validate.py",
+      "target": "src/quality/roadmap_freeze_bundle.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 79,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/evidence_bundle_validate.py",
       "target": "src/quality/scoring.py",
       "kind": "import",
       "evidence": "from quality.scoring",
       "confidence": "high",
-      "line": 78,
+      "line": 80,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -187145,7 +188123,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 78,
+      "line": 80,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -188090,6 +189068,896 @@
       "reviewed_disposition": null
     },
     {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<attribute:schema_version>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 150,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:collections.abc>",
+      "kind": "import",
+      "evidence": "external import collections.abc",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:collections>",
+      "kind": "import",
+      "evidence": "external import collections",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 10,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:pydantic>",
+      "kind": "import",
+      "evidence": "external import pydantic",
+      "confidence": "high",
+      "line": 13,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/architecture.py",
+      "kind": "import",
+      "evidence": "from quality.architecture",
+      "confidence": "high",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/architecture.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/duplicates.py",
+      "kind": "import",
+      "evidence": "from quality.duplicates",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/duplicates.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/git_env.py",
+      "kind": "import",
+      "evidence": "from quality.git_env",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/git_env.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/lifecycle_models.py",
+      "kind": "import",
+      "evidence": "from quality.lifecycle_models",
+      "confidence": "high",
+      "line": 18,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/lifecycle_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 18,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/performance_models.py",
+      "kind": "import",
+      "evidence": "from quality.performance_models",
+      "confidence": "high",
+      "line": 19,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/performance_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 19,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/reachability.py",
+      "kind": "import",
+      "evidence": "from quality.reachability",
+      "confidence": "high",
+      "line": 20,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/reachability.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 20,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_inputs",
+      "confidence": "high",
+      "line": 21,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 21,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_models",
+      "confidence": "high",
+      "line": 33,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 33,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/roadmap_reconciliation.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_reconciliation",
+      "confidence": "high",
+      "line": 45,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/roadmap_reconciliation.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 45,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/static_quality.py",
+      "kind": "import",
+      "evidence": "from quality.static_quality",
+      "confidence": "high",
+      "line": 46,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/static_quality.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 46,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/test_db_models.py",
+      "kind": "import",
+      "evidence": "from quality.test_db_models",
+      "confidence": "high",
+      "line": 47,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze.py",
+      "target": "src/quality/test_db_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 47,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "<external:collections.abc>",
+      "kind": "import",
+      "evidence": "external import collections.abc",
+      "confidence": "high",
+      "line": 6,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "<external:pydantic>",
+      "kind": "import",
+      "evidence": "external import pydantic",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "src/quality/admission_policy.py",
+      "kind": "import",
+      "evidence": "from quality.admission_policy",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "src/quality/evidence_bundle_io.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_bundle_io",
+      "confidence": "high",
+      "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "src/quality/roadmap_freeze.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze",
+      "confidence": "high",
+      "line": 13,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_inputs",
+      "confidence": "high",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_bundle.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_models",
+      "confidence": "high",
+      "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:commit_hash>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 226,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:revision>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 229,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:revision>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 231,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:scoped_commit>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 225,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:scoped_commit>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 227,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:scoped_commit>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 228,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:subject_commit>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 230,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<attribute:subject_commit>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 232,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:dataclasses>",
+      "kind": "import",
+      "evidence": "external import dataclasses",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:pydantic>",
+      "kind": "import",
+      "evidence": "external import pydantic",
+      "confidence": "high",
+      "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 10,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/architecture.py",
+      "kind": "import",
+      "evidence": "from quality.architecture",
+      "confidence": "high",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/architecture.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/duplicates.py",
+      "kind": "import",
+      "evidence": "from quality.duplicates",
+      "confidence": "high",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/duplicates.py",
+      "kind": "import",
+      "evidence": "from quality.duplicates",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/duplicates.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/duplicates.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/git_env.py",
+      "kind": "import",
+      "evidence": "from quality.git_env",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/git_env.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/lifecycle_models.py",
+      "kind": "import",
+      "evidence": "from quality.lifecycle_models",
+      "confidence": "high",
+      "line": 18,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/lifecycle_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 18,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/performance_models.py",
+      "kind": "import",
+      "evidence": "from quality.performance_models",
+      "confidence": "high",
+      "line": 19,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/performance_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 19,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/reachability.py",
+      "kind": "import",
+      "evidence": "from quality.reachability",
+      "confidence": "high",
+      "line": 20,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/reachability.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 20,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_models",
+      "confidence": "high",
+      "line": 21,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 21,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/roadmap_reconciliation.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_reconciliation",
+      "confidence": "high",
+      "line": 22,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/roadmap_reconciliation.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 22,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/scoring.py",
+      "kind": "import",
+      "evidence": "from quality.scoring",
+      "confidence": "high",
+      "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/scoring.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/static_quality.py",
+      "kind": "import",
+      "evidence": "from quality.static_quality",
+      "confidence": "high",
+      "line": 24,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/static_quality.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 24,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/test_db_models.py",
+      "kind": "import",
+      "evidence": "from quality.test_db_models",
+      "confidence": "high",
+      "line": 25,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/test_db_models.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 25,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/test_db_patterns.py",
+      "kind": "import",
+      "evidence": "from quality.test_db_patterns",
+      "confidence": "high",
+      "line": 26,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_inputs.py",
+      "target": "src/quality/test_db_patterns.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 26,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_models.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_models.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_models.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_models.py",
+      "target": "<external:pydantic>",
+      "kind": "import",
+      "evidence": "external import pydantic",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_freeze_models.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
       "source": "src/quality/roadmap_reconciliation.py",
       "target": "<external:__future__>",
       "kind": "import",
@@ -188301,11 +190169,31 @@
     },
     {
       "source": "src/quality/roadmap_reconciliation.py",
+      "target": "src/quality/roadmap_source.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_source",
+      "confidence": "high",
+      "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_reconciliation.py",
+      "target": "src/quality/roadmap_source.py",
+      "kind": "reexport",
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_reconciliation.py",
       "target": "src/quality/static_quality.py",
       "kind": "import",
       "evidence": "from quality.static_quality",
       "confidence": "high",
-      "line": 23,
+      "line": 30,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -188315,7 +190203,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 23,
+      "line": 30,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -188325,7 +190213,7 @@
       "kind": "import",
       "evidence": "from quality.test_db_patterns",
       "confidence": "high",
-      "line": 24,
+      "line": 31,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -188335,7 +190223,67 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 24,
+      "line": 31,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_source.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_source.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_source.py",
+      "target": "<external:math>",
+      "kind": "import",
+      "evidence": "external import math",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_source.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 6,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_source.py",
+      "target": "<external:pydantic>",
+      "kind": "import",
+      "evidence": "external import pydantic",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/quality/roadmap_source.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 7,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -222771,6 +224719,16 @@
     },
     {
       "source": "tests/test_apply_issuer_fact_manifest_cli.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 227,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_apply_issuer_fact_manifest_cli.py",
       "target": "src/pipeline/restatement_detector.py",
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
@@ -222781,11 +224739,31 @@
     },
     {
       "source": "tests/test_apply_issuer_fact_manifest_cli.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 228,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_apply_issuer_fact_manifest_cli.py",
       "target": "src/sqlite_runtime.py",
       "kind": "import",
       "evidence": "from sqlite_runtime",
       "confidence": "high",
       "line": 23,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_apply_issuer_fact_manifest_cli.py",
+      "target": "tests/test_issuer_fact_manifest.py",
+      "kind": "import",
+      "evidence": "from tests.test_issuer_fact_manifest",
+      "confidence": "high",
+      "line": 212,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -227096,6 +229074,176 @@
       "evidence": "from provenance.population_completeness",
       "confidence": "high",
       "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:datetime>",
+      "kind": "import",
+      "evidence": "external import datetime",
+      "confidence": "high",
+      "line": 10,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:sqlite3>",
+      "kind": "import",
+      "evidence": "external import sqlite3",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:sys>",
+      "kind": "import",
+      "evidence": "external import sys",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "<external:types>",
+      "kind": "import",
+      "evidence": "external import types",
+      "confidence": "high",
+      "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "execution/audit_kpi_revision_shadow_census.py",
+      "kind": "import",
+      "evidence": "import execution.audit_kpi_revision_shadow_census",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "execution/audit_kpi_revision_shadow_census.py",
+      "kind": "unknown",
+      "evidence": "subprocess/runpy expression; reviewed as internal_python_target in docs/quality/reachability-process-dispositions.json: The help probe runs sys.executable with the fixed repository execution/sqlite_bootstrap.py entrypoint and execution/audit_kpi_revision_shadow_census.py --help; neither target is caller supplied.",
+      "confidence": "medium",
+      "line": 87,
+      "unknown": false,
+      "reviewed_disposition": "internal_python_target"
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "execution/sqlite_bootstrap.py",
+      "kind": "unknown",
+      "evidence": "subprocess/runpy expression; reviewed as internal_python_target in docs/quality/reachability-process-dispositions.json: The help probe runs sys.executable with the fixed repository execution/sqlite_bootstrap.py entrypoint and execution/audit_kpi_revision_shadow_census.py --help; neither target is caller supplied.",
+      "confidence": "medium",
+      "line": 87,
+      "unknown": false,
+      "reviewed_disposition": "internal_python_target"
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "src/compute/kpi_revision_shadow_census.py",
+      "kind": "import",
+      "evidence": "import compute.kpi_revision_shadow_census",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "src/compute/kpi_revision_shadow_census.py",
+      "kind": "import",
+      "evidence": "from compute.kpi_revision_shadow_census",
+      "confidence": "high",
+      "line": 19,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "src/sqlite_runtime.py",
+      "kind": "import",
+      "evidence": "import sqlite_runtime",
+      "confidence": "high",
+      "line": 18,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_audit_kpi_revision_shadow_census.py",
+      "target": "src/sqlite_snapshot.py",
+      "kind": "import",
+      "evidence": "from sqlite_snapshot",
+      "confidence": "high",
+      "line": 25,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -254885,7 +257033,7 @@
       "kind": "import",
       "evidence": "external import collections.abc",
       "confidence": "high",
-      "line": 12,
+      "line": 13,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -254894,6 +257042,16 @@
       "target": "<external:hashlib>",
       "kind": "import",
       "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle.py",
+      "target": "<external:inspect>",
+      "kind": "import",
+      "evidence": "external import inspect",
       "confidence": "high",
       "line": null,
       "unknown": false,
@@ -254935,7 +257093,7 @@
       "kind": "import",
       "evidence": "external import pathlib",
       "confidence": "high",
-      "line": 13,
+      "line": 14,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -254945,7 +257103,7 @@
       "kind": "import",
       "evidence": "external import pydantic",
       "confidence": "high",
-      "line": 956,
+      "line": 958,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -254955,7 +257113,7 @@
       "kind": "import",
       "evidence": "external import pydantic",
       "confidence": "high",
-      "line": 1208,
+      "line": 1265,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255015,17 +257173,7 @@
       "kind": "import",
       "evidence": "from collect_evidence_bundle",
       "confidence": "high",
-      "line": 1023,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_evidence_bundle.py",
-      "target": "src/quality/admission_policy.py",
-      "kind": "import",
-      "evidence": "from quality.admission_policy",
-      "confidence": "high",
-      "line": 17,
+      "line": 1025,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255051,11 +257199,21 @@
     },
     {
       "source": "tests/test_evidence_bundle.py",
+      "target": "src/quality/admission_policy.py",
+      "kind": "import",
+      "evidence": "from quality.admission_policy",
+      "confidence": "high",
+      "line": 20,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle.py",
       "target": "src/quality/architecture.py",
       "kind": "import",
       "evidence": "from quality.architecture",
       "confidence": "high",
-      "line": 20,
+      "line": 21,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255065,7 +257223,7 @@
       "kind": "import",
       "evidence": "from quality.duplicates",
       "confidence": "high",
-      "line": 21,
+      "line": 22,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255075,7 +257233,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle",
       "confidence": "high",
-      "line": 22,
+      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255085,7 +257243,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_collect",
       "confidence": "high",
-      "line": 1148,
+      "line": 1150,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255095,7 +257253,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 37,
+      "line": 38,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255105,7 +257263,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 940,
+      "line": 942,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255115,7 +257273,7 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_io",
       "confidence": "high",
-      "line": 958,
+      "line": 960,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255125,7 +257283,17 @@
       "kind": "import",
       "evidence": "from quality.evidence_bundle_models",
       "confidence": "high",
-      "line": 1210,
+      "line": 1267,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle.py",
+      "target": "src/quality/evidence_path_policy.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_path_policy",
+      "confidence": "high",
+      "line": 39,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255135,7 +257303,7 @@
       "kind": "import",
       "evidence": "from quality.git_env",
       "confidence": "high",
-      "line": 38,
+      "line": 40,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255145,7 +257313,7 @@
       "kind": "import",
       "evidence": "from quality.scoring",
       "confidence": "high",
-      "line": 39,
+      "line": 41,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255155,7 +257323,7 @@
       "kind": "import",
       "evidence": "from quality.static_quality",
       "confidence": "high",
-      "line": 40,
+      "line": 42,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -255165,7 +257333,137 @@
       "kind": "import",
       "evidence": "from quality.test_db_models",
       "confidence": "high",
-      "line": 41,
+      "line": 43,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_cli_paths.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_cli_paths.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_cli_paths.py",
+      "target": "execution/__init__.py",
+      "kind": "import",
+      "evidence": "from execution",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_cli_paths.py",
+      "target": "execution/collect_evidence_bundle.py",
+      "kind": "import",
+      "evidence": "from execution import collect_evidence_bundle",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_cli_paths.py",
+      "target": "src/quality/evidence_bundle_models.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_bundle_models",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "src/quality/evidence_bundle.py",
+      "kind": "import",
+      "evidence": "from quality.evidence_bundle",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_evidence_bundle_inputs.py",
+      "target": "src/quality/git_env.py",
+      "kind": "import",
+      "evidence": "from quality.git_env",
+      "confidence": "high",
+      "line": 12,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -271985,7 +274283,7 @@
       "kind": "import",
       "evidence": "import pipeline.issuer_fact_manifest",
       "confidence": "high",
-      "line": 430,
+      "line": 505,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -271995,7 +274293,157 @@
       "kind": "import",
       "evidence": "import pipeline.issuer_fact_manifest",
       "confidence": "high",
-      "line": 519,
+      "line": 594,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/issuer_fact_manifest.py",
+      "kind": "import",
+      "evidence": "import pipeline.issuer_fact_manifest",
+      "confidence": "high",
+      "line": 1014,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/issuer_fact_manifest.py",
+      "kind": "import",
+      "evidence": "import pipeline.issuer_fact_manifest",
+      "confidence": "high",
+      "line": 1476,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_definition_revisions.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_definition_revisions",
+      "confidence": "high",
+      "line": 33,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_definition_revisions.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_definition_revisions",
+      "confidence": "high",
+      "line": 1342,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_definition_revisions.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_definition_revisions",
+      "confidence": "high",
+      "line": 1433,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_semantics.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_semantics",
+      "confidence": "high",
+      "line": 46,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 55,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1015,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1127,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1185,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1308,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1398,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1477,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1524,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_source_review.py",
+      "kind": "import",
+      "evidence": "import pipeline.kpi_source_review",
+      "confidence": "high",
+      "line": 1568,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272005,7 +274453,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 160,
+      "line": 235,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272015,7 +274463,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 182,
+      "line": 257,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272025,7 +274473,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 236,
+      "line": 311,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272035,7 +274483,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 278,
+      "line": 353,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272045,7 +274493,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 320,
+      "line": 395,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272055,7 +274503,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 392,
+      "line": 467,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272065,7 +274513,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 431,
+      "line": 506,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272075,7 +274523,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 520,
+      "line": 595,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272085,7 +274533,7 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 548,
+      "line": 623,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -272095,7 +274543,127 @@
       "kind": "import",
       "evidence": "import pipeline.restatement_detector",
       "confidence": "high",
-      "line": 605,
+      "line": 680,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1016,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1104,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1128,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1186,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1309,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1399,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1478,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1525,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/pipeline/restatement_detector.py",
+      "kind": "import",
+      "evidence": "import pipeline.restatement_detector",
+      "confidence": "high",
+      "line": 1569,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/provenance/evidence_ledger.py",
+      "kind": "import",
+      "evidence": "from provenance.evidence_ledger",
+      "confidence": "high",
+      "line": 56,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/provenance/financial_fact_resolution.py",
+      "kind": "import",
+      "evidence": "from provenance.financial_fact_resolution",
+      "confidence": "high",
+      "line": 57,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_issuer_fact_manifest.py",
+      "target": "src/sqlite_runtime.py",
+      "kind": "import",
+      "evidence": "from sqlite_runtime",
+      "confidence": "high",
+      "line": 58,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -273831,11 +276399,21 @@
     },
     {
       "source": "tests/test_kpi_definition_revisions.py",
+      "target": "src/compute/kpi_revision_shadow_census.py",
+      "kind": "import",
+      "evidence": "from compute.kpi_revision_shadow_census",
+      "confidence": "high",
+      "line": 20,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_kpi_definition_revisions.py",
       "target": "src/models/facts.py",
       "kind": "import",
       "evidence": "from models.facts",
       "confidence": "high",
-      "line": 20,
+      "line": 25,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -273845,7 +276423,7 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_definition_revisions",
       "confidence": "high",
-      "line": 21,
+      "line": 26,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -273855,7 +276433,7 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_semantics",
       "confidence": "high",
-      "line": 38,
+      "line": 43,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -273875,7 +276453,7 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_source_review",
       "confidence": "high",
-      "line": 49,
+      "line": 54,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303685,7 +306263,7 @@
       "kind": "import",
       "evidence": "external import datetime",
       "confidence": "high",
-      "line": 7,
+      "line": 8,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303695,7 +306273,17 @@
       "kind": "import",
       "evidence": "external import decimal",
       "confidence": "high",
-      "line": 8,
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_produce_issuer_fact_manifest.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303715,7 +306303,7 @@
       "kind": "import",
       "evidence": "external import pathlib",
       "confidence": "high",
-      "line": 9,
+      "line": 10,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303745,7 +306333,7 @@
       "kind": "import",
       "evidence": "external import threading",
       "confidence": "high",
-      "line": 10,
+      "line": 11,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303755,7 +306343,7 @@
       "kind": "import",
       "evidence": "from execution",
       "confidence": "high",
-      "line": 14,
+      "line": 15,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303765,7 +306353,7 @@
       "kind": "import",
       "evidence": "from execution import produce_issuer_fact_manifest",
       "confidence": "high",
-      "line": 14,
+      "line": 15,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303775,7 +306363,7 @@
       "kind": "import",
       "evidence": "from models.documents",
       "confidence": "high",
-      "line": 15,
+      "line": 16,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303785,7 +306373,7 @@
       "kind": "import",
       "evidence": "from models.facts",
       "confidence": "high",
-      "line": 16,
+      "line": 17,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303795,7 +306383,7 @@
       "kind": "import",
       "evidence": "from pipeline.issuer_document_coverage",
       "confidence": "high",
-      "line": 24,
+      "line": 25,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303805,7 +306393,7 @@
       "kind": "import",
       "evidence": "from pipeline.issuer_fact_manifest",
       "confidence": "high",
-      "line": 29,
+      "line": 30,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303815,7 +306403,17 @@
       "kind": "import",
       "evidence": "from pipeline.issuer_fact_manifest_producer",
       "confidence": "high",
-      "line": 30,
+      "line": 35,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_produce_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_definition_revisions.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_definition_revisions",
+      "confidence": "high",
+      "line": 40,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303825,7 +306423,17 @@
       "kind": "import",
       "evidence": "from pipeline.kpi_persistence",
       "confidence": "high",
-      "line": 34,
+      "line": 50,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_produce_issuer_fact_manifest.py",
+      "target": "src/pipeline/kpi_semantics.py",
+      "kind": "import",
+      "evidence": "from pipeline.kpi_semantics",
+      "confidence": "high",
+      "line": 51,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303835,7 +306443,17 @@
       "kind": "import",
       "evidence": "from provenance",
       "confidence": "high",
-      "line": 35,
+      "line": 60,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_produce_issuer_fact_manifest.py",
+      "target": "src/provenance/evidence_ledger.py",
+      "kind": "import",
+      "evidence": "from provenance.evidence_ledger",
+      "confidence": "high",
+      "line": 61,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -303845,7 +306463,7 @@
       "kind": "import",
       "evidence": "from provenance import secure_file_install",
       "confidence": "high",
-      "line": 35,
+      "line": 60,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -306156,6 +308774,106 @@
       "evidence": "from triggers.material_news",
       "confidence": "high",
       "line": 24,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": ".github/scripts/quality_hash_filter.py",
+      "kind": "unknown",
+      "evidence": "subprocess/runpy expression; reviewed as internal_python_target in docs/quality/reachability-process-dispositions.json: The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
+      "confidence": "medium",
+      "line": 164,
+      "unknown": false,
+      "reviewed_disposition": "internal_python_target"
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<attribute:is_quality_evidence_hash>",
+      "kind": "getattr",
+      "evidence": "literal getattr attribute",
+      "confidence": "medium",
+      "line": 26,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:importlib.util>",
+      "kind": "import",
+      "evidence": "external import importlib.util",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:os>",
+      "kind": "import",
+      "evidence": "external import os",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:sys>",
+      "kind": "import",
+      "evidence": "external import sys",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_quality_hash_filter.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 9,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -313526,6 +316244,426 @@
       "evidence": "from portfolio_risk_snapshot_store",
       "confidence": "high",
       "line": 34,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 1,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:shutil>",
+      "kind": "import",
+      "evidence": "external import shutil",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "<external:typing>",
+      "kind": "import",
+      "evidence": "external import typing",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "src/quality/architecture.py",
+      "kind": "import",
+      "evidence": "from quality.architecture",
+      "confidence": "high",
+      "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "src/quality/git_env.py",
+      "kind": "import",
+      "evidence": "from quality.git_env",
+      "confidence": "high",
+      "line": 13,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "src/quality/roadmap_freeze.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze",
+      "confidence": "high",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_inputs",
+      "confidence": "high",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_models",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze.py",
+      "target": "src/quality/scoring.py",
+      "kind": "import",
+      "evidence": "from quality.scoring",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "<external:shutil>",
+      "kind": "import",
+      "evidence": "external import shutil",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "execution/__init__.py",
+      "kind": "import",
+      "evidence": "from execution",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "execution/freeze_quality_roadmap.py",
+      "kind": "import",
+      "evidence": "from execution import freeze_quality_roadmap",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "src/quality/architecture.py",
+      "kind": "import",
+      "evidence": "from quality.architecture",
+      "confidence": "high",
+      "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "src/quality/git_env.py",
+      "kind": "import",
+      "evidence": "from quality.git_env",
+      "confidence": "high",
+      "line": 13,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "src/quality/roadmap_freeze.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze",
+      "confidence": "high",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "src/quality/roadmap_freeze_bundle.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_bundle",
+      "confidence": "high",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_inputs",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_cli.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_models",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 1,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "<external:math>",
+      "kind": "import",
+      "evidence": "external import math",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 6,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "<external:subprocess>",
+      "kind": "import",
+      "evidence": "external import subprocess",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "src/quality/git_env.py",
+      "kind": "import",
+      "evidence": "from quality.git_env",
+      "confidence": "high",
+      "line": 10,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "src/quality/roadmap_freeze_inputs.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_inputs",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_freeze_inputs.py",
+      "target": "src/quality/roadmap_freeze_models.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_freeze_models",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_source.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_source.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 4,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_source.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_source.py",
+      "target": "src/quality/roadmap_reconciliation.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_reconciliation",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_roadmap_source.py",
+      "target": "src/quality/roadmap_source.py",
+      "kind": "import",
+      "evidence": "from quality.roadmap_source",
+      "confidence": "high",
+      "line": 9,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -326606,6 +329744,56 @@
       "evidence": "external import sqlite3",
       "confidence": "high",
       "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_staged_evidence_aliases.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_staged_evidence_aliases.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 4,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_staged_evidence_aliases.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_staged_evidence_aliases.py",
+      "target": "execution/__init__.py",
+      "kind": "import",
+      "evidence": "from execution",
+      "confidence": "high",
+      "line": 8,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_staged_evidence_aliases.py",
+      "target": "execution/reconcile_quality_baseline.py",
+      "kind": "import",
+      "evidence": "from execution import reconcile_quality_baseline",
+      "confidence": "high",
+      "line": 8,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -340654,6 +343842,7 @@
     ".githooks/test_pre_push.sh",
     ".github/pull_request_template.md",
     ".github/scripts/ci_gate.py",
+    ".github/scripts/quality_hash_filter.py",
     ".github/workflows/ci.yml",
     ".github/workflows/public-boundary.yml",
     "Makefile",
@@ -340779,6 +343968,7 @@
     "execution/audit_deleted_table_recovery.py",
     "execution/audit_evidence_integrity.py",
     "execution/audit_gc_recovery.py",
+    "execution/audit_kpi_revision_shadow_census.py",
     "execution/audit_kpi_semantics.py",
     "execution/audit_quarterly_data_coverage.py",
     "execution/audit_segment_coverage.py",
@@ -340963,6 +344153,7 @@
     "execution/fix_kpi_series.py",
     "execution/fmp_backpop.py",
     "execution/format_changed.py",
+    "execution/freeze_quality_roadmap.py",
     "execution/gc_restore.py",
     "execution/generate_ask_retrieval_production_scopes.py",
     "execution/generate_cron_artifacts.py",
@@ -342088,8 +345279,8 @@
   ],
   "hold": false,
   "stats": {
-    "files": 3078,
-    "edges": 30901,
+    "files": 3098,
+    "edges": 31187,
     "unknown": 91,
     "diagnostics": 0,
     "production_unknown": 0,

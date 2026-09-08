@@ -3,13 +3,13 @@
   "kind": "block",
   "key": "cleanup.reconstructability",
   "state": "fail",
-  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/roadmap-reconciliation.json",
-      "sha256": "9b27214fbfd3af5e5ff93f919b24d3923fdb78276b7e0a4c26aaff2bb558d743",
+      "sha256": "e193ca7bd27efa84b98512dd5c3a13e449c916fba0aa4b51e3748c4e0d1d3dc4",
       "schema_version": "roadmap-reconciliation-v1"
     }
   ]

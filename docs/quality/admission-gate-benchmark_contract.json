@@ -3,13 +3,13 @@
   "kind": "hard_gate",
   "key": "benchmark_contract",
   "state": "fail",
-  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/performance-baseline.json",
-      "sha256": "a5bfae97abdf22316217c75ed2dc2f6f04b12357eb8ccfc182ff3c4ee1bdbfed",
+      "sha256": "c55ca72c612e229a600159f089fd5199a9b0b1223347d04a3b489593cf2cfe53",
       "schema_version": "performance-baseline/v1"
     }
   ]
