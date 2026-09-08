@@ -81,6 +81,9 @@ _HASH40_MEMBER = re.compile(
 _HASH64_MEMBER = re.compile(
     rf'[ \t]*"(?:{_HASH64_KEYS})"[ \t]*(?::|=)[ \t]*"[0-9a-f]{{64}}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
+_ROADMAP_FREEZE_SOURCE_IDENTITY_MEMBER = re.compile(
+    r'[ \t]*"source_identity"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
+)
 
 
 def is_quality_evidence_hash(filename: str, line: str) -> bool:
@@ -89,4 +92,9 @@ def is_quality_evidence_hash(filename: str, line: str) -> bool:
     canonical_path = filename.replace(os.sep, "/")
     if canonical_path not in _CANONICAL_PATHS:
         return False
-    return _HASH40_MEMBER.fullmatch(line) is not None or _HASH64_MEMBER.fullmatch(line) is not None
+    if _HASH40_MEMBER.fullmatch(line) is not None or _HASH64_MEMBER.fullmatch(line) is not None:
+        return True
+    return (
+        canonical_path == "docs/quality/roadmap-freeze.json"
+        and _ROADMAP_FREEZE_SOURCE_IDENTITY_MEMBER.fullmatch(line) is not None
+    )
