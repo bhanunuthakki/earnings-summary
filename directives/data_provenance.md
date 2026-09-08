@@ -103,6 +103,43 @@ Generic extraction, FMP-derived KPI persistence, and semantic-disposition writer
 null definition bindings. Direct legacy fact writers remain outside this batch slice and receive no
 authority to mint issuer-definition revisions; the later writer-retirement work owns their routing.
 
+The definition-revision shadow census is a read-only cutover rehearsal over the complete active
+`portfolio` roster owned by `tracked_companies`. It compares each definition root's current
+decision-grade reader membership with the revision-aware resolver at explicit effective and
+knowledge cutoffs. That deliberately narrow comparison does not reproduce name-alias consumers and
+never claims complete reader parity. Its population starts from every nonsuperseded base `kpi_facts`
+row at the effective cutoff, independently of resolved-view membership. The receipt retains that base
+identity, current canonical membership, every resolver exclusion and reason, the exact semantic head
+and definition binding as known, the included definition revisions, and direct comparability revisions
+and breaks. It blocks on missing current observation-resolution authority, missing roster definitions,
+invalid fact ownership, an unparseable fact period, or a delta without direct lineage evidence.
+Unparseable periods are retained exactly and never inferred; out-of-scope rows remain attributable as
+invalid-period observations too. Roster and population observations distinguish unavailable schema
+from an observed empty set. Their identities, the verifier implementation, and the full receipt are
+hash-bound.
+
+The census's six direct base reads are a transitional audit exemption, confined to
+`_census_definition`, `_out_of_scope_facts`, and `_invalid_in_scope_facts` at two reads each. They
+exist because the resolved projection cannot enumerate unresolved legacy rows, so using it as the
+population source would hide the exact cutover gaps the census must report. Retire these reads after
+the immutable canonical projection can enumerate the complete KPI population, including unresolved
+legacy rows, and census parity supports legacy read retirement.
+
+A supported snapshot manifest can match the inspected standalone database file to the snapshot
+producer's recorded identity and verification assertions. It does not freshly certify SQLite
+integrity, establish production provenance, or grant cutover authority. The census therefore reports
+deterministic readiness separately while keeping reader activation on `hold` for evidence authority
+and owner activation. Synthetic databases and caller-selected subsets can exercise the evaluator but
+cannot satisfy this portfolio gate. Reader activation, downstream parity, and legacy retirement remain
+separate later gates with their own complete evidence.
+
+When library callers supply `manifest_matched` evidence, the audit revalidates the manifest and file
+hash against the connection's exact `PRAGMA database_list` main path before and after its owned read
+transaction. It rejects a pre-existing transaction because uncommitted or older connection state cannot
+be attributed to unchanged snapshot bytes. Unverified callers retain their transaction ownership and
+receive no snapshot claim. The manual CLI adds a final recheck after closing the read-only connection,
+covering the remaining interval before it emits the receipt.
+
 ### 2.2 Fiscal-period stamping drift (off-cycle-FYE issuers)
 
 `(ticker, period_end)` matching (used by `src/provenance/llm_extracted_parent.py::resolve_parent` and any other exact-date join across `documents`) is only reliable if every ingestion path stamps `period_end` on the **same fiscal calendar** for a given ticker. Multiple independent modules each hardcode their own per-ticker "which tickers have a non-December fiscal year end" override table, keyed off filename conventions like `<TICKER>_Q<N>_<YYYY>` — and those tables can drift out of sync, silently mis-stamping `period_end` for tickers missing from one table but present in another. This is **not** the same failure mode as a genuinely-missing source document (§2's `parent_document_id` can legitimately stay NULL when no primary doc was ever fetched) — it produces an *orphan that looks unresolvable but has a perfectly good source sitting one calendar-quarter away*.

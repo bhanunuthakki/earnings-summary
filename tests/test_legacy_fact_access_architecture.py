@@ -188,6 +188,35 @@ _TRANSITIONAL_READ_EXEMPTIONS = {
             ),
         ),
     ),
+    "src/compute/kpi_revision_shadow_census.py": (
+        _TransitionalReadExemption(
+            function_name="_census_definition",
+            read_count=2,
+            retirement_criterion=(
+                "Retire after the immutable canonical projection can enumerate the complete "
+                "KPI population, including unresolved legacy rows, and census parity supports "
+                "legacy read retirement."
+            ),
+        ),
+        _TransitionalReadExemption(
+            function_name="_out_of_scope_facts",
+            read_count=2,
+            retirement_criterion=(
+                "Retire after the immutable canonical projection can enumerate the complete "
+                "KPI population, including unresolved legacy rows, and census parity supports "
+                "legacy read retirement."
+            ),
+        ),
+        _TransitionalReadExemption(
+            function_name="_invalid_in_scope_facts",
+            read_count=2,
+            retirement_criterion=(
+                "Retire after the immutable canonical projection can enumerate the complete "
+                "KPI population, including unresolved legacy rows, and census parity supports "
+                "legacy read retirement."
+            ),
+        ),
+    ),
     "src/pipeline/kpi_semantics.py": (
         _TransitionalReadExemption(
             function_name="_validate_definition_binding",
@@ -281,6 +310,10 @@ def _named_assignment_value(node: ast.stmt, name: str) -> ast.AST | None:
 def _legacy_read_count(path: Path) -> int:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     relative = path.relative_to(ROOT).as_posix()
+    return _legacy_read_count_for_tree(relative, tree)
+
+
+def _legacy_read_count_for_tree(relative: str, tree: ast.Module) -> int:
     count = _read_count(tree)
     for exemption in _TRANSITIONAL_READ_EXEMPTIONS.get(relative, ()):
         functions = [
@@ -375,14 +408,43 @@ def test_transitional_legacy_reader_exemptions_are_narrow_and_retirable() -> Non
     assert _TRANSITIONAL_READ_EXEMPTIONS
     for relative, exemptions in _TRANSITIONAL_READ_EXEMPTIONS.items():
         assert (ROOT / relative).is_file()
-        assert len(exemptions) == 1
-        exemption = exemptions[0]
-        if relative == "src/pipeline/kpi_source_review.py":
-            assert exemption.function_name == "bind_source_reviewed_kpi_definition"
-            assert exemption.read_count == 2
+        if relative == "src/compute/kpi_revision_shadow_census.py":
+            assert len(exemptions) == 3
         else:
-            assert exemption.read_count == 1
-        assert exemption.retirement_criterion.startswith("Retire after ")
+            assert len(exemptions) == 1
+        for exemption in exemptions:
+            if relative == "src/pipeline/kpi_source_review.py":
+                assert exemption.function_name == "bind_source_reviewed_kpi_definition"
+                assert exemption.read_count == 2
+            elif relative != "src/compute/kpi_revision_shadow_census.py":
+                assert exemption.read_count == 1
+            assert exemption.retirement_criterion.startswith("Retire after ")
         # _legacy_read_count also proves the exact named top-level function
         # still owns precisely the approved read count.
         _legacy_read_count(ROOT / relative)
+
+
+def test_shadow_census_raw_reads_are_exact_and_extra_reads_remain_debt() -> None:
+    relative = "src/compute/kpi_revision_shadow_census.py"
+    exemptions = _TRANSITIONAL_READ_EXEMPTIONS[relative]
+    retirement = (
+        "Retire after the immutable canonical projection can enumerate the complete KPI "
+        "population, including unresolved legacy rows, and census parity supports legacy "
+        "read retirement."
+    )
+    assert tuple((item.function_name, item.read_count) for item in exemptions) == (
+        ("_census_definition", 2),
+        ("_out_of_scope_facts", 2),
+        ("_invalid_in_scope_facts", 2),
+    )
+    assert {item.retirement_criterion for item in exemptions} == {retirement}
+
+    path = ROOT / relative
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    assert _read_count(tree) == 6
+    with_unapproved_read = ast.parse(
+        source + "\ndef _unapproved_reader():\n    return 'SELECT id FROM kpi_facts'\n",
+        filename=str(path),
+    )
+    assert _legacy_read_count_for_tree(relative, with_unapproved_read) == 1
