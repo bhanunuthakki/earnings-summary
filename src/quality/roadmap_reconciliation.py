@@ -20,6 +20,13 @@ from quality.architecture import ArchitectureReceipt, build_architecture_receipt
 from quality.duplicates import DuplicateInventory, build_inventory
 from quality.git_env import clean_local_git_env
 from quality.reachability import ReachabilityGraph, build_graph
+from quality.roadmap_source import (
+    ROADMAP_CLAIM_MAP_PATH,
+    RoadmapClaimBinding,
+    RoadmapSourceError,
+    load_roadmap_claim_map_with_raw,
+    parse_roadmap_claim_map,
+)
 from quality.static_quality import StaticQualityInventory, inventory
 from quality.test_db_patterns import TestDbAudit, audit_test_db_patterns
 
@@ -51,6 +58,17 @@ class Claim(Strict):
     evidence: Evidence | None = None
     provisional_evidence: Evidence | None = None
     note: str = Field(max_length=300)
+
+    @model_validator(mode="after")
+    def verified_claim_has_exact_value_type(self) -> Claim:
+        if self.verdict == "verified" and (
+            self.provisional_expected is None
+            or self.observed is None
+            or type(self.provisional_expected) is not type(self.observed)
+            or self.provisional_expected != self.observed
+        ):
+            raise ValueError("verified claim requires an exact typed observed value")
+        return self
 
 
 class CurrentReceipts(BaseModel):
@@ -134,6 +152,7 @@ class StagedManifestModel(Strict):
     test_db: StagedManifestEntry
     reachability: StagedManifestEntry
     roadmap: StagedManifestEntry
+    roadmap_claims: StagedManifestEntry | None = None
 
 
 class StagedManifestError(ValueError):
@@ -157,6 +176,8 @@ class _StagedLoad:
     manifest_dev: int | None
     manifest_ino: int | None
     violations: tuple[str, ...]
+    roadmap_claims_entry: StagedManifestEntry | None = None
+    roadmap_claims_snapshot: _StagedFileSnapshot | None = None
 
 
 def _is_hex40(value: str | None) -> bool:
@@ -433,10 +454,20 @@ def roadmap_facts() -> tuple[RoadmapFact, ...]:
             True,
         ),
         RoadmapFact(
-            "full suite seconds", r"full suite seconds: [\d.]+", None, "unavailable", _none, 1046.92
+            "full suite seconds",
+            r"full suite seconds: [\d.]+",
+            None,
+            "historical receipt only",
+            _none,
+            1046.92,
         ),
         RoadmapFact(
-            "unreachable scripts", r"unreachable scripts: \d+", None, "unavailable", _none, 85
+            "unreachable scripts",
+            r"unreachable scripts: \d+",
+            None,
+            "provisional queue only",
+            _none,
+            85,
         ),
     )
 
@@ -493,7 +524,24 @@ def load_roadmap(root: Path) -> tuple[bytes | None, list[str], bool, str]:
         return raw, [], True, rel
 
 
-def fact_line_numbers(fact: RoadmapFact, lines: list[str]) -> tuple[int, ...]:
+def fact_line_numbers(
+    fact: RoadmapFact,
+    lines: list[str],
+    bindings: Mapping[str, RoadmapClaimBinding] | None = None,
+) -> tuple[int, ...]:
+    if bindings is not None:
+        binding = bindings.get(fact.name)
+        if (
+            binding is None
+            or binding.source_key != fact.source
+            or binding.extractor_locator != fact.locator
+            or binding.value != fact.provisional
+            or binding.source_line > len(lines)
+        ):
+            return ()
+        return (
+            (binding.source_line,) if lines[binding.source_line - 1] == binding.source_quote else ()
+        )
     try:
         rx = re.compile(fact.pattern)
     except re.error:
@@ -501,8 +549,17 @@ def fact_line_numbers(fact: RoadmapFact, lines: list[str]) -> tuple[int, ...]:
     return tuple(i for i, line in enumerate(lines, 1) if rx.fullmatch(line.strip()))
 
 
-def _roadmap_value_matches(fact: RoadmapFact, line: str) -> bool:
-    expected = fact.provisional
+def roadmap_value_matches(
+    fact: RoadmapFact, line: str, binding: RoadmapClaimBinding | None = None
+) -> bool:
+    if binding is not None:
+        return (
+            binding.source_key == fact.source
+            and binding.extractor_locator == fact.locator
+            and type(binding.value) is type(fact.provisional)
+            and binding.value == fact.provisional
+        )
+    expected = binding.value if binding is not None else fact.provisional
     if expected is None or ":" not in line:
         return False
     raw = line.rsplit(":", 1)[1].strip()
@@ -538,6 +595,7 @@ def build_claims(
     roadmap_hash: str,
     lines: list[str],
     rejections: Mapping[SourceKey, str],
+    bindings: Mapping[str, RoadmapClaimBinding] | None = None,
 ) -> list[Claim]:
     claims: list[Claim] = []
     for fact in roadmap_facts():
@@ -562,7 +620,7 @@ def build_claims(
             else:
                 note = "No admissible typed generator receipt exists for this roadmap fact."
         else:
-            is_verified = observed == fact.provisional
+            is_verified = type(observed) is type(fact.provisional) and observed == fact.provisional
             verdict = "verified" if is_verified else "corrected"
             eligible = True
             note = (
@@ -570,10 +628,16 @@ def build_claims(
                 if is_verified
                 else "Fresh typed generator corrects the provisional value."
             )
+        binding = bindings.get(fact.name) if bindings is not None else None
+        if binding is not None:
+            note = (
+                f"{note} Unverified map annotation (display only): "
+                f"{binding.qualifier}; {binding.metric_definition}."
+            )
         ev = evidences.get(source) if source is not None else None
         prov = None
         if roadmap_ok and roadmap_raw is not None:
-            nums = fact_line_numbers(fact, lines)
+            nums = fact_line_numbers(fact, lines, bindings)
             if len(nums) == 1:
                 prov = Evidence(
                     path=roadmap_rel,
@@ -719,7 +783,9 @@ def admit_sources(
 
 
 def deterministic_source_hash(
-    raws: Mapping[SourceKey, bytes | None], roadmap_raw: bytes | None
+    raws: Mapping[SourceKey, bytes | None],
+    roadmap_raw: bytes | None,
+    claim_map_raw: bytes | None = None,
 ) -> str:
     digest = hashlib.sha256()
     for key in sorted(SOURCE_PATHS):
@@ -733,7 +799,56 @@ def deterministic_source_hash(
         digest.update(b"\0")
     digest.update(b"roadmap\0")
     digest.update(hashlib.sha256(roadmap_raw).digest() if roadmap_raw is not None else b"MISSING")
+    digest.update(b"roadmap-claim-map\0")
+    digest.update(
+        hashlib.sha256(claim_map_raw).digest() if claim_map_raw is not None else b"MISSING"
+    )
     return digest.hexdigest()
+
+
+def _roadmap_bindings(
+    root: Path, roadmap_raw: bytes | None
+) -> tuple[dict[str, RoadmapClaimBinding] | None, bytes | None, str | None]:
+    if roadmap_raw is None:
+        return None, None, "roadmap source is missing"
+    # Existing hermetic callers retain their explicit legacy one-line fixtures.
+    # A checked-in map, once present, is mandatory and never falls back on failure.
+    map_lexical = root / ROADMAP_CLAIM_MAP_PATH
+    if not os.path.lexists(map_lexical):
+        return None, None, None
+    try:
+        if _safe_source_path(root, ROADMAP_CLAIM_MAP_PATH) is None:
+            raise RoadmapSourceError("roadmap claim map is unsafe")
+        claim_map, raw = load_roadmap_claim_map_with_raw(root)
+    except (OSError, RoadmapSourceError):
+        return None, None, "roadmap claim map is invalid"
+    if hashlib.sha256(roadmap_raw).hexdigest() != claim_map.document.sha256:
+        return None, raw, "roadmap source does not match approved claim map"
+    return {binding.name: binding for binding in claim_map.claims}, raw, None
+
+
+def _subject_tracks_roadmap_claim_map(root: Path, subject_commit: str | None) -> bool:
+    if not _is_hex40(subject_commit):
+        return False
+    try:
+        return (
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "cat-file",
+                    "-e",
+                    f"{subject_commit}:{ROADMAP_CLAIM_MAP_PATH}",
+                ],
+                capture_output=True,
+                check=False,
+                env=clean_local_git_env(),
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
 
 
 def _fresh_receipts(root: Path) -> CurrentReceipts:
@@ -772,6 +887,9 @@ def _build_receipt(
     roadmap_raw, lines, decode_error, roadmap_rel = load_roadmap(root)
     roadmap_hash = hashlib.sha256(roadmap_raw).hexdigest() if roadmap_raw is not None else ""
     roadmap_ok = roadmap_raw is not None and not decode_error
+    bindings, claim_map_raw, binding_error = _roadmap_bindings(root, roadmap_raw)
+    if binding_error is not None:
+        violations.append(binding_error)
     for key in SOURCE_PATHS:
         if not admitted.get(key, False):
             violations.append(
@@ -783,14 +901,19 @@ def _build_receipt(
         violations.append("roadmap source is not valid UTF-8")
     else:
         for fact in roadmap_facts():
-            nums = fact_line_numbers(fact, lines)
+            binding = bindings.get(fact.name) if bindings is not None else None
+            nums = fact_line_numbers(fact, lines, bindings)
             if len(nums) != 1:
                 violations.append(f"roadmap locator is missing or ambiguous: {fact.name}")
-            elif fact.provisional is not None and not _roadmap_value_matches(
-                fact, lines[nums[0] - 1]
+            elif fact.provisional is not None and not roadmap_value_matches(
+                fact, lines[nums[0] - 1], binding
             ):
                 violations.append(f"roadmap provisional value mismatch: {fact.name}")
-    claims_roadmap_ok = roadmap_ok and not any(v.startswith("roadmap ") for v in violations)
+    claims_roadmap_ok = (
+        roadmap_ok
+        and binding_error is None
+        and not any(v.startswith("roadmap ") for v in violations)
+    )
     claims = build_claims(
         current,
         admitted,
@@ -801,6 +924,7 @@ def _build_receipt(
         roadmap_hash,
         lines,
         rejections,
+        bindings,
     )
     names = [c.name for c in claims]
     if len(set(names)) != len(names) or len(names) != len(roadmap_facts()):
@@ -830,11 +954,11 @@ def _build_receipt(
         rejected_claims=rejected,
         subject_commit=subject_commit,
         worktree_dirty=worktree_dirty,
-        source_hash=deterministic_source_hash(raws, roadmap_raw),
+        source_hash=deterministic_source_hash(raws, roadmap_raw, claim_map_raw),
         roadmap_source=Evidence(
             path=roadmap_rel,
             sha256=roadmap_hash,
-            locator="baseline section",
+            locator="baseline section; Linear document identity externally unverified",
         )
         if claims_roadmap_ok
         else None,
@@ -1065,6 +1189,26 @@ def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _St
         seen_ino = {(snapshots[k].dev, snapshots[k].ino) for k in STAGED_KEYS}
         if len(seen_ino) != len(STAGED_KEYS):
             violations.append("staged inputs share the same file")
+    claims_entry = model.roadmap_claims
+    claims_snapshot: _StagedFileSnapshot | None = None
+    if claims_entry is not None:
+        rel_path = Path(claims_entry.path)
+        lexical = staged_root / rel_path
+        if rel_path.is_absolute() or ".." in rel_path.parts or lexical.is_symlink():
+            violations.append("staged roadmap claims path is invalid")
+        else:
+            try:
+                resolved = lexical.resolve()
+                st = _lstat_regular(lexical)
+                if resolved != lexical or st is None or not resolved.is_relative_to(staged_root):
+                    raise OSError
+                data = lexical.read_bytes()
+                restat = os.lstat(lexical)
+                if (restat.st_dev, restat.st_ino) != (st.st_dev, st.st_ino):
+                    raise OSError
+                claims_snapshot = _StagedFileSnapshot(resolved, data, st.st_dev, st.st_ino)
+            except OSError:
+                violations.append("staged roadmap claims is unavailable or unsafe")
     return _StagedLoad(
         staged_root,
         entries,
@@ -1073,6 +1217,8 @@ def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _St
         manifest_dev,
         manifest_ino,
         tuple(violations),
+        claims_entry,
+        claims_snapshot,
     )
 
 
@@ -1215,13 +1361,38 @@ def _build_staged_receipt(
         and roadmap_entry is not None
         and not roadmap_hash_mismatch
     )
+    bindings: dict[str, RoadmapClaimBinding] | None = None
+    claim_map_raw: bytes | None = None
+    binding_error: str | None = None
+    claims_entry = load.roadmap_claims_entry
+    claims_snapshot = load.roadmap_claims_snapshot
+    if claims_entry is not None:
+        if (
+            claims_snapshot is None
+            or hashlib.sha256(claims_snapshot.data).hexdigest() != claims_entry.sha256
+        ):
+            binding_error = "staged roadmap claims is missing or has a hash mismatch"
+        elif roadmap_raw is None:
+            binding_error = "roadmap source is missing"
+        else:
+            try:
+                claim_map = parse_roadmap_claim_map(claims_snapshot.data, roadmap_raw)
+                bindings = {binding.name: binding for binding in claim_map.claims}
+                claim_map_raw = claims_snapshot.data
+            except RoadmapSourceError:
+                binding_error = "staged roadmap claims is invalid"
+    elif _subject_tracks_roadmap_claim_map(subject_resolved, subject_commit):
+        binding_error = "staged roadmap claims is missing"
+    if binding_error is not None:
+        violations.append(binding_error)
     if roadmap_ok and roadmap_raw is not None:
         for fact in roadmap_facts():
-            nums = fact_line_numbers(fact, roadmap_lines)
+            binding = bindings.get(fact.name) if bindings is not None else None
+            nums = fact_line_numbers(fact, roadmap_lines, bindings)
             if len(nums) != 1:
                 violations.append(f"roadmap locator is missing or ambiguous: {fact.name}")
-            elif fact.provisional is not None and not _roadmap_value_matches(
-                fact, roadmap_lines[nums[0] - 1]
+            elif fact.provisional is not None and not roadmap_value_matches(
+                fact, roadmap_lines[nums[0] - 1], binding
             ):
                 violations.append(f"roadmap provisional value mismatch: {fact.name}")
     elif (
@@ -1233,7 +1404,11 @@ def _build_staged_receipt(
         )
     ):
         violations.append("roadmap source is missing")
-    claims_roadmap_ok = bool(roadmap_ok) and not any(v.startswith("roadmap ") for v in violations)
+    claims_roadmap_ok = (
+        bool(roadmap_ok)
+        and binding_error is None
+        and not any(v.startswith("roadmap ") for v in violations)
+    )
     claims = build_claims(
         current,
         admitted,
@@ -1244,6 +1419,7 @@ def _build_staged_receipt(
         roadmap_hash,
         roadmap_lines,
         rejections,
+        bindings,
     )
     names = [c.name for c in claims]
     if len(set(names)) != len(names) or len(names) != len(roadmap_facts()):
@@ -1273,11 +1449,11 @@ def _build_staged_receipt(
         rejected_claims=rejected,
         subject_commit=subject_commit,
         worktree_dirty=worktree_dirty,
-        source_hash=deterministic_source_hash(raws, roadmap_raw),
+        source_hash=deterministic_source_hash(raws, roadmap_raw, claim_map_raw),
         roadmap_source=Evidence(
             path=roadmap_rel,
             sha256=roadmap_hash,
-            locator="baseline section",
+            locator="baseline section; Linear document identity externally unverified",
         )
         if claims_roadmap_ok and roadmap_hash != ""
         else None,
@@ -1383,4 +1559,5 @@ __all__ = [
     "reconcile",
     "reconcile_staged_subject",
     "roadmap_facts",
+    "roadmap_value_matches",
 ]

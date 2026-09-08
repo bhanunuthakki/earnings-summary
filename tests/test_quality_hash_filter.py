@@ -29,6 +29,9 @@ def _load_filter() -> QualityHashFilter:
 
 FILTER = _load_filter()
 CANONICAL_PATHS = (
+    "config/quality_roadmap_claims.json",
+    "config/quality_roadmap_owners.json",
+    "docs/quality/roadmap-freeze.json",
     "docs/quality/admission-block-cleanup-deletion_proof.json",
     "docs/quality/admission-block-cleanup-lifecycle_inventory.json",
     "docs/quality/admission-block-cleanup-reachability_oracle.json",
@@ -61,7 +64,7 @@ CANONICAL_PATHS = (
     "docs/quality/roadmap-reconciliation.json",
     "docs/quality/test-db-patterns-baseline.json",
 )
-HASH40_KEYS = ("subject_commit", "scoped_commit", "commit_hash", "revision")
+HASH40_KEYS = ("subject_commit", "scoped_commit", "commit_hash", "revision", "subject_tree")
 HASH64_KEYS = (
     "generator_sha256",
     "sha256",
@@ -79,6 +82,9 @@ HASH64_KEYS = (
     "source_manifest_sha256",
     "content_sha256",
     "claim_manifest_sha256",
+    "plan_sha256",
+    "owner_snapshot_sha256",
+    "scope_sha256",
 )
 UNRECOGNIZED_MEMBER = "unrecognized_hash"
 
@@ -162,8 +168,20 @@ def _json_document(member: str) -> str:
     return "{\n" + member + "\n}\n"
 
 
-def test_detect_secrets_filter_drops_only_known_metadata_hashes(tmp_path: Path) -> None:
-    known = tmp_path / "docs" / "quality" / "architecture-ratchet.json"
+@pytest.mark.parametrize(
+    "canonical_path",
+    [
+        "docs/quality/architecture-ratchet.json",
+        "docs/quality/roadmap-freeze.json",
+        "config/quality_roadmap_claims.json",
+        "config/quality_roadmap_owners.json",
+    ],
+)
+def test_detect_secrets_filter_drops_only_known_metadata_hashes(
+    tmp_path: Path,
+    canonical_path: str,
+) -> None:
+    known = tmp_path / canonical_path
     known.parent.mkdir(parents=True)
     digest = hashlib.sha256(b"public synthetic scanner fixture").hexdigest()
     known.write_text(_json_document(f'  "sha256": "{digest}"'), encoding="utf-8")
@@ -174,18 +192,8 @@ def test_detect_secrets_filter_drops_only_known_metadata_hashes(tmp_path: Path) 
     private_marker = "-----BEGIN " + "PRIVATE " + "KEY-----"
     private_end_marker = "-----END " + "PRIVATE " + "KEY-----"
 
-    assert (
-        _run_detect_secrets(
-            tmp_path, "docs/quality/architecture-ratchet.json", filtered=False
-        ).returncode
-        == 1
-    )
-    assert (
-        _run_detect_secrets(
-            tmp_path, "docs/quality/architecture-ratchet.json", filtered=True
-        ).returncode
-        == 0
-    )
+    assert _run_detect_secrets(tmp_path, canonical_path, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, canonical_path, filtered=True).returncode == 0
     for hostile_payload in (
         f'"{UNRECOGNIZED_MEMBER}": "{digest}"',
         f'"note": "{synthetic_provider_value}"',
@@ -195,12 +203,7 @@ def test_detect_secrets_filter_drops_only_known_metadata_hashes(tmp_path: Path) 
             _json_document(f'  "sha256": "{digest}",\n  {hostile_payload}'),
             encoding="utf-8",
         )
-        assert (
-            _run_detect_secrets(
-                tmp_path, "docs/quality/architecture-ratchet.json", filtered=True
-            ).returncode
-            == 1
-        )
+        assert _run_detect_secrets(tmp_path, canonical_path, filtered=True).returncode == 1
 
     assert (
         _run_detect_secrets(

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from quality.admission_policy import SOURCE_PATHS as _ADMISSION_SOURCE_PATHS
 from quality.evidence_path_policy import (
+    FREEZE_PATH,
     admission_path_for,
     is_canonical_generator_path,
     is_canonical_receipt_path,
@@ -68,7 +69,7 @@ def _check_accepted_exit_codes(codes: tuple[int, ...]) -> tuple[int, ...]:
 
 
 def allowed_bundle_paths() -> tuple[str, ...]:
-    paths: list[str] = [*ALLOWED_SOURCE_PATHS]
+    paths: list[str] = [*ALLOWED_SOURCE_PATHS, FREEZE_PATH]
     for key in non_architecture_blocks():
         paths.append(admission_path_for("block", key))
     for key in HARD_GATES:
@@ -123,6 +124,10 @@ class ArtifactSpec(StrictModel):
     accepted_exit_codes: tuple[int, ...] = Field(default=(0,))
     depends_on: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
     handoff_path: str | None = Field(default=None, min_length=1, max_length=200)
+    input_manifest_flag: str | None = Field(
+        default=None, max_length=32, pattern=r"^--[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+    roadmap_context_path: Literal["docs/quality/quality-9plus-roadmap.md"] | None = None
 
     @model_validator(mode="after")
     def _check(self) -> ArtifactSpec:
@@ -140,6 +145,8 @@ class ArtifactSpec(StrictModel):
         _check_depends_on(self.artifact_id, self.depends_on)
         if self.handoff_path is not None and not _is_canonical_handoff_path(self.handoff_path):
             raise ValueError("noncanonical handoff_path")
+        if self.roadmap_context_path is not None and self.input_manifest_flag is None:
+            raise ValueError("roadmap_context_path requires input_manifest_flag")
         return self
 
 

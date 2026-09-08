@@ -134,8 +134,8 @@ Collector properties:
   `manifest_hash` excluded, so it is not self-referential.
 - Tests inject a `runner(argv, repo_root)`; real use invokes existing local
   CLIs without a shell and never touches production DB or network.
-- Default collection has eight typed producers including test-db and
-  lifecycle. Accepted exit codes are declared and recorded; exit 2 may
+- Default collection has eight typed evidence producers plus a non-admission
+  roadmap-freeze index. Accepted exit codes are declared and recorded; exit 2 may
   mean successfully captured semantic HOLD. Acquisition completeness,
   typed bundle validity, per-slot admission, and score outcome stay
   distinct: typed-valid HOLD bytes are preserved verbatim, while
@@ -202,3 +202,37 @@ unresolved or dynamic invocations.
 no surface change — preserves the existing quality-measurement/score-evidence contract; no Operations registry field, scheduler task, service, operator action, or runtime panel is added.
 
 collection/assembly/validation/record are manual local-only non-production operations. `.tmp` is ignored external staging with no network or production DB. post-commit validation/ScoreEvidence recording are caller-owned, and failures remain HOLD/errors.
+
+
+### Roadmap-freeze index (BHA-144)
+
+`execution/freeze_quality_roadmap.py` indexes exact-subject native evidence,
+declared owner routes and an optional reviewed plan. Collection runs this ninth
+producer after the eight evidence producers; dependency manifests bind fresh raw
+handoffs by path and SHA-256. Reconciliation uses the approved roadmap export at
+`docs/quality/quality-9plus-roadmap.md` and its typed claim map under `config/`.
+Historical and provisional claims retain their qualifications.
+
+The freeze records the available candidate census and explicit missing producer
+reasons. Supplied plans retain candidate-to-intent ownership, dependencies,
+resource claims, acceptance test paths and exact evidence scopes. The retained raw
+plan and parsed plan are hash-bound; the owner map remains explicitly unverified
+without a typed approval binding. Required
+large-module reduction is derived from the current census and the 35-module
+target. Prospective crossings and distinct PR intents are separate counts;
+forecasts never count as delivered reductions. Protected composition-root
+threshold work has its own linked intent.
+
+Missing native membership checks, reviewed intents, proven SCC cuts, paired
+510-second feasibility or measured lane capacity keep the index on HOLD. An
+index supplies no admission points and cannot unlock subsequent trains, close
+BHA-122 or establish a 9+ result. Capacity declarations alone cannot establish a
+calendar. R5 must collect the actual index only after this implementation merges,
+using that exact merge as its executable subject; no current receipt accompanies
+the implementation commit.
+
+The CLI accepts `--repo-root`, a required `--input-manifest`, optional `--plan`
+and `--owner-snapshot`, and optional ignored `--output`. Exit 0 means artifact
+PASS, 2 means a captured semantic HOLD, and 1 rejects invalid input. It never
+accesses production state or runs a benchmark. Local quality operations retain
+the no-surface-change disposition above.

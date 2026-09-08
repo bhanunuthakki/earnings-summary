@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import shlex
@@ -35,6 +36,7 @@ from quality.evidence_bundle import (
     verify_staged_bytes,
 )
 from quality.evidence_bundle_io import Runner, default_runner
+from quality.evidence_path_policy import FREEZE_PATH
 from quality.git_env import clean_local_git_env
 from quality.scoring import HARD_GATES, AdmissionReceipt
 from quality.static_quality import RuntimeIdentity, StaticQualityInventory
@@ -1149,7 +1151,7 @@ def test_default_specs_select_existing_producers_and_output_flags() -> None:
 
     checkout = Path(__file__).resolve().parents[1]
     specs = default_artifact_specs()
-    assert len(specs) == 8
+    assert len(specs) == 9
     by_id = {s.artifact_id: s for s in specs}
     assert set(by_id) == {
         "architecture",
@@ -1158,6 +1160,7 @@ def test_default_specs_select_existing_producers_and_output_flags() -> None:
         "performance",
         "reachability",
         "reconciliation",
+        "roadmap_freeze",
         "static",
         "test_db",
     }
@@ -1196,12 +1199,66 @@ def test_default_specs_select_existing_producers_and_output_flags() -> None:
     assert by_id["lifecycle"].depends_on == ("reachability",)
     assert by_id["reachability"].handoff_path == ".tmp/quality/reachability-check.json"
     for artifact_id, spec in by_id.items():
-        if artifact_id not in ("lifecycle", "reachability"):
+        if artifact_id not in (
+            "lifecycle",
+            "reachability",
+            "reconciliation",
+            "roadmap_freeze",
+        ):
             assert spec.depends_on == ()
             assert spec.handoff_path is None
+    assert by_id["reconciliation"].depends_on == (
+        "architecture",
+        "duplicates",
+        "reachability",
+        "static",
+        "test_db",
+    )
+    assert by_id["reconciliation"].input_manifest_flag == "--staged-manifest"
+    assert by_id["reconciliation"].roadmap_context_path == "docs/quality/quality-9plus-roadmap.md"
+    assert by_id["roadmap_freeze"].canonical_path == "docs/quality/roadmap-freeze.json"
+    assert by_id["roadmap_freeze"].generator_version == "roadmap-freeze-index/v1"
+    assert by_id["roadmap_freeze"].input_manifest_flag == "--input-manifest"
+    assert by_id["roadmap_freeze"].depends_on == (
+        "architecture",
+        "duplicates",
+        "lifecycle",
+        "performance",
+        "reachability",
+        "reconciliation",
+        "static",
+        "test_db",
+    )
     for spec in specs:
         assert spec.generator_path is not None
         assert (checkout / spec.generator_path).is_file()
+
+
+def test_assembler_has_no_freeze_override_surface() -> None:
+    assert "freeze_index" not in inspect.signature(assemble_bundle).parameters
+
+
+def test_invalid_collected_freeze_holds_without_writing(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    spec = ArtifactSpec(
+        artifact_id="roadmap_freeze",
+        canonical_path=FREEZE_PATH,
+        command=("freeze",),
+        native_scope="WORKTREE",
+        output_flag="--output",
+        accepted_exit_codes=(0, 2),
+    )
+    staging = repo / ".tmp" / "quality" / "freeze"
+
+    def run(argv: tuple[str, ...], root: Path) -> subprocess.CompletedProcess[bytes]:
+        Path(argv[-1]).write_bytes(b"{}\n")
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    manifest = collect_evidence(repo, staging, (spec,), runner=run)
+    result = assemble_bundle(repo, manifest, staging, repo / "docs" / "quality")
+    assert result.status == "HOLD"
+    assert FREEZE_PATH not in result.written
+    assert not (repo / FREEZE_PATH).exists()
 
 
 def test_staging_file_must_match_artifact_id() -> None:

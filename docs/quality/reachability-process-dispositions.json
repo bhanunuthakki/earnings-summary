@@ -709,7 +709,7 @@
     },
     {
       "disposition": "closed_command_set",
-      "evidence": "_default_runner executes only the immutable argv declared by the typed evidence artifact registry.",
+      "evidence": "_default_runner executes the immutable argv declared by the typed evidence artifact registry and fixed git metadata probes used to bind dependency context to the subject.",
       "fingerprint": "a5ac9e4a92282feba248c54d2e4898f2fe0468b3b7ba029de396ca0ca2f1d7f8",
       "line": 59,
       "path": "src/quality/evidence_bundle_io.py",
@@ -801,8 +801,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
-      "fingerprint": "dac0062b12040d9cc7d45afb83d38e379b19c031179d12f9ae42b498ff691132",
-      "line": 158,
+      "fingerprint": "8be225185458649ce7739bacfd1224d541c7784bfbe04cb1c70a762a815f81c7",
+      "line": 164,
       "path": "tests/test_quality_hash_filter.py",
       "targets": [
         ".github/scripts/quality_hash_filter.py"
@@ -812,14 +812,14 @@
   "graph_provenance": {
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "fd4050aac564ccf5d5c0d4401027e0ebc477b6ad31b02418907509d8056fcd8c"
+      "source_sha256": "810909d9cb3cf2338eb55c805c105b54ff1eb3127637bf726c5f583da48d91c7",
+      "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "00cbb19fde6ee1a0ac8a7f338cf8db1cf14c7fe9853cfafce210eb864a71373d"
+    "source_manifest_sha256": "043eef3c9542a8b1fb7eb2dad6895b38de3b599736acb8814f7161f04fb04da4"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }

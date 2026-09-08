@@ -12,6 +12,9 @@ import re
 
 _CANONICAL_PATHS = frozenset(
     {
+        "config/quality_roadmap_claims.json",
+        "config/quality_roadmap_owners.json",
+        "docs/quality/roadmap-freeze.json",
         "docs/quality/admission-block-cleanup-deletion_proof.json",
         "docs/quality/admission-block-cleanup-lifecycle_inventory.json",
         "docs/quality/admission-block-cleanup-reachability_oracle.json",
@@ -46,7 +49,9 @@ _CANONICAL_PATHS = frozenset(
     }
 )
 
-_HASH40_KEYS = "|".join(("subject_commit", "scoped_commit", "commit_hash", "revision"))
+_HASH40_KEYS = "|".join(
+    ("subject_commit", "scoped_commit", "commit_hash", "revision", "subject_tree")
+)
 _HASH64_KEYS = "|".join(
     (
         "generator_sha256",
@@ -65,6 +70,9 @@ _HASH64_KEYS = "|".join(
         "source_manifest_sha256",
         "content_sha256",
         "claim_manifest_sha256",
+        "plan_sha256",
+        "owner_snapshot_sha256",
+        "scope_sha256",
     )
 )
 _HASH40_MEMBER = re.compile(

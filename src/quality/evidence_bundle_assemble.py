@@ -88,6 +88,8 @@ from quality.evidence_bundle_models import (
 from quality.evidence_bundle_models import (
     is_canonical_receipt_path as _is_canonical_receipt_path,
 )
+from quality.evidence_path_policy import FREEZE_PATH
+from quality.roadmap_freeze_bundle import validate_freeze_index
 from quality.scoring import (
     ADMISSION_GENERATOR_PATH,
     HARD_GATES,
@@ -184,12 +186,32 @@ def assemble_bundle(
     if len(by_id) != len(manifest.artifacts):
         violations.append("duplicate artifacts")
     staged_bytes: dict[str, bytes] = {}
+    collected_freeze: bytes | None = None
+    freeze_record: ArtifactRecord | None = None
     seen_inodes: set[tuple[int, int]] = set()
     try:
         staging_resolved = staging.resolve()
     except OSError:
         staging_resolved = staging
     for record in manifest.artifacts:
+        if record.canonical_path == FREEZE_PATH:
+            if record.collection_status != "collected":
+                violations.append("freeze index is not collected")
+                continue
+            data, err = _read_staged_secure(staging, staging_resolved, record, seen_inodes)
+            if err is not None:
+                violations.append(f"freeze index bytes unstable: {err}")
+                continue
+            assert data is not None
+            if hashlib.sha256(data).hexdigest() != record.sha256:
+                violations.append("freeze index bytes unstable")
+                continue
+            if len(data) != record.byte_length:
+                violations.append("freeze index length mismatch")
+                continue
+            collected_freeze = data
+            freeze_record = record
+            continue
         if record.canonical_path not in ALLOWED_SOURCE_PATHS:
             violations.append(f"source is not allowlisted: {record.canonical_path}")
             continue
@@ -239,8 +261,28 @@ def assemble_bundle(
         violations.append("admission registry mismatch")
     if not typed_sources:
         violations.append("admission sources are empty")
+    pending_freeze: bytes | None = None
+    freeze_to_write = collected_freeze
+    if freeze_to_write is not None:
+        try:
+            validate_freeze_index(root, freeze_to_write, subject, staged_bytes)
+        except (ValueError, RuntimeError) as exc:
+            violations.append(f"freeze index is invalid: {type(exc).__name__}")
+        else:
+            pending_freeze = freeze_to_write
     written: list[str] = []
     pending_writes: dict[str, bytes] = {}
+    if pending_freeze is not None:
+        if freeze_record is None:
+            violations.append("freeze index record is missing")
+        else:
+            freeze_src = staging / PurePosixPath(freeze_record.staging_file).name
+            freeze_dst = root / FREEZE_PATH
+            alias = _reject_output_alias(root, freeze_src, freeze_dst)
+            if alias is not None:
+                violations.append(f"output alias: {FREEZE_PATH}: {alias}")
+            else:
+                pending_writes[FREEZE_PATH] = pending_freeze
     for rel, raw in staged_bytes.items():
         if rel not in typed_sources:
             continue

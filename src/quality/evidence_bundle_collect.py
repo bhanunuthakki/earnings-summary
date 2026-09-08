@@ -11,6 +11,7 @@ import sys
 from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
+from typing import cast
 
 from quality.evidence_bundle_io import (
     Runner,
@@ -60,6 +61,7 @@ from quality.evidence_bundle_models import (
 from quality.evidence_bundle_models import (
     HEX40_RE as _HEX40_RE,
 )
+from quality.evidence_path_policy import FREEZE_PATH
 
 __all__ = (
     "collect_evidence",
@@ -139,10 +141,13 @@ def default_artifact_specs() -> tuple[ArtifactSpec, ...]:
             canonical_path="docs/quality/roadmap-reconciliation.json",
             generator_path="execution/reconcile_quality_baseline.py",
             generator_version="roadmap-reconciliation-v1",
-            command=(py, "execution/reconcile_quality_baseline.py", "--repo-root", "."),
+            command=(py, "execution/reconcile_quality_baseline.py", "--subject-root", "."),
             native_scope="WORKTREE",
             output_flag="--output",
             accepted_exit_codes=(0, 2),
+            depends_on=("architecture", "duplicates", "reachability", "static", "test_db"),
+            input_manifest_flag="--staged-manifest",
+            roadmap_context_path="docs/quality/quality-9plus-roadmap.md",
         ),
         ArtifactSpec(
             artifact_id="static",
@@ -164,12 +169,245 @@ def default_artifact_specs() -> tuple[ArtifactSpec, ...]:
             output_flag="--output",
             accepted_exit_codes=(0, 2),
         ),
+        ArtifactSpec(
+            artifact_id="roadmap_freeze",
+            canonical_path=FREEZE_PATH,
+            generator_path="execution/freeze_quality_roadmap.py",
+            generator_version="roadmap-freeze-index/v1",
+            command=(py, "execution/freeze_quality_roadmap.py", "--repo-root", "."),
+            native_scope="WORKTREE",
+            output_flag="--output",
+            input_manifest_flag="--input-manifest",
+            accepted_exit_codes=(0, 2),
+            depends_on=(
+                "architecture",
+                "duplicates",
+                "lifecycle",
+                "performance",
+                "reachability",
+                "reconciliation",
+                "static",
+                "test_db",
+            ),
+        ),
     )
 
 
 def _producer_output_path(staging: Path, artifact_id: str) -> Path:
     safe = artifact_id.replace("/", "-").replace("\\", "-")
     return staging / f"{safe}.out"
+
+
+def _input_manifest_path(staging: Path, artifact_id: str) -> Path:
+    safe = artifact_id.replace("/", "-").replace("\\", "-")
+    return staging / f"{safe}.inputs.json"
+
+
+def _roadmap_context_handoff(staging: Path) -> Path:
+    return staging / "roadmap.context.md"
+
+
+def _roadmap_claims_handoff(staging: Path) -> Path:
+    return staging / "roadmap.claims.json"
+
+
+_ROADMAP_CLAIMS_PATH = "config/quality_roadmap_claims.json"
+
+
+def _preflight_input_file(path: Path) -> str | None:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "unable to inspect input handoff"
+    if stat.S_ISLNK(st.st_mode):
+        return "input handoff is symlink"
+    if stat.S_ISDIR(st.st_mode):
+        return "input handoff is directory"
+    if not stat.S_ISREG(st.st_mode):
+        return "input handoff is non-regular"
+    if st.st_nlink != 1:
+        return "input handoff is hard-linked"
+    return None
+
+
+def _input_manifest_bytes(
+    root: Path,
+    staging: Path,
+    spec: ArtifactSpec,
+    raw_by_id: dict[str, bytes],
+    subject_commit: str,
+) -> tuple[bytes, tuple[tuple[Path, tuple[int, int, int] | None], ...]] | None:
+    if spec.input_manifest_flag is None:
+        return None
+    entries: dict[str, dict[str, str]] = {}
+    for dep in spec.depends_on:
+        data = raw_by_id.get(dep)
+        if data is None:
+            return None
+        entries[dep] = {
+            "path": f"{dep}.raw",
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    snapshots: list[tuple[Path, tuple[int, int, int] | None]] = []
+    if spec.roadmap_context_path is not None:
+        context = root / spec.roadmap_context_path
+        try:
+            context_stat = os.lstat(context)
+            context_resolved = context.resolve()
+            if (
+                stat.S_ISLNK(context_stat.st_mode)
+                or not stat.S_ISREG(context_stat.st_mode)
+                or context_stat.st_nlink != 1
+                or context_resolved != context
+            ):
+                return None
+            if (
+                _default_runner(
+                    ("git", "ls-files", "--error-unmatch", "--", spec.roadmap_context_path), root
+                ).returncode
+                != 0
+            ):
+                return None
+            expected_context: bytes = _default_runner(
+                ("git", "show", f"{subject_commit}:{spec.roadmap_context_path}"), root
+            ).stdout
+            if context.read_bytes() != expected_context:
+                return None
+            context_after = os.lstat(context)
+            context_signature = (
+                context_stat.st_dev,
+                context_stat.st_ino,
+                context_stat.st_ctime_ns,
+            )
+            if (context_after.st_dev, context_after.st_ino) != (
+                context_stat.st_dev,
+                context_stat.st_ino,
+            ) or context.read_bytes() != expected_context:
+                return None
+            handoff = _roadmap_context_handoff(staging)
+            _atomic_write(handoff, expected_context)
+        except OSError:
+            return None
+        entries["roadmap"] = {
+            "path": handoff.name,
+            "sha256": hashlib.sha256(expected_context).hexdigest(),
+        }
+        snapshots.append((context, context_signature))
+    if spec.roadmap_context_path is not None:
+        claims = root / _ROADMAP_CLAIMS_PATH
+        try:
+            claims_result = _default_runner(
+                ("git", "show", f"{subject_commit}:{_ROADMAP_CLAIMS_PATH}"), root
+            )
+            if claims_result.returncode == 0:
+                claims_bytes = claims_result.stdout
+                claims_stat = None
+                try:
+                    claims_stat = os.lstat(claims)
+                    claims_resolved = claims.resolve()
+                    if (
+                        stat.S_ISLNK(claims_stat.st_mode)
+                        or not stat.S_ISREG(claims_stat.st_mode)
+                        or claims_stat.st_nlink != 1
+                        or claims_resolved != claims
+                        or claims.read_bytes() != claims_bytes
+                    ):
+                        return None
+                except FileNotFoundError:
+                    if claims.resolve() != claims:
+                        return None
+                except OSError:
+                    return None
+                _atomic_write(_roadmap_claims_handoff(staging), claims_bytes)
+                entries["roadmap_claims"] = {
+                    "path": _roadmap_claims_handoff(staging).name,
+                    "sha256": hashlib.sha256(claims_bytes).hexdigest(),
+                }
+                if claims_stat is not None:
+                    snapshots.append(
+                        (
+                            claims,
+                            (claims_stat.st_dev, claims_stat.st_ino, claims_stat.st_ctime_ns),
+                        )
+                    )
+        except OSError:
+            return None
+    return (
+        (json.dumps(entries, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"),
+        tuple(snapshots),
+    )
+
+
+def _verify_input_manifest_inputs(
+    staging: Path,
+    manifest_path: Path,
+    manifest_bytes: bytes,
+    raw_by_id: dict[str, bytes],
+    context_snapshots: tuple[tuple[Path, tuple[int, int, int] | None], ...] = (),
+) -> str | None:
+    try:
+        manifest_stat = os.lstat(manifest_path)
+        if (
+            stat.S_ISLNK(manifest_stat.st_mode)
+            or not stat.S_ISREG(manifest_stat.st_mode)
+            or manifest_stat.st_nlink != 1
+            or manifest_path.resolve().parent != staging.resolve()
+            or manifest_path.read_bytes() != manifest_bytes
+        ):
+            return "input manifest changed during collection"
+        for context_path, context_signature in context_snapshots:
+            try:
+                context_stat = os.lstat(context_path)
+            except FileNotFoundError:
+                return "roadmap context changed during collection"
+            if (
+                stat.S_ISLNK(context_stat.st_mode)
+                or not stat.S_ISREG(context_stat.st_mode)
+                or context_stat.st_nlink != 1
+                or context_signature is None
+                or (context_stat.st_dev, context_stat.st_ino, context_stat.st_ctime_ns)
+                != context_signature
+            ):
+                return "roadmap context changed during collection"
+        payload: object = json.loads(manifest_bytes.decode("utf-8"))
+        if not isinstance(payload, dict):
+            return "input manifest changed during collection"
+        seen: set[tuple[int, int]] = set()
+        raw_payload = cast(dict[object, object], payload)
+        for entry_value in raw_payload.values():
+            entry: object = entry_value
+            if not isinstance(entry, dict):
+                return "input manifest changed during collection"
+            raw_entry = cast(dict[object, object], entry)
+            rel: object = raw_entry.get("path")
+            digest: object = raw_entry.get("sha256")
+            if not isinstance(rel, str) or not isinstance(digest, str):
+                return "input manifest changed during collection"
+            path = staging / rel
+            artifact_id = Path(rel).stem
+            expected = raw_by_id.get(artifact_id)
+            if expected is None and rel in (
+                _roadmap_context_handoff(staging).name,
+                _roadmap_claims_handoff(staging).name,
+            ):
+                expected = path.read_bytes()
+            st = os.lstat(path)
+            if (
+                stat.S_ISLNK(st.st_mode)
+                or not stat.S_ISREG(st.st_mode)
+                or st.st_nlink != 1
+                or (st.st_dev, st.st_ino) in seen
+                or expected is None
+                or path.read_bytes() != expected
+                or hashlib.sha256(expected).hexdigest() != digest
+            ):
+                return f"input dependency changed during collection: {rel}"
+            seen.add((st.st_dev, st.st_ino))
+    except OSError:
+        return "input dependency unavailable during collection"
+    return None
 
 
 def _preflight_output(path: Path) -> str | None:
@@ -322,6 +560,11 @@ def collect_evidence(
         staging_names.append(f"{_spec.artifact_id}.raw")
         if _spec.output_flag is not None:
             staging_names.append(f"{_spec.artifact_id}.out")
+        if _spec.input_manifest_flag is not None:
+            staging_names.append(f"{_spec.artifact_id}.inputs.json")
+        if _spec.roadmap_context_path is not None:
+            staging_names.append(_roadmap_context_handoff(staging).name)
+            staging_names.append(_roadmap_claims_handoff(staging).name)
     _staging_problems = _git_staging_problems(root, rel_staging, staging_names)
     if _staging_problems:
         raise ValueError(f"unsafe staging configuration: {'; '.join(_staging_problems)}")
@@ -358,15 +601,99 @@ def collect_evidence(
         staging_resolved = staging.resolve()
     except OSError:
         staging_resolved = staging
-    staged: list[tuple[ArtifactSpec, bytes, ArtifactCollectionStatus, int | None]] = []
+    staged: list[
+        tuple[ArtifactSpec, bytes, ArtifactCollectionStatus, int | None, tuple[str, ...]]
+    ] = []
     per_status: dict[str, ArtifactCollectionStatus] = {}
+    raw_by_id: dict[str, bytes] = {}
+    input_manifests: dict[
+        str,
+        tuple[
+            Path,
+            bytes,
+            dict[str, bytes],
+            tuple[tuple[Path, tuple[int, int, int] | None], ...],
+        ],
+    ] = {}
     for spec in ordered:
         if any(per_status.get(dep) != "collected" for dep in spec.depends_on):
             violations.append(f"unsatisfied dependency: {spec.artifact_id}")
             hold_dep: ArtifactCollectionStatus = "hold"
             per_status[spec.artifact_id] = hold_dep
-            staged.append((spec, b"", hold_dep, None))
+            staged.append((spec, b"", hold_dep, None, spec.command))
             continue
+        actual_command = spec.command
+        if spec.input_manifest_flag is not None:
+            dependency_bytes = {dep: raw_by_id[dep] for dep in spec.depends_on if dep in raw_by_id}
+            manifest_path = _input_manifest_path(staging, spec.artifact_id)
+            input_file_problem = _preflight_input_file(manifest_path)
+            if input_file_problem is not None:
+                violations.append(f"{input_file_problem}: {spec.artifact_id}")
+                hold_input_file: ArtifactCollectionStatus = "hold"
+                per_status[spec.artifact_id] = hold_input_file
+                staged.append((spec, b"", hold_input_file, None, actual_command))
+                continue
+            if spec.roadmap_context_path is not None:
+                context_problem = _preflight_input_file(_roadmap_context_handoff(staging))
+                if context_problem is not None:
+                    violations.append(f"{context_problem}: {spec.artifact_id}")
+                    hold_context_file: ArtifactCollectionStatus = "hold"
+                    per_status[spec.artifact_id] = hold_context_file
+                    staged.append((spec, b"", hold_context_file, None, actual_command))
+                    continue
+                claims_problem = _preflight_input_file(_roadmap_claims_handoff(staging))
+                if claims_problem is not None:
+                    violations.append(f"{claims_problem}: {spec.artifact_id}")
+                    hold_claims_file: ArtifactCollectionStatus = "hold"
+                    per_status[spec.artifact_id] = hold_claims_file
+                    staged.append((spec, b"", hold_claims_file, None, actual_command))
+                    continue
+            prepared_inputs = _input_manifest_bytes(root, staging, spec, raw_by_id, before_commit)
+            if prepared_inputs is None or len(dependency_bytes) != len(spec.depends_on):
+                violations.append(f"unable to prepare input manifest: {spec.artifact_id}")
+                hold_manifest: ArtifactCollectionStatus = "hold"
+                per_status[spec.artifact_id] = hold_manifest
+                staged.append((spec, b"", hold_manifest, None, actual_command))
+                continue
+            manifest_bytes, context_snapshots = prepared_inputs
+            try:
+                _atomic_write(manifest_path, manifest_bytes)
+            except OSError:
+                violations.append(f"unable to write input manifest: {spec.artifact_id}")
+                hold_manifest_write: ArtifactCollectionStatus = "hold"
+                per_status[spec.artifact_id] = hold_manifest_write
+                staged.append((spec, b"", hold_manifest_write, None, actual_command))
+                continue
+            input_manifests[spec.artifact_id] = (
+                manifest_path,
+                manifest_bytes,
+                dependency_bytes,
+                context_snapshots,
+            )
+            actual_command = (*actual_command, spec.input_manifest_flag, str(manifest_path))
+        if spec.input_manifest_flag is not None:
+            input_problem: str | None = None
+            for (
+                manifest_path,
+                manifest_bytes,
+                dependencies,
+                context_snapshots,
+            ) in input_manifests.values():
+                input_problem = _verify_input_manifest_inputs(
+                    staging,
+                    manifest_path,
+                    manifest_bytes,
+                    dependencies,
+                    context_snapshots,
+                )
+                if input_problem is not None:
+                    break
+            if input_problem is not None:
+                violations.append(f"{input_problem}: {spec.artifact_id}")
+                hold_input: ArtifactCollectionStatus = "hold"
+                per_status[spec.artifact_id] = hold_input
+                staged.append((spec, b"", hold_input, None, actual_command))
+                continue
         if spec.output_flag is not None:
             out_path = _producer_output_path(staging, spec.artifact_id)
             problem = _preflight_output(out_path)
@@ -374,32 +701,41 @@ def collect_evidence(
                 violations.append(f"{problem}: {spec.artifact_id}")
                 status: ArtifactCollectionStatus = "hold"
                 per_status[spec.artifact_id] = status
-                staged.append((spec, b"", status, None))
+                staged.append((spec, b"", status, None, actual_command))
                 continue
-            argv = (*spec.command, spec.output_flag, str(out_path))
+            argv = (*actual_command, spec.output_flag, str(out_path))
+            actual_command = argv
             try:
                 result = run(argv, root)
             except (OSError, RuntimeError, ValueError) as exc:
                 violations.append(f"producer failed: {spec.artifact_id}: {type(exc).__name__}")
                 failed: ArtifactCollectionStatus = "failed"
                 per_status[spec.artifact_id] = failed
-                staged.append((spec, b"", failed, None))
+                staged.append((spec, b"", failed, None, actual_command))
                 continue
             code = int(result.returncode)
             if code not in spec.accepted_exit_codes:
                 violations.append(f"producer exit {result.returncode}: {spec.artifact_id}")
                 hold: ArtifactCollectionStatus = "hold"
                 per_status[spec.artifact_id] = hold
-                staged.append((spec, b"", hold, code))
+                staged.append((spec, b"", hold, code, actual_command))
                 continue
             data, err = _read_producer_output(out_path, staging_resolved)
             if err is not None:
                 violations.append(f"{err}: {spec.artifact_id}")
                 hold_err: ArtifactCollectionStatus = "hold"
                 per_status[spec.artifact_id] = hold_err
-                staged.append((spec, b"", hold_err, code))
+                staged.append((spec, b"", hold_err, code, actual_command))
                 continue
             assert data is not None
+            try:
+                _atomic_write(_staging_path(staging, spec.artifact_id), data)
+            except OSError:
+                violations.append(f"unable to write staging: {spec.artifact_id}")
+                status_write: ArtifactCollectionStatus = "hold"
+                per_status[spec.artifact_id] = status_write
+                staged.append((spec, data, status_write, code, actual_command))
+                continue
             if spec.handoff_path is not None:
                 try:
                     _install_handoff(root, spec.handoff_path, data)
@@ -407,26 +743,27 @@ def collect_evidence(
                     violations.append(f"handoff failed: {spec.artifact_id}: {type(exc).__name__}")
                     hold_hand: ArtifactCollectionStatus = "hold"
                     per_status[spec.artifact_id] = hold_hand
-                    staged.append((spec, data, hold_hand, code))
+                    staged.append((spec, data, hold_hand, code, actual_command))
                     continue
             collected: ArtifactCollectionStatus = "collected"
             per_status[spec.artifact_id] = collected
-            staged.append((spec, data, collected, code))
+            raw_by_id[spec.artifact_id] = data
+            staged.append((spec, data, collected, code, actual_command))
         else:
             try:
-                result = run(spec.command, root)
+                result = run(actual_command, root)
                 stdout = result.stdout
                 code = int(result.returncode)
                 if not isinstance(stdout, bytes):
                     violations.append(f"producer returned non-bytes: {spec.artifact_id}")
                     failed_stdout: ArtifactCollectionStatus = "failed"
                     per_status[spec.artifact_id] = failed_stdout
-                    staged.append((spec, b"", failed_stdout, code))
+                    staged.append((spec, b"", failed_stdout, code, actual_command))
                 elif code not in spec.accepted_exit_codes:
                     violations.append(f"producer exit {result.returncode}: {spec.artifact_id}")
                     hold_stdout: ArtifactCollectionStatus = "hold"
                     per_status[spec.artifact_id] = hold_stdout
-                    staged.append((spec, b"", hold_stdout, code))
+                    staged.append((spec, b"", hold_stdout, code, actual_command))
                 else:
                     if spec.handoff_path is not None:
                         try:
@@ -437,16 +774,39 @@ def collect_evidence(
                             )
                             hold_hand_stdout: ArtifactCollectionStatus = "hold"
                             per_status[spec.artifact_id] = hold_hand_stdout
-                            staged.append((spec, stdout, hold_hand_stdout, code))
+                            staged.append((spec, stdout, hold_hand_stdout, code, actual_command))
                             continue
                     collected_stdout: ArtifactCollectionStatus = "collected"
                     per_status[spec.artifact_id] = collected_stdout
-                    staged.append((spec, stdout, collected_stdout, code))
+                    try:
+                        _atomic_write(_staging_path(staging, spec.artifact_id), stdout)
+                    except OSError:
+                        violations.append(f"unable to write staging: {spec.artifact_id}")
+                        collected_stdout = "hold"
+                        per_status[spec.artifact_id] = collected_stdout
+                    if collected_stdout == "collected":
+                        raw_by_id[spec.artifact_id] = stdout
+                    staged.append((spec, stdout, collected_stdout, code, actual_command))
             except (OSError, RuntimeError, ValueError) as exc:
                 violations.append(f"producer failed: {spec.artifact_id}: {type(exc).__name__}")
                 failed_exc: ArtifactCollectionStatus = "failed"
                 per_status[spec.artifact_id] = failed_exc
-                staged.append((spec, b"", failed_exc, None))
+                staged.append((spec, b"", failed_exc, None, actual_command))
+    for artifact_id, (
+        manifest_path,
+        manifest_bytes,
+        dependencies,
+        context_snapshots,
+    ) in input_manifests.items():
+        problem = _verify_input_manifest_inputs(
+            staging,
+            manifest_path,
+            manifest_bytes,
+            dependencies,
+            context_snapshots,
+        )
+        if problem is not None:
+            violations.append(f"{problem}: {artifact_id}")
     after = _snapshot_subject(root)
     if after is None:
         after_commit = before_commit
@@ -470,7 +830,7 @@ def collect_evidence(
     )
     subject_tree = after_tree if _HEX40_RE.fullmatch(after_tree) is not None else before_tree
     records: list[ArtifactRecord] = []
-    for spec, raw, status, code in sorted(staged, key=lambda t: t[0].artifact_id):
+    for spec, raw, status, code, actual_command in sorted(staged, key=lambda t: t[0].artifact_id):
         digest = hashlib.sha256(raw).hexdigest()
         schema = _extract_schema(raw)
         embedded = _extract_embedded_subject(raw)
@@ -489,7 +849,7 @@ def collect_evidence(
             generator_path=spec.generator_path,
             generator_sha256=gen_hash,
             generator_version=spec.generator_version,
-            command=spec.command,
+            command=actual_command,
             native_scope=spec.native_scope,
             output_flag=spec.output_flag,
             embedded_subject=embedded,
@@ -506,7 +866,19 @@ def collect_evidence(
         records.append(record)
         dest = _staging_path(staging, spec.artifact_id)
         try:
-            _atomic_write(dest, raw)
+            try:
+                dest_stat = os.lstat(dest)
+            except FileNotFoundError:
+                dest_stat = None
+            if dest_stat is None:
+                _atomic_write(dest, raw)
+            elif (
+                stat.S_ISLNK(dest_stat.st_mode)
+                or not stat.S_ISREG(dest_stat.st_mode)
+                or dest_stat.st_nlink != 1
+                or dest.read_bytes() != raw
+            ):
+                violations.append(f"staging bytes changed during collection: {spec.artifact_id}")
         except OSError:
             violations.append(f"unable to write staging: {spec.artifact_id}")
     bounded = bound_violations(sorted(set(violations)))

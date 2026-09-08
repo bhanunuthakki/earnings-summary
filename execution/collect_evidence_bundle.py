@@ -26,7 +26,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument(
-        "--staging-dir", type=Path, default=ROOT / ".tmp" / "quality" / "evidence-bundle"
+        "--staging-dir", type=Path, default=Path(".tmp") / "quality" / "evidence-bundle"
     )
     parser.add_argument("--output-dir", type=Path, default=ROOT / "docs" / "quality")
     parser.add_argument("--manifest", type=Path, default=None)
@@ -44,12 +44,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.staging_dir.is_absolute()
         else (repo_root / args.staging_dir).resolve()
     )
-    manifest_path = (
-        args.manifest.resolve()
-        if args.manifest is not None
-        else (staging / "manifest.json").resolve()
-    )
     try:
+        if args.manifest is None:
+            manifest_path = (staging / "manifest.json").resolve()
+            try:
+                relative_manifest = manifest_path.relative_to(repo_root)
+            except ValueError as exc:
+                raise ValueError("default manifest escapes repository") from exc
+            if relative_manifest.parts[:1] != (".tmp",):
+                raise ValueError("default manifest must live under ignored .tmp/")
+        else:
+            manifest_path = args.manifest.resolve()
         if args.mode == "collect":
             manifest = collect_evidence(repo_root, staging, default_artifact_specs())
             print(manifest.model_dump_json(indent=2))

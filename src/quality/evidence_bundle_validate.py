@@ -75,6 +75,8 @@ from quality.evidence_bundle_models import (
 from quality.evidence_bundle_models import (
     is_canonical_receipt_path as _is_canonical_receipt_path,
 )
+from quality.evidence_path_policy import FREEZE_PATH
+from quality.roadmap_freeze_bundle import validate_freeze_index
 from quality.scoring import (
     ADMISSION_GENERATOR_PATH,
     HARD_GATES,
@@ -422,6 +424,18 @@ def validate_bundle_diff(
             problems.append(f"bundle source bytes absent: {_p}")
             continue
         blobs[_p] = _blob
+    if FREEZE_PATH in changed_set:
+        freeze_blob = blobs.get(FREEZE_PATH)
+        if freeze_blob is None:
+            freeze_blob = _show_blob(root, exact_bundle, FREEZE_PATH)
+        if freeze_blob is None:
+            problems.append("freeze index bytes are absent")
+        else:
+            native_blobs = {path: data for path, data in blobs.items() if path != FREEZE_PATH}
+            try:
+                validate_freeze_index(root, freeze_blob, exact_subject, native_blobs)
+            except (ValueError, RuntimeError) as exc:
+                problems.append(f"freeze index is invalid: {type(exc).__name__}")
     parsed: dict[_SourceName, _ParsedSource] = {}
     typed_valid_paths: set[str] = set()
     for _p in sorted(blobs):
