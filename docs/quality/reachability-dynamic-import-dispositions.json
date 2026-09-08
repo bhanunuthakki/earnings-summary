@@ -182,14 +182,14 @@
   "graph_provenance": {
     "parser": {
       "name": "ast+xml+literal-scanner",
+      "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "9f06d5f58a441e08afbe945962c1d3d7c1194106db13b519cc62b4d1528f437d",
-      "version": "1.2.1"
+      "source_sha256": "2ab081f6e5078f831842e195b036e242f2175923af343d7f2e6399093cd981b1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "8a137df959b6155667abadfe48b7210ee3a6549e559c8cb9fee5411f22aed851"
+    "source_manifest_sha256": "49e9a554e4e666c3964f2f05b3dfcd6e3f0591d5d1637ee540942cfeb2c887dd"
   },
   "schema_version": "reachability-dynamic-import-dispositions/v1"
 }
