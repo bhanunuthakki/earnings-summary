@@ -16,7 +16,7 @@ def test_approved_map_binds_each_claim_to_exact_source_quote() -> None:
 
     assert (
         claim_map.document.sha256
-        == "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd"
+        == "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd"  # pragma: allowlist secret -- fixed approved document digest
     )
     assert len(claim_map.claims) == 16
     assert {claim.name for claim in claim_map.claims} == {
@@ -100,7 +100,10 @@ def test_map_rejects_scoped_commit_substitution(tmp_path: Path) -> None:
     target.write_text(
         (ROOT / "config/quality_roadmap_claims.json")
         .read_text(encoding="utf-8")
-        .replace("09d35d1a2785ff7e6a218031eb43952781be3a93", "a" * 40),
+        .replace(
+            "09d35d1a2785ff7e6a218031eb43952781be3a93",  # pragma: allowlist secret -- public historical commit
+            "a" * 40,
+        ),
         encoding="utf-8",
     )
     roadmap = tmp_path / "docs" / "quality" / "quality-9plus-roadmap.md"
