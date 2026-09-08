@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from quality.admission_policy import SOURCE_PATHS, parse_source
 from quality.evidence_bundle_io import git
-from quality.roadmap_freeze import GENERATOR_PATHS, verify_index_contents
+from quality.roadmap_freeze import GENERATOR_PATHS, RUNTIME_GENERATOR_SHA256, verify_index_contents
 from quality.roadmap_freeze_inputs import (
     FreezeInputError,
     LoadedInput,
@@ -90,6 +90,8 @@ def validate_freeze_index(
         generator.update(path.encode() + b"\0" + blob.stdout + b"\0")
     if generator.hexdigest() != receipt.generator_sha256:
         raise ValueError("freeze generator hash differs from subject")
+    if receipt.generator_sha256 != RUNTIME_GENERATOR_SHA256:
+        raise ValueError("runtime freeze generator differs from subject")
     available = {key for key, path in SOURCE_PATHS.items() if path in sources}
     if {entry.key for entry in receipt.evidence} != available:
         raise ValueError("freeze does not index the complete bundled source set")

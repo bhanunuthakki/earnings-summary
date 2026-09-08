@@ -10,8 +10,9 @@ import pytest
 
 from execution import freeze_quality_roadmap as cli
 from quality.architecture import build_architecture_receipt
-from quality.roadmap_freeze import GENERATOR_PATHS
+from quality.roadmap_freeze import GENERATOR_PATHS, build_freeze
 from quality.roadmap_freeze_bundle import load_dependency_inputs, validate_freeze_index
+from quality.roadmap_freeze_inputs import FreezeInputError
 from quality.roadmap_freeze_models import FreezeReceipt
 
 
@@ -145,6 +146,33 @@ def test_dependency_loader_rejects_tampered_raw_bytes(
     source.write_bytes(source.read_bytes() + b" ")
     with pytest.raises(ValueError, match="hash mismatch"):
         load_dependency_inputs(root, manifest)
+
+
+def test_cli_rejects_subject_with_a_different_generator(
+    freeze_subject: tuple[Path, Path, Path],
+) -> None:
+    root, manifest, _source = freeze_subject
+    generator = root / GENERATOR_PATHS[0]
+    generator.write_text(generator.read_text() + "\n# another subject generator\n")
+    for arguments in (("add", str(generator)), ("commit", "-qm", "different generator")):
+        subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
+    with pytest.raises(FreezeInputError, match="runtime freeze generator"):
+        build_freeze(root, {})
+    output = root / ".tmp" / "result.json"
+    assert (
+        cli.main(
+            [
+                "--repo-root",
+                str(root),
+                "--input-manifest",
+                str(manifest),
+                "--output",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    assert not output.exists()
 
 
 def test_dependency_loader_rejects_duplicate_manifest_keys(

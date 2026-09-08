@@ -51,6 +51,17 @@ GENERATOR_PATHS = (
     "src/quality/roadmap_freeze_inputs.py",
     "src/quality/roadmap_freeze_models.py",
 )
+
+
+def _runtime_generator_hash() -> str:
+    root = Path(__file__).resolve().parents[2]
+    digest = hashlib.sha256()
+    for path in GENERATOR_PATHS:
+        digest.update(path.encode() + b"\0" + (root / path).read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+RUNTIME_GENERATOR_SHA256 = _runtime_generator_hash()
 TARGET_LARGE_MODULES = 35
 POPULATION_EVIDENCE: dict[str, frozenset[EvidenceKey]] = {
     "large_module": frozenset({"architecture"}),
@@ -129,7 +140,10 @@ def _generator_hash(repo_root: Path, subject: str) -> str:
     for path in GENERATOR_PATHS:
         raw = _git_blob(repo_root, subject, path)
         digest.update(path.encode() + b"\0" + raw + b"\0")
-    return digest.hexdigest()
+    value = digest.hexdigest()
+    if value != RUNTIME_GENERATOR_SHA256:
+        raise FreezeInputError("runtime freeze generator differs from subject")
+    return value
 
 
 def _schema(value: object) -> str | None:
