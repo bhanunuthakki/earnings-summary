@@ -1,0 +1,6 @@
+interface:
+  display_name: "Next-dollar allocation"
+  short_description: "One tax-aware portfolio plan using saved goals"
+  default_prompt: "Use $next-dollar-allocation to recommend my next capital move using current holdings, saved goals, taxes, and permitted sales."
+policy:
+  allow_implicit_invocation: true

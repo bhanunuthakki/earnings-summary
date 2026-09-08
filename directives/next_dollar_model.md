@@ -14,6 +14,20 @@ Zones, the Risk Budget, and owner context, then a governed LLM selects one
 preferred plan from the resulting deterministic frontier. See
 `docs/design/personal_investment_partner_prd.md` §7.4 for the full contract.
 
+**September 8, 2026 owner correction — skill first, frontend later:**
+[Next-dollar-allocation](../src/advisor/skills/next-dollar-allocation/SKILL.md) packages
+the existing analyst workflow and is installed locally for agent invocation via
+`$next-dollar-allocation` or “Run my next-dollar allocation.” It reuses current goals,
+accounts, tax review and comparisons to give one preferred plan, with evidence
+limits and calculated trade arithmetic. Final selection remains analyst judgment.
+[Whole-portfolio capital allocation](../docs/architecture/capital_allocation_workflow.md)
+retains the capability audit and possible future engine enhancements. A new
+optimizer is not a prerequisite for the skill; app routing and frontend integration
+remain later roadmap work. The current app cash-only frontier is unchanged and must
+not be represented as meeting the broader contract. Cash exceeding 5% is not, by itself, an approved 5% reserve
+constraint. Preserve the distinction between source failure and a recommendation
+to retain cash.
+
 Code: `src/allocation/` (`price_history.py`, `covariance.py`, `model.py`).
 Primary consumer: `src/allocation/recommendation.py::build_next_dollar_model` call
 site (one input among several to the frontier).
