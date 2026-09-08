@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
-  "source_hash": "a5a200fb2c02af6f13dc2d7844028cb1d62ef689b85c1f95d3db90deb6f0ddda",
+  "commit_hash": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "source_hash": "c8f360f677c5f843752e37c311bd091d71d42d2c9d44a736134972c65e22a613",
   "scanner_hash": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -10,8 +10,8 @@
     "min_ast_nodes": 20,
     "min_body_lines": 15
   },
-  "files_scanned": 1339,
-  "functions_scanned": 14528,
+  "files_scanned": 1347,
+  "functions_scanned": 14635,
   "exact_groups": [
     {
       "group_id": "exact-008cef8bb5653e6d",
@@ -1752,31 +1752,6 @@
       ]
     },
     {
-      "group_id": "near-67a39c6ced3234d0",
-      "similarity": 0.991482,
-      "duplicated_loc": 38,
-      "functions": [
-        {
-          "path": "src/quality/evidence_bundle_validate.py",
-          "qualified_name": "_evidence_only_diff",
-          "lineno": 115,
-          "end_lineno": 131,
-          "body_lines": 16,
-          "ast_nodes": 149,
-          "normalized_hash": "c4f1e4f5a59132f288fed32442eeefbe81d95dd7072463d6fe2bcd84667935f3"
-        },
-        {
-          "path": "src/quality/scoring.py",
-          "qualified_name": "_evidence_only_diff",
-          "lineno": 289,
-          "end_lineno": 311,
-          "body_lines": 22,
-          "ast_nodes": 149,
-          "normalized_hash": "26a420b32a14ad89384d655a2de23cd3a17da92918e6fffe34ed521a0ae35e7f"
-        }
-      ]
-    },
-    {
       "group_id": "near-69cba1db14c941b7",
       "similarity": 0.888986,
       "duplicated_loc": 36,
@@ -3341,6 +3316,31 @@
           "body_lines": 18,
           "ast_nodes": 86,
           "normalized_hash": "2feb0c0a97ded03689c88ebbe313410a87f8c9969e726612be02ddd7c70050c5"
+        }
+      ]
+    },
+    {
+      "group_id": "near-b4c25400c20f03d2",
+      "similarity": 0.991482,
+      "duplicated_loc": 38,
+      "functions": [
+        {
+          "path": "src/quality/evidence_bundle_validate.py",
+          "qualified_name": "_evidence_only_diff",
+          "lineno": 117,
+          "end_lineno": 133,
+          "body_lines": 16,
+          "ast_nodes": 149,
+          "normalized_hash": "c4f1e4f5a59132f288fed32442eeefbe81d95dd7072463d6fe2bcd84667935f3"
+        },
+        {
+          "path": "src/quality/scoring.py",
+          "qualified_name": "_evidence_only_diff",
+          "lineno": 289,
+          "end_lineno": 311,
+          "body_lines": 22,
+          "ast_nodes": 149,
+          "normalized_hash": "26a420b32a14ad89384d655a2de23cd3a17da92918e6fffe34ed521a0ae35e7f"
         }
       ]
     },

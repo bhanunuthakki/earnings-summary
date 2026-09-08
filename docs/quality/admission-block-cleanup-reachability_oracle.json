@@ -3,13 +3,13 @@
   "kind": "block",
   "key": "cleanup.reachability_oracle",
   "state": "fail",
-  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/reachability-check.json",
-      "sha256": "29e997065fe4789defc8e11f6717f06d1d470fdb250b616eb896dd1613e88175",
+      "sha256": "21d87e74daf12e20d4a7c500a37ce233d9de74cb52b96fff666bc9ef294be663",
       "schema_version": "operational-reachability-raw/v1"
     }
   ]
