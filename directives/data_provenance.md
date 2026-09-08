@@ -118,6 +118,13 @@ invalid-period observations too. Roster and population observations distinguish 
 from an observed empty set. Their identities, the verifier implementation, and the full receipt are
 hash-bound.
 
+The census's six direct base reads are a transitional audit exemption, confined to
+`_census_definition`, `_out_of_scope_facts`, and `_invalid_in_scope_facts` at two reads each. They
+exist because the resolved projection cannot enumerate unresolved legacy rows, so using it as the
+population source would hide the exact cutover gaps the census must report. Retire these reads after
+the immutable canonical projection can enumerate the complete KPI population, including unresolved
+legacy rows, and census parity supports legacy read retirement.
+
 A supported snapshot manifest can match the inspected standalone database file to the snapshot
 producer's recorded identity and verification assertions. It does not freshly certify SQLite
 integrity, establish production provenance, or grant cutover authority. The census therefore reports
