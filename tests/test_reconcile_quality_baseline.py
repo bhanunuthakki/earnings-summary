@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import cast
@@ -15,6 +16,7 @@ import pytest
 import execution.reconcile_quality_baseline as cli_module
 from quality.architecture import ArchitectureMetrics, ArchitectureReceipt, LineCounts, ModuleMetric
 from quality.duplicates import DuplicateInventory, DuplicateTotals
+from quality.git_env import clean_local_git_env
 from quality.reachability import (
     EdgeKind,
     GraphEdge,
@@ -28,6 +30,7 @@ from quality.roadmap_reconciliation import (
     ReconciliationReceipt,
     SourceKey,
     claim_manifest_hash,
+    deterministic_source_hash,
     reconcile_staged_subject,
     reconcile_with_receipts_for_testing,
     roadmap_facts,
@@ -921,6 +924,18 @@ def _write_staged_manifest(staged_dir: Path, cur: CurrentReceipts, roadmap_text:
     return manifest_path
 
 
+def _add_staged_claim_map(manifest: Path, claim_map_raw: bytes) -> Path:
+    target = manifest.parent / "roadmap-claims.json"
+    target.write_bytes(claim_map_raw)
+    payload = _load_json_object(manifest)
+    payload["roadmap_claims"] = {
+        "path": target.name,
+        "sha256": hashlib.sha256(claim_map_raw).hexdigest(),
+    }
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
 def _roadmap_text() -> str:
     return "\n".join(ROADMAP_LINES[f.name] for f in roadmap_facts()) + "\n"
 
@@ -955,6 +970,244 @@ def test_staged_valid_separate_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert res.subject_commit == "a" * 40
     assert res.worktree_dirty is False
     assert res.roadmap_source is not None
+
+
+def test_real_cli_accepts_ignored_subject_tmp_staging(tmp_path: Path) -> None:
+    subject = tmp_path / "subject"
+    subject.mkdir()
+    (subject / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
+    roadmap_source = ROOT / "docs" / "quality" / "quality-9plus-roadmap.md"
+    claim_map_source = ROOT / "config" / "quality_roadmap_claims.json"
+    subject_roadmap = subject / "docs" / "quality" / roadmap_source.name
+    subject_claim_map = subject / "config" / claim_map_source.name
+    subject_roadmap.parent.mkdir(parents=True)
+    subject_claim_map.parent.mkdir(parents=True)
+    subject_roadmap.write_bytes(roadmap_source.read_bytes())
+    subject_claim_map.write_bytes(claim_map_source.read_bytes())
+    subprocess.run(
+        ["git", "init"], cwd=subject, check=True, capture_output=True, env=clean_local_git_env()
+    )
+    subprocess.run(
+        ["git", "add", ".gitignore", "docs", "config"],
+        cwd=subject,
+        check=True,
+        capture_output=True,
+        env=clean_local_git_env(),
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-m",
+            "subject",
+        ],
+        cwd=subject,
+        check=True,
+        capture_output=True,
+        env=clean_local_git_env(),
+    )
+    staging = subject / ".tmp" / "quality" / "evidence-bundle"
+    current = _current()
+    roadmap_raw = roadmap_source.read_bytes()
+    claim_map_raw = claim_map_source.read_bytes()
+    manifest = _write_staged_manifest(staging, current, roadmap_raw.decode("utf-8"))
+    _add_staged_claim_map(manifest, claim_map_raw)
+    output = tmp_path / "reconciliation.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "execution/reconcile_quality_baseline.py",
+            "--subject-root",
+            str(subject),
+            "--staged-manifest",
+            str(manifest),
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+        env={**clean_local_git_env(), "PYTHONPATH": str(ROOT / "src")},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    receipt = _load_json_object(output)
+    violations = receipt["violations"]
+    assert isinstance(violations, list)
+    assert "staged root overlaps subject" not in violations
+    assert "staged roadmap is missing" not in violations
+    assert "staged roadmap claims is missing" not in violations
+    roadmap_evidence = receipt["roadmap_source"]
+    assert isinstance(roadmap_evidence, dict)
+    assert roadmap_evidence["path"] == "roadmap.md"
+    assert roadmap_evidence["sha256"] == hashlib.sha256(roadmap_raw).hexdigest()
+    staged_raws: dict[SourceKey, bytes | None] = {
+        "architecture": (staging / "architecture.json").read_bytes(),
+        "duplicates": (staging / "duplicates.json").read_bytes(),
+        "static": (staging / "static.json").read_bytes(),
+        "test_db": (staging / "test_db.json").read_bytes(),
+        "reachability": (staging / "reachability.json").read_bytes(),
+    }
+    assert receipt["source_hash"] == deterministic_source_hash(
+        staged_raws, roadmap_raw, claim_map_raw
+    )
+
+
+@pytest.mark.parametrize("layout", ("nonignored_tmp", "arbitrary_subtree", "tmp_parent_symlink"))
+def test_staged_subject_root_exception_is_limited_to_lexical_ignored_tmp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
+) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    subject = tmp_path / "subject"
+    subject.mkdir()
+    subprocess.run(
+        ["git", "init"], cwd=subject, check=True, capture_output=True, env=clean_local_git_env()
+    )
+    if layout == "nonignored_tmp":
+        staging = subject / ".tmp" / "quality" / "evidence-bundle"
+    elif layout == "arbitrary_subtree":
+        staging = subject / "evidence-bundle"
+    else:
+        (subject / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
+        (subject / ".tmp").mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (subject / ".tmp" / "quality").symlink_to(outside, target_is_directory=True)
+        staging = subject / ".tmp" / "quality" / "evidence-bundle"
+    manifest = _write_staged_manifest(staging, _current(), _roadmap_text())
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return _current()
+
+    def clean_state(_root: Path) -> tuple[str, bool]:
+        return "a" * 40, False
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", clean_state)
+
+    receipt = reconcile_staged_subject(subject, manifest)
+    assert receipt.status == "HOLD"
+    assert "staged root overlaps subject" in receipt.violations
+
+
+def test_staged_claim_map_mutation_after_snapshot_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    subject = tmp_path / "subject"
+    subject.mkdir()
+    staged = tmp_path / "staged"
+    roadmap_raw = (ROOT / "docs" / "quality" / "quality-9plus-roadmap.md").read_bytes()
+    claim_map_raw = (ROOT / "config" / "quality_roadmap_claims.json").read_bytes()
+    manifest = _write_staged_manifest(staged, _current(), roadmap_raw.decode("utf-8"))
+    claim_map = _add_staged_claim_map(manifest, claim_map_raw)
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return _current()
+
+    calls = 0
+
+    def stable_until_final_state(_root: Path) -> tuple[str, bool]:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            claim_map.write_bytes(b"{}\n")
+        return "a" * 40, False
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", stable_until_final_state)
+    receipt = reconcile_staged_subject(subject, manifest)
+
+    assert receipt.status == "HOLD"
+    assert "staged roadmap claims changed during collection" in receipt.violations
+
+
+def test_staged_claim_map_hardlink_after_snapshot_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    subject = tmp_path / "subject"
+    subject.mkdir()
+    staged = tmp_path / "staged"
+    roadmap_raw = (ROOT / "docs" / "quality" / "quality-9plus-roadmap.md").read_bytes()
+    claim_map_raw = (ROOT / "config" / "quality_roadmap_claims.json").read_bytes()
+    manifest = _write_staged_manifest(staged, _current(), roadmap_raw.decode("utf-8"))
+    claim_map = _add_staged_claim_map(manifest, claim_map_raw)
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return _current()
+
+    calls = 0
+
+    def stable_until_final_state(_root: Path) -> tuple[str, bool]:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            os.link(claim_map, tmp_path / "outside-claim-map.json")
+        return "a" * 40, False
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", stable_until_final_state)
+    receipt = reconcile_staged_subject(subject, manifest)
+
+    assert receipt.status == "HOLD"
+    assert "staged roadmap claims changed during collection" in receipt.violations
+
+
+def test_staged_claim_map_alias_with_roadmap_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quality.roadmap_reconciliation as rr
+
+    subject = tmp_path / "subject"
+    subject.mkdir()
+    staged = tmp_path / "staged"
+    manifest = _write_staged_manifest(staged, _current(), _roadmap_text())
+    payload = _load_json_object(manifest)
+    roadmap = payload["roadmap"]
+    assert isinstance(roadmap, dict)
+    payload["roadmap_claims"] = {
+        "path": roadmap["path"],
+        "sha256": roadmap["sha256"],
+    }
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def fake_fresh(_root: Path) -> CurrentReceipts:
+        return _current()
+
+    def clean_state(_root: Path) -> tuple[str, bool]:
+        return "a" * 40, False
+
+    monkeypatch.setattr(rr, "_fresh_receipts", fake_fresh)
+    monkeypatch.setattr(rr, "_git_state", clean_state)
+    receipt = reconcile_staged_subject(subject, manifest)
+
+    assert receipt.status == "HOLD"
+    assert "staged inputs share the same file" in receipt.violations
+
+
+def test_staged_required_file_hardlink_to_undeclared_outside_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cur = _current()
+    subject, manifest = _staged_pass(tmp_path, monkeypatch, cur)
+    staged_static = tmp_path / "staged" / "static.json"
+    outside = tmp_path / "outside-static.json"
+    outside.write_bytes(staged_static.read_bytes())
+    staged_static.unlink()
+    os.link(outside, staged_static)
+
+    receipt = reconcile_staged_subject(subject, manifest)
+
+    assert receipt.status == "HOLD"
+    assert "staged input is not a regular file: static" in receipt.violations
 
 
 def test_staged_never_uses_testing_seam(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
