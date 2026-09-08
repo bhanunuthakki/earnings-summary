@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+import subprocess
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
+import llm.cli
+import llm.structured
 from capture import ingest, poller, telegram, token_store, transcribe
-from capture.matcher import build_roster_index
+from capture.matcher import RosterIndex, build_roster_index
+from capture.triage import TriageVerdict
 from execution import capture_poller
 from user_state import notes
 
@@ -18,9 +22,145 @@ PRIOR_HEAD = "0059_kpi_facts_restatement"
 ROSTER = build_roster_index(symbols=["NU", "MELI"], phrases={"nubank": "NU"})
 
 
+def _noop_tap(result: ingest.IngestResult, db_path: Path | str | None) -> int | None:
+    del result, db_path
+    return None
+
+
+def _noop_pledge(
+    token: str,
+    update: telegram.Update,
+    result: ingest.IngestResult,
+    db_path: Path | str | None,
+    *,
+    enabled: bool,
+) -> None:
+    del token, update, result, db_path, enabled
+
+
+def _noop_artifact(
+    token: str,
+    update: telegram.Update,
+    result: ingest.IngestResult,
+    roster: RosterIndex | None,
+    db_path: Path | str | None,
+    *,
+    enabled: bool,
+) -> None:
+    del token, update, result, roster, db_path, enabled
+
+
+def _noop_answer(
+    token: str,
+    update: telegram.Update,
+    result: ingest.IngestResult,
+    db_path: Path | str | None,
+    *,
+    enabled: bool,
+) -> None:
+    del token, update, result, db_path, enabled
+
+
+def _noop_decision_draft(result: ingest.IngestResult, db_path: Path | str | None) -> None:
+    del result, db_path
+
+
+def _answer_now_triage(*args: object, **kwargs: object) -> TriageVerdict:
+    del args, kwargs
+    return TriageVerdict(route="answer_now")
+
+
+def _plain_triage(*args: object, **kwargs: object) -> TriageVerdict:
+    del args, kwargs
+    return TriageVerdict(route="plain")
+
+
 @pytest.fixture(autouse=True)
 def _authorize_test_chat(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "1")
+
+
+@pytest.fixture
+def answer_tap() -> None:
+    """Opt into the answer tap; the test must fake its model boundary."""
+
+
+@pytest.fixture
+def decision_draft_tap() -> None:
+    """Opt into the decision-draft tap; the test must fake its model boundary."""
+
+
+@pytest.fixture
+def guard_probe() -> None:
+    """Allow the guard regression to assert one blocked boundary attempt."""
+
+
+@pytest.fixture(autouse=True)
+def _isolate_optional_capture_taps(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> Iterator[None]:
+    """Keep ordinary poller tests offline and free of optional tap work.
+
+    The poller intentionally runs these fire-and-forget taps after a capture
+    lands. In a unit test, allowing the defaults through starts model
+    subprocesses (and can fetch external artifacts), obscuring the behavior
+    under test and making the suite depend on the host environment.
+    """
+
+    enabled_taps = {
+        name
+        for name, fixture_name in (
+            ("_answer", "answer_tap"),
+            ("_decision_draft_tap", "decision_draft_tap"),
+        )
+        if fixture_name in request.fixturenames
+    }
+    monkeypatch.setattr(poller, "_tap", _noop_tap)
+    monkeypatch.setattr(poller, "_pledge_and_annotate", _noop_pledge)
+    monkeypatch.setattr(poller, "_artifact_brief", _noop_artifact)
+    if "_answer" not in enabled_taps:
+        monkeypatch.setattr(poller, "_answer", _noop_answer)
+    if "_decision_draft_tap" not in enabled_taps:
+        monkeypatch.setattr(poller, "_decision_draft_tap", _noop_decision_draft)
+
+    attempts: list[str] = []
+
+    def _guard(boundary: str) -> Callable[..., object]:
+        def _blocked(*args: object, **kwargs: object) -> object:
+            del args, kwargs
+            attempts.append(boundary)
+            raise AssertionError(f"unexpected external boundary: {boundary}")
+
+        return _blocked
+
+    monkeypatch.setattr(
+        llm.structured,
+        "call_llm_structured",
+        _guard("llm.structured.call_llm_structured"),
+    )
+    monkeypatch.setattr(
+        llm.structured,
+        "call_llm_structured_with_raw",
+        _guard("llm.structured.call_llm_structured_with_raw"),
+    )
+    monkeypatch.setattr(subprocess, "run", _guard("subprocess.run"))
+    monkeypatch.setattr(llm.cli.subprocess, "Popen", _guard("subprocess.Popen"))
+
+    yield
+
+    if "guard_probe" in request.fixturenames:
+        assert attempts == ["llm.structured.call_llm_structured"]
+    else:
+        assert attempts == [], "optional capture tests attempted an external boundary"
+
+
+def test_capture_tap_guard_blocks_direct_llm_launch(guard_probe: None) -> None:
+    """The no-external-call guard remains active even when a caller catches errors."""
+
+    try:
+        llm.structured.call_llm_structured("probe", purpose="test_capture_poller_guard")
+    except AssertionError as exc:
+        assert str(exc) == "unexpected external boundary: llm.structured.call_llm_structured"
 
 
 def test_runtime_configuration_binds_implicit_consumers_to_canonical_db(
@@ -682,12 +822,14 @@ def test_poll_once_unknown_command_replies_instead_of_vanishing(
 
 
 def test_poll_once_answers_a_question(
-    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answer_tap: None,
 ) -> None:
     """A question sent to the bot gets ANSWERED in-thread via the shared answer
     core (the overhaul) — not just 'Captured.'. The engine is faked so no live
     model call runs; the real answer_capture plumbing (store + return) executes."""
-    from collections.abc import Iterator
 
     updates = [
         telegram.Update(update_id=80, kind="text", chat_id=1, text="What's my cost basis on MELI?")
@@ -696,6 +838,10 @@ def test_poll_once_answers_a_question(
     sent: list[str] = []
     monkeypatch.setattr(
         telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    monkeypatch.setattr(
+        "onmymind.respond.classify_capture_triage",
+        _answer_now_triage,
     )
 
     def _stub(*_a: object, **_k: object) -> Iterator[dict[str, object]]:
@@ -719,17 +865,23 @@ def test_poll_once_answers_a_question(
 
 
 def test_poll_once_musing_not_answered(
-    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answer_tap: None,
 ) -> None:
     """A plain reflection (not a question) never spins the engine and gets no
     answer message — only the ordinary capture confirm."""
-    from collections.abc import Iterator
 
     updates = [telegram.Update(update_id=81, kind="text", chat_id=1, text="MELI looks cheap here")]
     monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
     sent: list[str] = []
     monkeypatch.setattr(
         telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    monkeypatch.setattr(
+        "onmymind.respond.classify_capture_triage",
+        _plain_triage,
     )
     engine_calls = {"n": 0}
 
@@ -892,7 +1044,6 @@ def test_poll_once_card_reply_chat_answers_via_shared_engine(
 ) -> None:
     """A 'question' reply is answered in-thread through the SAME ask engine the
     capture answer tap uses — the reply text is answered, not just filed."""
-    from collections.abc import Iterator
 
     _seed_card(db_path, "NU keeps compounding", 502)
     monkeypatch.setattr(
@@ -1150,7 +1301,10 @@ def test_poll_once_pending_reply_wins_over_coach_reply(
 
 
 def test_poll_once_decision_draft_tap_failure_never_blocks_capture(
-    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    decision_draft_tap: None,
 ) -> None:
     import capture.decision_draft as decision_draft_mod
 
@@ -1178,7 +1332,10 @@ def test_poll_once_decision_draft_tap_failure_never_blocks_capture(
 
 
 def test_poll_once_decision_draft_tap_runs_after_landing(
-    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    decision_draft_tap: None,
 ) -> None:
     import capture.decision_draft as decision_draft_mod
 
