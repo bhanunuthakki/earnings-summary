@@ -1,0 +1,16 @@
+{
+  "schema_version": "quality-score-admission/v1",
+  "kind": "hard_gate",
+  "key": "owner_acceptance",
+  "state": "fail",
+  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "generator_path": "src/quality/admission_policy.py",
+  "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
+  "sources": [
+    {
+      "path": "docs/quality/roadmap-reconciliation.json",
+      "sha256": "9b27214fbfd3af5e5ff93f919b24d3923fdb78276b7e0a4c26aaff2bb558d743",
+      "schema_version": "roadmap-reconciliation-v1"
+    }
+  ]
+}

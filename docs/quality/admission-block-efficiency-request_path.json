@@ -1,0 +1,16 @@
+{
+  "schema_version": "quality-score-admission/v1",
+  "kind": "block",
+  "key": "efficiency.request_path",
+  "state": "fail",
+  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "generator_path": "src/quality/admission_policy.py",
+  "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
+  "sources": [
+    {
+      "path": "docs/quality/reachability-check.json",
+      "sha256": "29e997065fe4789defc8e11f6717f06d1d470fdb250b616eb896dd1613e88175",
+      "schema_version": "operational-reachability-raw/v1"
+    }
+  ]
+}

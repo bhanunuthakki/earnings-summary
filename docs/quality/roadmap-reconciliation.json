@@ -1,0 +1,184 @@
+{
+  "schema_version": "roadmap-reconciliation-v1",
+  "status": "HOLD",
+  "claims": [
+    {
+      "name": "production module count",
+      "provisional_expected": 1291,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "production noncomment LOC",
+      "provisional_expected": 554615,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "scc count",
+      "provisional_expected": 16,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "largest scc",
+      "provisional_expected": 24,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "exact duplicate groups",
+      "provisional_expected": 140,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "exact duplicate functions",
+      "provisional_expected": 397,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "ruff diagnostics",
+      "provisional_expected": 2,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "pyright diagnostics",
+      "provisional_expected": 27924,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "test files",
+      "provisional_expected": 1092,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "upgrade builders",
+      "provisional_expected": 172,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "migrated builders",
+      "provisional_expected": 146,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "ddl builders",
+      "provisional_expected": 550,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "theme live edge",
+      "provisional_expected": true,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": {
+        "path": ".tmp/quality/reachability-check.json",
+        "sha256": "29e997065fe4789defc8e11f6717f06d1d470fdb250b616eb896dd1613e88175",
+        "locator": "$.edges"
+      },
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "refetch absence",
+      "provisional_expected": true,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Roadmap source is missing or tampered."
+    },
+    {
+      "name": "full suite seconds",
+      "provisional_expected": 1046.92,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Provisional roadmap states no scorable value for this metric."
+    },
+    {
+      "name": "unreachable scripts",
+      "provisional_expected": 85,
+      "observed": null,
+      "verdict": "rejected",
+      "scored_eligible": false,
+      "evidence": null,
+      "provisional_evidence": null,
+      "note": "Provisional roadmap states no scorable value for this metric."
+    }
+  ],
+  "scored_claims": 0,
+  "rejected_claims": 16,
+  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "worktree_dirty": false,
+  "source_hash": "723d1db332ebb4c161112ca53eef58c88878a278fa7248d4d2bf14d5d6360970",
+  "roadmap_source": null,
+  "claim_manifest_sha256": "6c13fe7e1997fe90a0a568113c273740c187cfef00307e0efc123df308a876a6",
+  "violations": [
+    "inadmissible source receipt docs/quality/architecture-ratchet.json: receipt is missing",
+    "inadmissible source receipt docs/quality/duplicates-ratchet.json: receipt is missing",
+    "inadmissible source receipt docs/quality/static-baseline.json: receipt failed its typed schema",
+    "inadmissible source receipt docs/quality/test-db-patterns-baseline.json: receipt is missing",
+    "roadmap source is missing"
+  ]
+}
