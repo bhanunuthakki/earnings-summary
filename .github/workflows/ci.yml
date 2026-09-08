@@ -462,7 +462,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install pip-audit bandit cyclonedx-bom detect-secrets
+          pip install pip-audit bandit cyclonedx-bom detect-secrets==1.5.0
       - name: pip-audit — dependency CVEs
         id: pip_audit
         continue-on-error: true
@@ -473,6 +473,8 @@ jobs:
         id: bandit
         continue-on-error: true
         run: bandit -q -r src execution -ll -b .bandit-baseline.json
+      # Canonical evidence hash fields are generated metadata. Keep scanning
+      # every other field and file with the unchanged detector set.
       - name: detect-secrets - no new credential material
         id: detect_secrets
         continue-on-error: true
@@ -480,6 +482,7 @@ jobs:
         run: >-
           git ls-files -z |
           xargs -0 detect-secrets-hook
+          --filter file://.github/scripts/quality_hash_filter.py::is_quality_evidence_hash
           --exclude-files
           '^(?:data[\\/]fmp_canary_manifest\.json|evals[\\/]receipts[\\/].*|docs[\\/]hardening[\\/].*|docs[\\/]quality[\\/](?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a|static-baseline|compatibility-baseline)\.json|docs[\\/]quality[\\/]reachability-(?:dynamic-import|getattr|process)-dispositions\.json|config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
       - name: Generate CycloneDX SBOM
