@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +16,11 @@ from compute.kpi_resolver import (
     KpiRevisionSeriesExclusionReason,
     KpiRevisionSeriesStatus,
     resolve_revision_aware_kpi_series,
+)
+from compute.kpi_revision_shadow_census import (
+    KpiRevisionCensusReadiness,
+    SnapshotEvidenceState,
+    audit_kpi_revision_shadow_census,
 )
 from models.facts import Currency, FactLocator, Unit
 from pipeline.kpi_definition_revisions import (
@@ -173,6 +178,11 @@ def _database(path: Path | None = None) -> sqlite3.Connection:
         """
     )
     conn.execute("INSERT INTO kpi_definitions VALUES (1,'NU','Monthly ARPAC','actual')")
+    conn.execute(
+        "CREATE TABLE tracked_companies("
+        "ticker TEXT PRIMARY KEY,list_type TEXT NOT NULL,archived_at TEXT)"
+    )
+    conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio',NULL)")
     conn.execute("INSERT INTO reporting_entities VALUES ('entity-nu','issuer-nu')")
     conn.execute(
         "INSERT INTO evidence_source_observations VALUES ('observation-1',?)",
@@ -678,6 +688,7 @@ def test_semantic_binding_is_exact_and_unbound_rows_stay_visible_in_shadow_count
     assert {exclusion.reason: exclusion.count for exclusion in result.exclusions} == {
         KpiRevisionSeriesExclusionReason.LEGACY_UNBOUND: 1
     }
+    assert result.exclusions[0].fact_ids == (unbound_fact,)
 
     with pytest.raises(ValueError, match="does not match the semantic context"):
         persist_kpi_semantic_context(
@@ -1458,3 +1469,313 @@ def test_second_source_review_entry_failure_allows_manifest_rollback(
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM kpi_fact_semantic_contexts").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 0
+
+
+def test_shadow_census_is_deterministic_and_never_authorizes_reader_activation() -> None:
+    conn = _database()
+    definition = persist_kpi_definition_revision(conn, _definition())
+    fact_id = _fact(conn)
+    persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=fact_id,
+        context=_context(),
+        reviewed_by="owner",
+        knowledge_at=NOW,
+        kpi_definition_revision_id=definition.kpi_definition_revision_id,
+    )
+    conn.commit()
+
+    first = audit_kpi_revision_shadow_census(
+        conn,
+        effective_at=NOW,
+        known_at=NOW,
+        evaluated_at=NOW,
+        snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+    )
+    second = audit_kpi_revision_shadow_census(
+        conn,
+        effective_at=NOW,
+        known_at=NOW,
+        evaluated_at=NOW,
+        snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+    )
+
+    assert first == second
+    assert first.receipt_sha256 == second.receipt_sha256
+    assert first.deterministic_readiness is KpiRevisionCensusReadiness.READY
+    assert first.activation_state == "hold"
+    assert first.activation_blocking_reasons == (
+        "evidence_authority_unverified",
+        "owner_activation_required",
+    )
+    assert first.active_portfolio_tickers == ("NU",)
+    assert len(first.series) == 1
+    assert first.series[0].legacy_fact_ids == (fact_id,)
+    assert first.series[0].revision_aware_fact_ids == (fact_id,)
+    assert first.series[0].fact_dispositions[0].reason == "eligible_in_both"
+
+
+def test_shadow_census_derives_complete_portfolio_population_and_attributes_each_loss() -> None:
+    conn = _database()
+    definition = persist_kpi_definition_revision(conn, _definition())
+    bound_fact = _fact(conn)
+    persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=bound_fact,
+        context=_context(),
+        reviewed_by="owner",
+        knowledge_at=NOW,
+        kpi_definition_revision_id=definition.kpi_definition_revision_id,
+    )
+    conn.execute("INSERT INTO kpi_definitions VALUES (2,'NU','Active customers','count')")
+    unbound_fact = _fact(conn, definition_id=2)
+    persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=unbound_fact,
+        context=_context("Active customers"),
+        reviewed_by="owner",
+        knowledge_at=NOW,
+        kpi_definition_revision_id=None,
+    )
+    conn.commit()
+
+    result = audit_kpi_revision_shadow_census(
+        conn,
+        effective_at=NOW,
+        known_at=NOW,
+        evaluated_at=NOW,
+        snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+    )
+
+    assert result.deterministic_readiness is KpiRevisionCensusReadiness.BLOCKED
+    assert tuple(item.kpi_definition_id for item in result.series) == (1, 2)
+    second = result.series[1]
+    assert second.legacy_fact_ids == (unbound_fact,)
+    assert second.revision_aware_fact_ids == ()
+    assert second.fact_dispositions[0].fact_id == unbound_fact
+    assert second.fact_dispositions[0].reason == "legacy_unbound"
+    assert second.blocking_reasons == ("legacy_unbound",)
+
+
+def test_shadow_census_blocks_roster_members_without_definitions() -> None:
+    conn = _database()
+    conn.execute("INSERT INTO tracked_companies VALUES ('ZERO','portfolio',NULL)")
+    conn.commit()
+
+    result = audit_kpi_revision_shadow_census(
+        conn,
+        effective_at=NOW,
+        known_at=NOW,
+        evaluated_at=NOW,
+        snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+    )
+
+    assert result.active_portfolio_tickers == ("NU", "ZERO")
+    assert result.deterministic_readiness is KpiRevisionCensusReadiness.BLOCKED
+    assert "portfolio_ticker_without_kpi_definition:ZERO" in result.deterministic_blocking_reasons
+
+
+@pytest.mark.parametrize(
+    ("definition_id", "definition_ticker", "expected_reason"),
+    [
+        (999, None, "definition_missing"),
+        (2, "OTHER", "definition_ticker_mismatch"),
+    ],
+)
+def test_shadow_census_blocks_invalid_active_portfolio_fact_ownership(
+    definition_id: int,
+    definition_ticker: str | None,
+    expected_reason: str,
+) -> None:
+    conn = _database()
+    if definition_ticker is not None:
+        conn.execute(
+            "INSERT INTO kpi_definitions VALUES (?,?,?,?)",
+            (definition_id, definition_ticker, "Other KPI", "actual"),
+        )
+    fact_id = _fact(conn, definition_id=definition_id)
+    conn.commit()
+
+    result = audit_kpi_revision_shadow_census(
+        conn,
+        effective_at=NOW,
+        known_at=NOW,
+        evaluated_at=NOW,
+        snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+    )
+
+    assert result.deterministic_readiness is KpiRevisionCensusReadiness.BLOCKED
+    assert "invalid_in_scope_fact_identity" in result.deterministic_blocking_reasons
+    assert len(result.invalid_in_scope_facts) == 1
+    assert result.invalid_in_scope_facts[0].fact_id == fact_id
+    assert result.invalid_in_scope_facts[0].reason == expected_reason
+
+
+def test_shadow_census_does_not_mislabel_historical_current_delta_as_comparability() -> None:
+    conn = _database()
+    definition = persist_kpi_definition_revision(conn, _definition())
+    logical_key = "monthly-arpac-2024-q4"
+    historical_fact = _fact(conn, logical_key=logical_key, known_at=NOW)
+    persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=historical_fact,
+        context=_context(),
+        reviewed_by="owner",
+        knowledge_at=NOW,
+        kpi_definition_revision_id=definition.kpi_definition_revision_id,
+    )
+    later = NOW + timedelta(days=1)
+    current_fact = _fact(
+        conn,
+        logical_key=logical_key,
+        known_at=later,
+        value="13.0",
+        supersedes_id=historical_fact,
+    )
+    persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=current_fact,
+        context=_context(),
+        reviewed_by="owner",
+        knowledge_at=later,
+        kpi_definition_revision_id=definition.kpi_definition_revision_id,
+    )
+    conn.commit()
+
+    result = audit_kpi_revision_shadow_census(
+        conn,
+        effective_at=NOW,
+        known_at=NOW,
+        evaluated_at=later,
+        snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+    )
+
+    series = result.series[0]
+    assert series.legacy_fact_ids == (current_fact,)
+    assert series.revision_aware_fact_ids == (historical_fact,)
+    disposition_by_id = {item.fact_id: item for item in series.fact_dispositions}
+    assert disposition_by_id[historical_fact].reason == "unexplained_revision_only"
+    assert disposition_by_id[historical_fact].comparability_revision_id is None
+    assert "unexplained_revision_only" in series.blocking_reasons
+
+
+def test_shadow_census_retains_direct_comparability_and_break_identities() -> None:
+    conn = _database()
+    conn.execute("INSERT INTO kpi_definitions VALUES (2,'NU','Monthly ARPAC renamed','actual')")
+    predecessor = persist_kpi_definition_revision(conn, _definition())
+    successor = persist_kpi_definition_revision(
+        conn,
+        _definition(
+            kpi_definition_revision_id="definition-renamed-r1",
+            idempotency_key="definition-renamed-key-r1",
+            kpi_definition_id=2,
+            reported_label="Monthly ARPAC renamed",
+        ),
+    )
+    relation = persist_kpi_definition_comparability_revision(
+        conn,
+        _relation(
+            predecessor.kpi_definition_revision_id,
+            successor.kpi_definition_revision_id,
+            comparability_revision_id="relation-renamed-break",
+            idempotency_key="relation-renamed-break-key",
+            disposition=KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK,
+        ),
+    )
+    predecessor_fact = _fact(conn)
+    persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=predecessor_fact,
+        context=_context(),
+        reviewed_by="owner",
+        knowledge_at=NOW,
+        kpi_definition_revision_id=predecessor.kpi_definition_revision_id,
+    )
+    successor_fact = _fact(conn, definition_id=2)
+    persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=successor_fact,
+        context=_context("Monthly ARPAC renamed"),
+        reviewed_by="owner",
+        knowledge_at=NOW,
+        kpi_definition_revision_id=successor.kpi_definition_revision_id,
+    )
+    conn.commit()
+
+    result = audit_kpi_revision_shadow_census(
+        conn,
+        effective_at=NOW,
+        known_at=NOW,
+        evaluated_at=NOW,
+        snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+    )
+
+    series = next(item for item in result.series if item.kpi_definition_id == 2)
+    assert series.included_definition_revision_ids == (
+        predecessor.kpi_definition_revision_id,
+        successor.kpi_definition_revision_id,
+    )
+    assert tuple(item.comparability_revision_id for item in series.comparability_revisions) == (
+        relation.comparability_revision_id,
+    )
+    assert tuple(item.comparability_revision_id for item in series.breaks) == (
+        relation.comparability_revision_id,
+    )
+    expanded = next(item for item in series.fact_dispositions if item.fact_id == predecessor_fact)
+    assert expanded.reason == "explicit_revision_comparability_expansion"
+    assert expanded.definition_revision_id == predecessor.kpi_definition_revision_id
+    assert expanded.comparability_revision_id == relation.comparability_revision_id
+
+
+def test_shadow_census_rejects_naive_clocks() -> None:
+    conn = _database()
+    naive = NOW.replace(tzinfo=None)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        audit_kpi_revision_shadow_census(
+            conn,
+            effective_at=naive,
+            known_at=NOW,
+            evaluated_at=NOW,
+            snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+        )
+
+
+def test_shadow_census_uses_the_active_migrated_portfolio_roster(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = migrated_db(tmp_path / "shadow-census-active-schema.db")
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies(ticker,name,list_type,archived_at) "
+            "VALUES ('NU','Nu Holdings','portfolio',NULL)"
+        )
+        conn.execute(
+            "INSERT INTO tracked_companies(ticker,name,list_type,archived_at) "
+            "VALUES ('OLD','Archived','portfolio','2026-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) "
+            "VALUES ('NU','Monthly ARPAC','actual','ir_doc')"
+        )
+        conn.commit()
+
+        result = audit_kpi_revision_shadow_census(
+            conn,
+            effective_at=NOW,
+            known_at=NOW,
+            evaluated_at=NOW,
+            snapshot_evidence=SnapshotEvidenceState.unverified("synthetic_test_database"),
+        )
+    finally:
+        conn.close()
+
+    assert result.active_portfolio_tickers == ("NU",)
+    assert ("NU", "Monthly ARPAC") in {
+        (item.ticker, item.definition_name) for item in result.series
+    }
+    assert all(item.ticker != "OLD" for item in result.series)
+    assert result.deterministic_readiness is KpiRevisionCensusReadiness.BLOCKED
+    assert "legacy_unbound" in result.deterministic_blocking_reasons

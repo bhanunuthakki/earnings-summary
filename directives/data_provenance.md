@@ -103,6 +103,23 @@ Generic extraction, FMP-derived KPI persistence, and semantic-disposition writer
 null definition bindings. Direct legacy fact writers remain outside this batch slice and receive no
 authority to mint issuer-definition revisions; the later writer-retirement work owns their routing.
 
+The definition-revision shadow census is a read-only cutover rehearsal over the complete active
+`portfolio` roster owned by `tracked_companies`. It compares each definition root's current
+decision-grade reader membership with the revision-aware resolver at explicit effective and
+knowledge cutoffs. That deliberately narrow comparison does not reproduce name-alias consumers and
+never claims complete reader parity. The receipt retains every current fact identity, every resolver
+exclusion and reason, the included definition revisions, direct comparability revisions and breaks,
+and blocks on missing roster definitions, invalid fact ownership, or a delta without direct lineage
+evidence. Its roster, population, verifier implementation, and full receipt are hash-bound.
+
+A supported snapshot manifest can match the inspected standalone database file to the snapshot
+producer's recorded identity and verification assertions. It does not freshly certify SQLite
+integrity, establish production provenance, or grant cutover authority. The census therefore reports
+deterministic readiness separately while keeping reader activation on `hold` for evidence authority
+and owner activation. Synthetic databases and caller-selected subsets can exercise the evaluator but
+cannot satisfy this portfolio gate. Reader activation, downstream parity, and legacy retirement remain
+separate later gates with their own complete evidence.
+
 ### 2.2 Fiscal-period stamping drift (off-cycle-FYE issuers)
 
 `(ticker, period_end)` matching (used by `src/provenance/llm_extracted_parent.py::resolve_parent` and any other exact-date join across `documents`) is only reliable if every ingestion path stamps `period_end` on the **same fiscal calendar** for a given ticker. Multiple independent modules each hardcode their own per-ticker "which tickers have a non-December fiscal year end" override table, keyed off filename conventions like `<TICKER>_Q<N>_<YYYY>` — and those tables can drift out of sync, silently mis-stamping `period_end` for tickers missing from one table but present in another. This is **not** the same failure mode as a genuinely-missing source document (§2's `parent_document_id` can legitimately stay NULL when no primary doc was ever fetched) — it produces an *orphan that looks unresolvable but has a perfectly good source sitting one calendar-quarter away*.

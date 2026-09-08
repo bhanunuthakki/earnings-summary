@@ -28,7 +28,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.facts import Unit
 from models.kpis import DefinitionOrigin
@@ -185,11 +185,29 @@ class KpiRevisionSeriesBreak(BaseModel):
     relation_kind: str = Field(min_length=1, max_length=32)
 
 
+class KpiRevisionSeriesComparability(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    comparability_revision_id: str = Field(min_length=1, max_length=128)
+    related_definition_revision_id: str = Field(min_length=1, max_length=128)
+    relation_kind: str = Field(min_length=1, max_length=32)
+    disposition: KpiDefinitionComparabilityDisposition
+
+
 class KpiRevisionSeriesExclusion(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     reason: KpiRevisionSeriesExclusionReason
     count: int = Field(gt=0)
+    fact_ids: tuple[int, ...] = ()
+
+    @model_validator(mode="after")
+    def _exact_fact_id_count(self) -> KpiRevisionSeriesExclusion:
+        if self.fact_ids and (
+            self.fact_ids != tuple(sorted(set(self.fact_ids))) or self.count != len(self.fact_ids)
+        ):
+            raise ValueError("exclusion fact_ids must be sorted, unique, and match count")
+        return self
 
 
 class KpiRevisionSeriesResolution(BaseModel):
@@ -201,6 +219,7 @@ class KpiRevisionSeriesResolution(BaseModel):
     kpi_definition_id: int = Field(gt=0)
     anchor_definition_revision_id: str | None = None
     included_definition_revision_ids: tuple[str, ...] = ()
+    comparability_revisions: tuple[KpiRevisionSeriesComparability, ...] = ()
     eligible_fact_ids: tuple[int, ...] = ()
     breaks: tuple[KpiRevisionSeriesBreak, ...] = ()
     exclusions: tuple[KpiRevisionSeriesExclusion, ...] = ()
@@ -233,6 +252,7 @@ def _historical_authority_unavailable_resolution(
     *,
     anchor_definition_revision_id: str | None = None,
     included_definition_revision_ids: tuple[str, ...] = (),
+    comparability_revisions: tuple[KpiRevisionSeriesComparability, ...] = (),
     breaks: tuple[KpiRevisionSeriesBreak, ...] = (),
 ) -> KpiRevisionSeriesResolution:
     return KpiRevisionSeriesResolution(
@@ -240,6 +260,7 @@ def _historical_authority_unavailable_resolution(
         kpi_definition_id=kpi_definition_id,
         anchor_definition_revision_id=anchor_definition_revision_id,
         included_definition_revision_ids=included_definition_revision_ids,
+        comparability_revisions=comparability_revisions,
         breaks=breaks,
         exclusions=(
             KpiRevisionSeriesExclusion(
@@ -351,6 +372,7 @@ def _resolve_revision_aware_kpi_series(
     included_ids = {anchor_id}
     related_ids: set[str] = set()
     breaks: list[KpiRevisionSeriesBreak] = []
+    comparability_revisions: list[KpiRevisionSeriesComparability] = []
     for pair in pair_rows:
         predecessor_id = str(pair[0])
         successor_id = str(pair[1])
@@ -379,6 +401,14 @@ def _resolve_revision_aware_kpi_series(
             continue
         related_ids.add(related_id)
         disposition_by_revision[related_id] = relation.disposition
+        comparability_revisions.append(
+            KpiRevisionSeriesComparability(
+                comparability_revision_id=relation.comparability_revision_id,
+                related_definition_revision_id=related_id,
+                relation_kind=relation.relation_kind.value,
+                disposition=relation.disposition,
+            )
+        )
         if relation.disposition in {
             KpiDefinitionComparabilityDisposition.CONTINUOUS,
             KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK,
@@ -426,6 +456,12 @@ def _resolve_revision_aware_kpi_series(
             kpi_definition_id,
             anchor_definition_revision_id=anchor_id,
             included_definition_revision_ids=tuple(sorted(included_ids)),
+            comparability_revisions=tuple(
+                sorted(
+                    comparability_revisions,
+                    key=lambda item: item.related_definition_revision_id,
+                )
+            ),
             breaks=tuple(sorted(breaks, key=lambda item: item.related_definition_revision_id)),
         )
     fact_id_predicate = "0"
@@ -479,20 +515,20 @@ def _resolve_revision_aware_kpi_series(
         ),
     ).fetchall()
     eligible_fact_ids: list[int] = []
-    exclusion_counts: dict[KpiRevisionSeriesExclusionReason, int] = {}
+    exclusion_fact_ids: dict[KpiRevisionSeriesExclusionReason, list[int]] = {}
 
-    def exclude(reason: KpiRevisionSeriesExclusionReason) -> None:
-        exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+    def exclude(reason: KpiRevisionSeriesExclusionReason, fact_id: int) -> None:
+        exclusion_fact_ids.setdefault(reason, []).append(fact_id)
 
     for row in fact_rows:
         if row["context_status"] is None:
-            exclude(KpiRevisionSeriesExclusionReason.MISSING_SEMANTIC_HEAD)
+            exclude(KpiRevisionSeriesExclusionReason.MISSING_SEMANTIC_HEAD, int(row["id"]))
             continue
         if str(row["context_status"]) != "admitted":
-            exclude(KpiRevisionSeriesExclusionReason.SEMANTIC_NOT_ADMITTED)
+            exclude(KpiRevisionSeriesExclusionReason.SEMANTIC_NOT_ADMITTED, int(row["id"]))
             continue
         if row["kpi_definition_revision_id"] is None:
-            exclude(KpiRevisionSeriesExclusionReason.LEGACY_UNBOUND)
+            exclude(KpiRevisionSeriesExclusionReason.LEGACY_UNBOUND, int(row["id"]))
             continue
         if (
             row["definition_revision_id"] is not None
@@ -502,27 +538,33 @@ def _resolve_revision_aware_kpi_series(
                 kpi_definition_id,
                 anchor_definition_revision_id=anchor_id,
                 included_definition_revision_ids=tuple(sorted(included_ids)),
+                comparability_revisions=tuple(
+                    sorted(
+                        comparability_revisions,
+                        key=lambda item: item.related_definition_revision_id,
+                    )
+                ),
                 breaks=tuple(sorted(breaks, key=lambda item: item.related_definition_revision_id)),
             )
         revision_id = str(row["kpi_definition_revision_id"])
         if revision_id not in candidate_revision_ids or row["definition_revision_id"] is None:
-            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH)
+            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH, int(row["id"]))
             continue
         if str(row["definition_status"]) != "admitted":
-            exclude(KpiRevisionSeriesExclusionReason.QUARANTINED_DEFINITION)
+            exclude(KpiRevisionSeriesExclusionReason.QUARANTINED_DEFINITION, int(row["id"]))
             continue
         if str(row["definition_lifecycle"]) == "discontinued":
-            exclude(KpiRevisionSeriesExclusionReason.DISCONTINUED_DEFINITION)
+            exclude(KpiRevisionSeriesExclusionReason.DISCONTINUED_DEFINITION, int(row["id"]))
             continue
         if (
             _database_datetime(row["definition_knowledge_at"]) > known_at
             or _database_datetime(row["definition_recorded_at"]) > known_at
             or _database_datetime(row["definition_effective_at"]) > effective_at
         ):
-            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH)
+            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH, int(row["id"]))
             continue
         if not _context_matches_revision(row, revision_id):
-            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH)
+            exclude(KpiRevisionSeriesExclusionReason.DEFINITION_CONTEXT_MISMATCH, int(row["id"]))
             continue
         if revision_id in included_ids:
             eligible_fact_ids.append(int(row["id"]))
@@ -531,11 +573,16 @@ def _resolve_revision_aware_kpi_series(
         exclude(
             KpiRevisionSeriesExclusionReason.NOT_COMPARABLE
             if disposition is KpiDefinitionComparabilityDisposition.NOT_COMPARABLE
-            else KpiRevisionSeriesExclusionReason.NO_EXPLICIT_COMPARABILITY
+            else KpiRevisionSeriesExclusionReason.NO_EXPLICIT_COMPARABILITY,
+            int(row["id"]),
         )
     exclusions = tuple(
-        KpiRevisionSeriesExclusion(reason=reason, count=count)
-        for reason, count in sorted(exclusion_counts.items(), key=lambda item: item[0].value)
+        KpiRevisionSeriesExclusion(
+            reason=reason,
+            count=len(fact_ids),
+            fact_ids=tuple(sorted(fact_ids)),
+        )
+        for reason, fact_ids in sorted(exclusion_fact_ids.items(), key=lambda item: item[0].value)
     )
     return KpiRevisionSeriesResolution(
         status=(
@@ -546,6 +593,12 @@ def _resolve_revision_aware_kpi_series(
         kpi_definition_id=kpi_definition_id,
         anchor_definition_revision_id=anchor_id,
         included_definition_revision_ids=tuple(sorted(included_ids)),
+        comparability_revisions=tuple(
+            sorted(
+                comparability_revisions,
+                key=lambda item: item.related_definition_revision_id,
+            )
+        ),
         eligible_fact_ids=tuple(eligible_fact_ids),
         breaks=tuple(sorted(breaks, key=lambda item: item.related_definition_revision_id)),
         exclusions=exclusions,
