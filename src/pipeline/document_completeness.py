@@ -106,9 +106,9 @@ def _receipt_from_group(
         # Fact-level persistence does not retain the manifest list position;
         # restore it before the existing complete-set validator compares the
         # typed identities.  The manifest parser also rechecks its hash.
-        from pipeline.issuer_fact_manifest import IssuerFactManifest
+        from pipeline.issuer_fact_manifest import parse_issuer_fact_manifest
 
-        manifest = IssuerFactManifest.model_validate_json(receipt.application_manifest_json)
+        manifest = parse_issuer_fact_manifest(json.loads(receipt.application_manifest_json))
         order = {expected.identity_key: index for index, expected in enumerate(manifest.expected)}
         receipt = receipt.model_copy(
             update={

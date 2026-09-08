@@ -9,8 +9,10 @@ apply CLI is invoked with its explicit ``--apply`` flag.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,8 +21,11 @@ from models.facts import FactLocator, FiscalPeriodType
 from pipeline.issuer_document_coverage import ExtractorFactPopulationFrame
 from pipeline.issuer_fact_manifest import (
     IssuerFactManifest,
+    IssuerFactManifestAny,
+    IssuerFactManifestV2,
     IssuerFactValue,
     IssuerManifestFactKind,
+    ReviewedKpiDefinitionCapture,
 )
 from pipeline.kpi_persistence import KpiExtractionManifest
 
@@ -60,6 +65,46 @@ class ReviewedSegmentValues(BaseModel):
         identities = [value.expected().identity_key for value in self.values]
         if len(identities) != len(set(identities)):
             raise ValueError("reviewed segment fact identities must be unique")
+        return self
+
+
+class ReviewedKpiDefinitionCaptures(BaseModel):
+    """Sealed offline review input for one document's complete KPI capture set."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["reviewed_kpi_definition_captures.v1"] = (
+        "reviewed_kpi_definition_captures.v1"
+    )
+    ticker: str = Field(min_length=1, max_length=16)
+    source_doc_id: int = Field(gt=0)
+    source_doc_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    period_end: date
+    fiscal_period_type: FiscalPeriodType
+    extracted_at: datetime
+    reviewed_by: str = Field(min_length=1, max_length=128)
+    captures: tuple[ReviewedKpiDefinitionCapture, ...]
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @property
+    def canonical_payload_json(self) -> str:
+        return json.dumps(
+            self.model_dump(mode="json", exclude={"content_sha256"}),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    @model_validator(mode="after")
+    def _sealed_capture_set(self) -> Self:
+        expected = hashlib.sha256(self.canonical_payload_json.encode("utf-8")).hexdigest()
+        if self.content_sha256 != expected:
+            raise ValueError("reviewed KPI capture content_sha256 does not match its payload")
+        if any(capture.reviewer != self.reviewed_by for capture in self.captures):
+            raise ValueError("reviewed KPI capture reviewer must match the sealed batch")
+        identities = [capture.fact_identity for capture in self.captures]
+        if len(identities) != len(set(identities)):
+            raise ValueError("reviewed KPI capture set repeats a fact identity")
         return self
 
 
@@ -123,7 +168,8 @@ def produce_issuer_fact_manifest(
     legacy: KpiExtractionManifest,
     frame: ExtractorFactPopulationFrame,
     segments: ReviewedSegmentValues,
-) -> IssuerFactManifest:
+    reviewed_kpi_captures: ReviewedKpiDefinitionCaptures | None = None,
+) -> IssuerFactManifestAny:
     """Build a complete, deterministic issuer-fact application manifest.
 
     The population frame is authoritative: captured KPI and segment identities
@@ -153,15 +199,34 @@ def produce_issuer_fact_manifest(
     ordered_values = tuple(captured_by_identity[key] for key in sorted(captured_by_identity))
     ordered_expected = tuple(expected_by_identity[key] for key in sorted(expected_by_identity))
     ordered_rejected = {key: frame.rejected[key] for key in sorted(frame.rejected)}
-    return IssuerFactManifest(
-        ticker=segments.ticker,
-        source_doc_id=segments.source_doc_id,
-        source_doc_sha256=segments.source_doc_sha256,
-        period_end=segments.period_end,
-        fiscal_period_type=segments.fiscal_period_type,
-        values=ordered_values,
-        expected=ordered_expected,
-        rejected=ordered_rejected,
-        expected_population_status=frame.expected_population_status,
-        extracted_at=segments.extracted_at,
+    common: dict[str, object] = {
+        "ticker": segments.ticker,
+        "source_doc_id": segments.source_doc_id,
+        "source_doc_sha256": segments.source_doc_sha256,
+        "period_end": segments.period_end,
+        "fiscal_period_type": segments.fiscal_period_type,
+        "values": ordered_values,
+        "expected": ordered_expected,
+        "rejected": ordered_rejected,
+        "expected_population_status": frame.expected_population_status,
+        "extracted_at": segments.extracted_at,
+    }
+    if reviewed_kpi_captures is None:
+        return IssuerFactManifest.model_validate(common)
+    if (
+        reviewed_kpi_captures.ticker.upper() != segments.ticker.upper()
+        or reviewed_kpi_captures.source_doc_id != segments.source_doc_id
+        or reviewed_kpi_captures.source_doc_sha256 != segments.source_doc_sha256
+        or reviewed_kpi_captures.period_end != segments.period_end
+        or reviewed_kpi_captures.fiscal_period_type is not segments.fiscal_period_type
+        or reviewed_kpi_captures.extracted_at != segments.extracted_at
+    ):
+        raise ValueError("reviewed KPI captures must share the exact manifest source and period")
+    return IssuerFactManifestV2.model_validate(
+        {
+            **common,
+            "reviewed_by": reviewed_kpi_captures.reviewed_by,
+            "reviewed_capture_set_sha256": reviewed_kpi_captures.content_sha256,
+            "reviewed_kpi_definition_captures": reviewed_kpi_captures.captures,
+        }
     )

@@ -314,6 +314,7 @@ def apply_kpi_semantic_disposition_manifest(
             context=context,
             reviewed_by=manifest.reviewer,
             knowledge_at=manifest.knowledge_at,
+            kpi_definition_revision_id=None,
         )
         if inserted_id == current_identity:
             replayed_context += 1

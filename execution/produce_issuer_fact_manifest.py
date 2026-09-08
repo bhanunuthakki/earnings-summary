@@ -1,4 +1,4 @@
-"""Build an inert issuer_fact_manifest.v1 from reviewed offline inputs.
+"""Build an inert issuer fact manifest from reviewed offline inputs.
 
 The command never opens a database.  It creates the requested output once with
 an exclusive create, so an existing reviewed artifact is never replaced.
@@ -20,6 +20,7 @@ if str(SRC) not in sys.path:
 
 from pipeline.issuer_document_coverage import ExtractorFactPopulationFrame  # noqa: E402
 from pipeline.issuer_fact_manifest_producer import (  # noqa: E402
+    ReviewedKpiDefinitionCaptures,
     ReviewedSegmentValues,
     produce_issuer_fact_manifest,
 )
@@ -66,15 +67,34 @@ def main() -> int:
     parser.add_argument("--legacy-kpi-manifest", type=Path, required=True)
     parser.add_argument("--population-frame", type=Path, required=True)
     parser.add_argument("--segment-values", type=Path, required=True)
+    parser.add_argument(
+        "--reviewed-kpi-definition-captures",
+        type=Path,
+        help="Sealed reviewed_kpi_definition_captures.v1 input; emits manifest v2",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     legacy_file = _read_model(args.legacy_kpi_manifest, LegacyKpiManifestFile)
     frame = _read_model(args.population_frame, ExtractorFactPopulationFrame)
     segments = _read_model(args.segment_values, ReviewedSegmentValues)
+    reviewed_captures = (
+        None
+        if args.reviewed_kpi_definition_captures is None
+        else _read_model(
+            args.reviewed_kpi_definition_captures,
+            ReviewedKpiDefinitionCaptures,
+        )
+    )
     assert isinstance(legacy_file, LegacyKpiManifestFile)
     assert isinstance(frame, ExtractorFactPopulationFrame)
     assert isinstance(segments, ReviewedSegmentValues)
-    manifest = produce_issuer_fact_manifest(legacy_file.manifests[0], frame, segments)
+    assert reviewed_captures is None or isinstance(reviewed_captures, ReviewedKpiDefinitionCaptures)
+    manifest = produce_issuer_fact_manifest(
+        legacy_file.manifests[0],
+        frame,
+        segments,
+        reviewed_captures,
+    )
     _publish_no_clobber(args.output, manifest.canonical_json)
     print(
         json.dumps(

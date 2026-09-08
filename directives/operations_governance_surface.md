@@ -68,3 +68,11 @@ At minimum, record one Pull Request disposition and run the relevant set. The Pu
 - browser acceptance for a visible or interactive change: primary navigation, each affected state, 375px and desktop layouts, keyboard/focus behavior, network completion, and a clean console.
 
 A tested `no surface change` disposition must state which canonical owner and visible contract remain unchanged. Static configuration, a green subprocess, or a successful historical row is not current-health evidence.
+
+### Current no-surface-change dispositions
+
+`issuer_fact_manifest.v2` extends the existing internal, explicit offline-produce/apply batch CLI.
+It adds no scheduled job, managed service, runtime-health claim, or operator control. The canonical
+Operations registry and its visible Jobs, Sources, Data, and Actions contracts therefore remain
+unchanged; manifest validation, transactionality, and durable coverage receipts stay owned by the
+ingestion boundary rather than the Operations workspace.
