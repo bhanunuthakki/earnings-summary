@@ -140,6 +140,19 @@ class CanonicalKpiFactPayload(_CutoverModel):
     source_excerpt: str | None
 
 
+class CanonicalFactSelectionAsKnown(_CutoverModel):
+    """Exact immutable selection identity returned by an as-known resolution."""
+
+    fact_row_id: int = Field(gt=0)
+    fact_revision: int = Field(gt=0)
+    logical_key: str = Field(min_length=1)
+    observation_id: str = Field(min_length=1, max_length=128)
+    resolution_id: str = Field(min_length=1, max_length=128)
+    resolution_revision: int = Field(gt=0)
+    source_document_id: int = Field(gt=0)
+    locator_json: str | None
+
+
 class GovernedDocumentFactAdmission(_CutoverModel):
     """Canonical proof that one exact evidence-backed document owns admitted facts."""
 
@@ -417,6 +430,34 @@ def canonical_fact_row_ids_as_known(
     truth as if it were historical.
     """
 
+    return tuple(
+        selection.fact_row_id
+        for selection in canonical_fact_selections_as_known(
+            conn,
+            fact_table=fact_table,
+            effective_at=effective_at,
+            known_at=known_at,
+            concept_keys=concept_keys,
+        )
+    )
+
+
+def canonical_fact_selections_as_known(
+    conn: sqlite3.Connection,
+    *,
+    fact_table: FactTable,
+    effective_at: datetime,
+    known_at: datetime,
+    concept_keys: Sequence[str] = (),
+) -> tuple[CanonicalFactSelectionAsKnown, ...]:
+    """Return exact fact, observation, and resolution identities as known.
+
+    This is the typed form of :func:`canonical_fact_row_ids_as_known`. It keeps
+    the same schema checks, temporal selection, and compatibility-row drift
+    validation while retaining the immutable identities needed by traced
+    readers.
+    """
+
     if fact_table not in _TABLES:
         raise ValueError(f"unsupported fact table: {fact_table}")
     required_columns = {
@@ -485,9 +526,10 @@ def canonical_fact_row_ids_as_known(
             parameters[name] = concept_key
         concept_predicate = f"AND observation.concept_key IN ({','.join(concept_names)}) "
     rows = conn.execute(
-        "SELECT resolution.logical_key,resolution.revision,outcome.resolution_status,"  # nosec B608 -- only generated named placeholders are interpolated; values stay bound
+        "SELECT resolution.resolution_id,resolution.logical_key,"  # nosec B608 -- only generated named placeholders are interpolated; values stay bound
+        "resolution.revision AS resolution_revision,outcome.resolution_status,"
         "link.fact_row_id,link.fact_revision,link.source_document_id,link.locator_json,"
-        "link.captured_at,observation.ticker,observation.concept_key,"
+        "link.captured_at,observation.observation_id,observation.ticker,observation.concept_key,"
         "observation.period_end,observation.fiscal_period_type,"
         "observation.numeric_value,observation.currency,observation.unit "
         "FROM observation_resolution_revisions resolution "
@@ -517,7 +559,7 @@ def canonical_fact_row_ids_as_known(
                 "fact-resolution history requires sqlite3.Row"
             )
         latest_by_key[str(row["logical_key"])] = row
-    fact_ids: list[int] = []
+    selections: list[CanonicalFactSelectionAsKnown] = []
     for row in latest_by_key.values():
         if str(row["resolution_status"]) != "resolved":
             continue
@@ -543,8 +585,19 @@ def canonical_fact_row_ids_as_known(
             raise HistoricalFactAuthorityUnavailableError(
                 "selected immutable observation differs from its mutable compatibility row"
             )
-        fact_ids.append(fact_row_id)
-    return tuple(sorted(fact_ids))
+        selections.append(
+            CanonicalFactSelectionAsKnown(
+                fact_row_id=fact_row_id,
+                fact_revision=int(row["fact_revision"]),
+                logical_key=str(row["logical_key"]),
+                observation_id=str(row["observation_id"]),
+                resolution_id=str(row["resolution_id"]),
+                resolution_revision=int(row["resolution_revision"]),
+                source_document_id=int(row["source_document_id"]),
+                locator_json=(None if row["locator_json"] is None else str(row["locator_json"])),
+            )
+        )
+    return tuple(sorted(selections, key=lambda selection: selection.fact_row_id))
 
 
 def execute_fact_cutover(
