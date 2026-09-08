@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from quality.git_env import clean_local_git_env
 from quality.roadmap_freeze_inputs import (
     FreezeInputError,
     assert_unchanged,
@@ -84,7 +85,7 @@ def test_same_bytes_replacement_fails_identity_recheck(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, env=clean_local_git_env())
     path = root / ".tmp/input.json"
     path.parent.mkdir()
     path.write_text("{}", encoding="utf-8")

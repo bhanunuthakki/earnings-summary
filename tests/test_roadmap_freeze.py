@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 
 from quality.architecture import build_architecture_receipt
+from quality.git_env import clean_local_git_env
 from quality.roadmap_freeze import GENERATOR_PATHS, build_freeze, compute_scope_sha256
 from quality.roadmap_freeze_inputs import FreezeInputError
 from quality.roadmap_freeze_models import CandidateRow, FreezePlan, FreezeReceipt, WorkIntent
@@ -17,7 +18,9 @@ from quality.scoring import HARD_GATES, SCORE_BLOCKS
 
 
 def _run_git(root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", *args], cwd=root, check=True, capture_output=True, env=clean_local_git_env()
+    )
 
 
 def _fixture_repo(tmp_path: Path, *, include_protected_root: bool = False) -> tuple[Path, Path]:

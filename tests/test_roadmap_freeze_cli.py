@@ -10,6 +10,7 @@ import pytest
 
 from execution import freeze_quality_roadmap as cli
 from quality.architecture import build_architecture_receipt
+from quality.git_env import clean_local_git_env
 from quality.roadmap_freeze import GENERATOR_PATHS, build_freeze
 from quality.roadmap_freeze_bundle import load_dependency_inputs, validate_freeze_index
 from quality.roadmap_freeze_inputs import FreezeInputError
@@ -40,7 +41,13 @@ def freeze_subject(tmp_path: Path) -> tuple[Path, Path, Path]:
         ("add", "."),
         ("commit", "-qm", "fixture"),
     ):
-        subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
+        subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            env=clean_local_git_env(),
+        )
     staging = root / ".tmp" / "inputs"
     staging.mkdir(parents=True)
     source = staging / "architecture.raw"
@@ -155,7 +162,13 @@ def test_cli_rejects_subject_with_a_different_generator(
     generator = root / GENERATOR_PATHS[0]
     generator.write_text(generator.read_text() + "\n# another subject generator\n")
     for arguments in (("add", str(generator)), ("commit", "-qm", "different generator")):
-        subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
+        subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            env=clean_local_git_env(),
+        )
     with pytest.raises(FreezeInputError, match="runtime freeze generator"):
         build_freeze(root, {})
     output = root / ".tmp" / "result.json"
