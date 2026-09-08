@@ -9,11 +9,13 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import compute.kpi_revision_shadow_census as census_module
 import execution.audit_kpi_revision_shadow_census as census_cli
+import sqlite_runtime
 from compute.kpi_revision_shadow_census import (
     KpiRevisionShadowCensus,
     SnapshotEvidenceState,
@@ -107,6 +109,7 @@ def test_snapshot_evidence_rejects_forbidden_checkout_path_before_read(
     def unexpected_read(path: Path) -> str:
         raise AssertionError(f"forbidden path was read: {path}")
 
+    monkeypatch.setattr(sqlite_runtime, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(census_module, "_file_sha256", unexpected_read)
     with pytest.raises(RuntimeError, match="Mac checkout database is prohibited"):
         verify_snapshot_evidence(
