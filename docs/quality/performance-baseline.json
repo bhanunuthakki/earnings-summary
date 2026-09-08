@@ -1,0 +1,108 @@
+{
+  "schema_version": "performance-baseline/v1",
+  "benchmark_command": "/Applications/earnings-summary/.venv/bin/python -c 'print('\"'\"'ok'\"'\"')'",
+  "command_argv": [
+    "/Applications/earnings-summary/.venv/bin/python",
+    "-c",
+    "print('ok')"
+  ],
+  "revision": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "source_identity": "clean_head",
+  "source_sha256": "82200d106f6e0ded63f74b63cc8cba19f0b09e454468865cc2e2266c1834e5ad",
+  "config_sha256": "067d728c274a6c1d30e0d1615579e05b6eeb5f1cca205440cada1910f9e6bd34",
+  "scanner_sha256": "0485ca9d6e2360906db0161736af249b1d6962e7fc37613b7a8f6864f34a554b",
+  "scanner_version": "performance-timing/v1",
+  "timing": {
+    "samples": [
+      0.032563624961767346,
+      0.031654666003305465,
+      0.031782542006112635,
+      0.031537292001303285,
+      0.03277333301957697,
+      0.031512417015619576,
+      0.03068700002040714
+    ],
+    "count": 7,
+    "median_seconds": 0.031654666003305465,
+    "mad_seconds": 0.000142248987685889,
+    "bootstrap_ci_95": [
+      0.031512417015619576,
+      0.032563624961767346
+    ],
+    "stability_verdict": "stable"
+  },
+  "timing_samples": [
+    {
+      "label": "measured",
+      "ordinal": 1,
+      "elapsed_seconds": 0.032563624961767346
+    },
+    {
+      "label": "measured",
+      "ordinal": 2,
+      "elapsed_seconds": 0.031654666003305465
+    },
+    {
+      "label": "measured",
+      "ordinal": 3,
+      "elapsed_seconds": 0.031782542006112635
+    },
+    {
+      "label": "measured",
+      "ordinal": 4,
+      "elapsed_seconds": 0.031537292001303285
+    },
+    {
+      "label": "measured",
+      "ordinal": 5,
+      "elapsed_seconds": 0.03277333301957697
+    },
+    {
+      "label": "measured",
+      "ordinal": 6,
+      "elapsed_seconds": 0.031512417015619576
+    },
+    {
+      "label": "measured",
+      "ordinal": 7,
+      "elapsed_seconds": 0.03068700002040714
+    }
+  ],
+  "warmup_seconds": 0.032839416002389044,
+  "environment": {
+    "python": "3.14.7",
+    "python_implementation": "CPython",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "processor": "arm",
+    "executable": "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14",
+    "runtime": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]"
+  },
+  "collection_status": "COMPLETE",
+  "admission_status": "HOLD",
+  "status": "HOLD",
+  "hold": true,
+  "hold_reasons": [
+    "causal/performance admission is deferred"
+  ],
+  "exit_codes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "output_sha256": "a59aa607f20a84f0180772ebde5cf50063d6664724c4cbcafb7cf407b8b4e965",
+  "output_bytes": 24,
+  "output_preview": "ok\nok\nok\nok\nok\nok\nok\nok\n",
+  "provenance": "local-timing",
+  "companion_measures": {
+    "sql_statements": null,
+    "rows": null,
+    "elapsed_seconds": null,
+    "peak_rss_bytes": null
+  }
+}

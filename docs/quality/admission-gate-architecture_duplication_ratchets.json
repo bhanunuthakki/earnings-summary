@@ -1,0 +1,21 @@
+{
+  "schema_version": "quality-score-admission/v1",
+  "kind": "hard_gate",
+  "key": "architecture_duplication_ratchets",
+  "state": "fail",
+  "subject_commit": "6b9f77610f0cb5c6b425204eea510c6bde0f2db2",
+  "generator_path": "src/quality/admission_policy.py",
+  "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
+  "sources": [
+    {
+      "path": "docs/quality/architecture-ratchet.json",
+      "sha256": "53033309efe06dbf8881eb240f8a0f490829d749d2f13bc0b3bbe698fb95b2ce",
+      "schema_version": "architecture-measurement-v1"
+    },
+    {
+      "path": "docs/quality/duplicates-ratchet.json",
+      "sha256": "d0992e539a5080c0820bd15e111bd7c9b86a58d9244fbd127c2923f0f8864404",
+      "schema_version": "1"
+    }
+  ]
+}
