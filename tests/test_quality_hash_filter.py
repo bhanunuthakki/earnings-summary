@@ -113,6 +113,42 @@ def test_detect_secrets_eager_json_delimiter_normalization_is_accepted() -> None
     )
 
 
+@pytest.mark.parametrize("delimiter", (":", "="))
+def test_roadmap_freeze_source_identity_accepts_only_complete_64_hex_member(
+    delimiter: str,
+) -> None:
+    assert FILTER.is_quality_evidence_hash(
+        "docs/quality/roadmap-freeze.json",
+        f'  "source_identity" {delimiter} "{"a" * 64}",',
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "line"),
+    (
+        ("docs/quality/architecture-ratchet.json", f'"source_identity": "{"a" * 64}"'),
+        ("docs/quality/roadmap-freeze.json", f'"source_identity": "{"a" * 40}"'),
+        ("docs/quality/roadmap-freeze.json", f'"source_identity": "{"A" * 64}"'),
+        ("docs/quality/roadmap-freeze.json", f'"source_identity": "{"a" * 64}x"'),
+        ("docs/quality/roadmap-freeze.json", f'"unknown": "{"a" * 64}"'),
+        (
+            "docs/quality/roadmap-freeze.json",
+            f'"provider_token": "ghp_{"a" * 60}"',
+        ),
+        (
+            "docs/quality/roadmap-freeze.json",
+            '"private_key": "-----BEGIN '
+            + "PRIVATE KEY----- synthetic-fixture -----END "
+            + 'PRIVATE KEY-----"',
+        ),
+    ),
+)
+def test_source_identity_filter_never_hides_other_paths_or_secret_shapes(
+    filename: str, line: str
+) -> None:
+    assert not FILTER.is_quality_evidence_hash(filename, line)
+
+
 @pytest.mark.parametrize(
     "filename",
     (
