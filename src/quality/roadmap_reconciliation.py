@@ -1013,6 +1013,8 @@ def _lstat_regular(path: Path) -> os.stat_result | None:
         return None
     if not stat.S_ISREG(st.st_mode):
         return None
+    if st.st_nlink != 1:
+        return None
     return st
 
 
@@ -1028,6 +1030,39 @@ def _staged_commit_of(key: SourceKey, parsed: BaseModel) -> str | None:
     if key == "reachability" and isinstance(parsed, ReachabilityGraph):
         return parsed.subject_commit
     return None
+
+
+def _is_ignored_subject_tmp_staging(subject: Path, staged_root: Path) -> bool:
+    """Allow only the collector's lexical ignored `.tmp` staging subtree."""
+
+    try:
+        relative = staged_root.relative_to(subject)
+    except ValueError:
+        return False
+    if len(relative.parts) < 2 or relative.parts[0] != ".tmp":
+        return False
+    candidate = subject
+    try:
+        for part in relative.parts:
+            candidate = candidate / part
+            if candidate.is_symlink():
+                return False
+        if staged_root.resolve() != staged_root:
+            return False
+    except OSError:
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["git", "-C", str(subject), "check-ignore", "-q", "--", relative.as_posix()],
+                capture_output=True,
+                check=False,
+                env=clean_local_git_env(),
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
 
 
 def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _StagedLoad:
@@ -1080,8 +1115,29 @@ def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _St
         "roadmap": model.roadmap,
     }
     entries = parsed_entries
+    manifest_root_lexical = Path(os.path.abspath(manifest_path.parent))
     try:
-        staged_root = manifest_path.parent.resolve()
+        manifest_inside_subject = manifest_root_lexical.is_relative_to(subject_resolved)
+    except OSError:
+        violations.append("staged manifest is invalid")
+        return _StagedLoad(
+            None, entries, snapshots, manifest_data, manifest_dev, manifest_ino, tuple(violations)
+        )
+    if manifest_inside_subject and not _is_ignored_subject_tmp_staging(
+        subject_resolved, manifest_root_lexical
+    ):
+        violations.append("staged root overlaps subject")
+        return _StagedLoad(
+            manifest_root_lexical,
+            entries,
+            snapshots,
+            manifest_data,
+            manifest_dev,
+            manifest_ino,
+            tuple(violations),
+        )
+    try:
+        staged_root = manifest_root_lexical.resolve()
     except OSError:
         violations.append("staged manifest is invalid")
         return _StagedLoad(
@@ -1099,9 +1155,10 @@ def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _St
             tuple(violations),
         )
     try:
-        if staged_root.is_relative_to(subject_resolved) or subject_resolved.is_relative_to(
-            staged_root
-        ):
+        nested_allowed = _is_ignored_subject_tmp_staging(subject_resolved, manifest_root_lexical)
+        if (
+            staged_root.is_relative_to(subject_resolved) and not nested_allowed
+        ) or subject_resolved.is_relative_to(staged_root):
             violations.append("staged root overlaps subject")
             return _StagedLoad(
                 staged_root,
@@ -1153,7 +1210,7 @@ def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _St
             violations.append(f"staged input path escapes staged root: {key}")
             continue
         try:
-            if resolved.is_relative_to(subject_resolved):
+            if resolved.is_relative_to(subject_resolved) and not nested_allowed:
                 violations.append(f"staged input overlaps subject: {key}")
                 continue
         except OSError:
@@ -1209,6 +1266,12 @@ def _load_staged_for_subject(subject_resolved: Path, manifest_path: Path) -> _St
                 claims_snapshot = _StagedFileSnapshot(resolved, data, st.st_dev, st.st_ino)
             except OSError:
                 violations.append("staged roadmap claims is unavailable or unsafe")
+    if claims_snapshot is not None:
+        all_snapshots = [*snapshots.values(), claims_snapshot]
+        if len({snapshot.resolved for snapshot in all_snapshots}) != len(all_snapshots):
+            violations.append("staged inputs share the same file")
+        if len({(snapshot.dev, snapshot.ino) for snapshot in all_snapshots}) != len(all_snapshots):
+            violations.append("staged inputs share the same file")
     return _StagedLoad(
         staged_root,
         entries,
@@ -1472,7 +1535,7 @@ def _verify_staged_stable(load: _StagedLoad, manifest_path: Path) -> tuple[str, 
         if (st.st_dev, st.st_ino) != (load.manifest_dev, load.manifest_ino):
             problems.append("staged manifest changed during collection")
             return tuple(problems)
-        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             problems.append("staged manifest changed during collection")
             return tuple(problems)
         current_manifest = manifest_path.read_bytes()
@@ -1493,7 +1556,7 @@ def _verify_staged_stable(load: _StagedLoad, manifest_path: Path) -> tuple[str, 
             if (st2.st_dev, st2.st_ino) != (snap.dev, snap.ino):
                 problems.append(f"staged input changed during collection: {key}")
                 continue
-            if stat.S_ISLNK(st2.st_mode) or not stat.S_ISREG(st2.st_mode):
+            if stat.S_ISLNK(st2.st_mode) or not stat.S_ISREG(st2.st_mode) or st2.st_nlink != 1:
                 problems.append(f"staged input changed during collection: {key}")
                 continue
             current_data = snap.resolved.read_bytes()
@@ -1501,6 +1564,26 @@ def _verify_staged_stable(load: _StagedLoad, manifest_path: Path) -> tuple[str, 
                 problems.append(f"staged input changed during collection: {key}")
         except OSError:
             problems.append(f"staged input changed during collection: {key}")
+    claims_snapshot = load.roadmap_claims_snapshot
+    if claims_snapshot is not None:
+        try:
+            if claims_snapshot.resolved.is_symlink():
+                problems.append("staged roadmap claims changed during collection")
+            else:
+                st2 = os.lstat(claims_snapshot.resolved)
+                if (
+                    (st2.st_dev, st2.st_ino)
+                    != (
+                        claims_snapshot.dev,
+                        claims_snapshot.ino,
+                    )
+                    or not stat.S_ISREG(st2.st_mode)
+                    or st2.st_nlink != 1
+                    or claims_snapshot.resolved.read_bytes() != claims_snapshot.data
+                ):
+                    problems.append("staged roadmap claims changed during collection")
+        except OSError:
+            problems.append("staged roadmap claims changed during collection")
     return tuple(problems)
 
 

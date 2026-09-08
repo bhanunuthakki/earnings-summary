@@ -55,6 +55,11 @@ from pipeline.kpi_source_review import (
     bind_source_reviewed_kpi_definition,
     insert_source_reviewed_kpi_supersession,
 )
+from provenance.financial_fact_resolution import (
+    HistoricalFactAuthorityUnavailableError,
+    canonical_fact_row_ids_as_known,
+    canonical_fact_selections_as_known,
+)
 
 NOW = datetime(2026, 9, 6, 18, tzinfo=UTC)
 EFFECTIVE = datetime(2024, 1, 1, tzinfo=UTC)
@@ -908,6 +913,113 @@ def test_shadow_resolver_rejects_late_fact_link_and_mutable_row_drift() -> None:
     )
     assert drifted.status is KpiRevisionSeriesStatus.HISTORICAL_FACT_AUTHORITY_UNAVAILABLE
     assert drifted.eligible_fact_ids == ()
+
+
+def test_canonical_fact_selections_retain_as_known_resolution_identity_and_id_projection() -> None:
+    conn = _database()
+    first_fact = _fact(conn, logical_key="history", known_at=NOW)
+    other_fact = _fact(conn, logical_key="other", known_at=NOW)
+    later = NOW + timedelta(days=1)
+    corrected_fact = _fact(
+        conn,
+        logical_key="history",
+        known_at=later,
+        value="13.0",
+    )
+
+    historical = canonical_fact_selections_as_known(
+        conn,
+        fact_table="kpi_facts",
+        effective_at=NOW,
+        known_at=NOW,
+    )
+    current = canonical_fact_selections_as_known(
+        conn,
+        fact_table="kpi_facts",
+        effective_at=later,
+        known_at=later,
+    )
+
+    assert tuple(item.fact_row_id for item in historical) == (first_fact, other_fact)
+    assert tuple(item.fact_row_id for item in current) == (other_fact, corrected_fact)
+    first = historical[0]
+    assert first.fact_revision == 1
+    assert first.logical_key == "history"
+    assert first.observation_id == f"kpi-observation-{first_fact}"
+    assert first.resolution_id == "kpi-resolution-history-1"
+    assert first.resolution_revision == 1
+    assert first.source_document_id == 10
+    assert first.locator_json == '{"pdf_page":7}'
+    corrected = current[1]
+    assert corrected.observation_id == f"kpi-observation-{corrected_fact}"
+    assert corrected.resolution_id == "kpi-resolution-history-2"
+    assert corrected.resolution_revision == 2
+    assert canonical_fact_row_ids_as_known(
+        conn,
+        fact_table="kpi_facts",
+        effective_at=later,
+        known_at=later,
+    ) == tuple(item.fact_row_id for item in current)
+
+
+def test_canonical_fact_selections_exclude_latest_unresolved_resolution() -> None:
+    conn = _database()
+    _ = _fact(conn, logical_key="history", known_at=NOW)
+    later = NOW + timedelta(days=1)
+    _ = _fact(conn, logical_key="history", known_at=later, value="13.0")
+    conn.execute(
+        "UPDATE fact_resolution_outcomes SET resolution_status='unresolved_material' "
+        "WHERE resolution_id='kpi-resolution-history-2'"
+    )
+
+    assert (
+        canonical_fact_selections_as_known(
+            conn,
+            fact_table="kpi_facts",
+            effective_at=later,
+            known_at=later,
+        )
+        == ()
+    )
+    assert (
+        canonical_fact_row_ids_as_known(
+            conn,
+            fact_table="kpi_facts",
+            effective_at=later,
+            known_at=later,
+        )
+        == ()
+    )
+
+
+def test_canonical_fact_selections_fail_closed_on_partial_authority_and_fact_drift() -> None:
+    partial = _database()
+    _ = _fact(partial)
+    partial.execute("DROP TABLE fact_resolution_outcomes")
+    with pytest.raises(
+        HistoricalFactAuthorityUnavailableError,
+        match="immutable fact-resolution history is unavailable",
+    ):
+        canonical_fact_selections_as_known(
+            partial,
+            fact_table="kpi_facts",
+            effective_at=NOW,
+            known_at=NOW,
+        )
+
+    drifted = _database()
+    fact_id = _fact(drifted)
+    drifted.execute("UPDATE kpi_facts SET value='99.0' WHERE id=?", (fact_id,))
+    with pytest.raises(
+        HistoricalFactAuthorityUnavailableError,
+        match="selected immutable observation differs",
+    ):
+        canonical_fact_selections_as_known(
+            drifted,
+            fact_table="kpi_facts",
+            effective_at=NOW,
+            known_at=NOW,
+        )
 
 
 def test_shadow_resolver_holds_one_wal_snapshot_across_fact_proof_and_use(
