@@ -17,6 +17,7 @@ import execution.audit_kpi_revision_shadow_census as census_cli
 from compute.kpi_revision_shadow_census import (
     KpiRevisionShadowCensus,
     SnapshotEvidenceState,
+    verifier_code_sha256,
     verify_snapshot_evidence,
 )
 from sqlite_snapshot import SnapshotManifest, SnapshotRequest, create_snapshot
@@ -203,3 +204,119 @@ def test_cli_rejects_snapshot_mutation_during_census(
             ]
         )
     assert capsys.readouterr().out == ""
+
+
+def test_audit_rejects_snapshot_evidence_from_a_different_connection(tmp_path: Path) -> None:
+    snapshot, manifest_path = _reader_snapshot(tmp_path)
+    evidence = verify_snapshot_evidence(
+        database_path=snapshot,
+        manifest_path=manifest_path,
+    )
+    other_database = tmp_path / "other.db"
+    conn = sqlite3.connect(other_database)
+    conn.execute("CREATE TABLE marker(value TEXT NOT NULL)")
+    conn.commit()
+    try:
+        with pytest.raises(ValueError, match="snapshot evidence does not match"):
+            census_module.audit_kpi_revision_shadow_census(
+                conn,
+                effective_at=STAMP,
+                known_at=STAMP,
+                evaluated_at=STAMP,
+                snapshot_evidence=evidence,
+            )
+    finally:
+        conn.close()
+
+
+def test_audit_rejects_manifest_matched_connection_with_uncommitted_writes(
+    tmp_path: Path,
+) -> None:
+    snapshot, manifest_path = _reader_snapshot(tmp_path)
+    evidence = verify_snapshot_evidence(
+        database_path=snapshot,
+        manifest_path=manifest_path,
+    )
+    conn = sqlite3.connect(snapshot)
+    conn.execute("INSERT INTO marker VALUES ('uncommitted')")
+    try:
+        with pytest.raises(ValueError, match="pre-existing transaction"):
+            census_module.audit_kpi_revision_shadow_census(
+                conn,
+                effective_at=STAMP,
+                known_at=STAMP,
+                evaluated_at=STAMP,
+                snapshot_evidence=evidence,
+            )
+        assert conn.in_transaction
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_public_audit_rechecks_manifest_matched_evidence_after_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot, manifest_path = _reader_snapshot(tmp_path)
+    evidence = verify_snapshot_evidence(
+        database_path=snapshot,
+        manifest_path=manifest_path,
+    )
+    actual_verify = census_module.verify_snapshot_evidence
+    verification_calls = 0
+
+    def mutate_before_final_verification(
+        *,
+        database_path: Path,
+        manifest_path: Path,
+    ) -> SnapshotEvidenceState:
+        nonlocal verification_calls
+        verification_calls += 1
+        if verification_calls == 2:
+            snapshot.write_bytes(snapshot.read_bytes() + b"changed-during-audit")
+        return actual_verify(database_path=database_path, manifest_path=manifest_path)
+
+    monkeypatch.setattr(
+        census_module,
+        "verify_snapshot_evidence",
+        mutate_before_final_verification,
+    )
+    conn = sqlite3.connect(snapshot)
+    try:
+        with pytest.raises(ValueError, match="snapshot evidence does not match"):
+            census_module.audit_kpi_revision_shadow_census(
+                conn,
+                effective_at=STAMP,
+                known_at=STAMP,
+                evaluated_at=STAMP,
+                snapshot_evidence=evidence,
+            )
+    finally:
+        conn.close()
+
+
+def test_verifier_digest_closes_over_snapshot_connection_and_lineage_authorities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: set[str] = set()
+
+    def capture_artifacts(artifacts: dict[str, Path]) -> str:
+        observed.update(artifacts)
+        return "a" * 64
+
+    monkeypatch.setattr(
+        census_module,
+        "verifier_source_artifact_sha256",
+        capture_artifacts,
+    )
+
+    assert verifier_code_sha256() == "a" * 64
+    assert {
+        "compute/kpi_revision_shadow_census.py",
+        "execution/audit_kpi_revision_shadow_census.py",
+        "pipeline/kpi_definition_revisions.py",
+        "provenance/verifier_identity.py",
+        "sqlite_runtime.py",
+        "sqlite_snapshot.py",
+    }.issubset(observed)

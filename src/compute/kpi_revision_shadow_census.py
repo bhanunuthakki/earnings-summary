@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -34,6 +35,7 @@ from sqlite_runtime import reject_forbidden_mac_checkout_database
 from sqlite_snapshot import SnapshotManifest
 
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
+_REPOSITORY_ROOT = _SOURCE_ROOT.parent
 _SUPPORTED_SNAPSHOT_SCHEMA_VERSION = "sqlite-reader-snapshot/v1"
 _SUPPORTED_SNAPSHOT_CODE_CONFIG_VERSION = "sqlite-reader-snapshot/v1"
 
@@ -82,6 +84,8 @@ class SnapshotEvidenceState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     status: Literal["manifest_matched", "unverified"]
+    snapshot_path: str | None = None
+    manifest_path: str | None = None
     snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     blocking_reasons: tuple[str, ...]
@@ -93,8 +97,13 @@ class SnapshotEvidenceState(BaseModel):
     @model_validator(mode="after")
     def _closed_state(self) -> Self:
         if self.status == "manifest_matched":
-            if self.snapshot_sha256 is None or self.manifest_sha256 is None:
-                raise ValueError("matched snapshot evidence requires both artifact hashes")
+            if (
+                self.snapshot_path is None
+                or self.manifest_path is None
+                or self.snapshot_sha256 is None
+                or self.manifest_sha256 is None
+            ):
+                raise ValueError("matched snapshot evidence requires paths and artifact hashes")
             if self.blocking_reasons:
                 raise ValueError("matched snapshot evidence cannot carry blockers")
         elif not self.blocking_reasons:
@@ -107,6 +116,8 @@ class KpiFactCensusDisposition(BaseModel):
 
     fact_id: int = Field(gt=0)
     reason: str = Field(min_length=1, max_length=96)
+    semantic_context_id: int | None = Field(default=None, gt=0)
+    semantic_context_revision: int | None = Field(default=None, gt=0)
     definition_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
     comparability_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
 
@@ -123,6 +134,7 @@ class KpiDefinitionShadowCensus(BaseModel):
     comparability_revisions: tuple[KpiRevisionSeriesComparability, ...]
     breaks: tuple[KpiRevisionSeriesBreak, ...]
     raw_current_fact_ids: tuple[int, ...]
+    canonical_current_fact_ids: tuple[int, ...]
     legacy_fact_ids: tuple[int, ...]
     revision_aware_fact_ids: tuple[int, ...]
     fact_dispositions: tuple[KpiFactCensusDisposition, ...]
@@ -135,6 +147,7 @@ class OutOfScopeKpiFact(BaseModel):
     fact_id: int = Field(gt=0)
     ticker: str = Field(min_length=1, max_length=32)
     kpi_definition_id: int = Field(gt=0)
+    period_end_status: Literal["within_cutoff", "invalid"] = "within_cutoff"
     reason: Literal["outside_active_portfolio"] = "outside_active_portfolio"
 
 
@@ -144,7 +157,11 @@ class InvalidInScopeKpiFact(BaseModel):
     fact_id: int = Field(gt=0)
     ticker: str = Field(min_length=1, max_length=32)
     kpi_definition_id: int = Field(gt=0)
-    reason: Literal["definition_missing", "definition_ticker_mismatch"]
+    reason: Literal[
+        "definition_missing",
+        "definition_ticker_mismatch",
+        "invalid_period_end",
+    ]
 
 
 class KpiRevisionShadowCensus(BaseModel):
@@ -159,6 +176,8 @@ class KpiRevisionShadowCensus(BaseModel):
     known_at: datetime
     evaluated_at: datetime
     snapshot_evidence: SnapshotEvidenceState
+    roster_observation_status: Literal["observed", "unavailable"]
+    population_observation_status: Literal["observed", "unavailable"]
     active_portfolio_tickers: tuple[str, ...]
     roster_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     population_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -236,12 +255,16 @@ def verify_snapshot_evidence(*, database_path: Path, manifest_path: Path) -> Sna
     if reasons or snapshot_sha256 is None or manifest_sha256 is None:
         return SnapshotEvidenceState(
             status="unverified",
+            snapshot_path=str(database),
+            manifest_path=str(manifest_file),
             snapshot_sha256=snapshot_sha256,
             manifest_sha256=manifest_sha256,
             blocking_reasons=tuple(dict.fromkeys(reasons)),
         )
     return SnapshotEvidenceState(
         status="manifest_matched",
+        snapshot_path=str(database),
+        manifest_path=str(manifest_file),
         snapshot_sha256=snapshot_sha256,
         manifest_sha256=manifest_sha256,
         blocking_reasons=(),
@@ -255,6 +278,33 @@ _NON_BLOCKING_EXCLUSIONS = frozenset(
         KpiRevisionSeriesExclusionReason.SEMANTIC_NOT_ADMITTED.value,
     }
 )
+
+
+def _require_snapshot_evidence_matches_connection(
+    conn: sqlite3.Connection,
+    evidence: SnapshotEvidenceState,
+    *,
+    reject_preexisting_transaction: bool,
+) -> None:
+    if evidence.status != "manifest_matched":
+        return
+    if reject_preexisting_transaction and conn.in_transaction:
+        raise ValueError(
+            "snapshot evidence does not match a connection with a pre-existing transaction"
+        )
+    rows = conn.execute("PRAGMA database_list").fetchall()
+    main_paths = [str(row[2]) for row in rows if str(row[1]) == "main" and str(row[2])]
+    if len(main_paths) != 1 or evidence.snapshot_path is None or evidence.manifest_path is None:
+        raise ValueError("snapshot evidence does not match the census connection")
+    connection_path = Path(main_paths[0]).expanduser().resolve()
+    if connection_path != Path(evidence.snapshot_path).expanduser().resolve():
+        raise ValueError("snapshot evidence does not match the census connection")
+    observed = verify_snapshot_evidence(
+        database_path=connection_path,
+        manifest_path=Path(evidence.manifest_path),
+    )
+    if observed != evidence:
+        raise ValueError("snapshot evidence does not match the census connection")
 
 
 def audit_kpi_revision_shadow_census(
@@ -272,6 +322,11 @@ def audit_kpi_revision_shadow_census(
     evaluated = _utc(evaluated_at)
     if effective > known or known > evaluated:
         raise ValueError("census clocks must satisfy effective_at <= known_at <= evaluated_at")
+    _require_snapshot_evidence_matches_connection(
+        conn,
+        snapshot_evidence,
+        reject_preexisting_transaction=True,
+    )
 
     original_row_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
@@ -279,13 +334,19 @@ def audit_kpi_revision_shadow_census(
     if owns_snapshot:
         conn.execute("BEGIN")
     try:
-        return _audit_snapshot(
+        result = _audit_snapshot(
             conn,
             effective_at=effective,
             known_at=known,
             evaluated_at=evaluated,
             snapshot_evidence=snapshot_evidence,
         )
+        _require_snapshot_evidence_matches_connection(
+            conn,
+            snapshot_evidence,
+            reject_preexisting_transaction=False,
+        )
+        return result
     finally:
         if owns_snapshot:
             conn.rollback()
@@ -301,11 +362,17 @@ def _audit_snapshot(
     snapshot_evidence: SnapshotEvidenceState,
 ) -> KpiRevisionShadowCensus:
     schema_blockers = _schema_blockers(conn)
-    roster = _active_portfolio_tickers(conn) if not schema_blockers else ()
+    roster_available = _required_columns_available(
+        conn,
+        "tracked_companies",
+        {"ticker", "list_type", "archived_at"},
+    )
+    population_available = not schema_blockers
+    roster = _active_portfolio_tickers(conn) if roster_available else ()
     series: tuple[KpiDefinitionShadowCensus, ...] = ()
     out_of_scope: tuple[OutOfScopeKpiFact, ...] = ()
     invalid_in_scope: tuple[InvalidInScopeKpiFact, ...] = ()
-    if not schema_blockers:
+    if population_available:
         series = tuple(
             _census_definition(
                 conn,
@@ -327,16 +394,17 @@ def _audit_snapshot(
         invalid_in_scope = _invalid_in_scope_facts(conn, effective_at=effective_at)
 
     blockers = set(schema_blockers)
-    if not roster:
+    if roster_available and not roster:
         blockers.add("active_portfolio_roster_empty")
-    if not series:
+    if population_available and not series:
         blockers.add("portfolio_kpi_population_empty")
     represented_tickers = {item.ticker for item in series}
-    blockers.update(
-        f"portfolio_ticker_without_kpi_definition:{ticker}"
-        for ticker in roster
-        if ticker not in represented_tickers
-    )
+    if population_available:
+        blockers.update(
+            f"portfolio_ticker_without_kpi_definition:{ticker}"
+            for ticker in roster
+            if ticker not in represented_tickers
+        )
     if invalid_in_scope:
         blockers.add("invalid_in_scope_fact_identity")
     for item in series:
@@ -360,13 +428,16 @@ def _audit_snapshot(
         "definitions": [
             {
                 "definition_id": item.kpi_definition_id,
+                "canonical_current_fact_ids": list(item.canonical_current_fact_ids),
                 "raw_current_fact_ids": list(item.raw_current_fact_ids),
                 "ticker": item.ticker,
             }
             for item in series
         ],
         "invalid_in_scope_facts": [item.model_dump(mode="json") for item in invalid_in_scope],
+        "population_observation_status": ("observed" if population_available else "unavailable"),
         "roster": list(roster),
+        "roster_observation_status": "observed" if roster_available else "unavailable",
     }
     payload = {
         "schema_version": "kpi-revision-shadow-census/v1",
@@ -376,10 +447,19 @@ def _audit_snapshot(
         "known_at": known_at,
         "evaluated_at": evaluated_at,
         "snapshot_evidence": snapshot_evidence,
+        "roster_observation_status": "observed" if roster_available else "unavailable",
+        "population_observation_status": ("observed" if population_available else "unavailable"),
         "active_portfolio_tickers": roster,
-        "roster_sha256": _sha256(_canonical_json(list(roster))),
+        "roster_sha256": _sha256(
+            _canonical_json(
+                {
+                    "status": "observed" if roster_available else "unavailable",
+                    "tickers": list(roster),
+                }
+            )
+        ),
         "population_sha256": _sha256(_canonical_json(population_material)),
-        "verifier_code_sha256": _verifier_code_sha256(),
+        "verifier_code_sha256": verifier_code_sha256(),
         "series": series,
         "out_of_scope_facts": out_of_scope,
         "invalid_in_scope_facts": invalid_in_scope,
@@ -395,15 +475,26 @@ def _audit_snapshot(
     )
 
 
-def _verifier_code_sha256() -> str:
+def verifier_code_sha256() -> str:
     return verifier_source_artifact_sha256(
         {
             "compute/kpi_resolver.py": _SOURCE_ROOT / "compute" / "kpi_resolver.py",
             "compute/kpi_revision_shadow_census.py": Path(__file__),
+            "execution/audit_kpi_revision_shadow_census.py": (
+                _REPOSITORY_ROOT / "execution" / "audit_kpi_revision_shadow_census.py"
+            ),
+            "pipeline/kpi_definition_revisions.py": (
+                _SOURCE_ROOT / "pipeline" / "kpi_definition_revisions.py"
+            ),
             "pipeline/kpi_semantics.py": _SOURCE_ROOT / "pipeline" / "kpi_semantics.py",
             "provenance/financial_fact_resolution.py": (
                 _SOURCE_ROOT / "provenance" / "financial_fact_resolution.py"
             ),
+            "provenance/verifier_identity.py": (
+                _SOURCE_ROOT / "provenance" / "verifier_identity.py"
+            ),
+            "sqlite_runtime.py": _SOURCE_ROOT / "sqlite_runtime.py",
+            "sqlite_snapshot.py": _SOURCE_ROOT / "sqlite_snapshot.py",
         }
     )
 
@@ -412,14 +503,28 @@ def _schema_blockers(conn: sqlite3.Connection) -> tuple[str, ...]:
     required = {
         "tracked_companies": {"ticker", "list_type", "archived_at"},
         "kpi_definitions": {"id", "ticker", "name"},
-        "kpi_facts": {"id", "ticker", "period_end", "kpi_definition_id"},
+        "kpi_facts": {
+            "id",
+            "ticker",
+            "period_end",
+            "kpi_definition_id",
+            "supersedes_id",
+        },
     }
     blockers: list[str] = []
     for table, columns in required.items():
-        observed = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
-        if not columns.issubset(observed):
+        if not _required_columns_available(conn, table, columns):
             blockers.append(f"required_schema_unavailable:{table}")
     return tuple(blockers)
+
+
+def _required_columns_available(
+    conn: sqlite3.Connection,
+    table: str,
+    required: set[str],
+) -> bool:
+    observed = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    return required.issubset(observed)
 
 
 def _active_portfolio_tickers(conn: sqlite3.Connection) -> tuple[str, ...]:
@@ -448,6 +553,17 @@ def _census_definition(
     raw_ids = tuple(
         int(row[0])
         for row in conn.execute(
+            "SELECT kf.id FROM kpi_facts kf "
+            "WHERE UPPER(kf.ticker)=UPPER(?) AND kf.kpi_definition_id=? "
+            "AND NOT EXISTS (SELECT 1 FROM kpi_facts successor "
+            "WHERE successor.supersedes_id=kf.id) "
+            "AND datetime(kf.period_end)<=datetime(?) ORDER BY kf.id",
+            (ticker, definition_id, cutoff),
+        )
+    )
+    canonical_current_ids = tuple(
+        int(row[0])
+        for row in conn.execute(
             f"SELECT kf.id FROM {relation} kf "  # nosec B608 -- resolver-owned relation
             "WHERE UPPER(kf.ticker)=UPPER(?) AND kf.kpi_definition_id=? "
             "AND datetime(kf.period_end)<=datetime(?) ORDER BY kf.id",
@@ -471,7 +587,6 @@ def _census_definition(
         known_at=known_at,
     )
     revision_ids = resolution.eligible_fact_ids
-    revision_by_fact = _revision_ids_by_fact(conn, all_fact_ids=revision_ids, known_at=known_at)
     comparability_by_revision = {
         item.related_definition_revision_id: item for item in resolution.comparability_revisions
     }
@@ -481,14 +596,25 @@ def _census_definition(
         for fact_id in exclusion.fact_ids
     }
     all_ids = sorted(set(raw_ids) | set(legacy_ids) | set(revision_ids) | set(exclusion_by_fact))
+    lineage_by_fact = _semantic_lineage_by_fact(
+        conn,
+        all_fact_ids=tuple(all_ids),
+        known_at=known_at,
+    )
     dispositions: list[KpiFactCensusDisposition] = []
     blockers: set[str] = set()
+    missing_current_authority = set(raw_ids) - set(canonical_current_ids)
     legacy_set = set(legacy_ids)
     revision_set = set(revision_ids)
     for fact_id in all_ids:
-        if fact_id in legacy_set and fact_id in revision_set:
+        lineage = lineage_by_fact.get(fact_id)
+        definition_revision_id = None if lineage is None else lineage.definition_revision_id
+        if fact_id in missing_current_authority:
+            reason = "missing_current_resolution_authority"
+            comparability_revision_id = None
+            blockers.add(reason)
+        elif fact_id in legacy_set and fact_id in revision_set:
             reason = "eligible_in_both"
-            definition_revision_id = revision_by_fact.get(fact_id)
             comparability_revision_id = None
         elif fact_id in legacy_set:
             reason = exclusion_by_fact.get(
@@ -507,10 +633,8 @@ def _census_definition(
             )
             if reason not in _NON_BLOCKING_EXCLUSIONS:
                 blockers.add(reason)
-            definition_revision_id = revision_by_fact.get(fact_id)
             comparability_revision_id = None
         elif fact_id in revision_set:
-            definition_revision_id = revision_by_fact.get(fact_id)
             comparability = (
                 comparability_by_revision.get(definition_revision_id)
                 if definition_revision_id is not None and fact_id not in raw_ids
@@ -525,12 +649,13 @@ def _census_definition(
                 comparability_revision_id = comparability.comparability_revision_id
         else:
             reason = exclusion_by_fact.get(fact_id, "excluded_by_current_legacy_semantics")
-            definition_revision_id = revision_by_fact.get(fact_id)
             comparability_revision_id = None
         dispositions.append(
             KpiFactCensusDisposition(
                 fact_id=fact_id,
                 reason=reason,
+                semantic_context_id=None if lineage is None else lineage.context_id,
+                semantic_context_revision=None if lineage is None else lineage.context_revision,
                 definition_revision_id=definition_revision_id,
                 comparability_revision_id=comparability_revision_id,
             )
@@ -550,6 +675,7 @@ def _census_definition(
         comparability_revisions=resolution.comparability_revisions,
         breaks=resolution.breaks,
         raw_current_fact_ids=raw_ids,
+        canonical_current_fact_ids=canonical_current_ids,
         legacy_fact_ids=legacy_ids,
         revision_aware_fact_ids=revision_ids,
         fact_dispositions=tuple(dispositions),
@@ -560,16 +686,20 @@ def _census_definition(
 def _out_of_scope_facts(
     conn: sqlite3.Connection, *, effective_at: datetime
 ) -> tuple[OutOfScopeKpiFact, ...]:
-    relation = canonical_fact_relation(conn, "kpi_facts").sql
     return tuple(
         OutOfScopeKpiFact(
             fact_id=int(row[0]),
             ticker=str(row[1]).upper(),
             kpi_definition_id=int(row[2]),
+            period_end_status="invalid" if int(row[3]) else "within_cutoff",
         )
         for row in conn.execute(
-            f"SELECT fact.id,fact.ticker,fact.kpi_definition_id FROM {relation} fact "  # nosec B608
-            "WHERE datetime(fact.period_end)<=datetime(?) AND NOT EXISTS ("
+            "SELECT fact.id,fact.ticker,fact.kpi_definition_id,"
+            "datetime(fact.period_end) IS NULL AS invalid_period_end FROM kpi_facts fact "
+            "WHERE NOT EXISTS (SELECT 1 FROM kpi_facts successor "
+            "WHERE successor.supersedes_id=fact.id) "
+            "AND (datetime(fact.period_end)<=datetime(?) OR datetime(fact.period_end) IS NULL) "
+            "AND NOT EXISTS ("
             "SELECT 1 FROM tracked_companies company WHERE "
             "UPPER(company.ticker)=UPPER(fact.ticker) AND company.list_type='portfolio' "
             "AND company.archived_at IS NULL) ORDER BY fact.id",
@@ -581,57 +711,97 @@ def _out_of_scope_facts(
 def _invalid_in_scope_facts(
     conn: sqlite3.Connection, *, effective_at: datetime
 ) -> tuple[InvalidInScopeKpiFact, ...]:
-    relation = canonical_fact_relation(conn, "kpi_facts").sql
     return tuple(
         InvalidInScopeKpiFact(
             fact_id=int(row["fact_id"]),
             ticker=str(row["fact_ticker"]).upper(),
             kpi_definition_id=int(row["kpi_definition_id"]),
             reason=(
-                "definition_missing"
-                if row["definition_id"] is None
-                else "definition_ticker_mismatch"
+                "invalid_period_end"
+                if int(row["invalid_period_end"])
+                else (
+                    "definition_missing"
+                    if row["definition_id"] is None
+                    else "definition_ticker_mismatch"
+                )
             ),
         )
         for row in conn.execute(
-            f"SELECT fact.id AS fact_id,fact.ticker AS fact_ticker,"  # nosec B608
-            "fact.kpi_definition_id,definition.id AS definition_id "
-            f"FROM {relation} fact "
+            "SELECT fact.id AS fact_id,fact.ticker AS fact_ticker,"
+            "fact.kpi_definition_id,definition.id AS definition_id,"
+            "datetime(fact.period_end) IS NULL AS invalid_period_end "
+            "FROM kpi_facts fact "
             "JOIN tracked_companies company ON UPPER(company.ticker)=UPPER(fact.ticker) "
             "LEFT JOIN kpi_definitions definition ON definition.id=fact.kpi_definition_id "
             "WHERE company.list_type='portfolio' AND company.archived_at IS NULL "
-            "AND datetime(fact.period_end)<=datetime(?) AND (definition.id IS NULL "
-            "OR UPPER(definition.ticker)<>UPPER(fact.ticker)) ORDER BY fact.id",
+            "AND NOT EXISTS (SELECT 1 FROM kpi_facts successor "
+            "WHERE successor.supersedes_id=fact.id) "
+            "AND (datetime(fact.period_end) IS NULL OR (datetime(fact.period_end)<=datetime(?) "
+            "AND (definition.id IS NULL OR UPPER(definition.ticker)<>UPPER(fact.ticker)))) "
+            "ORDER BY fact.id",
             (effective_at.isoformat(),),
         )
     )
 
 
-def _revision_ids_by_fact(
+@dataclass(frozen=True)
+class _SemanticLineage:
+    context_id: int
+    context_revision: int
+    definition_revision_id: str | None
+
+
+def _semantic_lineage_by_fact(
     conn: sqlite3.Connection,
     *,
     all_fact_ids: tuple[int, ...],
     known_at: datetime,
-) -> dict[int, str]:
+) -> dict[int, _SemanticLineage]:
     if not all_fact_ids:
         return {}
+    if not _required_columns_available(
+        conn,
+        "kpi_fact_semantic_contexts",
+        {
+            "id",
+            "kpi_fact_id",
+            "revision",
+            "supersedes_context_id",
+            "knowledge_at",
+            "created_at",
+            "kpi_definition_revision_id",
+        },
+    ):
+        return {}
     placeholders = ",".join("?" for _ in all_fact_ids)
-    return {
-        int(row["kpi_fact_id"]): str(row["kpi_definition_revision_id"])
-        for row in conn.execute(
-            "SELECT context.kpi_fact_id,context.kpi_definition_revision_id "
-            "FROM kpi_fact_semantic_contexts context WHERE "
-            f"context.kpi_fact_id IN ({placeholders}) "  # nosec B608 -- integer ids
-            "AND context.kpi_definition_revision_id IS NOT NULL "
-            "AND datetime(context.knowledge_at)<=datetime(?) "
-            "AND datetime(context.created_at)<=datetime(?) "
-            "AND NOT EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts successor "
-            "WHERE successor.supersedes_context_id=context.id "
-            "AND datetime(successor.knowledge_at)<=datetime(?) "
-            "AND datetime(successor.created_at)<=datetime(?)) ORDER BY context.kpi_fact_id",
-            (*all_fact_ids, *(known_at.isoformat() for _ in range(4))),
+    rows = conn.execute(
+        "SELECT context.kpi_fact_id,context.id,context.revision,"
+        "context.kpi_definition_revision_id "
+        "FROM kpi_fact_semantic_contexts context WHERE "
+        f"context.kpi_fact_id IN ({placeholders}) "  # nosec B608 -- integer ids
+        "AND datetime(context.knowledge_at)<=datetime(?) "
+        "AND datetime(context.created_at)<=datetime(?) "
+        "AND NOT EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts successor "
+        "WHERE successor.supersedes_context_id=context.id "
+        "AND datetime(successor.knowledge_at)<=datetime(?) "
+        "AND datetime(successor.created_at)<=datetime(?)) ORDER BY context.kpi_fact_id",
+        (*all_fact_ids, *(known_at.isoformat() for _ in range(4))),
+    ).fetchall()
+    result: dict[int, _SemanticLineage] = {}
+    for row in rows:
+        fact_id = int(row["kpi_fact_id"])
+        if fact_id in result:
+            raise RuntimeError(f"KPI fact {fact_id} has ambiguous semantic heads as known")
+        result[fact_id] = _SemanticLineage(
+            context_id=int(row["id"]),
+            context_revision=int(row["revision"]),
+            definition_revision_id=(
+                None
+                if row["kpi_definition_revision_id"] is None
+                else str(row["kpi_definition_revision_id"])
+            ),
         )
-    }
+    return result
 
 
 __all__ = [
@@ -643,5 +813,6 @@ __all__ = [
     "OutOfScopeKpiFact",
     "SnapshotEvidenceState",
     "audit_kpi_revision_shadow_census",
+    "verifier_code_sha256",
     "verify_snapshot_evidence",
 ]

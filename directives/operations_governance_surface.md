@@ -86,6 +86,12 @@ population from the database, emits one hash-bound `kpi-revision-shadow-census/v
 nonzero because the receipt never authorizes activation. A missing, incompatible, changed, or
 sidecar-active snapshot remains `unverified`; even a matching supported manifest records only artifact
 identity and the producer's assertions. It does not establish production evidence authority.
+The CLI binds the connection's main path to that manifest and file hash, requires no pre-existing
+transaction, rechecks identity after the owned read transaction, then closes the read-only connection
+and rechecks once more before emitting output. Base KPI rows missing current resolution authority stay
+in the population with an exact blocking disposition rather than disappearing through the resolved
+view. Unavailable roster or population schema remains distinct from an observed empty population.
+An unparseable fact period is retained as an exact blocking disposition rather than omitted or inferred.
 
 This capability has no schedule, service, retry control, database write, or Operations-workspace
 button. Its current supported state is `hold`: deterministic resolver readiness is visible in the
