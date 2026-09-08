@@ -1,0 +1,369 @@
+{
+  "schema_version": "quality-roadmap-owners/v1",
+  "source_document_id": "d742c645-13d1-4e97-8b79-f57761e8d4b7",
+  "source_document_path": "docs/quality/quality-9plus-roadmap.md",
+  "source_sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+  "owners": [
+    {
+      "issue_id": "BHA-104",
+      "lane": "test-performance",
+      "confirmed": true
+    },
+    {
+      "issue_id": "BHA-105",
+      "lane": "static-foundation",
+      "confirmed": true
+    },
+    {
+      "issue_id": "BHA-106",
+      "lane": "integrity",
+      "confirmed": true
+    },
+    {
+      "issue_id": "BHA-107",
+      "lane": "authorities",
+      "confirmed": true
+    },
+    {
+      "issue_id": "BHA-108",
+      "lane": "structure-request",
+      "confirmed": true
+    },
+    {
+      "issue_id": "BHA-109",
+      "lane": "retirement",
+      "confirmed": true
+    },
+    {
+      "issue_id": "BHA-110",
+      "lane": "static-closure",
+      "confirmed": true
+    },
+    {
+      "issue_id": "BHA-111",
+      "lane": "final-closure",
+      "confirmed": true
+    }
+  ],
+  "population_routes": [
+    {
+      "population": "large_module",
+      "owner_issues": [
+        "BHA-106",
+        "BHA-107",
+        "BHA-108"
+      ]
+    },
+    {
+      "population": "scc_cut",
+      "owner_issues": [
+        "BHA-107",
+        "BHA-108"
+      ]
+    },
+    {
+      "population": "duplicate_authority",
+      "owner_issues": [
+        "BHA-107"
+      ]
+    },
+    {
+      "population": "builder_invocation",
+      "owner_issues": [
+        "BHA-104"
+      ]
+    },
+    {
+      "population": "type_cluster",
+      "owner_issues": [
+        "BHA-105",
+        "BHA-110"
+      ]
+    },
+    {
+      "population": "lifecycle",
+      "owner_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "population": "deletion",
+      "owner_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "population": "admission",
+      "owner_issues": [
+        "BHA-104",
+        "BHA-105",
+        "BHA-106",
+        "BHA-107",
+        "BHA-108",
+        "BHA-109",
+        "BHA-110",
+        "BHA-111"
+      ]
+    }
+  ],
+  "admission_routes": [
+    {
+      "kind": "block",
+      "key": "elegance.cycles",
+      "issue_id": "BHA-108",
+      "delivery_issues": [
+        "BHA-107",
+        "BHA-108",
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "elegance.composition_roots",
+      "issue_id": "BHA-108",
+      "delivery_issues": [
+        "BHA-107",
+        "BHA-108",
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "elegance.module_shape",
+      "issue_id": "BHA-108",
+      "delivery_issues": [
+        "BHA-107",
+        "BHA-108",
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "elegance.cohesive_typed_facades",
+      "issue_id": "BHA-108",
+      "delivery_issues": [
+        "BHA-107",
+        "BHA-108",
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "maintainability.static_quality",
+      "issue_id": "BHA-110",
+      "delivery_issues": [
+        "BHA-105",
+        "BHA-110"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "maintainability.duplication",
+      "issue_id": "BHA-107",
+      "delivery_issues": [
+        "BHA-107"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "maintainability.authorities",
+      "issue_id": "BHA-107",
+      "delivery_issues": [
+        "BHA-107"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "maintainability.sustainable_tests",
+      "issue_id": "BHA-104",
+      "delivery_issues": [
+        "BHA-104"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "maintainability.enforced_ratchets",
+      "issue_id": "BHA-105",
+      "delivery_issues": [
+        "BHA-105",
+        "BHA-107",
+        "BHA-108",
+        "BHA-110"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "efficiency.integrity_audit",
+      "issue_id": "BHA-106",
+      "delivery_issues": [
+        "BHA-106"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "efficiency.request_path",
+      "issue_id": "BHA-108",
+      "delivery_issues": [
+        "BHA-108"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "efficiency.test_ci",
+      "issue_id": "BHA-104",
+      "delivery_issues": [
+        "BHA-104"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "efficiency.dcf_disposition",
+      "issue_id": "BHA-107",
+      "delivery_issues": [
+        "BHA-107"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "cleanup.lifecycle_inventory",
+      "issue_id": "BHA-109",
+      "delivery_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "cleanup.reachability_oracle",
+      "issue_id": "BHA-109",
+      "delivery_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "cleanup.deletion_proof",
+      "issue_id": "BHA-109",
+      "delivery_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "cleanup.schema_ownership",
+      "issue_id": "BHA-109",
+      "delivery_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "block",
+      "key": "cleanup.reconstructability",
+      "issue_id": "BHA-109",
+      "delivery_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "repository_gates",
+      "issue_id": "BHA-110",
+      "delivery_issues": [
+        "BHA-109",
+        "BHA-110"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "active_static_zero",
+      "issue_id": "BHA-110",
+      "delivery_issues": [
+        "BHA-105",
+        "BHA-110"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "compatibility_parity",
+      "issue_id": "BHA-110",
+      "delivery_issues": [
+        "BHA-105",
+        "BHA-106",
+        "BHA-107",
+        "BHA-108",
+        "BHA-109",
+        "BHA-110"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "benchmark_contract",
+      "issue_id": "BHA-104",
+      "delivery_issues": [
+        "BHA-104",
+        "BHA-106",
+        "BHA-108"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "database_authority",
+      "issue_id": "BHA-110",
+      "delivery_issues": [
+        "BHA-104",
+        "BHA-106",
+        "BHA-108",
+        "BHA-109",
+        "BHA-110"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "deletion_evidence",
+      "issue_id": "BHA-109",
+      "delivery_issues": [
+        "BHA-109"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "network_consolidation_safety",
+      "issue_id": "BHA-108",
+      "delivery_issues": [
+        "BHA-107",
+        "BHA-108"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "owner_acceptance",
+      "issue_id": "BHA-111",
+      "delivery_issues": [
+        "BHA-111"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "architecture_duplication_ratchets",
+      "issue_id": "BHA-105",
+      "delivery_issues": [
+        "BHA-105",
+        "BHA-107",
+        "BHA-108",
+        "BHA-110"
+      ]
+    },
+    {
+      "kind": "hard_gate",
+      "key": "touched_reachability_closure",
+      "issue_id": "BHA-105",
+      "delivery_issues": [
+        "BHA-105",
+        "BHA-106",
+        "BHA-107",
+        "BHA-108",
+        "BHA-109",
+        "BHA-110"
+      ]
+    }
+  ]
+}

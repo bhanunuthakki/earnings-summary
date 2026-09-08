@@ -183,6 +183,7 @@
     "execution/filing_sections_report.py",
     "execution/fix_kpi_series.py",
     "execution/fmp_backpop.py",
+    "execution/freeze_quality_roadmap.py",
     "execution/gc_restore.py",
     "execution/generate_ask_retrieval_production_scopes.py",
     "execution/generate_cron_artifacts.py",

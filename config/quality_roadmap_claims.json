@@ -1,0 +1,188 @@
+{
+  "schema_version": "roadmap-claim-map-v1",
+  "document": {
+    "path": "docs/quality/quality-9plus-roadmap.md",
+    "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+    "scoped_commit": "09d35d1a2785ff7e6a218031eb43952781be3a93",
+    "linear_document_id": "d742c645-13d1-4e97-8b79-f57761e8d4b7",
+    "linear_document_status": "externally_unverified"
+  },
+  "claims": [
+    {
+      "name": "production module count",
+      "metric_definition": "production Python modules under src plus execution",
+      "value": 1291,
+      "unit": "modules",
+      "qualifier": "verified_baseline",
+      "source_key": "architecture",
+      "extractor_locator": "$.metrics.executable_modules",
+      "source_line": 16,
+      "source_quote": "* Production code (`src/` + `execution/`): 1,291 Python modules and 554,615 LOC."
+    },
+    {
+      "name": "production noncomment LOC",
+      "metric_definition": "production noncomment lines under src plus execution",
+      "value": 554615,
+      "unit": "LOC",
+      "qualifier": "verified_baseline",
+      "source_key": "architecture",
+      "extractor_locator": "$.metrics.total_noncomment_loc",
+      "source_line": 16,
+      "source_quote": "* Production code (`src/` + `execution/`): 1,291 Python modules and 554,615 LOC."
+    },
+    {
+      "name": "scc count",
+      "metric_definition": "strongly connected components in provisional static import topology",
+      "value": 16,
+      "unit": "components",
+      "qualifier": "provisional_inventory",
+      "source_key": "architecture",
+      "extractor_locator": "$.metrics.scc_count",
+      "source_line": 26,
+      "source_quote": "* Provisional static import topology: 4,725 internal edges and 16 strongly connected components spanning 77 modules; largest SCCs contain 24 and 16 modules. Train 0 must check in/reproduce the generator before this can score."
+    },
+    {
+      "name": "largest scc",
+      "metric_definition": "largest SCC member count in provisional static import topology",
+      "value": 24,
+      "unit": "modules",
+      "qualifier": "provisional_inventory",
+      "source_key": "architecture",
+      "extractor_locator": "$.metrics.largest_scc",
+      "source_line": 26,
+      "source_quote": "* Provisional static import topology: 4,725 internal edges and 16 strongly connected components spanning 77 modules; largest SCCs contain 24 and 16 modules. Train 0 must check in/reproduce the generator before this can score."
+    },
+    {
+      "name": "exact duplicate groups",
+      "metric_definition": "provisional exact AST-body duplicate groups",
+      "value": 140,
+      "unit": "groups",
+      "qualifier": "provisional_inventory",
+      "source_key": "duplicates",
+      "extractor_locator": "$.exact_totals.groups",
+      "source_line": 27,
+      "source_quote": "* Provisional exact AST-body inventory: 140 duplicate groups covering 397 functions. Examples include 11 logging configurators, 12 file hashes, 6 savepoint helpers, 4 Form 10-K locators, duplicated FPI fetch, DCF, ticker-resolution, and population lifecycle families. Train 0 must check in/reproduce the generator before this can score."
+    },
+    {
+      "name": "exact duplicate functions",
+      "metric_definition": "provisional exact AST-body participating functions",
+      "value": 397,
+      "unit": "functions",
+      "qualifier": "provisional_inventory",
+      "source_key": "duplicates",
+      "extractor_locator": "$.exact_totals.participating_functions",
+      "source_line": 27,
+      "source_quote": "* Provisional exact AST-body inventory: 140 duplicate groups covering 397 functions. Examples include 11 logging configurators, 12 file hashes, 6 savepoint helpers, 4 Form 10-K locators, duplicated FPI fetch, DCF, ticker-resolution, and population lifecycle families. Train 0 must check in/reproduce the generator before this can score."
+    },
+    {
+      "name": "ruff diagnostics",
+      "metric_definition": "whole-tree Ruff errors from current direct checks",
+      "value": 2,
+      "unit": "diagnostics",
+      "qualifier": "historical_receipt",
+      "source_key": "static",
+      "extractor_locator": "$.diagnostics[tool=ruff].count",
+      "source_line": 29,
+      "source_quote": "* Full local suite receipt from the prior merged run: 14,043 passed / 62 skipped in 1,046.92 seconds (17m26s). The enforceable changed-file/changed-line Pyright, Ruff, and format ratchets were green; that does **not** mean the active tree is clean. Current direct checks found 2 whole-tree Ruff errors and 61 files needing Ruff formatting; 50 of those 61 are immutable archived migrations and are governed separately rather than reformatted. Strict-Pyright counts vary materially by environment (the repository documents roughly 3,070; a Sol dependency-resolving run found 3,271; the current local venv reported 27,924 over 2,380 files), so Train 0 must reproduce the CI environment and freeze the exact diagnostic inventory before work."
+    },
+    {
+      "name": "pyright diagnostics",
+      "metric_definition": "current local venv strict-Pyright diagnostics over 2380 files",
+      "value": 27924,
+      "unit": "diagnostics",
+      "qualifier": "historical_receipt",
+      "source_key": "static",
+      "extractor_locator": "$.diagnostics[tool=pyright].count",
+      "source_line": 29,
+      "source_quote": "* Full local suite receipt from the prior merged run: 14,043 passed / 62 skipped in 1,046.92 seconds (17m26s). The enforceable changed-file/changed-line Pyright, Ruff, and format ratchets were green; that does **not** mean the active tree is clean. Current direct checks found 2 whole-tree Ruff errors and 61 files needing Ruff formatting; 50 of those 61 are immutable archived migrations and are governed separately rather than reformatted. Strict-Pyright counts vary materially by environment (the repository documents roughly 3,070; a Sol dependency-resolving run found 3,271; the current local venv reported 27,924 over 2,380 files), so Train 0 must reproduce the CI environment and freeze the exact diagnostic inventory before work."
+    },
+    {
+      "name": "test files",
+      "metric_definition": "test infrastructure file inventory",
+      "value": 1092,
+      "unit": "files",
+      "qualifier": "verified_baseline",
+      "source_key": "test_db",
+      "extractor_locator": "$.tracked_test_files",
+      "source_line": 31,
+      "source_quote": "* Test infrastructure: 1,092 test files; 172 files still contain direct `command.upgrade`; 146 already use `migrated_db`; 550 contain hand-written DDL. A direct migration replay costs 18-56 seconds versus about 13.5 ms to copy a cached template."
+    },
+    {
+      "name": "upgrade builders",
+      "metric_definition": "test files containing direct command.upgrade",
+      "value": 172,
+      "unit": "files",
+      "qualifier": "verified_baseline",
+      "source_key": "test_db",
+      "extractor_locator": "$.database_builders[*].evidence contains call:upgrade",
+      "source_line": 31,
+      "source_quote": "* Test infrastructure: 1,092 test files; 172 files still contain direct `command.upgrade`; 146 already use `migrated_db`; 550 contain hand-written DDL. A direct migration replay costs 18-56 seconds versus about 13.5 ms to copy a cached template."
+    },
+    {
+      "name": "migrated builders",
+      "metric_definition": "test files using migrated_db",
+      "value": 146,
+      "unit": "files",
+      "qualifier": "verified_baseline",
+      "source_key": "test_db",
+      "extractor_locator": "$.database_builders[*].evidence contains call:migrated_db",
+      "source_line": 31,
+      "source_quote": "* Test infrastructure: 1,092 test files; 172 files still contain direct `command.upgrade`; 146 already use `migrated_db`; 550 contain hand-written DDL. A direct migration replay costs 18-56 seconds versus about 13.5 ms to copy a cached template."
+    },
+    {
+      "name": "ddl builders",
+      "metric_definition": "test files containing hand-written DDL",
+      "value": 550,
+      "unit": "files",
+      "qualifier": "verified_baseline",
+      "source_key": "test_db",
+      "extractor_locator": "$.database_builders[*].evidence contains sql:",
+      "source_line": 31,
+      "source_quote": "* Test infrastructure: 1,092 test files; 172 files still contain direct `command.upgrade`; 146 already use `migrated_db`; 550 contain hand-written DDL. A direct migration replay costs 18-56 seconds versus about 13.5 ms to copy a cached template."
+    },
+    {
+      "name": "theme live edge",
+      "metric_definition": "historical audit correction that theme_synth is live",
+      "value": true,
+      "unit": "boolean",
+      "qualifier": "audit_correction",
+      "source_key": "reachability",
+      "extractor_locator": "$.edges[target=src/synthesis/theme_synth.py]",
+      "source_line": 41,
+      "source_quote": "* `src/synthesis/theme_synth.py`, `filings.boilerplate_classify`, `filings.cross_sectional_detrend`, `ask.turn_cache`, and `etf_sources.vanguard` are live through edges the original scanner missed."
+    },
+    {
+      "name": "refetch absence",
+      "metric_definition": "historical audit correction for the missing refetch aggregator path",
+      "value": true,
+      "unit": "boolean",
+      "qualifier": "audit_correction",
+      "source_key": "architecture",
+      "extractor_locator": "$.metrics.modules[path=execution/refetch_aggregator.py]",
+      "source_line": 42,
+      "source_quote": "* `execution/refetch_aggregator.py` does not exist; the relevant file is `execution/refetch_aggregator_transcripts.py`."
+    },
+    {
+      "name": "full suite seconds",
+      "metric_definition": "prior merged full local suite receipt",
+      "value": 1046.92,
+      "unit": "seconds",
+      "qualifier": "historical_receipt",
+      "source_key": null,
+      "extractor_locator": "historical receipt only",
+      "source_line": 29,
+      "source_quote": "* Full local suite receipt from the prior merged run: 14,043 passed / 62 skipped in 1,046.92 seconds (17m26s). The enforceable changed-file/changed-line Pyright, Ruff, and format ratchets were green; that does **not** mean the active tree is clean. Current direct checks found 2 whole-tree Ruff errors and 61 files needing Ruff formatting; 50 of those 61 are immutable archived migrations and are governed separately rather than reformatted. Strict-Pyright counts vary materially by environment (the repository documents roughly 3,070; a Sol dependency-resolving run found 3,271; the current local venv reported 27,924 over 2,380 files), so Train 0 must reproduce the CI environment and freeze the exact diagnostic inventory before work."
+    },
+    {
+      "name": "unreachable scripts",
+      "metric_definition": "provisional executable-script investigation queue",
+      "value": 85,
+      "unit": "scripts",
+      "qualifier": "provisional_inventory",
+      "source_key": null,
+      "extractor_locator": "provisional queue only",
+      "source_line": 36,
+      "source_quote": "* A provisional scan found 85 executable scripts totaling 14,291 LOC without a visible path from canonical/runbook directives, cron/root wrappers, reconstruction declarations, or explicit execution references. This is an investigation queue, **not a deletion list**, and must be regenerated by the Train 0 reachability oracle."
+    }
+  ]
+}

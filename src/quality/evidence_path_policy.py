@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
+FREEZE_PATH = "docs/quality/roadmap-freeze.json"
+
 
 def is_canonical_receipt_path(value: str) -> bool:
     if not value or value.startswith("/") or "\\" in value:

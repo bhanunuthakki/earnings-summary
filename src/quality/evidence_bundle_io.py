@@ -539,6 +539,36 @@ def verify_staged_bytes(manifest: CollectionManifest, staging_dir: Path) -> tupl
     return bound_violations(sorted(set(problems)))
 
 
+def staged_input_alias_paths(manifest: Path) -> tuple[Path, ...]:
+    """Enumerate output-protection targets, including rejected input spellings.
+
+    This is only an alias guard. Admission still validates the manifest and its
+    canonical paths. Duplicate keys must not hide an earlier input from the guard.
+    """
+    candidates: list[str] = []
+
+    def capture_paths(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        for key, value in pairs:
+            if key == "path" and isinstance(value, str) and value:
+                candidates.append(value)
+        return dict(pairs)
+
+    try:
+        json.loads(manifest.read_bytes(), object_pairs_hook=capture_paths)
+        base = manifest.parent.resolve()
+    except (OSError, ValueError):
+        return ()
+    paths: set[Path] = set()
+    for value in candidates:
+        try:
+            # Absolute, overlong and dot-segment spellings can still name a
+            # retained file even though the input validator rejects them.
+            paths.add((base / value).resolve())
+        except (OSError, ValueError):
+            continue
+    return tuple(sorted(paths))
+
+
 atomic_write = _atomic_write
 default_runner = _default_runner
 exact_hex40 = _exact_hex40

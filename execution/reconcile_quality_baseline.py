@@ -6,12 +6,12 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from quality.atomic_write import write_text_atomic  # noqa: E402
+from quality.evidence_bundle_io import staged_input_alias_paths  # noqa: E402
 from quality.roadmap_reconciliation import (  # noqa: E402
     ROADMAP_CANDIDATES,
     SOURCE_PATHS,
@@ -19,6 +19,7 @@ from quality.roadmap_reconciliation import (  # noqa: E402
     reconcile,
     reconcile_staged_subject,
 )
+from quality.roadmap_source import ROADMAP_CLAIM_MAP_PATH  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -36,7 +37,7 @@ def _output_is_protected(output: Path, root: Path) -> bool:
         resolved_output = output.resolve()
     except OSError:
         return True
-    for rel in (*SOURCE_PATHS.values(), *ROADMAP_CANDIDATES):
+    for rel in (*SOURCE_PATHS.values(), *ROADMAP_CANDIDATES, ROADMAP_CLAIM_MAP_PATH):
         protected = root / rel
         try:
             if protected.resolve() == resolved_output:
@@ -49,42 +50,6 @@ def _output_is_protected(output: Path, root: Path) -> bool:
         except OSError:
             continue
     return False
-
-
-def _staged_resolved_for_alias(manifest: Path) -> list[Path]:
-    try:
-        raw = manifest.read_bytes()
-    except OSError:
-        return []
-    try:
-        payload: object = json.loads(raw)
-    except ValueError:
-        return []
-    if not isinstance(payload, dict):
-        return []
-    payload_dict = cast(dict[object, object], payload)
-    try:
-        base = manifest.parent.resolve()
-    except OSError:
-        return []
-    out: list[Path] = []
-    for value in payload_dict.values():
-        if not isinstance(value, dict):
-            continue
-        value_dict = cast(dict[object, object], value)
-        rel = value_dict.get("path")
-        if not isinstance(rel, str) or not rel or len(rel) > 300:
-            continue
-        candidate = Path(rel)
-        if candidate.is_absolute():
-            continue
-        if ".." in candidate.parts:
-            continue
-        try:
-            out.append((base / candidate).resolve())
-        except OSError:
-            continue
-    return out
 
 
 def _output_is_protected_staged(output: Path, subject: Path, manifest: Path) -> bool:
@@ -102,7 +67,7 @@ def _output_is_protected_staged(output: Path, subject: Path, manifest: Path) -> 
             return True
     except OSError:
         pass
-    for staged in _staged_resolved_for_alias(manifest):
+    for staged in staged_input_alias_paths(manifest):
         if staged == resolved_output:
             return True
         try:
