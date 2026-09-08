@@ -789,6 +789,17 @@
     },
     {
       "disposition": "internal_python_target",
+      "evidence": "The help probe runs sys.executable with the fixed repository execution/sqlite_bootstrap.py entrypoint and execution/audit_kpi_revision_shadow_census.py --help; neither target is caller supplied.",
+      "fingerprint": "6406141a7ab18cc08103750f6e4651bc8187ccf9a289a556c15c5f8ed924bd31",
+      "line": 87,
+      "path": "tests/test_audit_kpi_revision_shadow_census.py",
+      "targets": [
+        "execution/sqlite_bootstrap.py",
+        "execution/audit_kpi_revision_shadow_census.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
       "fingerprint": "dac0062b12040d9cc7d45afb83d38e379b19c031179d12f9ae42b498ff691132",
       "line": 158,
@@ -803,12 +814,12 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.2.1",
       "python": ">=3.11",
-      "source_sha256": "53af923e3384bb9be1267aac66dc80e67a5e7a93fdfac732f07653fd104cfa97"
+      "source_sha256": "fd4050aac564ccf5d5c0d4401027e0ebc477b6ad31b02418907509d8056fcd8c"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "9d45f61e65a2af8ca7a74a18f968ffe95a7d48a3d35476f3366b9f93fd0fe34e"
+    "source_manifest_sha256": "00cbb19fde6ee1a0ac8a7f338cf8db1cf14c7fe9853cfafce210eb864a71373d"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }
