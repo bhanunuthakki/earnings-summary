@@ -55,10 +55,13 @@ CODEX = "codex"
 WebSearchMode = Literal["disabled", "cached", "indexed", "live"]
 DEFAULT_WEB_SEARCH: WebSearchMode = "disabled"
 
-# The canonical subscription wrapper (global CLAUDE.md). Importing by path
-# keeps this repo from vendoring a copy that could drift from the machine's.
-_SNIPPETS_DIR = Path(
-    os.environ.get("CODEX_SNIPPETS_DIR") or Path.home() / ".gemini" / "snippets"
+# Import the canonical subscription wrapper by path so this repository does
+# not vendor a copy that could drift from the fleet-owned instruction checkout.
+_configured_instructions_home = os.environ.get("AGENT_INSTRUCTIONS_HOME")
+_SNIPPETS_DIR = (
+    Path(_configured_instructions_home) / "snippets"
+    if _configured_instructions_home
+    else Path(__file__).resolve().parents[3] / "agent-instructions" / "snippets"
 ).expanduser()
 
 # Judge default. The wrapper's own DEFAULT_MODEL is authoritative for general

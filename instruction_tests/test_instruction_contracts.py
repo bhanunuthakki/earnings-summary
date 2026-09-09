@@ -287,9 +287,9 @@ def test_llm_documents_have_non_overlapping_live_owners() -> None:
     evals = _read("directives/llm_evals.md")
     model_loop = _read("directives/model_eval_loop.md")
     routing = _read("directives/cheapest_model_routing.md")
-    assert "For normal purpose-resolved Claude-family pins" in calls
-    assert "production default is `codex`" in calls
-    assert "operational failure falls back to the\nClaude subscription transport" in calls
+    assert "shared fleet policy" in calls
+    assert "without restating a project default" in calls
+    assert "operational failure advances to the next registered\nfleet adapter" in calls
     assert "explicit provider-family model IDs route to that provider" in calls
     assert "A forced backend must fail rather than silently\nswitch" in calls
 
@@ -392,10 +392,10 @@ def test_design_behavior_uses_the_live_interaction_contract_only() -> None:
     )
 
 
-def test_project_rulebook_states_current_subscription_transport_truth() -> None:
+def test_project_rulebook_delegates_subscription_order_to_fleet_policy() -> None:
     calls = _read("directives/llm_calls.md")
     cli = _read("src/llm/cli.py")
-    for owner in (calls, cli):
-        assert "Codex membership transport" in owner
-        assert "Claude subscription transport" in owner
-        assert "LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude" in owner  # pragma: allowlist secret
+    assert "shared fleet policy" in calls
+    assert "without restating a project default" in calls
+    assert "from llm.fleet_policy import" in cli
+    assert "subscription_route" in cli

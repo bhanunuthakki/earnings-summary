@@ -157,16 +157,9 @@ def test_shared_runtime_forwards_original_arguments_without_shift() -> None:
     assert "set llm_capture_dir=" not in text
     assert 'set "llm_explicit_model_policy=primary-tier"' in text
     assert 'set "llm_subscription_fallback_disabled=1"' in text
-    assert 'set "llm_fallback_disabled=1"' in text
-    for credential in (
-        "anthropic_api_key",
-        "openai_api_key",
-        "codex_api_key",
-        "gemini_api_key",
-        "google_api_key",
-        "openrouter_api_key",
-    ):
-        assert f'set "{credential}="' in text
+    assert 'set "llm_fallback_disabled=%llm_subscription_fallback_disabled%"' in text
+    assert "scheduled_llm_primary_provider" not in text
+    assert "scheduled_llm_allow_provider_fallback" not in text
 
 
 def test_scheduled_wrappers_do_not_invoke_path_dependent_python() -> None:

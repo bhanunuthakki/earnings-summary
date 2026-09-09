@@ -196,7 +196,7 @@ WRITING CONTRACT
   Development, Security. Other H2s are allowed only when they materially help.
 - Describe the current Work OS and its main operator workflow before internals.
 - Keep setup commands copy-pasteable and use the guarded SQLite/bootstrap seam.
-- Explain Codex-first / Claude-fallback LLM routing only when the supplied
+- Explain shared fleet LLM routing only when the supplied
   evidence supports it; distinguish optional metered provider keys.
 - Prefer stable source-of-truth links over duplicating generated inventories.
 - Include a short `Keeping this README current` subsection documenting:

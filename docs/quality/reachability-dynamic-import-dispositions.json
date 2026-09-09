@@ -138,8 +138,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Wrapper loads codex_cli from the external snippets directory.",
-      "fingerprint": "905d2a4f0ecb659b5428f10fd85079c2cc6ffee8f5d6601177f071a45e3c87c7",
-      "line": 133,
+      "fingerprint": "b42694dd000d71a07ea99a9e5e094557736dd7149c5eab7e5419921e9d13f1dc",
+      "line": 136,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -148,8 +148,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Auth probe loads the same external codex_cli module.",
-      "fingerprint": "3814afd4d73cd2aa52aed8e48f1ca7ffdbf8b74a22d96951f085552ab0974f8b",
-      "line": 147,
+      "fingerprint": "a897c3daef10d6d6126799b0655817949347ca7a70fc9b3c68e5412a5c4db838",
+      "line": 150,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -183,13 +183,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "07354d96f42047e4176cadfbefbca8165dc2bd12f2b5cd30f4d6492993080aa4",
+      "source_sha256": "9a8d458e7fe5b8f1fd5bc32eace5e78657206fb560b3b26953191bb98648e537",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "470b37a46d925acd811eeb47b11dfeac3f4a80c414257327df3156b36191379b"
+    "source_manifest_sha256": "2c051e3eff9744584f26da5ae4b4ed35d06235b82f317e37f9ed9a3d76d213db"
   },
   "schema_version": "reachability-dynamic-import-dispositions/v1"
 }

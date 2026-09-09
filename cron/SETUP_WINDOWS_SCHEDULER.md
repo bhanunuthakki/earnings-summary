@@ -381,11 +381,10 @@ ORDER BY COUNT(*) DESC;
   path for scheduled/service processes. The LOCAL SYSTEM tracker API also
   requires its documented machine-visible `PORTFOLIO_TRACKER_ROOT` and
   loopback-only `PORTFOLIO_TRACKER_API_URL` values.
-- The shared `agent-instructions` Codex CLI wrapper installed and signed in with
-  ChatGPT membership. `cron\run_python.bat` selects the provider once for every
-  scheduled LLM job via `SCHEDULED_LLM_PRIMARY_PROVIDER` (default `codex`) and
-  disables cross-provider fallback unless `SCHEDULED_LLM_ALLOW_PROVIDER_FALLBACK=1`
-  is deliberately configured.
+- The shared `agent-instructions` checkout and each fleet-selected subscription
+  adapter are installed and authenticated. `cron\run_python.bat` consumes that
+  shared provider order and disables cross-provider fallback by default through
+  the canonical `LLM_SUBSCRIPTION_FALLBACK_DISABLED` control.
 - The optional `ir` extra (required by `refresh_ir_kpis` and
   `discover_ir_documents`, for the headless browser that resolves each issuer's
   spreadsheet / document URLs): from the repo root, run
