@@ -11,18 +11,15 @@ src/llm/cli.py
 Governed LLM routing, the public ``call_llm`` / ``call_llm_with_web`` entry
 points, and per-purpose budget enforcement.
 
-For normal purpose-resolved Claude-family pins, the primary path is the
-isolated Codex membership transport. Operational Codex failures fall back to
-the Claude subscription transport and are ledgered as such;
-``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback switch.
-Registered explicit provider-family model IDs route to that provider in
-interactive processes. Under the scheduler's primary-tier policy, explicit
-model/backend pins are capability requests and the configured subscription
-provider remains authoritative. An explicitly forced backend otherwise fails
-rather than silently changing contestants.
+For normal purpose-resolved model pins, provider order comes from the shared
+fleet policy. Operational failures advance through that registered route and
+are ledgered as such; the fleet-owned primary-backend setting is the reversible
+rollback switch.
+Registered explicit provider-family model IDs route to that provider. An
+explicitly forced backend fails rather than silently changing contestants.
 
-``call_llm_with_web`` is Codex-first too: the same primary/backup order as
-``call_llm``, with the Codex leg opting into the membership wrapper's
+``call_llm_with_web`` uses the same fleet-selected primary/backup order as
+``call_llm``, with the Codex adapter opting into the membership wrapper's
 ``web_search="live"`` mode so it can fetch fresh pages. Falls back to the
 existing Claude WebSearch/WebFetch tool-call path on an OPERATIONAL Codex
 failure only — never as a routing preference (2026-08-03 owner ratification;
@@ -69,6 +66,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from llm.capture import capture_exchange
+from llm.fleet_policy import policy_environment_names, subscription_route
 from llm.ledger import record_llm_call
 from llm.resolver import validate_purpose
 from llm.transport import (
@@ -163,8 +161,10 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 # same quality on narrowly-scoped JSON-output tasks.
 FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
 
-PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR = "LLM_PRIMARY_SUBSCRIPTION_BACKEND"
-SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR = "LLM_SUBSCRIPTION_FALLBACK_DISABLED"
+(
+    PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR,
+    SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR,
+) = policy_environment_names()
 _PRIMARY_CODEX = "codex"
 _PRIMARY_CLAUDE = "claude"
 _CODEX_FAST_MODEL = "gpt-5.6-luna"
@@ -962,7 +962,7 @@ class LLMSetupError(RuntimeError):
     """
 
 
-_CODEX_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
+_CODEX_MODEL_BY_CLAUDE_TIER: dict[str, str] = {
     "claude-haiku-4-5-20251001": _CODEX_FAST_MODEL,
     "claude-haiku-4-5": _CODEX_FAST_MODEL,
     "claude-sonnet-4-6": _CODEX_DEFAULT_MODEL,
@@ -970,24 +970,6 @@ _CODEX_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
     "claude-opus-4-7": _CODEX_JUDGMENT_MODEL,
     "claude-opus-4-8": _CODEX_JUDGMENT_MODEL,
     "claude-fable-5": _CODEX_JUDGMENT_MODEL,
-    "gemini-3-flash-preview": _CODEX_FAST_MODEL,
-    "gemini-2.5-flash": _CODEX_FAST_MODEL,
-    "gemini-3.1-pro-preview": _CODEX_DEFAULT_MODEL,
-    "gemini-2.5-pro": _CODEX_DEFAULT_MODEL,
-    "deepseek/deepseek-chat": _CODEX_FAST_MODEL,
-    "qwen/qwen-2.5-72b-instruct": _CODEX_FAST_MODEL,
-}
-
-_CLAUDE_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
-    _CODEX_FAST_MODEL: FAST_CLASSIFIER_MODEL,
-    _CODEX_DEFAULT_MODEL: DEFAULT_MODEL,
-    _CODEX_JUDGMENT_MODEL: "claude-opus-4-8",
-    "gemini-3-flash-preview": FAST_CLASSIFIER_MODEL,
-    "gemini-2.5-flash": FAST_CLASSIFIER_MODEL,
-    "gemini-3.1-pro-preview": DEFAULT_MODEL,
-    "gemini-2.5-pro": DEFAULT_MODEL,
-    "deepseek/deepseek-chat": FAST_CLASSIFIER_MODEL,
-    "qwen/qwen-2.5-72b-instruct": FAST_CLASSIFIER_MODEL,
 }
 
 
@@ -996,12 +978,10 @@ PRIMARY_CLAUDE = _PRIMARY_CLAUDE
 
 
 def primary_subscription_backend() -> str:
-    value = os.environ.get(PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, _PRIMARY_CODEX).strip().lower()
-    if value not in {_PRIMARY_CODEX, _PRIMARY_CLAUDE}:
-        raise LLMSetupError(
-            f"{PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR} must be 'codex' or 'claude', got {value!r}"
-        )
-    return value
+    try:
+        return subscription_route()[0]
+    except (RuntimeError, ValueError) as exc:
+        raise LLMSetupError(str(exc)) from None
 
 
 def _primary_subscription_backend() -> str:
@@ -1010,30 +990,15 @@ def _primary_subscription_backend() -> str:
 
 def subscription_fallback_disabled() -> bool:
     """Return whether provider-family fallback is forbidden for this process."""
-    return os.environ.get(SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR, "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    try:
+        return len(subscription_route()) == 1
+    except (RuntimeError, ValueError) as exc:
+        raise LLMSetupError(str(exc)) from None
 
 
-def _codex_model_for(model: str) -> str:
-    """Map a provider-shaped quality tier onto the corresponding Codex tier."""
-    return _CODEX_MODEL_BY_CAPABILITY_TIER.get(model, _CODEX_DEFAULT_MODEL)
-
-
-def model_for_subscription_backend(model: str, backend: str) -> str:
-    """Translate a provider-shaped model pin to the selected subscription tier."""
-    if backend == _PRIMARY_CODEX:
-        return model if model.startswith("gpt-") else _codex_model_for(model)
-    if backend == _PRIMARY_CLAUDE:
-        return (
-            model
-            if model.startswith("claude-")
-            else _CLAUDE_MODEL_BY_CAPABILITY_TIER.get(model, DEFAULT_MODEL)
-        )
-    raise LLMSetupError(f"unsupported subscription backend {backend!r}")
+def _codex_model_for(claude_model: str) -> str:
+    """Map the existing eval-gated Claude quality tier onto Codex's tier."""
+    return _CODEX_MODEL_BY_CLAUDE_TIER.get(claude_model, _CODEX_DEFAULT_MODEL)
 
 
 def is_hard_stop(exc: BaseException) -> bool:
@@ -1469,8 +1434,7 @@ def _call_claude(
         fallback_from_transport=fallback_from_transport,
     )
     if (
-        subscription_fallback_disabled()
-        or os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}
+        os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}
         or not allow_codex_fallback
     ):
         if last_info.kind == "usage_limit":
@@ -1802,8 +1766,8 @@ def call_llm(
         except (LLMBudgetExceeded, LLMSetupError):
             raise  # hard stops — never paper over with a backend switch
         except gemini_operational_errors as gemini_error:
-            if backend == "gemini" or subscription_fallback_disabled():
-                raise  # explicit routing or provider-wide fail-closed policy
+            if backend == "gemini":
+                raise  # explicitly forced: the caller wants Gemini's answer or its error
             from log_redact import redact
 
             log.warning(
@@ -1847,8 +1811,8 @@ def call_llm(
             raise  # hard stops — never paper over with a backend switch
         except (OSError, RuntimeError, ValueError) as openrouter_error:
             # requests.RequestException subclasses OSError, so network failures land here.
-            if backend == "openrouter" or subscription_fallback_disabled():
-                raise  # explicit routing or provider-wide fail-closed policy
+            if backend == "openrouter":
+                raise  # explicitly forced: the caller wants OpenRouter's answer or its error
             from log_redact import redact
 
             log.warning(
@@ -2333,8 +2297,8 @@ def call_llm_with_web(
     selects that provider. This facade supports only the Codex and Claude web
     transports, so other provider families fail before dispatch. For a normal
     purpose-resolved Claude-family pin, whenever
-    ``_primary_subscription_backend() == "codex"`` (the production default;
-    ``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback),
+    ``_primary_subscription_backend() == "codex"`` (as selected by the shared
+    fleet policy),
     the Codex membership wrapper runs FIRST with ``web_search="live"`` so it
     can fetch fresh pages. An OPERATIONAL Codex failure — never a routing
     preference — falls through to this function's Claude WebSearch/WebFetch

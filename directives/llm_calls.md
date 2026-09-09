@@ -58,11 +58,10 @@ response parsing.
 3. the purpose entry in `LLM_MODELS`; then
 4. the executable default.
 
-An explicit backend wins; otherwise the registered model family selects the provider.
-For normal purpose-resolved Claude-family pins, the production default is `codex`:
-the Codex membership transport runs first and an operational failure falls back to the
-Claude subscription transport. `LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude` is the
-documented rollback switch.
+An explicit backend wins; otherwise the registered model family and shared fleet policy
+select the provider order. Normal purpose-resolved subscription calls consume that policy
+without restating a project default; an operational failure advances to the next registered
+fleet adapter. The fleet's canonical primary-backend setting is the rollback switch.
 
 Registered explicit provider-family model IDs route to that provider. A model-routed
 provider adapter may use the operational fallback implemented in `src/llm/cli.py`,
@@ -75,7 +74,7 @@ Every resolved model and actual fallback model must have an entry in the executa
 capability registry. Unknown capability metadata fails closed even when the caller has
 no additional profile requirements.
 
-`call_llm_with_web` uses the same purpose resolution and Codex-first subscription order.
+`call_llm_with_web` uses the same purpose resolution and fleet subscription order.
 Its live-grounding requirement is enforced by code; a response that lacks required
 source evidence is a failure, not a grounded answer. With the default
 `require_grounding=True`, exhausted web transports raise and never return plain uncited
