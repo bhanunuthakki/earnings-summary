@@ -811,18 +811,16 @@ route must set `PORTFOLIO_TRACKER_API_URL` explicitly.
 
 **Reach:** `#portfolio_synthesis`; fragment `GET /api/panel/portfolio_synthesis`. **Preconditions:** :7421; tracker optional (equal-weight fallback, no offline card here).
 
-**Renders:** insights grid — **Thesis health** ("N OK · M flagged" + tone chips `T · status` deep-linking `#holding=<T>` with `data-peek-ticker` hover cards; hidden when no evaluations) and **Exposure** (FMP-sector bars, sub "weighted by live position" or "equal-weighted (tracker offline)"); **Where the next dollar goes** (softmax distribution rows: ticker link, bar, alloc %, "now X%", hover/focus reveals factor-waterfall chips Return/Diversification/Macro with z/weight/raw tooltips; hidden-factor + not-scored warning lines; hint "Hover or focus a row for the factor waterfall…"; below it **Advisor memo** excerpt with "full memo →" peek `/api/peek/memo/next_dollar`, hash fallback `#advisor_memos`); cached **cross-portfolio lens memo** fragment. Hide-don't-stub: each panel disappears when its substrate is absent.
+**Renders:** insights grid — **Thesis health** ("N OK · M flagged" + tone chips `T · status` deep-linking `#holding=<T>` with `data-peek-ticker` hover cards; hidden when no evaluations) and **Exposure** (FMP-sector bars, sub "weighted by live position" or "equal-weighted (tracker offline)"); cached **cross-portfolio lens memo** fragment. The retired incremental-dollar recommendation is not rendered or linked from this page. Hide-don't-stub: each panel disappears when its substrate is absent.
 
 ### Actions
 | Affordance | Trigger | Expected result | Edge | Pri |
 |---|---|---|---|---|
 | Thesis chip | click / hover | Navigate `#holding=<T>` / peek mini-card | — | P1 |
-| Next-dollar row | hover/focus (tabindex=0) | Factor chip waterfall reveals; chip tooltips | keyboard focus works | P1 |
-| "full memo →" | click | Peek overlay of rendered next-dollar memo | no memo → whole excerpt absent | P1 |
 
 ### States to verify
 - No DB / no portfolio rows: panels hide; page may be near-empty but no 500.
-- Tracker offline: exposure/next-dollar fall to equal-weight with explicit sub-line.
+- Tracker offline: exposure falls to equal-weight with an explicit sub-line.
 
 ## Portfolio → Memos (advisor memos)
 

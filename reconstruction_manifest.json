@@ -163,7 +163,6 @@
       "language": "python",
       "entrypoints": [
         "src/synthesis/lenses/catalyst_calendar.py",
-        "src/advisor/senior_partner_brief.py",
         "src/macro_store.py"
       ],
       "dependencies": [

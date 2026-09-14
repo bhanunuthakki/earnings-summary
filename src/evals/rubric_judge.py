@@ -81,16 +81,6 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     "bear_case": AuditSpec("bear_case", RUBRICS_DIR / "bear_case.md"),
     "transcript_summary": AuditSpec("transcript_summary", RUBRICS_DIR / "transcript_summary.md"),
     "advisor_next_dollar": AuditSpec("advisor_next_dollar", RUBRICS_DIR / "advisor_next_dollar.md"),
-    # Incremental Dollar Recommendation (P0.4a, personal_investment_partner_prd.md
-    # §7.4/§10.5): the governed selection over the deterministic Incremental
-    # Dollar frontier, graded on usefulness, personalization, probabilistic
-    # humility, evidence grounding, alternative quality, disconfirming case,
-    # frontier consistency, and no institutional-process overreach. Corpus =
-    # portfolio-scope llm_artifacts rows for this purpose
-    # (evals.corpora.load_incremental_dollar_recommendation_corpus).
-    "incremental_dollar_recommendation": AuditSpec(
-        "incremental_dollar_recommendation", RUBRICS_DIR / "incremental_dollar_recommendation.md"
-    ),
     # Investment Decision Card (P1.1, personal_investment_partner_prd.md
     # §8.1/§10.5): the per-ticker synthesis of company hypothesis, security
     # setup, portfolio fit, disconfirming case, and uncertainty over
@@ -100,17 +90,6 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     # purpose (evals.corpora.load_investment_decision_card_corpus).
     "investment_decision_card": AuditSpec(
         "investment_decision_card", RUBRICS_DIR / "investment_decision_card.md"
-    ),
-    # Senior Partner Brief (P2.2, personal_investment_partner_prd.md
-    # §9.1/§10.5): the weekly governed synthesis over the whole advisory
-    # surface into five ordered sections, graded on prioritization under the
-    # attention budget, materiality, integration across portfolio/research/
-    # history, actionable-but-humble tone, no duplicated items, the <=3
-    # normal-week action cap, and respect for notification policy. Corpus =
-    # portfolio-scope llm_artifacts rows for this purpose
-    # (evals.corpora.load_senior_partner_brief_corpus).
-    "senior_partner_brief": AuditSpec(
-        "senior_partner_brief", RUBRICS_DIR / "senior_partner_brief.md"
     ),
     # Position-review verdict (src/advisor/position_review.py, the /review service):
     # grades the persisted position_review memos on whether the trim/hold/add call

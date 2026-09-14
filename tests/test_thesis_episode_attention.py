@@ -421,11 +421,11 @@ def test_episode_alert_is_one_carrier_per_actionable_review_cycle(
     ) == (1, "episode-1", "initial")
 
 
-def test_linked_coach_ack_delegates_but_brief_delivery_does_not(
+def test_linked_coach_ack_delegates_but_legacy_routed_row_does_not(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    from research.governor import mark_ping_acted, mark_pings_briefed
+    from research.governor import mark_ping_acted
 
     database = tmp_path / "linked-coach.db"
     migrated_db(database, target="head")
@@ -449,12 +449,10 @@ def test_linked_coach_ack_delegates_but_brief_delivery_does_not(
             (NOW.isoformat(), NOW.isoformat()),
         )
         first_id = int(first.lastrowid or 0)
-        second_id = int(second.lastrowid or 0)
+        assert int(second.lastrowid or 0) > 0
         connection.commit()
 
     assert mark_ping_acted(first_id, db_path=database) is True
-    assert mark_pings_briefed([second_id], db_path=database) == 1
-
     with sqlite3.connect(database) as connection:
         states = dict(
             connection.execute(

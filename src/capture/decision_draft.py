@@ -571,11 +571,11 @@ def _as_float(value: object) -> float | None:
 
 
 def _link_advice_artifact(ticker: str | None, *, db_path: Path | str | None) -> int | None:
-    """The latest CURRENT ``investment_decision_card`` for the resolved ticker,
-    else the latest CURRENT portfolio-scope ``incremental_dollar_recommendation``
-    — the plausible advice the draft is confirming/correcting against (PRD
-    §9.2 "proposed link to existing advice/card"). Best-effort None on any
-    read failure; never blocks the draft write."""
+    """Return the latest CURRENT decision card for the resolved ticker.
+
+    This is the plausible advice the draft is confirming or correcting against.
+    Best-effort ``None`` on any read failure; never blocks the draft write.
+    """
     conn = open_conn(db_path)
     try:
         if ticker:
@@ -587,12 +587,7 @@ def _link_advice_artifact(ticker: str | None, *, db_path: Path | str | None) -> 
             ).fetchone()
             if row is not None:
                 return int(row[0])
-        row = conn.execute(
-            "SELECT id FROM llm_artifacts WHERE purpose = 'incremental_dollar_recommendation' "
-            "AND scope = 'portfolio' AND superseded_by_id IS NULL "
-            "ORDER BY generated_at DESC LIMIT 1"
-        ).fetchone()
-        return int(row[0]) if row is not None else None
+        return None
     except sqlite3.Error:
         return None
     finally:

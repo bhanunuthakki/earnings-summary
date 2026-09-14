@@ -157,10 +157,6 @@ $existing = Get-ScheduledTask -TaskName 'scan_ir_transcripts' -TaskPath '\earnin
 if ($existing) { Export-ScheduledTask -TaskName 'scan_ir_transcripts' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'scan_ir_transcripts.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'scan_ir_transcripts' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'scan_ir_transcripts.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\scan_ir_transcripts' -RenderedXmlPath (Join-Path $renderDir 'scan_ir_transcripts.task.xml')
-$existing = Get-ScheduledTask -TaskName 'senior_partner_brief' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'senior_partner_brief' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'senior_partner_brief.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'senior_partner_brief' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'senior_partner_brief.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\senior_partner_brief' -RenderedXmlPath (Join-Path $renderDir 'senior_partner_brief.task.xml')
 $existing = Get-ScheduledTask -TaskName 'submit_saydo_batch' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'submit_saydo_batch' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'submit_saydo_batch.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'submit_saydo_batch' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'submit_saydo_batch.task.xml')

@@ -45,7 +45,6 @@ from pipeline.portfolio_panel import (
     compose_risk_page,
     compose_synthesis_page,
     render_live_portfolio_section,
-    render_next_dollar_panel,
     render_portfolio_analytics_sections,
     render_portfolio_panel,
     render_portfolio_risk_panel,
@@ -2274,154 +2273,20 @@ def test_synthesis_page_rollup_and_next_dollar(tmp_path: Path) -> None:
     assert "2 OK" in html and "1 flagged" in html
     assert 'href="#holding=WIX"' in html
     assert "WIX" in html
-    # P0.4b: Health no longer renders the next-dollar distribution/memo at
-    # all — it points to the governed Incremental Dollar Recommendation on
-    # Portfolio -> Allocation instead (PRD §6/§7.4).
+    # The retired recommendation is absent rather than replaced by a doorway.
     assert "Where the next dollar goes" not in html
     assert 'class="pf-nd-row"' not in html
-    assert "Incremental Dollar Recommendation" in html
-    assert 'href="/#portfolio_allocation"' in html
+    assert "Incremental Dollar Recommendation" not in html
 
 
-def _next_dollar_fixture(tmp_path: Path) -> tuple[Path, Path]:
-    """Repo root with the full next-dollar substrate: three portfolio names,
-    dcf_runs rows, synthetic price charts (BBB tracks AAA; CCC independent),
-    and a next-dollar advisor memo. Macro tables are absent on purpose — the
-    factor must hide itself and renormalize the blend."""
-    import json
-    import sqlite3
-    from datetime import date, timedelta
-
-    import numpy as np
-
-    repo_root = tmp_path
-    db = repo_root / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    conn = sqlite3.connect(db)
-    conn.executescript(
-        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT);"
-        "CREATE TABLE advisor_memos (id INTEGER PRIMARY KEY, kind TEXT, title TEXT,"
-        " body_md TEXT, created_at TEXT);"
-        "CREATE TABLE dcf_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT,"
-        " valuation_date TEXT, npv_per_share NUMERIC, live_price FLOAT, created_at TEXT);"
-    )
-    conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'portfolio', NULL)",
-        [("AAA",), ("BBB",), ("CCC",)],
-    )
-    conn.execute(
-        "INSERT INTO advisor_memos (kind, title, body_md, created_at) VALUES"
-        " ('next_dollar', 'Next-dollar memo', '## Narrative **layer**', '2026-06-10')"
-    )
-    conn.executemany(
-        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, created_at)"
-        " VALUES (?, '2026-06-08', ?, 100.0, '2026-06-08 00:00:00')",
-        [("AAA", 150.0), ("BBB", 90.0), ("CCC", 120.0)],
-    )
-    conn.commit()
-    conn.close()
-
-    days: list[date] = []
-    d = date.today() - timedelta(days=2)
-    while len(days) < 200:
-        if d.weekday() < 5:
-            days.append(d)
-        d -= timedelta(days=1)
-    days.reverse()
-    rng = np.random.default_rng(0)
-    base = rng.normal(0.0005, 0.02, 200)
-    noise = rng.normal(0.0, 0.005, 200)
-    indep = rng.normal(0.0005, 0.02, 200)
-    fmp = repo_root / "data" / "historical" / "fmp"
-    fmp.mkdir(parents=True)
-    for ticker, rets in (("AAA", base), ("BBB", 0.9 * base + noise), ("CCC", indep)):
-        prices = 100.0 * np.exp(np.cumsum(rets))
-        rows = [
-            {"date": days[i].isoformat(), "adjClose": round(float(prices[i]), 6)}
-            for i in range(200)
-        ][::-1]  # newest first, like FMP
-        (fmp / f"{ticker}_price_chart_10y_div_adj.json").write_text(
-            json.dumps(rows), encoding="utf-8"
-        )
-    return repo_root, db
-
-
-def _position(ticker: str, value: float) -> LivePosition:
-    return LivePosition(
-        ticker=ticker,
-        name=ticker,
-        quantity=1.0,
-        market_value=value,
-        cost_basis=None,
-        unrealized_pnl=None,
-        percent_of_portfolio=None,
-    )
-
-
-def test_next_dollar_distribution_with_tracker_weights(tmp_path: Path) -> None:
-    """P0.4b: ``render_next_dollar_panel`` no longer renders inside
-    ``compose_synthesis_page`` (Health), but the function itself — and this
-    coverage of its quantitative distribution model — is unchanged; it is
-    called directly here (as the peek/markup-contract tests already do)."""
-    import re
-
-    _repo_root, db = _next_dollar_fixture(tmp_path)
-    live = LivePortfolio(
-        available=True,
-        api_url="http://x",
-        positions=[_position("AAA", 5000.0), _position("BBB", 3000.0), _position("CCC", 2000.0)],
-    )
-    html = render_next_dollar_panel(db, live)
-
-    # Distribution bars render, weighted by the tracker's live values.
-    assert 'class="pf-nd-row"' in html
-    assert "tracker-weighted" in html
-    assert "now 50.0%" in html  # AAA = 5000 / 10000
-    assert 'href="../research/AAA/"' in html
-    # Macro tables absent -> factor hidden, blend renormalized and labelled.
-    assert "expected return 62% / diversification 38%" in html
-    assert "macro tilt hidden" in html
-    # Provenance sub-line carries the covariance window + shrinkage.
-    assert "daily returns through" in html
-    assert "LW shrink" in html
-    # Waterfall chips: signed contribution per factor, raw in the tooltip.
-    assert "expected return +" in html
-    assert "z +" in html and "raw +50.0%" in html
-    assert "corr to book" in html
-    # The softmax shares sum to ~100 across the three rows.
-    allocs = [float(m) for m in re.findall(r'pf-nd-alloc">([0-9.]+)%', html)]
-    assert len(allocs) == 3
-    assert sum(allocs) == pytest.approx(100.0, abs=0.2)
-    assert allocs == sorted(allocs, reverse=True)
-    # The advisor memo keeps its excerpt below, under its own sub-heading.
-    assert "Advisor memo" in html
-    assert "Narrative" in html and "##" not in html.split("Advisor memo")[1][:200]
-    assert 'href="#advisor_memos"' in html
-
-
-def test_next_dollar_equal_weight_when_tracker_down(tmp_path: Path) -> None:
-    """P0.4b: called directly (see the sibling test's note above)."""
-    _repo_root, db = _next_dollar_fixture(tmp_path)
-    live = LivePortfolio(available=False, api_url="http://x", error="down")
-    html = render_next_dollar_panel(db, live)
-    assert 'class="pf-nd-row"' in html
-    assert "equal-weighted" in html
-    assert "now 33.3%" in html
-
-
-def test_synthesis_page_layout_order(tmp_path: Path) -> None:
-    """The Synthesis tab's shape: the rollup/exposure insights grid first, the
-    next-dollar POINTER (P0.4b — the full distribution moved to Portfolio ->
-    Allocation) below it (NOT a grid cell — the grid wrapper closes before
-    the section opens), the lens memo last."""
-    _repo_root, db = _next_dollar_fixture(tmp_path)
+def test_synthesis_page_excludes_retired_recommendation(tmp_path: Path) -> None:
     live = LivePortfolio(available=False, api_url="http://x", error="down")
     memo = '<section class="panel synthesis-panel">MEMO</section>'
-    html = compose_synthesis_page(db, live, memo)
-    grid = html.index('class="pf-insights"')  # exposure renders (equal-weight)
-    nd = html.index("Incremental Dollar Recommendation")
-    assert grid < nd < html.index("synthesis-panel")
-    assert '</div><section class="panel"><h2>Next dollar</h2>' in html
+    html = compose_synthesis_page(tmp_path / "missing.db", live, memo)
+    assert "MEMO" in html
+    assert "Incremental Dollar Recommendation" not in html
+    assert "Where the next dollar goes" not in html
+    assert 'class="pf-nd-row"' not in html
 
 
 # ----- Portfolio → Risk tab (L5): drawdown · factor exposure · macro stress -----

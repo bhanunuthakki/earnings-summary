@@ -114,7 +114,6 @@ _PORTFOLIO_DB_POLICY = {
     "refresh_scenario_priors": "research-synthesis",
     "restore-drill": "backup-restore",
     "scan-ir-transcripts": "transcript-refresh",
-    "senior-partner-brief": "notification-delivery",
     "submit-saydo-batch-prepare": "saydo-batch",
     "submit-saydo-batch-submit": "saydo-batch",
     "tenet-accountability": "research-synthesis",

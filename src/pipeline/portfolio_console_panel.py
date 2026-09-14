@@ -18,13 +18,9 @@ via the Work OS deep-link map, and any direct fetch / peek
 still hits the builder route).
 
 Wave 1 of ``docs/design/surface_density_jit_redesign.md`` (owner walkthrough
-2026-07-24): Allocation + Record are the D1 page-model reference
-implementation — a Band-1 synthesized *read* leads, the sections lay out as a
-dense multi-column tile grid instead of a full-width vertical stack, and the
-What-if/Compare signpost section is gone (its actions live on the Next-dollar
-tile; a nav chip jumps there — a section may never exist solely to say where
-functionality lives). The briefs are deterministic composers over already-
-governed artifacts and caches — no new LLM purpose, no render-path LLM call.
+2026-07-24): Allocation + Record use the D1 page model — a Band-1 synthesized
+*read* leads and sections form a dense multi-column tile grid. The reads are
+deterministic composers over existing caches: no render-path LLM call.
 """
 
 from __future__ import annotations
@@ -298,7 +294,7 @@ def _allocation_brief(db_path: Path, repo_root: Path) -> str:
     """The Allocation read: where the book stands and what is waiting on the
     owner, in three lines with doorways into the tiles that carry the detail."""
     lines: list[str] = []
-    links: list[str] = [_jump_chip("allocation_recommendation", "What-if / Compare")]
+    links: list[str] = []
 
     try:
         import portfolio_risk_snapshot_store as risk_store
@@ -319,26 +315,6 @@ def _allocation_brief(db_path: Path, repo_root: Path) -> str:
         if bits:
             lines.append("Top of book: " + "; ".join(bits) + ".")
             links.append(_jump_chip("risk_budget", "Risk budget"))
-    except Exception:
-        pass
-
-    try:
-        import llm_artifact_store
-
-        artifact = llm_artifact_store.read_current(
-            ticker=None,
-            purpose="incremental_dollar_recommendation",
-            scope="portfolio",
-            db_path=db_path,
-        )
-        if artifact is None:
-            lines.append(
-                "No current next-dollar recommendation — generate one from the "
-                "Next dollar tile when cash is ready."
-            )
-        else:
-            lines.append("A next-dollar recommendation is on file — act on it or regenerate.")
-        links.append(_jump_chip("allocation_recommendation", "Next dollar"))
     except Exception:
         pass
 
@@ -417,15 +393,10 @@ def render_portfolio_allocation_panel(
     user_id: str = DEFAULT_USER_ID,
     performance_renderer: Callable[[], str] | None = None,
 ) -> str:
-    """Portfolio → Allocation: where capital goes and how it's doing (P0.4b,
-    PRD §7.4/§7.5), laid out per the D1 page model: the Band-1 read leads,
-    then ONE dense tile grid — Next dollar (wide landing), Risk Budget /
-    Posture / Positioning as tiles. Performance renders in this on-demand route
-    request so the Work OS never strands an HTMX placeholder. The former
-    What-if/Compare signpost section is deleted: its actions live on the Next
-    dollar tile and the brief's chip jumps there."""
-    from pipeline.allocation_recommendation_panel import (
-        render_allocation_recommendation_section,
+    """Portfolio → Allocation: current performance, risk, posture, and durable
+    positioning. The retired incremental-dollar recommendation is deliberately
+    absent; the broader analyst workflow remains available outside this console."""
+    from pipeline.portfolio_decision_support import (
         render_portfolio_posture_section,
         render_risk_budget_section,
     )
@@ -442,11 +413,6 @@ def render_portfolio_allocation_panel(
             "Performance",
             render_performance,
         ),
-        (
-            "allocation_recommendation",
-            "Next dollar",
-            lambda: render_allocation_recommendation_section(db_path, root),
-        ),
         ("risk_budget", "Risk Budget", lambda: render_risk_budget_section(db_path, root)),
         ("posture", "Posture", lambda: render_portfolio_posture_section(db_path, root)),
         ("positioning", "Positioning", lambda: render_positioning_panel(db_path, root)),
@@ -457,7 +423,7 @@ def render_portfolio_allocation_panel(
         wrap_class="portfolio-allocation-console",
         nav_exclude=("brief",),
         grid=True,
-        wide=("brief", "allocation_recommendation", "performance"),
+        wide=("brief", "performance"),
     )
 
 

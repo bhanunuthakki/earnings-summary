@@ -1,18 +1,10 @@
 # Next-dollar allocation model
 
-**Decision (2026-06-11); final-answer role superseded 2026-07-23 (PRD §7.4/§17;
-P0.4a/P0.4b, PRs #958/#961).** This directive's three-factor scoring model is now
-the deterministic factor *library* that feeds one leg of the Incremental Dollar
-Recommendation's frontier (`src/allocation/recommendation.py`). It is no longer
-itself the platform's final next-dollar answer, and the raw distribution it used to
-render is no longer on the primary Portfolio page.
-
-The primary next-dollar answer is the governed `IncrementalDollarRecommendation`
-artifact on Portfolio → Allocation: it composes this model's per-holding factor
-scores together with candidate-fit, decision-ready eligibility, Concentration
-Zones, the Risk Budget, and owner context, then a governed LLM selects one
-preferred plan from the resulting deterministic frontier. See
-`docs/design/personal_investment_partner_prd.md` §7.4 for the full contract.
+**Decision (2026-06-11); recommendation product retired 2026-09-13.** This
+directive owns a deterministic factor *library* used by the broader
+next-dollar analyst workflow. It is not a trade order, optimizer weight, or
+standalone recommendation. The former `IncrementalDollarRecommendation`
+artifact, frontier, UI, actions, and delivery surfaces have been removed.
 
 **September 8, 2026 owner correction — skill first, frontend later:**
 [Next-dollar-allocation](../src/advisor/skills/next-dollar-allocation/SKILL.md) packages
@@ -23,27 +15,22 @@ limits and calculated trade arithmetic. Final selection remains analyst judgment
 [Whole-portfolio capital allocation](../docs/architecture/capital_allocation_workflow.md)
 retains the capability audit and possible future engine enhancements. A new
 optimizer is not a prerequisite for the skill; app routing and frontend integration
-remain later roadmap work. The current app cash-only frontier is unchanged and must
-not be represented as meeting the broader contract. Cash exceeding 5% is not, by itself, an approved 5% reserve
+remain later roadmap work. Cash exceeding 5% is not, by itself, an approved 5% reserve
 constraint. Preserve the distinction between source failure and a recommendation
 to retain cash.
 
 Code: `src/allocation/` (`price_history.py`, `covariance.py`, `model.py`).
-Primary consumer: `src/allocation/recommendation.py::build_next_dollar_model` call
-site (one input among several to the frontier).
-Legacy panel — **peek/test surface only, no longer on the primary render path**:
-`src/pipeline/portfolio_panel.py::render_next_dollar_panel`. Portfolio → Health's
-Synthesis page (`compose_synthesis_page`) shows only a one-line doorway to
-Portfolio → Allocation instead of this panel's distribution (P0.4b).
+Primary consumer: the `$next-dollar-allocation` analyst workflow.
+There is no application recommendation panel or route; the library is consumed
+only as supporting evidence by the analyst workflow.
 
 ## The question this factor library answers
 
 Across the current portfolio holdings (`tracked_companies.list_type = 'portfolio'`),
 which look most attractive by DCF upside, diversification value, and macro tilt?
 Output is a probability-style distribution (softmax over blended factor scores) — a
-*tilt ranking with magnitudes*, not a trade order, an optimizer weight, or (since
-P0.4) the platform's incremental-dollar recommendation on its own. It is one input
-to that recommendation's deterministic frontier.
+*tilt ranking with magnitudes*, not a trade order, optimizer weight, or allocation
+recommendation. It is one analytical input available to the broader workflow.
 
 ## The three factors
 

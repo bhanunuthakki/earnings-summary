@@ -478,7 +478,7 @@ def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
     P0.4b (PRD §7.5): the detailed active-target card — every quantitative
     dimension (growth tilt, vol posture, sector/sleeve targets, Sharpe
     floor, max position) — is now demoted into a collapsed "Advanced" well.
-    Portfolio Posture (``allocation_recommendation_panel.
+    Portfolio Posture (``portfolio_decision_support.
     render_portfolio_posture_section``) is the new default entry point: a
     short correctable paragraph, one section up the Allocation console.
     ``render_active_target_card`` itself is unchanged (still the fragment

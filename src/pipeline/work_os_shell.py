@@ -3082,7 +3082,7 @@ def _make_allocation_language_honest(html: str) -> str:
         "Trim Limit": "Review Trim Band",
         "Hold / Rebalance": "Review Hold Band",
         "Execute Trade Order": "Review Thresholds",
-        "Draft Rebalance Plan →": "Review Next-Dollar Plan →",
+        "Draft Rebalance Plan →": "Review Allocation Thresholds →",
         "Click trade action to launch execution modal": "Review decision thresholds before allocating capital",
         "Trade Order": "Allocation Decision",
         "Trade Execution": "Allocation Decision",
@@ -3108,11 +3108,11 @@ def _make_allocation_language_honest(html: str) -> str:
         """
       } else if (type === 'thresholds') {
         title.innerText = "Buy / Hold / Trim / Sell Thresholds";
-        subtitle.innerText = "Existing-position decision bands and governed Next-Dollar Allocation";
+        subtitle.innerText = "Existing-position buy, hold, trim, and sell bands";
         body.innerHTML = `
           <div class="k-well work-os-threshold-note">
             <div class="work-os-threshold-note-title">Decision discipline, not order routing</div>
-            <p class="work-os-threshold-note-body">Review the current buy, hold, trim, and sell conditions together with the next-dollar recommendation. This workspace records an allocation decision; it never submits a broker order.</p>
+            <p class="work-os-threshold-note-body">Review the current buy, hold, trim, and sell conditions. This workspace records an allocation decision; it never submits a broker order.</p>
           </div>
           <button class="k-btn k-btn-primary k-btn-sm" onclick="openLiveDetail('screen-performance')">Open Performance &amp; Risk →</button>`;
       } else if (type === 'dcf-priors')""",

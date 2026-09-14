@@ -381,7 +381,7 @@ def compute_diversifier(
     keep this module import-light for callers that never compute the
     diversifier leg). Never raises — a price-history/covariance edge case
     degrades to ``(None, None)`` (mirrors the precedent in
-    ``allocation.recommendation`` / ``allocation.model`` for this exact class
+    ``allocation.model`` for this exact class
     of "never crash the ranker over a numeric edge case")."""
     from allocation.candidate_fit import BookContext, compute_candidate_fit
 
@@ -394,7 +394,7 @@ def compute_diversifier(
             book,
             sectors={ticker: sector} if sector else {},
         )
-    except Exception:  # precedent: allocation.model / allocation.recommendation
+    except Exception:  # precedent: allocation.model
         return None, None
     fit = fits.get(ticker.upper())
     if fit is None:

@@ -13,10 +13,8 @@ Performance):
   arithmetic is display formatting and the portfolio-minus-benchmark readout
   of two API values.
 * **Synthesis** (``render_portfolio_synthesis_panel``): the portfolio-level
-  reading layer — thesis-health rollup + sector exposure in a grid up top, the
-  quantitative next-dollar allocation distribution (src/allocation) full-width
-  with its factor waterfall, the cached ``cross_portfolio_synthesis`` lens
-  memo below.
+  reading layer — thesis-health rollup + sector exposure in a grid up top, then
+  the cached ``cross_portfolio_synthesis`` lens memo.
 
 Degrades gracefully: tracker fully offline → a single prominent start-tracker
 banner LEADS the page (it auto-starts on open, since the whole page reads from
@@ -29,7 +27,7 @@ is down; its panels still fall back to equal-weighted readings below it.
 
 Reuses the dark panel/table/kpi-strip CSS vocabulary the shell already defines;
 the fragment-local additions (legend chips, allocation bars, the benchmark
-chart on Performance; the insights grid + next-dollar rows on Synthesis) ship
+chart on Performance; the insights grid on Synthesis) ship
 as per-fragment ``<style>`` blocks keyed off the shared token variables, and
 the chart's series colors come from ``ui.tokens.CHART_SERIES``.
 """
@@ -46,7 +44,6 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
-from allocation import FACTOR_LABELS, NextDollarModel, build_next_dollar_model
 from bear_lint import (
     SHALLOW_BEAR_FLOOR_PCT,
     STATUS_MISSING,
@@ -328,9 +325,9 @@ _TRACKER_BANNER_CSS = portfolio_css()
 # fragment carries its own block — _INSIGHTS_CSS.)
 _ANALYTICS_CSS = portfolio_css()
 
-# Styling for the Synthesis fragment: the rollup/exposure insights grid and
-# the next-dollar distribution rows. Same token-variable discipline as
-# _ANALYTICS_CSS; a separate block so each tab ships only the rules it renders.
+# Styling for the Synthesis fragment's rollup/exposure insights grid. Same
+# token-variable discipline as _ANALYTICS_CSS; a separate block so each tab
+# ships only the rules it renders.
 _INSIGHTS_CSS = portfolio_css()
 
 _SECTION_LABELS: dict[str, str] = {
@@ -1267,27 +1264,21 @@ def _offline_reason(error: str | None) -> str:
 # ---------------------------------------------------------------------------
 # Portfolio → Synthesis tab (UX round 4; grew out of the PR6 insights strip
 # that used to ride the bottom of Performance): thesis-health rollup + sector
-# exposure in a grid up top, the next-dollar distribution full-width as the
-# centerpiece, the cross-portfolio lens memo below. Each panel hides itself
-# when its substrate is absent (hide-don't-stub).
+# exposure in a grid up top and the cross-portfolio lens memo below. Each panel
+# hides itself when its substrate is absent (hide-don't-stub).
 # ---------------------------------------------------------------------------
 
 
-def render_portfolio_synthesis_panel(
-    db_path: Path, *, api_url: str | None = None, cash_to_deploy_usd: float | None = None
-) -> str:
+def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = None) -> str:
     """The Portfolio → Synthesis tab fragment. Fetches the live book once (the
-    exposure weighting and the next-dollar model prefer live position weights
-    and fall back to equal-weight when the tracker is down) plus the cached
+    exposure weighting prefers live position weights and falls back to
+    equal-weight when the tracker is down) plus the cached
     ``cross_portfolio_synthesis`` lens memo, then assembles the page. As the
     section's LANDING tab (navigation_ia.md §2.1) it now leads with the
     tracker-offline banner when the live fetch failed — a front door must
     say its weights are degraded, not silently show equal-weight.
 
-    ``cash_to_deploy_usd`` (tenet-2 Phase 2) opts the next-dollar panel into
-    cash-aware mode — the route boundary (``execution/comments_server.py``)
-    reads it from a ``?cash_to_deploy=`` query param; omitted, the panel
-    behaves exactly as before Phase 2."""
+    """
     # Lazy imports keep the analytical builder out of this module's import graph
     # until the panel is actually requested.
     from pipeline.analytical_dashboard import build_analytical_dashboard
@@ -1305,7 +1296,7 @@ def render_portfolio_synthesis_panel(
     memo = _synthesis_memo_doorway(dash.portfolio_synthesis_md) or (
         render_panel_fragment(dash, "portfolio") or ""
     )
-    return compose_synthesis_page(db_path, live, memo, cash_to_deploy_usd=cash_to_deploy_usd)
+    return compose_synthesis_page(db_path, live, memo)
 
 
 def _synthesis_memo_headline(content_md: str, cap: int = 220) -> str:
@@ -1344,26 +1335,12 @@ def compose_synthesis_page(
     db_path: Path,
     live: LivePortfolio,
     synthesis: str,
-    *,
-    cash_to_deploy_usd: float | None = None,
 ) -> str:
     """Page assembly over an already-fetched live book + lens-memo fragment
     (testable without network; the insight panels read the DB themselves):
     the tracker-offline banner when the live book is unavailable (landing-tab
     honesty — the exposure panel below is equal-weighted then), the
-    rollup/exposure grid, a one-line pointer to the primary next-dollar
-    answer, then the memo.
-
-    P0.4b (PRD §6/§7.4): Health no longer owns the primary next-dollar
-    answer — the full ``render_next_dollar_panel`` distribution moved to
-    Portfolio → Allocation as the governed Incremental Dollar Recommendation
-    (``pipeline.allocation_recommendation_panel``). This page now shows only
-    a doorway line; ``render_next_dollar_panel`` itself is unchanged and
-    still public (peek/markup-contract tests call it directly).
-    ``cash_to_deploy_usd`` is accepted for backward-compatible call sites but
-    no longer affects this page's output (the cash-aware mode lives on the
-    Allocation console's cash form now)."""
-    del cash_to_deploy_usd  # kept for callers; no longer threaded here (see docstring)
+    rollup/exposure grid, and the memo."""
     grid = "".join(p for p in (_thesis_rollup_panel(db_path), _exposure_panel(db_path, live)) if p)
     parts: list[str] = [_INSIGHTS_CSS]
     if not live.available:
@@ -1373,13 +1350,6 @@ def compose_synthesis_page(
         )
     if grid:
         parts.append(f'<div class="pf-insights">{grid}</div>')
-    parts.append(
-        '<section class="panel"><h2>Next dollar</h2>'
-        '<p class="sub">The Incremental Dollar Recommendation now lives on '
-        '<a class="k-chip k-chip-btn" href="/#portfolio_allocation">Portfolio &rarr; '
-        "Allocation</a> &mdash; a governed plan for new cash, with Risk Budget impact "
-        "and owner actions.</p></section>"
-    )
     parts.append(synthesis)
     return "".join(parts)
 
@@ -1507,171 +1477,6 @@ def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
         f'<p class="sub">By FMP sector · {escape(mode)}.</p>'
         f'<div class="pf-exp">{rows}</div></section>'
     )
-
-
-def render_next_dollar_panel(
-    db_path: Path,
-    live: LivePortfolio | None = None,
-    *,
-    cash_to_deploy_usd: float | None = None,
-) -> str:
-    """Quantitative next-dollar allocation distribution over the holdings
-    (src/allocation: DCF upside / diversification / macro tilt, z-scored,
-    blended by visible weights, softmaxed — directives/next_dollar_model.md),
-    with the latest advisor memo excerpted below as the narrative layer.
-    Falls back to the memo alone when the model has nothing to score; hides
-    entirely when neither exists. Public for the markup-contract tests
-    (UX9 peeks); ``live`` is optional so those callers don't need a tracker
-    snapshot (None means no live weights — the model goes equal-weight).
-
-    ``cash_to_deploy_usd`` (tenet-2 Phase 2 cash-aware mode) opts into a
-    concrete per-holding dollar plan for that cash — omitted, the panel
-    renders the distribution only, exactly as before Phase 2."""
-    if not db_path.exists():
-        return ""
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return ""
-    memo: tuple[str, str, str] | None = None
-    try:
-        tickers = _portfolio_tickers(conn)
-        try:
-            row = conn.execute(
-                "SELECT title, body_md, created_at FROM advisor_memos "
-                "WHERE kind = 'next_dollar' ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()
-        except sqlite3.Error:
-            row = None
-        if row is not None:
-            memo = (str(row[0]), str(row[1]), str(row[2]))
-    finally:
-        conn.close()
-
-    model: NextDollarModel | None = None
-    if tickers:
-        live_values: dict[str, float | None] | None = None
-        if live is not None and live.available and live.positions:
-            live_values = {p.ticker.upper(): p.market_value for p in live.positions if p.ticker}
-        model = build_next_dollar_model(
-            db_path,
-            db_path.parent.parent,
-            tickers,
-            live_values,
-            cash_to_deploy_usd=cash_to_deploy_usd,
-        )
-
-    model_html = _next_dollar_distribution(model) if model is not None else ""
-    memo_html = _next_dollar_memo(memo, with_heading=bool(model_html))
-    if not model_html and not memo_html:
-        return ""
-    return (
-        '<section class="panel"><h2>Where the next dollar goes</h2>'
-        f"{model_html}{memo_html}</section>"
-    )
-
-
-def _next_dollar_distribution(model: NextDollarModel) -> str:
-    """The allocation bars + per-holding factor waterfall (hover/focus) +
-    the model's provenance sub-line. Pure HTML over an already-built model."""
-    # round(..., 6) first: 0.30/0.80 floats to 37.4999…, which ':.0f' alone
-    # would render as 37% (and the blend line would sum to 99%).
-    blend = " / ".join(f"{FACTOR_LABELS[k]} {round(w * 100.0, 6):.0f}%" for k, w in model.blend)
-    blend_source = (
-        "your affirmed profile"
-        if model.blend_weights_source == "owner_profile"
-        else "default house view"
-    )
-    bits = [f"blend {blend} ({blend_source})"]
-    bits.append("tracker-weighted" if model.weights_source == "tracker" else "equal-weighted")
-    if model.prices_through is not None:
-        bits.append(f"daily returns through {model.prices_through.isoformat()}")
-    if model.cov_obs:
-        bits.append(f"{model.cov_obs}d window")
-    if model.portfolio_vol_ann is not None:
-        bits.append(f"book vol {model.portfolio_vol_ann * 100.0:.0f}%/yr")
-    if model.shrinkage is not None:
-        bits.append(f"LW shrink {model.shrinkage:.2f}")
-    if model.cash_to_deploy_usd is not None:
-        bits.append(f"deploying ${model.cash_to_deploy_usd:,.0f}")
-    sub = f'<p class="sub">Softmax over blended z-scores · {escape(" · ".join(bits))}.</p>'
-
-    warn_lines = [
-        f"{FACTOR_LABELS[k]} hidden — {reason}" for k, reason in model.hidden_factors.items()
-    ]
-    warn_lines.extend(f"{t} not scored — {reason}" for t, reason in sorted(model.excluded.items()))
-    warn_lines.extend(model.notes)
-    warns = "".join(f'<p class="muted pf-nd-note">{escape(w)}</p>' for w in warn_lines)
-
-    active = {k for k, _w in model.blend}
-    max_alloc = max((r.allocation_pct for r in model.rows), default=0.0) or 1.0
-    items: list[str] = []
-    for r in model.rows:
-        width = max(0.0, min(100.0, r.allocation_pct / max_alloc * 100.0))
-        chips: list[str] = []
-        for key in ("ret", "div", "macro"):
-            if key not in active:
-                continue
-            label = FACTOR_LABELS[key]
-            reading = r.reading(key)
-            if reading is None:
-                chips.append(
-                    f'<span class="k-chip" title="no {escape(label)} data for this '
-                    f'holding — its blend renormalizes over the rest">{escape(label)} —</span>'
-                )
-                continue
-            tone = " k-chip-ok" if reading.contribution >= 0 else " k-chip-bad"
-            tip = (
-                f"z {reading.z:+.2f} · weight {round(reading.weight * 100.0, 6):.0f}% · "
-                f"raw {reading.raw * 100.0:+.1f}% · {reading.detail}"
-            )
-            chips.append(
-                f'<span class="k-chip{tone}" title="{escape(tip)}">'
-                f"{escape(label)} {reading.contribution:+.2f}</span>"
-            )
-        ticker = escape(r.ticker)
-        # Cash-aware mode (tenet-2 Phase 2): fold the dollar amount into the
-        # existing "now X%" cell rather than adding a 5th grid column — the
-        # 4-column .pf-nd-row grid is otherwise fixed-width across every row.
-        now_text = f"now {r.current_weight_pct:.1f}%"
-        if r.cash_allocation_usd is not None:
-            now_text += f" · +${r.cash_allocation_usd:,.0f}"
-        items.append(
-            '<div class="pf-nd-item" tabindex="0">'
-            '<div class="pf-nd-row">'
-            f"{ticker_label(r.ticker, href=f'../research/{ticker}/', classes='pf-nd-ticker')}"
-            f'<span class="pf-nd-bar"><span style="width:{width:.1f}%"></span></span>'
-            f'<span class="pf-nd-alloc">{r.allocation_pct:.1f}%</span>'
-            f'<span class="pf-nd-now muted">{now_text}</span>'
-            "</div>"
-            f'<div class="pf-nd-wf">{"".join(chips)}</div>'
-            "</div>"
-        )
-    hint = (
-        '<p class="muted pf-nd-hint">Hover or focus a row for the factor waterfall '
-        "(blend weight x z per factor; raw values in the tooltip).</p>"
-    )
-    return f"{sub}{warns}{''.join(items)}{hint}"
-
-
-def _next_dollar_memo(memo: tuple[str, str, str] | None, *, with_heading: bool) -> str:
-    """The latest next-dollar advisor memo, excerpted, deep-linking into the
-    Memos tab. Gets its own sub-heading when it sits under the distribution."""
-    if memo is None:
-        return ""
-    title, body_md, created_at = memo
-    text = " ".join(body_md.replace("#", " ").replace("*", " ").split())
-    excerpt = text[:420] + ("…" if len(text) > 420 else "")
-    meta = (
-        f'<p class="sub">{escape(title)} · {stamp_html(created_at, mode="date")} · '
-        # Peeks the rendered memo in place (UX9); the hash href still lands on
-        # the Memos tab for middle-click / non-shell surfaces.
-        '<a href="#advisor_memos" data-peek-url="/api/peek/memo/next_dollar" '
-        'data-peek-title="Next-dollar memo">full memo →</a></p>'
-    )
-    body = f'<p class="pf-nd-excerpt">{escape(excerpt)}</p>'
-    heading = '<h3 class="panel-h3 pf-nd-memo-h">Advisor memo</h3>' if with_heading else ""
-    return f"{heading}{meta}{body}"
 
 
 # ---------------------------------------------------------------------------

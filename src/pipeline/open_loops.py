@@ -14,15 +14,8 @@ independently guarded so a pre-migration DB (or a stub fixture) can never
 break Home — a queue whose table is missing simply doesn't render.
 
 Pending Decision Draft confirmations and un-dispositioned Investment
-Decision Cards (2026-07-25 PRD closeout postmortem) get their own lines,
-queried directly here rather than through the Senior Partner Brief: 78
-tracker-sourced drafts piled up unconfirmed because their only doorway was a
-chip inside ``senior_partner_brief_panel.render_brief_today_card``, which
-renders "" until a ``senior_partner_brief`` artifact exists at all — so the
-confirmation queue was invisible for as long as the brief had never run.
-This band already renders unconditionally (falling back to "Ritual clear"),
-so these two lines surface the same instant a draft/card actually needs the
-owner, with no dependency on any LLM artifact ever having been generated.
+Decision Cards get their own unconditional lines so the queues never depend
+on a generated LLM artifact.
 
 Home-band consolidation (navigation_ia.md D1, wave3b — ~2-viewport budget):
 two more bands folded into this one rather than living beside it.
@@ -62,9 +55,7 @@ _DECISIONS_PANEL = "decisions_record"
 _LEDGER_HASH = "/#musings"
 _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 _RED_TEAM_HASH = "/#red_team"
-# Not a shell panel hash — the mobile Inbox is its own route
-# (execution/comments_server.py), the same doorway
-# senior_partner_brief_panel.render_brief_today_card already links to.
+# Not a shell panel hash — the mobile Inbox is its own route.
 _MOBILE_INBOX_HREF = "/mobile/inbox"
 
 
@@ -142,17 +133,14 @@ def _digest_ping_debt(
             db_conn.close()
 
 
-def _routed_to_brief_debt(
+def _legacy_routed_ping_debt(
     db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
 ) -> tuple[int, str]:
-    """P2.2 (personal_investment_partner_prd.md §9.1): coach pings the
-    governor routed to the Senior Partner Brief (calibration_finding /
-    capacity_breach / life_event_checkpoint / profile_drift —
-    ``research.governor.BRIEF_ROUTED_CLASSES``) and no brief has drained yet
-    (``status = 'routed_to_brief'``). Without this line these four classes'
-    items would be invisible on Home between the moment the governor routes
-    them and the next weekly brief — the digest-debt line above only ever
-    counted ``status = 'digest'``, which these rows never reach."""
+    """Historical pings parked by the retired weekly-brief product.
+
+    New governor runs use the ordinary sent/digest path. Retained rows remain
+    visible until the owner dismisses or resolves them; history is not rewritten.
+    """
     db_conn = conn or open_read_conn(db_path)
     try:
         row = db_conn.execute(
@@ -221,7 +209,7 @@ def _coach_sent_today_debt(
 ) -> int:
     """Coach pings actually pushed to Telegram today — the ONE count the
     retired ``coach_strip`` band carried that ``_digest_ping_debt`` /
-    ``_routed_to_brief_debt`` above don't already cover (those two count the
+    ``_legacy_routed_ping_debt`` above don't already cover (those two count the
     'digest' and 'routed_to_brief' queues; 'sent' is the third, disjoint
     status the strip used to render up to 4 rows of). Folded to a single
     count line — the strip's per-item detail (class label + body text) lived
@@ -448,9 +436,9 @@ def render_open_loops_band(
     except Exception:
         pass
     try:
-        n, age = _routed_to_brief_debt(db_path, conn=conn)
+        n, age = _legacy_routed_ping_debt(db_path, conn=conn)
         if n:
-            lines.append(_line(_LEDGER_HASH, "Routed to weekly brief", n, age))
+            lines.append(_line(_LEDGER_HASH, "Legacy routed coach moments", n, age))
     except Exception:
         pass
     try:

@@ -24,7 +24,6 @@ This runbook is the single current repository authority for collision avoidance 
 | `disclosure_change_sweep` | Saturday 14:00 | changed-accession detector and materiality gate |
 | `run_weekly_model_eval` | Saturday 20:00 | candidate sweep, judging, prompt A/B, and behavior distillation |
 | `run_weekly_packet` | Sunday 08:00 | per-item packet predrafts |
-| `compose_senior_partner_brief` | Sunday 09:00 | one governed weekly synthesis |
 | `run_grade_calibration` | Sunday 10:30 | grading calibration and rubric audits |
 | `refresh_business_factors` | Sunday 11:30 | changed-input business-factor taxonomy |
 | `ledger_synthesis` | daily morning block | cost-capped theme synthesis |

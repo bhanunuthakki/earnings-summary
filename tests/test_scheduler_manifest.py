@@ -46,7 +46,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 46
+    assert len(manifest.tasks) == 45
     collector = next(
         task
         for task in manifest.tasks

@@ -104,7 +104,6 @@
     "execution/collect_operations_runtime_observations.py",
     "execution/comments_server.py",
     "execution/compare_backends.py",
-    "execution/compose_senior_partner_brief.py",
     "execution/compute_derived_metrics.py",
     "execution/compute_macro_sensitivities.py",
     "execution/create_sqlite_snapshot.py",

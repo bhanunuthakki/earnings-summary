@@ -247,10 +247,10 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 
 ### Adopt
 
-**Mutates.** `adopt` records that the owner accepts a derived recommendation or proposed Tenet into durable owner-governed state. For allocation recommendations, the endpoint may expose the more precise dispositions `save_intent`, `hold_accountable`, or `dismiss`; do not relabel those distinct consequences as a generic Adopt button.
+**Mutates.** `adopt` records that the owner accepts a derived recommendation or proposed Tenet into durable owner-governed state.
 **Reversibility.** Adoption is **append-only**: later owner intent or a later Tenet may supersede it. A workflow may offer an explicit revert/retire action, but adoption itself never deletes its source proposal or provenance.
 **Feedback owed.** The receipt names what became durable (`Saved — allocation intent recorded`, `Adopted — Tenet is current`) and preserves the source link. Failure releases the proposal without changing its displayed status.
-**Surfaces.** Portfolio → Allocation recommendations and Worldview Tenet review/auto-adoption receipts.
+**Surfaces.** Worldview Tenet review/auto-adoption receipts.
 
 ### Save / Discuss / Incorporate
 

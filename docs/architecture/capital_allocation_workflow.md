@@ -6,6 +6,10 @@ packages the demonstrated analyst sequence using existing readers and calculatio
 It is installed locally for agent invocation. No new optimizer or frontend is needed
 to use it. App routing and frontend integration remain later roadmap work.
 
+The former cash-only Incremental Dollar Recommendation and weekly Senior
+Partner Brief products were retired on September 13, 2026. Historical database
+rows and migrations remain audit evidence, not current recommendation surfaces.
+
 Roadmap: [BHA-150](https://linear.app/bhanu-personal/issue/BHA-150/next-dollar-recommend-one-tax-aware-whole-portfolio-plan-across-cash),
 High priority. BHA-149 limits complete quantitative coverage; it does not prevent
 using the skill for evidence-supported, explicitly scoped advice.
@@ -41,17 +45,14 @@ partial position reads cannot establish a complete same-snapshot full-book model
 | Existing owner | What is reusable | What is missing for this question |
 | --- | --- | --- |
 | `allocation/model.py` | Return, marginal-risk and macro factor calculations | Relative cross-sectional scores and softmax shares are not optimized portfolio weights; the documented book excludes funds/cash |
-| `allocation/recommendation.py` | Evidence gate, bounded candidate frontier, concentration and affirmed human-capital caps | Only add/retain plans; external-new-cash funding; no sales, tax/account allocation or full-book joint optimization |
-| `allocation/recommendation_artifact.py` and `recommendation_schema.py` | Governed artifact, validation, source references, fallback and dispositions | LLM selects the preferred plan; same evidence need not produce the same choice; cash-only schema cannot express sell legs or account funding |
 | `allocation/what_if.py` | Portfolio risk comparison and new-cash/pro-rata scenarios | Pro-rata reallocation is not an implementable account/lot-specific funding plan |
 | `advisor/context.py::screen_swap_candidates` | Existing holding-versus-candidate valuation screen | DCF-margin screen selects the highest-upside candidate, not a joint after-tax portfolio plan |
 | `advisor/position_tax.py` | Sheltered/taxable separation, validated reconstructed lots, approximate tax range, holding-period and wash-sale checks | Not integrated into next-dollar plan construction or ranking |
 | `integrations/portfolio_tracker_v1.py` | Stable security and account identity, positions, tax treatment, coverage and freshness | Allocation consumer must retain all positions and same-snapshot joins |
 | `integrations/portfolio_allocation.py` | Reconciled typed allocation projection | BHA-149: known fund/cash metadata gaps and aggregate unexplained remainder |
 | `positioning/target.py`, `owner_profile/store.py`, sizing intents | Existing versioned goals, constraints, targets and provenance | Resolve these once into a typed decision request; preserve explicit owner vs analyst-assumption distinction |
-| `ask/packs.py` | Holdings/tax context, current allocation artifact | Whole-book holdings pack truncates to ten rows; allocation pack retrieves an old artifact rather than running a complete funding analysis |
-| `pipeline/allocation_recommendation_panel.py` | Preferred-plan presentation, details, compare, saved intent | Form asks only for new cash and horizon; no sale/account/ETF plan visibility |
-| Work OS thresholds and Copilot | Existing next-dollar doorway and conversation | Must invoke/read the same allocation result, with full-book coverage rather than research-roster-only hydration |
+| `ask/packs.py` | Holdings/tax context | Whole-book holdings pack truncates to ten rows; a future allocation result must not rely on that partial projection |
+| Work OS thresholds and Copilot | Existing research conversation | A future integration must invoke/read one allocation result, with full-book coverage rather than research-roster-only hydration |
 
 The prior Performance redesign deliberately removed the Next Dollar card from that
 page (BHA-79). Keep its accepted information hierarchy. Add a compact doorway in the
@@ -59,8 +60,8 @@ existing Portfolio Copilot/threshold workflow; do not restore a duplicate dashbo
 
 ## Possible future engine contract and execution path
 
-Extend the current recommendation entry point and artifact rather than keeping the
-legacy cash allocator and a separate rebalance answer. Use an explicit typed request
+If the workflow later gains a persisted application result, introduce one canonical
+entry point and artifact rather than separate cash and rebalance answers. Use an explicit typed request
 for funding mode (`existing_cash`, `external_contribution`, or `rebalance`), permitted
 sales, account restrictions, liquidity reserve, horizon, current target revision,
 and analyst assumptions with provenance. A conversational request is compiled into
@@ -193,7 +194,8 @@ amount, before/after book weight, estimated tax/cost, and reason. Include:
 
 Show the effective criteria and source revisions in Details. Let the owner revise
 criteria and rerun; do not repeatedly ask them to restate goals already recorded.
-Use the existing registered panel/control/overlay families and next-dollar doorway.
+If an application surface is later approved, use the existing registered
+panel/control/overlay families and introduce one explicit doorway.
 
 ## Required acceptance evidence
 
@@ -239,5 +241,5 @@ evidence after separately authorized activation:
    or implement a quantitative optimizer. The future-engine gates above govern that
    work; they do not block the analyst skill.
 
-The skill installation changes agent instructions only. The app runtime, live roster,
-portfolio state and existing allocation endpoint are unchanged.
+The skill installation changes agent instructions only. It does not create an app
+runtime endpoint or mutate the live roster and portfolio state.

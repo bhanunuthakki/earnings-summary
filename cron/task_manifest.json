@@ -596,23 +596,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\senior_partner_brief",
-   "xml": "senior_partner_brief.task.xml",
-   "wrapper": "run_senior_partner_brief.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-26T09:00:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Sunday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\submit_saydo_batch",
    "xml": "submit_saydo_batch.task.xml",
    "wrapper": "run_submit_saydo_batch.bat",

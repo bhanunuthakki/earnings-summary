@@ -197,8 +197,13 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # fingerprint-bound owner label review action.
     # +2 fixed, read-only KPI semantic-review routes: one bounded per-ticker
     # manifest plus exact current-index-referenced partitions.
-    assert len(rules) == 181
+    assert len(rules) == 176
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
+    assert "allocation_recommendation_get" not in rules
+    assert "allocation_recommendation_post" not in rules
+    assert "allocation_recommendation_adopt" not in rules
+    assert "allocation_compare" not in rules
+    assert "senior_partner_brief_dismiss_item_api" not in rules
     assert "company_say_do_api" not in rules
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()
     assert rules["operations_attention_action"] == ("/api/operations/attention/<action_name>")

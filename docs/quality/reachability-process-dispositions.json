@@ -600,8 +600,8 @@
     {
       "disposition": "external_process",
       "evidence": "_call_claude spawns the fixed claude CLI executable.",
-      "fingerprint": "cc1390ed39389fbfe861d71745700d5c8dd0756fc2029f481f1acb2fbcd16527",
-      "line": 1333,
+      "fingerprint": "f17b1bace35e733f506889f5b7f4eb8d4627a9769415039fa01cf1c65a0eda70",
+      "line": 1305,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -610,8 +610,8 @@
     {
       "disposition": "external_process",
       "evidence": "Streaming path spawns the fixed claude CLI executable.",
-      "fingerprint": "0c0c99348dc5b6ad7a54c6b9051bca243d8be6a3568a113a09ee9a22d49cd92f",
-      "line": 2126,
+      "fingerprint": "13c83eab24c257852a557b6678dcddd6b1fcd97c50450ef4d0501f9c10e09a16",
+      "line": 2098,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -620,8 +620,8 @@
     {
       "disposition": "external_process",
       "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
-      "fingerprint": "884785a7c6e6c237439c17de7dcf395138f289bc5be96b4cb863431404b47a9a",
-      "line": 2576,
+      "fingerprint": "c0f2090f8e0dab9e0721b01517c1a5990c9b8324e0bcb708f43df4656bb07016",
+      "line": 2548,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -760,8 +760,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "_run_managed_child runs the operator-supplied managed command.",
-      "fingerprint": "7b69fa1ff97160a5236fbd7899d110ebb2e70a85ab73ac1e4426ed73839192d8",
-      "line": 462,
+      "fingerprint": "c940aea5f74f6e558bc037374e926b71ed479f43d6d62637c9c86e728676d6fa",
+      "line": 461,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -770,8 +770,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Popen runs the operator-supplied managed command.",
-      "fingerprint": "a4e471ac3df72d85c97c4395db5d3747fc69569c4580abae2369fcd3aff75f86",
-      "line": 465,
+      "fingerprint": "391f3a0543a7b878a89c5580aa09ded57b8ee20c4aead145619fd4bca6a1ef9a",
+      "line": 464,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -820,13 +820,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "9a8d458e7fe5b8f1fd5bc32eace5e78657206fb560b3b26953191bb98648e537",
+      "source_sha256": "64e2291350fb725ea14dc22ca0784c3db56bfa4c04ed38c8d26dbc778f77d3d1",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "2c051e3eff9744584f26da5ae4b4ed35d06235b82f317e37f9ed9a3d76d213db"
+    "source_manifest_sha256": "8224d59ef69b2a3f96183ff952b37a3faad691b8612dae3aa538cc4501265705"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }

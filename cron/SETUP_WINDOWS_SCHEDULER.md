@@ -9,7 +9,7 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-46 operational declarations total — 45 Task Scheduler registrations and one
+45 operational declarations total — 44 Task Scheduler registrations and one
 separately managed Windows service. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. Run
