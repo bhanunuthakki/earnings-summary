@@ -19,7 +19,7 @@ from integrations.portfolio_allocation import (
     fetch_portfolio_allocation,
 )
 from integrations.portfolio_tracker_client import PolicyMix, PortfolioAnalytics
-from pipeline.allocation_recommendation_panel import render_portfolio_posture_section
+from pipeline.portfolio_decision_support import render_portfolio_posture_section
 from pipeline.portfolio_panel import render_portfolio_panel
 from pipeline.portfolio_styles import portfolio_css
 

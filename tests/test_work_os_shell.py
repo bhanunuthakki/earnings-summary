@@ -281,7 +281,9 @@ def test_rebalance_and_broker_execution_are_not_product_actions() -> None:
     ):
         assert forbidden not in html
     assert "Buy / Hold / Trim / Sell Thresholds" in html
-    assert "Next-Dollar Allocation" in html
+    assert "Existing-position buy, hold, trim, and sell bands" in html
+    assert "Next-Dollar Allocation" not in html
+    assert "next-dollar recommendation" not in html
 
 
 def test_prototype_buttons_do_not_fake_backend_mutation_or_pipeline_execution() -> None:

@@ -14,11 +14,10 @@ Public surface:
   BLEND_WEIGHTS / FACTOR_LABELS — the visible blend.
 
 Also re-exports ``allocation.concentration`` — the PRD §7.2 (P0.2) soft
-concentration-zone policy shared by the position-review service — and, for
-P0.3 (PRD §7.3/§7.4), ``allocation.eligibility`` (the deterministic
-decision-ready gate) and ``allocation.recommendation`` (the deterministic
-Incremental Dollar frontier composed over it). Both P0.3 modules are LLM-free;
-the governed selection over the frontier is P0.4.
+concentration-zone policy shared by the position-review service — and
+``allocation.eligibility`` (the deterministic decision-ready gate). These
+factor and eligibility modules are LLM-free analytical inputs for the broader
+next-dollar workflow; they do not create a standalone recommendation.
 """
 
 from __future__ import annotations
@@ -57,12 +56,6 @@ from allocation.model import (
     NextDollarModel,
     build_next_dollar_model,
 )
-from allocation.recommendation import (
-    DeterministicFrontier,
-    FrontierPlan,
-    PlanAllocation,
-    build_frontier,
-)
 
 __all__ = [
     "BLEND_WEIGHTS",
@@ -80,18 +73,14 @@ __all__ = [
     "TRIM_ASSESSMENT_THRESHOLD_PCT",
     "ZONE_BOUNDS",
     "DecisionReadyAssessment",
-    "DeterministicFrontier",
     "EligibilityCheck",
     "FactorReading",
-    "FrontierPlan",
     "HoldingScore",
     "NextDollarModel",
-    "PlanAllocation",
     "Zone",
     "ZoneAssessment",
     "assess_eligibility",
     "assess_universe",
-    "build_frontier",
     "build_next_dollar_model",
     "cash_assessment",
     "classify_entry_method",

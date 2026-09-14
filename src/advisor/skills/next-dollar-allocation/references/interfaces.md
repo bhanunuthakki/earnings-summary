@@ -36,8 +36,6 @@ Use these existing GET routes when direct canonical-host interfaces are unavaila
 - `/api/peek/review/<TICKER>`: deterministic position/tax pre-analysis. Ticker is a
   path segment, not a `?ticker=` query. This may be slow; bound reads and failures.
 - `/api/peek/etf_workup?ticker=<TICKER>`: existing ETF evidence.
-- `/api/allocation/recommendation` (GET): prior incremental-dollar artifact. Treat
-  it as a dated narrow result, not a full rebalance execution.
 
 If full account holdings cannot be reached through these projections, use a
 provenance-bearing export through the live host owner. Do not infer omitted small
@@ -47,16 +45,16 @@ holdings, expose the tracker listener, or claim all positions were evaluated.
 
 - App chat `/review` can start a full LLM verdict job. For evidence-only work use
   the pre-analysis function or GET peek, not that chat command or `--verdict`.
-- `/actions/refresh`, advisor memo generation and recommendation POSTs are not
+- `/actions/refresh` and advisor memo generation are not
   required to run this analyst skill. They can launch LLM/provider/persistence work.
 - `advisor.context.build_advisor_context` and some legacy CLIs still infer a
   checkout-local DB. Prefer the individual explicit-path readers above.
 - `review_position.py` requires an explicit `--db` argument: its argparse default
   is checkout-local and does not defer to the environment. Pass the configured
   tracker origin through `--api-url` when needed; do not infer a loopback service.
-- The existing next-dollar frontier models external cash, has limited ETF/sale
-  support, and mixes ranking scales in its diversifier picker. Do not use it as a
-  complete optimized trade list or trust its existing-cash/partial-funding math.
+- The retained factor library is analytical evidence, not a complete optimized
+  trade list. Build the skill's recommendation from current holdings, taxes,
+  goals, and research rather than treating a factor score as the decision.
 - An ETF review's missing corporate thesis/DCF is not a sell signal. Likewise, a
   partial cash classifier does not make known money markets unknowable assets.
 

@@ -8,8 +8,6 @@ Callback data is a compact ``kind:verb:id`` triple:
   ``wk:<verb>:<item_id>``     the Sunday packet's per-item verdict (PR2; item_id is a
                               weekly_packet_items row id) — accept / rewrite / drop / defer
   ``dn:<verb>:<decision_id>`` the point-of-intent decision nudge (PR2) — fill / skip
-  ``al:<verb>:<artifact_id>`` the Incremental Dollar Recommendation card (P0.4b,
-                              ``allocation.telegram_summary``) — why / open / dismiss
   ``tr:revert:<insight_id>``  (B4) undo an auto-adopted Tenet/stance receipt
   ``rx:<verb>:<task_id>``     (B7) the weekly packet's "expiring research"
                               line — run / session / drop a research_tasks
@@ -27,7 +25,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from capture import telegram
 from research.proposals import (
@@ -244,118 +242,6 @@ def dispatch_callback(
     visibly handled and its buttons stop doing anything. A stale/failed/
     malformed callback edits nothing."""
     cqid = update.callback_query_id
-    callback_data = update.callback_data or ""
-    if callback_data.startswith("spb:"):
-        parts = callback_data.split(":")
-        if len(parts) not in {2, 3} or (len(parts) == 3 and not parts[2].isdigit()):
-            if cqid:
-                answer(token, cqid, text="Unrecognized action.")
-            return None
-        verb = parts[1]
-        obj_id = int(parts[2]) if len(parts) == 3 else None
-        chat_id = update.chat_id
-
-        from advisor import senior_partner_brief as spb
-        from llm_artifact_store import read_artifact, read_current
-
-        artifact = (
-            read_artifact(obj_id, db_path=db_path)
-            if obj_id is not None and verb != "dismiss_item"
-            else None
-        )
-        if artifact is not None and (
-            artifact.purpose != spb.PURPOSE
-            or artifact.scope != "portfolio"
-            or artifact.ticker is not None
-        ):
-            artifact = None
-        if obj_id is not None and verb != "dismiss_item" and artifact is None:
-            if cqid:
-                answer(token, cqid, text="That brief is no longer available.")
-            return "spb_stale"
-
-        if verb == "review":
-            inbox_url = spb.private_mobile_inbox_url()
-            if cqid:
-                answer(
-                    token,
-                    cqid,
-                    text="Opening the private Inbox..."
-                    if inbox_url
-                    else "Inbox link not configured.",
-                )
-            if inbox_url and chat_id is not None:
-                send(token, chat_id, inbox_url)
-            return "spb_review" if inbox_url else "spb_review_unconfigured"
-
-        if verb == "dismiss_item" and obj_id is not None:
-            recorded, muted = spb.dismiss_routed_moment(obj_id, db_path=db_path)
-            if cqid:
-                if muted:
-                    answer(
-                        token,
-                        cqid,
-                        text=f"Dismissed; {muted.replace('_', ' ')} prompts are now muted.",
-                    )
-                else:
-                    answer(token, cqid, text="Dismissed." if recorded else "Already handled.")
-            return "spb_item_dismissed" if recorded else "spb_item_stale"
-
-        if verb == "why":
-            if artifact is None:
-                artifact = read_current(
-                    ticker=None,
-                    purpose=spb.PURPOSE,
-                    scope="portfolio",
-                    db_path=db_path,
-                )
-            if artifact is None or not isinstance(artifact.content_json, dict):
-                if cqid:
-                    answer(token, cqid, text="No current brief on file.")
-                return "spb_stale"
-            try:
-                brief = spb.SeniorPartnerBrief.model_validate(artifact.content_json)
-            except Exception:
-                if cqid:
-                    answer(token, cqid, text="Could not read the current brief.")
-                return "spb_stale"
-            items = brief.action_requested_items() or brief.what_changed[:3]
-            details = []
-            for item in items[:3]:
-                refs = ", ".join(item.source_refs[:3]) or "grounded current inputs"
-                details.append(f"{item.title}\nSources: {refs}")
-            if cqid:
-                answer(token, cqid, text="Sending the brief's grounding...")
-            if chat_id is not None:
-                send(
-                    token,
-                    chat_id,
-                    "\n\n".join(details)
-                    if details
-                    else "No material action was prioritized this week.",
-                )
-            return "spb_why"
-
-        if verb in {"defer", "dismiss"}:
-            recorded = spb.record_brief_action(
-                cast("Literal['defer', 'dismiss']", verb),
-                artifact_id=obj_id,
-                db_path=db_path,
-            )
-            if cqid:
-                answer(
-                    token,
-                    cqid,
-                    text=verb.capitalize() + ("." if recorded else " could not be recorded."),
-                )
-            if recorded:
-                _stamp_card(token, update, _state_stamp(verb), edit=edit)
-            return f"spb_{verb}" if recorded else "spb_stale"
-
-        if cqid:
-            answer(token, cqid, text="Unrecognized action.")
-        return None
-
     parsed = parse_callback(update.callback_data)
     if parsed is None:
         if cqid:
@@ -564,67 +450,6 @@ def dispatch_callback(
             with contextlib.suppress(Exception):
                 maybe_send_receipt(token, chat_id, item.run_id, db_path=db_path, send=send)
         return f"wk_{result}"
-
-    if kind == "al":
-        # The Incremental Dollar Recommendation's Telegram card (P0.4b, PRD
-        # §7.4 surface parity / §11.4 privacy). "why" answers inline with the
-        # stored disconfirmers/uncertainty (no re-generation, no LLM call);
-        # "open" answers with the deep-link path (the web surface is
-        # Tailscale-only, so there is no public URL button to open);
-        # "dismiss" calls the SAME action core the web route uses
-        # (allocation.actions.act_on_recommendation) so a button press and a
-        # web click behave identically.
-        if verb == "why":
-            from allocation.recommendation_artifact import PURPOSE
-            from llm_artifact_store import read_current
-
-            artifact = read_current(
-                ticker=None, purpose=PURPOSE, scope="portfolio", db_path=db_path
-            )
-            if artifact is None or not isinstance(artifact.content_json, dict):
-                if cqid:
-                    answer(token, cqid, text="No recommendation on file.")
-                return "al_stale"
-            from allocation.recommendation_schema import IncrementalDollarRecommendation
-
-            try:
-                rec = IncrementalDollarRecommendation.model_validate(artifact.content_json)
-            except Exception:
-                if cqid:
-                    answer(token, cqid, text="Could not read the recommendation.")
-                return "al_stale"
-            if cqid:
-                answer(token, cqid, text="Sending why...")
-            if chat_id is not None:
-                unknowns = "; ".join(rec.main_unknowns[:3]) or "none stated"
-                disconfirm = "; ".join(rec.disconfirming_evidence[:3]) or "none stated"
-                send(
-                    token,
-                    chat_id,
-                    f"Main uncertainty: {unknowns}\n\nDisconfirming evidence: {disconfirm}\n\n"
-                    f"{rec.confidence_basis}",
-                )
-            return "al_why"
-        if verb == "open":
-            if cqid:
-                answer(token, cqid, text="Open /#portfolio_allocation on the web dashboard.")
-            return "al_open"
-        if verb == "dismiss":
-            from allocation.actions import RecommendationActionError, act_on_recommendation
-
-            try:
-                status = act_on_recommendation(obj_id, "dismiss", db_path=db_path)
-            except RecommendationActionError:
-                if cqid:
-                    answer(token, cqid, text="Unrecognized action.")
-                return None
-            if cqid:
-                answer(token, cqid, text="Dismissed.")
-            _stamp_card(token, update, _state_stamp(status), edit=edit)
-            return "al_dismissed"
-        if cqid:
-            answer(token, cqid, text="Unrecognized action.")
-        return None
 
     if kind == "dn":
         # The point-of-intent decision nudge (PR2, Deliverable 2) — Fill in

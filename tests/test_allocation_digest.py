@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime
 
 import allocation.eligibility as eligibility_mod
-import allocation.recommendation as recommendation_mod
 from allocation.digest import allocation_payload_sha
 
 NESTED_PAYLOAD: dict[str, object] = {"b": 1, "a": {"d": 4, "c": 3}}
@@ -37,20 +36,13 @@ def test_default_str_fixed_vector() -> None:
 
 def test_no_private_sha_duplicates_remain() -> None:
     assert not hasattr(eligibility_mod, "_sha")
-    assert not hasattr(recommendation_mod, "_sha")
 
 
-def test_both_consumers_share_helper() -> None:
+def test_eligibility_uses_shared_helper() -> None:
     assert eligibility_mod.allocation_payload_sha is allocation_payload_sha
-    assert recommendation_mod.allocation_payload_sha is allocation_payload_sha
     assert eligibility_mod.allocation_payload_sha(NESTED_PAYLOAD) == NESTED_SHA
-    assert recommendation_mod.allocation_payload_sha(NESTED_PAYLOAD) == NESTED_SHA
     assert (
         eligibility_mod.allocation_payload_sha({"z": _Custom(), "a": [3, 2, 1]}) == CUSTOM_STR_SHA
-    )
-    assert (
-        recommendation_mod.allocation_payload_sha({"z": _Custom(), "a": [3, 2, 1]})
-        == CUSTOM_STR_SHA
     )
 
 

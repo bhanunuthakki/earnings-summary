@@ -1,8 +1,8 @@
 """Decision-ready eligibility gate (PRD ``docs/design/personal_investment_partner_prd.md``
 §7.3, P0.3). Pure deterministic checks — no LLM, no network, no writes.
 
-The Incremental Dollar Recommendation (P0.4, out of scope here) may only prefer
-a security this module marks ``eligible=True``. **The governed LLM can never
+Any downstream allocation analysis may only prefer a security this module marks
+``eligible=True``. **A governed LLM can never
 override ``eligible=False``** — every field on :class:`DecisionReadyAssessment`
 is computed entirely by the eight checks below, before any LLM sees the name;
 nothing downstream may flip a blocked name to eligible.

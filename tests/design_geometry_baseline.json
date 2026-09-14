@@ -5,7 +5,7 @@
   "src/dashboard/upcoming.py": 7,
   "src/pipeline/advisor_memos_panel.py": 31,
   "src/pipeline/allocation_decisions_panel.py": 27,
-  "src/pipeline/allocation_recommendation_panel.py": 30,
+  "src/pipeline/portfolio_decision_support.py": 30,
   "src/pipeline/analytical_dashboard_html.py": 57,
   "src/pipeline/attribution_panel.py": 3,
   "src/pipeline/calibration_scorecard_panel.py": 15,

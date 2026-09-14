@@ -487,7 +487,7 @@ CCACTION_REGRESSION_FLOOR = (
         "pipeline/allocation_decisions_panel.py", "work-os", "Current CCAction adopter."
     ),
     CCActionRegressionFloor(
-        "pipeline/allocation_recommendation_panel.py", "work-os", "Current CCAction adopter."
+        "pipeline/portfolio_decision_support.py", "work-os", "Current CCAction adopter."
     ),
     CCActionRegressionFloor("pipeline/cc_action.py", "work-os", "Current CCAction adopter."),
     CCActionRegressionFloor(
@@ -554,7 +554,7 @@ _BHA_92_SURFACES = frozenset(
         "dashboard/upcoming.py",
         "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
-        "pipeline/allocation_recommendation_panel.py",
+        "pipeline/portfolio_decision_support.py",
         "pipeline/analytical_dashboard_html.py",
         "pipeline/attribution_panel.py",
         "pipeline/calibration_scorecard_panel.py",
@@ -589,7 +589,6 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/research_cockpit.py",
         "pipeline/restatements_panel.py",
         "pipeline/section_coverage_panel.py",
-        "pipeline/senior_partner_brief_panel.py",
         "pipeline/source_calls_panel.py",
         "pipeline/source_viewers.py",
         "pipeline/thesis_ledger_panel.py",
@@ -730,7 +729,7 @@ _PYTHON_CSS_SURFACES = frozenset(
         "execution/verify_design_conformance.py",
         "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
-        "pipeline/allocation_recommendation_panel.py",
+        "pipeline/portfolio_decision_support.py",
         "pipeline/analysis_styles.py",
         "pipeline/analytical_dashboard_html.py",
         "pipeline/cc_action.py",
@@ -814,7 +813,6 @@ _RUNTIME_JS_SURFACES = frozenset(
         "execution/verify_design_conformance.py",
         "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
-        "pipeline/allocation_recommendation_panel.py",
         "pipeline/cc_action.py",
         "pipeline/cc_overlay.py",
         "pipeline/cron_health_panel.py",
@@ -1071,7 +1069,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret
         "pipeline/peeks.py": "02f325abd05b440ba3efcede16e7ee446036926b0edabae9bbd11a9a34021a4b",  # pragma: allowlist secret
         "pipeline/performance_risk_panel.py": "f4399458107940b948664fe2e664892e2390d0f100cc1ad6f300e5233e2dd831",  # pragma: allowlist secret
-        "pipeline/portfolio_panel.py": "71d2e9b39601d9e97dd395b70a405c15f6575c71d32f512fc7c04b4d128a6060",  # pragma: allowlist secret
+        "pipeline/portfolio_panel.py": "40bb72a454e55db7fdced77d585085713bc682fd68625dd204a7ddc311273e65",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret
         "pipeline/research_cockpit.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
@@ -1181,13 +1179,6 @@ LOCAL_PROPERTY_CONTRACTS = (
 )
 
 RUNTIME_VISUAL_CONTRACTS = (
-    RuntimeVisualContract(
-        "pipeline/allocation_recommendation_panel.py",
-        "outerHTML",
-        r"html",
-        "portfolio",
-        "A governed server fragment replaces the allocation recommendation section.",
-    ),
     RuntimeVisualContract(
         "pipeline/decision_journal_panel.py",
         "outerHTML",

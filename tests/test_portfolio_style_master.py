@@ -13,7 +13,7 @@ OWNED = (
     "portfolio_console_panel.py",
     "positioning_panel.py",
     "position_lifecycle_panel.py",
-    "allocation_recommendation_panel.py",
+    "portfolio_decision_support.py",
     "allocation_decisions_panel.py",
     "advisor_memos_panel.py",
 )

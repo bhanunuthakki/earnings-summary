@@ -504,18 +504,10 @@ def test_three_consecutive_dismissals_mute_the_class(db: Path) -> None:
 def test_three_consecutive_dismissals_of_routed_or_acted_pings_mute_the_class(
     db: Path,
 ) -> None:
-    """P2.2 mute-learning fix: a BRIEF_ROUTED_CLASSES moment is never
-    'sent'/'digest' — it is disposed from the brief UI (Today card / mobile
-    Inbox / Telegram spb:dismiss_item), so its row is 'routed_to_brief' (not
-    yet drained by a compose_brief run) or 'acted' (drained). Before this
-    fix, record_dismissal's status filter excluded both, so these four
-    classes could never be muted by the owner. Mirrors
-    test_three_consecutive_dismissals_mute_the_class but over the two
-    P2.2-specific statuses."""
+    """Legacy brief-routed rows remain dismissable after product retirement."""
     conn = sqlite3.connect(str(db))
     try:
-        # Two already-drained ('acted') rows + one not-yet-drained
-        # ('routed_to_brief') row — record_dismissal must accept both.
+        # Historical terminal and routed rows remain valid owner-control inputs.
         for i, status in enumerate(("acted", "acted", "routed_to_brief")):
             conn.execute(
                 "INSERT INTO coach_pings (class_, key, body, status, source_ref, "
@@ -920,12 +912,8 @@ def test_competing_moments_send_in_class_priority_order(
     competing moments collected in the WRONG order, the two highest-priority
     classes send and the coaching class lands digest.
 
-    Uses tenet_challenge/intent_followup/post_mortem rather than
-    profile_drift/calibration_finding — those two are P2.2
-    BRIEF_ROUTED_CLASSES now and never contend for a send/digest slot at all
-    (see test_brief_routed_classes_never_send_or_digest below); this test's
-    job is purely the priority-ORDER contract for classes still on the
-    legacy send path."""
+    This test isolates the priority-order contract for classes on the normal
+    send path."""
     import research.governor as governor_mod
 
     fabricated = [
@@ -943,85 +931,6 @@ def test_competing_moments_send_in_class_priority_order(
     assert tally["sent"] == 2 and tally["digest"] == 1
     assert sent == ["falsifier_breach", "post_mortem"]
     assert [str(p[1]) for p in digest_pings(db)] == ["intent_followup"]
-
-
-def test_brief_routed_classes_never_send_or_digest(
-    db: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """P2.2 ownership rule (personal_investment_partner_prd.md §9.1/§3.3): the
-    four moment classes calibration_finding/capacity_breach/
-    life_event_checkpoint/profile_drift stop delivering as standalone
-    pings — a fresh, unmuted moment in one of these classes lands
-    status='routed_to_brief' regardless of DAILY_CAP/WEEKLY_CAP, send_fn is
-    NEVER called for it, and it does not consume a cap slot (a sibling
-    falsifier_breach collected alongside it still sends normally)."""
-    import research.governor as governor_mod
-    from research.governor import BRIEF_ROUTED_CLASSES
-
-    assert {
-        "calibration_finding",
-        "capacity_breach",
-        "life_event_checkpoint",
-        "profile_drift",
-    } == BRIEF_ROUTED_CLASSES
-
-    fabricated = [
-        Moment("calibration_finding", "cal:1", None, "cohort under bar", "calibration:x"),
-        Moment("capacity_breach", "cap:1", None, "cap breached", "alert:1"),
-        Moment("life_event_checkpoint", "life:1", None, "life event window", "fact:1"),
-        Moment("profile_drift", "pd:1", None, "profile drifted", "fact:2"),
-        Moment("falsifier_breach", "alert:901", "NU", "falsifier broke", "decision:1"),
-    ]
-    monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory(fabricated))
-    monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
-
-    called: list[str] = []
-    tally = governor_mod.run_governor(
-        db, send_fn=lambda pid, m: called.append(m.class_) or True, now=_NOW
-    )
-    assert tally["routed_to_brief"] == 4
-    assert tally["sent"] == 1 and tally["digest"] == 0
-    assert called == ["falsifier_breach"]  # send_fn never invoked for the routed four
-
-    conn = sqlite3.connect(str(db))
-    try:
-        rows = dict(
-            conn.execute(
-                "SELECT class_, status FROM coach_pings WHERE class_ != 'falsifier_breach'"
-            )
-        )
-    finally:
-        conn.close()
-    assert set(rows.values()) == {"routed_to_brief"}
-
-    # A once-forever moment: rerunning sees nothing new for the routed rows.
-    again = governor_mod.run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
-    assert again["seen"] == 0
-
-
-def test_pending_routed_to_brief_and_mark_briefed(
-    db: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The brief's drain contract: pending_routed_to_brief lists undrained
-    routed rows oldest-first; mark_pings_briefed flips them to 'acted' and is
-    idempotent (a second call touches nothing)."""
-    import research.governor as governor_mod
-    from research.governor import mark_pings_briefed, pending_routed_to_brief
-
-    fabricated = [Moment("profile_drift", "pd:2", None, "profile drifted again", "fact:3")]
-    monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory(fabricated))
-    monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
-    governor_mod.run_governor(db, send_fn=None, now=_NOW)
-
-    pending = pending_routed_to_brief(db)
-    assert len(pending) == 1 and pending[0].class_ == "profile_drift"
-
-    n = mark_pings_briefed([p.id for p in pending], db_path=db)
-    assert n == 1
-    assert pending_routed_to_brief(db) == []
-
-    again = mark_pings_briefed([pending[0].id], db_path=db)
-    assert again == 0  # already 'acted' — idempotent no-op
 
 
 def test_weekly_cap_is_eight(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:

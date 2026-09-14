@@ -6,7 +6,6 @@ ROOT = Path(__file__).parents[1]
 CONSUMERS = (
     "src/pipeline/etf_workup.py",
     "src/pipeline/annual_letter_panel.py",
-    "src/pipeline/senior_partner_brief_panel.py",
     "src/pipeline/worldview_panel.py",
     "src/pipeline/redteam_pnl_panel.py",
     "src/pipeline/attribution_panel.py",

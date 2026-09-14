@@ -124,10 +124,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # is bounded to a 60k head+tail before spotlighting.
     "transcript_summary": "v3",
     "advisor_next_dollar": "v1",
-    # Incremental Dollar Recommendation (P0.4a, mode-B rubric,
-    # personal_investment_partner_prd.md §7.4/§10). Bump when
-    # allocation.recommendation_artifact._build_prompt is materially rewritten.
-    "incremental_dollar_recommendation": "v1",
     # Investment Decision Card (P1.1, mode-B rubric,
     # personal_investment_partner_prd.md §8.1/§10). Bump when
     # research.investment_decision_card._build_prompt is materially rewritten.
@@ -137,12 +133,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # and the company-specific what-would-change-it path explicit after the
     # first live v2 rubric run missed those facets.
     "investment_decision_card": "v3",
-    # Senior Partner Brief (P2.2, mode-B rubric,
-    # personal_investment_partner_prd.md §9.1/§10). Bump when
-    # advisor.senior_partner_brief._build_prompt is materially rewritten, then
-    # re-run `run_llm_evals.py --purpose senior_partner_brief` so the rewrite
-    # forks the score history cleanly.
-    "senior_partner_brief": "v1",
     # Ask advisory answer (mode-B rubric, close_the_loops L3). The audit run
     # records this version, so bump when the conversational ANSWER prompt (the
     # system context + evidence + thread assembly in src/ask/engine.py /

@@ -27,7 +27,7 @@ Flow (see :func:`generate_card`):
    purpose='investment_decision_card', cached on (assessment.input_sha,
    thesis hash, dcf run ref, bear artifact id, fit computed_at).
 
-Error handling (Â§10.6, mirrors ``allocation.recommendation_artifact``):
+Error handling (Â§10.6):
 budget-exceeded and transient LLM failures degrade to a labeled
 deterministic-minimal card when the deterministic inputs suffice (a thesis
 is on file); otherwise ``generate_card`` returns an explicit
@@ -101,7 +101,7 @@ ENGINE_VERSION = "v3"
 
 # A hypothetical add sized as 3% of book value â€” the Â§8.1 "expected
 # Concentration Zone if funded" preview. Not a recommendation of size; purely
-# an illustrative zone read (mirrors allocation.recommendation's cash-funded
+# an illustrative zone read (using the historical cash-funded
 # resulting-weight formula, applied to a fixed 3% rather than a live cash
 # amount, since the card has no cash figure to work from).
 _HYPOTHETICAL_ADD_FRACTION = 0.03

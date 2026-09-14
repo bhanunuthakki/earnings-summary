@@ -1199,7 +1199,7 @@ class SynthesisSection(BaseModel):
 # builder (report/sections/investment_decision_card.py) re-validates the
 # persisted artifact's content_json dict into these models at the JSON
 # boundary — the repo's accepted duplicate-simple-shared-logic pattern
-# (mirrors allocation.recommendation_schema vs. the artifact's own
+# (keeps the persisted envelope separate from the artifact's own
 # persisted JSON shape elsewhere in the codebase).
 # ---------------------------------------------------------------------------
 

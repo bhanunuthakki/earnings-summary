@@ -1285,22 +1285,6 @@ def create_app(
         from pipeline.open_loops import render_open_loops_band
 
         open_loops_html = render_open_loops_band(db_path, conn=read_conn)
-        # P2.2 (PRD §9.1): the Senior Partner Brief + the Incremental Dollar
-        # Recommendation Today doorways LEAD this composition — the brief
-        # owns delivery for the four governor-routed moment classes (see
-        # research.governor.BRIEF_ROUTED_CLASSES), so its doorway sits above
-        # the ritual-debt band rather than beside it. Task 2 (wave3b): both
-        # cards fold into ONE shared well via
-        # senior_partner_brief_panel.render_today_doorways_card (each card's
-        # own render function stays untouched; only the wrapping merges).
-        # Isolated like its siblings; renders "" when neither card has
-        # anything to show yet.
-        try:
-            from pipeline.senior_partner_brief_panel import render_today_doorways_card
-
-            open_loops_html = render_today_doorways_card(db_path, conn=read_conn) + open_loops_html
-        except Exception:
-            pass
         overview = render_overview_panel(
             rows,
             coverage,
@@ -1885,28 +1869,12 @@ def create_app(
         if name == "portfolio_synthesis":
             # Portfolio → Synthesis (UX round 4): the reading layer that used
             # to ride the bottom of the Performance tab — thesis rollup +
-            # sector exposure, the next-dollar allocation distribution with
-            # its factor waterfall, the cached cross-portfolio lens memo.
+            # sector exposure and the cached cross-portfolio lens memo.
             # Tracker down → quiet equal-weight fallback (the offline/start
             # card stays on Performance).
             from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
-            # tenet-2 Phase 2 cash-aware mode: an optional ?cash_to_deploy=
-            # query param opts the next-dollar model into per-holding dollar
-            # allocations of that cash. Absent/unparseable -> distribution-only
-            # (unchanged pre-Phase-2 behavior).
-            cash_raw = request.args.get("cash_to_deploy")
-            cash_to_deploy_usd: float | None = None
-            if cash_raw:
-                try:
-                    cash_to_deploy_usd = float(cash_raw)
-                except ValueError:
-                    cash_to_deploy_usd = None
-
-            return Response(
-                render_portfolio_synthesis_panel(db_path, cash_to_deploy_usd=cash_to_deploy_usd),
-                mimetype="text/html",
-            )
+            return Response(render_portfolio_synthesis_panel(db_path), mimetype="text/html")
 
         if name == "positioning":
             # Portfolio → Positioning: the owner's durable target book
@@ -1916,19 +1884,6 @@ def create_app(
             from pipeline.positioning_panel import render_positioning_panel
 
             return Response(render_positioning_panel(db_path, repo_root), mimetype="text/html")
-
-        if name == "allocation_recommendation":
-            # Portfolio → Allocation's Incremental Dollar Recommendation card
-            # (P0.4b, PRD §7.4). A pure read over the current llm_artifacts
-            # row — no tracker call, no LLM call. Fetched by the card's own
-            # JS after a generate/refresh POST to swap itself in place.
-            from pipeline.allocation_recommendation_panel import (
-                render_allocation_recommendation_section,
-            )
-
-            return Response(
-                render_allocation_recommendation_section(db_path, repo_root), mimetype="text/html"
-            )
 
         if name == "portfolio_risk":
             # Portfolio → Risk (L5): the whole-book risk cockpit — book drawdown
@@ -2965,172 +2920,11 @@ def create_app(
         return {"ok": True, "fact_id": fact_id}
 
     # ------------------------------------------------------------------
-    # Incremental Dollar Recommendation (P0.4a backend, P0.4b UI — PRD §7.4
-    # frontend/§11.6). The Allocation console, Today card, Telegram summary,
-    # and Ask allocation pack (P0.4b) all read the SAME artifact via the
-    # routes below.
-    # ------------------------------------------------------------------
-
-    @app.route("/api/allocation/recommendation", methods=["GET"])
-    def allocation_recommendation_get():
-        """The current governed Incremental Dollar Recommendation artifact,
-        or a 404-shaped JSON body when none has been generated yet."""
-        import llm_artifact_store
-        from allocation.recommendation_artifact import PURPOSE
-
-        artifact = llm_artifact_store.read_current(
-            ticker=None, purpose=PURPOSE, scope="portfolio", db_path=db_path
-        )
-        if artifact is None:
-            return ({"error": "no recommendation generated yet"}, 404)
-        stale = bool(
-            artifact.expires_at and artifact.expires_at < datetime.now(UTC).replace(tzinfo=None)
-        )
-        return {
-            "artifact_id": artifact.id,
-            "content_json": artifact.content_json,
-            "created_at": artifact.generated_at.isoformat(),
-            "dirty": artifact.dirty,
-            "stale": stale,
-        }
-
-    @app.route("/api/allocation/recommendation", methods=["POST", "OPTIONS"])
-    def allocation_recommendation_post():
-        """Generate (or cache-hit) a governed Incremental Dollar Recommendation
-        for ``{"cash_usd": <num>, "horizon": <str, optional>}``. Synchronous —
-        the governed call is retry-capped and falls back deterministically, so
-        it never hangs the request indefinitely."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from allocation.recommendation_artifact import generate_recommendation
-        from llm.cli import is_hard_stop
-
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        raw_cash = body.get("cash_usd")
-        try:
-            cash_usd = float(cast("str | float | int", raw_cash))
-        except (TypeError, ValueError):
-            return ({"error": "cash_usd (number > 0) required"}, 400)
-        if not (cash_usd > 0):
-            return ({"error": "cash_usd must be > 0"}, 400)
-        raw_horizon = body.get("horizon")
-        horizon = str(raw_horizon).strip() if isinstance(raw_horizon, str) and raw_horizon else None
-
-        try:
-            result = generate_recommendation(db_path, repo_root, cash_usd=cash_usd, horizon=horizon)
-        except Exception as exc:
-            if is_hard_stop(exc):
-                raise
-            return _internal_failure("recommendation generation failed", exc)
-        return {
-            "artifact_id": result.artifact_id,
-            "selection_mode": result.selection_mode,
-            "degraded_reasons": list(result.degraded_reasons),
-            "recommendation": result.recommendation.model_dump(mode="json"),
-        }
-
-    @app.route(
-        "/api/allocation/recommendation/<int:artifact_id>/adopt", methods=["POST", "OPTIONS"]
-    )
-    def allocation_recommendation_adopt(artifact_id: int):
-        """Owner disposition on a recommendation artifact —
-        ``{"verb": "save_intent"|"hold_accountable"|"dismiss", "notes": <str, optional>}``.
-        Delegates entirely to ``allocation.actions.act_on_recommendation`` (the
-        ONE action core), so a future Telegram dispatcher reaches the same
-        write path."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from allocation.actions import RecommendationActionError, act_on_recommendation
-
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        verb = str(body.get("verb") or "").strip()
-        raw_notes = body.get("notes")
-        notes = str(raw_notes).strip() if isinstance(raw_notes, str) and raw_notes.strip() else None
-        try:
-            status = act_on_recommendation(artifact_id, verb, db_path=db_path, notes=notes)
-        except RecommendationActionError as exc:
-            return ({"error": str(exc)}, 400)
-        return {"status": status}
-
-    @app.route("/api/allocation/compare", methods=["POST", "OPTIONS"])
-    def allocation_compare():
-        """Deterministic, NO-LLM comparison of up to 3 tickers (or 'CASH') for
-        a given cash amount — eligibility, current weight, concentration
-        zone, and diversification read, assembled from the same components
-        ``allocation.recommendation.build_frontier`` uses (PRD §7.4 Compare)."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from allocation.concentration import classify_zone
-        from allocation.eligibility import assess_universe, cash_assessment
-        from candidate_fit_cache import read_materialized_candidate_fit
-        from integrations.portfolio_tracker_client import fetch_live_portfolio
-        from portfolio_weights import read_materialized_weights
-
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        raw_tickers = body.get("tickers")
-        if not isinstance(raw_tickers, list) or not raw_tickers:
-            return ({"error": "tickers (list of 1-3 symbols) required"}, 400)
-        ticker_list = cast("list[object]", raw_tickers)
-        tickers = [str(t).strip().upper() for t in ticker_list if str(t).strip()]
-        if not tickers or len(tickers) > 3:
-            return ({"error": "tickers must be a non-empty list of at most 3 symbols"}, 400)
-        raw_cash = body.get("cash_usd")
-        try:
-            cash_usd = float(cast("str | float | int", raw_cash))
-        except (TypeError, ValueError):
-            return ({"error": "cash_usd (number > 0) required"}, 400)
-        if not (cash_usd > 0):
-            return ({"error": "cash_usd must be > 0"}, 400)
-
-        assessments = assess_universe(db_path, repo_root)
-        weights = read_materialized_weights(repo_root)
-        fit_cache = read_materialized_candidate_fit(repo_root)
-        live = fetch_live_portfolio()
-        total_value = (
-            live.total_market_value if live.available and live.total_market_value > 0 else None
-        )
-
-        rows: list[dict[str, object]] = []
-        for ticker in tickers:
-            assessment = cash_assessment() if ticker == "CASH" else assessments.get(ticker)
-            if assessment is None:
-                rows.append(
-                    {
-                        "ticker": ticker,
-                        "eligible": False,
-                        "blocking_reasons": ["not on the tracked-companies universe"],
-                    }
-                )
-                continue
-            current_weight_pct = None
-            zone = None
-            if total_value is not None and ticker != "CASH":
-                current_weight_pct = weights.get(ticker, 0.0) * 100.0
-                za = classify_zone(current_weight_pct)
-                zone = za.zone if za is not None else None
-            fit = fit_cache.get(ticker)
-            rows.append(
-                {
-                    "ticker": ticker,
-                    "eligible": assessment.eligible,
-                    "list_type": assessment.list_type,
-                    "blocking_reasons": list(assessment.blocking_reasons),
-                    "warning_reasons": list(assessment.warning_reasons),
-                    "portfolio_fit_status": assessment.portfolio_fit_status,
-                    "current_weight_pct": current_weight_pct,
-                    "zone": zone,
-                    "sharpe_delta_bps": fit.sharpe_delta_bps if fit is not None else None,
-                }
-            )
-        return {"cash_usd": cash_usd, "tickers": rows}
-
-    # ------------------------------------------------------------------
     # Investment Decision Card (P1.1, personal_investment_partner_prd.md §8.1).
     # Generation is a build-time step (execution/discovery_build.py,
     # execution/refresh_dirty_artifacts.py) — this POST route is the explicit
-    # owner-triggered refresh, synchronous like the allocation recommendation
-    # POST route above (the governed call is retry-capped and falls back
-    # deterministically, so it never hangs the request indefinitely).
+    # owner-triggered refresh. The governed call is retry-capped and falls
+    # back deterministically, so it never hangs the request indefinitely.
     # ------------------------------------------------------------------
 
     @app.route("/api/research/card/<ticker>/refresh", methods=["POST", "OPTIONS"])
@@ -3847,30 +3641,6 @@ def create_app(
         except DraftActionError as exc:
             return ({"error": str(exc)}, 400)
         return result
-
-    @app.route("/api/senior-partner-brief/dismiss-item/<int:ping_id>", methods=["POST", "OPTIONS"])
-    def senior_partner_brief_dismiss_item_api(ping_id: int):
-        """Dismiss ONE governor-routed moment (calibration_finding/
-        capacity_breach/life_event_checkpoint/profile_drift) from the brief —
-        the SAME action core the mobile Inbox buttons and the Telegram
-        ``spb:dismiss_item:<ping_id>`` callback call
-        (``advisor.senior_partner_brief.dismiss_routed_moment``, a thin
-        wrapper over ``research.governor.record_dismissal``). Consequence-
-        first receipt: the response names the muted class when this was the
-        3rd consecutive dismissal, so the owner knows the class just went
-        silent rather than discovering it later."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from advisor.senior_partner_brief import dismiss_routed_moment
-
-        recorded, muted_class = dismiss_routed_moment(ping_id, db_path=db_path)
-        if not recorded:
-            return ({"error": f"no dismissable ping for id={ping_id}"}, 404)
-        return {
-            "dismissed": True,
-            "ping_id": ping_id,
-            "muted_class": muted_class,
-        }
 
     @app.route("/mobile/inbox", methods=["GET"])
     def mobile_inbox_page():

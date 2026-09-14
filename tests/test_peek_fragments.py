@@ -28,7 +28,6 @@ from dashboard.inbox import collect_inbox, render_inbox_stream
 from pipeline.analytical_dashboard_html import render_tier_coverage_strip
 from pipeline.dashboard_status import DashboardRow
 from pipeline.peeks import render_new_docs_peek, render_provenance_peek
-from pipeline.portfolio_panel import render_next_dollar_panel
 from pipeline.research_cockpit import CockpitRow, render_research_cockpit
 from pipeline.ticker_command_center import build_ticker_command_center, render_ticker_fragment
 
@@ -995,13 +994,6 @@ def test_cockpit_evaluation_row_has_no_review_doorway() -> None:
     )
     html = render_research_cockpit({"evaluation": [CockpitRow(base=base)]})
     assert "/api/peek/review/" not in html
-
-
-def test_next_dollar_memo_link_peeks(db_path: Path) -> None:
-    _seed_memo(db_path)
-    html = render_next_dollar_panel(db_path)
-    assert 'data-peek-url="/api/peek/memo/next_dollar"' in html
-    assert 'href="#advisor_memos"' in html  # tab deep-link kept for middle-click
 
 
 def test_ticker_badge_carries_hover_attr(db_path: Path) -> None:

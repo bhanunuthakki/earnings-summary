@@ -1,3 +1,4 @@
+# pyright: reportUnknownArgumentType=false, reportUnknownLambdaType=false
 """Red-team wave B (B4/B5): composite-console latency + memo duplication.
 
 B4a — Health's Risk + Red Team panes defer until first activation. Allocation
@@ -238,28 +239,21 @@ def test_allocation_console_is_brief_plus_grid(tmp_path: Path, probe_down: None)
     assert 'class="console-grid"' in html
     assert 'id="csec-brief"' in html
     assert html.index('id="csec-brief"') < html.index('id="csec-risk_budget"')
-    # Wide spans: brief + landing recommendation; Risk Budget / Posture /
-    # Positioning are tiles (no csec-wide on their wrappers).
+    # Wide spans: brief + performance; Risk Budget / Posture / Positioning are
+    # tiles (no csec-wide on their wrappers).
     assert 'class="console-sec csec-wide k-card k-card-section" id="csec-brief"' in html
-    assert (
-        'class="console-sec csec-wide k-card k-card-section" id="csec-allocation_recommendation"'
-        in html
-    )
+    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-performance"' in html
     assert 'class="console-sec k-card k-card-section" id="csec-risk_budget"' in html
     assert 'class="console-sec k-card k-card-section" id="csec-positioning"' in html
-    # The benchmark answer leads before the recommendation and target-setting
-    # detail instead of sitting below the fold.
-    assert html.index('id="csec-performance"') < html.index('id="csec-allocation_recommendation"')
+    assert "csec-allocation_recommendation" not in html
 
 
 def test_allocation_console_whatif_signpost_is_gone(tmp_path: Path, probe_down: None) -> None:
-    """D1 Band-3 rule: a section may never exist solely to say where its
-    functionality lives. The signpost is dead; the brief carries a What-if
-    chip that jumps to the Next dollar tile (which owns the actions)."""
+    """The retired recommendation and its old signpost stay absent."""
     html = render_portfolio_allocation_panel(tmp_path / "missing.db")
     assert "csec-whatif_pointer" not in html
     assert "Simulate a weight change or compare candidates" not in html
-    assert 'data-console-jump="csec-allocation_recommendation">What-if / Compare</button>' in html
+    assert "What-if / Compare" not in html
 
 
 def test_record_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> None:
@@ -279,13 +273,11 @@ def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: 
     console or leaks a traceback."""
     from pipeline.portfolio_console_panel import render_portfolio_record_panel
 
-    # Allocation still has one true fact on an empty DB — no next-dollar
-    # artifact exists — so its read states that (with the doorway chip)
-    # rather than the generic quiet line.
     alloc = render_portfolio_allocation_panel(tmp_path / "missing.db")
     assert 'class="console-brief"' in alloc
     assert 'class="panel console-brief"' not in alloc
-    assert "No current next-dollar recommendation" in alloc
+    assert "Not enough live data for a read yet" in alloc
+    assert "next-dollar recommendation" not in alloc.lower()
     assert "Traceback" not in alloc
     # Record has nothing to say → the one-line quiet state, never a blank.
     record = render_portfolio_record_panel(tmp_path / "missing.db")

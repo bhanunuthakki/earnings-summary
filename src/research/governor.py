@@ -141,19 +141,6 @@ CLASS_PRIORITY: tuple[str, ...] = (
 )
 _PRIORITY_RANK: dict[str, int] = {c: i for i, c in enumerate(CLASS_PRIORITY)}
 
-# P2.2 (personal_investment_partner_prd.md §9.1/§3.3, brief-owns-delivery
-# ownership rule): these four moment classes stop delivering as standalone
-# Telegram pings — the Senior Partner Brief (src/advisor/senior_partner_brief.py)
-# owns their delivery now, draining them into brief sections 4/5. Caps,
-# cooldowns, freshness, and priority ordering are UNCHANGED for every class
-# (B9 invariant: this governs ONLY the delivery leg below, nothing upstream of
-# it) — the other five classes (falsifier_breach, post_mortem, tenet_challenge,
-# retro_annotation, intent_followup — tier-1 falsifier_breach included) keep
-# the legacy sent/digest path untouched.
-BRIEF_ROUTED_CLASSES: frozenset[str] = frozenset(
-    {"calibration_finding", "capacity_breach", "life_event_checkpoint", "profile_drift"}
-)
-
 
 @dataclass(frozen=True, slots=True)
 class Moment:
@@ -617,8 +604,6 @@ def run_governor(
         "skipped_stale": 0,
         "send_failed": 0,
         "seen": 0,
-        # P2.2: the four BRIEF_ROUTED_CLASSES land here instead of sent/digest.
-        "routed_to_brief": 0,
     }
     moments = collect_moments(db_path, now=stamp, repo_root=repo_root, api_url=api_url)
     # B9: competing moments contend for DAILY_CAP slots in priority order
@@ -694,13 +679,6 @@ def run_governor(
                 status = "skipped_muted"
             elif not freshness_ok(moment, db_path, repo_root=repo_root, api_url=api_url):
                 status = "skipped_stale"
-            elif moment.class_ in BRIEF_ROUTED_CLASSES:
-                # P2.2 ownership rule: fresh + unmuted is enough — this class
-                # never contends for the DAILY_CAP/WEEKLY_CAP send slots (those
-                # slots are for classes that still push to Telegram). The
-                # Senior Partner Brief's OWN admission rule (<=3 action_requested
-                # items/week) governs from here, not this cap.
-                status = "routed_to_brief"
             else:
                 day, week = _sent_counts(conn, stamp)
                 status = "digest" if (day >= DAILY_CAP or week >= WEEKLY_CAP) else "sent"
@@ -779,15 +757,10 @@ def record_dismissal(ping_id: int, *, db_path: Path | str | None = None) -> tupl
     """Owner dismissed a ping. Returns (recorded, muted_class|None): MUTE_AFTER
     consecutive dismissals of a class silence it until cleared.
 
-    P2.2: a BRIEF_ROUTED_CLASSES moment is never 'sent'/'digest' — it is
-    disposed from the brief UI (Today card / mobile Inbox / Telegram
-    callback), not Telegram directly, so at dismiss time its row is either
-    still 'routed_to_brief' (not yet drained into a composed brief) or
-    'acted' (drained — research.governor.mark_pings_briefed). Excluding those
-    two statuses here would make the four brief-routed classes permanently
-    unmutable — the owner's 3-strikes auto-mute (MUTE_AFTER) is per-class
-    learning, and the ownership rule moved DELIVERY to the brief, not the
-    owner's right to say "stop showing me this class of thing.\""""
+    Legacy ``routed_to_brief`` rows remain dismissable so removing the retired
+    weekly-brief product does not strand historical owner controls.
+    """
+
     stamp = now_naive_utc().isoformat()
     conn = open_conn(db_path)
     try:
@@ -948,51 +921,5 @@ def digest_pings(
                 (int(limit),),
             ).fetchall()
         ]
-    finally:
-        conn.close()
-
-
-def pending_routed_to_brief(db_path: Path | str | None = None, *, limit: int = 50) -> list[PingRow]:
-    """P2.2: ``coach_pings`` rows a prior governor run routed to the Senior
-    Partner Brief (``status='routed_to_brief'``) and no brief has drained yet
-    — the brief's section 4/5 candidate pool. Oldest first (a moment waiting
-    longest gets first claim on the brief's limited slots)."""
-    conn = open_conn(db_path)
-    try:
-        rows = conn.execute(
-            "SELECT id, class_, ticker, status FROM coach_pings "
-            "WHERE status = 'routed_to_brief' ORDER BY id ASC LIMIT ?",
-            (int(limit),),
-        ).fetchall()
-        return [
-            PingRow(id=int(r[0]), class_=str(r[1]), ticker=r[2], status=str(r[3])) for r in rows
-        ]
-    finally:
-        conn.close()
-
-
-def mark_pings_briefed(ping_ids: list[int], *, db_path: Path | str | None = None) -> int:
-    """A composed Senior Partner Brief drained these ``routed_to_brief`` rows
-    into a section — flip them to ``acted`` (the existing terminal status for
-    "this moment reached the owner and is resolved," reused rather than
-    minting a second new status; ``pipeline.open_loops`` already only
-    special-cases ``sent``/``digest``/``routed_to_brief``, so a row moving to
-    ``acted`` silently stops appearing in the band, exactly like any other
-    ``mark_ping_acted`` transition). Only rows still ``routed_to_brief`` are
-    touched — idempotent against a re-run over the same ids. Returns the
-    number of rows updated."""
-    if not ping_ids:
-        return 0
-    stamp = now_naive_utc().isoformat()
-    conn = open_conn(db_path)
-    try:
-        placeholders = ",".join("?" for _ in ping_ids)
-        cur = conn.execute(
-            f"UPDATE coach_pings SET status = 'acted', updated_at = ? "
-            f"WHERE id IN ({placeholders}) AND status = 'routed_to_brief'",
-            (stamp, *ping_ids),
-        )
-        conn.commit()
-        return cur.rowcount
     finally:
         conn.close()

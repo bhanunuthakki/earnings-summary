@@ -539,45 +539,17 @@ LLM_MODELS: dict[str, str] = {
     # deterministic screen; Sonnet keeps the marginal cost proportionate.
     "advisor_next_dollar": "claude-opus-4-8",
     "advisor_swap_check": DEFAULT_MODEL,
-    # Incremental Dollar Recommendation (P0.4a, personal_investment_partner_prd.md
-    # §7.4/§10): the governed selection over the deterministic frontier
-    # (allocation.recommendation.build_frontier) — a cross-portfolio allocation
-    # judgment with a hard frontier-grounding gate (invented tickers/weights/
-    # probabilities are rejected and force a deterministic fallback). Same tier
-    # as advisor_next_dollar / cross_portfolio_synthesis: Opus's wider
-    # instruction-following matters when the prompt embeds an explicit
-    # VALIDATION CONSTRAINTS block the model must actually honor. Budget-capped
-    # at $10/mo, on_exceed='block' (migration 0188) — a blown cap is explicit
-    # unavailability (a labeled deterministic-fallback artifact), never a
-    # silent downgrade to a cheaper model.
-    "incremental_dollar_recommendation": "claude-opus-4-8",
     # Investment Decision Card (P1.1, personal_investment_partner_prd.md
     # §8.1/§10): the governed synthesis of company hypothesis, security setup,
     # portfolio fit, and disconfirming case over deterministic inputs
     # (research.investment_decision_card.generate_card) — a per-ticker
     # judgment with the same "evidence_readiness is NEVER LLM-authored" hard
-    # gate as Incremental Dollar Recommendation's frontier-grounding gate.
+    # gate as the former portfolio-allocation frontier grounding check.
     # Same Opus tier: the prompt embeds an explicit VALIDATION CONSTRAINTS
     # block the model must actually honor. Budget-capped at $8/mo,
     # on_exceed='skip' (migration 0190) — per-ticker batch build work should
     # degrade one card at a time, not block the whole evaluation build.
     "investment_decision_card": "claude-opus-4-8",
-    # Senior Partner Brief (P2.2, personal_investment_partner_prd.md
-    # §9.1/§10): the weekly governed synthesis over the whole advisory
-    # surface — latest Incremental Dollar Recommendation, Risk Budget,
-    # wealth context, Investment Decision Cards, weekly-packet items,
-    # governor-routed moments (calibration_finding/capacity_breach/
-    # life_event_checkpoint/profile_drift — see research.governor.
-    # BRIEF_ROUTED_CLASSES), v_decision_journal, Worldview/owner-profile
-    # anchors, and open research proposals into five ordered sections. Same
-    # Opus tier as Incremental Dollar Recommendation / Investment Decision
-    # Card: the prompt embeds an explicit VALIDATION CONSTRAINTS block
-    # (notably the <=3 action_requested/week cap unless an active week
-    # explains the excess) the model must actually honor. Budget-capped at
-    # $6/mo, on_exceed='block' (migration 0199) — one governed call/week, so
-    # a blown cap is explicit unavailability (a labeled mechanical-digest
-    # fallback), never a silent downgrade.
-    "senior_partner_brief": "claude-opus-4-8",
     # Socratic think-through (P2.4): question generation is a short grounded
     # task (Sonnet); the decision memo weighs the owner's answers against the
     # evidence and commits to a scoreable stance — Opus judgment tier.

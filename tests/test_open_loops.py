@@ -122,20 +122,8 @@ def test_pending_confirmation_line_ignores_non_awaiting_status(db_path: Path) ->
     assert "Pending confirmations" not in html
 
 
-def test_pending_confirmation_line_independent_of_senior_partner_brief(db_path: Path) -> None:
-    """The 2026-07-25 postmortem: 78 drafts piled up unconfirmed because their
-    only doorway lived inside the brief's Today card, which renders nothing
-    until a senior_partner_brief artifact exists. This line must show the
-    pending count with no such artifact ever generated."""
+def test_pending_confirmation_line_is_unconditional(db_path: Path) -> None:
     _insert_decision_draft(db_path)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM llm_artifacts WHERE purpose = 'senior_partner_brief'"
-        ).fetchone()[0]
-    finally:
-        conn.close()
-    assert count == 0
     html = render_open_loops_band(db_path)
     assert "Pending confirmations" in html
 
@@ -233,10 +221,8 @@ def test_digest_ping_line(db_path: Path) -> None:
     assert "Coach digest" in html
 
 
-def test_routed_to_brief_line(db_path: Path) -> None:
-    """P2.2: a coach_pings row the governor routed to the Senior Partner
-    Brief (status='routed_to_brief') gets its own debt line — distinct from
-    'Coach digest', which never sees these rows anymore."""
+def test_legacy_routed_ping_line(db_path: Path) -> None:
+    """Retained rows from the removed product remain visible for recovery."""
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(
@@ -248,7 +234,7 @@ def test_routed_to_brief_line(db_path: Path) -> None:
     finally:
         conn.close()
     html = render_open_loops_band(db_path)
-    assert "Routed to weekly brief" in html
+    assert "Legacy routed coach moments" in html
     assert "Coach digest" not in html
 
 
