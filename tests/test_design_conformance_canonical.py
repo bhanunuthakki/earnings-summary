@@ -18,6 +18,7 @@ SRC = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from execution import verify_design_conformance as design_verifier  # noqa: E402
+from ui import conformance_scan  # noqa: E402
 from ui import design_registry as registry  # noqa: E402
 from ui.conformance_scan import (  # noqa: E402
     DIMENSIONS,
@@ -213,6 +214,30 @@ def test_authoritative_emitter_census_does_not_require_a_token_reference(
     assert "html" in discovered["ui/plain_html.py"].adapter_kinds
     assert "svg" in discovered["ui/svg_only.py"].adapter_kinds
     assert "runtime-js" in discovered["ui/runtime.py"].adapter_kinds
+
+
+def test_emitter_discovery_parses_each_python_source_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "src" / "ui" / "surface.py"
+    path.parent.mkdir(parents=True)
+    path.write_text('HTML = "<button>Run</button>"\n', encoding="utf-8")
+    original_parse = ast.parse
+    parsed: list[str] = []
+
+    def counted_parse(
+        source: str,
+        filename: str = "<unknown>",
+        mode: str = "exec",
+    ) -> ast.AST:
+        parsed.append(filename)
+        return original_parse(source, filename=filename, mode=mode)
+
+    monkeypatch.setattr(conformance_scan.ast, "parse", counted_parse)
+
+    assert [entry.path for entry in discover_emitters(tmp_path)] == ["ui/surface.py"]
+    assert parsed.count(str(path)) == 1
 
 
 def test_unknown_custom_properties_fail_closed() -> None:
