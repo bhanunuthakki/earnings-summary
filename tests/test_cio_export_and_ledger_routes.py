@@ -11,13 +11,11 @@ non-trivial.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -30,12 +28,13 @@ from user_state.ledger import append_entry  # noqa: E402
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> None:
+    migrated_db(
+        db_path,
+        stamp=_PRIOR_HEAD,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
     append_entry(
         user_id="bhanu",
         ticker="NU",
@@ -46,10 +45,10 @@ def _build_db(db_path: Path) -> None:
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> FlaskClient:
+def client(tmp_path: Path, migrated_db: Callable[..., Path]) -> FlaskClient:
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
-    _build_db(db)
+    _build_db(db, migrated_db)
     return comments_server.create_app(tmp_path).test_client()
 
 

@@ -21,14 +21,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from dcf.persist import (
     SANITY_OVER_UNDER_LIMIT,
     DcfPromotionBlocked,
@@ -42,29 +40,18 @@ from synthesis.lenses._shared import load_dcf
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _cfg(db_file: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Iterator[Path]:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[Path]:
     """A real at-head DB in ``<tmp>/data/portfolio.db`` (the repo-root shape
     ``load_dcf`` resolves), mirroring the save/restore discipline of
     ``test_dcf_live_write.py``."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    db_file = data_dir / "portfolio.db"
+    db_file = migrated_db(data_dir / "portfolio.db")
     import db as dbmod
 
     saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
     dbmod.set_db_path(str(db_file))
-    dbmod.init_db()
-    cfg = _cfg(db_file)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
     try:
         yield db_file
     finally:
