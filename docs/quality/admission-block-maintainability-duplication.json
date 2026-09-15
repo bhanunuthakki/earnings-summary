@@ -3,13 +3,13 @@
   "kind": "block",
   "key": "maintainability.duplication",
   "state": "fail",
-  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/duplicates-ratchet.json",
-      "sha256": "6579cc6e740ae72a2776456b5b745d406ba6c8e2598386fa3ac3fae69f46aee7",
+      "sha256": "c14795a319e6a20485c95401622f00871dac8a86389818e50de8304992d5eaf3",
       "schema_version": "1"
     }
   ]

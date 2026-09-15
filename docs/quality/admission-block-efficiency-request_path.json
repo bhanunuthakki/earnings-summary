@@ -3,13 +3,13 @@
   "kind": "block",
   "key": "efficiency.request_path",
   "state": "fail",
-  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/reachability-check.json",
-      "sha256": "21d87e74daf12e20d4a7c500a37ce233d9de74cb52b96fff666bc9ef294be663",
+      "sha256": "4e0ecc69968e541cd5bc672c249013ccfbad9598a5da225281102073bffb3048",
       "schema_version": "operational-reachability-raw/v1"
     }
   ]

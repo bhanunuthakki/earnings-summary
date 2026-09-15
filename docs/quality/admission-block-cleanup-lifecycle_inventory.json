@@ -3,13 +3,13 @@
   "kind": "block",
   "key": "cleanup.lifecycle_inventory",
   "state": "fail",
-  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/lifecycle-inventory.json",
-      "sha256": "8c6e682c7216acdd42ec6e8e4941aeecfe309c0b4f0da7c4436f19b16ee0a799",
+      "sha256": "79fbe8ec94c4c09631a3306b3af257fd33c6500826c096c1e59308a049fb81f2",
       "schema_version": "operational-lifecycle-inventory/v1"
     }
   ]

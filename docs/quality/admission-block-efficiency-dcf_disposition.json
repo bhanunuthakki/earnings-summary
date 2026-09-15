@@ -3,13 +3,13 @@
   "kind": "block",
   "key": "efficiency.dcf_disposition",
   "state": "fail",
-  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/performance-baseline.json",
-      "sha256": "c55ca72c612e229a600159f089fd5199a9b0b1223347d04a3b489593cf2cfe53",
+      "sha256": "527d8a5c887ce2dfdddb27becc89e1cf67a6455a8e98732781fcb2d7f94820e7",
       "schema_version": "performance-baseline/v1"
     }
   ]

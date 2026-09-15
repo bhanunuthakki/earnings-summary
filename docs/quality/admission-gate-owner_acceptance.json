@@ -3,13 +3,13 @@
   "kind": "hard_gate",
   "key": "owner_acceptance",
   "state": "fail",
-  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/roadmap-reconciliation.json",
-      "sha256": "e193ca7bd27efa84b98512dd5c3a13e449c916fba0aa4b51e3748c4e0d1d3dc4",
+      "sha256": "04aa454a992e11481e89a1f4061dff25da13e7c6a60083d1b5937e8c408012b0",
       "schema_version": "roadmap-reconciliation-v1"
     }
   ]
