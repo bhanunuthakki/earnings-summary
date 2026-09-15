@@ -365,6 +365,7 @@ def test_0011_api_terminal_falls_back_when_redaction_still_violates_privacy_chec
 ) -> None:
     db_path = migrated_db(
         tmp_path / "journal-redaction.db",
+        target="0011_add_operations_journal",
         upgrade_from="0010_add_rehearsal_io_indexes",
         before_upgrade=_noop_before_upgrade,
     )
@@ -456,7 +457,7 @@ def test_operations_journal_is_excluded_from_gc_retention() -> None:
 def test_0011_downgrade_removes_only_journal_additions(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    db_path = migrated_db(tmp_path / "journal-down.db")
+    db_path = migrated_db(tmp_path / "journal-down.db", target="0011_add_operations_journal")
     config = _config(db_path)
     command.downgrade(config, "0010_add_rehearsal_io_indexes")
     conn = sqlite3.connect(db_path)
