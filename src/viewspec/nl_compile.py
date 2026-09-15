@@ -63,6 +63,7 @@ _TICKERISH_RE = re.compile(r"\b[A-Z][A-Z0-9.\-]{0,5}\b")
 _MAX_VOCAB_FIN = 250
 _MAX_VOCAB_KPI = 500
 _MAX_VOCAB_SEG = 300
+_MAX_VOCAB_DETAIL = 200
 
 
 @dataclass(slots=True)
@@ -122,8 +123,13 @@ def _vocab_block(db_path: Path, tickers: list[str]) -> str:
     """The grounding vocabulary: one token per line, per domain, capped."""
     catalog = metric_catalog(db_path, tickers)
     lines: list[str] = []
-    for domain, cap in (("fin", _MAX_VOCAB_FIN), ("kpi", _MAX_VOCAB_KPI), ("seg", _MAX_VOCAB_SEG)):
-        entries = catalog.get(domain, [])[:cap]
+    for domain, cap in (
+        ("fin", _MAX_VOCAB_FIN),
+        ("kpi", _MAX_VOCAB_KPI),
+        ("seg", _MAX_VOCAB_SEG),
+        ("detail", _MAX_VOCAB_DETAIL),
+    ):
+        entries = [entry for entry in catalog.get(domain, []) if entry.get("chartable", True)][:cap]
         if not entries:
             continue
         lines.append(f"# {domain} tokens")
@@ -162,7 +168,8 @@ Schema:
 
 Rules:
 - metrics MUST be tokens copied verbatim from the vocabulary ("fin:..." financial line items,
-  "kpi:..." company KPIs, "seg:<dim_type>:<dim_name>:<metric>" segment slices). Never invent one.
+  "kpi:..." company KPIs, "seg:<dim_type>:<dim_name>:<metric>" segment slices,
+  "detail:<family>:<member>:<metric>" source-backed legacy concentration/commitment series). Never invent one.
   If the user names something with no matching token, use the closest token that exists.
 - Resolve colloquial metric names to the MOST SPECIFIC matching token, never a broader
   rollup that merely contains it: "R&D spend" -> fin:research_and_development (NOT
@@ -180,6 +187,8 @@ Rules:
   (that computes growth-of-a-growth-rate / margin-of-a-margin, which is always wrong).
 - cadence "annual" only when the question is in years/annual/FY terms; periods defaults
   to 12 for quarterly and 8 for annual when the question doesn't say.
+- all detail tokens always require transform "level" and cadence "annual"; their
+  canonical definition admission is pending, so never infer quarterly values or transforms.
 {context_block}
 Metric vocabulary:
 {vocab}

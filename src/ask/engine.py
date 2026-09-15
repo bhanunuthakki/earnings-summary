@@ -426,8 +426,9 @@ def respond_turn(
         catalog = metric_catalog(db_path, effective_tickers)
         labels = [
             str(e.get("label") or "")
-            for domain in ("fin", "kpi", "seg")
+            for domain in ("fin", "kpi", "seg", "detail")
             for e in catalog.get(domain, [])
+            if bool(e.get("chartable", True))
         ]
         route = route_turn(
             text,

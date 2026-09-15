@@ -38,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.11.2"
+REGISTRY_VERSION = "1.12.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -502,7 +502,9 @@ CCACTION_REGRESSION_FLOOR = (
     ),
     CCActionRegressionFloor("pipeline/evals_panel.py", "research-ui", "Current CCAction adopter."),
     CCActionRegressionFloor(
-        "pipeline/explore_panel.py", "research-ui", "Current CCAction adopter."
+        "pipeline/explore_panel_runtime.py",
+        "research-ui",
+        "Explore action behavior moved into its dedicated runtime module.",
     ),
     CCActionRegressionFloor(
         "pipeline/journal_panel.py", "research-ui", "Current CCAction adopter."
@@ -572,6 +574,7 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/etf_workup.py",
         "pipeline/evals_panel.py",
         "pipeline/explore_panel.py",
+        "pipeline/explore_panel_runtime.py",
         "pipeline/fact_overrides_panel.py",
         "pipeline/ir_coverage_panel.py",
         "pipeline/journal_panel.py",
@@ -743,7 +746,7 @@ _PYTHON_CSS_SURFACES = frozenset(
         "pipeline/diet_panel.py",
         "pipeline/discovery_panel.py",
         "pipeline/evals_panel.py",
-        "pipeline/explore_panel.py",
+        "pipeline/explore_panel_runtime.py",
         "pipeline/ir_approval_panel.py",
         "pipeline/journal_panel.py",
         "pipeline/ledger_panel.py",
@@ -821,7 +824,7 @@ _RUNTIME_JS_SURFACES = frozenset(
         "pipeline/diet_panel.py",
         "pipeline/discovery_panel.py",
         "pipeline/evals_panel.py",
-        "pipeline/explore_panel.py",
+        "pipeline/explore_panel_runtime.py",
         "pipeline/ir_approval_panel.py",
         "pipeline/journal_panel.py",
         "pipeline/ledger_panel.py",
@@ -1030,7 +1033,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "80479df16d7055543dc3af1010c69ff7542234b2b2c21ba59f7179f1bc58e1f4",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "596388526bd3d0cc6c64747d990b57391cbd2be2d734fb3eb75a38e954b1e759",  # pragma: allowlist secret
-        "pipeline/research_panel_styles.py": "430015d0f97507f8d418d90199dd4a9db3217be2dec492a93c54bf13f41ece0f",  # pragma: allowlist secret
+        "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dfb3c1a3b2c8fec2c6a6b5438f0cf2549efff97f8624794e8e98d913b8200792",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
         "report/renderers/workspace_styles.py": "27eba0547bdad4a8bf4178452b7e8f5e8ba947a3f8d141ce05f4c5a4e90573a1",  # pragma: allowlist secret
@@ -1038,7 +1041,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "ui/controls.py": "bd7e8e9ed70a1d975f01bc2138b996a859608739fb385760d34480d571bc491a",  # pragma: allowlist secret
         "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret
         "ui/source_chip.py": "374338d4d1132239c3de1c91fb84f1214e87b57472f6c5df2c0582708792f141",  # pragma: allowlist secret
-        "viewspec/render.py": "743c2211158fef8be8fc86530004b6dbed51c6f9c862743bf42c8b7d677fff11",  # pragma: allowlist secret
+        "viewspec/render.py": "9de95e9c22f55c98882139eac2d179723666f00af84cd8945653b809fdb06cee",  # pragma: allowlist secret
     }
 )
 
@@ -1075,9 +1078,9 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "4c7aea15a1beea4fc424b171cc328dc6da7f7534e469b2f5e9a018f697ea8f04",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "b77f60a6b4ca1ea6c093fd6b5c0c493dec39977482d899cbd9204d7718f95995",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
-        "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
+        "report/renderers/charts_v2.py": "38895e26b31e240446d2cd93ebf38869df6a86bdcd3ad4ea8be9d040f4102f29",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "867b089ceac45baa3dd1f72d35e74feba80f1af19ae6b8c4f4bdeeb2a5d60c05",  # pragma: allowlist secret
         "report/renderers/workspace_sections/company.py": "a2a7e88bb845c9eafa39e7673ac009ee3220e068430e91dc0160c3ef62b53551",  # pragma: allowlist secret
         "report/renderers/workspace_sections/thesis_risk.py": "ea6efda97e1eba69cdeb02e03744784f89ff7e606dcb86ccddceb1d4d12c0fea",  # pragma: allowlist secret
@@ -1179,6 +1182,13 @@ LOCAL_PROPERTY_CONTRACTS = (
 )
 
 RUNTIME_VISUAL_CONTRACTS = (
+    RuntimeVisualContract(
+        "pipeline/explore_panel_runtime.py",
+        "width",
+        r"next\+['\"]px['\"]",
+        "research-ui",
+        "The user-owned fields and definition rails persist their bounded drag width.",
+    ),
     RuntimeVisualContract(
         "pipeline/decision_journal_panel.py",
         "outerHTML",

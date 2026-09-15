@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0038_add_kpi_definition_revisions"
+_ACTIVE_HEAD = "0039_add_dcf_forecast_series"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

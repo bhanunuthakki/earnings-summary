@@ -1,8 +1,8 @@
 """ViewSpec — the deterministic, saveable pivot spec (master build P5.1).
 
 The owner's slice-and-dice substrate: metrics x tickers x period x
-transform over financial_facts / kpi_facts / the segment junction. A spec
-is plain data — JSON in, JSON out — so it can be saved (saved_views,
+transform over admitted statement/KPI/segment facts and explicitly typed
+detail adapters. A spec is plain data — JSON in, JSON out — so it can be saved (saved_views,
 alembic 0079), embedded in the cockpit/reports, built by the structured
 panel UI, or (P5.2) compiled from a natural-language query by a fast
 model. Execution is `viewspec.engine.execute_view`: instant, LLM-free,
@@ -16,10 +16,13 @@ Serialized shape (the contract the P5.2 compiler must emit)::
         {"domain": "fin", "key": "revenue"},
         {"domain": "kpi", "key": "ROE"},
         {"domain": "seg", "key": "revenue",
-         "dim_type": "product", "dim_name": "AWS"}
+         "dim_type": "product", "dim_name": "AWS"},
+        {"domain": "detail", "key": "pct_of_revenue",
+         "dim_type": "customer", "dim_name": "Customer A"}
       ],
       # each metric may equivalently be its compact token string:
-      # "fin:revenue" | "kpi:ROE" | "seg:product:AWS:revenue"
+      # "fin:revenue" | "kpi:ROE" | "seg:product:AWS:revenue" |
+      # "detail:customer:Customer%20A:pct_of_revenue"
       "transform": "yoy",                        # level|yoy|cagr|margin
       "cadence": "quarterly",                    # quarterly|annual
       "periods": 12,                             # display window, 1..MAX_PERIODS
@@ -35,8 +38,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import cast
+from urllib.parse import quote, unquote
 
-DOMAINS: tuple[str, ...] = ("fin", "kpi", "seg")
+DOMAINS: tuple[str, ...] = ("fin", "kpi", "seg", "detail")
 TRANSFORMS: tuple[str, ...] = ("level", "yoy", "cagr", "margin")
 CADENCES: tuple[str, ...] = ("quarterly", "annual")
 
@@ -71,30 +75,55 @@ class MetricRef:
     @property
     def label(self) -> str:
         """Human-readable row label fragment."""
-        if self.domain == "seg":
+        if self.domain in ("seg", "detail"):
             return f"{self.dim_name} {self.key}"
         return self.key
 
     def token(self) -> str:
         """Compact form for picker option values: ``fin:revenue``,
         ``kpi:ROE``, ``seg:product:AWS:revenue``."""
+        if self.domain == "detail":
+            return ":".join(
+                (
+                    "detail",
+                    quote(str(self.dim_type), safe=""),
+                    quote(str(self.dim_name), safe=""),
+                    quote(self.key, safe=""),
+                )
+            )
         if self.domain == "seg":
-            return f"seg:{self.dim_type}:{self.dim_name}:{self.key}"
-        return f"{self.domain}:{self.key}"
+            return ":".join(
+                (
+                    "seg",
+                    quote(str(self.dim_type), safe=""),
+                    quote(str(self.dim_name), safe=""),
+                    quote(self.key, safe=""),
+                )
+            )
+        return f"{self.domain}:{quote(self.key, safe='')}"
 
     @classmethod
     def parse_token(cls, token: str) -> MetricRef:
         """Inverse of :meth:`token`. Raises ViewSpecError on a bad token."""
         parts = token.split(":")
         if len(parts) == 2 and parts[0] in ("fin", "kpi") and parts[1]:
-            return cls(domain=parts[0], key=parts[1])
+            return cls(domain=parts[0], key=unquote(parts[1]))
+        if len(parts) == 4 and parts[0] == "detail" and all(parts[1:]):
+            dim_type, dim_name, key = (unquote(part) for part in parts[1:])
+            if dim_type not in ("customer", "lease") or (
+                (dim_type == "customer" and key not in ("pct_of_revenue", "revenue_amount"))
+                or (dim_type == "lease" and key != "amount")
+            ):
+                raise ViewSpecError(f"unparseable metric token {token!r}")
+            return cls(domain="detail", key=key, dim_type=dim_type, dim_name=dim_name)
         if len(parts) == 4 and parts[0] == "seg" and all(parts[1:]):
-            return cls(domain="seg", key=parts[3], dim_type=parts[1], dim_name=parts[2])
+            dim_type, dim_name, key = (unquote(part) for part in parts[1:])
+            return cls(domain=parts[0], key=key, dim_type=dim_type, dim_name=dim_name)
         raise ViewSpecError(f"unparseable metric token {token!r}")
 
     def to_dict(self) -> dict[str, object]:
-        d: dict[str, object] = {"domain": self.domain, "key": self.key}
-        if self.domain == "seg":
+        d: dict[str, object] = {"domain": self.domain, "key": self.key, "token": self.token()}
+        if self.domain in ("seg", "detail"):
             d["dim_type"] = self.dim_type
             d["dim_name"] = self.dim_name
         return d
@@ -112,11 +141,18 @@ class MetricRef:
             raise ViewSpecError(f"metric domain must be one of {DOMAINS}, got {domain!r}")
         if not key:
             raise ViewSpecError("metric key must be non-empty")
-        if domain == "seg":
+        if domain in ("seg", "detail"):
             dim_type = str(m.get("dim_type") or "").strip()
             dim_name = str(m.get("dim_name") or "").strip()
             if not dim_type or not dim_name:
-                raise ViewSpecError("seg metrics need dim_type and dim_name")
+                raise ViewSpecError(f"{domain} metrics need dim_type and dim_name")
+            if domain == "detail" and dim_type not in ("customer", "lease"):
+                raise ViewSpecError("detail metric type must be customer or lease")
+            if domain == "detail" and (
+                (dim_type == "customer" and key not in ("pct_of_revenue", "revenue_amount"))
+                or (dim_type == "lease" and key != "amount")
+            ):
+                raise ViewSpecError("unsupported detail metric key")
             return cls(domain=domain, key=key, dim_type=dim_type, dim_name=dim_name)
         return cls(domain=domain, key=key)
 
@@ -185,10 +221,29 @@ class ViewSpec:
         transform = str(spec.get("transform") or "level")
         if transform not in TRANSFORMS:
             errors.append(f"transform must be one of {TRANSFORMS}, got {transform!r}")
+        if transform != "level" and any(metric.domain == "detail" for metric in metrics):
+            errors.append("source-backed detail metrics support only the level transform")
 
         cadence = str(spec.get("cadence") or "quarterly")
         if cadence not in CADENCES:
             errors.append(f"cadence must be one of {CADENCES}, got {cadence!r}")
+        if cadence != "annual" and any(
+            metric.domain == "detail" and metric.dim_type == "lease" for metric in metrics
+        ):
+            errors.append("source-backed lease detail metrics require annual cadence")
+        quarterly_customers = [
+            metric
+            for metric in metrics
+            if metric.domain == "detail" and metric.dim_type == "customer"
+        ]
+        if (
+            cadence == "quarterly"
+            and quarterly_customers
+            and len(quarterly_customers) != len(metrics)
+        ):
+            errors.append(
+                "quarterly customer detail cannot share a calendar-aligned axis with other metrics"
+            )
 
         periods = _coerce_int(spec.get("periods"), default=12)
         if periods is None or not 1 <= periods <= MAX_PERIODS:

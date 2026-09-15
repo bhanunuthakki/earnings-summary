@@ -7,6 +7,8 @@ definition tooltip:
   fin:…  — a small curated glossary over the FMP-normalized line items,
            with a generic fallback for the long tail
   seg:…  — composed from the slice's dimension parts
+  detail:… — family-specific language for source-backed legacy series whose
+             canonical definition admission is still pending
 
 ``metric_definitions`` feeds ``ViewResult.definitions`` (row-label
 tooltips); ``attach_catalog_titles`` decorates the picker catalog. Both
@@ -25,6 +27,7 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
 from compute.kpi_resolver import engine_formula_definition
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -78,6 +81,12 @@ def metric_display_label(metric: MetricRef) -> str:
         return _FIN_DISPLAY_LABELS.get(metric.key, metric.key.replace("_", " ").title())
     if metric.domain == "seg":
         return f"{metric.dim_name} · {metric.key.replace('_', ' ').title()}"
+    if metric.domain == "detail":
+        if metric.dim_type == "customer":
+            suffix = "Share of revenue" if metric.key == "pct_of_revenue" else "Revenue amount"
+            return f"{metric.dim_name} · {suffix}"
+        if metric.dim_type == "lease":
+            return f"{str(metric.dim_name).title()} lease commitments"
     return metric.key
 
 
@@ -193,6 +202,18 @@ def metric_definitions(
             )
         elif m.domain == "seg" and m.dim_type and m.dim_name:
             out[m.token()] = seg_definition(m.dim_type, m.dim_name, m.key)
+        elif m.domain == "detail" and m.dim_type == "customer" and m.dim_name:
+            out[m.token()] = (
+                f"{m.dim_name} customer concentration, as reported in the issuer filing. "
+                "Source-backed legacy detail; canonical definition and comparability "
+                "admission are pending. Annual level view only."
+            )
+        elif m.domain == "detail" and m.dim_type == "lease" and m.dim_name:
+            out[m.token()] = (
+                f"{m.dim_name.title()} lease commitments from the latest reported maturity "
+                "ladder. Source-backed legacy detail; canonical definition admission is "
+                "pending. Annual level view only."
+            )
     return out
 
 
@@ -216,6 +237,24 @@ def attach_catalog_titles(
         parts = token.split(":")
         if len(parts) == 4:
             entry["title"] = seg_definition(parts[1], parts[2], parts[3])
+    for entry in catalog.get("detail", []):
+        token = str(entry.get("token") or "")
+        parts = token.split(":")
+        if len(parts) != 4:
+            continue
+        family = parts[1]
+        member = unquote(parts[2])
+        if family == "customer":
+            entry["title"] = (
+                f"{member} customer concentration from an issuer filing. Source-backed "
+                "legacy detail; canonical definition admission is pending. Annual level only."
+            )
+        elif family == "lease":
+            entry["title"] = (
+                f"{member.title()} lease commitment maturity ladder from an issuer filing. "
+                "Source-backed legacy detail; canonical definition admission is pending. "
+                "Annual level only."
+            )
 
 
 __all__ = [

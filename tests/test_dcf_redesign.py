@@ -39,7 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import dcf_sheets  # noqa: E402
 import refresh_dcf  # noqa: E402
 
-from dcf import fact_sheet, redesign  # noqa: E402
+from dcf import redesign  # noqa: E402
 from tests.kpi_semantic_support import admit_all_kpi_facts  # noqa: E402
 
 BUILDER = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
@@ -1893,134 +1893,6 @@ def _seed_kpi_fact(db: Path, ticker: str, name: str, value: float, unit: str) ->
     admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
-
-
-def test_inject_fact_route_reprices_and_syncs_end_to_end(
-    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The S6 deliverable, end-to-end through the real route: pick a fact →
-    inject as a DCF driver → the model reprices and the xlsx + assumptions JSON
-    stay in sync (clobber-safe), with the converted units written and the fact
-    lineage recorded.
-
-    A 42% operating-margin KPI (stored as percent) must land on the Dashboard's
-    near-margin cell as the decimal ratio 0.42 — the units/scale conversion that
-    is the whole point — and lift the fair value above the builder's seed."""
-    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
-    db = refresh_repo / "data" / "portfolio.db"
-    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
-    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
-    _seed_kpi_fact(db, "TESTCO", "Operating margin", 42.0, "percent")
-
-    base_inp = redesign.read_inputs(dest)
-    assert base_inp is not None
-    conn = sqlite3.connect(str(db))
-    npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
-    conn.close()
-
-    import comments_server
-
-    client = comments_server.create_app(refresh_repo).test_client()
-    resp = client.post(
-        "/api/dcf/inject-fact",
-        json={"ticker": "TESTCO", "token": "kpi:Operating margin", "field": "near_op_margin"},
-    )
-    assert resp.status_code == 200, resp.get_json()
-    body = resp.get_json()
-    assert body["injected"] is True
-    inj = body["injection"]
-    # The load-bearing conversion: percent 42.0 → ratio 0.42.
-    assert inj["raw_value"] == pytest.approx(42.0)
-    assert inj["raw_unit"] == "percent"
-    assert inj["applied_value"] == pytest.approx(0.42)
-    assert inj["fact_id"] is not None
-
-    # The edit landed on the LIVE workbook's near-margin cell (B29) as 0.42 —
-    # written through apply_edits, not poked into the JSON.
-    assert _dashboard_cell(dest, redesign._DB_MARGIN_NEAR) == pytest.approx(0.42)
-    # ...and re-read from the workbook the engine repriced from.
-    edited = redesign.read_inputs(dest)
-    assert edited is not None and edited.near_op_margin == pytest.approx(0.42)
-
-    # The assumptions JSON mirrored the same value (from-scratch-build default
-    # stays in sync — no clobber) and recorded the fact lineage (S6 #5).
-    adata = json.loads(
-        (refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json").read_text(encoding="utf-8")
-    )
-    assert adata["redesign"]["near_term_op_margin"] == pytest.approx(0.42)
-    prov = adata["redesign"]["driver_provenance"]["near_op_margin"]
-    assert prov["metric"] == "kpi:Operating margin"
-    assert prov["raw_unit"] == "percent"
-
-    # dcf_runs repriced (margin 0.12 → 0.42 lifts value); never wrote over_under
-    # directly — it is re-derived by persist.
-    conn = sqlite3.connect(str(db))
-    npv1 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
-    conn.close()
-    assert npv1 > float(npv0)
-    assert body["fair_value_per_share_usd"] == pytest.approx(float(npv1))
-
-
-def test_inject_fact_sheet_survives_a_dcf_refresh_end_to_end(
-    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """THE S7 DELIVERABLE, end-to-end through the real route: pick a fact → add
-    it as a DCF reference → the model workbook is REFRESHED (rebuilt from scratch)
-    → the reference still has the value.
-
-    Survival is structural: the reference lands in the companion ``dcf/facts/
-    TESTCO.xlsx``, NOT in the main workbook the rebuild discards. The proof is the
-    second ``refresh_one`` (a full FMP rebuild + os.replace of the main workbook)
-    leaving the companion untouched."""
-    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
-    db = refresh_repo / "data" / "portfolio.db"
-    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
-    facts_path = fact_sheet.facts_workbook_path(refresh_repo, "TESTCO")
-
-    # Build the model, seed a fact, then park it as a reference via the route.
-    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
-    _seed_kpi_fact(db, "TESTCO", "Operating margin", 42.0, "percent")
-
-    import comments_server
-
-    client = comments_server.create_app(refresh_repo).test_client()
-    resp = client.post(
-        "/api/dcf/inject-fact-sheet",
-        json={"ticker": "TESTCO", "token": "kpi:Operating margin"},
-    )
-    assert resp.status_code == 200, resp.get_json()
-    body = resp.get_json()
-    assert body["added"] is True and body["action"] == "added" and body["count"] == 1
-    # Faithful reference: stored in its NATIVE unit (no driver conversion).
-    assert body["fact"]["value"] == pytest.approx(42.0)
-    assert body["fact"]["unit"] == "percent"
-    assert facts_path.exists()
-
-    # The reference lives in the COMPANION, never appended to the model workbook
-    # (which is what makes it survive the rebuild).
-    wb = openpyxl.load_workbook(str(dest))
-    assert fact_sheet.SHEET_NAME not in wb.sheetnames
-    wb.close()
-
-    facts_before = fact_sheet.read_facts(facts_path)
-    assert [f.value for f in facts_before] == [pytest.approx(42.0)]
-
-    # The survival event: a full refresh rebuilds dcf/TESTCO.xlsx from scratch.
-    res2 = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
-    assert res2["status"] == "ok"
-
-    # The companion — and the parked fact — survived untouched.
-    assert facts_path.exists()
-    facts_after = fact_sheet.read_facts(facts_path)
-    assert len(facts_after) == 1
-    assert facts_after[0].token == "kpi:Operating margin"
-    assert facts_after[0].value == pytest.approx(42.0)
-    assert facts_after[0].unit == "percent"
-
-    # And the route reads them back the same way.
-    got = client.get("/api/dcf/reference-facts/TESTCO").get_json()
-    assert got["ticker"] == "TESTCO"
-    assert len(got["facts"]) == 1 and got["facts"][0]["value"] == pytest.approx(42.0)
 
 
 def test_apply_edits_no_workbook_fails_soft(refresh_repo: Path) -> None:

@@ -197,7 +197,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # fingerprint-bound owner label review action.
     # +2 fixed, read-only KPI semantic-review routes: one bounded per-ticker
     # manifest plus exact current-index-referenced partitions.
-    assert len(rules) == 176
+    # -3 Explore-to-DCF mutation side channels: direct injection, reference-sheet
+    # injection, and reference-fact listing. Modeling remains DCF-owned.
+    assert len(rules) == 173
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "allocation_recommendation_get" not in rules
     assert "allocation_recommendation_post" not in rules

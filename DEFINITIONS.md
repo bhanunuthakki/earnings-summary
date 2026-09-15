@@ -82,6 +82,23 @@ mixing the two sets.
 amount was resolved from an aggregate or component source. DCF Debt Scope defines
 what belongs in the amount; `total_debt_basis` explains how that amount was found.
 
+## DCF Forecast Mapping Revision
+
+**Definition.** An immutable, issuer-scoped crosswalk from one versioned DCF output
+series to one canonical metric-definition revision and one ViewSpec metric token.
+Only the current `admitted` revision with `high` confidence can authorize a
+read-only Explore overlay, and its engine version must equal the producing DCF run.
+**Not to be confused with.** Label matching or an Explore edit. The mapping records
+a reviewed semantic identity; it does not infer equivalence from similar text and
+does not authorize any change to DCF inputs.
+
+## DCF Forecast Series Point
+
+**Definition.** One append-only forecast value for an explicit fiscal duration,
+persisted atomically with its immutable DCF run and current DCF Forecast Mapping
+Revision. Explore may display these points as a read-only dashed series but never
+promote them to reported facts or write them back into the model.
+
 ## Research Level
 
 **Definition.** The evidence depth authorized for an active tracked instrument. The four levels are mutually exclusive and collectively exhaustive: `catalog` preserves identity and raw-source availability; `screened` adds compact deterministic screening metrics; `monitored` adds narrow company-specific monitoring; `governed` admits the company to the complete document, fact, provenance, brief, DCF, and research-artifact contract.

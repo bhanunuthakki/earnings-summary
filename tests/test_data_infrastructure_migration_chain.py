@@ -13,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import migration_schema_targets
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0038_add_kpi_definition_revisions"
+HEAD = "0039_add_dcf_forecast_series"
 SCHEDULE_CLASS_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 RETAINED_TABLES = {
     "archive_generations",

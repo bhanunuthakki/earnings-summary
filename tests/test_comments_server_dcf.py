@@ -266,81 +266,16 @@ def test_save_rejects_degenerate_inputs(client: FlaskClient) -> None:
     assert resp.status_code == 422
 
 
-# --------------------------------------------------------------------------- #
-# Inject-fact route (S6) — the DIY fact → DCF driver bridge. HTTP contract here;
-# the value resolution / converter / round-trip live in test_fact_drivers and
-# test_dcf_redesign.
-# --------------------------------------------------------------------------- #
-def test_inject_fact_options_preflight(client: FlaskClient) -> None:
-    assert client.open("/api/dcf/inject-fact", method="OPTIONS").status_code == 204
-
-
-def test_inject_fact_requires_ticker_token_field(client: FlaskClient) -> None:
-    assert client.post("/api/dcf/inject-fact", json={}).status_code == 400
-    assert client.post("/api/dcf/inject-fact", json={"ticker": "NU"}).status_code == 400
-    assert (
-        client.post("/api/dcf/inject-fact", json={"ticker": "NU", "token": "kpi:ROE"}).status_code
-        == 400
-    )
-
-
-def test_inject_fact_rejects_wacc_target(client: FlaskClient) -> None:
-    """WACC is not an injectable field (no input cell) — the route 400s an
-    attempt to target it directly (the guardrail surfaced to the client)."""
-    resp = client.post(
-        "/api/dcf/inject-fact", json={"ticker": "NU", "token": "kpi:ROE", "field": "wacc"}
-    )
-    assert resp.status_code == 400
-    assert "unknown driver field" in resp.get_json()["error"]
-
-
-def test_inject_fact_rejects_unparseable_token(client: FlaskClient) -> None:
-    resp = client.post(
+@pytest.mark.parametrize(
+    "path",
+    (
         "/api/dcf/inject-fact",
-        json={"ticker": "NU", "token": "not-a-token", "field": "near_op_margin"},
-    )
-    assert resp.status_code == 400
-
-
-def test_inject_fact_404_when_no_fcff_workbook(client: FlaskClient) -> None:
-    """A well-formed request for a ticker with no redesigned FCFF workbook (a
-    never-built name, or an archetype model) is a 404 — the happy-path reprice +
-    JSON/xlsx sync is covered end-to-end in test_dcf_redesign."""
-    resp = client.post(
-        "/api/dcf/inject-fact",
-        json={"ticker": "NU", "token": "kpi:ROE", "field": "near_op_margin"},
-    )
-    assert resp.status_code == 404
-    assert "no editable FCFF DCF model" in resp.get_json()["error"]
-
-
-# --------------------------------------------------------------------------- #
-# Inject-fact-SHEET route (S7) — the DIY fact → DCF reference-sheet bridge. HTTP
-# contract here; the survival-across-refresh proof lives in test_dcf_redesign.
-# --------------------------------------------------------------------------- #
-def test_inject_fact_sheet_options_preflight(client: FlaskClient) -> None:
-    assert client.open("/api/dcf/inject-fact-sheet", method="OPTIONS").status_code == 204
-
-
-def test_inject_fact_sheet_requires_ticker_and_token(client: FlaskClient) -> None:
-    assert client.post("/api/dcf/inject-fact-sheet", json={}).status_code == 400
-    assert client.post("/api/dcf/inject-fact-sheet", json={"ticker": "NU"}).status_code == 400
-
-
-def test_inject_fact_sheet_rejects_unparseable_token(client: FlaskClient) -> None:
-    resp = client.post("/api/dcf/inject-fact-sheet", json={"ticker": "NU", "token": "not-a-token"})
-    assert resp.status_code == 400
-
-
-def test_inject_fact_sheet_404_when_no_dcf_model(client: FlaskClient) -> None:
-    """A reference attaches to a ticker's DCF; a never-built name is a 404. The
-    happy-path write + survival is covered end-to-end in test_dcf_redesign."""
-    resp = client.post("/api/dcf/inject-fact-sheet", json={"ticker": "NU", "token": "kpi:ROE"})
-    assert resp.status_code == 404
-    assert "no DCF model" in resp.get_json()["error"]
-
-
-def test_reference_facts_empty_when_none(client: FlaskClient) -> None:
-    resp = client.get("/api/dcf/reference-facts/NU")
-    assert resp.status_code == 200
-    assert resp.get_json() == {"ticker": "NU", "facts": []}
+        "/api/dcf/inject-fact-sheet",
+        "/api/dcf/reference-facts/NU",
+    ),
+)
+def test_explore_to_dcf_fact_injection_routes_are_not_registered(
+    client: FlaskClient, path: str
+) -> None:
+    """Explore cannot mutate DCF inputs or create a DCF fact side channel."""
+    assert client.post(path, json={}).status_code == 404

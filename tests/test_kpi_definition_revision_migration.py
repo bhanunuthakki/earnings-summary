@@ -36,11 +36,7 @@ from pipeline.kpi_semantics import (
     KpiUnitScale,
     persist_kpi_semantic_context,
 )
-from sqlite_runtime import (
-    SQLiteConnectionRole,
-    connect_sqlite,
-    register_sqlite_integrity_functions,
-)
+from sqlite_runtime import register_sqlite_integrity_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0038_add_kpi_definition_revisions"
@@ -56,10 +52,6 @@ def _config(path: Path) -> Config:
     config.set_main_option("script_location", str(ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path.as_posix()}")
     return config
-
-
-def _writer_connection(path: Path) -> sqlite3.Connection:
-    return connect_sqlite(path, role=SQLiteConnectionRole.WRITER)
 
 
 def _raw_guarded_connection(path: Path) -> sqlite3.Connection:
@@ -255,7 +247,7 @@ def test_migration_keeps_unbound_context_explicit_and_enforces_exact_binding(
     migrated_db: Callable[..., Path], tmp_path: Path
 ) -> None:
     path = migrated_db(tmp_path / "kpi-definition-binding.db", target=REVISION)
-    with _writer_connection(path) as conn:
+    with _raw_guarded_connection(path) as conn:
         conn.row_factory = sqlite3.Row
         _seed_authority(conn)
         conn.execute(
@@ -347,7 +339,7 @@ def test_database_rejects_locator_tampering_sibling_branches_and_history_loss(
     migrated_db: Callable[..., Path], tmp_path: Path
 ) -> None:
     path = migrated_db(tmp_path / "kpi-definition-guards.db", target=REVISION)
-    with _writer_connection(path) as conn:
+    with _raw_guarded_connection(path) as conn:
         _seed_authority(conn)
         first = persist_kpi_definition_revision(conn, _definition())
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -549,7 +541,7 @@ def test_migration_round_trips_every_approved_count_scale_and_rejects_invalid_pa
         KpiUnitScale.MILLIONS,
         KpiUnitScale.BILLIONS,
     )
-    with _writer_connection(path) as conn:
+    with _raw_guarded_connection(path) as conn:
         _seed_authority(conn)
         conn.executemany(
             "INSERT INTO kpi_definitions "
@@ -733,7 +725,7 @@ def test_migration_rejects_continuity_across_semantic_axes_and_relation_kinds(
         {"consolidation_scope": KpiConsolidationScope.OTHER},
         {"dimensions": {"customer_plan": "premium"}},
     )
-    with _writer_connection(path) as conn:
+    with _raw_guarded_connection(path) as conn:
         _seed_authority(conn)
         conn.executemany(
             "INSERT INTO kpi_definitions "

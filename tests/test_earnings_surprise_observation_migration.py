@@ -21,7 +21,7 @@ from execution.ingest_earnings_surprises import (
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0038_add_kpi_definition_revisions"
+ACTIVE_HEAD = "0039_add_dcf_forecast_series"
 
 
 def _config(path: Path) -> Config:
