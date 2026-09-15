@@ -132,7 +132,7 @@ def test_signal_links_to_its_source(db: Path) -> None:
 def test_disclosed_scaffolds_are_named_not_promised(db: Path) -> None:
     html = render_diet_panel(db)
     assert "fast-follows" in html
-    assert "buy-side ratings" in html.lower()
+    assert "buy-side ratings" not in html.lower()
     assert "estimate" in html.lower()
 
 

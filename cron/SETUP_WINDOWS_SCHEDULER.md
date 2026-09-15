@@ -42,18 +42,6 @@ schtasks /Delete /TN "\earnings-summary\monthly_p3_refresh" /F
 
 Retained scheduler logs and other historical receipts remain historical evidence; deleting the retired task does not delete them.
 
-The podcast prototype is retired and 13F discovery is planned/dormant. Neither
-is declared by the authoritative manifest. On a host that previously installed
-either task, remove the stale registrations once:
-
-```text
-schtasks /Delete /TN "\earnings-summary\fetch_podcast_rss" /F
-schtasks /Delete /TN "\earnings-summary\fetch_13f" /F
-```
-
-This cleanup removes scheduler controls only. Existing logs, historical signal
-rows, and archived migrations remain retained evidence.
-
 ### Portfolio Tracker runtime
 
 | Task name | Cadence | XML | Wrapper | What it does |
@@ -161,7 +149,7 @@ The failing-only rescan is the cheap mid-week companion to the Sunday full sweep
 ### Prototype scheduler status
 
 `task_manifest.json` remains the sole authority for installed operations; no
-parallel prototype scheduler exists. 13F discovery and SEC-delta planning are
+parallel prototype scheduler exists. SEC-delta planning is
 **planned/dormant**: their implementation remains available for manual development
 and validation, but neither is registered. Podcast RSS/takeaway is **retired**:
 its executable, eval, model budget, and rendered Diet paths are removed, while

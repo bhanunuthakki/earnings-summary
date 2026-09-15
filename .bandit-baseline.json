@@ -1265,19 +1265,6 @@
                                                                        "nosec":  0,
                                                                        "skipped_tests":  0
                                                                    },
-                    "execution\\fetch_13f.py":  {
-                                                    "CONFIDENCE.HIGH":  0,
-                                                    "CONFIDENCE.LOW":  0,
-                                                    "CONFIDENCE.MEDIUM":  0,
-                                                    "CONFIDENCE.UNDEFINED":  0,
-                                                    "SEVERITY.HIGH":  0,
-                                                    "SEVERITY.LOW":  0,
-                                                    "SEVERITY.MEDIUM":  0,
-                                                    "SEVERITY.UNDEFINED":  0,
-                                                    "loc":  142,
-                                                    "nosec":  0,
-                                                    "skipped_tests":  0
-                                                },
                     "execution\\fetch_audio_transcripts.py":  {
                                                                   "CONFIDENCE.HIGH":  0,
                                                                   "CONFIDENCE.LOW":  0,
@@ -2071,19 +2058,6 @@
                                                              "nosec":  0,
                                                              "skipped_tests":  0
                                                          },
-                    "execution\\recalibrate_investor_weights.py":  {
-                                                                       "CONFIDENCE.HIGH":  0,
-                                                                       "CONFIDENCE.LOW":  0,
-                                                                       "CONFIDENCE.MEDIUM":  0,
-                                                                       "CONFIDENCE.UNDEFINED":  0,
-                                                                       "SEVERITY.HIGH":  0,
-                                                                       "SEVERITY.LOW":  0,
-                                                                       "SEVERITY.MEDIUM":  0,
-                                                                       "SEVERITY.UNDEFINED":  0,
-                                                                       "loc":  209,
-                                                                       "nosec":  0,
-                                                                       "skipped_tests":  0
-                                                                   },
                     "execution\\reconcile_decision_actions.py":  {
                                                                      "CONFIDENCE.HIGH":  0,
                                                                      "CONFIDENCE.LOW":  0,
@@ -2383,19 +2357,6 @@
                                                       "nosec":  0,
                                                       "skipped_tests":  0
                                                   },
-                    "execution\\resolve_manager_ciks.py":  {
-                                                               "CONFIDENCE.HIGH":  1,
-                                                               "CONFIDENCE.LOW":  0,
-                                                               "CONFIDENCE.MEDIUM":  0,
-                                                               "CONFIDENCE.UNDEFINED":  0,
-                                                               "SEVERITY.HIGH":  0,
-                                                               "SEVERITY.LOW":  0,
-                                                               "SEVERITY.MEDIUM":  1,
-                                                               "SEVERITY.UNDEFINED":  0,
-                                                               "loc":  239,
-                                                               "nosec":  0,
-                                                               "skipped_tests":  0
-                                                           },
                     "execution\\restore_drill.py":  {
                                                         "CONFIDENCE.HIGH":  0,
                                                         "CONFIDENCE.LOW":  0,
@@ -5373,19 +5334,6 @@
                                                      "nosec":  0,
                                                      "skipped_tests":  0
                                                  },
-                    "src\\discovery\\thirteenf.py":  {
-                                                         "CONFIDENCE.HIGH":  2,
-                                                         "CONFIDENCE.LOW":  0,
-                                                         "CONFIDENCE.MEDIUM":  0,
-                                                         "CONFIDENCE.UNDEFINED":  0,
-                                                         "SEVERITY.HIGH":  0,
-                                                         "SEVERITY.LOW":  1,
-                                                         "SEVERITY.MEDIUM":  1,
-                                                         "SEVERITY.UNDEFINED":  0,
-                                                         "loc":  374,
-                                                         "nosec":  0,
-                                                         "skipped_tests":  0
-                                                     },
                     "src\\dispatch_registry.py":  {
                                                       "CONFIDENCE.HIGH":  4,
                                                       "CONFIDENCE.LOW":  0,
@@ -13828,46 +13776,6 @@
                         "test_name":  "hardcoded_sql_expressions"
                     },
                     {
-                        "code":  "230         )\n231         with urllib.request.urlopen(req, timeout=30) as resp:\n232             body = resp.read()\n",
-                        "col_offset":  13,
-                        "end_col_offset":  52,
-                        "filename":  "execution\\resolve_manager_ciks.py",
-                        "issue_confidence":  "HIGH",
-                        "issue_cwe":  {
-                                          "id":  22,
-                                          "link":  "https://cwe.mitre.org/data/definitions/22.html"
-                                      },
-                        "issue_severity":  "MEDIUM",
-                        "issue_text":  "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
-                        "line_number":  231,
-                        "line_range":  [
-                                           231
-                                       ],
-                        "more_info":  "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
-                        "test_id":  "B310",
-                        "test_name":  "blacklist"
-                    },
-                    {
-                        "code":  "230         )\n231         with urllib.request.urlopen(req, timeout=30) as resp:\n232             body = resp.read()\n",
-                        "col_offset":  13,
-                        "end_col_offset":  52,
-                        "filename":  "execution/resolve_manager_ciks.py",
-                        "issue_confidence":  "HIGH",
-                        "issue_cwe":  {
-                                          "id":  22,
-                                          "link":  "https://cwe.mitre.org/data/definitions/22.html"
-                                      },
-                        "issue_severity":  "MEDIUM",
-                        "issue_text":  "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
-                        "line_number":  231,
-                        "line_range":  [
-                                           231
-                                       ],
-                        "more_info":  "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
-                        "test_id":  "B310",
-                        "test_name":  "blacklist"
-                    },
-                    {
                         "code":  "83             try:\n84                 out[tbl] = int(conn.execute(f\"SELECT COUNT(*) FROM {tbl}\").fetchone()[0])\n85             except sqlite3.DatabaseError:\n",
                         "col_offset":  46,
                         "end_col_offset":  67,
@@ -17990,46 +17898,6 @@
                         "more_info":  "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
                         "test_id":  "B608",
                         "test_name":  "hardcoded_sql_expressions"
-                    },
-                    {
-                        "code":  "117     try:\n118         root = ET.fromstring(xml_text)\n119     except ET.ParseError:\n",
-                        "col_offset":  15,
-                        "end_col_offset":  38,
-                        "filename":  "src\\discovery\\thirteenf.py",
-                        "issue_confidence":  "HIGH",
-                        "issue_cwe":  {
-                                          "id":  20,
-                                          "link":  "https://cwe.mitre.org/data/definitions/20.html"
-                                      },
-                        "issue_severity":  "MEDIUM",
-                        "issue_text":  "Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called",
-                        "line_number":  118,
-                        "line_range":  [
-                                           118
-                                       ],
-                        "more_info":  "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b313-b320-xml-bad-elementtree",
-                        "test_id":  "B314",
-                        "test_name":  "blacklist"
-                    },
-                    {
-                        "code":  "117     try:\n118         root = ET.fromstring(xml_text)\n119     except ET.ParseError:\n",
-                        "col_offset":  15,
-                        "end_col_offset":  38,
-                        "filename":  "src/discovery/thirteenf.py",
-                        "issue_confidence":  "HIGH",
-                        "issue_cwe":  {
-                                          "id":  20,
-                                          "link":  "https://cwe.mitre.org/data/definitions/20.html"
-                                      },
-                        "issue_severity":  "MEDIUM",
-                        "issue_text":  "Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called",
-                        "line_number":  118,
-                        "line_range":  [
-                                           118
-                                       ],
-                        "more_info":  "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b313-b320-xml-bad-elementtree",
-                        "test_id":  "B314",
-                        "test_name":  "blacklist"
                     },
                     {
                         "code":  "225     try:\n226         root = ET.fromstring(xml_text)\n227     except ET.ParseError as exc:\n",

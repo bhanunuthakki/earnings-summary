@@ -15,7 +15,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -414,13 +414,14 @@ def test_thesis_episode_acknowledgement_route_is_idempotent_and_cross_site_safe(
     )
     assert rejected.status_code == 403
 
+    next_review_at = (datetime.now(UTC) + timedelta(days=1)).isoformat()
     first = client.post(
         "/api/thesis-episodes/episode-route/acknowledge",
-        json={"note": "Reviewed", "next_review_at": "2026-09-14T12:00:00+00:00"},
+        json={"note": "Reviewed", "next_review_at": next_review_at},
     )
     second = client.post(
         "/api/thesis-episodes/episode-route/acknowledge",
-        json={"note": "Reviewed", "next_review_at": "2026-09-14T12:00:00+00:00"},
+        json={"note": "Reviewed", "next_review_at": next_review_at},
     )
     assert first.status_code == second.status_code == 200
     assert first.get_json()["state"] == "acknowledged"

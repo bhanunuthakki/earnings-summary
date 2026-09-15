@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ownership disclosure scan"
+  short_description: "Reliable on-demand 13F and Congress scans"
+  default_prompt: "Use $ownership-disclosure-scan to scan recent 13F or congressional disclosures with official-source coverage receipts."
+policy:
+  allow_implicit_invocation: true

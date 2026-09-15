@@ -8,7 +8,7 @@ slower than the disclosure. Freshness, when an issuer publishes it, comes
 from the ``issuer_registry`` overlay.
 
 Resolution chain (all endpoints are the same EDGAR rungs
-``discovery/thirteenf.py`` already uses — UA, throttle, degrade conventions
+other SEC acquisition paths use — UA, throttle, degrade conventions
 mirrored from there):
 
   1. ``www.sec.gov/files/company_tickers_mf.json`` — the fund-ticker map
@@ -90,7 +90,7 @@ class NportReport:
 
 
 # ---------------------------------------------------------------------------
-# Throttled EDGAR GET (mirrors discovery/thirteenf.py)
+# Throttled EDGAR GET
 # ---------------------------------------------------------------------------
 
 _last_request = 0.0

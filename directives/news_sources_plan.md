@@ -38,7 +38,7 @@ Ranking criteria, in order: **cost** (free first, no paid signups), **ToS/licens
 | Source | Cost | ToS / licensing | Latency | Coverage | Maintenance | Verdict |
 |---|---|---|---|---|---|---|
 | **EDGAR 13D / 13G (incl. amendments)** | Free | **Public domain** (SEC fair-access rules: descriptive UA + contact, ≤10 req/s) | 13D: ≤5 business days after crossing 5% (activist intent); 13G: periodic/quarterly (passive) | **Verified live 2026-06-11**: filings appear under the **subject company's** submissions JSON. Note EDGAR's Dec-2024 renaming: new filings are `SCHEDULE 13D` / `SCHEDULE 13G(/A)`, legacy are `SC 13D` / `SC 13G(/A)` — match both | Low (one submissions JSON per ticker, already cached) | **PILOT — implemented** as `edgar_13d` / `edgar_13g` |
-| EDGAR 13F-HR quarterly diffs (curated top-fund list) | Free | Public domain | **~45-day lag** after quarter end (quarterly cadence = low urgency) | Full for US-listed equities | **Not small** — see §4 design sketch | **Scoped, deferred** to its own PR |
+| Ownership disclosures (13F and congressional PTR) | Free | Public records | Filing-lagged | Explicit request scope | Skill-led research | **On demand only** — never a product feed |
 | WhaleWisdom / HedgeFollow / Dataroma scrapes | Free-ish | Scraping against ToS | Same 13F lag | Full | High, fragile | Rejected — EDGAR is the same data, canonical and legal |
 
 ### (c) Product releases / acquisitions / material events
@@ -72,7 +72,7 @@ Category            Always-on (additive)            Ladder on top
 -----------------   -----------------------------   ------------------------------------------
 Rating changes      yf_grades (free, keyless)       FMP headline regex (existing)
                                                     → [Finnhub free key, if yfinance breaks]
-Hedge-fund moves    edgar_13d / edgar_13g           13F-HR quarterly diffs (deferred, §4)
+Hedge-fund moves    edgar_13d / edgar_13g           Ownership disclosures (on demand, §4)
 Material events     edgar_8k (item-coded)           FMP stock-news (existing)
 General news        —                               FMP → [yfinance news, follow-up] → WebSearch+Opus
 ```
@@ -144,30 +144,14 @@ the additive feeds *never replace* FMP/WebSearch rows.
 
 ---
 
-## 4. 13F-HR quarterly diffs — design sketch (deferred)
+## 4. Ownership disclosures — on demand only
 
-Scope kept out of the pilot per the "implement only if it stays small" rule — it is not small:
-
-1. **Curated fund list** (CIK-keyed, config file, ~15–25 funds): Berkshire 0001067983,
-   Pershing Square 0001336528, Third Point, Tiger Global, Coatue, Altimeter, Lone Pine,
-   Viking, Appaloosa, Baupost, Greenlight, Duquesne, Bridgewater, …
-2. Per fund: submissions JSON → two most recent `13F-HR` accessions → fetch each filing's
-   **information table XML** (one extra request per fund per quarter; small).
-3. Aggregate by issuer; **map issuer → tracked ticker**. This is the hard part: info tables
-   key on **CUSIP + issuer name**, not ticker. Options: OpenFIGI API (free key, another
-   dependency) or normalized issuer-name matching against `tracked_companies` (fuzzy,
-   needs a manual alias table for the ~62 names — feasible but fiddly).
-4. Diff latest vs prior quarter per (fund, tracked ticker): new position / full exit /
-   share-count change ≥25% → one `NewsRow` (`source_feed='edgar_13f'`,
-   `published_at` = filing acceptance, headline `"13F: Berkshire Hathaway exits SNOW
-   (-100%, was $1.1B)"`).
-5. State: no extra table needed — recompute the diff from the two cached filings each run;
-   `(ticker, url#fund-quarter)` keys idempotency. Amendments (`13F-HR/A`) must replace, not
-   stack (RESTATEMENT vs NEW HOLDINGS amendment types).
-
-Why deferred: CUSIP/name mapping + amendment semantics are each a day of careful work and
-test fixtures; the cadence is quarterly with a 45-day lag, so there is no urgency premium.
-Effort: one focused PR.
+Quarterly 13F comparisons and congressional Periodic Transaction Report scans are
+not product feeds. They have no scheduler, database writer, discovery/news producer,
+or notification path. Run them explicitly through the tracked
+`ownership-disclosure-scan` skill, which owns first-party source selection,
+amendment reconstruction, provenance, and completeness receipts. Results remain
+foreground research unless the owner explicitly requests a private dated export.
 
 ---
 
@@ -208,4 +192,3 @@ In accordance with Linear issue **BHA-61** and the combined-source data backbone
    - **Tier 2 (Market Core)**: FMP stock-news (curated financial wire).
    - **Tier 3 (Analyst Actions)**: `yf_grades` (keyless, structured).
    - **Tier 4 (Contingency Fallback)**: Curated WebSearch + LLM structuring (fail-closed, deterministic refusal on network failure).
-
