@@ -452,11 +452,24 @@ def css_text(path: Path) -> str:
             _css_text_from_token_prefix(path), _legacy_css_text(path), source_text=text
         )
 
-    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    return _css_text_from_tree(path, text, tree)
+
+
+def _css_text_from_tree(
+    path: Path,
+    text: str,
+    tree: ast.AST,
+    *,
+    nodes: tuple[ast.AST, ...] | None = None,
+) -> _ExtractedSurfaceText:
+    """Extract surface text from an already parsed Python module."""
+
+    parsed_nodes = nodes if nodes is not None else tuple(ast.walk(tree))
+    parents = {child: parent for parent in parsed_nodes for child in ast.iter_child_nodes(parent)}
     candidates = sorted(
         (
             node
-            for node in ast.walk(tree)
+            for node in parsed_nodes
             if isinstance(node, (ast.Constant, ast.JoinedStr, ast.BinOp, ast.Call))
         ),
         key=lambda node: (
@@ -1068,34 +1081,47 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
     found: list[DiscoveredEmitter] = []
     for path in sorted(candidates):
         suffix = path.suffix.lower()
+        tree: ast.AST | None = None
+        nodes: tuple[ast.AST, ...] | None = None
         try:
             raw_source = path.read_text("utf-8")
-            payload = str(css_text(path)) if suffix == ".py" else raw_source
+            if suffix == ".py":
+                try:
+                    tree = ast.parse(raw_source, filename=str(path))
+                except SyntaxError:
+                    payload = str(css_text(path))
+                else:
+                    nodes = tuple(ast.walk(tree))
+                    payload = str(_css_text_from_tree(path, raw_source, tree, nodes=nodes))
+            else:
+                payload = raw_source
         except (OSError, UnicodeError, SyntaxError):
             continue
         adapters, evidence = _emitter_adapters(payload, suffix=suffix)
         adapter_set = set(adapters)
         evidence_set = set(evidence)
+        runtime_source = _normalize_runtime_js_syntax(raw_source)
         if suffix == ".py" and (
-            _RUNTIME_DOM_EMITTER.search(_normalize_runtime_js_syntax(raw_source))
-            or _INDIRECT_VISUAL_INVOCATION.search(_normalize_runtime_js_syntax(raw_source))
-            or _VISUAL_MUTATOR_ALIAS.search(_normalize_runtime_js_syntax(raw_source))
-            or _RUNTIME_HTML_SINK.search(_normalize_runtime_js_syntax(raw_source))
-            or _RUNTIME_STYLE_ELEMENT_SINK.search(_normalize_runtime_js_syntax(raw_source))
-            or _RUNTIME_STYLESHEET_COLLECTION_SINK.search(_normalize_runtime_js_syntax(raw_source))
+            _RUNTIME_DOM_EMITTER.search(runtime_source)
+            or _INDIRECT_VISUAL_INVOCATION.search(runtime_source)
+            or _VISUAL_MUTATOR_ALIAS.search(runtime_source)
+            or _RUNTIME_HTML_SINK.search(runtime_source)
+            or _RUNTIME_STYLE_ELEMENT_SINK.search(runtime_source)
+            or _RUNTIME_STYLESHEET_COLLECTION_SINK.search(runtime_source)
         ):
             adapter_set.add("runtime-js")
             evidence_set.add("runtime-visual-mutation")
         if suffix == ".py" and (
-            _contains_dynamic_tag(raw_source) or _contains_dynamic_html_emitter(raw_source)
+            _contains_dynamic_tag(raw_source)
+            or _contains_dynamic_html_emitter(raw_source, tree=tree, nodes=nodes)
         ):
             adapter_set.add("html")
             evidence_set.add("dynamic-html-markup")
-        if suffix == ".py" and _contains_dynamic_css(raw_source):
+        if suffix == ".py" and _contains_dynamic_css(raw_source, tree=tree, nodes=nodes):
             adapter_set.add("python-css")
             evidence_set.add("dynamic-css-markup")
         if suffix == ".py":
-            opaque_kinds = _opaque_visual_composition_kinds(raw_source)
+            opaque_kinds = _opaque_visual_composition_kinds(raw_source, tree=tree, nodes=nodes)
             if "dynamic-html-markup" in opaque_kinds:
                 adapter_set.add("html")
                 evidence_set.add("dynamic-html-markup")
@@ -1363,10 +1389,18 @@ def _contains_dynamic_tag(text: str) -> bool:
     return False
 
 
-def _contains_dynamic_css(text: str) -> bool:
+def _contains_dynamic_css(
+    text: str,
+    *,
+    tree: ast.AST | None = None,
+    nodes: tuple[ast.AST, ...] | None = None,
+) -> bool:
     """Return whether a Python expression can construct visual CSS dynamically."""
 
-    return any(not item.startswith("opaque-html:") for item in _dynamic_visual_skeletons(text))
+    return any(
+        not item.startswith("opaque-html:")
+        for item in _dynamic_visual_skeletons(text, tree=tree, nodes=nodes)
+    )
 
 
 def _dynamic_string_skeleton(node: ast.AST) -> tuple[str, bool] | None:
@@ -1427,12 +1461,17 @@ def _dynamic_string_skeleton(node: ast.AST) -> tuple[str, bool] | None:
     return None
 
 
-def _dynamic_string_recipes(tree: ast.AST) -> tuple[tuple[str, bool], ...]:
+def _dynamic_string_recipes(
+    tree: ast.AST,
+    *,
+    nodes: tuple[ast.AST, ...] | None = None,
+) -> tuple[tuple[str, bool], ...]:
     """Return only maximal bounded string expressions, never nested fragments."""
 
-    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    parsed_nodes = nodes if nodes is not None else tuple(ast.walk(tree))
+    parents = {child: parent for parent in parsed_nodes for child in ast.iter_child_nodes(parent)}
     recipes: list[tuple[str, bool]] = []
-    for node in ast.walk(tree):
+    for node in parsed_nodes:
         if not isinstance(node, (ast.JoinedStr, ast.BinOp, ast.Call)):
             continue
         parent = parents.get(node)
@@ -1463,13 +1502,20 @@ def _dynamic_html_skeletons(text: str) -> tuple[str, ...]:
     return tuple(sorted(skeletons))
 
 
-def _contains_dynamic_html_emitter(text: str) -> bool:
+def _contains_dynamic_html_emitter(
+    text: str,
+    *,
+    tree: ast.AST | None = None,
+    nodes: tuple[ast.AST, ...] | None = None,
+) -> bool:
     """Limit census evidence to explicit HTML variables and renderer returns."""
 
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return False
+    if tree is None:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return False
+    parsed_nodes = nodes if nodes is not None else tuple(ast.walk(tree))
 
     def is_dynamic_tag(node: ast.AST | None) -> bool:
         if node is None:
@@ -1481,7 +1527,7 @@ def _contains_dynamic_html_emitter(text: str) -> bool:
             and re.search(r"</?\{dynamic\}(?:\s|/?>)", recipe[0], re.IGNORECASE)
         )
 
-    for node in ast.walk(tree):
+    for node in parsed_nodes:
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names = {target.id.lower() for target in targets if isinstance(target, ast.Name)}
@@ -1501,35 +1547,35 @@ def _contains_dynamic_html_emitter(text: str) -> bool:
     return False
 
 
-def _opaque_visual_composition_skeletons(text: str) -> tuple[str, ...]:
+def _opaque_visual_composition_skeletons(
+    text: str,
+    *,
+    tree: ast.AST | None = None,
+    nodes: tuple[ast.AST, ...] | None = None,
+) -> tuple[str, ...]:
     """Pin explicit visual variables that delegate to otherwise opaque code."""
 
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        tree = None
+    if tree is None:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            tree = None
     skeletons: set[str] = set()
     if tree is not None:
-        known_callables = (
-            {
-                alias.asname or alias.name.split(".")[-1]
-                for node in ast.walk(tree)
-                if isinstance(node, (ast.Import, ast.ImportFrom))
-                for alias in node.names
-            }
-            | {
-                node.name
-                for node in ast.walk(tree)
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            }
-            | {
-                argument.arg
-                for node in ast.walk(tree)
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
-            }
-        )
-        for node in ast.walk(tree):
+        parsed_nodes = nodes if nodes is not None else tuple(ast.walk(tree))
+        known_callables: set[str] = set()
+        for node in parsed_nodes:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                known_callables.update(
+                    alias.asname or alias.name.split(".")[-1] for alias in node.names
+                )
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                known_callables.add(node.name)
+                known_callables.update(
+                    argument.arg
+                    for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+                )
+        for node in parsed_nodes:
             targets: list[ast.expr]
             value: ast.expr | None
             if isinstance(node, ast.Assign):
@@ -1583,8 +1629,13 @@ def _opaque_visual_composition_skeletons(text: str) -> tuple[str, ...]:
     return tuple(sorted(skeletons))
 
 
-def _opaque_visual_composition_kinds(text: str) -> frozenset[str]:
-    skeletons = _opaque_visual_composition_skeletons(text)
+def _opaque_visual_composition_kinds(
+    text: str,
+    *,
+    tree: ast.AST | None = None,
+    nodes: tuple[ast.AST, ...] | None = None,
+) -> frozenset[str]:
+    skeletons = _opaque_visual_composition_skeletons(text, tree=tree, nodes=nodes)
     kinds: set[str] = set()
     if any(item.startswith("opaque-html:") for item in skeletons):
         kinds.add("dynamic-html-markup")
@@ -1941,16 +1992,22 @@ def _surface_css_rules(text: str) -> tuple[_CssRule, ...]:
     return (*_css_rules(text), *inline)
 
 
-def _dynamic_visual_skeletons(text: str) -> tuple[str, ...]:
+def _dynamic_visual_skeletons(
+    text: str,
+    *,
+    tree: ast.AST | None = None,
+    nodes: tuple[ast.AST, ...] | None = None,
+) -> tuple[str, ...]:
     """Return normalized dynamic string recipes that contain visual values."""
 
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        tree = None
+    if tree is None:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            tree = None
     marker = "{dynamic}"
     skeletons: set[str] = set()
-    recipes = _dynamic_string_recipes(tree) if tree is not None else ()
+    recipes = _dynamic_string_recipes(tree, nodes=nodes) if tree is not None else ()
     for rendered, _dynamic in recipes:
         dynamic_declaration = any(
             marker in value
@@ -2013,7 +2070,7 @@ def _dynamic_visual_skeletons(text: str) -> tuple[str, ...]:
             or dynamic_style_payload
         ):
             skeletons.add(_normalize_css_fragment(rendered))
-    skeletons.update(_opaque_visual_composition_skeletons(text))
+    skeletons.update(_opaque_visual_composition_skeletons(text, tree=tree, nodes=nodes))
     return tuple(sorted(skeletons))
 
 
