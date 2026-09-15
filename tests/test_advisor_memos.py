@@ -17,6 +17,7 @@ import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from flask.testing import FlaskClient
@@ -36,7 +37,7 @@ from advisor.context import (  # noqa: E402
 )
 from advisor.memos import generate_next_dollar_memo, run_swap_checks  # noqa: E402
 from advisor.store import AdvisorMemoRow, get_memo, insert_memo, list_memos  # noqa: E402
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
     PortfolioAnalytics,
@@ -61,6 +62,11 @@ def advisor_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     )
 
 
+def _memo_summary_line(body: str) -> str:
+    select = cast(Callable[[str], str], getattr(memos_mod, "_memo_summary_line"))
+    return select(body)
+
+
 # --------------------------------------------------------------------------- #
 # _memo_summary_line — the note-sized conclusion selector
 # --------------------------------------------------------------------------- #
@@ -72,7 +78,6 @@ def test_memo_summary_line_selects_bold_lead_not_heading() -> None:
     prose), NOT the heading flattened into the body — the old
     ``startswith("*")`` skipped the bold line as a bullet and fell through to
     dumping the whole body, heading text first."""
-    from advisor.memos import _memo_summary_line
     from llm.postprocess import strip_inline_markdown
 
     body = (
@@ -94,8 +99,6 @@ def test_memo_summary_line_still_skips_structural_markdown() -> None:
     """Headings, blockquotes, table rows, and real ``- ``/``* ``/``+ `` bullets
     are still skipped; a bullet is a marker FOLLOWED BY WHITESPACE, distinct
     from an ``*italic*`` lead (marker + non-space)."""
-    from advisor.memos import _memo_summary_line
-
     assert _memo_summary_line("# Head\n> quote\n- bullet\n* star\n+ plus\nreal prose.") == (
         "real prose."
     )
@@ -261,7 +264,7 @@ def test_screen_never_crowns_a_stub_thesis_candidate() -> None:
     assert only_stub == []
 
 
-def test_load_valuations_flags_stub_thesis_names(tmp_path) -> None:
+def test_load_valuations_flags_stub_thesis_names(tmp_path: Path) -> None:
     """load_valuations joins thesis_state minimally to stamp ``stub_thesis``,
     so the screen's eligibility filter has the signal without re-querying."""
     import sqlite3 as _sqlite3
@@ -542,8 +545,27 @@ def test_compose_memos_page_renders_all_sections(tmp_path: Path) -> None:
 class _NonSpawningRegistry(Registry):
     """Records starts without forking a subprocess (same as the actions tests)."""
 
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
+        del spawn
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
 
 
 @pytest.fixture
