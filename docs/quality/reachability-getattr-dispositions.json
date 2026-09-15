@@ -527,13 +527,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c19552c9a5d2fe565f4882164ab65dc31b01f4cfeab602abb8bfaa77b0babd14",
+      "source_sha256": "4c44de98d77573a20d1ad41a30993aba3c2ffce0597e50e7d3be88c409cd15fc",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "68e2bb1d6e75164095548bafa6161c13df38406fa0fd7063c95619628695dd6f"
+    "source_manifest_sha256": "31861af0ae25725464c494e635c8a4fcc88297ee8e038496a0160e29ffc1934d"
   },
   "schema_version": "reachability-getattr-dispositions/v1"
 }
