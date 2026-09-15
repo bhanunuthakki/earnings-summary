@@ -13,15 +13,23 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-import upgrade_database as upgrade_database_module
-from upgrade_database import ACTIVE_HEAD, UpgradeDatabaseError, upgrade_database
-
-from execution import portfolio_readiness_receipt as readiness_module
-from execution.backup_restore_readiness_receipt import collect_backup_restore_receipt
-from execution.create_sqlite_snapshot import create_snapshot
-from sqlite_snapshot import SnapshotRequest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "execution"))
+
+import upgrade_database as upgrade_database_module  # noqa: E402
+from upgrade_database import (  # noqa: E402
+    ACTIVE_HEAD,
+    UpgradeDatabaseError,
+    upgrade_database,
+)
+
+from execution import portfolio_readiness_receipt as readiness_module  # noqa: E402
+from execution.backup_restore_readiness_receipt import (  # noqa: E402
+    collect_backup_restore_receipt,
+)
+from execution.create_sqlite_snapshot import create_snapshot  # noqa: E402
+from sqlite_snapshot import SnapshotRequest  # noqa: E402
 
 
 def _authoritative_runtime(
@@ -202,6 +210,7 @@ def test_live_upgrade_revalidates_phase0_receipt_while_lock_is_held(
 
     class _Blocked:
         ready = False
+        db_revision = None
         blocking_reasons = ("test_block",)
 
     origin = readiness_module.OriginMainObservation(
@@ -231,14 +240,14 @@ def test_live_upgrade_revalidates_phase0_receipt_while_lock_is_held(
         assert root == runtime_root.resolve()
         return db_path
 
-    def prior_revision(_path: Path) -> tuple[str, ...]:
-        return (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,)
+    def reject_prevalidation_revision_probe(_path: Path) -> tuple[str, ...]:
+        raise AssertionError("live revision classification must follow Phase-0 revalidation")
 
     monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", canonical_db)
     monkeypatch.setattr(
         upgrade_database_module,
         "_read_revisions",
-        prior_revision,
+        reject_prevalidation_revision_probe,
     )
     monkeypatch.setattr(readiness_module, "collect_readiness", collect_under_lock)
     monkeypatch.setattr(readiness_module, "fetch_origin_main", fetch_before_lock)
@@ -252,6 +261,74 @@ def test_live_upgrade_revalidates_phase0_receipt_while_lock_is_held(
         )
 
     assert lock_held is False
+
+
+def test_live_upgrade_classifies_from_readiness_before_any_direct_source_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    db_path.touch()
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text("{}", encoding="utf-8")
+    runtime_root = tmp_path / "runtime"
+    _authoritative_runtime(monkeypatch, runtime_root)
+    mutation_started = False
+    prior_revision = "0038_add_kpi_definition_revisions"
+
+    class _Ready:
+        ready = True
+        db_revision = prior_revision
+        blocking_reasons: tuple[str, ...] = ()
+
+    origin = readiness_module.OriginMainObservation(
+        sha="a" * 40,
+        fetched_at=datetime.now(UTC),
+    )
+
+    def canonical_db(root: Path) -> Path:
+        assert root == runtime_root.resolve()
+        return db_path
+
+    def revisions_only_after_migration(_path: Path) -> tuple[str, ...]:
+        assert mutation_started, "live source was classified before Phase-0 readiness"
+        return (ACTIVE_HEAD,)
+
+    def mark_migration_started(*_args: object, **_kwargs: object) -> None:
+        nonlocal mutation_started
+        mutation_started = True
+
+    def fetch_origin(_root: Path) -> readiness_module.OriginMainObservation:
+        return origin
+
+    def collect_ready(**_kwargs: object) -> _Ready:
+        return _Ready()
+
+    def skip_backup(_source: Path, _destination: Path) -> None:
+        return None
+
+    def accept_integrity(_path: Path) -> None:
+        return None
+
+    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", canonical_db)
+    monkeypatch.setattr(readiness_module, "fetch_origin_main", fetch_origin)
+    monkeypatch.setattr(readiness_module, "collect_readiness", collect_ready)
+    monkeypatch.setattr(upgrade_database_module, "_read_revisions", revisions_only_after_migration)
+    monkeypatch.setattr(upgrade_database_module, "_backup_database", skip_backup)
+    monkeypatch.setattr(upgrade_database_module.command, "upgrade", mark_migration_started)
+    monkeypatch.setattr(upgrade_database_module, "_integrity_check", accept_integrity)
+
+    receipt = upgrade_database(
+        db_path,
+        repo_root=ROOT,
+        runtime_root=runtime_root,
+        phase0_backup_restore_receipt=receipt_path,
+    )
+
+    assert mutation_started is True
+    assert receipt.status == "upgraded"
+    assert receipt.from_revision == prior_revision
+    assert receipt.to_revision == ACTIVE_HEAD
 
 
 def test_explicit_database_outside_runtime_requires_isolated_opt_in(tmp_path: Path) -> None:
