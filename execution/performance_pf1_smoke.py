@@ -7,12 +7,13 @@ import json
 import os
 import resource
 import sys
-import xml.etree.ElementTree as ET
 from contextlib import redirect_stderr, redirect_stdout
 from io import TextIOBase
 from pathlib import Path
 
 import pytest
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -63,7 +64,7 @@ def _sha256(data: bytes) -> str:
 
 
 def _executed_nodes(junit_path: Path) -> tuple[str, ...]:
-    root = ET.fromstring(junit_path.read_bytes())
+    root = ElementTree.fromstring(junit_path.read_bytes())
     nodes: list[str] = []
     for case in root.iter("testcase"):
         if any(case.find(state) is not None for state in ("failure", "error", "skipped")):
@@ -125,7 +126,14 @@ def main() -> int:
             "peak_rss_bytes": max(0, peak_rss),
         }
         print(json.dumps(companion, sort_keys=True, separators=(",", ":")))
-    except (KeyError, OSError, ET.ParseError, ValueError, _OutputLimitError):
+    except (
+        KeyError,
+        OSError,
+        ElementTree.ParseError,
+        DefusedXmlException,
+        ValueError,
+        _OutputLimitError,
+    ):
         return 1
     return 0
 

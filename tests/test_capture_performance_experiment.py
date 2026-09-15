@@ -431,6 +431,43 @@ def test_smoke_adapter_bounds_in_process_pytest_output(
     assert (output / "pytest.stdout").stat().st_size <= MAX_COMPANION_OUTPUT_BYTES
 
 
+def test_smoke_adapter_rejects_xml_entities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import performance_pf1_smoke as smoke
+
+    root = Path(__file__).resolve().parents[1]
+    output = tmp_path / "output"
+    output.mkdir()
+    fixture = root / smoke.FIXTURE_PATH
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("PERFORMANCE_EXPERIMENT_OUTPUT_DIR", str(output))
+    monkeypatch.setenv("PERFORMANCE_EXPERIMENT_REVISION", "a" * 40)
+    monkeypatch.setenv(
+        "PERFORMANCE_EXPERIMENT_FIXTURE_SHA256",
+        hashlib.sha256(fixture.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setenv("PERFORMANCE_EXPERIMENT_WORKLOAD_ID", smoke.WORKLOAD_ID)
+
+    def entity_junit(argv: list[str]) -> pytest.ExitCode:
+        junit_arg = next(value for value in argv if value.startswith("--junitxml="))
+        junit = Path(junit_arg.split("=", 1)[1])
+        cases = "".join(
+            f'<testcase classname="tests.test_capture_poller" name="{node.rsplit("::", 1)[1]}" />'
+            for node in smoke.SELECTED_NODES
+        )
+        junit.write_text(
+            '<!DOCTYPE testsuites [<!ENTITY injected "unexpected">]>'
+            f'<testsuites name="&injected;"><testsuite>{cases}</testsuite></testsuites>',
+            encoding="utf-8",
+        )
+        return pytest.ExitCode.OK
+
+    monkeypatch.setattr(smoke.pytest, "main", entity_junit)
+    assert smoke.main() == 1
+
+
 def test_safe_tar_capability_is_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import quality.performance_experiment as performance
 
