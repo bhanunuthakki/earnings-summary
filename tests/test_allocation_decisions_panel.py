@@ -20,10 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -609,7 +606,11 @@ CREATE TABLE decisions (
 """
 
 
-def _memo_db(tmp_path: Path, name: str = "coach.db") -> Path:
+def _memo_db(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    name: str = "coach.db",
+) -> Path:
     """Alembic-built DB through head — carries advisor_memos (0077, widened to
     admit 'position_review' by 0140), stance_scores (0078), and
     coach_pings/coach_mutes (0131). Stamps past baseline first (the ``client``
@@ -617,11 +618,13 @@ def _memo_db(tmp_path: Path, name: str = "coach.db") -> Path:
     already exists, which an empty file doesn't have. ``decisions`` is hand-
     built post-upgrade (see ``_MEMO_TEST_DECISIONS_DDL``)."""
     db = tmp_path / name
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(
+        db,
+        stamp=_PRIOR_HEAD,
+        target="head",
+        archived=True,
+        reanchor_to_active_head=True,
+    )
     conn = sqlite3.connect(str(db))
     try:
         conn.executescript(_MEMO_TEST_DECISIONS_DDL)
@@ -700,8 +703,8 @@ def _insert_owner_decision(db: Path, *, ticker: str, kind: str, made_at: str) ->
 _NOW = datetime(2026, 7, 15)
 
 
-def test_coach_pnl_all_zero_is_honest(tmp_path: Path) -> None:
-    db = _memo_db(tmp_path)
+def test_coach_pnl_all_zero_is_honest(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    db = _memo_db(tmp_path, migrated_db)
     pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.reviews_run == 0
     assert pnl.guard_fired == 0 and pnl.overridden == 0
@@ -711,8 +714,10 @@ def test_coach_pnl_all_zero_is_honest(tmp_path: Path) -> None:
     assert "Reviews run: <b>0</b> — the guard has never been exercised." in html
 
 
-def test_coach_pnl_counts_reviews_guard_fires_and_grades(tmp_path: Path) -> None:
-    db = _memo_db(tmp_path)
+def test_coach_pnl_counts_reviews_guard_fires_and_grades(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _memo_db(tmp_path, migrated_db)
     _insert_review_memo(db, ticker="NU", verdict_source="llm", created_at="2026-06-01T00:00:00")
     m2 = _insert_review_memo(
         db, ticker="META", verdict_source="guard_override", created_at="2026-06-02T00:00:00"
@@ -733,12 +738,14 @@ def test_coach_pnl_counts_reviews_guard_fires_and_grades(tmp_path: Path) -> None
     assert "/api/peek/memo/position_review" in html
 
 
-def test_coach_pnl_candidate_split_and_attestation_promotes_to_changed(tmp_path: Path) -> None:
+def test_coach_pnl_candidate_split_and_attestation_promotes_to_changed(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """An eligible-but-unconfirmed guard_override is a CANDIDATE, never a
     changed decision (silence is the platform default, not evidence). Only an
     explicit owner attestation counts toward the Q3'26 target — and once it
     does, the row leaves the candidate line."""
-    db = _memo_db(tmp_path)
+    db = _memo_db(tmp_path, migrated_db)
     # Heeded-so-far: guard held NU, window elapsed, no sell/trim -> candidate.
     nu_id = _insert_review_memo(
         db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
@@ -767,11 +774,13 @@ def test_coach_pnl_candidate_split_and_attestation_promotes_to_changed(tmp_path:
     assert "Candidates (eligible, unconfirmed)" not in html2
 
 
-def test_coach_pnl_window_not_elapsed_excludes_candidate(tmp_path: Path) -> None:
+def test_coach_pnl_window_not_elapsed_excludes_candidate(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """A guard_override whose 30d window hasn't fully elapsed is NOT yet a
     candidate — a memo written today trivially has no later sell, which must not
     tick the counter."""
-    db = _memo_db(tmp_path)
+    db = _memo_db(tmp_path, migrated_db)
     # Created 5 days before now: 5d < 30d window -> not eligible yet.
     _insert_review_memo(
         db, ticker="NU", verdict_source="guard_override", created_at="2026-07-10T00:00:00"
@@ -786,11 +795,13 @@ def test_coach_pnl_window_not_elapsed_excludes_candidate(tmp_path: Path) -> None
     assert pnl_later.candidate == 1
 
 
-def test_coach_pnl_agent_source_reviews_are_excluded(tmp_path: Path) -> None:
+def test_coach_pnl_agent_source_reviews_are_excluded(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """A review persisted by an agent/CI run (context source='agent') never
     enters ANY count — reviews_run, guard_fired, or the change tally — so an
     automated verification run can't inflate the owner-facing scoreboard."""
-    db = _memo_db(tmp_path)
+    db = _memo_db(tmp_path, migrated_db)
     # Owner-driven guard_override (no source tag = legacy owner row) -> counts.
     _insert_review_memo(
         db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
@@ -847,10 +858,10 @@ def test_coach_attest_change_route_marks_memo(client: FlaskClient, tmp_path: Pat
     assert client.post("/api/coach/attest-change", json={}).status_code == 400
 
 
-def test_attest_review_changed_guardrails(tmp_path: Path) -> None:
+def test_attest_review_changed_guardrails(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
     """The write path never fabricates a positive: an unknown memo, another
     user's memo, and a repeat attestation all return False."""
-    db = _memo_db(tmp_path)
+    db = _memo_db(tmp_path, migrated_db)
     memo_id = _insert_review_memo(
         db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
     )
@@ -904,10 +915,12 @@ def _insert_mute(db: Path, *, class_: str, muted_at: str, reason: str | None = N
         conn.close()
 
 
-def test_coach_pings_section_renders_seeded_rows_this_month(tmp_path: Path) -> None:
+def test_coach_pings_section_renders_seeded_rows_this_month(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     from datetime import datetime
 
-    db = _memo_db(tmp_path)
+    db = _memo_db(tmp_path, migrated_db)
     now = datetime(2026, 7, 10)
     _insert_ping(
         db,
@@ -931,14 +944,18 @@ def test_coach_pings_section_renders_seeded_rows_this_month(tmp_path: Path) -> N
     assert "intent_followup" not in html
 
 
-def test_coach_pings_section_empty_state_is_one_line(tmp_path: Path) -> None:
-    db = _memo_db(tmp_path)
+def test_coach_pings_section_empty_state_is_one_line(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _memo_db(tmp_path, migrated_db)
     html = _coach_pings_section(db)
     assert "No pings this month." in html
 
 
-def test_coach_mutes_section_renders_row_with_unmute_button(tmp_path: Path) -> None:
-    db = _memo_db(tmp_path)
+def test_coach_mutes_section_renders_row_with_unmute_button(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _memo_db(tmp_path, migrated_db)
     _insert_mute(db, class_="falsifier_breach", muted_at="2026-07-02T00:00:00")
     html = _coach_mutes_section(db)
     assert "falsifier_breach" in html
@@ -947,14 +964,18 @@ def test_coach_mutes_section_renders_row_with_unmute_button(tmp_path: Path) -> N
     assert "/api/coach/unmute" in html  # wired via _UNMUTE_JS
 
 
-def test_coach_mutes_section_empty_state_is_one_line(tmp_path: Path) -> None:
-    db = _memo_db(tmp_path)
+def test_coach_mutes_section_empty_state_is_one_line(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _memo_db(tmp_path, migrated_db)
     html = _coach_mutes_section(db)
     assert "No active mutes." in html
 
 
-def test_coach_digest_section_renders_and_empty_state(tmp_path: Path) -> None:
-    db = _memo_db(tmp_path)
+def test_coach_digest_section_renders_and_empty_state(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _memo_db(tmp_path, migrated_db)
     empty_html = _coach_digest_section(db)
     assert "Digest is empty." in empty_html
 

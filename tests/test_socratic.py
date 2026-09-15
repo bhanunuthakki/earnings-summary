@@ -20,14 +20,12 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -48,7 +46,7 @@ from advisor.socratic import (  # noqa: E402
 )
 from advisor.store import AdvisorMemoRow, get_memo  # noqa: E402
 from decision_calibration import CalibrationStats, ConvictionBucket  # noqa: E402
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
     PortfolioAnalytics,
@@ -65,8 +63,26 @@ class _NonSpawningRegistry(Registry):
     that a job got registered, not that ``run_socratic_questions.py``
     actually completes end to end."""
 
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
 
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
@@ -104,14 +120,15 @@ CREATE TABLE IF NOT EXISTS llm_artifacts (
 """
 
 
-def _build_db(tmp_path: Path) -> Path:
+def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(
+        db,
+        stamp=_PRIOR_HEAD,
+        target="head",
+        archived=True,
+        reanchor_to_active_head=True,
+    )
     conn = sqlite3.connect(str(db))
     try:
         conn.execute(_LLM_ARTIFACTS_DDL)
@@ -232,9 +249,9 @@ _MEMO_BODY = (
 
 
 def test_decision_memo_persists_stance_horizon_ledger_and_transcript(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    db = _build_db(tmp_path)
+    db = _build_db(tmp_path, migrated_db)
     seen: dict[str, object] = {}
 
     def fake_llm(prompt: str, **kwargs: object) -> str:
@@ -286,9 +303,9 @@ def test_decision_memo_validates_owner_first_inputs(tmp_path: Path) -> None:
 
 
 def test_decision_memo_missing_stance_still_persists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    db = _build_db(tmp_path)
+    db = _build_db(tmp_path, migrated_db)
 
     def no_stance(*a: object, **k: object) -> str:
         return "## Bull\nfine\n## Stance if forced\nunclear"
@@ -303,9 +320,9 @@ def test_decision_memo_missing_stance_still_persists(
 
 
 def test_decision_memo_transient_vs_hard_stop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    _build_db(tmp_path)
+    _build_db(tmp_path, migrated_db)
     ctx = _ctx(tmp_path)
 
     def transient(*a: object, **k: object) -> str:
@@ -440,12 +457,15 @@ def test_questions_prompt_carries_the_premortem(
         prompts.append(prompt)
         return "1. read?\n2. horizon?\n3. wrong?"
 
+    def fake_premortem(
+        repo_root: Path | str,
+        ticker: str,
+        **_kwargs: object,
+    ) -> str:
+        return "**Pre-mortem:**\n1. like RBRK, you size up before the print"
+
     monkeypatch.setattr(socratic_mod, "call_llm", fake_llm)
-    monkeypatch.setattr(
-        calibration_coach,
-        "premortem_block",
-        lambda *_a, **_k: "**Pre-mortem:**\n1. like RBRK, you size up before the print",
-    )
+    monkeypatch.setattr(calibration_coach, "premortem_block", fake_premortem)
     generate_questions(tmp_path, "NU", ctx=_ctx(tmp_path))
     assert "like RBRK, you size up before the print" in prompts[0]
     assert "Pre-mortem" in prompts[0] and "strongest parallel" in prompts[0].lower()
@@ -459,10 +479,20 @@ def test_questions_prompt_degrades_without_premortem(
     import calibration_coach
 
     prompts: list[str] = []
-    monkeypatch.setattr(
-        socratic_mod, "call_llm", lambda p, **_k: prompts.append(p) or "1. a?\n2. b?\n3. c?"
-    )
-    monkeypatch.setattr(calibration_coach, "premortem_block", lambda *_a, **_k: "")
+
+    def capture_llm(prompt: str, **_kwargs: object) -> str:
+        prompts.append(prompt)
+        return "1. a?\n2. b?\n3. c?"
+
+    def empty_premortem(
+        repo_root: Path | str,
+        ticker: str,
+        **_kwargs: object,
+    ) -> str:
+        return ""
+
+    monkeypatch.setattr(socratic_mod, "call_llm", capture_llm)
+    monkeypatch.setattr(calibration_coach, "premortem_block", empty_premortem)
     prelude = generate_questions(tmp_path, "NU", ctx=_ctx(tmp_path))
     assert len(prelude.questions) == 3
     assert "no pre-mortem" in prompts[0]
@@ -473,8 +503,10 @@ def test_questions_prompt_degrades_without_premortem(
 # --------------------------------------------------------------------------- #
 
 
-def test_persist_and_read_current_prelude_roundtrip(tmp_path: Path) -> None:
-    db = _build_db(tmp_path)
+def test_persist_and_read_current_prelude_roundtrip(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _build_db(tmp_path, migrated_db)
     prelude = SocraticPrelude(
         ticker="NU", questions=["Your read?", "Horizon?", "What breaks it?"], context_block="ctx"
     )
@@ -488,15 +520,19 @@ def test_persist_and_read_current_prelude_roundtrip(tmp_path: Path) -> None:
     assert got.context_block == "ctx"
 
 
-def test_read_current_prelude_none_before_any_run(tmp_path: Path) -> None:
-    db = _build_db(tmp_path)
+def test_read_current_prelude_none_before_any_run(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _build_db(tmp_path, migrated_db)
     assert read_current_prelude(db, "NU") is None
 
 
-def test_persist_prelude_each_call_lands_a_fresh_row(tmp_path: Path) -> None:
+def test_persist_prelude_each_call_lands_a_fresh_row(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """Each generate click is a deliberate new LLM spend — never served
     stale from an artifact cache keyed only on ticker."""
-    db = _build_db(tmp_path)
+    db = _build_db(tmp_path, migrated_db)
     persist_prelude(
         db, SocraticPrelude(ticker="NU", questions=["a?", "b?", "c?"], context_block="1")
     )
@@ -508,7 +544,7 @@ def test_persist_prelude_each_call_lands_a_fresh_row(tmp_path: Path) -> None:
 
 
 def test_run_socratic_questions_script_persists_prelude(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
     """The background job's actual entrypoint
     (execution/run_socratic_questions.py), exercised in-process (no real
@@ -516,7 +552,7 @@ def test_run_socratic_questions_script_persists_prelude(
     level it's imported from — the script's OWN job is the persist step, not
     re-proving generate_questions' grounding (already covered above); this
     also keeps the test offline (no tracker/network round-trip)."""
-    db = _build_db(tmp_path)
+    db = _build_db(tmp_path, migrated_db)
 
     def fake_generate(repo_root: Path, ticker: str, **_kwargs: object) -> SocraticPrelude:
         return SocraticPrelude(
@@ -567,8 +603,11 @@ def test_run_socratic_questions_script_exit_1_when_persistence_fails(
             ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c"
         )
 
+    def fail_persist(db_path: Path, prelude: SocraticPrelude) -> None:
+        return None
+
     monkeypatch.setattr(socratic_mod, "generate_questions", fake_generate)
-    monkeypatch.setattr(socratic_mod, "persist_prelude", lambda *_a, **_k: None)
+    monkeypatch.setattr(socratic_mod, "persist_prelude", fail_persist)
 
     import run_socratic_questions
 
@@ -582,8 +621,12 @@ def test_run_socratic_questions_script_exit_1_when_persistence_fails(
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
-    _build_db(tmp_path)
+def client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> FlaskClient:
+    _build_db(tmp_path, migrated_db)
 
     # The flow builds its context against the test repo root; keep it offline-
     # deterministic by mocking only the LLM boundary.
