@@ -5,62 +5,110 @@
     {
       "name": "production module count",
       "provisional_expected": 1291,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": 1342,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "architecture.raw",
+        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "locator": "$.metrics"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 16"
+      },
+      "note": "Fresh typed generator corrects the provisional value. Unverified map annotation (display only): verified_baseline; production Python modules under src plus execution."
     },
     {
       "name": "production noncomment LOC",
       "provisional_expected": 554615,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": 500106,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "architecture.raw",
+        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "locator": "$.metrics"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 16"
+      },
+      "note": "Fresh typed generator corrects the provisional value. Unverified map annotation (display only): verified_baseline; production noncomment lines under src plus execution."
     },
     {
       "name": "scc count",
       "provisional_expected": 16,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": 17,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "architecture.raw",
+        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "locator": "$.metrics"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 26"
+      },
+      "note": "Fresh typed generator corrects the provisional value. Unverified map annotation (display only): provisional_inventory; strongly connected components in provisional static import topology."
     },
     {
       "name": "largest scc",
       "provisional_expected": 24,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": 25,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "architecture.raw",
+        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "locator": "$.metrics"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 26"
+      },
+      "note": "Fresh typed generator corrects the provisional value. Unverified map annotation (display only): provisional_inventory; largest SCC member count in provisional static import topology."
     },
     {
       "name": "exact duplicate groups",
       "provisional_expected": 140,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": 8,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "duplicates.raw",
+        "sha256": "c14795a319e6a20485c95401622f00871dac8a86389818e50de8304992d5eaf3",
+        "locator": "$.exact_totals"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 27"
+      },
+      "note": "Fresh typed generator corrects the provisional value. Unverified map annotation (display only): provisional_inventory; provisional exact AST-body duplicate groups."
     },
     {
       "name": "exact duplicate functions",
       "provisional_expected": 397,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": 19,
+      "verdict": "corrected",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "duplicates.raw",
+        "sha256": "c14795a319e6a20485c95401622f00871dac8a86389818e50de8304992d5eaf3",
+        "locator": "$.exact_totals"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 27"
+      },
+      "note": "Fresh typed generator corrects the provisional value. Unverified map annotation (display only): provisional_inventory; provisional exact AST-body participating functions."
     },
     {
       "name": "ruff diagnostics",
@@ -69,8 +117,12 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 29"
+      },
+      "note": "receipt status is not PASS Unverified map annotation (display only): historical_receipt; whole-tree Ruff errors from current direct checks."
     },
     {
       "name": "pyright diagnostics",
@@ -79,8 +131,12 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 29"
+      },
+      "note": "receipt status is not PASS Unverified map annotation (display only): historical_receipt; current local venv strict-Pyright diagnostics over 2380 files."
     },
     {
       "name": "test files",
@@ -89,8 +145,12 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 31"
+      },
+      "note": "receipt audit status is not PASS Unverified map annotation (display only): verified_baseline; test infrastructure file inventory."
     },
     {
       "name": "upgrade builders",
@@ -99,8 +159,12 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 31"
+      },
+      "note": "receipt audit status is not PASS Unverified map annotation (display only): verified_baseline; test files containing direct command.upgrade."
     },
     {
       "name": "migrated builders",
@@ -109,8 +173,12 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 31"
+      },
+      "note": "receipt audit status is not PASS Unverified map annotation (display only): verified_baseline; test files using migrated_db."
     },
     {
       "name": "ddl builders",
@@ -119,28 +187,48 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 31"
+      },
+      "note": "receipt audit status is not PASS Unverified map annotation (display only): verified_baseline; test files containing hand-written DDL."
     },
     {
       "name": "theme live edge",
       "provisional_expected": true,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "reachability.raw",
+        "sha256": "4e0ecc69968e541cd5bc672c249013ccfbad9598a5da225281102073bffb3048",
+        "locator": "$.edges"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 41"
+      },
+      "note": "Fresh typed generator reproduces the provisional value. Unverified map annotation (display only): audit_correction; historical audit correction that theme_synth is live."
     },
     {
       "name": "refetch absence",
       "provisional_expected": true,
-      "observed": null,
-      "verdict": "rejected",
-      "scored_eligible": false,
-      "evidence": null,
-      "provisional_evidence": null,
-      "note": "Roadmap source is missing or tampered."
+      "observed": true,
+      "verdict": "verified",
+      "scored_eligible": true,
+      "evidence": {
+        "path": "architecture.raw",
+        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "locator": "$.metrics"
+      },
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 42"
+      },
+      "note": "Fresh typed generator reproduces the provisional value. Unverified map annotation (display only): audit_correction; historical audit correction for the missing refetch aggregator path."
     },
     {
       "name": "full suite seconds",
@@ -149,8 +237,12 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Provisional roadmap states no scorable value for this metric."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 29"
+      },
+      "note": "Provisional roadmap states no scorable value for this metric. Unverified map annotation (display only): historical_receipt; prior merged full local suite receipt."
     },
     {
       "name": "unreachable scripts",
@@ -159,20 +251,27 @@
       "verdict": "rejected",
       "scored_eligible": false,
       "evidence": null,
-      "provisional_evidence": null,
-      "note": "Provisional roadmap states no scorable value for this metric."
+      "provisional_evidence": {
+        "path": "roadmap.context.md",
+        "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+        "locator": "line 36"
+      },
+      "note": "Provisional roadmap states no scorable value for this metric. Unverified map annotation (display only): provisional_inventory; provisional executable-script investigation queue."
     }
   ],
-  "scored_claims": 0,
-  "rejected_claims": 16,
-  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "scored_claims": 8,
+  "rejected_claims": 8,
+  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
   "worktree_dirty": false,
-  "source_hash": "c49d3af72fdac8197d2e98719671d884ce1fcc760816db454ce1419d2746b39b",
-  "roadmap_source": null,
+  "source_hash": "59f7b9d9c73e37c8089493d306e25ec7ff8044159cf7e3abcdd05577453fc3ae",
+  "roadmap_source": {
+    "path": "roadmap.context.md",
+    "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",
+    "locator": "baseline section; Linear document identity externally unverified"
+  },
   "claim_manifest_sha256": "31bd59868279a7d8addc20c497f5694e4796acb45b128ba12cc9bd820671d2f7",
   "violations": [
-    "staged roadmap claims is missing",
-    "staged roadmap is missing",
-    "staged root overlaps subject"
+    "inadmissible staged receipt static: receipt status is not PASS",
+    "inadmissible staged receipt test_db: receipt audit status is not PASS"
   ]
 }

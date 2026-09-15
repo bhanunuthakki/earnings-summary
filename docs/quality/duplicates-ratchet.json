@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
-  "source_hash": "c8f360f677c5f843752e37c311bd091d71d42d2c9d44a736134972c65e22a613",
+  "commit_hash": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "source_hash": "5da92a9afb636e91e020557ed2dca992343fed2304017b7e09dab12316ca3771",
   "scanner_hash": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -10,8 +10,8 @@
     "min_ast_nodes": 20,
     "min_body_lines": 15
   },
-  "files_scanned": 1347,
-  "functions_scanned": 14635,
+  "files_scanned": 1342,
+  "functions_scanned": 14534,
   "exact_groups": [
     {
       "group_id": "exact-008cef8bb5653e6d",
@@ -268,31 +268,6 @@
       ]
     },
     {
-      "group_id": "near-05afb8197f1930e9",
-      "similarity": 0.900227,
-      "duplicated_loc": 84,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_fintech_sotp",
-          "lineno": 728,
-          "end_lineno": 770,
-          "body_lines": 42,
-          "ast_nodes": 248,
-          "normalized_hash": "7cf8cc51ed19863ed7b3514ccbcdf3818c06546c66c442f77d592df8b38ed6ea"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_platform",
-          "lineno": 773,
-          "end_lineno": 815,
-          "body_lines": 42,
-          "ast_nodes": 248,
-          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
-        }
-      ]
-    },
-    {
       "group_id": "near-0b295602108b70cc",
       "similarity": 0.857456,
       "duplicated_loc": 45,
@@ -418,27 +393,27 @@
       ]
     },
     {
-      "group_id": "near-0fb1baf2feef0162",
-      "similarity": 0.911379,
-      "duplicated_loc": 97,
+      "group_id": "near-1043f228e056ea5d",
+      "similarity": 0.870036,
+      "duplicated_loc": 34,
       "functions": [
         {
-          "path": "src/evals/corpora.py",
-          "qualified_name": "load_incremental_dollar_recommendation_corpus",
-          "lineno": 742,
-          "end_lineno": 791,
-          "body_lines": 49,
-          "ast_nodes": 207,
-          "normalized_hash": "f8c7d859ad75813c6e79d86677ae1b898a57f70a4185b391e243bee98eacfb94"
+          "path": "src/ask/context.py",
+          "qualified_name": "tracked_tickers",
+          "lineno": 46,
+          "end_lineno": 65,
+          "body_lines": 19,
+          "ast_nodes": 94,
+          "normalized_hash": "d305158785ec8ddc5cacc92916e31519d0beefc340ac956b950e791e2dee7b0d"
         },
         {
-          "path": "src/evals/corpora.py",
-          "qualified_name": "load_senior_partner_brief_corpus",
-          "lineno": 848,
-          "end_lineno": 896,
-          "body_lines": 48,
-          "ast_nodes": 207,
-          "normalized_hash": "09ba96679f6e7b9cfdad0cb7e4f60e52c8d1de2ea79ffb625a22a92cbe29ce53"
+          "path": "src/viewspec/nl_compile.py",
+          "qualified_name": "_tracked_tickers",
+          "lineno": 94,
+          "end_lineno": 109,
+          "body_lines": 15,
+          "ast_nodes": 94,
+          "normalized_hash": "cf95abeb84f5fb2b1a91b55c80c880c212f7a00d7e99cdae0779884efa7b8014"
         }
       ]
     },
@@ -868,6 +843,31 @@
       ]
     },
     {
+      "group_id": "near-3048e3c676a359bd",
+      "similarity": 0.91922,
+      "duplicated_loc": 75,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_bank",
+          "lineno": 651,
+          "end_lineno": 684,
+          "body_lines": 33,
+          "ast_nodes": 248,
+          "normalized_hash": "488f3766be7e56aaece83e85b04e6a0dc31f853e9184efc6df69c10788f4b79b"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_fintech_sotp",
+          "lineno": 730,
+          "end_lineno": 772,
+          "body_lines": 42,
+          "ast_nodes": 248,
+          "normalized_hash": "7cf8cc51ed19863ed7b3514ccbcdf3818c06546c66c442f77d592df8b38ed6ea"
+        }
+      ]
+    },
+    {
       "group_id": "near-3127eaeb60f6b8c4",
       "similarity": 0.980282,
       "duplicated_loc": 54,
@@ -1039,31 +1039,6 @@
           "body_lines": 24,
           "ast_nodes": 124,
           "normalized_hash": "6a9645fbb46835748f7dbb884af76043ad715e5b32998a9615c807ea529f1f6f"
-        }
-      ]
-    },
-    {
-      "group_id": "near-3bd45122b7096024",
-      "similarity": 0.912377,
-      "duplicated_loc": 39,
-      "functions": [
-        {
-          "path": "src/discovery/thirteenf.py",
-          "qualified_name": "_sec_get",
-          "lineno": 302,
-          "end_lineno": 321,
-          "body_lines": 19,
-          "ast_nodes": 102,
-          "normalized_hash": "4454cbe5f4026ce7fab4af99e84d566960a86196ac2fd12ab19f208d86f62a25"
-        },
-        {
-          "path": "src/etf_sources/nport.py",
-          "qualified_name": "_sec_get",
-          "lineno": 107,
-          "end_lineno": 127,
-          "body_lines": 20,
-          "ast_nodes": 106,
-          "normalized_hash": "c8c3df14ffd362ed448c8d5ba93c0d2d31d8e73b6404c2c6b1ac1778db98fd61"
         }
       ]
     },
@@ -1418,27 +1393,27 @@
       ]
     },
     {
-      "group_id": "near-53233f5c0c7a633f",
-      "similarity": 0.91922,
-      "duplicated_loc": 75,
+      "group_id": "near-510778ae41604511",
+      "similarity": 0.900227,
+      "duplicated_loc": 84,
       "functions": [
         {
           "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_bank",
-          "lineno": 649,
-          "end_lineno": 682,
-          "body_lines": 33,
-          "ast_nodes": 248,
-          "normalized_hash": "488f3766be7e56aaece83e85b04e6a0dc31f853e9184efc6df69c10788f4b79b"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
           "qualified_name": "_refresh_fintech_sotp",
-          "lineno": 728,
-          "end_lineno": 770,
+          "lineno": 730,
+          "end_lineno": 772,
           "body_lines": 42,
           "ast_nodes": 248,
           "normalized_hash": "7cf8cc51ed19863ed7b3514ccbcdf3818c06546c66c442f77d592df8b38ed6ea"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_platform",
+          "lineno": 775,
+          "end_lineno": 817,
+          "body_lines": 42,
+          "ast_nodes": 248,
+          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
         }
       ]
     },
@@ -1777,6 +1752,56 @@
       ]
     },
     {
+      "group_id": "near-6ad17172115f420d",
+      "similarity": 0.897909,
+      "duplicated_loc": 36,
+      "functions": [
+        {
+          "path": "src/discovery/adjacency.py",
+          "qualified_name": "portfolio_tickers",
+          "lineno": 260,
+          "end_lineno": 278,
+          "body_lines": 18,
+          "ast_nodes": 100,
+          "normalized_hash": "6a5f4430dd6fd6e66b130ce5c2de21d5b5b522ff1815303dc209ddf675abea80"
+        },
+        {
+          "path": "src/pipeline/explore_panel.py",
+          "qualified_name": "_default_tickers",
+          "lineno": 54,
+          "end_lineno": 72,
+          "body_lines": 18,
+          "ast_nodes": 95,
+          "normalized_hash": "51c149478618970e1347d62272a523c8c8b0a1e7bfdca81b1c1e49b23348d347"
+        }
+      ]
+    },
+    {
+      "group_id": "near-6bf4eab494f6e54b",
+      "similarity": 0.890386,
+      "duplicated_loc": 84,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_holdco",
+          "lineno": 687,
+          "end_lineno": 727,
+          "body_lines": 40,
+          "ast_nodes": 254,
+          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_meli_sotp",
+          "lineno": 820,
+          "end_lineno": 864,
+          "body_lines": 44,
+          "ast_nodes": 248,
+          "normalized_hash": "9773ae569770b0610919433a039ebdb37eb9da1b74c179e088f5136463cc365a"
+        }
+      ]
+    },
+    {
       "group_id": "near-6d0a0b30e04b54a2",
       "similarity": 0.921875,
       "duplicated_loc": 80,
@@ -2011,6 +2036,31 @@
       ]
     },
     {
+      "group_id": "near-70487529b612abb1",
+      "similarity": 0.916324,
+      "duplicated_loc": 82,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_holdco",
+          "lineno": 687,
+          "end_lineno": 727,
+          "body_lines": 40,
+          "ast_nodes": 254,
+          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_platform",
+          "lineno": 775,
+          "end_lineno": 817,
+          "body_lines": 42,
+          "ast_nodes": 248,
+          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
+        }
+      ]
+    },
+    {
       "group_id": "near-706fac09d360357c",
       "similarity": 0.946934,
       "duplicated_loc": 31,
@@ -2195,6 +2245,31 @@
       ]
     },
     {
+      "group_id": "near-7420093a80f97870",
+      "similarity": 0.934956,
+      "duplicated_loc": 73,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_bank",
+          "lineno": 651,
+          "end_lineno": 684,
+          "body_lines": 33,
+          "ast_nodes": 248,
+          "normalized_hash": "488f3766be7e56aaece83e85b04e6a0dc31f853e9184efc6df69c10788f4b79b"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_holdco",
+          "lineno": 687,
+          "end_lineno": 727,
+          "body_lines": 40,
+          "ast_nodes": 254,
+          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
+        }
+      ]
+    },
+    {
       "group_id": "near-74f89eaea72276ad",
       "similarity": 0.850101,
       "duplicated_loc": 112,
@@ -2266,6 +2341,31 @@
           "body_lines": 22,
           "ast_nodes": 105,
           "normalized_hash": "58261d6ac60f9047f79be3660efdf17f540aef0815607070c9e61c1667357136"
+        }
+      ]
+    },
+    {
+      "group_id": "near-7635aa545a440f7c",
+      "similarity": 0.931935,
+      "duplicated_loc": 75,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_bank",
+          "lineno": 651,
+          "end_lineno": 684,
+          "body_lines": 33,
+          "ast_nodes": 248,
+          "normalized_hash": "488f3766be7e56aaece83e85b04e6a0dc31f853e9184efc6df69c10788f4b79b"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_platform",
+          "lineno": 775,
+          "end_lineno": 817,
+          "body_lines": 42,
+          "ast_nodes": 248,
+          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
         }
       ]
     },
@@ -2395,31 +2495,6 @@
       ]
     },
     {
-      "group_id": "near-80d21027ff989ecc",
-      "similarity": 0.916324,
-      "duplicated_loc": 82,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_holdco",
-          "lineno": 685,
-          "end_lineno": 725,
-          "body_lines": 40,
-          "ast_nodes": 254,
-          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_platform",
-          "lineno": 773,
-          "end_lineno": 815,
-          "body_lines": 42,
-          "ast_nodes": 248,
-          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
-        }
-      ]
-    },
-    {
       "group_id": "near-829281e3b9438071",
       "similarity": 0.921613,
       "duplicated_loc": 32,
@@ -2520,6 +2595,31 @@
       ]
     },
     {
+      "group_id": "near-851e0cb5f6189bcf",
+      "similarity": 0.891544,
+      "duplicated_loc": 38,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_source_file",
+          "lineno": 108,
+          "end_lineno": 131,
+          "body_lines": 18,
+          "ast_nodes": 124,
+          "normalized_hash": "78f9a0117bb9725d653843f7b24598656fa5233bb47c7ab5824b749d724a119c"
+        },
+        {
+          "path": "src/dcf/provenance.py",
+          "qualified_name": "_source_record",
+          "lineno": 48,
+          "end_lineno": 74,
+          "body_lines": 20,
+          "ast_nodes": 133,
+          "normalized_hash": "84f0a81fd346a12a0d0841a772ce0f12e9f58bee80e0e6ea59e87b82960e222b"
+        }
+      ]
+    },
+    {
       "group_id": "near-85f12995cfb51ab4",
       "similarity": 0.972777,
       "duplicated_loc": 50,
@@ -2541,31 +2641,6 @@
           "body_lines": 25,
           "ast_nodes": 135,
           "normalized_hash": "41cce012010a30eb5d3a3481d4a4a0e5ec0648462ba361bbf0c09efb2057d040"
-        }
-      ]
-    },
-    {
-      "group_id": "near-895fb509d4d4285f",
-      "similarity": 0.906093,
-      "duplicated_loc": 77,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_bank",
-          "lineno": 649,
-          "end_lineno": 682,
-          "body_lines": 33,
-          "ast_nodes": 248,
-          "normalized_hash": "488f3766be7e56aaece83e85b04e6a0dc31f853e9184efc6df69c10788f4b79b"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_meli_sotp",
-          "lineno": 818,
-          "end_lineno": 862,
-          "body_lines": 44,
-          "ast_nodes": 248,
-          "normalized_hash": "9773ae569770b0610919433a039ebdb37eb9da1b74c179e088f5136463cc365a"
         }
       ]
     },
@@ -2620,27 +2695,27 @@
       ]
     },
     {
-      "group_id": "near-8c123929b94780f2",
-      "similarity": 0.931935,
-      "duplicated_loc": 75,
+      "group_id": "near-8cf877333eccdfb5",
+      "similarity": 0.902184,
+      "duplicated_loc": 82,
       "functions": [
         {
           "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_bank",
-          "lineno": 649,
-          "end_lineno": 682,
-          "body_lines": 33,
-          "ast_nodes": 248,
-          "normalized_hash": "488f3766be7e56aaece83e85b04e6a0dc31f853e9184efc6df69c10788f4b79b"
+          "qualified_name": "_refresh_holdco",
+          "lineno": 687,
+          "end_lineno": 727,
+          "body_lines": 40,
+          "ast_nodes": 254,
+          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
         },
         {
           "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_platform",
-          "lineno": 773,
-          "end_lineno": 815,
+          "qualified_name": "_refresh_fintech_sotp",
+          "lineno": 730,
+          "end_lineno": 772,
           "body_lines": 42,
           "ast_nodes": 248,
-          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
+          "normalized_hash": "7cf8cc51ed19863ed7b3514ccbcdf3818c06546c66c442f77d592df8b38ed6ea"
         }
       ]
     },
@@ -2745,31 +2820,6 @@
       ]
     },
     {
-      "group_id": "near-92bb65d7ee7a3376",
-      "similarity": 0.890386,
-      "duplicated_loc": 84,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_holdco",
-          "lineno": 685,
-          "end_lineno": 725,
-          "body_lines": 40,
-          "ast_nodes": 254,
-          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_meli_sotp",
-          "lineno": 818,
-          "end_lineno": 862,
-          "body_lines": 44,
-          "ast_nodes": 248,
-          "normalized_hash": "9773ae569770b0610919433a039ebdb37eb9da1b74c179e088f5136463cc365a"
-        }
-      ]
-    },
-    {
       "group_id": "near-930da2dc19648ed5",
       "similarity": 0.871293,
       "duplicated_loc": 108,
@@ -2816,6 +2866,31 @@
           "body_lines": 33,
           "ast_nodes": 281,
           "normalized_hash": "76cc2e4b846f2be63e032c1a2f88b626e741a66c2d66a2ae3e787d5af797d72a"
+        }
+      ]
+    },
+    {
+      "group_id": "near-9562dc7348f5e886",
+      "similarity": 0.886801,
+      "duplicated_loc": 86,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_platform",
+          "lineno": 775,
+          "end_lineno": 817,
+          "body_lines": 42,
+          "ast_nodes": 248,
+          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_meli_sotp",
+          "lineno": 820,
+          "end_lineno": 864,
+          "body_lines": 44,
+          "ast_nodes": 248,
+          "normalized_hash": "9773ae569770b0610919433a039ebdb37eb9da1b74c179e088f5136463cc365a"
         }
       ]
     },
@@ -2870,15 +2945,15 @@
       ]
     },
     {
-      "group_id": "near-97f4d562864d1d95",
+      "group_id": "near-9ad1adb0bbbd7333",
       "similarity": 0.914275,
       "duplicated_loc": 189,
       "functions": [
         {
           "path": "src/report/renderers/charts_v2.py",
           "qualified_name": "stacked_area",
-          "lineno": 422,
-          "end_lineno": 523,
+          "lineno": 441,
+          "end_lineno": 542,
           "body_lines": 95,
           "ast_nodes": 941,
           "normalized_hash": "cb6d112cfdaf083a29dba44ffff962ec583ac9582f7d86af3e214086e30a9373"
@@ -2886,8 +2961,8 @@
         {
           "path": "src/report/renderers/charts_v2.py",
           "qualified_name": "stacked_area_100pct",
-          "lineno": 526,
-          "end_lineno": 626,
+          "lineno": 545,
+          "end_lineno": 645,
           "body_lines": 94,
           "ast_nodes": 965,
           "normalized_hash": "585b763bbe26de69198b8030ae0c559304d6373930dfae5da1fbfa38508d9e62"
@@ -3095,52 +3170,27 @@
       ]
     },
     {
-      "group_id": "near-a4c2824de133219a",
-      "similarity": 0.886801,
+      "group_id": "near-a555cdd719ddf0bb",
+      "similarity": 0.902759,
       "duplicated_loc": 86,
       "functions": [
         {
           "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_platform",
-          "lineno": 773,
-          "end_lineno": 815,
+          "qualified_name": "_refresh_fintech_sotp",
+          "lineno": 730,
+          "end_lineno": 772,
           "body_lines": 42,
           "ast_nodes": 248,
-          "normalized_hash": "c6eb187c85c6eac42c5b1baa59fac9ea92d4447a5e80640cd8ab827818632390"
+          "normalized_hash": "7cf8cc51ed19863ed7b3514ccbcdf3818c06546c66c442f77d592df8b38ed6ea"
         },
         {
           "path": "execution/refresh_dcf.py",
           "qualified_name": "_refresh_meli_sotp",
-          "lineno": 818,
-          "end_lineno": 862,
+          "lineno": 820,
+          "end_lineno": 864,
           "body_lines": 44,
           "ast_nodes": 248,
           "normalized_hash": "9773ae569770b0610919433a039ebdb37eb9da1b74c179e088f5136463cc365a"
-        }
-      ]
-    },
-    {
-      "group_id": "near-a5cf934e12b36872",
-      "similarity": 0.934956,
-      "duplicated_loc": 73,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_bank",
-          "lineno": 649,
-          "end_lineno": 682,
-          "body_lines": 33,
-          "ast_nodes": 248,
-          "normalized_hash": "488f3766be7e56aaece83e85b04e6a0dc31f853e9184efc6df69c10788f4b79b"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_holdco",
-          "lineno": 685,
-          "end_lineno": 725,
-          "body_lines": 40,
-          "ast_nodes": 254,
-          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
         }
       ]
     },
@@ -3216,31 +3266,6 @@
           "body_lines": 15,
           "ast_nodes": 102,
           "normalized_hash": "3a80a14e5990c2550530bcdc55d6ee4f4ba1aa3deb98e5ca8b8a3420da303cda"
-        }
-      ]
-    },
-    {
-      "group_id": "near-a9ee882cf50b092e",
-      "similarity": 0.891544,
-      "duplicated_loc": 38,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_source_file",
-          "lineno": 106,
-          "end_lineno": 129,
-          "body_lines": 18,
-          "ast_nodes": 124,
-          "normalized_hash": "78f9a0117bb9725d653843f7b24598656fa5233bb47c7ab5824b749d724a119c"
-        },
-        {
-          "path": "src/dcf/provenance.py",
-          "qualified_name": "_source_record",
-          "lineno": 48,
-          "end_lineno": 74,
-          "body_lines": 20,
-          "ast_nodes": 133,
-          "normalized_hash": "84f0a81fd346a12a0d0841a772ce0f12e9f58bee80e0e6ea59e87b82960e222b"
         }
       ]
     },
@@ -3570,31 +3595,6 @@
       ]
     },
     {
-      "group_id": "near-ca58a7b121c2520f",
-      "similarity": 0.899139,
-      "duplicated_loc": 36,
-      "functions": [
-        {
-          "path": "src/discovery/adjacency.py",
-          "qualified_name": "portfolio_tickers",
-          "lineno": 260,
-          "end_lineno": 278,
-          "body_lines": 18,
-          "ast_nodes": 100,
-          "normalized_hash": "6a5f4430dd6fd6e66b130ce5c2de21d5b5b522ff1815303dc209ddf675abea80"
-        },
-        {
-          "path": "src/pipeline/explore_panel.py",
-          "qualified_name": "_default_tickers",
-          "lineno": 668,
-          "end_lineno": 686,
-          "body_lines": 18,
-          "ast_nodes": 95,
-          "normalized_hash": "492eab78fc6db0c4fe49606bffeef569d33d1ff063db70480a16e9a8bc568a1e"
-        }
-      ]
-    },
-    {
       "group_id": "near-ca9615117d2a0ea1",
       "similarity": 0.917755,
       "duplicated_loc": 79,
@@ -3666,56 +3666,6 @@
           "body_lines": 173,
           "ast_nodes": 1042,
           "normalized_hash": "6749ae65e47c8ea68b1f81eb124bc44d325c9a0b18111a0ede23f84f2ebc7ca0"
-        }
-      ]
-    },
-    {
-      "group_id": "near-d91a5d446b031d5a",
-      "similarity": 0.902759,
-      "duplicated_loc": 86,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_fintech_sotp",
-          "lineno": 728,
-          "end_lineno": 770,
-          "body_lines": 42,
-          "ast_nodes": 248,
-          "normalized_hash": "7cf8cc51ed19863ed7b3514ccbcdf3818c06546c66c442f77d592df8b38ed6ea"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_meli_sotp",
-          "lineno": 818,
-          "end_lineno": 862,
-          "body_lines": 44,
-          "ast_nodes": 248,
-          "normalized_hash": "9773ae569770b0610919433a039ebdb37eb9da1b74c179e088f5136463cc365a"
-        }
-      ]
-    },
-    {
-      "group_id": "near-dc6f0026785f8a76",
-      "similarity": 0.870036,
-      "duplicated_loc": 34,
-      "functions": [
-        {
-          "path": "src/ask/context.py",
-          "qualified_name": "tracked_tickers",
-          "lineno": 46,
-          "end_lineno": 65,
-          "body_lines": 19,
-          "ast_nodes": 94,
-          "normalized_hash": "d305158785ec8ddc5cacc92916e31519d0beefc340ac956b950e791e2dee7b0d"
-        },
-        {
-          "path": "src/viewspec/nl_compile.py",
-          "qualified_name": "_tracked_tickers",
-          "lineno": 93,
-          "end_lineno": 108,
-          "body_lines": 15,
-          "ast_nodes": 94,
-          "normalized_hash": "cf95abeb84f5fb2b1a91b55c80c880c212f7a00d7e99cdae0779884efa7b8014"
         }
       ]
     },
@@ -3970,31 +3920,6 @@
       ]
     },
     {
-      "group_id": "near-eaf7632ddbda0d07",
-      "similarity": 0.865738,
-      "duplicated_loc": 99,
-      "functions": [
-        {
-          "path": "src/evals/corpora.py",
-          "qualified_name": "load_investment_decision_card_corpus",
-          "lineno": 794,
-          "end_lineno": 845,
-          "body_lines": 51,
-          "ast_nodes": 221,
-          "normalized_hash": "856bd49d2d39f17e2979094d8c8bec1a5b417299e84772f8f6e06b7311ef79b4"
-        },
-        {
-          "path": "src/evals/corpora.py",
-          "qualified_name": "load_senior_partner_brief_corpus",
-          "lineno": 848,
-          "end_lineno": 896,
-          "body_lines": 48,
-          "ast_nodes": 207,
-          "normalized_hash": "09ba96679f6e7b9cfdad0cb7e4f60e52c8d1de2ea79ffb625a22a92cbe29ce53"
-        }
-      ]
-    },
-    {
       "group_id": "near-ec9e175ecd03a90f",
       "similarity": 0.862971,
       "duplicated_loc": 41,
@@ -4166,31 +4091,6 @@
           "body_lines": 31,
           "ast_nodes": 139,
           "normalized_hash": "027043cbb24a5444cfe62621dde68744d4fb08b1c295f4d6f1fe1943c66c976f"
-        }
-      ]
-    },
-    {
-      "group_id": "near-f271757936e6687c",
-      "similarity": 0.902184,
-      "duplicated_loc": 82,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_holdco",
-          "lineno": 685,
-          "end_lineno": 725,
-          "body_lines": 40,
-          "ast_nodes": 254,
-          "normalized_hash": "4423264298538106ab8d235f324b01339660866ab6d005574e25aab80b0b144d"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_fintech_sotp",
-          "lineno": 728,
-          "end_lineno": 770,
-          "body_lines": 42,
-          "ast_nodes": 248,
-          "normalized_hash": "7cf8cc51ed19863ed7b3514ccbcdf3818c06546c66c442f77d592df8b38ed6ea"
         }
       ]
     },
@@ -4426,9 +4326,9 @@
     "duplicated_loc": 337
   },
   "near_miss_totals": {
-    "groups": 166,
-    "participating_functions": 251,
-    "duplicated_loc": 11783
+    "groups": 162,
+    "participating_functions": 246,
+    "duplicated_loc": 11471
   },
   "definitions": {
     "eligible_function": "at least 20 AST nodes and at least 15 physical body lines",

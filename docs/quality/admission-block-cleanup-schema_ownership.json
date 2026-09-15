@@ -3,13 +3,13 @@
   "kind": "block",
   "key": "cleanup.schema_ownership",
   "state": "fail",
-  "subject_commit": "56b2bd2bc3e0b6b3d42ba61780c83ed5eb2f9d33",
+  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/static-baseline.json",
-      "sha256": "db18be0b03bcb68af97c27afb5a48d1fff7b9b9fcd133b7905d30ed14e277ce0",
+      "sha256": "0a68eb820fa97c886b4357f0be8bd503ede686636212cd509336a5d40824507f",
       "schema_version": "bha-120.v3"
     }
   ]
