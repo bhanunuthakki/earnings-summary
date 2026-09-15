@@ -39,6 +39,7 @@ from quality.performance_experiment_models import (
     PairedStats,
     PerformanceExperimentReceipt,
     RunnerIdentity,
+    RuntimeBootstrapIdentity,
     SourceArmIdentity,
 )
 
@@ -46,6 +47,45 @@ ADMISSION_HOLD_REASON = "performance admission remains deferred (BHA-122 HOLD)"
 BOOTSTRAP_REPLICATES = 2_000
 MAX_COMPANION_OUTPUT_BYTES = 64 * 1024
 _SHA256_LENGTH = 64
+_ALIAS_CACHE_BOOTSTRAP = b'''"""Redirect the alias cache before running an archived workload."""
+from __future__ import annotations
+
+import os
+import runpy
+import sys
+from pathlib import Path
+
+snapshot = Path(os.environ["PERFORMANCE_EXPERIMENT_SNAPSHOT"]).resolve(strict=True)
+output = Path(os.environ["PERFORMANCE_EXPERIMENT_OUTPUT_DIR"]).resolve(strict=True)
+source = (snapshot / "src").resolve(strict=True)
+expected_module = (source / "alias_manager.py").resolve(strict=True)
+expected_workload = (snapshot / os.environ["PERFORMANCE_EXPERIMENT_WORKLOAD_ENTRYPOINT"]).resolve(
+    strict=True
+)
+if len(sys.argv) < 2:
+    raise RuntimeError("alias-cache bootstrap workload is unavailable")
+workload = Path(sys.argv[1]).resolve(strict=True)
+if snapshot not in source.parents or snapshot not in expected_module.parents:
+    raise RuntimeError("alias-cache bootstrap source escaped snapshot")
+if snapshot not in expected_workload.parents or workload != expected_workload:
+    raise RuntimeError("alias-cache bootstrap resolved the wrong workload")
+sys.path.insert(0, str(source))
+import alias_manager
+
+loaded_module = Path(alias_manager.__file__).resolve(strict=True)
+if loaded_module != expected_module:
+    raise RuntimeError("alias-cache bootstrap resolved the wrong module")
+if not hasattr(alias_manager, "CACHE_DIR") or not hasattr(alias_manager, "ALIASES_FILE"):
+    raise RuntimeError("alias-cache bootstrap interface is unavailable")
+cache_dir = (output / "alias-cache").resolve()
+if output not in cache_dir.parents:
+    raise RuntimeError("alias-cache bootstrap target escaped output")
+alias_manager.CACHE_DIR = str(cache_dir)
+alias_manager.ALIASES_FILE = str(cache_dir / "ticker_aliases.json")
+sys.argv = [str(workload), *sys.argv[2:]]
+runpy.run_path(str(workload), run_name="__main__")
+'''
+RuntimeBootstrapPolicy = Literal["alias_cache_redirect_v1"]
 
 
 class PerformanceExperimentError(Exception):
@@ -346,6 +386,16 @@ def _validate_digest(value: str, *, kind: str) -> None:
         raise PerformanceExperimentError(f"{kind} digest is invalid")
 
 
+def _verify_bootstrap_file(path: Path, expected_sha256: str) -> None:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise PerformanceExperimentError("runtime bootstrap topology is invalid")
+        if _sha256(path.read_bytes()) != expected_sha256:
+            raise PerformanceExperimentError("runtime bootstrap identity drifted")
+    except OSError as exc:
+        raise PerformanceExperimentError("runtime bootstrap is unavailable") from exc
+
+
 def _run_sample(
     *,
     arm: Literal["control", "treatment"],
@@ -358,6 +408,9 @@ def _run_sample(
     revision: str,
     fixture_sha256: str,
     environment: Mapping[str, str],
+    runtime_bootstrap: RuntimeBootstrapPolicy | None,
+    bootstrap_path: Path | None,
+    bootstrap_sha256: str | None,
 ) -> ArmSample:
     output_dir.mkdir(parents=True, exist_ok=False)
     env = dict(environment)
@@ -366,16 +419,35 @@ def _run_sample(
     env["PERFORMANCE_EXPERIMENT_FIXTURE_SHA256"] = fixture_sha256
     env["PERFORMANCE_EXPERIMENT_WORKLOAD_ID"] = declaration.workload_id
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    argv = _render_argv(declaration, runner, snapshot)
+    if runtime_bootstrap is not None:
+        if (
+            runtime_bootstrap != "alias_cache_redirect_v1"
+            or bootstrap_path is None
+            or bootstrap_sha256 is None
+        ):
+            raise PerformanceExperimentError("runtime bootstrap is invalid")
+        _verify_bootstrap_file(bootstrap_path, bootstrap_sha256)
+        env["PERFORMANCE_EXPERIMENT_SNAPSHOT"] = str(snapshot)
+        env["PERFORMANCE_EXPERIMENT_WORKLOAD_ENTRYPOINT"] = declaration.workload_entrypoint
+        argv = [
+            argv[0],
+            str(bootstrap_path),
+            str((snapshot / declaration.workload_entrypoint).resolve()),
+            *argv[2:],
+        ]
     started = time.perf_counter()
     try:
         completed = run_experiment_subprocess(
-            _render_argv(declaration, runner, snapshot),
+            argv,
             cwd=snapshot,
             env=env,
             timeout=declaration.timeout_seconds,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise PerformanceExperimentError("workload execution failed") from exc
+    if bootstrap_path is not None and bootstrap_sha256 is not None:
+        _verify_bootstrap_file(bootstrap_path, bootstrap_sha256)
     elapsed = time.perf_counter() - started
     if completed.returncode != 0:
         raise PerformanceExperimentError("workload exited nonzero")
@@ -453,6 +525,7 @@ def capture_performance_experiment(
     declaration_path: str,
     control_revision: str,
     treatment_revision: str,
+    runtime_bootstrap: RuntimeBootstrapPolicy | None = None,
 ) -> PerformanceExperimentReceipt:
     """Run a sealed paired protocol; a complete receipt still remains HOLD."""
     try:
@@ -489,9 +562,37 @@ def capture_performance_experiment(
         for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "COOKIE")
     )
     git_removed = all(not key.upper().startswith("GIT_") for key in environment)
+    if runtime_bootstrap not in (None, "alias_cache_redirect_v1"):
+        raise PerformanceExperimentError("runtime bootstrap is invalid")
 
     with tempfile.TemporaryDirectory(prefix="paired-performance-") as temp_name:
         temp_root = Path(temp_name)
+        bootstrap_path: Path | None = None
+        bootstrap_sha256: str | None = None
+        bootstrap_identity: RuntimeBootstrapIdentity | None = None
+        if runtime_bootstrap == "alias_cache_redirect_v1":
+            bootstrap_root = temp_root / "runtime-bootstrap"
+            bootstrap_root.mkdir()
+            bootstrap_path = bootstrap_root / "bootstrap.py"
+            bootstrap_path.write_bytes(_ALIAS_CACHE_BOOTSTRAP)
+            bootstrap_sha256 = _sha256(_ALIAS_CACHE_BOOTSTRAP)
+            bootstrap_identity = RuntimeBootstrapIdentity(
+                policy=runtime_bootstrap,
+                bootstrap_sha256=bootstrap_sha256,
+                cache_lifecycle="fresh_external_output_directory_per_sample",
+                overridden_module_path="src/alias_manager.py",
+                overridden_names=("CACHE_DIR", "ALIASES_FILE"),
+                injected_environment_keys=(
+                    "PERFORMANCE_EXPERIMENT_SNAPSHOT",
+                    "PERFORMANCE_EXPERIMENT_WORKLOAD_ENTRYPOINT",
+                ),
+                effective_argv=(
+                    "{runner}",
+                    "{runtime_bootstrap}",
+                    f"{{snapshot}}/{declaration.workload_entrypoint}",
+                    *declaration.workload_argv[2:],
+                ),
+            )
         snapshots = {
             "control": temp_root / "control" / "source",
             "treatment": temp_root / "treatment" / "source",
@@ -547,6 +648,9 @@ def capture_performance_experiment(
                 revision=identity.revision,
                 fixture_sha256=identity.fixture_sha256,
                 environment=environment,
+                runtime_bootstrap=runtime_bootstrap,
+                bootstrap_path=bootstrap_path,
+                bootstrap_sha256=bootstrap_sha256,
             )
 
         warmups = (collect("control", 1, 1, "warmup"), collect("treatment", 1, 2, "warmup"))
@@ -606,10 +710,11 @@ def capture_performance_experiment(
         ):
             raise PerformanceExperimentError("isolation proof is incomplete")
         return PerformanceExperimentReceipt(
-            schema_version="performance-experiment-receipt/v1",
+            schema_version="performance-experiment-receipt/v2",
             declaration=declaration,
             declaration_sha256=declaration_sha256,
             runner=runner_identity,
+            runtime_bootstrap=bootstrap_identity,
             control=identities["control"],
             treatment=identities["treatment"],
             warmups=warmups,
@@ -627,6 +732,11 @@ def capture_performance_experiment(
                 "PF1 establishes paired latency collection only",
                 "companion measures are self-reported and unverified",
                 "independent process and network isolation proof is unavailable",
+                *(
+                    ("a disclosed runtime bootstrap changes the execution envelope",)
+                    if bootstrap_identity is not None
+                    else ()
+                ),
             ),
         )
 

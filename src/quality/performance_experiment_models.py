@@ -53,6 +53,25 @@ class RunnerIdentity(BaseModel):
     platform: str
 
 
+class RuntimeBootstrapIdentity(BaseModel):
+    """Disclosed common execution envelope applied outside both source arms."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    policy: Literal["alias_cache_redirect_v1"]
+    bootstrap_sha256: str
+    cache_lifecycle: Literal["fresh_external_output_directory_per_sample"]
+    overridden_module_path: Literal["src/alias_manager.py"]
+    overridden_names: tuple[Literal["CACHE_DIR", "ALIASES_FILE"], ...]
+    injected_environment_keys: tuple[
+        Literal[
+            "PERFORMANCE_EXPERIMENT_SNAPSHOT",
+            "PERFORMANCE_EXPERIMENT_WORKLOAD_ENTRYPOINT",
+        ],
+        ...,
+    ]
+    effective_argv: tuple[str, ...]
+
+
 class SourceArmIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     arm: Literal["control", "treatment"]
@@ -119,10 +138,11 @@ class IsolationProof(BaseModel):
 
 class PerformanceExperimentReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-    schema_version: Literal["performance-experiment-receipt/v1"]
+    schema_version: Literal["performance-experiment-receipt/v2"]
     declaration: ExperimentDeclaration
     declaration_sha256: str
     runner: RunnerIdentity
+    runtime_bootstrap: RuntimeBootstrapIdentity | None
     control: SourceArmIdentity
     treatment: SourceArmIdentity
     warmups: tuple[ArmSample, ArmSample]
@@ -147,5 +167,6 @@ __all__ = [
     "PairedStats",
     "PerformanceExperimentReceipt",
     "RunnerIdentity",
+    "RuntimeBootstrapIdentity",
     "SourceArmIdentity",
 ]
