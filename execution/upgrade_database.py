@@ -127,7 +127,14 @@ def authoritative_managed_database_paths(runtime_root: Path) -> tuple[Path, ...]
     redirect the guard away from the real managed database.
     """
 
-    default_database = (runtime_root / "data" / "portfolio.db").resolve()
+    # Keep the protected default identity lexical. The managed runtime may
+    # deliberately expose ``data`` as an untrusted/reparse boundary while the
+    # configured canonical database lives in the private scratch root. Windows
+    # rejects ``Path.resolve()`` across that boundary with WinError 448, which
+    # must not prevent safe recognition of the separately configured database.
+    # ``runtime_root`` is already resolved from the OS-owned account identity,
+    # so joining this fixed suffix cannot escape the authoritative root.
+    default_database = runtime_root / "data" / "portfolio.db"
     configured_database = portfolio_db_path(runtime_root).resolve()
     if _same_database_path(default_database, configured_database):
         return (default_database,)
