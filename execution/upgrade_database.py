@@ -383,11 +383,48 @@ def upgrade_database(
         origin_observation = readiness_module.fetch_origin_main(repo_root)
 
     with hold_run_lock(db_path, owner="upgrade_database", timeout_s=30.0):
-        # Revision/schema classification and the mutation it authorizes must be
-        # one locked operation. Otherwise a concurrent writer can change the
-        # database between inspection and the first Alembic statement.
         existed = db_path.exists()
-        initial = _read_revisions(db_path)
+        readiness = None
+        if existed and live_database and phase0_backup_restore_receipt is not None:
+            if origin_observation is None:
+                raise UpgradeDatabaseError("live portfolio DB origin evidence is unavailable")
+
+            # Revalidate the immutable snapshot before any other SQLite
+            # connection opens the live source. On Windows, even a read-only
+            # revision probe can create or retire a WAL sidecar and invalidate
+            # the Phase-0 source identity. The readiness receipt proves the
+            # source matches the snapshot and supplies the revision used for
+            # classification under this same writer lock.
+            import portfolio_readiness_receipt as readiness_module
+
+            readiness = readiness_module.collect_readiness(
+                checkout_root=repo_root,
+                runtime_root=runtime_root,
+                db_path=db_path,
+                backup_restore_receipt_path=phase0_backup_restore_receipt,
+                mode="migration",
+                origin_resolver=lambda _root: origin_observation,
+            )
+            already_current_only = (
+                readiness.db_revision == ACTIVE_HEAD
+                and readiness.blocking_reasons == ("migration_requires_db_behind_code:clear",)
+            )
+            if not readiness.ready and not already_current_only:
+                raise UpgradeDatabaseError(
+                    "live portfolio DB migration preconditions failed: "
+                    + ",".join(readiness.blocking_reasons)
+                )
+            if readiness.db_revision is None:
+                raise UpgradeDatabaseError(
+                    "live portfolio DB migration preconditions did not establish a revision"
+                )
+            initial = (readiness.db_revision,)
+        else:
+            # Revision/schema classification and the mutation it authorizes
+            # remain one locked operation. A no-receipt probe may establish
+            # that a live database is already current, but can never authorize
+            # an upgrade.
+            initial = _read_revisions(db_path)
         if len(initial) > 1:
             raise UpgradeDatabaseError(f"multiple Alembic heads in database: {list(initial)!r}")
         from_revision = initial[0] if initial else None
@@ -411,27 +448,8 @@ def upgrade_database(
                 raise UpgradeDatabaseError(
                     "live portfolio DB upgrade requires a Phase-0 backup/restore receipt"
                 )
-            if origin_observation is None:
-                raise UpgradeDatabaseError("live portfolio DB origin evidence is unavailable")
-
-            # Revalidation runs inside the same database lock as the backup and
-            # Alembic mutation, closing the point-in-time TOCTOU gap. Origin was
-            # fetched before the lock; this resolver performs no network I/O.
-            import portfolio_readiness_receipt as readiness_module
-
-            readiness = readiness_module.collect_readiness(
-                checkout_root=repo_root,
-                runtime_root=runtime_root,
-                db_path=db_path,
-                backup_restore_receipt_path=phase0_backup_restore_receipt,
-                mode="migration",
-                origin_resolver=lambda _root: origin_observation,
-            )
-            if not readiness.ready:
-                raise UpgradeDatabaseError(
-                    "live portfolio DB migration preconditions failed: "
-                    + ",".join(readiness.blocking_reasons)
-                )
+            if readiness is None:
+                raise UpgradeDatabaseError("live portfolio DB readiness evidence is unavailable")
 
         if from_revision is None and _user_tables(db_path):
             raise UpgradeDatabaseError(
