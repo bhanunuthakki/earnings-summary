@@ -1,0 +1,26 @@
+{
+  "cache_state": "fresh_process_os_cache_uncontrolled",
+  "cohort_kind": "runner_fidelity_smoke",
+  "experiment_id": "bha-104-pf1-runner-fidelity-smoke",
+  "fixture_path": "tests/fixtures/performance/pf1-smoke.txt",
+  "repeats": 7,
+  "representativeness": "not_510s_or_production_feasibility_evidence",
+  "required_companions": [
+    "coverage_sha256",
+    "fixture_sha256",
+    "peak_rss_bytes",
+    "result_sha256",
+    "rows",
+    "sql_statements",
+    "workload_id"
+  ],
+  "runner_id": "project-python-posix/v1",
+  "schema_version": "performance-experiment-declaration/v1",
+  "timeout_seconds": 30.0,
+  "workload_argv": [
+    "{runner}",
+    "execution/performance_pf1_smoke.py"
+  ],
+  "workload_entrypoint": "execution/performance_pf1_smoke.py",
+  "workload_id": "capture-poller-runner-fidelity-smoke/v1"
+}
