@@ -14,14 +14,13 @@ Layers:
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -38,7 +37,7 @@ from advisor.context import (  # noqa: E402
 )
 from advisor.memos import generate_next_dollar_memo, run_swap_checks  # noqa: E402
 from advisor.store import AdvisorMemoRow, get_memo, insert_memo, list_memos  # noqa: E402
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
     PortfolioAnalytics,
@@ -52,15 +51,20 @@ from user_state.notes import create_note, list_notes  # noqa: E402
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(tmp_path: Path) -> Path:
+@pytest.fixture
+def advisor_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+    return migrated_db(
+        db,
+        stamp=_PRIOR_HEAD,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
+
+
+def _memo_summary_line(body: str) -> str:
+    select = cast(Callable[[str], str], getattr(memos_mod, "_memo_summary_line"))
+    return select(body)
 
 
 # --------------------------------------------------------------------------- #
@@ -74,7 +78,6 @@ def test_memo_summary_line_selects_bold_lead_not_heading() -> None:
     prose), NOT the heading flattened into the body — the old
     ``startswith("*")`` skipped the bold line as a bullet and fell through to
     dumping the whole body, heading text first."""
-    from advisor.memos import _memo_summary_line
     from llm.postprocess import strip_inline_markdown
 
     body = (
@@ -96,8 +99,6 @@ def test_memo_summary_line_still_skips_structural_markdown() -> None:
     """Headings, blockquotes, table rows, and real ``- ``/``* ``/``+ `` bullets
     are still skipped; a bullet is a marker FOLLOWED BY WHITESPACE, distinct
     from an ``*italic*`` lead (marker + non-space)."""
-    from advisor.memos import _memo_summary_line
-
     assert _memo_summary_line("# Head\n> quote\n- bullet\n* star\n+ plus\nreal prose.") == (
         "real prose."
     )
@@ -110,8 +111,8 @@ def test_memo_summary_line_still_skips_structural_markdown() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_store_roundtrip_and_validation(tmp_path: Path) -> None:
-    db = _build_db(tmp_path)
+def test_store_roundtrip_and_validation(advisor_db: Path) -> None:
+    db = advisor_db
     memo = insert_memo(
         user_id="bhanu",
         kind="swap_check",
@@ -143,7 +144,7 @@ def test_store_roundtrip_and_validation(tmp_path: Path) -> None:
         )
 
 
-def test_position_review_kind_persists_against_real_check_constraint(tmp_path: Path) -> None:
+def test_position_review_kind_persists_against_real_check_constraint(advisor_db: Path) -> None:
     """Regression for the prod IntegrityError (2026-07-02 adversarial review):
     0077's ``ck_advisor_memos_kind`` CHECK predated the 'position_review' kind
     that ``advisor.store.MEMO_KINDS`` has carried since P2's position-review
@@ -151,7 +152,7 @@ def test_position_review_kind_persists_against_real_check_constraint(tmp_path: P
     (``persist=False`` or a monkeypatched ``persist_memo``), so nothing ever
     exercised a real INSERT against the real CHECK — 0140 widens it; this
     pins the widened constraint actually accepts the kind end-to-end."""
-    db = _build_db(tmp_path)
+    db = advisor_db
     memo = insert_memo(
         user_id="bhanu",
         kind="position_review",
@@ -168,8 +169,8 @@ def test_position_review_kind_persists_against_real_check_constraint(tmp_path: P
     ]
 
 
-def test_widened_note_source_accepts_advisor(tmp_path: Path) -> None:
-    db = _build_db(tmp_path)
+def test_widened_note_source_accepts_advisor(advisor_db: Path) -> None:
+    db = advisor_db
     note = create_note(
         user_id="bhanu",
         ticker=None,
@@ -263,7 +264,7 @@ def test_screen_never_crowns_a_stub_thesis_candidate() -> None:
     assert only_stub == []
 
 
-def test_load_valuations_flags_stub_thesis_names(tmp_path) -> None:
+def test_load_valuations_flags_stub_thesis_names(tmp_path: Path) -> None:
     """load_valuations joins thesis_state minimally to stamp ``stub_thesis``,
     so the screen's eligibility filter has the signal without re-querying."""
     import sqlite3 as _sqlite3
@@ -359,9 +360,9 @@ def _ctx(
 
 
 def test_next_dollar_persists_memo_note_and_backlinks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
-    db = _build_db(tmp_path)
+    db = advisor_db
     calls: list[str] = []
 
     def fake_llm(prompt: str, **kwargs: object) -> str:
@@ -395,12 +396,12 @@ def test_next_dollar_persists_memo_note_and_backlinks(
 
 
 def test_next_dollar_model_rows_excludes_breach_and_stub_and_implausible(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
     """A breached-thesis or stub-placeholder name, and an implausibly-huge
     upside (data-quality artifact per IMPLAUSIBLE_UPSIDE_PCT), must never be
     crowned the mechanically-graded "top pick"."""
-    db = _build_db(tmp_path)
+    db = advisor_db
 
     def fake_llm(prompt: str, **kwargs: object) -> str:
         return "## Section\nBody.\n\nDone."
@@ -429,9 +430,9 @@ def test_next_dollar_model_rows_excludes_breach_and_stub_and_implausible(
 
 
 def test_swap_checks_gate_on_screen_and_write_ledger(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
-    db = _build_db(tmp_path)
+    db = advisor_db
     calls: list[str] = []
 
     def fake_llm(prompt: str, **kwargs: object) -> str:
@@ -460,9 +461,9 @@ def test_swap_checks_gate_on_screen_and_write_ledger(
 
 
 def test_swap_checks_spend_nothing_when_bar_holds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
-    _build_db(tmp_path)
+    del advisor_db
 
     def fail_if_called(prompt: str, **kwargs: object) -> str:
         raise AssertionError("LLM must not be called when no pair clears the bar")
@@ -477,9 +478,9 @@ def test_swap_checks_spend_nothing_when_bar_holds(
 
 
 def test_transient_llm_failure_degrades_hard_stop_propagates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
-    _build_db(tmp_path)
+    del advisor_db
     ctx = _ctx(tmp_path, {"NU": _val("NU", 30.0, list_type="portfolio")}, {})
 
     def transient(prompt: str, **kwargs: object) -> str:
@@ -544,13 +545,32 @@ def test_compose_memos_page_renders_all_sections(tmp_path: Path) -> None:
 class _NonSpawningRegistry(Registry):
     """Records starts without forking a subprocess (same as the actions tests)."""
 
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
+        del spawn
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> FlaskClient:
-    _build_db(tmp_path)
+def client(tmp_path: Path, advisor_db: Path) -> FlaskClient:
+    del advisor_db
     app = comments_server.create_app(tmp_path, registry=_NonSpawningRegistry())
     return app.test_client()
 
