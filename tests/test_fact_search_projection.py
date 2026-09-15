@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
@@ -62,12 +63,7 @@ def _alembic_config(path: Path) -> Config:
     return config
 
 
-@pytest.fixture
-def hardened_conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
-    path = tmp_path / "fact-search-projection.db"
-    database = sqlite3.connect(path)
-    database.executescript(
-        """
+_LEGACY_FACT_TABLES_DDL = """
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY,
             source_doc_id INTEGER NOT NULL
@@ -77,13 +73,29 @@ def hardened_conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
             source_doc_id INTEGER NOT NULL
         );
         """
-    )
+
+
+@pytest.fixture(scope="module")
+def hardened_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("fact_search_projection") / "template.db"
+    database = sqlite3.connect(path)
+    database.executescript(_LEGACY_FACT_TABLES_DDL)
     database.commit()
     database.close()
     base_revision = "0213_decision_draft_provider_id"
     config = _alembic_config(path)
     command.stamp(config, base_revision)
     command.upgrade(config, "head")
+    return path
+
+
+@pytest.fixture
+def hardened_conn(
+    tmp_path: Path,
+    hardened_template: Path,
+) -> Generator[sqlite3.Connection, None, None]:
+    path = tmp_path / "fact-search-projection.db"
+    shutil.copyfile(hardened_template, path)
     database = sqlite3.connect(path)
     database.execute("PRAGMA foreign_keys = ON")
     _seed_hardened_foundation(database)
