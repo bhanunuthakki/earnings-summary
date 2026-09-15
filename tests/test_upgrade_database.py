@@ -50,6 +50,36 @@ def test_authoritative_runtime_ignores_process_home_environment(
     )
 
 
+def test_authoritative_database_paths_do_not_traverse_runtime_data_mount(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_root = (tmp_path / "runtime" / "earnings-summary").resolve()
+    configured_database = (tmp_path / "scratch" / "portfolio.db").resolve()
+    blocked_default = runtime_root / "data" / "portfolio.db"
+    real_resolve = Path.resolve
+
+    def guarded_resolve(path: Path, strict: bool = False) -> Path:
+        if path == blocked_default:
+            raise OSError(448, "untrusted mount point", str(path))
+        return real_resolve(path, strict=strict)
+
+    def configured_path(_runtime_root: Path) -> Path:
+        return configured_database
+
+    monkeypatch.setattr(Path, "resolve", guarded_resolve)
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "portfolio_db_path",
+        configured_path,
+    )
+
+    assert upgrade_database_module.authoritative_managed_database_paths(runtime_root) == (
+        blocked_default,
+        configured_database,
+    )
+
+
 def test_upgrade_requires_safe_sqlite_before_touching_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
