@@ -22,6 +22,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--declaration", required=True)
     parser.add_argument("--control-revision", required=True)
     parser.add_argument("--treatment-revision", required=True)
+    parser.add_argument(
+        "--runtime-bootstrap",
+        choices=("alias_cache_redirect_v1",),
+        default=None,
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
@@ -30,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             declaration_path=args.declaration,
             control_revision=args.control_revision,
             treatment_revision=args.treatment_revision,
+            runtime_bootstrap=args.runtime_bootstrap,
         )
         write_text_atomic(args.output, receipt.model_dump_json(indent=2) + "\n")
     except (OSError, PerformanceExperimentError):

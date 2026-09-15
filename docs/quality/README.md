@@ -92,6 +92,7 @@ python execution/capture_performance_experiment.py \
   --declaration config/quality_performance_pf1_smoke.json \
   --control-revision <control-commit> \
   --treatment-revision <treatment-commit> \
+  --runtime-bootstrap alias_cache_redirect_v1 \
   --output .tmp/quality/performance-experiment.json
 ```
 
@@ -101,6 +102,15 @@ tests. It establishes runner fidelity only; it cannot establish full-suite,
 test identity and normalized outcomes. Separate immutable archives and external
 output directories protect the measured source; the collector records hashes
 before and after the complete warmup and alternating paired sample series.
+The versioned alias-cache launcher is a disclosed common execution envelope
+for historical capture-poller arms whose test-module import otherwise creates
+`.tmp/ticker_aliases.json` inside the archive. It resolves the arm's own
+`src/alias_manager.py`, redirects only `CACHE_DIR` and `ALIASES_FILE` to a
+fresh per-sample external output directory, and only then executes the archived
+adapter with its original arguments. The launcher bytes are hash-checked before
+and after every sample; its policy, byte hash, injected environment keys, and
+effective wrapped argv are recorded in the v2 receipt. The original declaration,
+fixture, workload adapter, and source snapshots remain unchanged.
 
 POSIX process groups bound child lifetime and output. Unsupported process or
 archive-safety capabilities fail closed. These controls do not establish OS or

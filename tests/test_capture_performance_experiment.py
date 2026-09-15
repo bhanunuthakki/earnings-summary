@@ -129,6 +129,54 @@ def _fixture_repo(tmp_path: Path, *, hostile_treatment: bool = False) -> tuple[P
     return root, control, treatment
 
 
+def _alias_cache_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / "fixture.txt").write_text("fixed fixture\n", encoding="utf-8")
+    (root / "experiment.json").write_text(
+        json.dumps(_declaration(), sort_keys=True), encoding="utf-8"
+    )
+    (root / "src" / "alias_manager.py").write_text(
+        """import json
+from pathlib import Path
+
+CACHE_DIR = str(Path(__file__).resolve().parents[1] / ".tmp")
+ALIASES_FILE = str(Path(CACHE_DIR) / "ticker_aliases.json")
+
+def resolve_ticker(ticker: str) -> str:
+    path = Path(ALIASES_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"GOOGL": "GOOG"}), encoding="utf-8")
+    return "GOOG" if ticker == "GOOGL" else ticker
+""",
+        encoding="utf-8",
+    )
+    (root / "workload.py").write_text(
+        _workload().replace(
+            "revision = os.environ",
+            "from pathlib import Path\n"
+            "import sys\n"
+            "sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))\n"
+            "import alias_manager\n"
+            "alias_manager.resolve_ticker('GOOGL')\n"
+            "revision = os.environ",
+        ),
+        encoding="utf-8",
+    )
+    (root / "subject.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@example.invalid")
+    _git(root, "config", "user.name", "Test")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "control")
+    control = _git(root, "rev-parse", "HEAD")
+    (root / "subject.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(root, "add", "subject.py")
+    _git(root, "commit", "-qm", "treatment")
+    treatment = _git(root, "rev-parse", "HEAD")
+    return root, control, treatment
+
+
 def test_real_hermetic_subprocess_collects_complete_but_held_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -187,6 +235,188 @@ def test_real_hermetic_subprocess_collects_complete_but_held_receipt(
     assert receipt.isolation.process_isolation == "unavailable"
     assert receipt.isolation.network_isolation == "unavailable"
     assert any("unverified" in reason for reason in receipt.hold_reasons)
+
+
+def test_runtime_bootstrap_redirects_historical_alias_cache_without_source_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, control, treatment = _alias_cache_repo(tmp_path)
+
+    with pytest.raises(PerformanceExperimentError, match="isolation proof is incomplete"):
+        capture_performance_experiment(
+            root,
+            declaration_path="experiment.json",
+            control_revision=control,
+            treatment_revision=treatment,
+        )
+
+    real_run = performance_experiment.run_experiment_subprocess
+    cache_paths: list[Path] = []
+
+    def observe_external_cache(
+        argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: float
+    ) -> subprocess.CompletedProcess[bytes]:
+        completed = real_run(argv, cwd=cwd, env=env, timeout=timeout)
+        cache_path = Path(env["PERFORMANCE_EXPERIMENT_OUTPUT_DIR"]) / "alias-cache"
+        assert (cache_path / "ticker_aliases.json").is_file()
+        assert cwd not in cache_path.parents
+        cache_paths.append(cache_path)
+        return completed
+
+    monkeypatch.setattr(performance_experiment, "run_experiment_subprocess", observe_external_cache)
+    receipt = capture_performance_experiment(
+        root,
+        declaration_path="experiment.json",
+        control_revision=control,
+        treatment_revision=treatment,
+        runtime_bootstrap="alias_cache_redirect_v1",
+    )
+
+    assert receipt.schema_version == "performance-experiment-receipt/v2"
+    assert receipt.runtime_bootstrap is not None
+    assert receipt.runtime_bootstrap.policy == "alias_cache_redirect_v1"
+    assert receipt.runtime_bootstrap.bootstrap_sha256
+    assert receipt.runtime_bootstrap.cache_lifecycle == "fresh_external_output_directory_per_sample"
+    assert receipt.runtime_bootstrap.overridden_module_path == "src/alias_manager.py"
+    assert receipt.runtime_bootstrap.overridden_names == ("CACHE_DIR", "ALIASES_FILE")
+    assert receipt.runtime_bootstrap.injected_environment_keys == (
+        "PERFORMANCE_EXPERIMENT_SNAPSHOT",
+        "PERFORMANCE_EXPERIMENT_WORKLOAD_ENTRYPOINT",
+    )
+    assert receipt.runtime_bootstrap.effective_argv == (
+        "{runner}",
+        "{runtime_bootstrap}",
+        "{snapshot}/workload.py",
+    )
+    assert any("bootstrap" in reason for reason in receipt.hold_reasons)
+    assert receipt.isolation.source_trees_unchanged is True
+    assert len(cache_paths) == 16
+    assert len(set(cache_paths)) == len(cache_paths)
+
+
+def test_runtime_bootstrap_fails_when_historical_alias_interface_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, control, treatment = _fixture_repo(tmp_path)
+    real_run = performance_experiment.run_experiment_subprocess
+    workload_ran: list[bool] = []
+
+    def observe_bootstrap_failure(
+        argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: float
+    ) -> subprocess.CompletedProcess[bytes]:
+        completed = real_run(argv, cwd=cwd, env=env, timeout=timeout)
+        workload_ran.append(bool(completed.stdout))
+        return completed
+
+    monkeypatch.setattr(
+        performance_experiment, "run_experiment_subprocess", observe_bootstrap_failure
+    )
+
+    with pytest.raises(PerformanceExperimentError, match="workload exited nonzero"):
+        capture_performance_experiment(
+            root,
+            declaration_path="experiment.json",
+            control_revision=control,
+            treatment_revision=treatment,
+            runtime_bootstrap="alias_cache_redirect_v1",
+        )
+    assert workload_ran == [False]
+
+
+def test_runtime_bootstrap_mutation_fails_its_recorded_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, control, treatment = _alias_cache_repo(tmp_path)
+    real_run = performance_experiment.run_experiment_subprocess
+
+    def mutate_bootstrap_after_execution(
+        argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: float
+    ) -> subprocess.CompletedProcess[bytes]:
+        completed = real_run(argv, cwd=cwd, env=env, timeout=timeout)
+        Path(argv[1]).write_text("raise RuntimeError('changed')\n", encoding="utf-8")
+        return completed
+
+    monkeypatch.setattr(
+        performance_experiment,
+        "run_experiment_subprocess",
+        mutate_bootstrap_after_execution,
+    )
+    with pytest.raises(PerformanceExperimentError, match="bootstrap identity drifted"):
+        capture_performance_experiment(
+            root,
+            declaration_path="experiment.json",
+            control_revision=control,
+            treatment_revision=treatment,
+            runtime_bootstrap="alias_cache_redirect_v1",
+        )
+
+
+def test_runtime_bootstrap_symlink_replacement_fails_topology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, control, treatment = _alias_cache_repo(tmp_path)
+    real_run = performance_experiment.run_experiment_subprocess
+
+    def replace_bootstrap_with_symlink(
+        argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: float
+    ) -> subprocess.CompletedProcess[bytes]:
+        completed = real_run(argv, cwd=cwd, env=env, timeout=timeout)
+        bootstrap = Path(argv[1])
+        replacement = bootstrap.with_suffix(".replacement")
+        replacement.write_bytes(bootstrap.read_bytes())
+        bootstrap.unlink()
+        bootstrap.symlink_to(replacement)
+        return completed
+
+    monkeypatch.setattr(
+        performance_experiment,
+        "run_experiment_subprocess",
+        replace_bootstrap_with_symlink,
+    )
+    with pytest.raises(PerformanceExperimentError, match="bootstrap topology is invalid"):
+        capture_performance_experiment(
+            root,
+            declaration_path="experiment.json",
+            control_revision=control,
+            treatment_revision=treatment,
+            runtime_bootstrap="alias_cache_redirect_v1",
+        )
+
+
+def test_runtime_bootstrap_does_not_hide_genuine_source_mutation(tmp_path: Path) -> None:
+    root, _, _ = _alias_cache_repo(tmp_path)
+    (root / "workload.py").write_text(
+        _workload(mutate_source=True).replace(
+            "revision = os.environ",
+            "from pathlib import Path\n"
+            "import sys\n"
+            "sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))\n"
+            "import alias_manager\n"
+            "alias_manager.resolve_ticker('GOOGL')\n"
+            "revision = os.environ",
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", "workload.py")
+    _git(root, "commit", "-qm", "mutating control")
+    control = _git(root, "rev-parse", "HEAD")
+    (root / "subject.py").write_text("VALUE = 3\n", encoding="utf-8")
+    _git(root, "add", "subject.py")
+    _git(root, "commit", "-qm", "mutating treatment")
+    treatment = _git(root, "rev-parse", "HEAD")
+
+    with pytest.raises(PerformanceExperimentError, match="isolation proof is incomplete"):
+        capture_performance_experiment(
+            root,
+            declaration_path="experiment.json",
+            control_revision=control,
+            treatment_revision=treatment,
+            runtime_bootstrap="alias_cache_redirect_v1",
+        )
 
 
 def test_pair_order_alternates_after_unscored_warmups(tmp_path: Path) -> None:
