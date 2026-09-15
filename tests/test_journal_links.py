@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -83,12 +84,7 @@ CREATE TABLE decisions (
 """
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+def _add_decisions_schema(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
         conn.executescript(_DECISIONS_SCHEMA)
@@ -98,10 +94,15 @@ def _build_db(db_path: Path) -> None:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+    migrated_db(
+        db,
+        stamp=_PRIOR_HEAD,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
+    _add_decisions_schema(db)
     return db
 
 
