@@ -127,7 +127,7 @@ def test_compile_context_spec_grounds_refinement(db: Path, monkeypatch: pytest.M
         return _GOOD_SPEC_JSON
 
     monkeypatch.setattr(nlc, "call_llm", fake_call)
-    prev = {
+    prev: dict[str, object] = {
         "tickers": ["TST"],
         "metrics": ["fin:revenue"],
         "transform": "yoy",
@@ -320,7 +320,7 @@ def test_compile_route_ok(client: FlaskClient) -> None:
     assert res.status_code == 200
     body = res.get_json()
     assert body["status"] == "ok"
-    assert body["spec"]["metrics"] == [{"domain": "fin", "key": "revenue"}]
+    assert body["spec"]["metrics"] == [{"domain": "fin", "key": "revenue", "token": "fin:revenue"}]
 
 
 def test_compile_route_requires_query(client: FlaskClient) -> None:
@@ -329,6 +329,6 @@ def test_compile_route_requires_query(client: FlaskClient) -> None:
 
 def test_panel_carries_nl_box(db: Path) -> None:
     html_out = render_explore_panel(db)
-    assert 'id="vx-nl-q"' in html_out
-    assert 'id="vx-nl-go"' in html_out
+    assert 'id="ask-q"' in html_out
+    assert 'id="vx-workbench-q"' in html_out
     assert "/api/viewspec/compile" in html_out

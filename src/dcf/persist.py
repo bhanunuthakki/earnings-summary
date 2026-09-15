@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo
 
 from dcf import valuation
 from dcf.artifact_promotion import ArtifactPromotion
+from dcf.forecast_series import ForecastSeriesPoint
 from dcf.provenance import DcfInputProvenance
 from model_provenance.versioning import mark_superseded_by, supersede_current
 from schema_compat import require_current_for_write
@@ -73,6 +74,7 @@ class DcfRunRow:
     assumptions_sync_status: str | None = None
     assumptions_synced_at: datetime | None = None
     provenance: DcfInputProvenance | None = None
+    forecast_points: tuple[ForecastSeriesPoint, ...] = ()
 
 
 PromotionStatus = Literal["verified", "unverified", "not_applicable", "missing"]
@@ -191,6 +193,17 @@ def _has_input_ledger(conn: sqlite3.Connection) -> bool:
     )
 
 
+def _has_forecast_plane(conn: sqlite3.Connection) -> bool:
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name IN ('dcf_forecast_metric_mapping_revisions', 'dcf_forecast_series_points')"
+    ).fetchall()
+    return {str(row[0]) for row in rows} == {
+        "dcf_forecast_metric_mapping_revisions",
+        "dcf_forecast_series_points",
+    }
+
+
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -290,6 +303,39 @@ def _persist_input_ledger(
     )
 
 
+def _persist_forecast_points(
+    conn: sqlite3.Connection, *, dcf_run_id: int, points: tuple[ForecastSeriesPoint, ...]
+) -> None:
+    if not points:
+        return
+    if not _has_forecast_plane(conn):
+        raise sqlite3.OperationalError(
+            "DCF forecast series tables are missing — run `alembic upgrade head` before persisting forecasts"
+        )
+    identities = {(point.mapping_revision_id, point.period_end) for point in points}
+    if len(identities) != len(points):
+        raise ValueError("DCF forecast points duplicate a mapping fiscal period")
+    conn.executemany(
+        """
+        INSERT INTO dcf_forecast_series_points
+            (dcf_run_id, mapping_revision_id, series_key, period_start, period_end, value)
+        VALUES
+            (:dcf_run_id, :mapping_revision_id, :series_key, :period_start, :period_end, :value)
+        """,
+        [
+            {
+                "dcf_run_id": dcf_run_id,
+                "mapping_revision_id": point.mapping_revision_id,
+                "series_key": point.series_key,
+                "period_start": point.period_start.isoformat(),
+                "period_end": point.period_end.isoformat(),
+                "value": point.value,
+            }
+            for point in points
+        ],
+    )
+
+
 def _same_current_version(
     conn: sqlite3.Connection,
     row: DcfRunRow,
@@ -335,6 +381,47 @@ def _same_current_version(
         row.provenance.as_json(),
     )
     return tuple(current) == expected
+
+
+def _same_current_forecast_points(
+    conn: sqlite3.Connection,
+    row: DcfRunRow,
+) -> bool:
+    """Whether the latest run already has the exact immutable point set."""
+    if not row.forecast_points:
+        return True
+    try:
+        current = conn.execute(
+            """
+            SELECT id FROM dcf_runs
+            WHERE ticker=? AND COALESCE(segment_name, '')='' AND is_latest=1
+            LIMIT 1
+            """,
+            (row.ticker.upper(),),
+        ).fetchone()
+        if current is None:
+            return False
+        persisted = conn.execute(
+            """
+            SELECT mapping_revision_id,series_key,period_start,period_end,value
+            FROM dcf_forecast_series_points WHERE dcf_run_id=?
+            ORDER BY mapping_revision_id,period_end,series_key
+            """,
+            (int(current[0]),),
+        ).fetchall()
+    except sqlite3.Error:
+        return False
+    expected = sorted(
+        (
+            point.mapping_revision_id,
+            point.series_key,
+            point.period_start.isoformat(),
+            point.period_end.isoformat(),
+            point.value,
+        )
+        for point in row.forecast_points
+    )
+    return [tuple(item) for item in persisted] == expected
 
 
 _BRIDGE_STRENGTH: dict[PromotionStatus, int] = {
@@ -610,6 +697,7 @@ def upsert(
         _has_versioning_columns(conn)
         and has_provenance
         and _same_current_version(conn, row, params)
+        and _same_current_forecast_points(conn, row)
     ):
         return False
 
@@ -652,6 +740,7 @@ def upsert(
             )
             new_id = int(cur.lastrowid or 0)
         _persist_input_ledger(conn, dcf_run_id=new_id, rows=input_ledger_rows)
+        _persist_forecast_points(conn, dcf_run_id=new_id, points=row.forecast_points)
         if artifact_promotion is not None:
             artifact_promotion.apply()
             artifact_applied = True

@@ -39,7 +39,7 @@ def test_work_os_has_the_unified_performance_risk_destination() -> None:
             for screen in SCREEN_SPECS
             if screen.screen_id == "screen-analytics-playground"
         )
-        == "Facts & Analytics"
+        == "Explore"
     )
 
 
@@ -747,7 +747,7 @@ def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> Non
     assert 'id="workOsBriefLibraryHeading">Brief Library</h2>' in html
     assert 'id="screen-analytics-playground"' in html
     assert 'aria-labelledby="workOsFactPlaygroundHeading"' in html
-    assert 'id="workOsFactPlaygroundHeading">Fact &amp; Metric Playground</h2>' in html
+    assert 'id="workOsFactPlaygroundHeading">Explore</h1>' in html
     assert 'id="screen-execution-queue"' in html
     assert 'role="region" aria-label="Operations"' in html
     assert 'class="k-grid-split-rail" data-layout-signature="k-grid-split-rail"' in html
@@ -897,7 +897,9 @@ def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:
     assert "copilotInput" not in html
     assert "copilotResponse" not in html
     assert "fetch('/api/ask'," not in html
-    assert html.count("fetch('/api/ask/stream'") == 1
+    # One governed stream belongs to the global Copilot and one to the
+    # narrative-first Explore surface; neither is the retired Ask drawer.
+    assert html.count("fetch('/api/ask/stream'") == 2
     assert "work-os:ask-session" not in html
     assert "AI COPILOT ANALYSIS" not in html
     assert "Grounded Citations: doc:bcb_jun26_p4" not in html
@@ -1613,7 +1615,7 @@ def test_company_context_coordinator_owns_desk_playground_and_breadcrumb_state()
     assert "function workOsWriteCompanyContext(ticker, screen, options)" in html
     assert "function workOsRenderCompanyBreadcrumb()" in html
     assert "breadcrumb.textContent = 'Company Desk';" in html
-    assert "breadcrumb.textContent = 'Fact & Metric Playground';" in html
+    assert "breadcrumb.textContent = 'Explore';" in html
     assert "Company Desk (' + context.ticker + ')'" not in html
     assert "Fact & Metric Playground (' + context.ticker + ')'" not in html
     assert "workOsWriteCompanyContext(requested, 'company-desk'" in html

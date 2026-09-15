@@ -254,7 +254,7 @@ def _v7_manifest(**entry_changes: object) -> refresh.RefreshManifest:
         reviewer="owner",
         knowledge_at=NOW,
         review_bundle_sha256="d" * 64,
-        expected_schema_revision="0038_add_kpi_definition_revisions",
+        expected_schema_revision="0039_add_dcf_forecast_series",
         backup_restore_evidence_id="e" * 64,
         entries=(entry,),
     )

@@ -87,7 +87,7 @@ SCREEN_SPECS: tuple[ScreenSpec, ...] = (
     ScreenSpec(
         "screen-analytics-playground",
         "nav-analytics-playground",
-        "Facts & Analytics",
+        "Explore",
         "/api/panel/explore",
     ),
     ScreenSpec(
@@ -476,7 +476,7 @@ def _production_runtime(generated_at: datetime) -> str:
     const breadcrumb = document.getElementById('breadcrumb-title');
     if (!breadcrumb || !context.ticker) return;
     if (context.screen === 'company-desk') breadcrumb.textContent = 'Company Desk';
-    if (context.screen === 'analytics-playground') breadcrumb.textContent = 'Fact & Metric Playground';
+    if (context.screen === 'analytics-playground') breadcrumb.textContent = 'Explore';
   }}
 
   function workOsCompanyContextUrl(ticker, screen) {{
@@ -2670,7 +2670,7 @@ def _production_runtime(generated_at: datetime) -> str:
         return true;
       }} catch (error) {{
         if ((error && error.name === 'AbortError') || requestSequence !== workOsFactPlaygroundRequestSequence) return false;
-        mount.innerHTML = '<div class="k-well" role="alert">Facts &amp; Analytics is temporarily unavailable. No prototype values are being shown.</div>';
+        mount.innerHTML = '<div class="k-well" role="alert">Explore is temporarily unavailable. No prototype values are being shown.</div>';
         return false;
       }} finally {{
         if (requestSequence === workOsFactPlaygroundRequestSequence) {{
@@ -3171,7 +3171,7 @@ def _add_production_contract(
         render_fact_playground_shell() + "\n\n      ", html, count=1
     )
     html = _FACT_PLAYGROUND_RUNTIME_RE.sub(
-        "\n\n    // Governed Facts & Analytics is mounted from /api/panel/explore.\n\n    // EMBEDDED DCF SLIDERS INSIDE REPORT",
+        "\n\n    // Governed Explore is mounted from /api/panel/explore.\n\n    // EMBEDDED DCF SLIDERS INSIDE REPORT",
         html,
         count=1,
     )
@@ -3228,8 +3228,8 @@ def _add_production_contract(
         1,
     )
     html = html.replace(
-        '<h2 class="k-card-title">Fact &amp; Metric Playground</h2>',
-        '<h2 class="k-card-title" id="workOsFactPlaygroundHeading">Fact &amp; Metric Playground</h2>',
+        '<h1 class="k-card-title work-os-explore-title">Explore</h1>',
+        '<h1 class="k-card-title work-os-explore-title" id="workOsFactPlaygroundHeading">Explore</h1>',
         1,
     )
     html = html.replace(

@@ -11,15 +11,18 @@ it (json_valid CHECK + (user_id, name) uniqueness).
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from report.models import CellSource
 from timeseries.loaders import (
     load_financial_series_with_provenance,
     load_kpi_series_with_provenance,
 )
 from user_state.saved_views import delete_view, get_view, list_views, save_view
+from viewspec import engine
 from viewspec.engine import ViewCell, ViewResult, ViewRow, execute_view, metric_catalog
 from viewspec.render import render_view_fragment
 from viewspec.spec import MetricRef, ViewSpec, ViewSpecError
@@ -264,6 +267,32 @@ def test_spec_round_trip() -> None:
     assert ViewSpec.from_dict(spec.to_dict()) == spec
 
 
+def test_detail_metric_wire_form_carries_its_canonical_token() -> None:
+    metric = MetricRef(
+        domain="detail",
+        key="pct_of_revenue",
+        dim_type="customer",
+        dim_name="Customer (US)'s top account",
+    )
+
+    payload = metric.to_dict()
+
+    assert payload["token"] == metric.token()
+    assert MetricRef.parse_token(str(payload["token"])) == metric
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        MetricRef(domain="fin", key="revenue:reported"),
+        MetricRef(domain="kpi", key="Merchant's growth (US): YoY"),
+        MetricRef(domain="seg", key="revenue", dim_type="product", dim_name="US: Direct"),
+    ],
+)
+def test_all_metric_tokens_round_trip_reserved_characters(metric: MetricRef) -> None:
+    assert MetricRef.parse_token(metric.token()) == metric
+
+
 def test_spec_validation_aggregates_errors() -> None:
     with pytest.raises(ViewSpecError) as exc:
         ViewSpec.from_dict({"tickers": [], "metrics": [], "transform": "nope", "periods": 0})
@@ -335,6 +364,27 @@ def test_viewspec_uses_canonical_kpi_relation_over_raw_candidate(db: Path) -> No
     result = execute_view(_spec(metrics=["kpi:ROE"]), db_path=db)
     cells = next(iter(result.rows)).cells
     assert [cell.raw for cell in cells] == [11.0, 12.5]
+
+
+def test_viewspec_uses_canonical_financial_relation_over_raw_candidate(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "INSERT INTO financial_facts (ticker,period_end,fiscal_period_type,line_item,"
+            "value,unit,source_doc_id) VALUES "
+            "('TST','2025-12-31 00:00:00','Q4','revenue',999.0,'actual',1)"
+        )
+        conn.execute(
+            "CREATE VIEW v_financial_facts_resolved_current AS "
+            "SELECT * FROM financial_facts WHERE value <> '999.0'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = execute_view(_spec(metrics=["fin:revenue"]), db_path=db)
+
+    assert result.rows[0].cells[-1].raw == 160.0
 
 
 def test_viewspec_fails_closed_on_unadmitted_kpi_override(db: Path) -> None:
@@ -450,6 +500,173 @@ def test_engine_annual_cadence(db: Path) -> None:
     assert result.period_labels == ["FY2024", "FY2025"]
     assert row.cells[0].value is None
     assert row.cells[1].value == pytest.approx((562 / 460 - 1) * 100)
+
+
+def test_engine_suppresses_legacy_rows_without_a_canonical_forecast_coordinate(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, created_at TEXT,
+            segment_name TEXT, is_latest INTEGER, sanity_flag TEXT, engine_version TEXT
+        );
+        CREATE TABLE dcf_forecast_metric_mapping_revisions (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, engine_family TEXT NOT NULL,
+            engine_version TEXT NOT NULL, series_key TEXT NOT NULL,
+            viewspec_metric_token TEXT NOT NULL, admission_status TEXT NOT NULL,
+            confidence TEXT NOT NULL, revision INTEGER NOT NULL
+        );
+        CREATE TABLE dcf_forecast_series_points (
+            id INTEGER PRIMARY KEY, dcf_run_id INTEGER NOT NULL,
+            mapping_revision_id INTEGER NOT NULL, series_key TEXT NOT NULL,
+            period_start TEXT NOT NULL, period_end TEXT NOT NULL, value REAL NOT NULL
+        );
+        INSERT INTO dcf_runs VALUES
+            (7,'TST','2026-01-01T00:00:00Z',NULL,1,NULL,'redesign_fcff_v1');
+        INSERT INTO dcf_forecast_metric_mapping_revisions VALUES
+            (11,'TST','redesign','redesign_fcff_v1','revenue','fin:revenue',
+             'admitted','high',1);
+        INSERT INTO dcf_forecast_series_points VALUES
+            (1,7,11,'revenue','2026-01-01','2026-12-31',650.0),
+            (2,7,11,'revenue','2027-01-01','2027-12-31',700.0);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    result = execute_view(_spec(cadence="annual", periods=2), db_path=db)
+
+    assert result.period_labels == ["FY2024", "FY2025"]
+    assert [cell.value for cell in result.rows[0].cells] == [460.0, 562.0]
+    assert result.forecast_rows == []
+    html_out = render_view_fragment(result)
+    assert "DCF forecast" not in html_out
+
+    quarterly = execute_view(_spec(cadence="quarterly"), db_path=db)
+    assert quarterly.forecast_rows == []
+    assert "DCF forecast" not in render_view_fragment(quarterly)
+
+
+def test_engine_auto_overlays_a_provenance_bound_canonical_coordinate(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE canonical_metric_definition_revisions (
+            metric_definition_revision_id TEXT PRIMARY KEY, metric_id TEXT NOT NULL,
+            revision INTEGER NOT NULL, lifecycle TEXT NOT NULL, period_kind TEXT NOT NULL,
+            unit_family TEXT NOT NULL, accounting_basis TEXT NOT NULL
+        );
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, created_at TEXT,
+            segment_name TEXT, is_latest INTEGER, sanity_flag TEXT, engine_version TEXT
+        );
+        CREATE TABLE dcf_forecast_metric_mapping_revisions (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, engine_family TEXT NOT NULL,
+            engine_version TEXT NOT NULL, series_key TEXT NOT NULL,
+            viewspec_metric_token TEXT NOT NULL,
+            canonical_metric_definition_revision_id TEXT NOT NULL, period_kind TEXT NOT NULL,
+            unit_family TEXT NOT NULL, value_scale TEXT NOT NULL, currency TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL, consolidation_scope TEXT NOT NULL,
+            dimensions_sha256 TEXT NOT NULL, dimensions_json TEXT NOT NULL,
+            evidence_json TEXT NOT NULL, evidence_sha256 TEXT NOT NULL,
+            reviewer_identity TEXT, admission_status TEXT NOT NULL,
+            confidence TEXT NOT NULL, revision INTEGER NOT NULL
+        );
+        CREATE TABLE dcf_forecast_series_points (
+            id INTEGER PRIMARY KEY, dcf_run_id INTEGER NOT NULL,
+            mapping_revision_id INTEGER NOT NULL, series_key TEXT NOT NULL,
+            period_start TEXT NOT NULL, period_end TEXT NOT NULL, value REAL NOT NULL
+        );
+        CREATE TABLE v_fact_observation_match_proofs_current_valid (
+            fact_table TEXT NOT NULL, fact_row_id INTEGER NOT NULL,
+            match_revision_id TEXT NOT NULL
+        );
+        CREATE TABLE fact_cells_v2 (
+            fact_cell_id TEXT PRIMARY KEY, period_kind TEXT NOT NULL,
+            unit_key TEXT NOT NULL, currency TEXT,
+            accounting_basis TEXT NOT NULL, consolidation_scope TEXT NOT NULL,
+            canonical_dimensions_sha256 TEXT NOT NULL
+        );
+        CREATE TABLE fact_observations_v2 (
+            observation_id TEXT PRIMARY KEY, legacy_match_revision_id TEXT NOT NULL,
+            fact_cell_id TEXT NOT NULL
+        );
+        CREATE TABLE latest_governed_fact_entries (
+            selected_observation_id TEXT NOT NULL, fact_generation_id TEXT NOT NULL,
+            canonical_metric_cell_id TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_projection_entries (
+            generation_id TEXT NOT NULL, canonical_metric_cell_id TEXT NOT NULL,
+            selected_observation_id TEXT NOT NULL, change_kind TEXT NOT NULL,
+            metric_definition_revision_id TEXT NOT NULL
+        );
+        INSERT INTO canonical_metric_definition_revisions VALUES
+            ('definition:revenue:1','metric:revenue',1,'active','duration','currency','us_gaap');
+        INSERT INTO dcf_runs VALUES
+            (7,'TST','2026-01-01T00:00:00Z',NULL,1,NULL,'redesign_fcff_v1');
+        INSERT INTO dcf_forecast_metric_mapping_revisions VALUES
+            (11,'TST','redesign','redesign_fcff_v1','revenue','fin:revenue',
+             'definition:revenue:1','duration','currency','millions','USD','us_gaap',
+             'consolidated','4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945', -- pragma: allowlist secret
+             '[]','{"basis":"reviewed test mapping"}',
+             '6297fc5b0d6c59788a230da04f0237b41afdd9a7a691fb6d4645c5104cf5f859', -- pragma: allowlist secret
+             'test-reviewer',
+             'admitted','high',1);
+        INSERT INTO dcf_forecast_series_points VALUES
+            (1,7,11,'revenue','2026-01-01','2026-12-31',650.0),
+            (2,7,11,'revenue','2027-01-01','2027-12-31',700.0);
+        UPDATE financial_facts SET unit='USD millions'
+          WHERE fiscal_period_type='FY' AND line_item='revenue';
+        INSERT INTO financial_facts
+          (ticker,period_end,fiscal_period_type,line_item,value,unit,source_doc_id,locator)
+          VALUES ('TST','2023-12-31 00:00:00','FY','revenue',390.0,
+                  'USD millions',1,NULL);
+        INSERT INTO v_fact_observation_match_proofs_current_valid VALUES
+            ('financial_facts',10,'match-2024'),
+            ('financial_facts',11,'match-2025');
+        INSERT INTO fact_cells_v2 VALUES
+            ('cell-2024','duration','USD','USD','us_gaap','consolidated',
+             '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'), -- pragma: allowlist secret
+            ('cell-2025','duration','USD','USD','us_gaap','consolidated',
+             '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'); -- pragma: allowlist secret
+        INSERT INTO fact_observations_v2 VALUES
+            ('observation-2024','match-2024','cell-2024'),
+            ('observation-2025','match-2025','cell-2025');
+        INSERT INTO latest_governed_fact_entries VALUES
+            ('observation-2024','generation-1','canonical-cell-2024'),
+            ('observation-2025','generation-1','canonical-cell-2025');
+        INSERT INTO canonical_fact_projection_entries VALUES
+            ('generation-1','canonical-cell-2024','observation-2024','upsert',
+             'definition:revenue:1'),
+            ('generation-1','canonical-cell-2025','observation-2025','upsert',
+             'definition:revenue:1');
+        """
+    )
+    conn.commit()
+    conn.close()
+    result = execute_view(_spec(cadence="annual", periods=2), db_path=db)
+
+    assert result.period_labels == ["FY2024", "FY2025", "FY2026", "FY2027"]
+    assert len(result.forecast_rows) == 1
+    assert result.forecast_rows[0].values == [None, None, 650.0, 700.0]
+
+
+def test_canonical_coordinate_bridge_runs_against_migrated_schema(
+    migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    db_path = migrated_db(tmp_path / "viewspec-coordinate.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    source = CellSource(source="test", fact_table="financial_facts", fact_id=999)
+    try:
+        coordinate = engine.canonical_coordinate_from_historical_cells(
+            conn,
+            {(2025, 0): ViewCell(value=1.0, raw=1.0, source=source)},
+            unit="USD millions",
+        )
+    finally:
+        conn.close()
+    assert coordinate is None
 
 
 def test_engine_segments_and_warnings(db: Path) -> None:
@@ -622,6 +839,46 @@ def test_metric_catalog(db: Path) -> None:
     assert seg["label"] == "Cloud revenue (product)"
     assert seg["tickers"] == 1
     assert "product axis" in str(seg["title"])
-    assert metric_catalog(db, []) == {"fin": [], "kpi": [], "seg": []}
+    assert metric_catalog(db, []) == {"fin": [], "kpi": [], "seg": [], "detail": []}
     empty = metric_catalog(db.parent / "absent.db", ["TST"])
-    assert empty == {"fin": [], "kpi": [], "seg": []}
+    assert empty == {"fin": [], "kpi": [], "seg": [], "detail": []}
+
+
+def test_metric_catalog_uses_parseable_canonical_tokens_for_reserved_characters(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO financial_facts "
+        "(ticker,period_end,fiscal_period_type,line_item,value,unit,source_doc_id) "
+        "VALUES ('TST','2025-12-31','Q4','revenue:reported',1,'actual',1)"
+    )
+    conn.execute(
+        "INSERT INTO kpi_definitions (id,ticker,name,unit) VALUES (2,'TST',?, 'percent')",
+        ("Merchant's growth (US): YoY",),
+    )
+    fact = conn.execute(
+        "INSERT INTO kpi_facts "
+        "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,source_doc_id) "
+        "VALUES ('TST','2025-12-31','Q4',2,12,'percent',1)"
+    )
+    conn.execute(
+        "INSERT INTO kpi_fact_semantic_contexts "
+        "(kpi_fact_id,metric_name_as_reported,reported_period_end) VALUES (?,?,?)",
+        (fact.lastrowid, "Merchant's growth (US): YoY", "2025-12-31"),
+    )
+    conn.execute(
+        "INSERT INTO segment_dimensions (period_id,dim_type,dim_name,value,metric) "
+        "VALUES (2,'product','US: Direct',10,'revenue:reported')"
+    )
+    conn.commit()
+    conn.close()
+
+    catalog = metric_catalog(db, ["TST"])
+    tokens = [str(entry["token"]) for entries in catalog.values() for entry in entries]
+    decoded = [MetricRef.parse_token(token) for token in tokens]
+
+    assert MetricRef(domain="fin", key="revenue:reported") in decoded
+    assert MetricRef(domain="kpi", key="Merchant's growth (US): YoY") in decoded
+    assert (
+        MetricRef(domain="seg", dim_type="product", dim_name="US: Direct", key="revenue:reported")
+        in decoded
+    )

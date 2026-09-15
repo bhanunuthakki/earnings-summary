@@ -148,7 +148,9 @@ AUDITED_LEGACY_FACT_READS = {
     # stored unit before appending context. This is a write-boundary guard, not
     # an analytical reader, and retires with the legacy KPI projection.
     "src/pipeline/kpi_semantics.py": 1,
-    "src/timeseries/loaders.py": 5,
+    # One direct legacy financial-fact read moved behind the canonical relation
+    # resolver; the frozen literal legacy-read debt therefore shrinks by one.
+    "src/timeseries/loaders.py": 4,
     "src/triggers/kpi_inflection.py": 1,
     "src/user_state/kpi_catalog.py": 1,
     "src/viewspec/engine.py": 1,

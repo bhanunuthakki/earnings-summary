@@ -178,20 +178,20 @@ def render_brief_library_shell() -> str:
 
 
 def render_fact_playground_shell() -> str:
-    """Return the full-canvas mount for the governed Explore panel."""
+    """Return the narrative-first Explore mount and canonical company picker."""
 
     return """
 <section id="screen-analytics-playground" class="screen-view" data-layout="governed-fact-playground">
   <div class="research-screen" aria-live="polite">
     <header class="k-card k-card-section research-toolbar">
-      <div><div class="k-card-meta">Research Engine</div><h2 class="k-card-title">Fact &amp; Metric Playground</h2><div class="k-card-meta">Open-ended analysis over governed financial facts, KPIs, and segments</div></div>
+      <h1 class="k-card-title work-os-explore-title">Explore</h1>
       <div class="research-actions">
-        <label class="k-card-meta" for="workOsFactTicker">Primary company</label>
-        <select class="k-select" id="workOsFactTicker" aria-label="Choose primary company"><option value="">Loading tracked companies…</option></select>
+        <label class="k-card-meta" for="workOsFactTicker">Company</label>
+        <select class="k-select" id="workOsFactTicker" aria-label="Choose company" data-k-select-default="true"><option value="">Loading tracked companies…</option></select>
       </div>
     </header>
     <div id="workOsFactPlayground">
-      <div class="k-well" role="status">Open Fact &amp; Metric Playground to load governed data. No prototype values are being shown.</div>
+      <div class="k-well" role="status">Open Explore to load governed company context. No prototype values are being shown.</div>
     </div>
   </div>
 </section>

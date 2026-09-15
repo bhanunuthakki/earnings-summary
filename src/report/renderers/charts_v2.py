@@ -258,6 +258,7 @@ def bar_chart(spec: BarSpec) -> str:
 class LineSeries:
     name: str
     values: list[float | None]
+    dashed: bool = False
 
 
 def multi_line_chart(
@@ -267,11 +268,13 @@ def multi_line_chart(
     width: int = 560,
     height: int = 240,
     value_fmt: str = "pct",
+    label_points: bool = False,
 ) -> str:
-    """Overlay N line series. Legend at top-right, end-of-line labels.
+    """Overlay N line series. Legend at top-right, with optional point labels.
 
-    Every data point gets a small dot + the value of the LAST point is
-    printed at the end of each line. Y-axis auto-scales to ALL series.
+    Every data point gets a small dot. By default only the last value is
+    printed; analytical workbenches can request all values with
+    ``label_points=True``. Y-axis auto-scales to all series.
     """
     pad_left, pad_right, pad_top, pad_bottom = 50, 56, 32, 38
     plot_w = width - pad_left - pad_right
@@ -336,15 +339,24 @@ def multi_line_chart(
             pts.append((x, y, i))
         if len(pts) >= 2:
             path = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y, _ in pts)
+            dash = ' stroke-dasharray="6 4"' if s.dashed else ""
             parts.append(
                 f'<path d="{path}" fill="none" stroke="currentColor" '
-                f'stroke-width="var(--bw-thin)" class="cv2-line" style="color:{color}"/>'
+                f'stroke-width="var(--bw-thin)"{dash} class="cv2-line" style="color:{color}"/>'
             )
-        for x, y, _ in pts:
+        for point_index, (x, y, value_index) in enumerate(pts):
             parts.append(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="currentColor" '
                 f'class="cv2-point" style="color:{color}"/>'
             )
+            if label_points and point_index < len(pts) - 1:
+                point_value = s.values[value_index]
+                assert point_value is not None
+                label_y = y - 7 if s_idx % 2 == 0 else y + 13
+                parts.append(
+                    f'<text x="{x:.1f}" y="{label_y:.1f}" class="cv2-point-label" '
+                    f'text-anchor="middle" style="color:{color}">{fmt(point_value)}</text>'
+                )
         # End-of-line value label.
         if pts:
             x, y, i = pts[-1]
@@ -360,10 +372,17 @@ def multi_line_chart(
     leg_y = pad_top + 2
     for s_idx, s in enumerate(series):
         color = PALETTE[s_idx % len(PALETTE)]
-        parts.append(
-            f'<rect x="{leg_x:.1f}" y="{leg_y:.1f}" width="10" height="10" '
-            f'fill="currentColor" class="cv2-legend-swatch" style="color:{color}"/>'
-        )
+        if s.dashed:
+            parts.append(
+                f'<line x1="{leg_x:.1f}" y1="{leg_y + 5:.1f}" '
+                f'x2="{leg_x + 10:.1f}" y2="{leg_y + 5:.1f}" stroke="currentColor" '
+                f'stroke-dasharray="3 2" class="cv2-legend-swatch" style="color:{color}"/>'
+            )
+        else:
+            parts.append(
+                f'<rect x="{leg_x:.1f}" y="{leg_y:.1f}" width="10" height="10" '
+                f'fill="currentColor" class="cv2-legend-swatch" style="color:{color}"/>'
+            )
         parts.append(
             f'<text x="{leg_x + 14:.1f}" y="{leg_y + 9:.1f}" class="cv2-legend">{html.escape(s.name)}</text>'
         )

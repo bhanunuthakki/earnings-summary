@@ -38,11 +38,9 @@ both of which would mis-read a sibling as a ticker named ``<T>_FACTS``. Those
 globs are non-recursive (``glob("*.xlsx")``), so a subdirectory file is invisible
 to them — the same reason ``dcf/redesign/`` already nests sample builds.
 
-This module is pure (no ``execution/`` dependency, unit-tested in isolation); the
-server route (``POST /api/dcf/inject-fact-sheet``) resolves the fact's latest
-value via :func:`dcf.fact_drivers.resolve_fact_value` (so company-doc
-``fact_overrides`` win — S2, exactly as the driver path does) and calls
-:func:`upsert_fact` here.
+This module is pure (no ``execution/`` dependency, unit-tested in isolation).
+It is not reachable from Explore: the UI cannot resolve or write a fact into a
+DCF companion workbook.
 """
 
 from __future__ import annotations

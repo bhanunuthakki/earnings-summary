@@ -1,16 +1,10 @@
-"""Inject a picked DIY fact as a DCF *driver* (capture-every-number S6).
+"""Typed DCF-authoring driver helpers.
 
-The DIY explore panel (``src/pipeline/explore_panel.py``) surfaces every
-extracted fact as a pickable token (S5). This module is the bridge that takes
-one such token + a target driver field and turns the fact's LATEST stored value
-into a yellow-Dashboard assumption on the redesigned FCFF workbook — so a number
-the owner found while slicing data can flow straight into the valuation instead
-of being hand-retyped (and mis-scaled) into the model.
+These pure helpers can support a DCF-owned authoring workflow, but Explore has
+no route or write path into a DCF driver.  The only clobber-safe commit remains
+``refresh_dcf.apply_edits`` (cell + JSON sync + provenance + ``dcf_runs``).
 
-Three pieces live here, all pure (no ``execution/`` dependency, so the converter
-is unit-tested in isolation); the server route (``POST /api/dcf/inject-fact``)
-orchestrates them and routes the commit through ``refresh_dcf.apply_edits`` — the
-ONLY clobber-safe write path (cell + JSON sync + provenance + dcf_runs):
+Three pieces live here, all independent of ``execution/``:
 
 1. **The field registry** (:data:`DRIVER_FIELDS`) — the fixed set of injectable
    :class:`~dcf.redesign.RedesignInputs` levers, each carrying the unit *family*

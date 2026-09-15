@@ -42,12 +42,13 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 from collections.abc import Mapping
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -56,6 +57,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf import assumptions_doc  # noqa: E402
 from dcf import equity_bridge as equity_bridge_mod  # noqa: E402
+from dcf import forecast_series as forecast_series_mod  # noqa: E402
 from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
@@ -1098,6 +1100,135 @@ def _redesign_snapshot(
     return json.dumps(payload, indent=2)
 
 
+def _workbook_base_fiscal_year(workbook_path: Path) -> int | None:
+    """Read the valuation workbook's latest complete fiscal year identity."""
+    quarter_re = re.compile(r"^Q([1-4])\s+(\d{4})$")
+    try:
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(str(workbook_path), read_only=True, data_only=False)
+        try:
+            financials = workbook["Financials"]
+            quarters_by_year: dict[int, set[int]] = {}
+            for column in range(2, financials.max_column + 1):
+                label = financials.cell(row=1, column=column).value
+                match = quarter_re.match(label.strip()) if isinstance(label, str) else None
+                if match is not None:
+                    quarters_by_year.setdefault(int(match.group(2)), set()).add(int(match.group(1)))
+            complete = [
+                year for year, quarters in quarters_by_year.items() if quarters == {1, 2, 3, 4}
+            ]
+            return max(complete) if complete else None
+        finally:
+            workbook.close()
+    except (OSError, KeyError, ValueError, redesign_mod.RedesignError):
+        return None
+
+
+def _redesign_forecast_axis(
+    repo_root: Path,
+    ticker: str,
+    workbook_path: Path,
+    count: int,
+) -> tuple[tuple[date, date], ...]:
+    """Return the generic model's annual fiscal axis, or no axis if unprovable.
+
+    The producing workbook fixes the base fiscal year.  The FMP cache supplies
+    its recorded Q4 endpoint for *that* year only, never whichever cache record
+    happens to be newest during an in-app edit.  A fixed month/day must be
+    evidenced across the immediately preceding fiscal year; 52/53-week and
+    otherwise drifting calendars therefore suppress the overlay rather than
+    inventing future dates.
+    """
+    path = repo_root / "data" / "historical" / "fmp" / f"{ticker}_income_statement_quarterly.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    if not isinstance(raw, list):
+        return ()
+    ends_by_fy: dict[int, set[date]] = {}
+    for item_raw in cast("list[object]", raw):
+        if not isinstance(item_raw, dict):
+            continue
+        item = cast("Mapping[str, object]", item_raw)
+        if item.get("period") != "Q4":
+            continue
+        fiscal_year_raw = item.get("fiscalYear")
+        period_end_raw = item.get("date")
+        if not isinstance(fiscal_year_raw, int | str) or not isinstance(period_end_raw, str):
+            continue
+        try:
+            fiscal_year = int(fiscal_year_raw)
+            period_end = date.fromisoformat(period_end_raw)
+        except ValueError:
+            continue
+        ends_by_fy.setdefault(fiscal_year, set()).add(period_end)
+    base_fiscal_year = _workbook_base_fiscal_year(workbook_path)
+    if base_fiscal_year is None:
+        return ()
+    ends = ends_by_fy.get(base_fiscal_year, set())
+    prior_ends = ends_by_fy.get(base_fiscal_year - 1, set())
+    if len(ends) != 1 or len(prior_ends) != 1:
+        return ()
+    base_end = next(iter(ends))
+    prior_end = next(iter(prior_ends))
+    if (base_end.month, base_end.day) != (prior_end.month, prior_end.day):
+        return ()
+    axis: list[tuple[date, date]] = []
+    for offset in range(1, count + 1):
+        try:
+            period_end = date(base_end.year + offset, base_end.month, base_end.day)
+            prior_end = date(base_end.year + offset - 1, base_end.month, base_end.day)
+        except ValueError:
+            return ()
+        axis.append((prior_end + timedelta(days=1), period_end))
+    return tuple(axis)
+
+
+def redesign_revenue_forecast_points(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    ticker: str,
+    workbook_path: Path,
+    valuation: redesign_mod.RedesignValuation,
+) -> tuple[forecast_series_mod.ForecastSeriesPoint, ...]:
+    """Produce generic revenue output only for one current admitted mapping."""
+    mapping_id = forecast_series_mod.current_admitted_mapping_id(
+        conn,
+        ticker=ticker,
+        engine_family="redesign",
+        engine_version=DCF_ENGINE_VERSION,
+        series_key="revenue",
+        unit_family="currency",
+        currency=_reported_currency(repo_root, ticker) or "",
+        value_scale="millions",
+    )
+    if mapping_id is None:
+        return ()
+    axis = _redesign_forecast_axis(
+        repo_root, ticker, workbook_path, len(valuation.forecast_revenue_m)
+    )
+    if len(axis) != len(valuation.forecast_revenue_m):
+        return ()
+    try:
+        return tuple(
+            forecast_series_mod.ForecastSeriesPoint(
+                mapping_revision_id=mapping_id,
+                series_key="revenue",
+                period_start=period_start,
+                period_end=period_end,
+                value=value,
+            )
+            for (period_start, period_end), value in zip(
+                axis, valuation.forecast_revenue_m, strict=True
+            )
+        )
+    except ValueError:
+        return ()
+
+
 @dataclasses.dataclass(frozen=True)
 class SyncResult:
     """Outcome of one workbook→assumptions-JSON sync. ``status`` is 'synced'
@@ -1430,6 +1561,12 @@ def _refresh_redesign(
         # upsert so a competing refresh cannot change the current run between
         # the decision and persistence.
         conn.execute("BEGIN IMMEDIATE")
+        row = dataclasses.replace(
+            row,
+            forecast_points=redesign_revenue_forecast_points(
+                conn, repo_root=repo_root, ticker=ticker, workbook_path=tmp, valuation=rv
+            ),
+        )
         decision = persist_mod.check_promotion(conn, row)
         if not decision.allowed:
             _unlink(tmp)
@@ -1865,6 +2002,12 @@ def apply_edits(
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         conn.execute("BEGIN IMMEDIATE")
+        row = dataclasses.replace(
+            row,
+            forecast_points=redesign_revenue_forecast_points(
+                conn, repo_root=repo_root, ticker=ticker, workbook_path=staged_dest, valuation=rv
+            ),
+        )
         decision = persist_mod.check_promotion(conn, row)
         if not decision.allowed:
             _unlink(staged_dest)

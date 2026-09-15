@@ -754,6 +754,7 @@ def load_financial_cell_provenance(
             if _has_column(conn, "financial_facts", "extracted_by")
             else "NULL AS extracted_by"
         )
+        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
         rows = conn.execute(
             f"""
             SELECT ff.id AS fact_id,
@@ -768,14 +769,14 @@ def load_financial_cell_provenance(
                    d.doc_type,
                    {accession_select},
                    {tier_select}
-            FROM financial_facts ff
+            FROM {fact_relation} ff
             JOIN documents d ON d.id = ff.source_doc_id
             WHERE ff.ticker = ?
               AND ff.line_item IN ({li_marks})
               AND ff.fiscal_period_type IN ({p_marks})
               AND ff.id = (
                 SELECT ff2.id
-                FROM financial_facts ff2
+                FROM {fact_relation} ff2
                 WHERE ff2.ticker = ff.ticker
                   AND ff2.line_item = ff.line_item
                   AND ff2.period_end = ff.period_end
@@ -827,7 +828,7 @@ def load_financial_cell_provenance(
                 elif ov.action == OverrideAction.QUALIFY.value:
                     cell["issues"] = [qualify_note(ov)]
         return out
-    except sqlite3.Error as exc:
+    except (RuntimeError, sqlite3.Error) as exc:
         log.warning(
             {
                 "event": "timeseries_load_cell_provenance_failed",

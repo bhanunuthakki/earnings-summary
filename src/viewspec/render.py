@@ -24,7 +24,7 @@ from html import escape
 
 from report.renderers.charts_v2 import LineSeries, fmt_compact, fmt_pct, multi_line_chart
 from ui.source_chip import SOURCE_CHIP_CSS, source_chip_html
-from viewspec.engine import ViewResult, ViewRow
+from viewspec.engine import ViewForecastRow, ViewResult, ViewRow
 
 _MAX_CHART_SERIES = 8
 
@@ -52,6 +52,11 @@ VIEWSPEC_CSS = (
 /* Canonical table rule: numbers mono, labels/headers sans. Data cells are <td>;
    the row label (.vx-label) and column headers are <th>, inheriting sans. */
 .vx-matrix td { color: var(--fg-soft, var(--fg)); font-family: var(--mono); }
+.vx-matrix .vx-forecast-row td, .vx-matrix .vx-forecast-row th {
+  border-top-style: dashed; background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.vx-forecast-tag { display: inline-flex; margin-left: 6px; padding: 1px 5px;
+  border: 1px dashed var(--muted); border-radius: var(--radius-full); color: var(--muted);
+  font-size: var(--fs-micro); font-weight: 600; }
 .vx-matrix td.vx-nm { color: var(--muted); cursor: help; }
 .vx-unit { color: var(--muted); font-weight: 400; }
 .vx-chart { margin-top: var(--sp-3); }
@@ -61,6 +66,7 @@ VIEWSPEC_CSS = (
 .vx-chart .cv2-grid-zero { stroke: var(--muted); }
 .vx-chart .cv2-legend { fill: var(--fg-soft, var(--fg)); }
 .vx-chart .cv2-bar-label { fill: var(--fg); }
+.vx-chart .cv2-point-label { fill: currentColor; font-size: var(--fs-caption); }
 .vx-chart .cv2-empty-text { fill: var(--muted); }
 """
     + SOURCE_CHIP_CSS
@@ -160,6 +166,20 @@ def _row_html(row: ViewRow, transform: str, definition: str | None = None) -> st
     return f"<tr>{''.join(cells)}</tr>"
 
 
+def _forecast_row_html(row: ViewForecastRow, transform: str) -> str:
+    unit_sub = f' <span class="vx-unit">({escape(row.unit)})</span>' if row.unit else ""
+    lineage = (
+        f"Immutable DCF run {row.dcf_run_id}; admitted mapping revision "
+        f"{row.mapping_revision_id}. Read-only in Explore."
+    )
+    cells = [
+        f'<th class="vx-label" title="{escape(lineage)}">{escape(row.label)}{unit_sub}'
+        '<span class="vx-forecast-tag">read-only</span></th>'
+    ]
+    cells.extend(f"<td>{_fmt_cell(value, transform, row.unit)}</td>" for value in row.values)
+    return f'<tr class="vx-forecast-row">{"".join(cells)}</tr>'
+
+
 def render_view_fragment(
     result: ViewResult, *, include_chart: bool = True, include_summary: bool = True
 ) -> str:
@@ -191,6 +211,7 @@ def render_view_fragment(
         _row_html(row, spec.transform, result.definitions.get(row.metric.token()))
         for row in result.rows
     ]
+    body.extend(_forecast_row_html(row, spec.transform) for row in result.forecast_rows)
     parts.append(
         '<div class="vx-wrap"><table class="vx-matrix">'
         f"<thead>{''.join(head)}</thead><tbody>{''.join(body)}</tbody></table></div>"
@@ -214,6 +235,11 @@ def _chart_html(result: ViewResult) -> str:
         )
         for row in rows
     ]
+    remaining = max(0, _MAX_CHART_SERIES - len(series))
+    series.extend(
+        LineSeries(name=row.label, values=row.values, dashed=True)
+        for row in result.forecast_rows[:remaining]
+    )
     value_fmt = "pct" if spec.transform in ("yoy", "cagr", "margin") else "compact"
     # No title: the summary line (caption band or the Ask card's actions row)
     # already states transform · cadence, and the legend names the series — a
@@ -225,11 +251,13 @@ def _chart_html(result: ViewResult) -> str:
         width=720,
         height=260,
         value_fmt=value_fmt,
+        label_points=True,
     )
     note = ""
-    if len(result.rows) > _MAX_CHART_SERIES:
+    total_series = len(result.rows) + len(result.forecast_rows)
+    if total_series > _MAX_CHART_SERIES:
         note = (
             f'<div class="vx-meta">chart shows the first {_MAX_CHART_SERIES} of '
-            f"{len(result.rows)} series</div>"
+            f"{total_series} series</div>"
         )
     return svg + note

@@ -530,7 +530,7 @@ def test_v3_requires_explicit_reviewed_definition_fields_and_currency_semantics(
         "logical_idempotency_key": "nu:definition-review:v1",
         "knowledge_at": NOW.isoformat(),
         "review_bundle_sha256": REVIEW_SHA,
-        "expected_schema_revision": "0038_add_kpi_definition_revisions",
+        "expected_schema_revision": "0039_add_dcf_forecast_series",
         "backup_restore_evidence_id": BACKUP_SHA,
         "decisions": [_decision(KpiSemanticReviewBatch.model_construct()).model_dump(mode="json")],
     }

@@ -2651,8 +2651,8 @@ def create_app(
     @app.route("/api/viewspec/catalog", methods=["GET"])
     def viewspec_catalog_api():
         """Metric catalog for the Explore builder (P5.1): what's plottable
-        for ``?tickers=A,B`` — financial line items, KPI names, segment
-        slices — as token/label/coverage entries per domain."""
+        for ``?tickers=A,B`` — admitted statement facts, KPIs, segments,
+        customer concentrations, and lease ladders — as typed entries."""
         from viewspec.engine import metric_catalog
 
         tickers = [t for t in (request.args.get("tickers") or "").split(",") if t.strip()]
@@ -2709,7 +2709,18 @@ def create_app(
             if isinstance(raw_tickers, list)
             else []
         )
-        result = compile_nl_to_viewspec(query, db_path=db_path, context_tickers=context)
+        raw_context_spec = body.get("context_spec")
+        context_spec = (
+            cast("dict[str, object]", raw_context_spec)
+            if isinstance(raw_context_spec, dict)
+            else None
+        )
+        result = compile_nl_to_viewspec(
+            query,
+            db_path=db_path,
+            context_tickers=context,
+            context_spec=context_spec,
+        )
         payload: dict[str, object] = {"status": result.status}
         if result.message:
             payload["message"] = result.message

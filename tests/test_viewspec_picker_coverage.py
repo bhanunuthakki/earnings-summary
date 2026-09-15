@@ -21,7 +21,7 @@ from provenance.overrides import record_override
 from tests.kpi_semantic_support import admit_all_kpi_facts
 from timeseries.loaders import load_segment_junction_series_with_provenance
 from viewspec.engine import execute_view, metric_catalog
-from viewspec.spec import ViewSpec
+from viewspec.spec import MetricRef, ViewSpec
 
 # Minimal schema: just the tables the catalog + engine touch. definition_origin
 # is added conditionally per test so both the post-0113 and pre-0113 worlds are
@@ -201,7 +201,8 @@ def test_catalog_surfaces_definition_origin(tmp_path: Path) -> None:
     cat = metric_catalog(db, ["TST"])
     by_token = {str(e["token"]): e for e in cat["kpi"]}
     assert by_token["kpi:ROE"]["origin"] == "analyst"
-    assert by_token["kpi:One-off ratio"]["origin"] == "capture"
+    one_off_token = MetricRef(domain="kpi", key="One-off ratio").token()
+    assert by_token[one_off_token]["origin"] == "capture"
 
 
 def test_catalog_tolerates_pre_0113_db(tmp_path: Path) -> None:

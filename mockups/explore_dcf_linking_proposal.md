@@ -11,9 +11,9 @@ Metrics with no exact live-model binding show no **Live DCF** affordance. A sepa
 ## What exists today
 
 - `src/pipeline/explore_panel.py` exposes **Inject as DCF driver** for one selected metric and one target from the fixed `DRIVER_FIELDS` registry.
-- `POST /api/dcf/inject-fact` resolves the latest governed fact, converts and bounds its unit, applies it to `RedesignInputs`, calls `refresh_dcf.apply_edits`, and records fact lineage in the assumptions JSON.
+- Superseded: Explore no longer exposes any endpoint that writes a discovered fact into DCF inputs. Modeling remains in the DCF workflow.
 - `src/report/renderers/workspace_dcf.py` has a second KPI → DCF path. It recognizes a small set of KPI names, fills the in-page editor, and waits for the ordinary save action.
-- `POST /api/dcf/inject-fact-sheet` parks an observed value in a separate reference workbook without changing the valuation.
+- Superseded: Explore does not create a companion fact workbook. Governed DCF outputs may appear only through admitted, immutable read-only overlays.
 
 These paths are useful but narrow. They map a fact to a scalar driver, cannot express a new model node or formula, and do not establish an exact semantic relationship between an Explore metric and a model line item. The generic segment-growth driver also changes every segment uniformly.
 
