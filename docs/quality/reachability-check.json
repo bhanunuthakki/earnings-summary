@@ -1,7 +1,7 @@
 {
   "schema_version": "operational-reachability-raw/v1",
-  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
-  "source_manifest_sha256": "a70f61ee0bf09f049e536b0700f586e692e59b36603933b41ed343e1e0ed3bf8",
+  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
+  "source_manifest_sha256": "9d307a37c43002074d2c60937270c34755dc887664e76534c06704bbf498bddb",
   "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
   "scanner_version": "1.2.1",
   "python_version": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]",
@@ -6833,7 +6833,7 @@
     },
     {
       "path": "execution/backup_restore_readiness_receipt.py",
-      "content_sha256": "29d85f46227289956246e9bc2f2098a52a977f7457c053c14dd930c615edbc10",
+      "content_sha256": "0fa3c8ac7020ac34a2c738224adbc1cf1c4f26cbaeabdab2cde528720c2b7848",
       "error": null
     },
     {
@@ -7858,7 +7858,7 @@
     },
     {
       "path": "execution/portfolio_readiness_receipt.py",
-      "content_sha256": "51e87720faaf8120b947d94d5df31c948588bc035ad92cc07645f83623c9520b",
+      "content_sha256": "f298200ea8479867b787fd8c4c7110147896858d10fcc03586bbce909da4d013",
       "error": null
     },
     {
@@ -8523,7 +8523,7 @@
     },
     {
       "path": "execution/upgrade_database.py",
-      "content_sha256": "67ddac6aa3097faec3602805464a8edaf7f485cffe390548cbad590129854351",
+      "content_sha256": "aa47f3abb8ae6d246fc21e7fe21c70d545a43e2e9d0fe1edde2a101f25733ff0",
       "error": null
     },
     {
@@ -13393,7 +13393,7 @@
     },
     {
       "path": "src/ui/conformance_scan.py",
-      "content_sha256": "fb2f99f3647120c24a98e6b76e30f781726cae31e2463be79ac3a4ecbaef0f3a",
+      "content_sha256": "aa16758fac59386516f820c9406a616dfa053a7b0a0d0cacd6de27fc6c8af012",
       "error": null
     },
     {
@@ -14038,7 +14038,7 @@
     },
     {
       "path": "tests/test_allocation_decisions_panel.py",
-      "content_sha256": "4c4be3bbd6bf7e3a41d90adc33c966a6b34975ca240807a8f7fea87e06aa4796",
+      "content_sha256": "806720dfb195053c93a8347c84cd59ea4036d377cd1559bc658d25ab856edc03",
       "error": null
     },
     {
@@ -14688,7 +14688,7 @@
     },
     {
       "path": "tests/test_cio_export_and_ledger_routes.py",
-      "content_sha256": "aa5d250ef3f707921136a494d9a6295cf623e817b141f3893c099b0865cba0d9",
+      "content_sha256": "a23c16cbdcea5b8d398a86f248991bffd9d63e85eab7d830e6d3bf772de0ba64",
       "error": null
     },
     {
@@ -15248,7 +15248,7 @@
     },
     {
       "path": "tests/test_dcf_sanity_gate.py",
-      "content_sha256": "d0537e139e7578e2d67e4984125ace3303767a608f2eac420637c0ba7833b435",
+      "content_sha256": "5fbcee2485ee2d9c0948a73a71242189f441e47c33a402433a0381a229e0503f",
       "error": null
     },
     {
@@ -15363,7 +15363,7 @@
     },
     {
       "path": "tests/test_design_conformance_canonical.py",
-      "content_sha256": "dad6e825e6ac5a475db06f019d68f5b58c0dc8659ba7c203f8e1cecf282d3c0f",
+      "content_sha256": "4aa7bd6051c4723c2774f4171b70763818cc5dcb274731e58ef4f1c82d17f15f",
       "error": null
     },
     {
@@ -15803,7 +15803,7 @@
     },
     {
       "path": "tests/test_fact_search_projection.py",
-      "content_sha256": "a3a7ecc5a839c6363c506d6295e9e1a7112c6b36524e389b2c9d9577e62e643c",
+      "content_sha256": "d6e7e7115f7d8e8507542a5808729d983de11d4c027b24bd12e1dfe8815e16c7",
       "error": null
     },
     {
@@ -17253,7 +17253,7 @@
     },
     {
       "path": "tests/test_operations_journal_migration.py",
-      "content_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
+      "content_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
       "error": null
     },
     {
@@ -17603,7 +17603,7 @@
     },
     {
       "path": "tests/test_portfolio_readiness_receipt.py",
-      "content_sha256": "b4874ea677ffdf9729d127a1031ed74f3340c4ed1a746c26a2a681a65eefc60e",
+      "content_sha256": "79a81e65455ff8eb2881e7147a377117869064b1ff045aca2be7b69843ae02ab",
       "error": null
     },
     {
@@ -18153,7 +18153,7 @@
     },
     {
       "path": "tests/test_research_routes.py",
-      "content_sha256": "01523667b309990d9a228458f23a77640b5162209218f18bb31e16433cd5db87",
+      "content_sha256": "43b7c955370acf771f5f1266d36c69022d12801c5151ea2a13feea3238b757f3",
       "error": null
     },
     {
@@ -18723,7 +18723,7 @@
     },
     {
       "path": "tests/test_socratic.py",
-      "content_sha256": "1270095521304bb1c9faefb7aae01ce1982643a9add99edb1a07cd3b1aab3cf2",
+      "content_sha256": "4ccd6ed53f7709b76439e3a788224f2b3a88b21654e85f99b3354e8986fd3d09",
       "error": null
     },
     {
@@ -18918,7 +18918,7 @@
     },
     {
       "path": "tests/test_suite_migration_cost.py",
-      "content_sha256": "77936412a7d7f49ade9662cd9bf0711f854da60b68aaf85a0fddc8a194a8a7e5",
+      "content_sha256": "0ab770c7a75cd6759252e09218a3dc6dd13f5a53d8b68a4bb19ccfa11ae2a454",
       "error": null
     },
     {
@@ -19228,7 +19228,7 @@
     },
     {
       "path": "tests/test_upgrade_database.py",
-      "content_sha256": "5c88d0bb9b7767f7e0a083ed9aea07e3aa22ce4a966e719847d478a0054f9705",
+      "content_sha256": "fea59caa9c3421d4225df4ceccfa32d4f6e37fbb5d682e6575f50ddaef85fe16",
       "error": null
     },
     {
@@ -19555,8 +19555,8 @@
     "name": "ast+xml+literal-scanner",
     "version": "1.2.1",
     "python": ">=3.11",
-    "source_sha256": "249c1594cc7dc957462c2f1183e92665e90755c81dd0d49c11da0131693a6cb1",
-    "dispositions_sha256": "fbcc9658a330f386e747ec2d27a0cf4051d6330fcf93fb45493b38b7ceb0651b"
+    "source_sha256": "7bf0350559efdc5100dd76097330d3d0ca28a564a319e62a6f21838b21ac1896",
+    "dispositions_sha256": "7bd85ffefee27b23d15f17ff3fe139617b95382a0899efb0c37f031675cc2551"
   },
   "nodes": [
     {
@@ -103935,7 +103935,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 281,
+      "line": 288,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -104105,7 +104105,7 @@
       "kind": "import",
       "evidence": "import portfolio_readiness_receipt",
       "confidence": "high",
-      "line": 374,
+      "line": 381,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -104115,7 +104115,7 @@
       "kind": "import",
       "evidence": "import portfolio_readiness_receipt",
       "confidence": "high",
-      "line": 413,
+      "line": 398,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221181,26 +221181,6 @@
     },
     {
       "source": "tests/test_allocation_decisions_panel.py",
-      "target": "<external:alembic.config>",
-      "kind": "import",
-      "evidence": "external import alembic.config",
-      "confidence": "high",
-      "line": 23,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_allocation_decisions_panel.py",
-      "target": "<external:alembic>",
-      "kind": "import",
-      "evidence": "external import alembic",
-      "confidence": "high",
-      "line": 26,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_allocation_decisions_panel.py",
       "target": "<external:collections.abc>",
       "kind": "import",
       "evidence": "external import collections.abc",
@@ -221225,7 +221205,7 @@
       "kind": "import",
       "evidence": "external import datetime",
       "confidence": "high",
-      "line": 908,
+      "line": 921,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221235,7 +221215,7 @@
       "kind": "import",
       "evidence": "external import flask.testing",
       "confidence": "high",
-      "line": 24,
+      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221295,7 +221275,7 @@
       "kind": "import",
       "evidence": "import comments_server",
       "confidence": "high",
-      "line": 32,
+      "line": 29,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221305,7 +221285,7 @@
       "kind": "import",
       "evidence": "from advisor.position_review",
       "confidence": "high",
-      "line": 35,
+      "line": 32,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221315,7 +221295,7 @@
       "kind": "import",
       "evidence": "from attribution",
       "confidence": "high",
-      "line": 36,
+      "line": 33,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221325,7 +221305,7 @@
       "kind": "import",
       "evidence": "from decision_calibration",
       "confidence": "high",
-      "line": 37,
+      "line": 34,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221335,7 +221315,7 @@
       "kind": "import",
       "evidence": "from integrations.portfolio_tracker_client",
       "confidence": "high",
-      "line": 38,
+      "line": 35,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221345,7 +221325,7 @@
       "kind": "import",
       "evidence": "import pipeline.allocation_decisions_panel",
       "confidence": "high",
-      "line": 34,
+      "line": 31,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221355,7 +221335,7 @@
       "kind": "import",
       "evidence": "from pipeline.allocation_decisions_panel",
       "confidence": "high",
-      "line": 46,
+      "line": 43,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221365,7 +221345,7 @@
       "kind": "import",
       "evidence": "from pipeline.allocation_decisions_panel",
       "confidence": "high",
-      "line": 1144,
+      "line": 1165,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221375,7 +221355,7 @@
       "kind": "import",
       "evidence": "from pipeline.allocation_decisions_panel",
       "confidence": "high",
-      "line": 1158,
+      "line": 1179,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221385,7 +221365,7 @@
       "kind": "import",
       "evidence": "from pipeline.allocation_decisions_panel",
       "confidence": "high",
-      "line": 1168,
+      "line": 1189,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221395,7 +221375,7 @@
       "kind": "import",
       "evidence": "from pipeline.allocation_decisions_panel",
       "confidence": "high",
-      "line": 1176,
+      "line": 1197,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221405,7 +221385,7 @@
       "kind": "import",
       "evidence": "from research.governor",
       "confidence": "high",
-      "line": 1015,
+      "line": 1036,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221415,7 +221395,7 @@
       "kind": "import",
       "evidence": "from user_state.ledger",
       "confidence": "high",
-      "line": 61,
+      "line": 58,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221425,7 +221405,7 @@
       "kind": "import",
       "evidence": "from user_state.notes",
       "confidence": "high",
-      "line": 62,
+      "line": 59,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221435,7 +221415,7 @@
       "kind": "import",
       "evidence": "from user_state.sizing",
       "confidence": "high",
-      "line": 63,
+      "line": 60,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -235611,21 +235591,11 @@
     },
     {
       "source": "tests/test_cio_export_and_ledger_routes.py",
-      "target": "<external:alembic.config>",
+      "target": "<external:collections.abc>",
       "kind": "import",
-      "evidence": "external import alembic.config",
+      "evidence": "external import collections.abc",
       "confidence": "high",
-      "line": 17,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_cio_export_and_ledger_routes.py",
-      "target": "<external:alembic>",
-      "kind": "import",
-      "evidence": "external import alembic",
-      "confidence": "high",
-      "line": 20,
+      "line": 14,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -235645,7 +235615,7 @@
       "kind": "import",
       "evidence": "external import pathlib",
       "confidence": "high",
-      "line": 14,
+      "line": 15,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -235675,7 +235645,7 @@
       "kind": "import",
       "evidence": "import comments_server",
       "confidence": "high",
-      "line": 26,
+      "line": 24,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -235685,7 +235655,7 @@
       "kind": "import",
       "evidence": "from user_state.ledger",
       "confidence": "high",
-      "line": 28,
+      "line": 26,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -246801,26 +246771,6 @@
     },
     {
       "source": "tests/test_dcf_sanity_gate.py",
-      "target": "<external:alembic.config>",
-      "kind": "import",
-      "evidence": "external import alembic.config",
-      "confidence": "high",
-      "line": 29,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_dcf_sanity_gate.py",
-      "target": "<external:alembic>",
-      "kind": "import",
-      "evidence": "external import alembic",
-      "confidence": "high",
-      "line": 31,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_dcf_sanity_gate.py",
       "target": "<external:collections.abc>",
       "kind": "import",
       "evidence": "external import collections.abc",
@@ -246905,7 +246855,7 @@
       "kind": "import",
       "evidence": "import db",
       "confidence": "high",
-      "line": 60,
+      "line": 51,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -246915,7 +246865,7 @@
       "kind": "import",
       "evidence": "from dcf.persist",
       "confidence": "high",
-      "line": 32,
+      "line": 30,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -246925,7 +246875,7 @@
       "kind": "import",
       "evidence": "from dcf.provenance",
       "confidence": "high",
-      "line": 39,
+      "line": 37,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -246935,7 +246885,7 @@
       "kind": "import",
       "evidence": "from synthesis.lenses._shared",
       "confidence": "high",
-      "line": 40,
+      "line": 38,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -249235,7 +249185,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 1575,
+      "line": 1603,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -249371,11 +249321,31 @@
     },
     {
       "source": "tests/test_design_conformance_canonical.py",
+      "target": "src/ui/__init__.py",
+      "kind": "import",
+      "evidence": "from ui",
+      "confidence": "high",
+      "line": 22,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_design_conformance_canonical.py",
+      "target": "src/ui/conformance_scan.py",
+      "kind": "import",
+      "evidence": "from ui import conformance_scan",
+      "confidence": "high",
+      "line": 21,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_design_conformance_canonical.py",
       "target": "src/ui/conformance_scan.py",
       "kind": "import",
       "evidence": "from ui.conformance_scan",
       "confidence": "high",
-      "line": 22,
+      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -249385,7 +249355,7 @@
       "kind": "import",
       "evidence": "from ui import design_registry",
       "confidence": "high",
-      "line": 21,
+      "line": 22,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258905,7 +258875,7 @@
       "kind": "import",
       "evidence": "external import alembic.config",
       "confidence": "high",
-      "line": 14,
+      "line": 15,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258915,7 +258885,7 @@
       "kind": "import",
       "evidence": "external import alembic",
       "confidence": "high",
-      "line": 17,
+      "line": 18,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258925,7 +258895,7 @@
       "kind": "import",
       "evidence": "external import collections.abc",
       "confidence": "high",
-      "line": 8,
+      "line": 9,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258935,7 +258905,7 @@
       "kind": "import",
       "evidence": "external import datetime",
       "confidence": "high",
-      "line": 9,
+      "line": 10,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258945,7 +258915,7 @@
       "kind": "import",
       "evidence": "external import decimal",
       "confidence": "high",
-      "line": 10,
+      "line": 11,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258975,7 +258945,7 @@
       "kind": "import",
       "evidence": "external import pathlib",
       "confidence": "high",
-      "line": 11,
+      "line": 12,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258985,7 +258955,7 @@
       "kind": "import",
       "evidence": "external import pydantic",
       "confidence": "high",
-      "line": 15,
+      "line": 16,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -258994,6 +258964,16 @@
       "target": "<external:pytest>",
       "kind": "import",
       "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_fact_search_projection.py",
+      "target": "<external:shutil>",
+      "kind": "import",
+      "evidence": "external import shutil",
       "confidence": "high",
       "line": null,
       "unknown": false,
@@ -259015,7 +258995,7 @@
       "kind": "import",
       "evidence": "from provenance.fact_plane_v2",
       "confidence": "high",
-      "line": 18,
+      "line": 19,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -259025,7 +259005,7 @@
       "kind": "import",
       "evidence": "from provenance.source_fact_repository",
       "confidence": "high",
-      "line": 27,
+      "line": 28,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -259035,7 +259015,7 @@
       "kind": "import",
       "evidence": "from search.fact_projection",
       "confidence": "high",
-      "line": 32,
+      "line": 33,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -291035,7 +291015,7 @@
       "kind": "import",
       "evidence": "from execution.db_gc",
       "confidence": "high",
-      "line": 449,
+      "line": 450,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -301291,11 +301271,21 @@
     },
     {
       "source": "tests/test_portfolio_readiness_receipt.py",
+      "target": "src/sqlite_runtime.py",
+      "kind": "import",
+      "evidence": "from sqlite_runtime",
+      "confidence": "high",
+      "line": 15,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_portfolio_readiness_receipt.py",
       "target": "src/sqlite_snapshot.py",
       "kind": "import",
       "evidence": "from sqlite_snapshot",
       "confidence": "high",
-      "line": 15,
+      "line": 16,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -312221,21 +312211,11 @@
     },
     {
       "source": "tests/test_research_routes.py",
-      "target": "<external:alembic.config>",
+      "target": "<external:collections.abc>",
       "kind": "import",
-      "evidence": "external import alembic.config",
+      "evidence": "external import collections.abc",
       "confidence": "high",
-      "line": 11,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_research_routes.py",
-      "target": "<external:alembic>",
-      "kind": "import",
-      "evidence": "external import alembic",
-      "confidence": "high",
-      "line": 14,
+      "line": 8,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -312265,7 +312245,7 @@
       "kind": "import",
       "evidence": "external import pathlib",
       "confidence": "high",
-      "line": 8,
+      "line": 9,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -312305,7 +312285,7 @@
       "kind": "import",
       "evidence": "import comments_server",
       "confidence": "high",
-      "line": 20,
+      "line": 18,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -312315,7 +312295,7 @@
       "kind": "import",
       "evidence": "import research.apply",
       "confidence": "high",
-      "line": 154,
+      "line": 152,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -312325,7 +312305,7 @@
       "kind": "import",
       "evidence": "from research.proposals",
       "confidence": "high",
-      "line": 22,
+      "line": 20,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -312335,7 +312315,7 @@
       "kind": "import",
       "evidence": "from research.proposals",
       "confidence": "high",
-      "line": 123,
+      "line": 121,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -312345,7 +312325,7 @@
       "kind": "import",
       "evidence": "import research.run",
       "confidence": "high",
-      "line": 102,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324211,21 +324191,11 @@
     },
     {
       "source": "tests/test_socratic.py",
-      "target": "<external:alembic.config>",
+      "target": "<external:collections.abc>",
       "kind": "import",
-      "evidence": "external import alembic.config",
+      "evidence": "external import collections.abc",
       "confidence": "high",
-      "line": 27,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_socratic.py",
-      "target": "<external:alembic>",
-      "kind": "import",
-      "evidence": "external import alembic",
-      "confidence": "high",
-      "line": 30,
+      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324245,7 +324215,7 @@
       "kind": "import",
       "evidence": "external import datetime",
       "confidence": "high",
-      "line": 23,
+      "line": 24,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324265,7 +324235,7 @@
       "kind": "import",
       "evidence": "external import pathlib",
       "confidence": "high",
-      "line": 24,
+      "line": 25,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324305,7 +324275,7 @@
       "kind": "import",
       "evidence": "import comments_server",
       "confidence": "high",
-      "line": 36,
+      "line": 34,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324315,7 +324285,7 @@
       "kind": "import",
       "evidence": "import run_socratic_questions",
       "confidence": "high",
-      "line": 528,
+      "line": 564,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324325,7 +324295,7 @@
       "kind": "import",
       "evidence": "import run_socratic_questions",
       "confidence": "high",
-      "line": 550,
+      "line": 586,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324335,7 +324305,7 @@
       "kind": "import",
       "evidence": "import run_socratic_questions",
       "confidence": "high",
-      "line": 573,
+      "line": 612,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324345,7 +324315,7 @@
       "kind": "import",
       "evidence": "from advisor.context",
       "confidence": "high",
-      "line": 39,
+      "line": 37,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324355,7 +324325,7 @@
       "kind": "import",
       "evidence": "import advisor.socratic",
       "confidence": "high",
-      "line": 38,
+      "line": 36,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324365,7 +324335,7 @@
       "kind": "import",
       "evidence": "from advisor.socratic",
       "confidence": "high",
-      "line": 40,
+      "line": 38,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324375,7 +324345,7 @@
       "kind": "import",
       "evidence": "from advisor.store",
       "confidence": "high",
-      "line": 49,
+      "line": 47,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324385,7 +324355,7 @@
       "kind": "import",
       "evidence": "import calibration_coach",
       "confidence": "high",
-      "line": 435,
+      "line": 452,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324395,7 +324365,7 @@
       "kind": "import",
       "evidence": "import calibration_coach",
       "confidence": "high",
-      "line": 459,
+      "line": 479,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324405,7 +324375,7 @@
       "kind": "import",
       "evidence": "from decision_calibration",
       "confidence": "high",
-      "line": 50,
+      "line": 48,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324415,7 +324385,7 @@
       "kind": "import",
       "evidence": "from decision_calibration",
       "confidence": "high",
-      "line": 372,
+      "line": 389,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324425,7 +324395,7 @@
       "kind": "import",
       "evidence": "from dispatch_registry",
       "confidence": "high",
-      "line": 51,
+      "line": 49,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324435,7 +324405,7 @@
       "kind": "import",
       "evidence": "from integrations.portfolio_tracker_client",
       "confidence": "high",
-      "line": 52,
+      "line": 50,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324445,7 +324415,7 @@
       "kind": "import",
       "evidence": "from llm.cli",
       "confidence": "high",
-      "line": 56,
+      "line": 54,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324455,7 +324425,7 @@
       "kind": "import",
       "evidence": "from pipeline.advisor_memos_panel",
       "confidence": "high",
-      "line": 57,
+      "line": 55,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324465,7 +324435,7 @@
       "kind": "import",
       "evidence": "from pipeline.allocation_decisions_panel",
       "confidence": "high",
-      "line": 58,
+      "line": 56,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -324475,7 +324445,7 @@
       "kind": "import",
       "evidence": "from user_state.ledger",
       "confidence": "high",
-      "line": 59,
+      "line": 57,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335385,7 +335355,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 422,
+      "line": 529,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -335395,7 +335365,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 493,
+      "line": 600,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -335405,7 +335375,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 525,
+      "line": 632,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -335415,7 +335385,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 595,
+      "line": 702,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -335425,7 +335395,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 633,
+      "line": 740,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -335435,7 +335405,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 710,
+      "line": 817,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -335575,7 +335545,7 @@
       "kind": "import",
       "evidence": "from execution",
       "confidence": "high",
-      "line": 19,
+      "line": 27,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335585,7 +335555,7 @@
       "kind": "import",
       "evidence": "from execution.backup_restore_readiness_receipt",
       "confidence": "high",
-      "line": 20,
+      "line": 28,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335595,7 +335565,7 @@
       "kind": "import",
       "evidence": "from execution.create_sqlite_snapshot",
       "confidence": "high",
-      "line": 21,
+      "line": 31,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335605,7 +335575,7 @@
       "kind": "dynamic_import",
       "evidence": "import_module('portfolio_readiness_receipt')",
       "confidence": "medium",
-      "line": 740,
+      "line": 847,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335615,7 +335585,7 @@
       "kind": "import",
       "evidence": "from execution import portfolio_readiness_receipt",
       "confidence": "high",
-      "line": 19,
+      "line": 27,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335625,7 +335595,7 @@
       "kind": "import",
       "evidence": "import upgrade_database",
       "confidence": "high",
-      "line": 16,
+      "line": 20,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335635,7 +335605,7 @@
       "kind": "import",
       "evidence": "from upgrade_database",
       "confidence": "high",
-      "line": 17,
+      "line": 21,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335645,7 +335615,7 @@
       "kind": "import",
       "evidence": "from sqlite_snapshot",
       "confidence": "high",
-      "line": 22,
+      "line": 32,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -342140,7 +342110,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 1575,
+      "line": 1603,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -342620,7 +342590,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 422,
+      "line": 529,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -342630,7 +342600,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 493,
+      "line": 600,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -342640,7 +342610,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 525,
+      "line": 632,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -342650,7 +342620,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 595,
+      "line": 702,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -342660,7 +342630,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 633,
+      "line": 740,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -342670,7 +342640,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 710,
+      "line": 817,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -342728,7 +342698,7 @@
   "hold": false,
   "stats": {
     "files": 3087,
-    "edges": 30938,
+    "edges": 30935,
     "unknown": 91,
     "diagnostics": 0,
     "production_unknown": 0,

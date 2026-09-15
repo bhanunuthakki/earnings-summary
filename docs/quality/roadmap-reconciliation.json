@@ -10,7 +10,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -23,12 +23,12 @@
     {
       "name": "production noncomment LOC",
       "provisional_expected": 554615,
-      "observed": 500106,
+      "observed": 500200,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -46,7 +46,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -64,7 +64,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -82,7 +82,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "duplicates.raw",
-        "sha256": "c14795a319e6a20485c95401622f00871dac8a86389818e50de8304992d5eaf3",
+        "sha256": "5b0d7fed8b36cc5fa78be2512d24dde94563f4b6e6514ddc31774f22b18533f8",
         "locator": "$.exact_totals"
       },
       "provisional_evidence": {
@@ -100,7 +100,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "duplicates.raw",
-        "sha256": "c14795a319e6a20485c95401622f00871dac8a86389818e50de8304992d5eaf3",
+        "sha256": "5b0d7fed8b36cc5fa78be2512d24dde94563f4b6e6514ddc31774f22b18533f8",
         "locator": "$.exact_totals"
       },
       "provisional_evidence": {
@@ -202,7 +202,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "reachability.raw",
-        "sha256": "4e0ecc69968e541cd5bc672c249013ccfbad9598a5da225281102073bffb3048",
+        "sha256": "be6f5e01a3e47efd6bc5bbff1c5f44e66d79e4da43bd42c8ce12b7b61919810c",
         "locator": "$.edges"
       },
       "provisional_evidence": {
@@ -220,7 +220,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -261,9 +261,9 @@
   ],
   "scored_claims": 8,
   "rejected_claims": 8,
-  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "worktree_dirty": false,
-  "source_hash": "59f7b9d9c73e37c8089493d306e25ec7ff8044159cf7e3abcdd05577453fc3ae",
+  "source_hash": "a78981cbfb7a38729ae502af2e0d41bb1ba634915d8716cd6227f5346b7d7aa8",
   "roadmap_source": {
     "path": "roadmap.context.md",
     "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",

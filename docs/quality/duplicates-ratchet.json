@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
-  "source_hash": "5da92a9afb636e91e020557ed2dca992343fed2304017b7e09dab12316ca3771",
+  "commit_hash": "beb90404738e4abd1014f93ad2d87aed1d06160b",
+  "source_hash": "b09b1fab7e418c594d53145d340cc9763c71c232eee22a77656e270156a66d9c",
   "scanner_hash": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -11,7 +11,7 @@
     "min_body_lines": 15
   },
   "files_scanned": 1342,
-  "functions_scanned": 14534,
+  "functions_scanned": 14535,
   "exact_groups": [
     {
       "group_id": "exact-008cef8bb5653e6d",
@@ -1727,6 +1727,31 @@
       ]
     },
     {
+      "group_id": "near-688077fbd8d8513d",
+      "similarity": 0.908235,
+      "duplicated_loc": 36,
+      "functions": [
+        {
+          "path": "src/ui/conformance_scan.py",
+          "qualified_name": "_html_tag_end",
+          "lineno": 1300,
+          "end_lineno": 1319,
+          "body_lines": 19,
+          "ast_nodes": 105,
+          "normalized_hash": "48fb008d442ba71ff33a525dad0cf21e03f1ec41b4d21363b2cbcdd09bce62ac"
+        },
+        {
+          "path": "src/ui/conformance_scan.py",
+          "qualified_name": "_next_unquoted_opening",
+          "lineno": 1742,
+          "end_lineno": 1759,
+          "body_lines": 17,
+          "ast_nodes": 97,
+          "normalized_hash": "0ade1cb76419b50592681a62be5e72bd09ca5aab1bc4fc7f4a440af48c9d1cbb"
+        }
+      ]
+    },
+    {
       "group_id": "near-69cba1db14c941b7",
       "similarity": 0.888986,
       "duplicated_loc": 36,
@@ -2291,31 +2316,6 @@
           "body_lines": 55,
           "ast_nodes": 318,
           "normalized_hash": "66615efdabdf3721d9575bd26c3e38fccba8877860356cdf4fde8aa88382e6d7"
-        }
-      ]
-    },
-    {
-      "group_id": "near-75df41d42f24c091",
-      "similarity": 0.908235,
-      "duplicated_loc": 36,
-      "functions": [
-        {
-          "path": "src/ui/conformance_scan.py",
-          "qualified_name": "_html_tag_end",
-          "lineno": 1274,
-          "end_lineno": 1293,
-          "body_lines": 19,
-          "ast_nodes": 105,
-          "normalized_hash": "48fb008d442ba71ff33a525dad0cf21e03f1ec41b4d21363b2cbcdd09bce62ac"
-        },
-        {
-          "path": "src/ui/conformance_scan.py",
-          "qualified_name": "_next_unquoted_opening",
-          "lineno": 1691,
-          "end_lineno": 1708,
-          "body_lines": 17,
-          "ast_nodes": 97,
-          "normalized_hash": "0ade1cb76419b50592681a62be5e72bd09ca5aab1bc4fc7f4a440af48c9d1cbb"
         }
       ]
     },
