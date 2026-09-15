@@ -75,7 +75,7 @@ the evaluation lane depends on them.
 - **Attempt Identity:** unique onboarding or refresh invocation and its receipt.
   Price-fetch presence checks are repeat-safety guards, not identities.
 - **Rate limits**: SEC fair-access — declared UA with contact, ≥150 ms
-  between requests (mirrors `discovery/thirteenf.py`); ≤ ~26 requests per
+  between requests; ≤ ~26 requests per
   ticker refresh (1 map + 1 submissions + ≤24 probes). Vanguard API: plain
   GETs, ~10-60 pages per holdings refresh, UA declared. yfinance: 1 call.
 

@@ -11,7 +11,7 @@ every future run.
 
 ``score`` is now a weighted sum over the candidate's ``discovery_signals``
 rows (``scoring.py``), and ``score_json`` holds that score's ``score_why``
-breakdown. Each signal producer (the screen+adjacency run, the 13F miner)
+breakdown. Each signal producer owns its signal classes
 fully replaces ITS signal classes each run via :func:`replace_signals`, so a
 name that stops firing a screen loses that signal without disturbing another
 producer's classes.
@@ -390,7 +390,7 @@ def replace_signals(
     """Replace this user's signals for the given ``classes`` with ``signals``,
     in one transaction. Each producer owns its classes and fully refreshes them
     each run: the screen+adjacency run replaces ``{'screen','adjacency'}``, the
-    13F miner replaces ``{'investor_13f'}`` — so a name that stops firing a
+    legacy investor producer replaced ``{'investor_13f'}`` — so a name that stops firing a
     screen loses that row without touching the investor rows (and vice versa).
     Returns the number of rows inserted."""
     class_set = sorted(set(classes))
@@ -458,7 +458,7 @@ def signals_by_ticker(
     signal_class: str, *, user_id: str = DEFAULT_USER_ID, db_path: Path | str | None = None
 ) -> dict[str, list[SignalRow]]:
     """All signals of one class, grouped by ticker — the scorer (run_discovery)
-    loads another producer's class (e.g. the 13F miner's ``investor_13f`` rows)
+    loads another producer's class (for example legacy ``investor_13f`` rows)
     to score them alongside the fundamentals it just computed. Degrades to ``{}``
     on a missing DB / pre-0096 schema."""
     clause, params = _user_in(user_id)

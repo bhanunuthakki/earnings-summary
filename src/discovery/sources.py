@@ -1,9 +1,8 @@
 """Read/edit API for ``discovery_sources`` — the weighted source registry.
 
 The roster the weighted scorer reads (``scoring.py``) and the panel edits: one
-row per signal SOURCE (each factor screen, each adjacency channel, each
-rostered 13F investor) with an editable ``base_weight``, a ``cik`` (investors),
-the ``style_tags`` the new-vs-add asymmetry reads, and an ``active`` flag.
+row per signal source with an editable ``base_weight`` and ``active`` flag.
+Legacy rows retain their historical metadata for schema compatibility.
 
 The roster is GLOBAL, not tenant-scoped — in a single-user tool the source
 weights aren't per-user (the candidates and signals they produce are). Reads
@@ -105,17 +104,6 @@ def load_source_map(*, db_path: Path | str | None = None) -> dict[str, SourceRow
     return {s.source_key: s for s in list_sources(db_path=db_path)}
 
 
-def active_investor_sources(*, db_path: Path | str | None = None) -> list[tuple[str, str]]:
-    """``(source_key, cik)`` for every active rostered 13F manager WITH a CIK —
-    the set the 13F miner polls. A rostered-but-unresolved fund (no CIK) is
-    configured-yet-dormant and simply absent here, not an error."""
-    return [
-        (s.source_key, s.cik)
-        for s in list_sources(signal_class="investor_13f", active_only=True, db_path=db_path)
-        if s.cik
-    ]
-
-
 def weight_for(source_map: dict[str, SourceRow], source_key: str) -> float:
     """The resolved ``base_weight`` for a source, or ``DEFAULT_WEIGHT`` when the
     roster doesn't know it (a name still scores, at unit weight)."""
@@ -164,8 +152,7 @@ def _update(
 def set_source_weight(
     source_key: str, base_weight: float, *, db_path: Path | str | None = None
 ) -> SourceRow | None:
-    """Edit a source's weight (the panel's weight-edit surface + quarterly
-    recalibration). Clamps negatives to 0 (the CHECK forbids them anyway)."""
+    """Edit a source's weight. Clamps negatives to 0."""
     weight = max(float(base_weight), 0.0)
     return _update(
         source_key,
@@ -178,17 +165,5 @@ def set_source_weight(
 def set_source_active(
     source_key: str, active: bool, *, db_path: Path | str | None = None
 ) -> SourceRow | None:
-    """Toggle a source on/off in the scorer + miner."""
+    """Toggle a source on/off in the scorer."""
     return _update(source_key, "active = ?", [1 if active else 0], db_path=db_path)
-
-
-def set_source_cik(
-    source_key: str, cik: str | None, *, db_path: Path | str | None = None
-) -> SourceRow | None:
-    """Set/clear a manager's CIK (the 13F miner resolves these; the owner can
-    paste one). Normalizes to 10-digit zero-padded, or None to clear."""
-    normalized: str | None = None
-    if cik is not None and str(cik).strip():
-        digits = "".join(ch for ch in str(cik) if ch.isdigit())
-        normalized = f"{int(digits):010d}" if digits else None
-    return _update(source_key, "cik = ?", [normalized], db_path=db_path)

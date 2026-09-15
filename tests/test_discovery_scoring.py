@@ -30,7 +30,6 @@ from discovery.sources import (
     list_sources,
     load_source_map,
     set_source_active,
-    set_source_cik,
     set_source_weight,
     weight_for,
 )
@@ -370,8 +369,4 @@ def test_weight_edit_changes_the_score(sources_db: Path) -> None:
 def test_roster_edits(sources_db: Path) -> None:
     assert set_source_active("sands", active=False, db_path=sources_db).active is False  # type: ignore[union-attr]
     assert [s.source_key for s in list_sources(active_only=True, db_path=sources_db)] != ["sands"]
-    # CIK normalizes to 10-digit zero-padded; a blank clears it.
-    updated = set_source_cik("sands", "0012345", db_path=sources_db)
-    assert updated is not None and updated.cik == "0000012345"
-    assert set_source_cik("sands", "", db_path=sources_db).cik is None  # type: ignore[union-attr]
     assert set_source_weight("does_not_exist", 1.0, db_path=sources_db) is None

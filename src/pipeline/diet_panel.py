@@ -583,6 +583,6 @@ def _scaffold_note() -> str:
         '<p class="diet-scaffold" title="Both need a data path this repo doesn\'t have on '
         "the free tier yet (FMP analyst estimates are Ultimate-gated) — scaffolded in the "
         'substrate, not promised here.">'
-        "Coming as fast-follows: buy-side ratings (13F + ARK) and sell-side estimate revisions."
+        "Coming as fast-follows: sell-side estimate and model revisions."
         "</p>"
     )
