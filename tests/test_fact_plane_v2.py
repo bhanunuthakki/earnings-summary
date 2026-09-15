@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
@@ -44,9 +45,9 @@ def _config(path: Path) -> Config:
     return config
 
 
-@pytest.fixture
-def conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
-    path = tmp_path / "fact-plane-v2.db"
+@pytest.fixture(scope="session")
+def fact_plane_v2_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("fact_plane_v2_template") / "template.db"
     legacy = sqlite3.connect(path)
     legacy.executescript(
         """
@@ -65,6 +66,16 @@ def conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
     config = _config(path)
     command.stamp(config, BASE_REVISION)
     command.upgrade(config, "head")
+    return path
+
+
+@pytest.fixture
+def conn(
+    tmp_path: Path,
+    fact_plane_v2_template: Path,
+) -> Generator[sqlite3.Connection, None, None]:
+    path = tmp_path / "fact-plane-v2.db"
+    shutil.copyfile(fact_plane_v2_template, path)
 
     database = sqlite3.connect(path)
     database.execute("PRAGMA foreign_keys = ON")
