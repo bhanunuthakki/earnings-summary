@@ -524,6 +524,92 @@ def test_migration_mode_does_not_probe_live_source_without_valid_restore_receipt
     assert reason in receipt.blocking_reasons
 
 
+def test_migration_mode_does_not_probe_schema_valid_receipt_with_rewritten_snapshot_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = _revision_repo(tmp_path / "checkout", revision=readiness.ACTIVE_HEAD)
+    runtime = _revision_repo(tmp_path / "runtime", revision=readiness.ACTIVE_HEAD)
+    db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=readiness.ACTIVE_HEAD)
+    receipt_path = _backup_receipt(db_path, tmp_path / "backup")
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["snapshot_resolved_path"] = str(db_path.resolve())
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def reject_database_probe(
+        _path: str | Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        del role, schema_preflight
+        raise AssertionError("provenance-invalid receipt must not open a SQLite database")
+
+    monkeypatch.setattr(readiness, "connect_sqlite", reject_database_probe)
+    receipt = readiness.collect_readiness(
+        checkout_root=checkout,
+        runtime_root=runtime,
+        db_path=db_path,
+        backup_restore_receipt_path=receipt_path,
+        mode="migration",
+        **_aligned_kwargs(checkout, runtime),
+    )
+
+    assert receipt.db_revision is None
+    assert receipt.drift_state == "unavailable"
+    assert receipt.ready is False
+    assert "backup_restore_evidence_id_invalid" in receipt.blocking_reasons
+
+
+def test_migration_mode_does_not_probe_receipt_whose_snapshot_aliases_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = _revision_repo(tmp_path / "checkout", revision=readiness.ACTIVE_HEAD)
+    runtime = _revision_repo(tmp_path / "runtime", revision=readiness.ACTIVE_HEAD)
+    db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=readiness.ACTIVE_HEAD)
+    receipt_path = _backup_receipt(db_path, tmp_path / "backup")
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["snapshot_resolved_path"] = str(db_path.resolve())
+    payload["snapshot_requested_path"] = str(db_path)
+    payload["snapshot_byte_size"] = db_path.stat().st_size
+    payload["snapshot_sha256"] = _sha(db_path)
+    payload["evidence_id"] = "0" * 64
+    draft = backup_receipt.BackupRestoreReadinessReceipt.model_validate(payload)
+    canonical = json.dumps(
+        draft.model_dump(mode="json", exclude={"evidence_id"}),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["evidence_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def reject_database_probe(
+        _path: str | Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        del role, schema_preflight
+        raise AssertionError("source-aliased snapshot must not open a SQLite database")
+
+    monkeypatch.setattr(readiness, "connect_sqlite", reject_database_probe)
+    receipt = readiness.collect_readiness(
+        checkout_root=checkout,
+        runtime_root=runtime,
+        db_path=db_path,
+        backup_restore_receipt_path=receipt_path,
+        mode="migration",
+        **_aligned_kwargs(checkout, runtime),
+    )
+
+    assert receipt.db_revision is None
+    assert receipt.drift_state == "unavailable"
+    assert receipt.ready is False
+    assert "backup_restore_snapshot_source_alias" in receipt.blocking_reasons
+
+
 def test_migration_mode_rejects_stale_source_bound_restore_receipt(
     tmp_path: Path,
 ) -> None:

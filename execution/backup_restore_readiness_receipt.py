@@ -134,6 +134,35 @@ def validate_receipt_for_source(
         reasons.append("backup_restore_not_verified")
     if Path(receipt.source_db_resolved_path).resolve() != source:
         reasons.append("backup_restore_source_path_mismatch")
+
+    # Receipt metadata is untrusted until its own evidence commitment, verifier
+    # identity, verified state, and source binding all pass.  Fail before using
+    # any receipt-controlled path so a rewritten snapshot path cannot redirect
+    # a readiness probe (or even an artifact hash) to the live source.
+    if reasons:
+        return tuple(dict.fromkeys(reasons))
+
+    snapshot = Path(receipt.snapshot_resolved_path).resolve()
+    try:
+        snapshot_aliases_source = snapshot.samefile(source)
+    except OSError:
+        snapshot_aliases_source = snapshot == source
+    if snapshot_aliases_source:
+        return ("backup_restore_snapshot_source_alias",)
+
+    try:
+        snapshot_stat = snapshot.stat()
+    except OSError:
+        reasons.append("backup_restore_snapshot_unavailable")
+    else:
+        if (
+            receipt.snapshot_byte_size != snapshot_stat.st_size
+            or receipt.snapshot_sha256 != _sha256(snapshot)
+        ):
+            reasons.append("backup_restore_snapshot_identity_mismatch")
+    if reasons:
+        return tuple(dict.fromkeys(reasons))
+
     if require_current_identity:
         if receipt.source_db_revision != source_revision:
             reasons.append("backup_restore_source_revision_mismatch")
@@ -159,18 +188,6 @@ def validate_receipt_for_source(
             )
         except Exception:
             reasons.append("backup_restore_source_content_stale")
-
-    snapshot = Path(receipt.snapshot_resolved_path)
-    try:
-        snapshot_stat = snapshot.stat()
-    except OSError:
-        reasons.append("backup_restore_snapshot_unavailable")
-    else:
-        if (
-            receipt.snapshot_byte_size != snapshot_stat.st_size
-            or receipt.snapshot_sha256 != _sha256(snapshot)
-        ):
-            reasons.append("backup_restore_snapshot_identity_mismatch")
     return tuple(dict.fromkeys(reasons))
 
 

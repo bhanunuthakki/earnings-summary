@@ -356,10 +356,21 @@ def collect_readiness(
         else:
             backup_evidence_id = backup_receipt.evidence_id
 
+    artifact_reasons: tuple[str, ...] = ()
+    if backup_receipt is not None:
+        artifact_reasons = validate_receipt_for_source(
+            backup_receipt,
+            source_db=database,
+            source_revision=None,
+            require_current_identity=False,
+        )
+
     database_probe: Path | None
     if mode == "migration":
         database_probe = (
-            Path(backup_receipt.snapshot_resolved_path) if backup_receipt is not None else None
+            Path(backup_receipt.snapshot_resolved_path)
+            if backup_receipt is not None and not artifact_reasons
+            else None
         )
     else:
         database_probe = database
@@ -394,34 +405,30 @@ def collect_readiness(
                 else:
                     base_reasons.append("schema_drift_reason_unknown")
 
-    artifact_reasons: tuple[str, ...] = ()
     current_source_reasons: tuple[str, ...] = ()
     if backup_receipt is not None:
-        artifact_reasons = validate_receipt_for_source(
-            backup_receipt,
-            source_db=database,
-            source_revision=db_revision,
-            require_current_identity=False,
-        )
-        current_source_reasons = validate_receipt_for_source(
-            backup_receipt,
-            source_db=database,
-            source_revision=db_revision,
-            require_current_identity=True,
-        )
-        try:
-            snapshot_drift = describe_drift(
-                Path(backup_receipt.snapshot_resolved_path),
-                project_root=checkout,
-            )
-        except Exception:
-            artifact_reasons = (*artifact_reasons, "backup_restore_revision_probe_failed")
+        if artifact_reasons:
+            current_source_reasons = artifact_reasons
         else:
-            if snapshot_drift is not None and snapshot_drift.reason != "db_behind_code":
-                artifact_reasons = (
-                    *artifact_reasons,
-                    "backup_restore_revision_not_ancestor_of_target",
+            current_source_reasons = validate_receipt_for_source(
+                backup_receipt,
+                source_db=database,
+                source_revision=db_revision,
+                require_current_identity=True,
+            )
+            try:
+                snapshot_drift = describe_drift(
+                    Path(backup_receipt.snapshot_resolved_path),
+                    project_root=checkout,
                 )
+            except Exception:
+                artifact_reasons = (*artifact_reasons, "backup_restore_revision_probe_failed")
+            else:
+                if snapshot_drift is not None and snapshot_drift.reason != "db_behind_code":
+                    artifact_reasons = (
+                        *artifact_reasons,
+                        "backup_restore_revision_not_ancestor_of_target",
+                    )
 
     common = list(dict.fromkeys(base_reasons))
     operational_reasons = [*common, *artifact_reasons]
