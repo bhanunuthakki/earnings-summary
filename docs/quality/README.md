@@ -80,6 +80,41 @@ does not make dirty-tree or revision-scoped evidence admissible. Successful
 collection is always admission `HOLD` because causal and paired performance
 evidence is deferred; receipts belong under ignored `.tmp/` paths.
 
+## Paired performance preflight (BHA-104 PF1)
+
+The paired collector compares two distinct immutable commits using the same
+tracked declaration, fixture, workload adapter, and Python interpreter. Both
+commits must already contain those inputs. Run from a clean worktree with the
+project environment installed:
+
+```bash
+python execution/capture_performance_experiment.py \
+  --declaration config/quality_performance_pf1_smoke.json \
+  --control-revision <control-commit> \
+  --treatment-revision <treatment-commit> \
+  --output .tmp/quality/performance-experiment.json
+```
+
+The supplied declaration runs two fixed capture-poller configuration/offset
+tests. It establishes runner fidelity only; it cannot establish full-suite,
+510-second, or production-shaped feasibility. It preserves selected/executed
+test identity and normalized outcomes. Separate immutable archives and external
+output directories protect the measured source; the collector records hashes
+before and after the complete warmup and alternating paired sample series.
+
+POSIX process groups bound child lifetime and output. Unsupported process or
+archive-safety capabilities fail closed. These controls do not establish OS or
+network isolation. SQL counts and peak RSS are per-sample self-reported,
+unverified measurements and may vary; workload, fixture, coverage, result, and
+row identities must remain fixed. The receipt always retains causal and score
+admission `HOLD`, even when raw collection is `COMPLETE`. Do not run timed
+experiments concurrently on the same machine or describe this smoke cohort as
+representative performance evidence.
+
+Operational-surface disposition: these offline developer entrypoints add no
+cockpit action, scheduler job, production connection, or persistent application
+state. Their outputs remain explicit experiment artifacts under `.tmp/`.
+
 ## Lifecycle/reconciliation reproduction
 
 Lifecycle inventory and roadmap reconciliation are fail-closed producers.

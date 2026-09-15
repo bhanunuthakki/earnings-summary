@@ -709,6 +709,26 @@
     },
     {
       "disposition": "closed_command_set",
+      "evidence": "run_git executes only fixed Git commit, blob, tree, and archive probes used to bind and extract the two immutable experiment arms.",
+      "fingerprint": "c949523799b8941a29f447515ab0f006df30f3622fd68b3d0f51f65b0d52097f",
+      "line": 71,
+      "path": "src/quality/performance_experiment.py",
+      "targets": [
+        "git"
+      ]
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "run_experiment_subprocess executes the immutable workload argv from the validated sealed experiment declaration.",
+      "fingerprint": "ef7e18af5daef73b7e6ab3b2635e0251dfeec72f96d2a369be0eeebf5e4a1f70",
+      "line": 84,
+      "path": "src/quality/performance_experiment.py",
+      "targets": [
+        "sealed declaration workload argv"
+      ]
+    },
+    {
+      "disposition": "closed_command_set",
       "evidence": "run_git_subprocess runs only fixed git metadata probes.",
       "fingerprint": "330c508f90be7b7290e460c6f3832067f3cd2a2f08f511f395c613a47b1a4bc4",
       "line": 52,
@@ -820,13 +840,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c719f45983c209540685adab60efa7ecce86df204f031d7b6fc4d2f6f3766831",
+      "source_sha256": "bcacd15130d48d035378390d13c68a3daeb2b577b60162b38e7ba8e80501ae21",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "7bcb0c95e7cf0613fec4c4eebfe31238065a8ec4bdb5e0b6b820434533c54f76"
+    "source_manifest_sha256": "b84f762f0d148dd748b77888cce759f3e018b0e0afede512e0eb9940066aa16e"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }
