@@ -2070,7 +2070,7 @@ def _dynamic_visual_skeletons(
             or dynamic_style_payload
         ):
             skeletons.add(_normalize_css_fragment(rendered))
-    skeletons.update(_opaque_visual_composition_skeletons(text))
+    skeletons.update(_opaque_visual_composition_skeletons(text, tree=tree, nodes=nodes))
     return tuple(sorted(skeletons))
 
 

@@ -222,22 +222,25 @@ def test_emitter_discovery_parses_each_python_source_once(
 ) -> None:
     path = tmp_path / "src" / "ui" / "surface.py"
     path.parent.mkdir(parents=True)
-    path.write_text('HTML = "<button>Run</button>"\n', encoding="utf-8")
+    source_text = 'HTML = "<button>Run</button>"\n'
+    path.write_text(source_text, encoding="utf-8")
     original_parse = ast.parse
-    parsed: list[str] = []
+    parsed: list[tuple[str, str, str]] = []
 
     def counted_parse(
         source: str,
         filename: str = "<unknown>",
         mode: str = "exec",
     ) -> ast.AST:
-        parsed.append(filename)
+        parsed.append((filename, source, mode))
         return original_parse(source, filename=filename, mode=mode)
 
     monkeypatch.setattr(conformance_scan.ast, "parse", counted_parse)
 
     assert [entry.path for entry in discover_emitters(tmp_path)] == ["ui/surface.py"]
-    assert parsed.count(str(path)) == 1
+    assert [
+        filename for filename, source, mode in parsed if source == source_text and mode == "exec"
+    ] == [str(path)]
 
 
 def test_unknown_custom_properties_fail_closed() -> None:
