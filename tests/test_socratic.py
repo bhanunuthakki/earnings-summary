@@ -46,7 +46,7 @@ from advisor.socratic import (  # noqa: E402
 )
 from advisor.store import AdvisorMemoRow, get_memo  # noqa: E402
 from decision_calibration import CalibrationStats, ConvictionBucket  # noqa: E402
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
     PortfolioAnalytics,
@@ -63,8 +63,26 @@ class _NonSpawningRegistry(Registry):
     that a job got registered, not that ``run_socratic_questions.py``
     actually completes end to end."""
 
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
 
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
@@ -439,12 +457,15 @@ def test_questions_prompt_carries_the_premortem(
         prompts.append(prompt)
         return "1. read?\n2. horizon?\n3. wrong?"
 
+    def fake_premortem(
+        repo_root: Path | str,
+        ticker: str,
+        **_kwargs: object,
+    ) -> str:
+        return "**Pre-mortem:**\n1. like RBRK, you size up before the print"
+
     monkeypatch.setattr(socratic_mod, "call_llm", fake_llm)
-    monkeypatch.setattr(
-        calibration_coach,
-        "premortem_block",
-        lambda *_a, **_k: "**Pre-mortem:**\n1. like RBRK, you size up before the print",
-    )
+    monkeypatch.setattr(calibration_coach, "premortem_block", fake_premortem)
     generate_questions(tmp_path, "NU", ctx=_ctx(tmp_path))
     assert "like RBRK, you size up before the print" in prompts[0]
     assert "Pre-mortem" in prompts[0] and "strongest parallel" in prompts[0].lower()
@@ -458,10 +479,20 @@ def test_questions_prompt_degrades_without_premortem(
     import calibration_coach
 
     prompts: list[str] = []
-    monkeypatch.setattr(
-        socratic_mod, "call_llm", lambda p, **_k: prompts.append(p) or "1. a?\n2. b?\n3. c?"
-    )
-    monkeypatch.setattr(calibration_coach, "premortem_block", lambda *_a, **_k: "")
+
+    def capture_llm(prompt: str, **_kwargs: object) -> str:
+        prompts.append(prompt)
+        return "1. a?\n2. b?\n3. c?"
+
+    def empty_premortem(
+        repo_root: Path | str,
+        ticker: str,
+        **_kwargs: object,
+    ) -> str:
+        return ""
+
+    monkeypatch.setattr(socratic_mod, "call_llm", capture_llm)
+    monkeypatch.setattr(calibration_coach, "premortem_block", empty_premortem)
     prelude = generate_questions(tmp_path, "NU", ctx=_ctx(tmp_path))
     assert len(prelude.questions) == 3
     assert "no pre-mortem" in prompts[0]
@@ -572,8 +603,11 @@ def test_run_socratic_questions_script_exit_1_when_persistence_fails(
             ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c"
         )
 
+    def fail_persist(db_path: Path, prelude: SocraticPrelude) -> None:
+        return None
+
     monkeypatch.setattr(socratic_mod, "generate_questions", fake_generate)
-    monkeypatch.setattr(socratic_mod, "persist_prelude", lambda *_a, **_k: None)
+    monkeypatch.setattr(socratic_mod, "persist_prelude", fail_persist)
 
     import run_socratic_questions
 
