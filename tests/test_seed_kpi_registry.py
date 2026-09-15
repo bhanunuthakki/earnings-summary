@@ -22,14 +22,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 import yaml
-from alembic.config import Config
-
-from alembic import command
 
 # scratch/ lives at <repo_root>/scratch/. Tests live at <repo_root>/tests/.
 # Insert scratch/ on sys.path so the import below resolves at runtime; pyright
@@ -50,17 +48,9 @@ from user_state import registry  # noqa: E402
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
-
 # ---------------------------------------------------------------------------
 # Schema setup
 # ---------------------------------------------------------------------------
-
-
-def _build_alembic_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
 
 
 def _add_inputs_schema(db_path: Path) -> None:
@@ -204,13 +194,15 @@ def _write_10k_json(
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    """tmp_path SQLite stamped at 0059, upgraded to head, plus the
-    seeder-input tables (kpi_facts, kpi_definitions, tracked_companies)."""
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    """Private archived-head database plus the seeder's input tables."""
     path = tmp_path / "portfolio.db"
-    cfg = _build_alembic_config(path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(
+        path,
+        stamp=PRIOR_HEAD,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
     _add_inputs_schema(path)
     return path
 
