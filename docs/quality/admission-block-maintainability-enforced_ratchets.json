@@ -3,18 +3,18 @@
   "kind": "block",
   "key": "maintainability.enforced_ratchets",
   "state": "fail",
-  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/architecture-ratchet.json",
-      "sha256": "c68d30d4996410c48ce7363ccc515ac90cd1510dbf119d59551129413a815ab5",
+      "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
       "schema_version": "architecture-measurement-v1"
     },
     {
       "path": "docs/quality/duplicates-ratchet.json",
-      "sha256": "c14795a319e6a20485c95401622f00871dac8a86389818e50de8304992d5eaf3",
+      "sha256": "5b0d7fed8b36cc5fa78be2512d24dde94563f4b6e6514ddc31774f22b18533f8",
       "schema_version": "1"
     }
   ]

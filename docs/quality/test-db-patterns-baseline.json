@@ -1,8 +1,8 @@
 {
   "schema_version": "test-db-patterns/v1",
-  "scoped_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "scoped_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "scanner_sha256": "cddc327b3942155835a5658de6f58b9333360c2cf4ab95c6b2c4286e678e131f",
-  "source_sha256": "b2b0f6bd4676942071c4fc1cbf2bbb3f9b65af378936d40ba89b62c8297073d9",
+  "source_sha256": "82b073f4684e0322914fe7753321e6dc590aada239d5196ca7965f755d72ca26",
   "collection_status": "COMPLETE",
   "collection_note": "",
   "raw_audit_status": "HOLD",
@@ -1391,12 +1391,10 @@
     },
     {
       "path": "tests/test_allocation_decisions_panel.py",
-      "taxonomy": "seeded-upgrade",
+      "taxonomy": "custom-bootstrap",
       "evidence": [
         "call:executescript",
         "call:migrated_db",
-        "call:stamp",
-        "call:upgrade",
         "sql:create table",
         "text:historical",
         "text:seed",
@@ -2189,10 +2187,9 @@
     },
     {
       "path": "tests/test_cio_export_and_ledger_routes.py",
-      "taxonomy": "seeded-upgrade",
+      "taxonomy": "cached-current-head",
       "evidence": [
-        "call:stamp",
-        "call:upgrade",
+        "call:migrated_db",
         "text:historical",
         "text:seed"
       ]
@@ -2807,10 +2804,9 @@
     },
     {
       "path": "tests/test_dcf_sanity_gate.py",
-      "taxonomy": "direct-historical",
+      "taxonomy": "hand-DDL-unit-schema",
       "evidence": [
-        "call:stamp",
-        "call:upgrade",
+        "call:migrated_db",
         "sql:create table",
         "text:historical"
       ]
@@ -6380,10 +6376,9 @@
     },
     {
       "path": "tests/test_research_routes.py",
-      "taxonomy": "direct-historical",
+      "taxonomy": "cached-current-head",
       "evidence": [
-        "call:stamp",
-        "call:upgrade",
+        "call:migrated_db",
         "text:historical"
       ]
     },
@@ -7094,10 +7089,9 @@
     },
     {
       "path": "tests/test_socratic.py",
-      "taxonomy": "direct-historical",
+      "taxonomy": "hand-DDL-unit-schema",
       "evidence": [
-        "call:stamp",
-        "call:upgrade",
+        "call:migrated_db",
         "sql:create table",
         "text:historical"
       ]
@@ -7955,13 +7949,13 @@
   ],
   "counts_by_taxonomy": {
     "archived-graph": 37,
-    "cached-current-head": 67,
-    "custom-bootstrap": 300,
+    "cached-current-head": 69,
+    "custom-bootstrap": 301,
     "direct-downgrade": 104,
-    "direct-historical": 24,
-    "hand-DDL-unit-schema": 94,
+    "direct-historical": 21,
+    "hand-DDL-unit-schema": 96,
     "performance-volume": 12,
-    "seeded-upgrade": 56
+    "seeded-upgrade": 54
   },
   "findings": [
     {
@@ -7978,13 +7972,19 @@
     },
     {
       "path": "tests/test_allocation_decisions_panel.py",
-      "line": 276,
+      "line": 273,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
     {
       "path": "tests/test_allocation_decisions_panel.py",
-      "line": 530,
+      "line": 527,
+      "kind": "explicit_fixture",
+      "evidence": "temporary-fixture"
+    },
+    {
+      "path": "tests/test_allocation_decisions_panel.py",
+      "line": 545,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
@@ -7996,19 +7996,13 @@
     },
     {
       "path": "tests/test_allocation_decisions_panel.py",
-      "line": 551,
+      "line": 840,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
     {
       "path": "tests/test_allocation_decisions_panel.py",
-      "line": 829,
-      "kind": "explicit_fixture",
-      "evidence": "temporary-fixture"
-    },
-    {
-      "path": "tests/test_allocation_decisions_panel.py",
-      "line": 1008,
+      "line": 1029,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
@@ -8620,7 +8614,7 @@
     },
     {
       "path": "tests/test_cio_export_and_ledger_routes.py",
-      "line": 50,
+      "line": 49,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
@@ -10234,7 +10228,7 @@
     },
     {
       "path": "tests/test_research_routes.py",
-      "line": 51,
+      "line": 50,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
@@ -10732,19 +10726,19 @@
     },
     {
       "path": "tests/test_socratic.py",
-      "line": 108,
+      "line": 124,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
     {
       "path": "tests/test_socratic.py",
-      "line": 622,
+      "line": 665,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
     {
       "path": "tests/test_socratic.py",
-      "line": 654,
+      "line": 697,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
@@ -11038,19 +11032,31 @@
     },
     {
       "path": "tests/test_upgrade_database.py",
-      "line": 113,
+      "line": 66,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
     {
       "path": "tests/test_upgrade_database.py",
-      "line": 155,
+      "line": 151,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
     {
       "path": "tests/test_upgrade_database.py",
-      "line": 371,
+      "line": 193,
+      "kind": "explicit_fixture",
+      "evidence": "temporary-fixture"
+    },
+    {
+      "path": "tests/test_upgrade_database.py",
+      "line": 270,
+      "kind": "explicit_fixture",
+      "evidence": "temporary-fixture"
+    },
+    {
+      "path": "tests/test_upgrade_database.py",
+      "line": 478,
       "kind": "explicit_fixture",
       "evidence": "temporary-fixture"
     },
@@ -13171,13 +13177,13 @@
     {
       "path": "tests/test_allocation_decisions_panel.py",
       "locator": {
-        "start_line": 518,
+        "start_line": 515,
         "start_col": 4,
-        "end_line": 518,
+        "end_line": 515,
         "end_col": 70
       },
-      "source_sha256": "4c4be3bbd6bf7e3a41d90adc33c966a6b34975ca240807a8f7fea87e06aa4796",
-      "invocation_id": "8edf5576c67cbfe5ac9ba827a85094bb1c3fc46084f7c039382a9c7d15b340de",
+      "source_sha256": "806720dfb195053c93a8347c84cd59ea4036d377cd1559bc658d25ab856edc03",
+      "invocation_id": "a6c72e119e1c05ba5e45959a8b4400c16c7eeb7e4cbeb1dd105163a227a54d0b",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "client",
@@ -13188,47 +13194,30 @@
     {
       "path": "tests/test_allocation_decisions_panel.py",
       "locator": {
-        "start_line": 623,
+        "start_line": 621,
         "start_col": 4,
-        "end_line": 623,
-        "end_col": 35
-      },
-      "source_sha256": "4c4be3bbd6bf7e3a41d90adc33c966a6b34975ca240807a8f7fea87e06aa4796",
-      "invocation_id": "e068b1b8ce8a5a29fc9c697ef71855bb3c9176f3cf0d018b84b470c27107acbf",
-      "observed_call": "command.stamp",
-      "canonical_identity": "alembic.command.stamp",
-      "factory": "_memo_db",
-      "evidence": "call:stamp",
-      "taxonomy": "direct-historical",
-      "disposition": "RETAIN"
-    },
-    {
-      "path": "tests/test_allocation_decisions_panel.py",
-      "locator": {
-        "start_line": 624,
-        "start_col": 4,
-        "end_line": 624,
-        "end_col": 32
-      },
-      "source_sha256": "4c4be3bbd6bf7e3a41d90adc33c966a6b34975ca240807a8f7fea87e06aa4796",
-      "invocation_id": "05106e96eebfb186018502a10bcb07bfe8a2e77fc4395c2b7cea69414330ce64",
-      "observed_call": "command.upgrade",
-      "canonical_identity": "alembic.command.upgrade",
-      "factory": "_memo_db",
-      "evidence": "call:upgrade",
-      "taxonomy": "custom-bootstrap",
-      "disposition": "RETAIN"
-    },
-    {
-      "path": "tests/test_allocation_decisions_panel.py",
-      "locator": {
-        "start_line": 627,
-        "start_col": 8,
         "end_line": 627,
+        "end_col": 5
+      },
+      "source_sha256": "806720dfb195053c93a8347c84cd59ea4036d377cd1559bc658d25ab856edc03",
+      "invocation_id": "112643d95255d7b70f83b52e08a1c64f6e3a89f29bf3e0a8e528a314833584be",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
+      "factory": "_memo_db",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
+      "disposition": "RETAIN"
+    },
+    {
+      "path": "tests/test_allocation_decisions_panel.py",
+      "locator": {
+        "start_line": 630,
+        "start_col": 8,
+        "end_line": 630,
         "end_col": 52
       },
-      "source_sha256": "4c4be3bbd6bf7e3a41d90adc33c966a6b34975ca240807a8f7fea87e06aa4796",
-      "invocation_id": "20c94ffd508cf21e9b5f0278708ee78378199a65b97b2d6e091c7cea563e187a",
+      "source_sha256": "806720dfb195053c93a8347c84cd59ea4036d377cd1559bc658d25ab856edc03",
+      "invocation_id": "74eda7ce071280ae0ff2eebbd4274aadcf56af4009551fc751687c00f11e3827",
       "observed_call": "conn.executescript",
       "canonical_identity": null,
       "factory": "_memo_db",
@@ -13239,13 +13228,13 @@
     {
       "path": "tests/test_allocation_decisions_panel.py",
       "locator": {
-        "start_line": 1203,
+        "start_line": 1224,
         "start_col": 8,
-        "end_line": 1220,
+        "end_line": 1241,
         "end_col": 9
       },
-      "source_sha256": "4c4be3bbd6bf7e3a41d90adc33c966a6b34975ca240807a8f7fea87e06aa4796",
-      "invocation_id": "86eb26ba396608a71cb5fa3aa5b2ccd37d63a60d6a0f9ea61363deab3f7f4e3c",
+      "source_sha256": "806720dfb195053c93a8347c84cd59ea4036d377cd1559bc658d25ab856edc03",
+      "invocation_id": "9dfad6fa90ab7f53166473519ae5cb1d7ca17e591faa5b531c47d803388a5c69",
       "observed_call": "con.executescript",
       "canonical_identity": null,
       "factory": "_make_pool_db",
@@ -15925,35 +15914,18 @@
     {
       "path": "tests/test_cio_export_and_ledger_routes.py",
       "locator": {
-        "start_line": 37,
+        "start_line": 32,
         "start_col": 4,
         "end_line": 37,
-        "end_col": 35
+        "end_col": 5
       },
-      "source_sha256": "aa5d250ef3f707921136a494d9a6295cf623e817b141f3893c099b0865cba0d9",
-      "invocation_id": "daeed4734d8078b693beb69a628c64810d2e534a063e4a6182e9f79dc0f7d0c7",
-      "observed_call": "command.stamp",
-      "canonical_identity": "alembic.command.stamp",
+      "source_sha256": "a23c16cbdcea5b8d398a86f248991bffd9d63e85eab7d830e6d3bf772de0ba64",
+      "invocation_id": "e057fce408619a997e3382627af71b1fbf55fc869b4954e92bfcd96c8cc20259",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
       "factory": "_build_db",
-      "evidence": "call:stamp",
-      "taxonomy": "direct-historical",
-      "disposition": "RETAIN"
-    },
-    {
-      "path": "tests/test_cio_export_and_ledger_routes.py",
-      "locator": {
-        "start_line": 38,
-        "start_col": 4,
-        "end_line": 38,
-        "end_col": 32
-      },
-      "source_sha256": "aa5d250ef3f707921136a494d9a6295cf623e817b141f3893c099b0865cba0d9",
-      "invocation_id": "af133a48f0deea1a0acb1ebbfdfef3e8f5d0bce3b57359b2efb273c94791568b",
-      "observed_call": "command.upgrade",
-      "canonical_identity": "alembic.command.upgrade",
-      "factory": "_build_db",
-      "evidence": "call:upgrade",
-      "taxonomy": "custom-bootstrap",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
       "disposition": "RETAIN"
     },
     {
@@ -18611,35 +18583,18 @@
     {
       "path": "tests/test_dcf_sanity_gate.py",
       "locator": {
-        "start_line": 66,
-        "start_col": 4,
-        "end_line": 66,
-        "end_col": 39
+        "start_line": 50,
+        "start_col": 14,
+        "end_line": 50,
+        "end_col": 52
       },
-      "source_sha256": "d0537e139e7578e2d67e4984125ace3303767a608f2eac420637c0ba7833b435",
-      "invocation_id": "60cbc47824ec984da79045e03a2ff089988cbae9d23fd2c1e849cb404fb5a70f",
-      "observed_call": "command.stamp",
-      "canonical_identity": "alembic.command.stamp",
+      "source_sha256": "5fbcee2485ee2d9c0948a73a71242189f441e47c33a402433a0381a229e0503f",
+      "invocation_id": "62bf4caa260382c09dd6f9799c9ea4aefc547895d54fd36e517b22aa41cbd5c0",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
       "factory": "db_path",
-      "evidence": "call:stamp",
-      "taxonomy": "direct-historical",
-      "disposition": "RETAIN"
-    },
-    {
-      "path": "tests/test_dcf_sanity_gate.py",
-      "locator": {
-        "start_line": 67,
-        "start_col": 4,
-        "end_line": 67,
-        "end_col": 32
-      },
-      "source_sha256": "d0537e139e7578e2d67e4984125ace3303767a608f2eac420637c0ba7833b435",
-      "invocation_id": "9068dc5dfa503dd7c070e480d508c43ff98400c1f8f0950ac42df785d31a16e3",
-      "observed_call": "command.upgrade",
-      "canonical_identity": "alembic.command.upgrade",
-      "factory": "db_path",
-      "evidence": "call:upgrade",
-      "taxonomy": "custom-bootstrap",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
       "disposition": "RETAIN"
     },
     {
@@ -21960,16 +21915,16 @@
     {
       "path": "tests/test_fact_search_projection.py",
       "locator": {
-        "start_line": 69,
+        "start_line": 82,
         "start_col": 4,
-        "end_line": 80,
-        "end_col": 5
+        "end_line": 82,
+        "end_col": 51
       },
-      "source_sha256": "a3a7ecc5a839c6363c506d6295e9e1a7112c6b36524e389b2c9d9577e62e643c",
-      "invocation_id": "86837ad47b2e87c0aecf68086f204f526f9fa16457545a76211e1cf1dedafabc",
+      "source_sha256": "d6e7e7115f7d8e8507542a5808729d983de11d4c027b24bd12e1dfe8815e16c7",
+      "invocation_id": "7896fea98ad503c44d1e4d017c64c409cb38e0885932da4026c90dee8207a2d0",
       "observed_call": "database.executescript",
       "canonical_identity": null,
-      "factory": "hardened_conn",
+      "factory": "hardened_template",
       "evidence": "call:executescript",
       "taxonomy": "unclassified",
       "disposition": "HOLD"
@@ -21977,16 +21932,16 @@
     {
       "path": "tests/test_fact_search_projection.py",
       "locator": {
-        "start_line": 85,
+        "start_line": 87,
         "start_col": 4,
-        "end_line": 85,
+        "end_line": 87,
         "end_col": 40
       },
-      "source_sha256": "a3a7ecc5a839c6363c506d6295e9e1a7112c6b36524e389b2c9d9577e62e643c",
-      "invocation_id": "1ce54e49d76092ae0317f230b9712eb0e3100599ce9f8f5ffbb08a4738720df0",
+      "source_sha256": "d6e7e7115f7d8e8507542a5808729d983de11d4c027b24bd12e1dfe8815e16c7",
+      "invocation_id": "04d0173ff068d2df60264916b5495b02dfcc96fcaa216c0fb46d29586fc50d4a",
       "observed_call": "command.stamp",
       "canonical_identity": "alembic.command.stamp",
-      "factory": "hardened_conn",
+      "factory": "hardened_template",
       "evidence": "call:stamp",
       "taxonomy": "direct-historical",
       "disposition": "RETAIN"
@@ -21994,16 +21949,16 @@
     {
       "path": "tests/test_fact_search_projection.py",
       "locator": {
-        "start_line": 86,
+        "start_line": 88,
         "start_col": 4,
-        "end_line": 86,
+        "end_line": 88,
         "end_col": 35
       },
-      "source_sha256": "a3a7ecc5a839c6363c506d6295e9e1a7112c6b36524e389b2c9d9577e62e643c",
-      "invocation_id": "68f651fd72787208f2fa4299e8e58791f1559917c67a3c0ca2a653b043e2cf38",
+      "source_sha256": "d6e7e7115f7d8e8507542a5808729d983de11d4c027b24bd12e1dfe8815e16c7",
+      "invocation_id": "e3d08a8bfb0b388ebed3d1af863da5526c39082589baf87447368985f2d9c915",
       "observed_call": "command.upgrade",
       "canonical_identity": "alembic.command.upgrade",
-      "factory": "hardened_conn",
+      "factory": "hardened_template",
       "evidence": "call:upgrade",
       "taxonomy": "custom-bootstrap",
       "disposition": "RETAIN"
@@ -22011,13 +21966,13 @@
     {
       "path": "tests/test_fact_search_projection.py",
       "locator": {
-        "start_line": 375,
+        "start_line": 387,
         "start_col": 4,
-        "end_line": 608,
+        "end_line": 620,
         "end_col": 5
       },
-      "source_sha256": "a3a7ecc5a839c6363c506d6295e9e1a7112c6b36524e389b2c9d9577e62e643c",
-      "invocation_id": "df51629b832f79bf121a2057b456d856331c50f3159a4459cd380becf54bbf71",
+      "source_sha256": "d6e7e7115f7d8e8507542a5808729d983de11d4c027b24bd12e1dfe8815e16c7",
+      "invocation_id": "1c36864d99e767b6ae341c117310a91e910fd7b45e2677495f4c37780e0c6cc2",
       "observed_call": "conn.executescript",
       "canonical_identity": "connection.executescript",
       "factory": "_schema",
@@ -32233,8 +32188,8 @@
         "end_line": 78,
         "end_col": 5
       },
-      "source_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
-      "invocation_id": "bb799b0fa3f0fe8b1eded8215455e4064d09d2c2b82855ebd77c47e4b76b9a77",
+      "source_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
+      "invocation_id": "bb7993537f76757b4d57fd2ffd229c875dfc02582d99e6f820c001508c39c9f1",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_0011_adds_append_only_journal_correlations_and_trace_index",
@@ -32250,8 +32205,8 @@
         "end_line": 199,
         "end_col": 54
       },
-      "source_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
-      "invocation_id": "0c469c5e03fef783236cf6d426d2ab3d8300ed473531395cfe8ee851f1e15377",
+      "source_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
+      "invocation_id": "e028a181904636b5e31c7402608f415a05978755ab7f9c0c2cf7f12ce50e1e5c",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_migrated_db_correlates_pipeline_source_and_llm_without_time_inference",
@@ -32267,8 +32222,8 @@
         "end_line": 304,
         "end_col": 86
       },
-      "source_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
-      "invocation_id": "d863c8b361ca9ecb07854aaf5a7261a9439dd49a99dbe41a369274343950a722",
+      "source_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
+      "invocation_id": "d5259326f6b7b9750415f23b449023fdd62e32d621cb591140d8970035a9dd1e",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_0011_rejects_unsafe_direct_operation_request_inserts",
@@ -32284,8 +32239,8 @@
         "end_line": 337,
         "end_col": 84
       },
-      "source_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
-      "invocation_id": "13be82456e1cce02585c449c8c7e45f56662483eea63d2f49e87f19afbea9f5b",
+      "source_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
+      "invocation_id": "6ac0e54bb4aada780c33febbd08050fe247675e801aeef6b74bd87f2fb91355f",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_0011_rejects_noncanonical_terminal_events",
@@ -32298,11 +32253,11 @@
       "locator": {
         "start_line": 366,
         "start_col": 14,
-        "end_line": 370,
+        "end_line": 371,
         "end_col": 5
       },
-      "source_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
-      "invocation_id": "78fb12fb0b3124968b2fefee496e6b461cf2ee392e27a64ba031037740190153",
+      "source_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
+      "invocation_id": "06ddf6ddf5be5ef7fee87403ac5db87502f0934bec1875a7801ae71262be6c9d",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_0011_api_terminal_falls_back_when_redaction_still_violates_privacy_check",
@@ -32313,13 +32268,13 @@
     {
       "path": "tests/test_operations_journal_migration.py",
       "locator": {
-        "start_line": 459,
+        "start_line": 460,
         "start_col": 14,
-        "end_line": 459,
-        "end_col": 55
+        "end_line": 460,
+        "end_col": 93
       },
-      "source_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
-      "invocation_id": "6c828ba64792e813ea0239ec90cba55300b69390cffe711c9742db555fb49b3e",
+      "source_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
+      "invocation_id": "0f8e2c6ba15672c2febde159f3adb7268c6e1473b0bf0fe6cc52909d4b9ccc84",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_0011_downgrade_removes_only_journal_additions",
@@ -32330,13 +32285,13 @@
     {
       "path": "tests/test_operations_journal_migration.py",
       "locator": {
-        "start_line": 461,
+        "start_line": 462,
         "start_col": 4,
-        "end_line": 461,
+        "end_line": 462,
         "end_col": 62
       },
-      "source_sha256": "47006fedc8cda03676e904f5df8b4fe1214ff7531a52ca0b6fbcf149f3024029",
-      "invocation_id": "1edb6d87ff350279585182b5fd5c0f7f154aad05be318ae978224764fd90d13d",
+      "source_sha256": "3c218cd167ce4964a7edc393e94ec524b3d39fac2e65f9618888c32446cf81a0",
+      "invocation_id": "d3833066b3823659500c1608ce1c47d14ace369741e4394e005258196b347c77",
       "observed_call": "command.downgrade",
       "canonical_identity": "alembic.command.downgrade",
       "factory": "test_0011_downgrade_removes_only_journal_additions",
@@ -35067,35 +35022,18 @@
     {
       "path": "tests/test_research_routes.py",
       "locator": {
-        "start_line": 32,
+        "start_line": 27,
         "start_col": 4,
         "end_line": 32,
-        "end_col": 35
+        "end_col": 5
       },
-      "source_sha256": "01523667b309990d9a228458f23a77640b5162209218f18bb31e16433cd5db87",
-      "invocation_id": "22ea4b25ac567e795b541bbfb392dbf3e41761fa5480cbe28597ef20dff749d7",
-      "observed_call": "command.stamp",
-      "canonical_identity": "alembic.command.stamp",
+      "source_sha256": "43b7c955370acf771f5f1266d36c69022d12801c5151ea2a13feea3238b757f3",
+      "invocation_id": "8d7360615159513bd74d36a97dea085c48dcaccb164df6b13dc9d5a72c000725",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
       "factory": "_build_db",
-      "evidence": "call:stamp",
-      "taxonomy": "direct-historical",
-      "disposition": "RETAIN"
-    },
-    {
-      "path": "tests/test_research_routes.py",
-      "locator": {
-        "start_line": 33,
-        "start_col": 4,
-        "end_line": 33,
-        "end_col": 32
-      },
-      "source_sha256": "01523667b309990d9a228458f23a77640b5162209218f18bb31e16433cd5db87",
-      "invocation_id": "2a74b8836c75a0d3cc80294660e3d3061157e17f7a51be6ccc61969600e41880",
-      "observed_call": "command.upgrade",
-      "canonical_identity": "alembic.command.upgrade",
-      "factory": "_build_db",
-      "evidence": "call:upgrade",
-      "taxonomy": "custom-bootstrap",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
       "disposition": "RETAIN"
     },
     {
@@ -37872,35 +37810,18 @@
     {
       "path": "tests/test_socratic.py",
       "locator": {
-        "start_line": 113,
+        "start_line": 125,
         "start_col": 4,
-        "end_line": 113,
-        "end_col": 35
+        "end_line": 131,
+        "end_col": 5
       },
-      "source_sha256": "1270095521304bb1c9faefb7aae01ce1982643a9add99edb1a07cd3b1aab3cf2",
-      "invocation_id": "2f9abbf64a8bca65a29bfb2cf6c0afe9c952b9df2b67adc9e60dcbd2f7940c67",
-      "observed_call": "command.stamp",
-      "canonical_identity": "alembic.command.stamp",
+      "source_sha256": "4ccd6ed53f7709b76439e3a788224f2b3a88b21654e85f99b3354e8986fd3d09",
+      "invocation_id": "8cabe1beb023bb415f21e889a4ca4b4030bb7c537d4a3929850767c8fb795979",
+      "observed_call": "migrated_db",
+      "canonical_identity": "migrated_db",
       "factory": "_build_db",
-      "evidence": "call:stamp",
-      "taxonomy": "direct-historical",
-      "disposition": "RETAIN"
-    },
-    {
-      "path": "tests/test_socratic.py",
-      "locator": {
-        "start_line": 114,
-        "start_col": 4,
-        "end_line": 114,
-        "end_col": 32
-      },
-      "source_sha256": "1270095521304bb1c9faefb7aae01ce1982643a9add99edb1a07cd3b1aab3cf2",
-      "invocation_id": "c8ffc3a30de1882823d51372429960d28012dd31640e747b798065192f1fd46b",
-      "observed_call": "command.upgrade",
-      "canonical_identity": "alembic.command.upgrade",
-      "factory": "_build_db",
-      "evidence": "call:upgrade",
-      "taxonomy": "custom-bootstrap",
+      "evidence": "call:migrated_db",
+      "taxonomy": "cached-current-head",
       "disposition": "RETAIN"
     },
     {
@@ -40456,13 +40377,13 @@
     {
       "path": "tests/test_upgrade_database.py",
       "locator": {
-        "start_line": 463,
+        "start_line": 570,
         "start_col": 8,
-        "end_line": 487,
+        "end_line": 594,
         "end_col": 9
       },
-      "source_sha256": "5c88d0bb9b7767f7e0a083ed9aea07e3aa22ce4a966e719847d478a0054f9705",
-      "invocation_id": "67c5b3530cc399588cc5787aa4765ad328344dfa11405c1db1495bfa7f3c0f93",
+      "source_sha256": "fea59caa9c3421d4225df4ceccfa32d4f6e37fbb5d682e6575f50ddaef85fe16",
+      "invocation_id": "fa3d554baae1cda861379b3f093cc4550a3f6e62531751b99e286533bb855f00",
       "observed_call": "conn.executescript",
       "canonical_identity": null,
       "factory": "test_archived_bridge_rejects_closed_detail_lookalike_before_revision_mutation",
@@ -40473,13 +40394,13 @@
     {
       "path": "tests/test_upgrade_database.py",
       "locator": {
-        "start_line": 523,
+        "start_line": 630,
         "start_col": 14,
-        "end_line": 523,
+        "end_line": 630,
         "end_col": 93
       },
-      "source_sha256": "5c88d0bb9b7767f7e0a083ed9aea07e3aa22ce4a966e719847d478a0054f9705",
-      "invocation_id": "e17d2a6473bbece5e1515104720af6e7cb4904ddd6bb10977de9ade671a94a7a",
+      "source_sha256": "fea59caa9c3421d4225df4ceccfa32d4f6e37fbb5d682e6575f50ddaef85fe16",
+      "invocation_id": "c36a920ebd1263f567de9cff9c4c96171a449ed50fecf3d328de951a2a7b0194",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_managed_wrapper_upgrades_exact_0010_to_0014_with_backup_and_closed_journal_schema",
@@ -40490,13 +40411,13 @@
     {
       "path": "tests/test_upgrade_database.py",
       "locator": {
-        "start_line": 571,
+        "start_line": 678,
         "start_col": 14,
-        "end_line": 571,
+        "end_line": 678,
         "end_col": 95
       },
-      "source_sha256": "5c88d0bb9b7767f7e0a083ed9aea07e3aa22ce4a966e719847d478a0054f9705",
-      "invocation_id": "4b9f79b4c095bc3d54e4f0890bfa81f3d90fd1150c3439d0f6fa16ca6c22e092",
+      "source_sha256": "fea59caa9c3421d4225df4ceccfa32d4f6e37fbb5d682e6575f50ddaef85fe16",
+      "invocation_id": "160052f516ed97ec511505cda06de1d96867ecad22b167dbbed213215be9b13e",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_managed_upgrade_rejects_weaker_preexisting_same_column_journal_table",
@@ -40507,13 +40428,13 @@
     {
       "path": "tests/test_upgrade_database.py",
       "locator": {
-        "start_line": 623,
+        "start_line": 730,
         "start_col": 14,
-        "end_line": 623,
+        "end_line": 730,
         "end_col": 100
       },
-      "source_sha256": "5c88d0bb9b7767f7e0a083ed9aea07e3aa22ce4a966e719847d478a0054f9705",
-      "invocation_id": "111e7dc7f364e0ff7d25ee7577e63b677c469e7532542bc0aedfa2ed88f43711",
+      "source_sha256": "fea59caa9c3421d4225df4ceccfa32d4f6e37fbb5d682e6575f50ddaef85fe16",
+      "invocation_id": "70956736cb3d90d863bee7a9551fc563fb791e2e7617c3abe53d5bced61b09aa",
       "observed_call": "migrated_db",
       "canonical_identity": "migrated_db",
       "factory": "test_managed_upgrade_rejects_partial_preexisting_owned_llm_index",

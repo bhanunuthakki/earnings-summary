@@ -3,13 +3,13 @@
   "kind": "hard_gate",
   "key": "database_authority",
   "state": "fail",
-  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/test-db-patterns-baseline.json",
-      "sha256": "6f045b651d33e6b589d03c47f2ca7d300a935cba502a54361ebbfcd65875c02b",
+      "sha256": "e8f1c5ba6d538b4171abd4627ff7052093d365447f3f9c0aecca5a83746fe45f",
       "schema_version": "test-db-patterns/v1"
     }
   ]

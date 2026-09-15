@@ -6,28 +6,28 @@
     "-c",
     "print('ok')"
   ],
-  "revision": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "revision": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "source_identity": "clean_head",
-  "source_sha256": "3f203165e8b90ce2daa458a46b0707dfa12ed874445dd6bba61ce419e3cceb30",
+  "source_sha256": "5edc0e44e36c0e596184fcca2a53c50e949fa63cf2fc7b04fbbe0e9276ab6bb7",
   "config_sha256": "951bb85f0d81c8222aa46eb03aad174492706f4910bd5221ff114ae2176acb06",
   "scanner_sha256": "0485ca9d6e2360906db0161736af249b1d6962e7fc37613b7a8f6864f34a554b",
   "scanner_version": "performance-timing/v1",
   "timing": {
     "samples": [
-      0.030273749958723783,
-      0.031297249952331185,
-      0.030132542015053332,
-      0.030611790949478745,
-      0.030731540988199413,
-      0.0288957089651376,
-      0.02969358302652836
+      0.028967666905373335,
+      0.02931258303578943,
+      0.029528875020332634,
+      0.029485916951671243,
+      0.02885941695421934,
+      0.02958279091399163,
+      0.029197665979154408
     ],
     "count": 7,
-    "median_seconds": 0.030273749958723783,
-    "mad_seconds": 0.00045779102947562933,
+    "median_seconds": 0.02931258303578943,
+    "mad_seconds": 0.0002162919845432043,
     "bootstrap_ci_95": [
-      0.02969358302652836,
-      0.030731540988199413
+      0.028967666905373335,
+      0.029528875020332634
     ],
     "stability_verdict": "stable"
   },
@@ -35,40 +35,40 @@
     {
       "label": "measured",
       "ordinal": 1,
-      "elapsed_seconds": 0.030273749958723783
+      "elapsed_seconds": 0.028967666905373335
     },
     {
       "label": "measured",
       "ordinal": 2,
-      "elapsed_seconds": 0.031297249952331185
+      "elapsed_seconds": 0.02931258303578943
     },
     {
       "label": "measured",
       "ordinal": 3,
-      "elapsed_seconds": 0.030132542015053332
+      "elapsed_seconds": 0.029528875020332634
     },
     {
       "label": "measured",
       "ordinal": 4,
-      "elapsed_seconds": 0.030611790949478745
+      "elapsed_seconds": 0.029485916951671243
     },
     {
       "label": "measured",
       "ordinal": 5,
-      "elapsed_seconds": 0.030731540988199413
+      "elapsed_seconds": 0.02885941695421934
     },
     {
       "label": "measured",
       "ordinal": 6,
-      "elapsed_seconds": 0.0288957089651376
+      "elapsed_seconds": 0.02958279091399163
     },
     {
       "label": "measured",
       "ordinal": 7,
-      "elapsed_seconds": 0.02969358302652836
+      "elapsed_seconds": 0.029197665979154408
     }
   ],
-  "warmup_seconds": 0.029771042056381702,
+  "warmup_seconds": 0.028953249915502965,
   "environment": {
     "python": "3.14.7",
     "python_implementation": "CPython",

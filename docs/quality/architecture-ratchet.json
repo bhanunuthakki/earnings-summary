@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "scoped_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "scanner_sha256": "07c1c2265f5374df0c77f24b39471158dc8d81c0a9527406ba004047b4c11ffc",
-  "source_sha256": "5da92a9afb636e91e020557ed2dca992343fed2304017b7e09dab12316ca3771",
+  "source_sha256": "b09b1fab7e418c594d53145d340cc9763c71c232eee22a77656e270156a66d9c",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1342,
-    "total_noncomment_loc": 500106,
+    "total_noncomment_loc": 500200,
     "modules_over_1000_loc": 96,
     "modules_over_2000_loc": 19,
     "modules_at_least_3000_loc": 4,
@@ -847,9 +847,9 @@
         "path": "execution/backup_restore_readiness_receipt.py",
         "module": "execution.backup_restore_readiness_receipt",
         "lines": {
-          "physical": 313,
-          "nonblank": 274,
-          "noncomment": 274
+          "physical": 330,
+          "nonblank": 288,
+          "noncomment": 284
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -3982,9 +3982,9 @@
         "path": "execution/portfolio_readiness_receipt.py",
         "module": "execution.portfolio_readiness_receipt",
         "lines": {
-          "physical": 490,
-          "nonblank": 442,
-          "noncomment": 438
+          "physical": 514,
+          "nonblank": 464,
+          "noncomment": 454
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -5993,9 +5993,9 @@
         "path": "execution/upgrade_database.py",
         "module": "execution.upgrade_database",
         "lines": {
-          "physical": 527,
-          "nonblank": 454,
-          "noncomment": 435
+          "physical": 552,
+          "nonblank": 479,
+          "noncomment": 449
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -20016,9 +20016,9 @@
         "path": "src/ui/conformance_scan.py",
         "module": "ui.conformance_scan",
         "lines": {
-          "physical": 3098,
-          "nonblank": 2822,
-          "noncomment": 2812
+          "physical": 3155,
+          "nonblank": 2876,
+          "noncomment": 2866
         },
         "internal_fan_out": 2,
         "responsibilities": [

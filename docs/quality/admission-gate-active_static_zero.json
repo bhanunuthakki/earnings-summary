@@ -3,13 +3,13 @@
   "kind": "hard_gate",
   "key": "active_static_zero",
   "state": "fail",
-  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/static-baseline.json",
-      "sha256": "0a68eb820fa97c886b4357f0be8bd503ede686636212cd509336a5d40824507f",
+      "sha256": "48339a9a67314fe958e1e0c5153a1c7f1d4bf2903e88113f8f3ba18757594298",
       "schema_version": "bha-120.v3"
     }
   ]

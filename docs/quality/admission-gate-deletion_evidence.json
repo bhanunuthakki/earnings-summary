@@ -3,13 +3,13 @@
   "kind": "hard_gate",
   "key": "deletion_evidence",
   "state": "fail",
-  "subject_commit": "8727ae52e2b5804bb79b52ad9f4a05eabd651b0d",
+  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
   "generator_path": "src/quality/admission_policy.py",
   "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
   "sources": [
     {
       "path": "docs/quality/lifecycle-inventory.json",
-      "sha256": "79fbe8ec94c4c09631a3306b3af257fd33c6500826c096c1e59308a049fb81f2",
+      "sha256": "85cf02280ac6756c84475589d29b895edf39910a50bca117e8d5b704660cef5f",
       "schema_version": "operational-lifecycle-inventory/v1"
     }
   ]
