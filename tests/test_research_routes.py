@@ -5,13 +5,11 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -25,12 +23,13 @@ _PRIOR_HEAD = "0059_kpi_facts_restatement"
 ResearchContext = tuple[FlaskClient, Path, int, int]
 
 
-def _build_db(db_path: Path) -> tuple[int, int]:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> tuple[int, int]:
+    migrated_db(
+        db_path,
+        stamp=_PRIOR_HEAD,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
     task_id = create_task(
         note_id=None, claim="do NU's margins still hold?", ticker="NU", db_path=db_path
     )
@@ -47,10 +46,9 @@ def _build_db(db_path: Path) -> tuple[int, int]:
 
 
 @pytest.fixture
-def ctx(tmp_path: Path) -> ResearchContext:
+def ctx(tmp_path: Path, migrated_db: Callable[..., Path]) -> ResearchContext:
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    task_id, proposal_id = _build_db(db)
+    task_id, proposal_id = _build_db(db, migrated_db)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db, task_id, proposal_id
 
