@@ -1,7 +1,7 @@
 """Tests for the canonical next-earnings store (0082) and its daily refresher.
 
 Store tests run against a REAL alembic-migrated table (stamp at the prior
-head, upgrade to head — only 0082 executes) so the upsert hits the actual
+head, upgrade to 0082 — only 0082 executes) so the upsert hits the actual
 ``ux_expected_earnings_ticker_date`` unique index. The refresher's source
 stack (``next_earnings_date``) is monkeypatched so tests stay offline.
 """
@@ -10,19 +10,17 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 from expected_earnings import record_next_earnings, upcoming_by_ticker
 from sources.earnings_calendar import NextEarnings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0081_discovery_candidates"
+EXPECTED_EARNINGS_HEAD = "0082_expected_earnings_revival"
 TODAY = date(2026, 6, 11)
 
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -31,13 +29,9 @@ import refresh_expected_earnings as ree  # noqa: E402
 
 
 @pytest.fixture
-def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
+def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "expected_earnings.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(db, stamp=PRIOR_HEAD, target=EXPECTED_EARNINGS_HEAD, archived=True)
     c = sqlite3.connect(str(db))
     yield c
     c.close()
