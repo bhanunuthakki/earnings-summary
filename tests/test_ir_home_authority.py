@@ -9,9 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from ir_pipeline.home_authority import (
     IRHomeAuthorityError,
     IRHomeAuthorityRequest,
@@ -28,8 +26,8 @@ from provenance.issuer_registry import (
     LegacyIssuerBindingRevision,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0231_legacy_document_evidence_bindings"
+_PRIOR_HEAD = "0213_decision_draft_provider_id"
 STAMP = datetime(2026, 7, 28, 2, 0, tzinfo=UTC)
 URL = "https://investor.acme.test/"
 BODY = b"<html><title>Acme Investor Relations</title><body>Quarterly Results</body></html>"
@@ -82,13 +80,9 @@ class _Session:
         self.closed = True
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "ir-home-authority.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    migrated_db(path, stamp=_PRIOR_HEAD, target=HEAD, archived=True)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     registry = IssuerRegistry(conn)
@@ -148,8 +142,9 @@ def _request(
 
 def test_verified_home_is_hash_bound_but_does_not_claim_inventory_completeness(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     first = verify_ir_home_authority(conn, request=_request(tmp_path))
     exact = verify_ir_home_authority(conn, request=_request(tmp_path))
     refreshed = verify_ir_home_authority(
@@ -177,8 +172,9 @@ def test_verified_home_is_hash_bound_but_does_not_claim_inventory_completeness(
 
 def test_marker_or_identity_failure_emits_no_evidence_or_surface(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     with pytest.raises(IRHomeAuthorityError, match="marker"):
         verify_ir_home_authority(
             conn,
@@ -197,8 +193,8 @@ def test_marker_or_identity_failure_emits_no_evidence_or_surface(
     conn.close()
 
 
-def test_dry_run_validates_without_writes(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_dry_run_validates_without_writes(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    conn = _conn(tmp_path, migrated_db)
     result = verify_ir_home_authority(
         conn,
         request=_request(tmp_path, apply=False),
@@ -212,8 +208,9 @@ def test_dry_run_validates_without_writes(tmp_path: Path) -> None:
 
 def test_batch_verifies_bounded_redirect_and_deduplicates_canonical_issuer(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     IssuerRegistry(conn).persist(
         LegacyIssuerBindingRevision(
             binding_revision_id="legacy-acme-alias-1",
@@ -289,8 +286,10 @@ def test_batch_verifies_bounded_redirect_and_deduplicates_canonical_issuer(
     conn.close()
 
 
-def test_batch_robots_denial_is_explicit_and_writes_nothing(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_batch_robots_denial_is_explicit_and_writes_nothing(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     session = _Session([])
     result = verify_ir_home_candidates(
         conn,
@@ -321,8 +320,9 @@ def test_batch_robots_denial_is_explicit_and_writes_nothing(tmp_path: Path) -> N
 
 def test_batch_parallelizes_fetches_but_persists_in_candidate_order(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     registry = IssuerRegistry(conn)
     registry.persist(
         IssuerEntity(
