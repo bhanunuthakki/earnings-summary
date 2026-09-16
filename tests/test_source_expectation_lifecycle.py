@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -30,27 +29,23 @@ from provenance.source_coverage_reconcile import (
     reconcile_source_coverage,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 4, 0, 0)
 A, B = "a" * 64, "b" * 64
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 def _conn(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     *,
     target_revision: str = "0224_expected_document_lifecycle",
 ) -> sqlite3.Connection:
     path = tmp_path / "expectation-lifecycle.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, target_revision)
+    migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        target=target_revision,
+        archived=True,
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     ledger = EvidenceLedger(conn)
@@ -140,8 +135,10 @@ def _request(
     )
 
 
-def test_exact_replay_does_not_invent_an_expectation_revision(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_exact_replay_does_not_invent_an_expectation_revision(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         request = _request(1, expected_documents=(_expected(),))
         first = reconcile_source_coverage(conn, request)
@@ -157,8 +154,10 @@ def test_exact_replay_does_not_invent_an_expectation_revision(tmp_path: Path) ->
         conn.close()
 
 
-def test_lifecycle_uses_canonical_append_only_trigger_contract(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_lifecycle_uses_canonical_append_only_trigger_contract(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         trigger_names = {
             str(row[0])
@@ -176,8 +175,9 @@ def test_lifecycle_uses_canonical_append_only_trigger_contract(tmp_path: Path) -
 
 def test_disappearing_expectation_requires_exact_withdrawal_and_is_not_deleted(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         reconcile_source_coverage(conn, _request(1, expected_documents=(_expected(),)))
 
@@ -206,8 +206,10 @@ def test_disappearing_expectation_requires_exact_withdrawal_and_is_not_deleted(
         conn.close()
 
 
-def test_cross_authority_supersession_binds_exact_replacement(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_cross_authority_supersession_binds_exact_replacement(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = EvidenceLedger(conn)
         ledger.persist(
@@ -267,8 +269,10 @@ def test_cross_authority_supersession_binds_exact_replacement(tmp_path: Path) ->
         conn.close()
 
 
-def test_cross_authority_supersession_rejects_unowned_replacement(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_cross_authority_supersession_rejects_unowned_replacement(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         reconcile_source_coverage(conn, _request(1, expected_documents=(_expected(),)))
         withdrawal = ExpectedDocumentWithdrawalImport(
@@ -288,8 +292,9 @@ def test_cross_authority_supersession_rejects_unowned_replacement(tmp_path: Path
 
 def test_supersession_rejects_authority_observed_after_reconciliation_cutoff(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         future = STAMP + timedelta(hours=2)
         ledger = EvidenceLedger(conn)
@@ -345,8 +350,9 @@ def test_supersession_rejects_authority_observed_after_reconciliation_cutoff(
 
 def test_supersession_rejects_replacement_recorded_after_reconciliation_cutoff(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         future = STAMP + timedelta(hours=2)
         ledger = EvidenceLedger(conn)
@@ -402,8 +408,14 @@ def test_supersession_rejects_replacement_recorded_after_reconciliation_cutoff(
         conn.close()
 
 
-def test_supersession_compares_canonical_issuer_identity_at_cutoff(tmp_path: Path) -> None:
-    conn = _conn(tmp_path, target_revision="0227_issuer_reporting_registry")
+def test_supersession_compares_canonical_issuer_identity_at_cutoff(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(
+        tmp_path,
+        migrated_db,
+        target_revision="0227_issuer_reporting_registry",
+    )
     try:
         registry = IssuerRegistry(conn)
         registry.persist(
