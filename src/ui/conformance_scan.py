@@ -101,7 +101,6 @@ _HTML_EMITTER = re.compile(
     re.IGNORECASE,
 )
 _SVG_EMITTER = re.compile(r"<(?:svg|path|circle|rect|line|polyline|polygon|text)\b", re.IGNORECASE)
-_CSS_EMITTER = re.compile(r"(?:^|[}\s])[^{}<>]+\{\s*[-\w]+\s*:", re.MULTILINE)
 _CSS_SELECTOR_START = re.compile(
     r"^(?:[.#:\[*]|(?:html|body|main|nav|aside|article|section|div|span|table|thead|tbody|tr|th|td|button|a|p|h[1-6]|ul|ol|li|input|select|option|textarea|label|img|canvas|video|audio|picture|iframe|figure|header|footer|pre|code|form|details|summary|dialog)\b)",
     re.IGNORECASE,
@@ -150,6 +149,7 @@ _RUNTIME_STYLESHEET_COLLECTION_SINK = re.compile(
     r"|\.setAttribute\s*\(\s*['\"]srcdoc['\"])",
     re.IGNORECASE,
 )
+_CSS_DECLARATION_SOURCE_HINT = re.compile(r"(?<!\{)\{(?!\{)\s*[-\w]+\s*:")
 _DYNAMIC_CLASS_LIST = re.compile(
     r"\.classList\.(?:add|remove|toggle|replace)\s*\((?P<args>[^)\r\n]*)\)",
     re.IGNORECASE,
@@ -1035,6 +1035,37 @@ def _normalize_runtime_js_syntax(text: str) -> str:
     return re.sub(r"\?\.", ".", normalized)
 
 
+def _contains_css_emitter(text: str) -> bool:
+    """Recognize a CSS declaration block without regex backtracking.
+
+    The prior expression retried an unbounded selector prefix at every
+    whitespace character.  Checking declaration openings and their nearest
+    structural boundary preserves that grammar in linear time.
+    """
+
+    boundary = -1
+    cursor = 0
+    for match in _CSS_DECLARATION_SOURCE_HINT.finditer(text):
+        opening = match.start()
+        while cursor < opening:
+            if text[cursor] in "{}<>":
+                boundary = cursor
+            cursor += 1
+        start = boundary + 1
+        prefix = text[start:opening]
+        if prefix:
+            if start == 0 or text[start - 1] == "}":
+                return True
+            if any(
+                character.isspace() and index + 1 < len(prefix)
+                for index, character in enumerate(prefix)
+            ):
+                return True
+        boundary = opening
+        cursor = opening + 1
+    return False
+
+
 def _emitter_adapters(text: str, *, suffix: str) -> tuple[frozenset[str], tuple[str, ...]]:
     adapters: set[str] = set()
     evidence: list[str] = []
@@ -1055,7 +1086,7 @@ def _emitter_adapters(text: str, *, suffix: str) -> tuple[frozenset[str], tuple[
     ):
         adapters.add("runtime-js")
         evidence.append("runtime-visual-mutation")
-    if _CSS_EMITTER.search(strip_css_comments(text)) or suffix == ".css":
+    if _contains_css_emitter(strip_css_comments(text)) or suffix == ".css":
         adapters.add("python-css")
         evidence.append("css-declaration")
     return frozenset(adapters), tuple(sorted(set(evidence)))
@@ -1117,15 +1148,15 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
         ):
             adapter_set.add("html")
             evidence_set.add("dynamic-html-markup")
-        if suffix == ".py" and _contains_dynamic_css(raw_source, tree=tree, nodes=nodes):
-            adapter_set.add("python-css")
-            evidence_set.add("dynamic-css-markup")
         if suffix == ".py":
-            opaque_kinds = _opaque_visual_composition_kinds(raw_source, tree=tree, nodes=nodes)
-            if "dynamic-html-markup" in opaque_kinds:
+            dynamic_skeletons = _dynamic_visual_skeletons(raw_source, tree=tree, nodes=nodes)
+            if any(not item.startswith("opaque-html:") for item in dynamic_skeletons):
+                adapter_set.add("python-css")
+                evidence_set.add("dynamic-css-markup")
+            if any(item.startswith("opaque-html:") for item in dynamic_skeletons):
                 adapter_set.add("html")
                 evidence_set.add("dynamic-html-markup")
-            if "dynamic-visual-value" in opaque_kinds:
+            if any(item.startswith("opaque-css:") for item in dynamic_skeletons):
                 adapter_set.add("python-css")
                 evidence_set.add("dynamic-css-markup")
         adapters = frozenset(adapter_set)
