@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from provenance.issuer_registry import (
     ListingResolution,
     ReportingScopeRevision,
     Security,
+    SurfaceKind,
     UnresolvedIssuerIdentityError,
     identifier_candidate_digest,
     listing_candidate_digest,
@@ -53,11 +55,13 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
-    path = tmp_path / "issuer-registry.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    path = migrated_db(
+        tmp_path / "issuer-registry.db",
+        stamp="0213_decision_draft_provider_id",
+        target=HEAD,
+        archived=True,
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -129,8 +133,9 @@ def _seed_entity(registry: IssuerRegistry) -> None:
 
 def test_conflicting_identifier_assertions_require_explicit_resolution(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     _source_observation(conn, tmp_path)
     registry = IssuerRegistry(conn)
     _seed_entity(registry)
@@ -220,8 +225,9 @@ def test_conflicting_identifier_assertions_require_explicit_resolution(
 
 def test_verified_authority_surface_is_evidence_backed_and_revisioned(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     registry = IssuerRegistry(conn)
     _seed_entity(registry)
     with pytest.raises(ValueError, match="source evidence"):
@@ -276,8 +282,9 @@ def test_verified_authority_surface_is_evidence_backed_and_revisioned(
 
 def test_security_listing_is_distinct_from_reporting_issuer_and_resolved(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     _source_observation(conn, tmp_path)
     registry = IssuerRegistry(conn)
     _seed_entity(registry)
@@ -347,8 +354,9 @@ def test_security_listing_is_distinct_from_reporting_issuer_and_resolved(
 
 def test_legacy_binding_canonicalizes_without_rewriting_evidence(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     _source_observation(conn, tmp_path)
     registry = IssuerRegistry(conn)
     _seed_entity(registry)
@@ -403,8 +411,9 @@ def test_legacy_binding_canonicalizes_without_rewriting_evidence(
 
 def test_reporting_scope_separates_research_from_discovery_and_bounds_history(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     registry = IssuerRegistry(conn)
     _seed_entity(registry)
     assert registry.persist(
@@ -438,8 +447,9 @@ def test_reporting_scope_separates_research_from_discovery_and_bounds_history(
 
 def test_inventory_subject_rejects_cross_issuer_and_unverified_source_urls(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     _source_observation(conn, tmp_path)
     registry = IssuerRegistry(conn)
     _seed_entity(registry)
@@ -494,14 +504,15 @@ def test_inventory_subject_rejects_cross_issuer_and_unverified_source_urls(
             recorded_at=STAMP,
         )
     )
-    for key, kind, url in (
+    surfaces: tuple[tuple[str, SurfaceKind, str], ...] = (
         (
             "sec-submissions",
             "sec_submissions",
             "https://data.sec.gov/submissions/CIK0000123456.json",
         ),
         ("ir-home", "ir_home", "https://ir.acme.test/"),
-    ):
+    )
+    for key, kind, url in surfaces:
         registry.persist(
             AuthoritySurfaceRevision(
                 surface_revision_id=f"surface-{key}",
