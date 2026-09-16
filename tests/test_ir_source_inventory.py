@@ -175,9 +175,7 @@ def test_partial_crawl_retains_failure_and_every_discovered_candidate(
         conn.close()
 
 
-def test_exact_apply_replay_is_idempotent(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
+def test_exact_apply_replay_is_idempotent(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
     conn = _conn(tmp_path, migrated_db)
     request = _request(_inventory(), apply=True)
     try:
