@@ -114,7 +114,11 @@ def test_refresh_tickers_writes_resolved_and_skips_misses(
         "NU": NextEarnings(TODAY + timedelta(days=5), "fmp_cache", confirmed=True),
         "MELI": NextEarnings(TODAY + timedelta(days=12), "yfinance", confirmed=False),
     }
-    monkeypatch.setattr(ree, "next_earnings_date", lambda _root, t: stack.get(t))
+
+    def _next_earnings_date(_root: Path, ticker: str) -> NextEarnings | None:
+        return stack.get(ticker)
+
+    monkeypatch.setattr(ree, "next_earnings_date", _next_earnings_date)
 
     summary = ree.refresh_tickers(tmp_path, ["NU", "MELI", "ZZ"], conn, today=TODAY)
 
