@@ -17,14 +17,13 @@ Two contracts:
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from news.store import (
     SOURCE_FEED_FMP,
     SOURCE_FEED_WEBSEARCH,
@@ -34,26 +33,15 @@ from news.store import (
     upsert_news_rows,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0064_queued_actions"
 NEWS_HEAD = "0065_news"
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def news_db(tmp_path: Path) -> Path:
+def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """Tmp DB with the real `news` table (migration 0065_news on top of 0064)."""
     db = tmp_path / "news_store.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, NEWS_HEAD)
-    return db
+    return migrated_db(db, stamp=PRIOR_HEAD, target=NEWS_HEAD, archived=True)
 
 
 def _row(
