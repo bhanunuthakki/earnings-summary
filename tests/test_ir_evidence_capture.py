@@ -14,9 +14,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from execution import capture_observed_ir_documents as cli
 from ir_pipeline import evidence_capture
 from ir_pipeline._net import UnsafeURLError
@@ -34,13 +32,14 @@ from ir_pipeline.evidence_capture import (
 )
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 14, 0, tzinfo=UTC)
 CONFIG_SHA = "d" * 64
 INVENTORY_KEY = "issuer-acme:ir-crawl"
 URL = "https://ir.acme.test/q4-2025-results.pdf"
 EXACT_PUBLIC_URL = "https://93.184.216.34/q4-2025-results.pdf"
 BODY = b"%PDF-1.7 investor presentation bytes"
+_PRIOR_HEAD = "0213_decision_draft_provider_id"
+_TARGET = "0220_source_inventory_seals"
 ROBOTS_ALLOWS = cast(
     Callable[[str, str], bool],
     getattr(evidence_capture, "_robots_allows"),
@@ -138,18 +137,19 @@ def _safe_public_url(url: str) -> str:
     return url
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path, *, source_url: str = URL) -> sqlite3.Connection:
+def _conn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    *,
+    source_url: str = URL,
+) -> sqlite3.Connection:
     path = tmp_path / "ir-capture.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0220_source_inventory_seals")
+    migrated_db(
+        path,
+        stamp=_PRIOR_HEAD,
+        target=_TARGET,
+        archived=True,
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     inventory = DocumentDiscoveryInventory(
@@ -486,8 +486,9 @@ def test_exact_capture_accepts_approved_wix_and_rubrik_cdn_fixtures(
 
 def test_dry_run_streams_raw_checkpoint_without_database_or_durable_blob_write(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         result = capture_observed_ir_documents(
             conn,
@@ -508,8 +509,9 @@ def test_dry_run_streams_raw_checkpoint_without_database_or_durable_blob_write(
 
 def test_apply_promotes_verified_bytes_and_creates_legacy_free_document_version(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     dry = _request(tmp_path, apply=False)
     try:
         capture_observed_ir_documents(
@@ -537,8 +539,11 @@ def test_apply_promotes_verified_bytes_and_creates_legacy_free_document_version(
         conn.close()
 
 
-def test_robots_denial_is_explicit_and_prevents_network_access(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_robots_denial_is_explicit_and_prevents_network_access(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     session = FakeSession([])
     try:
         result = capture_observed_ir_documents(
@@ -615,8 +620,9 @@ def test_robots_fetch_fails_closed_on_unsafe_or_network_failure(
 
 def test_streaming_byte_budget_rejects_oversized_response_without_raw_artifact(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         result = capture_observed_ir_documents(
             conn,
@@ -641,8 +647,9 @@ def test_streaming_byte_budget_rejects_oversized_response_without_raw_artifact(
 
 def test_cross_host_redirect_requires_explicit_publisher_endpoint_rule(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     redirect = FakeResponse(
         status_code=302,
         body=b"",
@@ -663,8 +670,9 @@ def test_cross_host_redirect_requires_explicit_publisher_endpoint_rule(
 
 def test_authorized_redirect_preserves_requested_and_final_url_observations(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     session = FakeSession(
         [
             FakeResponse(
@@ -703,9 +711,12 @@ def test_authorized_redirect_preserves_requested_and_final_url_observations(
         conn.close()
 
 
-def test_explicit_cross_host_publisher_endpoint_can_be_captured(tmp_path: Path) -> None:
+def test_explicit_cross_host_publisher_endpoint_can_be_captured(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
     source_url = "https://cdn.publisher.test/reports/q4.pdf"
-    conn = _conn(tmp_path, source_url=source_url)
+    conn = _conn(tmp_path, migrated_db, source_url=source_url)
     try:
         result = capture_observed_ir_documents(
             conn,
@@ -729,8 +740,9 @@ def test_explicit_cross_host_publisher_endpoint_can_be_captured(tmp_path: Path) 
 
 def test_capture_fails_closed_when_raw_discovery_blob_is_tampered(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     storage_uri = conn.execute(
         "SELECT location.storage_uri FROM source_inventory_components AS component "
         "JOIN evidence_source_observations AS observation "
@@ -758,10 +770,11 @@ def test_capture_fails_closed_when_raw_discovery_blob_is_tampered(
 
 def test_cli_defaults_to_locked_read_only_dry_run(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     conn.close()
     captured_request: list[IRDocumentCaptureRequest] = []
