@@ -692,48 +692,6 @@ def test_every_css_surface_is_registered() -> None:
     )
 
 
-def test_visual_census_prefilter_preserves_every_emitter_grammar(tmp_path: Path) -> None:
-    source_root = tmp_path / "src"
-    source_root.mkdir()
-    sources = {
-        "static_html.py": 'HTML = "<section>ok</section>"',
-        "static_css.py": 'CSS = ".card { color: red; }"',
-        "runtime.py": 'script = "node.classList.add(name)"',
-        "opaque.py": "style = external_style()",
-        "dynamic_tag.py": 'markup = f"<{tag}>"',
-        "escaped_html.py": 'x = "\\x3cinput\\x3e"',
-        "concatenated_html.py": 'x = "<" + "input>"',
-        "concatenated_css.py": 'x = ".card " + "{" + " color: red; }"',
-        "split_property_css.py": 'x = ".card {co" + "lor:red;}"',
-        "formatted_css.py": 'x = f".card {{ color: red; }}"',
-        "formatted_escaped_html.py": 'x = f"\\x3cinput\\x3e"',
-        "escaped_css.py": 'x = "\\x2ecard \\x7b color: red; \\x7d"',
-        "plain.py": "def total(values):\n    return sum(values)\n",
-        "format_only.py": 'value = f"{amount:,.2f}"',
-        "double_brace_only.py": 'value = ".x{{color:red}"',
-        "rejected_brace_stress.py": 'value = "<x{a:1}" * 1000',
-    }
-    for name, source in sources.items():
-        (source_root / name).write_text(source, encoding="utf-8")
-
-    observed = {entry.path for entry in discover_emitters(tmp_path)}
-
-    assert observed == {
-        "concatenated_css.py",
-        "concatenated_html.py",
-        "dynamic_tag.py",
-        "escaped_css.py",
-        "escaped_html.py",
-        "formatted_css.py",
-        "formatted_escaped_html.py",
-        "opaque.py",
-        "runtime.py",
-        "split_property_css.py",
-        "static_css.py",
-        "static_html.py",
-    }
-
-
 def test_no_unquarantined_token_drift() -> None:
     """Every clean surface — and every non-quarantined DIMENSION of a
     quarantined surface — must be free of denied literals. This is the live

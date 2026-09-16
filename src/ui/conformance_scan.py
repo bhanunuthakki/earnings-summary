@@ -150,29 +150,6 @@ _RUNTIME_STYLESHEET_COLLECTION_SINK = re.compile(
     re.IGNORECASE,
 )
 _CSS_DECLARATION_SOURCE_HINT = re.compile(r"(?<!\{)\{(?!\{)\s*[-\w]+\s*:")
-_RUNTIME_VISUAL_SOURCE_HINTS = (
-    "adoptedstylesheets",
-    "attributestylemap",
-    "classname",
-    "classlist",
-    "createcontextualfragment",
-    "createelement",
-    "createhtmldocument",
-    "dangerouslysetinnerhtml",
-    "domparser",
-    "innerhtml",
-    "insertrule",
-    "outerhtml",
-    "replacesync",
-    "setattribute",
-    "sethtml",
-    "srcdoc",
-    "stylesheets",
-)
-_ROUGH_VISUAL_SOURCE_HINT = re.compile(
-    r"css|emit|html|markup|render|style|template|class|element|sheet|srcdoc|[<\\]",
-    re.IGNORECASE,
-)
 _DYNAMIC_CLASS_LIST = re.compile(
     r"\.classList\.(?:add|remove|toggle|replace)\s*\((?P<args>[^)\r\n]*)\)",
     re.IGNORECASE,
@@ -1058,109 +1035,6 @@ def _normalize_runtime_js_syntax(text: str) -> str:
     return re.sub(r"\?\.", ".", normalized)
 
 
-def _has_visual_source_hint(source: str) -> bool:
-    """Cheaply exclude Python modules that cannot produce visual evidence.
-
-    This is deliberately conservative: every syntax family consumed by the
-    census has a raw-source marker here, while false positives continue through
-    the authoritative AST and adapter checks below.
-    """
-
-    rough_match = bool(
-        _ROUGH_VISUAL_SOURCE_HINT.search(source)
-        or _CSS_DECLARATION_SOURCE_HINT.search(source)
-        or "<{" in source
-        or "</{" in source
-        or ("+" in source and "{" in source)
-        or ("{{" in source and ":" in source)
-    )
-    if not rough_match:
-        return False
-
-    string_clusters: list[str] = []
-    current_cluster: list[str] = []
-    previous_kind = ""
-    in_fstring = False
-    fstring_raw = False
-
-    def flush_cluster() -> None:
-        nonlocal current_cluster
-        if current_cluster:
-            string_clusters.append("".join(current_cluster))
-            current_cluster = []
-
-    try:
-        source_lines = iter(source.splitlines(keepends=True))
-        tokens = tokenize.generate_tokens(source_lines.__next__)
-        for item in tokens:
-            token_name = tokenize.tok_name.get(item.type, "")
-            if token_name == "FSTRING_START":
-                flush_cluster()
-                previous_kind = ""
-                prefix = item.string.split(item.string[-1], 1)[0].casefold()
-                in_fstring = True
-                fstring_raw = "r" in prefix
-                continue
-            if token_name == "FSTRING_MIDDLE":
-                middle = item.string
-                if not fstring_raw and "\\" in middle:
-                    middle = middle.encode("ascii", "backslashreplace").decode("unicode_escape")
-                current_cluster.append(middle)
-                previous_kind = "string"
-                continue
-            if token_name == "FSTRING_END":
-                flush_cluster()
-                previous_kind = ""
-                in_fstring = False
-                fstring_raw = False
-                continue
-            if in_fstring:
-                continue
-            if item.type == _token.NAME:
-                flush_cluster()
-                previous_kind = ""
-                identifier = item.string.casefold()
-                if any(
-                    marker in identifier
-                    for marker in ("html", "markup", "template", "css", "style", "stylesheet")
-                ) or identifier.startswith(("render", "emit")):
-                    return True
-            elif item.type == _token.STRING:
-                literal = (
-                    ast.literal_eval(item.string)
-                    if "\\" in item.string
-                    else _unwrap_extracted_string_token(item.string)
-                )
-                if isinstance(literal, str):
-                    if previous_kind not in {"string", "plus"}:
-                        flush_cluster()
-                    current_cluster.append(literal)
-                    previous_kind = "string"
-            elif item.type == _token.OP and item.string == "+" and previous_kind == "string":
-                previous_kind = "plus"
-            elif item.type in {_token.NL, _token.ENCODING}:
-                continue
-            else:
-                flush_cluster()
-                previous_kind = ""
-    except (IndentationError, SyntaxError, UnicodeError, ValueError, tokenize.TokenError):
-        return True
-    flush_cluster()
-
-    for payload in string_clusters:
-        payload_lower = payload.casefold()
-        if (
-            _contains_css_emitter(payload)
-            or _HTML_EMITTER.search(payload)
-            or _SVG_EMITTER.search(payload)
-            or "<{" in payload
-            or "</{" in payload
-            or any(marker in payload_lower for marker in _RUNTIME_VISUAL_SOURCE_HINTS)
-        ):
-            return True
-    return False
-
-
 def _contains_css_emitter(text: str) -> bool:
     """Recognize a CSS declaration block without regex backtracking.
 
@@ -1243,8 +1117,6 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
         try:
             raw_source = path.read_text("utf-8")
             if suffix == ".py":
-                if not _has_visual_source_hint(raw_source):
-                    continue
                 try:
                     tree = ast.parse(raw_source, filename=str(path))
                 except SyntaxError:
@@ -1270,14 +1142,10 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
         ):
             adapter_set.add("runtime-js")
             evidence_set.add("runtime-visual-mutation")
-        dynamic_html = suffix == ".py" and (
-            ("<" in raw_source and _contains_dynamic_tag(raw_source))
-            or (
-                ("<" in raw_source or "\\" in raw_source)
-                and _contains_dynamic_html_emitter(raw_source, tree=tree, nodes=nodes)
-            )
-        )
-        if dynamic_html:
+        if suffix == ".py" and (
+            _contains_dynamic_tag(raw_source)
+            or _contains_dynamic_html_emitter(raw_source, tree=tree, nodes=nodes)
+        ):
             adapter_set.add("html")
             evidence_set.add("dynamic-html-markup")
         if suffix == ".py":
