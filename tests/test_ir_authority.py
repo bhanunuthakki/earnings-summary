@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from ir_pipeline.authority import (
     IRAuthorityEvidence,
     PublisherSurfaceEvidence,
@@ -21,24 +20,21 @@ from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInve
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 CONFIG_SHA = "a" * 64
 URL = "https://ir.acme.test/q4-2025-results.pdf"
+_PRIOR_HEAD = "0213_decision_draft_provider_id"
+_TARGET = "0220_source_inventory_seals"
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "authority.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0220_source_inventory_seals")
+    migrated_db(
+        path,
+        stamp=_PRIOR_HEAD,
+        target=_TARGET,
+        archived=True,
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -150,8 +146,11 @@ def _request(
     )
 
 
-def test_generic_frontier_exhaustion_cannot_create_complete_seal(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_generic_frontier_exhaustion_cannot_create_complete_seal(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         result = sync_ir_source_inventory(
             conn,
@@ -185,8 +184,9 @@ def test_authority_requires_every_required_surface_exhausted() -> None:
 
 def test_hash_bound_authority_can_seal_complete_publisher_universe(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     observation_id, digest = _persist_authority_observation(conn, tmp_path)
     try:
         result = sync_ir_source_inventory(
@@ -211,8 +211,9 @@ def test_hash_bound_authority_can_seal_complete_publisher_universe(
 
 def test_complete_authority_supersedes_generic_crawl_budget_exhaustion(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     observation_id, digest = _persist_authority_observation(conn, tmp_path)
     try:
         result = sync_ir_source_inventory(
@@ -245,9 +246,10 @@ def test_complete_authority_supersedes_generic_crawl_budget_exhaustion(
 @pytest.mark.parametrize("authority_variant", ["mismatched", "incomplete"])
 def test_non_complete_authority_preserves_generic_crawl_budget_failure(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     authority_variant: str,
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     observation_id, digest = _persist_authority_observation(conn, tmp_path)
     authority = _authority(observation_id, digest)
     surface_update: dict[str, object]
@@ -284,8 +286,11 @@ def test_non_complete_authority_preserves_generic_crawl_budget_failure(
         conn.close()
 
 
-def test_authority_observation_hash_mismatch_fails_closed(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_authority_observation_hash_mismatch_fails_closed(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     observation_id, _ = _persist_authority_observation(conn, tmp_path)
     try:
         with pytest.raises(ValueError, match="authority observation"):
