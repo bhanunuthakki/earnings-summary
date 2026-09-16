@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import re
 import token as _token
 import tokenize
@@ -101,7 +102,6 @@ _HTML_EMITTER = re.compile(
     re.IGNORECASE,
 )
 _SVG_EMITTER = re.compile(r"<(?:svg|path|circle|rect|line|polyline|polygon|text)\b", re.IGNORECASE)
-_CSS_EMITTER = re.compile(r"(?:^|[}\s])[^{}<>]+\{\s*[-\w]+\s*:", re.MULTILINE)
 _CSS_SELECTOR_START = re.compile(
     r"^(?:[.#:\[*]|(?:html|body|main|nav|aside|article|section|div|span|table|thead|tbody|tr|th|td|button|a|p|h[1-6]|ul|ol|li|input|select|option|textarea|label|img|canvas|video|audio|picture|iframe|figure|header|footer|pre|code|form|details|summary|dialog)\b)",
     re.IGNORECASE,
@@ -149,6 +149,36 @@ _RUNTIME_STYLESHEET_COLLECTION_SINK = re.compile(
     r"(?:\bstyleSheets\b[^;\r\n]{0,500}\.(?:insertRule|deleteRule|addRule|removeRule|replace|replaceSync)\s*\("
     r"|\.setAttribute\s*\(\s*['\"]srcdoc['\"])",
     re.IGNORECASE,
+)
+_CSS_DECLARATION_SOURCE_HINT = re.compile(r"\{\{?\s*[-\w]+\s*:")
+_RUNTIME_VISUAL_SOURCE_HINTS = (
+    "adoptedstylesheets",
+    "attributestylemap",
+    "classname",
+    "classlist",
+    "createcontextualfragment",
+    "createelement",
+    "createhtmldocument",
+    "dangerouslysetinnerhtml",
+    "domparser",
+    "innerhtml",
+    "insertrule",
+    "outerhtml",
+    "replacesync",
+    "setattribute",
+    "sethtml",
+    "srcdoc",
+    "stylesheets",
+)
+_VISUAL_NAME_SOURCE_HINTS = (
+    "css",
+    "emit",
+    "html",
+    "markup",
+    "render",
+    "style",
+    "stylesheet",
+    "template",
 )
 _DYNAMIC_CLASS_LIST = re.compile(
     r"\.classList\.(?:add|remove|toggle|replace)\s*\((?P<args>[^)\r\n]*)\)",
@@ -1035,6 +1065,80 @@ def _normalize_runtime_js_syntax(text: str) -> str:
     return re.sub(r"\?\.", ".", normalized)
 
 
+def _has_visual_source_hint(source: str) -> bool:
+    """Cheaply exclude Python modules that cannot produce visual evidence.
+
+    This is deliberately conservative: every syntax family consumed by the
+    census has a raw-source marker here, while false positives continue through
+    the authoritative AST and adapter checks below.
+    """
+
+    lowered = source.casefold()
+    rough_match = bool(
+        any(marker in lowered for marker in _VISUAL_NAME_SOURCE_HINTS)
+        or _CSS_DECLARATION_SOURCE_HINT.search(source)
+        or "<{" in source
+        or "</{" in source
+        or "<" in source
+        or any(marker in lowered for marker in _RUNTIME_VISUAL_SOURCE_HINTS)
+    )
+    if not rough_match:
+        return False
+
+    string_tokens: list[str] = []
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        for item in tokens:
+            token_name = tokenize.tok_name.get(item.type, "")
+            if item.type == _token.NAME:
+                identifier = item.string.casefold()
+                if any(
+                    marker in identifier
+                    for marker in ("html", "markup", "template", "css", "style", "stylesheet")
+                ) or identifier.startswith(("render", "emit")):
+                    return True
+            elif item.type == _token.STRING or token_name == "FSTRING_MIDDLE":
+                string_tokens.append(item.string)
+    except (IndentationError, tokenize.TokenError):
+        return True
+
+    payload = "".join(string_tokens)
+    payload_lower = payload.casefold()
+    return bool(
+        _contains_css_emitter(payload)
+        or _HTML_EMITTER.search(payload)
+        or _SVG_EMITTER.search(payload)
+        or "<{" in payload
+        or "</{" in payload
+        or any(marker in payload_lower for marker in _RUNTIME_VISUAL_SOURCE_HINTS)
+    )
+
+
+def _contains_css_emitter(text: str) -> bool:
+    """Recognize a CSS declaration block without regex backtracking.
+
+    The prior expression retried an unbounded selector prefix at every
+    whitespace character.  Checking declaration openings and their nearest
+    structural boundary preserves that grammar in linear time.
+    """
+
+    for match in _CSS_DECLARATION_SOURCE_HINT.finditer(text):
+        opening = match.start()
+        boundary = max(text.rfind(character, 0, opening) for character in "{}<>")
+        start = boundary + 1
+        prefix = text[start:opening]
+        if not prefix:
+            continue
+        if start == 0 or text[start - 1] == "}":
+            return True
+        if any(
+            character.isspace() and index + 1 < len(prefix)
+            for index, character in enumerate(prefix)
+        ):
+            return True
+    return False
+
+
 def _emitter_adapters(text: str, *, suffix: str) -> tuple[frozenset[str], tuple[str, ...]]:
     adapters: set[str] = set()
     evidence: list[str] = []
@@ -1055,7 +1159,7 @@ def _emitter_adapters(text: str, *, suffix: str) -> tuple[frozenset[str], tuple[
     ):
         adapters.add("runtime-js")
         evidence.append("runtime-visual-mutation")
-    if _CSS_EMITTER.search(strip_css_comments(text)) or suffix == ".css":
+    if _contains_css_emitter(strip_css_comments(text)) or suffix == ".css":
         adapters.add("python-css")
         evidence.append("css-declaration")
     return frozenset(adapters), tuple(sorted(set(evidence)))
@@ -1086,6 +1190,8 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
         try:
             raw_source = path.read_text("utf-8")
             if suffix == ".py":
+                if not _has_visual_source_hint(raw_source):
+                    continue
                 try:
                     tree = ast.parse(raw_source, filename=str(path))
                 except SyntaxError:
@@ -1117,15 +1223,15 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
         ):
             adapter_set.add("html")
             evidence_set.add("dynamic-html-markup")
-        if suffix == ".py" and _contains_dynamic_css(raw_source, tree=tree, nodes=nodes):
-            adapter_set.add("python-css")
-            evidence_set.add("dynamic-css-markup")
         if suffix == ".py":
-            opaque_kinds = _opaque_visual_composition_kinds(raw_source, tree=tree, nodes=nodes)
-            if "dynamic-html-markup" in opaque_kinds:
+            dynamic_skeletons = _dynamic_visual_skeletons(raw_source, tree=tree, nodes=nodes)
+            if any(not item.startswith("opaque-html:") for item in dynamic_skeletons):
+                adapter_set.add("python-css")
+                evidence_set.add("dynamic-css-markup")
+            if any(item.startswith("opaque-html:") for item in dynamic_skeletons):
                 adapter_set.add("html")
                 evidence_set.add("dynamic-html-markup")
-            if "dynamic-visual-value" in opaque_kinds:
+            if any(item.startswith("opaque-css:") for item in dynamic_skeletons):
                 adapter_set.add("python-css")
                 evidence_set.add("dynamic-css-markup")
         adapters = frozenset(adapter_set)

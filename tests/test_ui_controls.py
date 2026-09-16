@@ -692,6 +692,32 @@ def test_every_css_surface_is_registered() -> None:
     )
 
 
+def test_visual_census_prefilter_preserves_every_emitter_grammar(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    source_root.mkdir()
+    sources = {
+        "static_html.py": 'HTML = "<section>ok</section>"',
+        "static_css.py": 'CSS = ".card { color: red; }"',
+        "runtime.py": 'script = "node.classList.add(name)"',
+        "opaque.py": "style = external_style()",
+        "dynamic_tag.py": 'markup = f"<{tag}>"',
+        "plain.py": "def total(values):\n    return sum(values)\n",
+        "format_only.py": 'value = f"{amount:,.2f}"',
+    }
+    for name, source in sources.items():
+        (source_root / name).write_text(source, encoding="utf-8")
+
+    observed = {entry.path for entry in discover_emitters(tmp_path)}
+
+    assert observed == {
+        "dynamic_tag.py",
+        "opaque.py",
+        "runtime.py",
+        "static_css.py",
+        "static_html.py",
+    }
+
+
 def test_no_unquarantined_token_drift() -> None:
     """Every clean surface — and every non-quarantined DIMENSION of a
     quarantined surface — must be free of denied literals. This is the live
