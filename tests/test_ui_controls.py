@@ -701,8 +701,14 @@ def test_visual_census_prefilter_preserves_every_emitter_grammar(tmp_path: Path)
         "runtime.py": 'script = "node.classList.add(name)"',
         "opaque.py": "style = external_style()",
         "dynamic_tag.py": 'markup = f"<{tag}>"',
+        "escaped_html.py": 'markup = "\\x3cinput\\x3e"',
+        "concatenated_html.py": 'markup = "<" + "input>"',
+        "concatenated_css.py": 'css = ".card " + "{" + " color: red; }"',
+        "escaped_css.py": 'css = "\\x2ecard \\x7b color: red; \\x7d"',
         "plain.py": "def total(values):\n    return sum(values)\n",
         "format_only.py": 'value = f"{amount:,.2f}"',
+        "double_brace_only.py": 'value = ".x{{color:red}"',
+        "rejected_brace_stress.py": 'value = "<x{a:1}" * 1000',
     }
     for name, source in sources.items():
         (source_root / name).write_text(source, encoding="utf-8")
@@ -710,7 +716,11 @@ def test_visual_census_prefilter_preserves_every_emitter_grammar(tmp_path: Path)
     observed = {entry.path for entry in discover_emitters(tmp_path)}
 
     assert observed == {
+        "concatenated_css.py",
+        "concatenated_html.py",
         "dynamic_tag.py",
+        "escaped_css.py",
+        "escaped_html.py",
         "opaque.py",
         "runtime.py",
         "static_css.py",

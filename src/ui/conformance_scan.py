@@ -150,7 +150,7 @@ _RUNTIME_STYLESHEET_COLLECTION_SINK = re.compile(
     r"|\.setAttribute\s*\(\s*['\"]srcdoc['\"])",
     re.IGNORECASE,
 )
-_CSS_DECLARATION_SOURCE_HINT = re.compile(r"\{\{?\s*[-\w]+\s*:")
+_CSS_DECLARATION_SOURCE_HINT = re.compile(r"(?<!\{)\{(?!\{)\s*[-\w]+\s*:")
 _RUNTIME_VISUAL_SOURCE_HINTS = (
     "adoptedstylesheets",
     "attributestylemap",
@@ -1080,6 +1080,7 @@ def _has_visual_source_hint(source: str) -> bool:
         or "<{" in source
         or "</{" in source
         or "<" in source
+        or "\\" in source
         or any(marker in lowered for marker in _RUNTIME_VISUAL_SOURCE_HINTS)
     )
     if not rough_match:
@@ -1097,9 +1098,13 @@ def _has_visual_source_hint(source: str) -> bool:
                     for marker in ("html", "markup", "template", "css", "style", "stylesheet")
                 ) or identifier.startswith(("render", "emit")):
                     return True
-            elif item.type == _token.STRING or token_name == "FSTRING_MIDDLE":
+            elif item.type == _token.STRING:
+                literal = ast.literal_eval(item.string)
+                if isinstance(literal, str):
+                    string_tokens.append(literal)
+            elif token_name == "FSTRING_MIDDLE":
                 string_tokens.append(item.string)
-    except (IndentationError, tokenize.TokenError):
+    except (IndentationError, SyntaxError, ValueError, tokenize.TokenError):
         return True
 
     payload = "".join(string_tokens)
@@ -1122,20 +1127,26 @@ def _contains_css_emitter(text: str) -> bool:
     structural boundary preserves that grammar in linear time.
     """
 
+    boundary = -1
+    cursor = 0
     for match in _CSS_DECLARATION_SOURCE_HINT.finditer(text):
         opening = match.start()
-        boundary = max(text.rfind(character, 0, opening) for character in "{}<>")
+        while cursor < opening:
+            if text[cursor] in "{}<>":
+                boundary = cursor
+            cursor += 1
         start = boundary + 1
         prefix = text[start:opening]
-        if not prefix:
-            continue
-        if start == 0 or text[start - 1] == "}":
-            return True
-        if any(
-            character.isspace() and index + 1 < len(prefix)
-            for index, character in enumerate(prefix)
-        ):
-            return True
+        if prefix:
+            if start == 0 or text[start - 1] == "}":
+                return True
+            if any(
+                character.isspace() and index + 1 < len(prefix)
+                for index, character in enumerate(prefix)
+            ):
+                return True
+        boundary = opening
+        cursor = opening + 1
     return False
 
 
