@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from execution import sync_ir_source_inventory as cli
 from ir_pipeline.discover._docmeta import CandidateDoc
 from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
@@ -22,9 +21,10 @@ from ir_pipeline.source_inventory import (
 )
 from runtime.job_runtime import JobAlreadyRunningError
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 8, 0, tzinfo=UTC)
 CONFIG_SHA = "c" * 64
+_PRIOR_HEAD = "0213_decision_draft_provider_id"
+_TARGET = "0220_source_inventory_seals"
 
 
 class _BusyLock:
@@ -42,18 +42,9 @@ class _BusyLock:
         return None
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "ir-source-inventory.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0220_source_inventory_seals")
+    migrated_db(path, stamp=_PRIOR_HEAD, target=_TARGET, archived=True)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -116,8 +107,10 @@ def _request(inventory: DocumentDiscoveryInventory, *, apply: bool) -> IRSourceI
     )
 
 
-def test_dry_run_plans_without_database_or_blob_writes(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_dry_run_plans_without_database_or_blob_writes(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     blob_root = tmp_path / "blobs"
     try:
         result = sync_ir_source_inventory(
@@ -134,8 +127,9 @@ def test_dry_run_plans_without_database_or_blob_writes(tmp_path: Path) -> None:
 
 def test_apply_preserves_page_and_candidate_artifacts_before_coverage(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     blob_root = tmp_path / "blobs"
     try:
         result = sync_ir_source_inventory(
@@ -156,8 +150,9 @@ def test_apply_preserves_page_and_candidate_artifacts_before_coverage(
 
 def test_partial_crawl_retains_failure_and_every_discovered_candidate(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         result = sync_ir_source_inventory(
             conn,
@@ -180,8 +175,8 @@ def test_partial_crawl_retains_failure_and_every_discovered_candidate(
         conn.close()
 
 
-def test_exact_apply_replay_is_idempotent(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_exact_apply_replay_is_idempotent(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    conn = _conn(tmp_path, migrated_db)
     request = _request(_inventory(), apply=True)
     try:
         first = sync_ir_source_inventory(conn, request, blob_root=tmp_path / "blobs")
@@ -193,8 +188,10 @@ def test_exact_apply_replay_is_idempotent(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_empty_successful_crawl_is_an_explicit_coverage_gap(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_empty_successful_crawl_is_an_explicit_coverage_gap(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     inventory = DocumentDiscoveryInventory(
         candidates=(),
         pages=(
@@ -222,10 +219,11 @@ def test_empty_successful_crawl_is_an_explicit_coverage_gap(tmp_path: Path) -> N
 
 def test_cli_defaults_to_structured_read_only_dry_run(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     conn.close()
     capsys.readouterr()
@@ -313,10 +311,11 @@ def test_cli_apply_returns_retryable_exit_before_opening_locked_database(
 
 def test_cli_failure_log_omits_raw_exception_body(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     conn.close()
 
