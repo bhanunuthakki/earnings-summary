@@ -15,6 +15,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+
 from expected_earnings import record_next_earnings, upcoming_by_ticker
 from sources.earnings_calendar import NextEarnings
 
