@@ -15,13 +15,11 @@ from __future__ import annotations
 import sqlite3
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -36,22 +34,22 @@ from user_state.notes import TRIAGE_INTENT, create_note, patch_note_context  # n
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
-
 @pytest.fixture
-def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FlaskClient, Path, Path]:
+def ctx(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> tuple[FlaskClient, Path, Path]:
     monkeypatch.setenv("LEDGER_RESEARCH_TAP", "0")
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     monkeypatch.setenv("LEDGER_WORLDVIEW", "1")
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+    migrated_db(
+        db,
+        stamp=_PRIOR_HEAD,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
     client = comments_server.create_app(tmp_path).test_client()
     return client, db, tmp_path
 
@@ -218,9 +216,25 @@ def test_web_research_run_pushes_drafted_proposal_to_telegram(
     sent = threading.Event()
     calls: list[tuple[str, int, int]] = []
 
-    monkeypatch.setattr(run_mod, "run_research_task", lambda tid, **kw: pid)
-    monkeypatch.setattr(token_store, "load_token", lambda p=None: "tok")
-    monkeypatch.setattr(token_store, "load_chat_id", lambda p=None: 777)
+    def _fake_run_task(task_id: int, **kwargs: object) -> int:
+        del task_id, kwargs
+        return pid
+
+    def _fake_load_token(
+        path: Path | str | None = None,
+        *,
+        repo_root: Path | None = None,
+    ) -> str:
+        del path, repo_root
+        return "tok"
+
+    def _fake_load_chat_id(path: Path | str | None = None) -> int:
+        del path
+        return 777
+
+    monkeypatch.setattr(run_mod, "run_research_task", _fake_run_task)
+    monkeypatch.setattr(token_store, "load_token", _fake_load_token)
+    monkeypatch.setattr(token_store, "load_chat_id", _fake_load_chat_id)
 
     def _fake_send(token: str, chat_id: int, proposal: object, **kw: object) -> None:
         calls.append((token, chat_id, getattr(proposal, "id", -1)))
