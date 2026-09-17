@@ -202,9 +202,9 @@ Assembler properties:
   complete typed collection bundle `HOLD`. Assembly `HOLD`s for a
   declared collection source that failed or is absent from its
   manifest/staging contract, typed-invalid source bytes, or unknown
-  registry/path/schema material. Only three narrow rules can currently pass;
-  the other 21 stay deliberately unadmitted until dedicated evidence
-  exists. This honest fail-closed phase is not a 9+ claim.
+  registry/path/schema material. Four narrow rules can currently pass; the
+  other 20 stay deliberately unadmitted until dedicated evidence exists. This honest
+  fail-closed phase is not a 9+ claim.
 - Writes are atomic and require a repo-contained canonical relative path
   that is a non-symlink regular single-link file with exact binding;
   direct, symlink, hard-link, or escape aliases are rejected.

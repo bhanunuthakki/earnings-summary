@@ -17,7 +17,12 @@ from quality.performance_models import PerformanceReceipt
 from quality.reachability import ReachabilityGraph
 from quality.roadmap_reconciliation import ReconciliationReceipt
 from quality.static_quality import StaticQualityInventory
-from quality.test_db_models import TestDbAudit
+from quality.test_db_models import (
+    TEST_DB_REPLAY_BASELINE_FILES,
+    TEST_DB_REPLAY_THRESHOLD_PERCENT,
+    ReplayReduction,
+    TestDbAudit,
+)
 
 SourceName = Literal[
     "architecture",
@@ -35,6 +40,7 @@ AdmissionRule = Literal[
     "unadmitted",
     "lifecycle_complete",
     "reachability_closed",
+    "replay_reduction_met",
 ]
 
 __all__ = [
@@ -52,11 +58,15 @@ __all__ = [
     "SOURCE_SCHEMAS",
     "STATIC_PATH",
     "TEST_DB_PATH",
+    "TEST_DB_REPLAY_BASELINE_FILES",
+    "TEST_DB_REPLAY_THRESHOLD_PERCENT",
     "AdmissionRule",
     "ParsedSource",
+    "ReplayReduction",
     "SlotSpec",
     "evaluate_slot",
     "parse_source",
+    "replay_reduction",
     "required_paths",
     "verify_registry",
 ]
@@ -94,6 +104,11 @@ SOURCE_SCHEMAS: dict[SourceName, str] = {
 }
 
 
+# BHA-104's accepted baseline is the checked-in test-db receipt at
+# beb90404738e4abd1014f93ad2d87aed1d06160b.  Its denominator is the number
+# of database-builder files whose typed evidence contains ``call:upgrade``.
+# Keep this pin separate from the current receipt: the current numerator must
+# move down for the reduction claim to become true.
 class ParsedSource(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     source: SourceName
@@ -160,7 +175,10 @@ SLOTS: dict[str, SlotSpec] = {
         rule="unadmitted",
     ),
     "efficiency.test_ci": SlotSpec(
-        key="efficiency.test_ci", kind="block", sources=("test_db",), rule="unadmitted"
+        key="efficiency.test_ci",
+        kind="block",
+        sources=("test_db",),
+        rule="replay_reduction_met",
     ),
     "efficiency.dcf_disposition": SlotSpec(
         key="efficiency.dcf_disposition",
@@ -318,6 +336,25 @@ def _reachability_semantic(m: ReachabilityGraph) -> bool:
     )
 
 
+def replay_reduction(audit: TestDbAudit) -> ReplayReduction:
+    """Measure the pinned file-based replay reduction without admitting it."""
+
+    return ReplayReduction.from_builders(audit.database_builders)
+
+
+def _test_db_semantic(m: TestDbAudit) -> bool:
+    measurement = replay_reduction(m)
+    return (
+        m.collection_status == "COMPLETE"
+        and m.collection_note == ""
+        and m.raw_audit_status == "PASS"
+        and not m.violations
+        and m.replay_reduction == measurement
+        and measurement.unique_builder_paths
+        and measurement.ratio_pass
+    )
+
+
 def _check_schema(source: SourceName, payload: dict[str, object]) -> str:
     raw_schema = payload.get("schema_version")
     if not isinstance(raw_schema, str):
@@ -370,7 +407,7 @@ def parse_source(source: SourceName, raw: bytes, expected_subject: str) -> Parse
             if model_t.scoped_commit != expected_subject:
                 raise ValueError("subject mismatch")
             typed_valid = True
-            semantic_pass = False
+            semantic_pass = _test_db_semantic(model_t)
         elif source == "reachability":
             model_r = ReachabilityGraph.model_validate_json(raw)
             if model_r.subject_commit != expected_subject:
@@ -440,6 +477,8 @@ def evaluate_slot(slot: str, parsed: dict[SourceName, ParsedSource]) -> Verdict:
         return "pass"
     if spec.rule == "reachability_closed":
         return "pass"
+    if spec.rule == "replay_reduction_met":
+        return "pass"
     return "fail"
 
 
@@ -483,6 +522,7 @@ def verify_registry() -> bool:
     expected_rule_sources: dict[AdmissionRule, tuple[SourceName, ...] | None] = {
         "lifecycle_complete": ("lifecycle",),
         "reachability_closed": ("reachability",),
+        "replay_reduction_met": ("test_db",),
         "unadmitted": None,
     }
     expected_rule_keys: dict[AdmissionRule, frozenset[str]] = {
@@ -490,20 +530,23 @@ def verify_registry() -> bool:
         "reachability_closed": frozenset(
             {"cleanup.reachability_oracle", "touched_reachability_closure"}
         ),
+        "replay_reduction_met": frozenset({"efficiency.test_ci"}),
         "unadmitted": frozenset(k for k, s in SLOTS.items() if s.rule == "unadmitted"),
     }
-    if len(expected_rule_keys["unadmitted"]) != 21:
+    if len(expected_rule_keys["unadmitted"]) != 20:
         return False
     if set(expected_rule_keys) != {
         "unadmitted",
         "lifecycle_complete",
         "reachability_closed",
+        "replay_reduction_met",
     }:
         return False
     actual_keys: dict[AdmissionRule, set[str]] = {
         "unadmitted": set(),
         "lifecycle_complete": set(),
         "reachability_closed": set(),
+        "replay_reduction_met": set(),
     }
     for key, spec in SLOTS.items():
         actual_keys[spec.rule].add(key)
