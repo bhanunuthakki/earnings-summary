@@ -5,5 +5,5 @@
   "activation_evidence": "explicit-owner-invocation-or-registration",
   "review_on": "2027-12-31",
   "path_prefixes": [".github/", "cron/", "execution/", "scripts/", "src/"],
-  "exact_paths": ["Makefile"]
+  "exact_paths": ["Makefile", ".githooks/test_pre_push.sh", "build_report.bat", "process_comments.bat", "refresh_fmp.bat", "refresh_news.bat", "refresh_transcripts.bat", "start_comments_server.bat"]
 }
