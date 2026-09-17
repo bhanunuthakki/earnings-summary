@@ -180,7 +180,10 @@ def test_replay_reduction_pin_matches_checked_baseline() -> None:
         any(str(evidence).startswith("call:upgrade") for evidence in item["evidence"])
         for item in payload["database_builders"]
     )
-    assert payload["scoped_commit"] == "beb90404738e4abd1014f93ad2d87aed1d06160b"
+    assert (
+        payload["scoped_commit"]
+        == "beb90404738e4abd1014f93ad2d87aed1d06160b"  # pragma: allowlist secret -- pinned checked-in baseline subject
+    )
     assert count == TEST_DB_REPLAY_BASELINE_FILES
     assert verify_registry() is True
 
