@@ -27,6 +27,7 @@ from quality.lifecycle import (
     validate_inventory,
 )
 from quality.lifecycle_discovery import (
+    is_wrapper,
     route_entries,
     scheduled_targets,
     service_entries,
@@ -704,6 +705,37 @@ def test_policy_owner_contract() -> None:
     p = Path(__file__).resolve().parents[1] / "docs/quality/lifecycle-dormant-policy.json"
     if p.is_file():
         assert json.loads(p.read_text())["owner_evidence"] == "linear:BHA-142"
+
+
+def test_root_wrapper_without_policy_coverage_holds(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _w(repo / "launch_thing.bat", "@echo off\n")
+    _git(repo, "add", ".")
+    _refresh(repo)
+    r = build_inventory(repo)
+    assert r.status == "HOLD"
+    assert any("does not cover wrapper: launch_thing.bat" in v for v in r.violations)
+    assert any(o == "launch_thing.bat:wrapper:launch_thing.bat" for o in r.omissions)
+
+
+def test_real_dormant_policy_covers_all_tracked_wrapper_candidates() -> None:
+    root = Path(__file__).resolve().parents[1]
+    raw = json.loads(
+        (root / "docs/quality/lifecycle-dormant-policy.json").read_text(encoding="utf-8")
+    )
+    prefixes = tuple(raw["path_prefixes"])
+    exact = set(raw["exact_paths"])
+    out = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--cached", "-z"],
+        capture_output=True,
+        check=True,
+        env=clean_local_git_env(),
+    )
+    tracked = [p for p in out.stdout.decode("utf-8").split("\0") if p]
+    uncovered = [
+        p for p in tracked if is_wrapper(p) and not p.startswith(prefixes) and p not in exact
+    ]
+    assert uncovered == []
 
 
 def test_dirty_worktree_hold(tmp_path: Path) -> None:
