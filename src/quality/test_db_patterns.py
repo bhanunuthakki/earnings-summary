@@ -49,6 +49,9 @@ from quality.test_db_models import (
     PatternFinding as PatternFinding,
 )
 from quality.test_db_models import (
+    ReplayReduction as ReplayReduction,
+)
+from quality.test_db_models import (
     SourceLocator as SourceLocator,
 )
 from quality.test_db_models import (
@@ -703,6 +706,7 @@ def _hold_receipt(note: HoldReason) -> TestDbAudit:
         counts_by_taxonomy={},
         findings=tuple(),
         violations=(note,),
+        replay_reduction=None,
     )
 
 
@@ -837,4 +841,5 @@ def audit_test_db_patterns(
                 ),
             )
         ),
+        replay_reduction=ReplayReduction.from_builders(tuple(builders_sorted)),
     )

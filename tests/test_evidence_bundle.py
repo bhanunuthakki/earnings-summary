@@ -15,7 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from quality.admission_policy import SLOTS, SOURCE_PATHS, parse_source
+from quality.admission_policy import (
+    SLOTS,
+    SOURCE_PATHS,
+    TEST_DB_REPLAY_BASELINE_FILES,
+    parse_source,
+    replay_reduction,
+    verify_registry,
+)
 from quality.admission_policy import evaluate_slot as _evaluate_slot
 from quality.admission_policy import required_paths as _required_paths
 from quality.architecture import build_architecture_receipt
@@ -40,7 +47,13 @@ from quality.evidence_path_policy import FREEZE_PATH
 from quality.git_env import clean_local_git_env
 from quality.scoring import HARD_GATES, AdmissionReceipt
 from quality.static_quality import RuntimeIdentity, StaticQualityInventory
-from quality.test_db_models import TestDbAudit as _TestDbAudit
+from quality.test_db_models import (
+    BuilderClassification,
+    ReplayReduction,
+)
+from quality.test_db_models import (
+    TestDbAudit as _TestDbAudit,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -90,6 +103,7 @@ def test_exact_subject_static_and_test_db_roundtrips() -> None:
         findings=(),
         violations=(),
         builder_invocations=(),
+        replay_reduction=ReplayReduction.from_builders(()),
     )
     raw_db = audit.model_dump_json().encode()
     assert parse_source("test_db", raw_db, subject).typed_valid is True
@@ -97,6 +111,78 @@ def test_exact_subject_static_and_test_db_roundtrips() -> None:
         parse_source("static", raw_static, subject.upper())
     with pytest.raises(ValueError):
         parse_source("static", raw_static, "abc")
+
+
+def _audit_with_upgrade_files(count: int) -> _TestDbAudit:
+    builders = tuple(
+        BuilderClassification(
+            path=f"tests/test_upgrade_{index}.py",
+            taxonomy="seeded-upgrade",
+            evidence=("call:upgrade",),
+        )
+        for index in range(count)
+    )
+    return _TestDbAudit(
+        scoped_commit="a" * 40,
+        scanner_sha256="0" * 64,
+        source_sha256="1" * 64,
+        collection_status="COMPLETE",
+        raw_audit_status="PASS",
+        tracked_test_files=tuple(item.path for item in builders),
+        database_builders=builders,
+        counts_by_taxonomy={"seeded-upgrade": count},
+        findings=(),
+        violations=(),
+        builder_invocations=(),
+        replay_reduction=ReplayReduction.from_builders(builders),
+    )
+
+
+def test_replay_reduction_is_typed_and_integer_bounded() -> None:
+    passing = _audit_with_upgrade_files(51)
+    failing = _audit_with_upgrade_files(52)
+    pass_measurement = replay_reduction(passing)
+    fail_measurement = replay_reduction(failing)
+    assert pass_measurement.baseline_files == TEST_DB_REPLAY_BASELINE_FILES == 172
+    assert pass_measurement.remaining_files == 51
+    assert pass_measurement.reduction_percent == pytest.approx(70.35)
+    assert pass_measurement.ratio_pass is True
+    assert fail_measurement.ratio_pass is False
+    assert parse_source("test_db", passing.model_dump_json().encode(), "a" * 40).semantic_pass
+    assert not parse_source("test_db", failing.model_dump_json().encode(), "a" * 40).semantic_pass
+
+
+def test_replay_reduction_rejects_duplicate_builder_paths() -> None:
+    audit = _audit_with_upgrade_files(51)
+    builders_with_duplicate = (
+        *audit.database_builders,
+        BuilderClassification(
+            path=audit.database_builders[0].path,
+            taxonomy="archived-graph",
+            evidence=("text:archived",),
+        ),
+    )
+    duplicate = audit.model_copy(update={"database_builders": builders_with_duplicate})
+    # Re-stamp the typed measurement so only the uniqueness gate can reject:
+    # the duplicated path keeps call:upgrade count at 51, so the ratio still passes.
+    duplicate = duplicate.model_copy(update={"replay_reduction": replay_reduction(duplicate)})
+    measurement = replay_reduction(duplicate)
+    assert measurement.remaining_files == 51
+    assert measurement.ratio_pass is True
+    assert measurement.unique_builder_paths is False
+    assert not parse_source("test_db", duplicate.model_dump_json().encode(), "a" * 40).semantic_pass
+
+
+def test_replay_reduction_pin_matches_checked_baseline() -> None:
+    path = Path(__file__).resolve().parents[1] / "docs/quality/test-db-patterns-baseline.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    count = sum(
+        any(str(evidence).startswith("call:upgrade") for evidence in item["evidence"])
+        for item in payload["database_builders"]
+    )
+    assert payload["scoped_commit"] == "beb90404738e4abd1014f93ad2d87aed1d06160b"
+    assert count == TEST_DB_REPLAY_BASELINE_FILES
+    assert verify_registry() is True
 
 
 def test_lifecycle_handoff_order_and_preservation(tmp_path: Path) -> None:
