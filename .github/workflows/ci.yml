@@ -96,21 +96,26 @@ jobs:
       matrix:
         # `split_count` subdivides a source shard WITHOUT changing which shard
         # a file lands in (that stays `index % 8`), so adding a split keeps
-        # assignments stable (b93ead99). Shards 1 and 6 are the consistently
-        # heaviest (886-929s and 674-851s vs 211-365s for shard 2's halves),
-        # so they carry the split; that pulls the slowest job back to ~450s.
+        # assignments stable (b93ead99). Shards 1 and 6 were the consistently
+        # heaviest at the last rebalance (886-929s and 674-851s vs 211-365s for
+        # shard 2's halves); the 2026-09-16 re-baseline window (15 main runs
+        # through 3d284d6b) shows shard 8 as the median-slowest (5.88m, 4/7
+        # runs under 6m) with shard 3 the spikiest (12.48m on run 35187203222,
+        # 5/7 under 6m), so shards 3 and 8 now carry the split alongside 1 and 6.
         include:
           - { label: "1", source_shard: 1, split_count: 2, split_part: 0 }
           - { label: "1 overflow", source_shard: 1, split_count: 2, split_part: 1 }
           - { label: "2", source_shard: 2, split_count: 2, split_part: 0 }
           - { label: "2 overflow", source_shard: 2, split_count: 2, split_part: 1 }
-          - { label: "3", source_shard: 3, split_count: 1, split_part: 0 }
+          - { label: "3", source_shard: 3, split_count: 2, split_part: 0 }
+          - { label: "3 overflow", source_shard: 3, split_count: 2, split_part: 1 }
           - { label: "4", source_shard: 4, split_count: 1, split_part: 0 }
           - { label: "5", source_shard: 5, split_count: 1, split_part: 0 }
           - { label: "6", source_shard: 6, split_count: 2, split_part: 0 }
           - { label: "6 overflow", source_shard: 6, split_count: 2, split_part: 1 }
           - { label: "7", source_shard: 7, split_count: 1, split_part: 0 }
-          - { label: "8", source_shard: 8, split_count: 1, split_part: 0 }
+          - { label: "8", source_shard: 8, split_count: 2, split_part: 0 }
+          - { label: "8 overflow", source_shard: 8, split_count: 2, split_part: 1 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
