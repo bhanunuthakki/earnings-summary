@@ -346,6 +346,41 @@ def upgrade():
     op.create_table = lambda *args: None
     op.create_table("orphaned")
 """,
+        """revision = "0001"
+down_revision = None
+alias = op
+alias.execute = lambda *args: None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """import builtins
+revision = "0001"
+down_revision = None
+builtins.setattr(op, "execute", lambda *args: None)
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """from builtins import setattr as change
+revision = "0001"
+down_revision = None
+change(op, "execute", lambda *args: None)
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """revision = "0001"
+down_revision = None
+op.__dict__["execute"] = lambda *args: None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
     ],
 )
 def test_uncertain_bindings_do_not_manufacture_ownership(
