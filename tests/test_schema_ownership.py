@@ -24,7 +24,8 @@ def _repo(tmp_path: Path, *, include_orphan: bool = False) -> tuple[Path, Path]:
     _write(
         tmp_path,
         "alembic/versions/0001_base.py",
-        """revision = "0001"
+        """from alembic import op
+revision = "0001"
 down_revision = None
 def upgrade():
     op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
@@ -73,8 +74,8 @@ def test_records_schema_revision_readers_writers_and_recovery_owner(tmp_path: Pa
     assert facts.schema_revision == "0001"
     assert facts.readers == ("src/store.py:1",)
     assert facts.writers == ("src/store.py:2",)
-    assert facts.historical_evidence == ("alembic/versions/0001_base.py:4",)
-    assert facts.recovery_owner == "alembic/versions/0001_base.py:4"
+    assert facts.historical_evidence == ("alembic/versions/0001_base.py:5",)
+    assert facts.recovery_owner == "alembic/versions/0001_base.py:5"
     assert entries["fact_ids"].kind == "view"
     assert entries["alembic_version"].recovery_owner == "alembic:version-table"
 
@@ -101,7 +102,8 @@ def test_comments_and_downgrade_sql_do_not_manufacture_ownership(tmp_path: Path)
     root, database = _repo(tmp_path, include_orphan=True)
     migration = root / "alembic/versions/0001_base.py"
     migration.write_text(
-        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+        """from alembic import op
+SQL = "CREATE TABLE orphaned (id INTEGER)"
 revision = "0001"
 down_revision = None
 def unreachable_after_return():
@@ -290,6 +292,44 @@ def upgrade():
     mutate()
     helper()
 """,
+        """SQL = "SELECT 1"
+revision = "0001"
+down_revision = None
+def mutate():
+    global SQL
+    SQL = "SELECT 1"
+def upgrade():
+    global SQL
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    SQL = "CREATE TABLE orphaned (id INTEGER)"
+    mutate()
+    op.execute(SQL)
+""",
+        """revision = "0001"
+down_revision = None
+class Noop:
+    def execute(self, sql):
+        return None
+def helper(op):
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    helper(Noop())
+""",
+        """revision = "0001"
+down_revision = None
+class Noop:
+    def create_table(self, name):
+        return None
+def helper(op):
+    op.create_table("orphaned")
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    helper(Noop())
+""",
     ],
 )
 def test_uncertain_bindings_do_not_manufacture_ownership(
@@ -297,7 +337,7 @@ def test_uncertain_bindings_do_not_manufacture_ownership(
 ) -> None:
     root, database = _repo(tmp_path, include_orphan=True)
     migration = root / "alembic/versions/0001_base.py"
-    migration.write_text(migration_source, encoding="utf-8")
+    migration.write_text("from alembic import op\n" + migration_source, encoding="utf-8")
     subprocess.run(
         ["git", "commit", "-qam", "uncertain binding"],
         cwd=root,

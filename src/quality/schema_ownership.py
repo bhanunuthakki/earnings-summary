@@ -339,6 +339,13 @@ def _record_upgrade_evidence(
     revision: str,
     evidence: dict[str, list[tuple[int, str, str]]],
 ) -> None:
+    trusted_operation_receivers: set[str] = set()
+    for statement in tree.body:
+        trusted_operation_receivers.difference_update(_bound_names([statement]))
+        if isinstance(statement, ast.ImportFrom) and statement.module == "alembic":
+            trusted_operation_receivers.update(
+                alias.asname or alias.name for alias in statement.names if alias.name == "op"
+            )
     globally_mutable_symbols = {
         name
         for function in tree.body
@@ -347,6 +354,7 @@ def _record_upgrade_evidence(
         if isinstance(child, ast.Global)
         for name in child.names
     }
+    trusted_operation_receivers.difference_update(globally_mutable_symbols)
     constants: dict[str, str] = {}
     functions: dict[str, ast.FunctionDef] = {}
     for node in tree.body:
@@ -409,6 +417,13 @@ def _record_upgrade_evidence(
                 visit_function(node.func.id)
             if not node.args or not isinstance(node.func, ast.Attribute):
                 return
+            receiver = node.func.value
+            if (
+                not isinstance(receiver, ast.Name)
+                or receiver.id not in trusted_operation_receivers
+                or receiver.id in lexical_bindings
+            ):
+                return
             if node.func.attr == "create_table":
                 table_name = _static_migration_string(node.args[0], function_constants)
                 if table_name is not None:
@@ -438,7 +453,10 @@ def _record_upgrade_evidence(
                     continue
                 if isinstance(value, str):
                     simple_targets = tuple(
-                        target.id for target in targets if isinstance(target, ast.Name)
+                        target.id
+                        for target in targets
+                        if isinstance(target, ast.Name)
+                        and target.id not in globally_mutable_symbols
                     )
                     for target_name in simple_targets:
                         function_constants[target_name] = value
