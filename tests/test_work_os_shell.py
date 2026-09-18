@@ -1802,3 +1802,31 @@ def test_shell_render_memo_follows_a_changed_prototype(
         assert "late prototype edit" in after
     finally:
         clear_work_os_shell_render_cache()
+
+
+def test_shell_self_hosts_its_webfonts_from_the_vendored_binaries() -> None:
+    """The shell's first paint depends on no external font origin, and every
+    @font-face src resolves to a vendored binary in the repository."""
+    html = render_work_os_shell()
+    repo_root = Path(__file__).resolve().parents[1]
+
+    assert "fonts.googleapis.com" not in html
+    assert "fonts.gstatic.com" not in html
+    assert '<style id="work-os-fonts">' in html
+    face_rules = re.findall(r"@font-face \{(.*?)\}", html, re.DOTALL)
+    assert len(face_rules) == 39
+
+    declared: set[tuple[str, str]] = set()
+    for rule in face_rules:
+        family = re.search(r"font-family: '([^']+)'", rule)
+        weight = re.search(r"font-weight: (\d+)", rule)
+        local = re.search(r"url\(\.\./src/ui/vendor/fonts/([^)]+\.woff2)\)", rule)
+        assert family is not None and weight is not None and local is not None
+        assert (repo_root / "src" / "ui" / "vendor" / "fonts" / local.group(1)).is_file()
+        declared.add((family.group(1), weight.group(1)))
+
+    assert declared == {
+        (family, str(weight))
+        for family in ("Inter", "JetBrains Mono")
+        for weight in (400, 500, 600)
+    }
