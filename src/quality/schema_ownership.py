@@ -193,6 +193,91 @@ def _migration_ranks(
     return locations, ranks, errors
 
 
+def _static_migration_string(node: ast.expr, constants: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.Call) and len(node.args) == 1 and not node.keywords:
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "text":
+            return _static_migration_string(node.args[0], constants)
+    return None
+
+
+def _record_upgrade_evidence(
+    tree: ast.Module,
+    *,
+    path: str,
+    rank: int,
+    revision: str,
+    evidence: dict[str, list[tuple[int, str, str]]],
+) -> None:
+    constants: dict[str, str] = {}
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions[node.name] = node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+            try:
+                value: object = ast.literal_eval(node.value)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, str):
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        constants[target.id] = value
+
+    visited: set[str] = set()
+
+    def visit_function(name: str) -> None:
+        if name in visited:
+            return
+        visited.add(name)
+        function = functions.get(name)
+        if function is None:
+            return
+        function_constants = dict(constants)
+        for assignment in ast.walk(function):
+            if not isinstance(assignment, (ast.Assign, ast.AnnAssign)):
+                continue
+            if assignment.value is None:
+                continue
+            targets = (
+                assignment.targets if isinstance(assignment, ast.Assign) else (assignment.target,)
+            )
+            try:
+                value: object = ast.literal_eval(assignment.value)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, str):
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        function_constants[target.id] = value
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id in functions:
+                visit_function(node.func.id)
+            if not node.args or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr == "create_table":
+                table_name = _static_migration_string(node.args[0], function_constants)
+                if table_name is not None:
+                    evidence[table_name].append((rank, revision, f"{path}:{node.lineno}"))
+                continue
+            if node.func.attr != "execute":
+                continue
+            sql = _static_migration_string(node.args[0], function_constants)
+            if sql is None:
+                continue
+            for match in CREATE_RE.finditer(sql):
+                evidence[match.group("name")].append((rank, revision, f"{path}:{node.lineno}"))
+
+    visit_function("upgrade")
+
+
 def _migration_evidence(
     sources: list[tuple[str, bytes]],
 ) -> tuple[dict[str, list[tuple[int, str, str]]], list[str]]:
@@ -207,27 +292,17 @@ def _migration_evidence(
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
             continue
-        for match in CREATE_RE.finditer(text):
-            name = match.group("name")
-            line = text.count("\n", 0, match.start()) + 1
-            evidence[name].append((rank, revision, f"{path}:{line}"))
         try:
             tree = ast.parse(text, filename=path)
         except SyntaxError:
             continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not node.args:
-                continue
-            func = node.func
-            if not (
-                isinstance(func, ast.Attribute)
-                and func.attr == "create_table"
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)
-            ):
-                continue
-            name = node.args[0].value
-            evidence[name].append((rank, revision, f"{path}:{node.lineno}"))
+        _record_upgrade_evidence(
+            tree,
+            path=path,
+            rank=rank,
+            revision=revision,
+            evidence=evidence,
+        )
     for records in evidence.values():
         records.sort(key=lambda item: (item[0], item[2], item[1]))
     return evidence, errors
@@ -281,7 +356,7 @@ def _schema_objects(database: Path) -> list[tuple[str, ObjectKind, str]]:
         }
         rows = connection.execute(
             "SELECT name, type, COALESCE(sql, '') FROM sqlite_master "
-            "WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            "WHERE type IN ('table', 'view') ORDER BY name"
         ).fetchall()
     except sqlite3.Error as exc:
         raise SchemaOwnershipError("disposable schema database could not be inspected") from exc
@@ -290,6 +365,8 @@ def _schema_objects(database: Path) -> list[tuple[str, ObjectKind, str]]:
     objects: list[tuple[str, ObjectKind, str]] = []
     for raw_name, raw_kind, raw_ddl in rows:
         name = str(raw_name)
+        if name.casefold().startswith("sqlite_"):
+            continue
         table_type = table_types.get(name, str(raw_kind))
         if table_type == "shadow":
             continue
@@ -409,6 +486,29 @@ def build_inventory(root: Path) -> SchemaOwnershipInventory:
         return inventory_database(root, database, schema_revision=revision)
 
 
+def _safe_output_path(root: Path, requested: Path) -> Path:
+    resolved_root = root.resolve()
+    lexical = requested if requested.is_absolute() else resolved_root / requested
+    declared_tmp = resolved_root / ".tmp"
+    if declared_tmp.is_symlink():
+        raise SchemaOwnershipError("repository .tmp directory cannot be a symlink")
+    try:
+        resolved_tmp = declared_tmp.resolve()
+        resolved_output = lexical.resolve()
+    except OSError as exc:
+        raise SchemaOwnershipError("output path cannot be resolved safely") from exc
+    if not resolved_tmp.is_relative_to(resolved_root) or not resolved_output.is_relative_to(
+        resolved_tmp
+    ):
+        raise SchemaOwnershipError("output must remain under the repository .tmp directory")
+    try:
+        if lexical.exists() and lexical.stat().st_nlink > 1:
+            raise SchemaOwnershipError("output aliases another file")
+    except OSError as exc:
+        raise SchemaOwnershipError("output path cannot be inspected safely") from exc
+    return resolved_output
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -418,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         inventory = build_inventory(args.repo_root)
         payload = inventory.model_dump_json(indent=2) + "\n"
         if args.output is not None:
-            output = args.output if args.output.is_absolute() else args.repo_root / args.output
+            output = _safe_output_path(args.repo_root, args.output)
             write_text_atomic(output, payload)
             print(
                 json.dumps(
@@ -431,7 +531,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif len(payload.encode()) > MAX_STDOUT_BYTES:
-            output = args.repo_root / ".tmp/quality/schema-ownership-inventory.json"
+            output = _safe_output_path(
+                args.repo_root, Path(".tmp/quality/schema-ownership-inventory.json")
+            )
             write_text_atomic(output, payload)
             print(
                 json.dumps(

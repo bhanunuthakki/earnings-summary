@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from quality import schema_ownership
 from quality.git_env import clean_local_git_env
-from quality.schema_ownership import inventory_database
+from quality.schema_ownership import SchemaOwnershipInventory, inventory_database
 
 
 def _write(root: Path, relative: str, text: str) -> None:
@@ -91,3 +95,71 @@ def test_inventory_is_deterministic(tmp_path: Path) -> None:
     first = inventory_database(root, database, schema_revision="0001")
     second = inventory_database(root, database, schema_revision="0001")
     assert json.loads(first.model_dump_json()) == json.loads(second.model_dump_json())
+
+
+def test_comments_and_downgrade_sql_do_not_manufacture_ownership(tmp_path: Path) -> None:
+    root, database = _repo(tmp_path, include_orphan=True)
+    migration = root / "alembic/versions/0001_base.py"
+    migration.write_text(
+        migration.read_text(encoding="utf-8")
+        + """
+# CREATE TABLE orphaned (id INTEGER)
+def downgrade():
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True, env=clean_local_git_env())
+    subprocess.run(
+        ["git", "commit", "-qm", "misleading ddl"],
+        cwd=root,
+        check=True,
+        env=clean_local_git_env(),
+    )
+
+    inventory = inventory_database(root, database, schema_revision="0001")
+    orphaned = next(entry for entry in inventory.entries if entry.name == "orphaned")
+    assert inventory.status == "HOLD"
+    assert orphaned.ownership == "unowned"
+    assert orphaned.recovery_owner is None
+
+
+def test_sqlite_prefix_filter_does_not_hide_similarly_named_user_table(
+    tmp_path: Path,
+) -> None:
+    root, database = _repo(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE sqlitefacts (id INTEGER)")
+
+    inventory = inventory_database(root, database, schema_revision="0001")
+    entry = next(item for item in inventory.entries if item.name == "sqlitefacts")
+    assert inventory.status == "HOLD"
+    assert entry.ownership == "unowned"
+
+
+def test_output_must_be_non_aliasing_path_under_repository_tmp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, database = _repo(tmp_path)
+    inventory = inventory_database(root, database, schema_revision="0001")
+
+    def fake_build_inventory(_root: Path) -> SchemaOwnershipInventory:
+        return inventory
+
+    monkeypatch.setattr(schema_ownership, "build_inventory", fake_build_inventory)
+    source = tmp_path / "src/store.py"
+    (tmp_path / ".tmp").mkdir()
+
+    before = source.read_bytes()
+    assert schema_ownership.main(["--repo-root", str(root), "--output", "src/store.py"]) == 1
+    assert source.read_bytes() == before
+
+    symlink = tmp_path / ".tmp/link.json"
+    symlink.symlink_to(source)
+    assert schema_ownership.main(["--repo-root", str(root), "--output", ".tmp/link.json"]) == 1
+    assert source.read_bytes() == before
+
+    hardlink = tmp_path / ".tmp/hardlink.json"
+    os.link(source, hardlink)
+    assert schema_ownership.main(["--repo-root", str(root), "--output", ".tmp/hardlink.json"]) == 1
+    assert source.read_bytes() == before
