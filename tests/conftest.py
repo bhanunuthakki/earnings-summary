@@ -551,3 +551,49 @@ def migrated_db(
         return dest
 
     return build
+
+
+# ----------------------------------------------------------------------------
+# Un-amortised chain build — the control that keeps ``migrated_db`` honest
+# ----------------------------------------------------------------------------
+#
+# ``migrated_db`` is only a safe substitute for a hand-rolled fixture while the
+# template it copies is indistinguishable from a database built by replaying the
+# chain. Nothing checked that, yet converting the remaining direct builders
+# rests on it entirely, so this fixture pays the full un-amortised price once
+# per session as the comparison control for
+# ``tests/test_migrated_db_parity.py``.
+#
+# Reserved for that control. Every other test must use ``migrated_db``, which
+# reaches the same schema without paying for another chain replay.
+
+_DIRECT_CHAIN_DBS: dict[str, Path] = {}
+
+
+@pytest.fixture(scope="session")
+def direct_chain_db(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Callable[..., Path]:
+    """Return a builder that replays the migration chain, bypassing the cache."""
+    from alembic.config import Config
+
+    from alembic import command
+
+    project_root = Path(__file__).resolve().parents[1]
+    cache_dir = tmp_path_factory.mktemp("direct_chain_dbs")
+
+    def build(dest: Path, *, target: str = "head") -> Path:
+        source = _DIRECT_CHAIN_DBS.get(target)
+        if source is None or not source.exists():
+            safe = target.replace("/", "_").replace("\\", "_")
+            source = cache_dir / f"direct_{safe}.db"
+            cfg = Config(str(project_root / "alembic.ini"))
+            cfg.set_main_option("script_location", str(project_root / "alembic"))
+            cfg.set_main_option("sqlalchemy.url", f"sqlite:///{source.as_posix()}")
+            command.upgrade(cfg, target)
+            _DIRECT_CHAIN_DBS[target] = source
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, dest)
+        return dest
+
+    return build
