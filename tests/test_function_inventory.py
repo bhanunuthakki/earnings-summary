@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from quality.function_inventory import build_inventory, main
 from quality.git_env import clean_local_git_env
 
@@ -95,6 +97,35 @@ def test_unresolved_dynamic_lookup_preserves_candidate_as_unknown(tmp_path: Path
     assert entry.reasons == ("unresolved-dynamic-reflection",)
 
 
+def test_cross_module_reflection_protects_or_holds_target(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _write(root, "src/handlers.py", "def literal_target(): pass\ndef dynamic_target(): pass\n")
+    _write(
+        root,
+        "src/runner.py",
+        "import handlers\ngetattr(handlers, 'literal_target')()\ngetattr(handlers, name)()\n",
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True, env=clean_local_git_env())
+    entries = {
+        entry.qualified_name: entry
+        for entry in build_inventory(root).entries
+        if entry.path == "src/handlers.py"
+    }
+    assert entries["literal_target"].disposition == "protected"
+    assert entries["literal_target"].reasons == ("reflection",)
+    assert entries["dynamic_target"].disposition == "unknown"
+    assert entries["dynamic_target"].reasons == ("unresolved-dynamic-reflection",)
+
+
+def test_getattr_default_string_does_not_resolve_dynamic_name(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _write(root, "src/dynamic.py", "def hidden(): pass\ngetattr(object(), name, 'fallback')\n")
+    subprocess.run(["git", "add", "."], cwd=root, check=True, env=clean_local_git_env())
+    entry = next(item for item in build_inventory(root).entries if item.qualified_name == "hidden")
+    assert entry.disposition == "unknown"
+    assert entry.reasons == ("unresolved-dynamic-reflection",)
+
+
 def test_parse_error_holds_and_excluded_roots_stay_out(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _write(root, "src/broken.py", "def broken(:\n")
@@ -112,10 +143,37 @@ def test_inventory_is_deterministic(tmp_path: Path) -> None:
     assert build_inventory(root).model_dump() == build_inventory(root).model_dump()
 
 
-def test_cli_writes_receipt(tmp_path: Path, capsys: object) -> None:
+def test_cli_writes_receipt(tmp_path: Path) -> None:
     root = _repo(tmp_path)
-    output = root / "inventory.json"
+    output = root / ".tmp/quality/inventory.json"
     assert main(["--repo-root", str(root), "--output", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "function-candidate-inventory/v1"
     assert payload["deletion_authority"] is False
+
+
+def test_cli_rejects_tracked_source_output_without_modifying_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _repo(tmp_path)
+    source = root / "src/app.py"
+    before = source.read_bytes()
+    assert main(["--repo-root", str(root), "--output", str(source)]) == 1
+    assert source.read_bytes() == before
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "FunctionInventoryError"
+    assert "repository .tmp" in error["message"]
+
+
+def test_cli_rejects_symlink_escape_from_tmp(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _repo(tmp_path)
+    link = root / ".tmp/escape"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(root / "src", target_is_directory=True)
+    source = root / "src/app.py"
+    before = source.read_bytes()
+    assert main(["--repo-root", str(root), "--output", str(link / "app.py")]) == 1
+    assert source.read_bytes() == before
+    assert json.loads(capsys.readouterr().err)["error"] == "FunctionInventoryError"

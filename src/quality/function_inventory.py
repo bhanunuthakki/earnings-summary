@@ -147,9 +147,11 @@ class _ModuleFacts(ast.NodeVisitor):
         self.callback_names: set[str] = set()
         self.registry_names: set[str] = set()
         self.reflection_names: set[str] = set()
+        self.unresolved_reflection_modules: set[str] = set()
         self.unresolved_dynamic = False
         self.exports: set[str] = set()
         self.imported_names: set[tuple[str, str]] = set()
+        self.imported_modules: dict[str, str] = {}
         self.star_imports: set[str] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -183,7 +185,25 @@ class _ModuleFacts(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         name = _decorator_name(node.func)
-        if name.rsplit(".", 1)[-1] in DYNAMIC_CALLS or name.endswith("import_module"):
+        dynamic_name = name.rsplit(".", 1)[-1]
+        if dynamic_name == "getattr":
+            attribute = node.args[1] if len(node.args) > 1 else None
+            if (
+                isinstance(attribute, ast.Constant)
+                and isinstance(attribute.value, str)
+                and attribute.value.isidentifier()
+            ):
+                self.reflection_names.add(attribute.value)
+            else:
+                target = node.args[0] if node.args else None
+                target_module = (
+                    self.imported_modules.get(target.id) if isinstance(target, ast.Name) else None
+                )
+                if target_module is None:
+                    self.unresolved_dynamic = True
+                else:
+                    self.unresolved_reflection_modules.add(target_module)
+        elif dynamic_name in DYNAMIC_CALLS or name.endswith("import_module"):
             literal_names = {
                 child.value
                 for child in (*node.args, *(keyword.value for keyword in node.keywords))
@@ -232,6 +252,13 @@ class _ModuleFacts(ast.NodeVisitor):
                 self.star_imports.add(module)
             else:
                 self.imported_names.add((module, alias.name))
+                if module:
+                    self.imported_modules[alias.asname or alias.name] = f"{module}.{alias.name}"
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            local_name = alias.asname or alias.name.split(".", 1)[0]
+            self.imported_modules[local_name] = alias.name
 
 
 def _hazards(
@@ -274,9 +301,31 @@ def _hazards(
         reasons.add("import")
     if module in star_imports and top_level and not name.startswith("_"):
         reasons.add("import-star")
-    if name in facts.reflection_names:
-        reasons.add("reflection")
     return reasons
+
+
+def _module_matches(module: str, target: str) -> bool:
+    return module == target or module.endswith(f".{target}") or target.endswith(f".{module}")
+
+
+def _safe_output_path(root: Path, requested: Path) -> Path:
+    resolved_root = root.resolve()
+    lexical = requested if requested.is_absolute() else resolved_root / requested
+    try:
+        resolved_tmp = (resolved_root / ".tmp").resolve()
+        resolved_output = lexical.resolve()
+    except OSError as exc:
+        raise FunctionInventoryError("output path cannot be resolved safely") from exc
+    if not resolved_tmp.is_relative_to(resolved_root) or not resolved_output.is_relative_to(
+        resolved_tmp
+    ):
+        raise FunctionInventoryError("output must remain under the repository .tmp directory")
+    try:
+        if lexical.exists() and lexical.stat().st_nlink > 1:
+            raise FunctionInventoryError("output aliases another file")
+    except OSError as exc:
+        raise FunctionInventoryError("output path cannot be inspected safely") from exc
+    return resolved_output
 
 
 def _source_manifest_hash(sources: list[tuple[str, bytes]]) -> str:
@@ -295,6 +344,8 @@ def build_inventory(root: Path) -> FunctionInventory:
     parse_errors: list[str] = []
     imported_names: set[tuple[str, str]] = set()
     star_imports: set[str] = set()
+    global_reflection_names: set[str] = set()
+    unresolved_reflection_modules: set[str] = set()
     global_references: Counter[str] = Counter()
     for path, raw in sources:
         try:
@@ -309,6 +360,8 @@ def build_inventory(root: Path) -> FunctionInventory:
         facts_by_path[path] = facts
         imported_names.update(facts.imported_names)
         star_imports.update(facts.star_imports)
+        global_reflection_names.update(facts.reflection_names)
+        unresolved_reflection_modules.update(facts.unresolved_reflection_modules)
         global_references.update(facts.references)
 
     entries: list[FunctionEntry] = []
@@ -323,12 +376,17 @@ def build_inventory(root: Path) -> FunctionInventory:
                 star_imports,
             )
             references = global_references[node.name]
+            if node.name in global_reflection_names:
+                reasons.add("reflection")
             if reasons:
                 disposition: Disposition = "protected"
             elif references:
                 disposition = "referenced"
                 reasons.add("static-reference")
-            elif facts.unresolved_dynamic:
+            elif facts.unresolved_dynamic or any(
+                _module_matches(_module_name(path), target)
+                for target in unresolved_reflection_modules
+            ):
                 disposition = "unknown"
                 reasons.add("unresolved-dynamic-reflection")
             else:
@@ -387,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
         inventory = build_inventory(args.repo_root)
         payload = inventory.model_dump_json(indent=2) + "\n"
         if args.output is not None:
-            output = args.output if args.output.is_absolute() else args.repo_root / args.output
+            output = _safe_output_path(args.repo_root, args.output)
             write_text_atomic(output, payload)
             print(
                 json.dumps(
@@ -400,12 +458,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif len(payload.encode()) > MAX_STDOUT_BYTES:
-            output = args.repo_root / ".tmp/quality/function-candidate-inventory.json"
+            output = _safe_output_path(
+                args.repo_root, Path(".tmp/quality/function-candidate-inventory.json")
+            )
             write_text_atomic(output, payload)
             print(
                 json.dumps(
                     {
-                        "output": str(output.relative_to(args.repo_root)),
+                        "output": str(output.relative_to(args.repo_root.resolve())),
                         "status": inventory.status,
                         "counts": inventory.counts,
                     },
