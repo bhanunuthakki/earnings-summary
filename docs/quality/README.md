@@ -137,6 +137,8 @@ python execution/classify_operational_lifecycle.py \
   --output .tmp/quality/lifecycle-inventory.json
 python execution/inventory_function_candidates.py \
   --output .tmp/quality/function-candidate-inventory.json
+python execution/inventory_schema_ownership.py \
+  --output .tmp/quality/schema-ownership-inventory.json
 python execution/reconcile_quality_baseline.py \
   --output .tmp/quality/roadmap-reconciliation.json
 ```
@@ -144,6 +146,14 @@ python execution/reconcile_quality_baseline.py \
 The lifecycle CLI never regenerates the graph. A missing, malformed, or
 stale `.tmp/quality/reachability-check.json` is an expected operational
 error (`LifecycleError`, exit 1). A dirty worktree is never `PASS`.
+
+The schema ownership inventory migrates a fresh disposable temporary SQLite
+database to the active Alembic head, then records every current table, view,
+and virtual table with static product readers/writers and active-migration
+recovery evidence. It never opens `data/portfolio.db`, excludes SQLite-owned
+shadow tables, and is review evidence only: `deletion_authority` is always
+false. A current object without an active recovery owner makes the receipt
+`HOLD`; it does not authorize removal.
 
 ## Exact-subject evidence bundle (BHA-147)
 
