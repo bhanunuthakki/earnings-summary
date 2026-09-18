@@ -342,22 +342,19 @@ def _record_upgrade_evidence(
     constants: dict[str, str] = {}
     functions: dict[str, ast.FunctionDef] = {}
     for node in tree.body:
+        bound_names = _bound_names([node])
+        for bound_name in bound_names:
+            constants.pop(bound_name, None)
+            functions.pop(bound_name, None)
         if isinstance(node, ast.FunctionDef):
             is_generator = any(
                 isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(node)
             )
-            if node.decorator_list or is_generator:
-                functions.pop(node.name, None)
-            else:
+            if not node.decorator_list and not is_generator:
                 functions[node.name] = node
             continue
-        for bound_name in _bound_names([node]):
-            functions.pop(bound_name, None)
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
-            target_names = _bound_names([node])
-            for target_name in target_names:
-                constants.pop(target_name, None)
             try:
                 value: object = ast.literal_eval(node.value)
             except (TypeError, ValueError):
@@ -370,14 +367,22 @@ def _record_upgrade_evidence(
                     constants[target_name] = value
 
     visited: set[str] = set()
+    global_side_effects: dict[str, set[str]] = {}
 
-    def visit_function(name: str) -> None:
+    def visit_function(name: str) -> set[str]:
         if name in visited:
-            return
+            return global_side_effects.get(name, set())
         visited.add(name)
         function = functions.get(name)
         if function is None:
-            return
+            return set()
+        function_global_side_effects = {
+            bound_name
+            for child in ast.walk(function)
+            if isinstance(child, ast.Global)
+            for bound_name in child.names
+        }
+        global_side_effects[name] = function_global_side_effects
         parameter_names = {
             argument.arg
             for argument in (
@@ -398,7 +403,10 @@ def _record_upgrade_evidence(
 
         def record_call(node: ast.Call) -> None:
             if isinstance(node.func, ast.Name) and node.func.id in callable_functions:
-                visit_function(node.func.id)
+                called_global_side_effects = visit_function(node.func.id)
+                function_global_side_effects.update(called_global_side_effects)
+                for bound_name in called_global_side_effects:
+                    function_constants.pop(bound_name, None)
             if not node.args or not isinstance(node.func, ast.Attribute):
                 return
             if node.func.attr == "create_table":
@@ -446,6 +454,7 @@ def _record_upgrade_evidence(
                 break
             for bound_name in _bound_names([statement]):
                 function_constants.pop(bound_name, None)
+        return function_global_side_effects
 
     visit_function("upgrade")
 

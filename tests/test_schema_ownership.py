@@ -216,6 +216,28 @@ def upgrade(helper):
     op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
     helper()
 """,
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+if True:
+    SQL = "SELECT 1"
+revision = "0001"
+down_revision = None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute(SQL)
+""",
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+revision = "0001"
+down_revision = None
+def helper():
+    global SQL
+    SQL = "SELECT 1"
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    helper()
+    op.execute(SQL)
+""",
     ],
 )
 def test_uncertain_bindings_do_not_manufacture_ownership(
