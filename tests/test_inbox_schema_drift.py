@@ -15,20 +15,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from alerts import fire_alert
 from dashboard import render_alert_feed
 from dashboard.inbox import collect_inbox, collect_inbox_counted, schema_drift_notice
 from schema_compat import SchemaRevisionMismatch
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 #: The rendered ELEMENT, not the class name — ``.ix-degraded`` also appears in
 #: every page's stylesheet, so a bare "ix-degraded" substring check matches
@@ -36,20 +32,11 @@ PRIOR_HEAD = "0059_kpi_facts_restatement"
 _DEGRADED_EL = '<div class="ix-degraded"'
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def populated_db(tmp_path: Path) -> Path:
+def populated_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """A healthy database carrying real, renderable inbox content."""
     db = tmp_path / "inbox_drift.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(db, target="head")
     fire_alert(
         ticker="NU",
         trigger_kind="kpi_inflection",
@@ -102,20 +89,18 @@ def test_feed_renders_a_degraded_notice_not_an_empty_list(populated_db: Path) ->
     assert "could not be read" in drifted
 
 
-def test_degraded_notice_is_distinguishable_from_the_empty_state(tmp_path: Path) -> None:
+def test_degraded_notice_is_distinguishable_from_the_empty_state(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """The discriminating assertion: an EMPTY database and a DRIFTED one must
     not produce the same page. A guard that passed both ways would pin nothing.
     """
     empty = tmp_path / "empty.db"
-    cfg = _build_config(empty)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(empty, target="head")
     empty_html = render_alert_feed(db_path=empty)
 
     drifted = tmp_path / "drifted.db"
-    cfg2 = _build_config(drifted)
-    command.stamp(cfg2, PRIOR_HEAD)
-    command.upgrade(cfg2, "head")
+    migrated_db(drifted, target="head")
     _drift(drifted)
     drifted_html = render_alert_feed(db_path=drifted)
 

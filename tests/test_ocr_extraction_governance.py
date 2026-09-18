@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -29,6 +30,7 @@ from provenance.ocr_extraction import (
     PypdfPDFInspector,
     backfill_ocr_evidence,
 )
+from sqlite_runtime import register_sqlite_integrity_functions
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_REVISION = "0221_ask_retrieval_traces"
@@ -54,7 +56,10 @@ def test_cli_can_persist_native_preflight_without_ocr_engine(
         def model_dump_json(self) -> str:
             return '{"mode":"apply"}'
 
-    monkeypatch.setattr(cli, "connect_sqlite", lambda *args, **kwargs: _Connection())
+    def _connect(*_args: object, **_kwargs: object) -> _Connection:
+        return _Connection()
+
+    monkeypatch.setattr(cli, "connect_sqlite", _connect)
 
     def _backfill(conn: object, request: OCRBackfillRequest, *, provider: object) -> _Result:
         captured["request"] = request
@@ -90,7 +95,9 @@ def _config(db_path: Path) -> Config:
 
 
 def _connection(
-    tmp_path: Path, content: bytes = b"%PDF-governed-ocr-test"
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    content: bytes = b"%PDF-governed-ocr-test",
 ) -> tuple[sqlite3.Connection, Path]:
     db_path = tmp_path / "portfolio.db"
     repo_root = tmp_path / "repo"
@@ -98,37 +105,20 @@ def _connection(
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(content)
     digest = hashlib.sha256(content).hexdigest()
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(
-            """
-            CREATE TABLE documents (
-              id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
-              doc_type TEXT NOT NULL, period_start TIMESTAMP, period_end TIMESTAMP,
-              file_path TEXT NOT NULL, sha256 TEXT NOT NULL, fetched_at TIMESTAMP NOT NULL,
-              fetch_status TEXT NOT NULL, raw_bytes_size INTEGER NOT NULL, source_url TEXT,
-              accession_number TEXT
-            );
-            """
-        )
-        conn.execute(
-            "INSERT INTO documents VALUES (1, 'ACME', 'issuer_ir', 'presentation', NULL, NULL, "
-            "?, ?, '2026-07-20 12:00:00', 'ok', ?, NULL, NULL)",
-            ("data/ACME.pdf", digest, len(content)),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    config = _config(db_path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0217_fact_selection_ledger")
-    command.upgrade(config, "0218_evidence_replica_links")
-    command.stamp(config, PRIOR_REVISION)
-    command.upgrade(config, OCR_REVISION)
+    migrated_db(db_path, target="head")
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    register_sqlite_integrity_functions(conn)
+    conn.execute(
+        "INSERT INTO documents "
+        "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
+        "fetch_status, raw_bytes_size) "
+        "VALUES (1, 'ACME', 'issuer_ir', 'presentation', ?, ?, "
+        "'2026-07-20 12:00:00', 'ok', ?)",
+        ("data/ACME.pdf", digest, len(content)),
+    )
+    conn.commit()
     backfill_legacy_evidence(conn, BackfillRequest(repo_root=repo_root, apply=True))
     return conn, repo_root
 
@@ -257,8 +247,10 @@ def test_migration_round_trip_and_append_only_tables(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_dry_run_detects_ocr_need_without_provider_or_writes(tmp_path: Path) -> None:
-    conn, repo_root = _connection(tmp_path)
+def test_dry_run_detects_ocr_need_without_provider_or_writes(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
     inspector = _Inspector(_required_preflight(1))
     try:
         result = backfill_ocr_evidence(
@@ -309,8 +301,9 @@ def test_native_preflight_is_page_complete_and_deterministic(
 
 def test_apply_records_exact_governance_page_confidence_and_replays(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn, repo_root = _connection(tmp_path)
+    conn, repo_root = _connection(tmp_path, migrated_db)
     inspector = _Inspector(_required_preflight(1))
     provider = _Provider(
         [
@@ -386,8 +379,10 @@ def test_apply_records_exact_governance_page_confidence_and_replays(
         conn.close()
 
 
-def test_native_sufficient_is_persisted_without_calling_ocr(tmp_path: Path) -> None:
-    conn, repo_root = _connection(tmp_path)
+def test_native_sufficient_is_persisted_without_calling_ocr(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
     native_text = "Native text is already sufficiently complete."
     preflight = PDFPreflight(
         outcome="native_sufficient",
@@ -423,9 +418,11 @@ def test_native_sufficient_is_persisted_without_calling_ocr(tmp_path: Path) -> N
 
 @pytest.mark.parametrize("outcome", ["encrypted", "unreadable", "unsupported"])
 def test_preflight_failures_are_explicit_and_quarantined(
-    tmp_path: Path, outcome: Literal["encrypted", "unreadable", "unsupported"]
+    tmp_path: Path,
+    outcome: Literal["encrypted", "unreadable", "unsupported"],
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn, repo_root = _connection(tmp_path)
+    conn, repo_root = _connection(tmp_path, migrated_db)
     preflight = PDFPreflight(
         outcome=outcome,
         page_count=0,
@@ -453,8 +450,9 @@ def test_preflight_failures_are_explicit_and_quarantined(
 
 def test_low_confidence_output_records_failed_run_without_evidence_node(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn, repo_root = _connection(tmp_path)
+    conn, repo_root = _connection(tmp_path, migrated_db)
     inspector = _Inspector(_required_preflight(1))
     provider = _Provider([OCRPageOutput(page_number=1, text="uncertain", mean_confidence=12.5)])
     try:
@@ -492,8 +490,10 @@ def test_low_confidence_output_records_failed_run_without_evidence_node(
         conn.close()
 
 
-def test_provider_failure_is_recorded_for_every_required_page(tmp_path: Path) -> None:
-    conn, repo_root = _connection(tmp_path)
+def test_provider_failure_is_recorded_for_every_required_page(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
     inspector = _Inspector(_required_preflight(1, 2))
     provider = _Provider(failure_reason="engine_timeout")
     try:
@@ -516,8 +516,10 @@ def test_provider_failure_is_recorded_for_every_required_page(tmp_path: Path) ->
         conn.close()
 
 
-def test_apply_advances_checkpoint_only_after_bounded_transaction(tmp_path: Path) -> None:
-    conn, repo_root = _connection(tmp_path)
+def test_apply_advances_checkpoint_only_after_bounded_transaction(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
     inspector = _Inspector(_required_preflight(1))
     provider = _Provider([OCRPageOutput(page_number=1, text="Auditable.", mean_confidence=99.0)])
     try:
@@ -542,8 +544,9 @@ def test_apply_advances_checkpoint_only_after_bounded_transaction(tmp_path: Path
 
 def test_evidence_native_lane_preflights_extensionless_pdf_without_legacy_row(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn, repo_root = _connection(tmp_path)
+    conn, repo_root = _connection(tmp_path, migrated_db)
     body = b"%PDF-evidence-native"
     digest = hashlib.sha256(body).hexdigest()
     blob_path = repo_root / ".tmp" / "evidence-blobs" / digest[:2] / digest

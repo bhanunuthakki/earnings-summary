@@ -58,6 +58,7 @@ def _closure(root: Path) -> None:
         "execution/audit_test_db_patterns.py",
         "src/quality/test_db_invocations.py",
         "src/quality/test_db_models.py",
+        "src/quality/test_db_conversions.py",
     ):
         src = Path(__file__).resolve().parents[1] / name
         dst = root / name
@@ -279,6 +280,7 @@ def test_closure_git_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         "--",
         "execution/audit_test_db_patterns.py",
         "src/quality/git_env.py",
+        "src/quality/test_db_conversions.py",
         "src/quality/test_db_invocations.py",
         "src/quality/test_db_models.py",
         "src/quality/test_db_patterns.py",
@@ -289,6 +291,7 @@ def test_closure_git_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
             b"execution/audit_test_db_patterns.py\x00"
             b"execution/audit_test_db_patterns.py\x00"
             b"src/quality/git_env.py\x00"
+            b"src/quality/test_db_conversions.py\x00"
             b"src/quality/test_db_invocations.py\x00"
             b"src/quality/test_db_models.py\x00src/quality/test_db_patterns.py\x00",
             "duplicate-path",
@@ -296,6 +299,7 @@ def test_closure_git_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         (
             "missing",
             b"src/quality/git_env.py\x00"
+            b"src/quality/test_db_conversions.py\x00"
             b"src/quality/test_db_invocations.py\x00"
             b"src/quality/test_db_models.py\x00src/quality/test_db_patterns.py\x00",
             "closure-untracked",
@@ -304,6 +308,7 @@ def test_closure_git_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
             "noncanonical",
             b"./src/quality/git_env.py\x00"
             b"execution/audit_test_db_patterns.py\x00"
+            b"src/quality/test_db_conversions.py\x00"
             b"src/quality/test_db_invocations.py\x00"
             b"src/quality/test_db_models.py\x00src/quality/test_db_patterns.py\x00",
             "invalid-path",
@@ -529,6 +534,9 @@ def test_hashes(tmp_path: Path) -> None:
     assert a.source_sha256 == b.source_sha256
     assert a.scanner_sha256 == b.scanner_sha256
     man = hashlib.sha256()
+    # The conversion registry frames the scanned source: an absent registry is
+    # still attested, so adding one cannot pass unnoticed.
+    man.update(b"docs/quality/test-db-conversions.json\x00" + b"\x00")
     for n in sorted(files):
         man.update(n.encode() + b"\x00" + files[n].encode() + b"\x00")
     assert a.source_sha256 == man.hexdigest()
@@ -896,9 +904,11 @@ def test_dirty_status_malformed_output_holds(
         "instruction_tests",
         "execution/audit_test_db_patterns.py",
         "src/quality/git_env.py",
+        "src/quality/test_db_conversions.py",
         "src/quality/test_db_invocations.py",
         "src/quality/test_db_models.py",
         "src/quality/test_db_patterns.py",
+        "docs/quality/test-db-conversions.json",
     )
     cases = (
         (b"\xff", "invalid-git-utf8"),
@@ -1904,3 +1914,227 @@ def test_builder_attribute_alias_hold_and_no_row(tmp_path: Path) -> None:
         assert items[0].canonical_identity is None, path
         assert items[0].disposition == "HOLD", path
     assert grouped.get("tests/test_unsupported.py", []) == []
+
+
+# ---------------------------------------------------------------------------
+# Conversion-record registry
+# ---------------------------------------------------------------------------
+#
+# A partially converted file is the shape that matters: the chain builder its
+# fixtures used is gone, but a retained migration test in the same file still
+# calls ``upgrade``, so file-level evidence keeps counting it as replaying. The
+# registry is where the parity evidence for the converted fixture is recorded,
+# and where a stale record withdraws the claim instead of silently keeping it.
+
+_PARTIALLY_CONVERTED = (
+    "from alembic.command import upgrade\n"
+    "\n"
+    "\n"
+    "def test_migration_round_trip(cfg):\n"
+    "    upgrade(cfg, 'head')\n"
+    "\n"
+    "\n"
+    "def test_reads_current_schema(migrated_db, tmp_path):\n"
+    "    return migrated_db(tmp_path / 'x.db', target='head')\n"
+)
+_STILL_REPLAYING = "from alembic.command import upgrade\ndef m(cfg):\n    upgrade(cfg, 'head')\n"
+_REGISTRY = "docs/quality/test-db-conversions.json"
+
+
+def _migrated_invocation(report: scanner.TestDbAudit, path: str) -> scanner.BuilderInvocation:
+    return next(
+        item
+        for item in report.builder_invocations
+        if item.path == path and item.canonical_identity == "migrated_db"
+    )
+
+
+def _record_for(
+    report: scanner.TestDbAudit, subject: str, **overrides: object
+) -> dict[str, object]:
+    invocation = _migrated_invocation(report, subject)
+    locator = {
+        "start_line": invocation.locator.start_line,
+        "start_col": invocation.locator.start_col,
+        "end_line": invocation.locator.end_line,
+        "end_col": invocation.locator.end_col,
+    }
+    record: dict[str, object] = {
+        "path": subject,
+        "source_sha256": invocation.source_sha256,
+        "parity_receipt": {
+            "schema_version": "test-db-parity/v1",
+            "status": "PASS",
+            "invocation_id": invocation.invocation_id,
+            "path": subject,
+            "locator": locator,
+            "source_sha256": invocation.source_sha256,
+        },
+        "owner_issue": "linear:BHA-104",
+        "reason": "fixtures copy the cached migrated_db template",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+    }
+    record.update(overrides)
+    return record
+
+
+def _commit_registry(root: Path, payload: str, *, track: bool = True) -> None:
+    _write(root, _REGISTRY, payload.encode("utf-8"))
+    if not track:
+        return
+    assert _git(root, "add", _REGISTRY).returncode == 0
+    assert _git(root, "commit", "-qm", "registry").returncode == 0
+
+
+def _converted_repo(root: Path) -> tuple[Path, scanner.TestDbAudit]:
+    repo = _repo(
+        root,
+        {
+            "tests/test_converted.py": _PARTIALLY_CONVERTED,
+            "tests/test_other.py": _STILL_REPLAYING,
+        },
+    )
+    base = audit_test_db_patterns(repo)
+    assert base.collection_status == "COMPLETE"
+    assert base.replay_reduction is not None
+    assert base.replay_reduction.remaining_files == 2
+    assert base.converted_files == ()
+    return repo, base
+
+
+def test_conversion_registry_admits_only_the_recorded_file(tmp_path: Path) -> None:
+    root, base = _converted_repo(tmp_path / "registry-admit")
+    _commit_registry(
+        root,
+        json.dumps(
+            {
+                "schema_version": "test-db-conversions/v1",
+                "records": [_record_for(base, "tests/test_converted.py")],
+            }
+        ),
+    )
+    report = audit_test_db_patterns(root)
+    assert report.violations == ()
+    assert report.raw_audit_status == "PASS"
+    assert report.converted_files == ("tests/test_converted.py",)
+    assert report.replay_reduction is not None
+    assert report.replay_reduction.remaining_files == 1
+    assert report.replay_reduction.baseline_files == 172
+    # The registry only forgives what it records: the other replaying file is
+    # untouched, and the admitted file still reports its real builder evidence.
+    builders = {item.path: item.evidence for item in report.database_builders}
+    assert "call:upgrade" in builders["tests/test_converted.py"]
+    assert "call:upgrade" in builders["tests/test_other.py"]
+    assert report.source_sha256 != base.source_sha256
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        # A record and its receipt agree on a hash the file no longer has: the
+        # file changed after the parity evidence was produced.
+        ({"source_sha256": "0" * 64, "restamp_receipt": True}, "conversion-record-stale"),
+        ({"owner_issue": "BHA 104"}, "conversion-record-invalid"),
+        ({"reason": "two\nlines"}, "conversion-record-invalid"),
+        ({"expires_at": "2000-01-01T00:00:00+00:00"}, "conversion-record-expired"),
+        ({"path": "tests/test_absent.py"}, "conversion-record-unknown-path"),
+    ],
+)
+def test_conversion_registry_rejects_unusable_records(
+    tmp_path: Path, overrides: dict[str, object], expected: str
+) -> None:
+    slug = expected + "-" + "-".join(sorted(overrides))
+    root, base = _converted_repo(tmp_path / f"registry-{slug}")
+    fields = dict(overrides)
+    restamp = bool(fields.pop("restamp_receipt", False))
+    record = _record_for(base, "tests/test_converted.py", **fields)
+    if restamp:
+        receipt = cast("dict[str, object]", record["parity_receipt"])
+        receipt["source_sha256"] = record["source_sha256"]
+    _commit_registry(
+        root,
+        json.dumps({"schema_version": "test-db-conversions/v1", "records": [record]}),
+    )
+    report = audit_test_db_patterns(root)
+    assert report.converted_files == ()
+    assert report.raw_audit_status == "HOLD"
+    assert any(item.startswith(expected + ":") for item in report.violations), report.violations
+    assert report.replay_reduction is not None
+    assert report.replay_reduction.remaining_files == 2
+
+
+def test_conversion_registry_requires_parity_receipt_to_name_the_template_call(
+    tmp_path: Path,
+) -> None:
+    root, base = _converted_repo(tmp_path / "registry-unproven")
+    record = _record_for(base, "tests/test_converted.py")
+    receipt = cast("dict[str, object]", record["parity_receipt"])
+    # A receipt for some other invocation proves nothing about this file having
+    # adopted the template.
+    receipt["invocation_id"] = "f" * 64
+    _commit_registry(
+        root,
+        json.dumps({"schema_version": "test-db-conversions/v1", "records": [record]}),
+    )
+    report = audit_test_db_patterns(root)
+    assert report.converted_files == ()
+    assert "conversion-record-unproven:tests/test_converted.py" in report.violations
+
+    # A receipt bound to a different file is equally unusable.
+    mismatched = _record_for(base, "tests/test_converted.py")
+    other = cast("dict[str, object]", mismatched["parity_receipt"])
+    other["path"] = "tests/test_other.py"
+    _commit_registry(
+        root,
+        json.dumps({"schema_version": "test-db-conversions/v1", "records": [mismatched]}),
+    )
+    assert "conversion-record-invalid:tests/test_converted.py" in (
+        audit_test_db_patterns(root).violations
+    )
+
+
+def test_conversion_registry_rejects_duplicate_paths_and_duplicate_keys(
+    tmp_path: Path,
+) -> None:
+    root, base = _converted_repo(tmp_path / "registry-duplicate")
+    record = _record_for(base, "tests/test_converted.py")
+    _commit_registry(
+        root,
+        json.dumps({"schema_version": "test-db-conversions/v1", "records": [record, record]}),
+    )
+    report = audit_test_db_patterns(root)
+    assert report.converted_files == ()
+    assert "conversion-record-duplicate:tests/test_converted.py" in report.violations
+
+    _commit_registry(
+        root,
+        '{"schema_version": "test-db-conversions/v1", "records": [], "records": []}',
+    )
+    duplicate_keys = audit_test_db_patterns(root)
+    assert duplicate_keys.converted_files == ()
+    assert duplicate_keys.violations == ("conversion-registry-invalid",)
+
+    _commit_registry(root, "{}")
+    assert audit_test_db_patterns(root).violations == ("conversion-registry-invalid",)
+
+
+def test_conversion_registry_must_be_tracked_and_clean(tmp_path: Path) -> None:
+    root, base = _converted_repo(tmp_path / "registry-untracked")
+    payload = json.dumps(
+        {
+            "schema_version": "test-db-conversions/v1",
+            "records": [_record_for(base, "tests/test_converted.py")],
+        }
+    )
+    _commit_registry(root, payload, track=False)
+    untracked = audit_test_db_patterns(root)
+    assert untracked.collection_status == "HOLD"
+    assert untracked.collection_note == "closure-untracked"
+    assert untracked.converted_files == ()
+
+    _commit_registry(root, payload)
+    assert audit_test_db_patterns(root).converted_files == ("tests/test_converted.py",)
+    (root / _REGISTRY).write_text(payload + "\n", encoding="utf-8")
+    dirty = audit_test_db_patterns(root)
+    assert dirty.collection_status == "HOLD"
+    assert dirty.collection_note == "dirty-tree"

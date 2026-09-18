@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -19,10 +20,12 @@ from provenance.evidence_ledger import (
 )
 from provenance.source_coverage import (
     CoverageAssessment,
+    CoverageStatus,
     ExpectedDocument,
     SourceCoverageLedger,
     SourceInventorySnapshot,
 )
+from sqlite_runtime import register_sqlite_integrity_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = "0218_evidence_replica_links"
@@ -38,17 +41,41 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
-    path = tmp_path / "coverage.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0215_observation_resolution_ledger")
-    command.upgrade(config, "0216_search_corpus_foundation")
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    path = migrated_db(tmp_path / "coverage.db", target="head")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    register_sqlite_integrity_functions(conn)
+    # The current schema resolves every expected document through the issuer
+    # registry and exactly one active source obligation.
+    conn.execute(
+        "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+        ("issuer-acme", "issuer-acme", "operating_company", STAMP),
+    )
+    conn.execute(
+        "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "sec-periodic:v1",
+            "sec-periodic:v1",
+            "sec-periodic",
+            1,
+            "issuer-acme",
+            None,
+            "sec_edgar",
+            "operating_company_periodic",
+            "required",
+            "regulator_inventory",
+            datetime(2026, 1, 1),
+            None,
+            "deterministic",
+            "test",
+            "{}",
+            STAMP,
+            STAMP,
+            STAMP,
+            None,
+        ),
+    )
     EvidenceLedger(conn).persist(
         ContentBlob(
             sha256=A,
@@ -131,7 +158,7 @@ def _assessment(
     *,
     assessment_id: str = "assessment-r1",
     revision: int = 1,
-    status: str = "available",
+    status: CoverageStatus = "available",
     supersedes_assessment_id: str | None = None,
     document_version_id: str | None = None,
 ) -> CoverageAssessment:
@@ -161,8 +188,9 @@ def _assessment(
 
 def test_inventory_expected_document_and_assessment_are_append_only_and_current(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = SourceCoverageLedger(conn)
         assert ledger.persist(_snapshot()).created
@@ -179,8 +207,9 @@ def test_inventory_expected_document_and_assessment_are_append_only_and_current(
 
 def test_revision_chains_are_same_scope_and_failed_inventory_cannot_claim_documents(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = SourceCoverageLedger(conn)
         ledger.persist(_snapshot())
@@ -241,8 +270,10 @@ def test_coverage_status_requires_progressively_stronger_lineage(tmp_path: Path)
         )
 
 
-def test_document_anchor_and_assessment_revision_are_validated(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_document_anchor_and_assessment_revision_are_validated(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = SourceCoverageLedger(conn)
         ledger.persist(_snapshot())

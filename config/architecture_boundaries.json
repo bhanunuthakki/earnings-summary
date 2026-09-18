@@ -263,6 +263,7 @@
     "execution/record_kpi_disposition_judgment.py",
     "execution/record_kpi_repair_judgment.py",
     "execution/record_owner_decision_checkpoint.py",
+    "execution/record_test_db_conversion.py",
     "execution/refetch_aggregator_transcripts.py",
     "execution/refresh_business_factors.py",
     "execution/refresh_cache.py",

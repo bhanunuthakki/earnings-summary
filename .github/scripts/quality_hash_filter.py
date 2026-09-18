@@ -45,6 +45,7 @@ _CANONICAL_PATHS = frozenset(
         "docs/quality/performance-baseline.json",
         "docs/quality/reachability-check.json",
         "docs/quality/roadmap-reconciliation.json",
+        "docs/quality/test-db-conversions.json",
         "docs/quality/test-db-patterns-baseline.json",
     }
 )

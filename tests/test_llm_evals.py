@@ -433,13 +433,15 @@ def test_migration_0082_tolerates_missing_llm_budgets(tmp_path: Path) -> None:
     assert rev == "0083_eval_runs"
 
 
-def test_run_eval_end_to_end_persists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    db_path = _migrated_db(tmp_path)
-    # Seed the engine tables so execute_view runs against something real.
-    conn = sqlite3.connect(db_path)
-    conn.executescript(_DDL)
-    conn.commit()
-    conn.close()
+def test_run_eval_end_to_end_persists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> None:
+    # The eval tables and the seeded eval_judge budget both exist at the current
+    # head, so this end-to-end test copies the template. The two pinned 0083
+    # migration tests above still build their own chain.
+    db_path = migrated_db(tmp_path / "eval-head.db", target="head")
 
     golden = tmp_path / "golden.json"
     golden.write_text(

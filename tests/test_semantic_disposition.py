@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from alembic.config import Config
-
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -26,33 +24,54 @@ from provenance.source_coverage import (
     SourceCoverageLedger,
     SourceInventorySnapshot,
 )
+from sqlite_runtime import register_sqlite_integrity_functions
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 16, 0)
 SHA = "a" * 64
 CONFIG_SHA = "b" * 64
 INVENTORY_KEY = "issuer-acme:sec-submissions"
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
-    path = tmp_path / "semantic-disposition.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0215_observation_resolution_ledger")
-    command.upgrade(config, "0216_search_corpus_foundation")
-    command.stamp(config, "0218_evidence_replica_links")
-    command.upgrade(config, "0219_source_coverage_ledger")
-    command.stamp(config, "0231_legacy_document_evidence_bindings")
-    command.upgrade(config, "0232_document_semantic_dispositions")
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    path = migrated_db(tmp_path / "semantic-disposition.db", target="head")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    register_sqlite_integrity_functions(conn)
     return conn
 
 
 def _seed(conn: sqlite3.Connection) -> None:
+    # The current schema resolves every expected document through the issuer
+    # registry and exactly one active source obligation, so both have to exist
+    # before coverage records reference them.
+    conn.execute(
+        "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+        ("issuer-acme", "issuer-acme", "operating_company", STAMP),
+    )
+    conn.execute(
+        "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "sec-periodic:v1",
+            "sec-periodic:v1",
+            "sec-periodic",
+            1,
+            "issuer-acme",
+            None,
+            "sec_edgar",
+            "operating_company_periodic",
+            "required",
+            "regulator_inventory",
+            datetime(2026, 1, 1),
+            None,
+            "deterministic",
+            "test",
+            "{}",
+            STAMP,
+            STAMP,
+            STAMP,
+            None,
+        ),
+    )
     evidence = EvidenceLedger(conn)
     evidence.persist(
         ContentBlob(
@@ -140,6 +159,7 @@ def _seed(conn: sqlite3.Connection) -> None:
             ticker="ACME",
             source_kind="sec_filing",
             document_type="sec_attachment",
+            form_type="10-K",
             source_url="https://sec.test/chart.jpg",
             expectation_basis="authoritative",
             recorded_at=STAMP,
@@ -170,8 +190,9 @@ def _seed(conn: sqlite3.Connection) -> None:
 
 def test_image_review_initialization_is_bounded_dry_run_first_and_replay_safe(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         request = SemanticReviewInitializationRequest(
