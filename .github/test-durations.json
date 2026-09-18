@@ -1,0 +1,4534 @@
+{
+  "schema": 1,
+  "generated": "2026-09-18",
+  "source": "Per-file seconds seeded from main CI run 35388990584 (push 8a0cf865, 13 test jobs). Measured files use the pytest --durations=25 'slowest 25 durations' sums from each shard's log; unmeasured files use each shard's residual (2x wall minus measured) spread evenly over its unmeasured files. The per-file 'shard' fields are the output of the deterministic 13-bin LPT pack over these durations.",
+  "default_seconds": 1.6,
+  "labels": [
+    "1",
+    "1 overflow",
+    "2",
+    "2 overflow",
+    "3",
+    "3 overflow",
+    "4",
+    "5",
+    "6",
+    "6 overflow",
+    "7",
+    "8",
+    "8 overflow"
+  ],
+  "files": {
+    "tests/test_a1_launcher_cleanup.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_action_feedback.py": {
+      "seconds": 2.0,
+      "shard": "2"
+    },
+    "tests/test_advice_influence.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_advisor_memos.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_aggregator_sources_roic_dom.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_aggregator_sources_stockanalysis_tickertrends_dom.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_alembic_dcf_run_inputs.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_alembic_decision_process_quality.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_alembic_disclosure_thesis_materiality.py": {
+      "seconds": 1.4,
+      "shard": "8"
+    },
+    "tests/test_alembic_fact_overrides.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_alembic_financial_facts_supersedes_index.py": {
+      "seconds": 1.8,
+      "shard": "8"
+    },
+    "tests/test_alembic_news_migration.py": {
+      "seconds": 3.65,
+      "shard": "8 overflow"
+    },
+    "tests/test_alembic_owner_decision_extension.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_alembic_pass_decision_source.py": {
+      "seconds": 1.7,
+      "shard": "8 overflow"
+    },
+    "tests/test_alembic_personal_cio_migrations.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_alembic_provenance_freshness.py": {
+      "seconds": 2.5,
+      "shard": "7"
+    },
+    "tests/test_alembic_qualitative_conditions.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_alembic_reader_perf_indexes.py": {
+      "seconds": 2.0,
+      "shard": "6 overflow"
+    },
+    "tests/test_alembic_rehearsal_io_indexes.py": {
+      "seconds": 3.04,
+      "shard": "6"
+    },
+    "tests/test_alembic_signals_migration.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_alembic_standup_messages.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_alerts_store.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_allocation_covariance.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_allocation_decisions_panel.py": {
+      "seconds": 7.89,
+      "shard": "6 overflow"
+    },
+    "tests/test_allocation_digest.py": {
+      "seconds": 1.4,
+      "shard": "3"
+    },
+    "tests/test_allocation_eligibility.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_allocation_exposure.py": {
+      "seconds": 1.8,
+      "shard": "8 overflow"
+    },
+    "tests/test_allocation_model.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_allocation_next_dollar_profile.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_allocation_price_history.py": {
+      "seconds": 1.7,
+      "shard": "7"
+    },
+    "tests/test_analysis_styles.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_analyst_notes.py": {
+      "seconds": 2.69,
+      "shard": "6"
+    },
+    "tests/test_analytical_dashboard_to_dict.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_analyze_code_duplicates.py": {
+      "seconds": 2.0,
+      "shard": "6"
+    },
+    "tests/test_annual_kpi_cadence.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_apply_gate.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_apply_issuer_fact_manifest_cli.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_apply_switches_wilson.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_approve_queued_action_cli.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_approved_company_desk_production.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_approved_ir_catalog.py": {
+      "seconds": 1.4,
+      "shard": "8 overflow"
+    },
+    "tests/test_approved_ir_observation_capture.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_architecture_boundaries.py": {
+      "seconds": 1.26,
+      "shard": "6"
+    },
+    "tests/test_architecture_measurement.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_architecture_migrations.py": {
+      "seconds": 20.15,
+      "shard": "6"
+    },
+    "tests/test_architecture_runtime_contracts.py": {
+      "seconds": 1.7,
+      "shard": "2"
+    },
+    "tests/test_archive_catalog.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_archive_generation.py": {
+      "seconds": 2.5,
+      "shard": "5"
+    },
+    "tests/test_artifact_brief.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_artifact_dirty_chain.py": {
+      "seconds": 2.0,
+      "shard": "8 overflow"
+    },
+    "tests/test_artifact_expires_at.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_artifact_resolve.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_ask_answer_pin.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_ask_claim_audit_eval.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_ask_claims.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_ask_engine.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_ask_exchange_route.py": {
+      "seconds": 1.4,
+      "shard": "7"
+    },
+    "tests/test_ask_exchange_store.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_ask_exchange_store_migration.py": {
+      "seconds": 9.61,
+      "shard": "3 overflow"
+    },
+    "tests/test_ask_external_exchange_integration.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_ask_followup.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_ask_grounded_default.py": {
+      "seconds": 1.7,
+      "shard": "2 overflow"
+    },
+    "tests/test_ask_grounding.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_ask_grounding_trace.py": {
+      "seconds": 2.5,
+      "shard": "3"
+    },
+    "tests/test_ask_memory.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_ask_packs.py": {
+      "seconds": 2.0,
+      "shard": "7"
+    },
+    "tests/test_ask_proposal_approval.py": {
+      "seconds": 0.58,
+      "shard": "6"
+    },
+    "tests/test_ask_proposal_approval_migration.py": {
+      "seconds": 4.21,
+      "shard": "4"
+    },
+    "tests/test_ask_retrieval_scope_registry.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_ask_router.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_ask_sealed_answer_audit.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_ask_sealed_mode.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_ask_sealed_retrieval_cutover.py": {
+      "seconds": 1.4,
+      "shard": "1 overflow"
+    },
+    "tests/test_ask_turn_cache.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_ask_viewspec_override_consistency.py": {
+      "seconds": 1.8,
+      "shard": "7"
+    },
+    "tests/test_attribution.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_audit_data_cutover_readiness.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_audit_kpi_revision_shadow_census.py": {
+      "seconds": 1.7,
+      "shard": "4"
+    },
+    "tests/test_audit_quarterly_data_coverage.py": {
+      "seconds": 3.53,
+      "shard": "3"
+    },
+    "tests/test_audit_segment_quarterly_coverage.py": {
+      "seconds": 2.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_audit_test_db_patterns.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_audit_thesis_episode_clone.py": {
+      "seconds": 2.88,
+      "shard": "2"
+    },
+    "tests/test_audit_transcript_evidence.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_audited_llm_structured_boundaries.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_auto_reconcile.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_b2_unified_anchors.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_backend_judge.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_backfill_earnings_surprises.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_backfill_fiscal_period_stamps.py": {
+      "seconds": 1.4,
+      "shard": "6"
+    },
+    "tests/test_backfill_ir_deck_locators.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_backfill_llm_extracted_parents.py": {
+      "seconds": 1.8,
+      "shard": "2 overflow"
+    },
+    "tests/test_backfill_strip_markdown_scalars.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_backfill_transcripts.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_backup_file_gc.py": {
+      "seconds": 1.7,
+      "shard": "5"
+    },
+    "tests/test_backup_lock_scope.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_backup_restore.py": {
+      "seconds": 2.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_bank_global_assumptions.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_bear_case_resilience.py": {
+      "seconds": 2.0,
+      "shard": "2 overflow"
+    },
+    "tests/test_bear_lint.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_bear_provenance.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_behavior_distill.py": {
+      "seconds": 2.83,
+      "shard": "4"
+    },
+    "tests/test_benchmark_sqlite_runtime.py": {
+      "seconds": 2.74,
+      "shard": "3 overflow"
+    },
+    "tests/test_bha140_segment_scans.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_bha92_report_design.py": {
+      "seconds": 0.54,
+      "shard": "3"
+    },
+    "tests/test_boilerplate_classify.py": {
+      "seconds": 1.4,
+      "shard": "3 overflow"
+    },
+    "tests/test_book_risk.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_brief_provenance_log.py": {
+      "seconds": 1.8,
+      "shard": "4"
+    },
+    "tests/test_budget_modes.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_budget_override.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_build_artifacts_native_regeneration.py": {
+      "seconds": 1.7,
+      "shard": "6 overflow"
+    },
+    "tests/test_build_artifacts_offline.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_build_bank_dcf.py": {
+      "seconds": 2.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_build_filing_xbrl_processor_bundle.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_build_holdco_sotp.py": {
+      "seconds": 2.0,
+      "shard": "4"
+    },
+    "tests/test_build_issuer_portfolio_coverage.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_build_kpi_semantic_refresh_manifest.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_build_operational_reachability.py": {
+      "seconds": 59.22,
+      "shard": "2"
+    },
+    "tests/test_cadence_policy.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_calendar_end_to_end.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_calendar_integrity.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_calibration_coach.py": {
+      "seconds": 1.4,
+      "shard": "8"
+    },
+    "tests/test_calibration_finding_moment.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_calibration_guard.py": {
+      "seconds": 1.8,
+      "shard": "5"
+    },
+    "tests/test_calibration_receipt.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_calibration_scorecard_panel.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_candidate_fit.py": {
+      "seconds": 1.7,
+      "shard": "3"
+    },
+    "tests/test_candidate_fit_cache.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_canonical_fact_projection.py": {
+      "seconds": 3.13,
+      "shard": "5"
+    },
+    "tests/test_canonical_fact_projection_migration.py": {
+      "seconds": 1.79,
+      "shard": "3 overflow"
+    },
+    "tests/test_canonical_fact_resolution.py": {
+      "seconds": 24.99,
+      "shard": "8 overflow"
+    },
+    "tests/test_canonical_fact_resolution_migration.py": {
+      "seconds": 1.74,
+      "shard": "8"
+    },
+    "tests/test_canonical_narrative_s1.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_canonical_resolution_operation_migration.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_canonicalize_segments.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_capacity_moments.py": {
+      "seconds": 32.02,
+      "shard": "4"
+    },
+    "tests/test_capture_compatibility_evidence.py": {
+      "seconds": 1.15,
+      "shard": "4"
+    },
+    "tests/test_capture_coverage.py": {
+      "seconds": 1.4,
+      "shard": "3"
+    },
+    "tests/test_capture_ingest.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_capture_intent.py": {
+      "seconds": 1.8,
+      "shard": "3"
+    },
+    "tests/test_capture_issuer_document_inventory.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_capture_performance_baseline.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_capture_performance_experiment.py": {
+      "seconds": 1.7,
+      "shard": "1 overflow"
+    },
+    "tests/test_capture_poller.py": {
+      "seconds": 3.58,
+      "shard": "3 overflow"
+    },
+    "tests/test_capture_quality_eval.py": {
+      "seconds": 2.5,
+      "shard": "7"
+    },
+    "tests/test_capture_spine.py": {
+      "seconds": 12.75,
+      "shard": "6"
+    },
+    "tests/test_capture_telegram.py": {
+      "seconds": 2.0,
+      "shard": "5"
+    },
+    "tests/test_capture_triage.py": {
+      "seconds": 4.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_capture_units.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_card_dispositions.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_cc_state.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_charts_v2_ratio_levels.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_ci_gate.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_cio_export.py": {
+      "seconds": 1.4,
+      "shard": "8 overflow"
+    },
+    "tests/test_cio_export_and_ledger_routes.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_classify_operational_lifecycle.py": {
+      "seconds": 1.17,
+      "shard": "2 overflow"
+    },
+    "tests/test_claude_tool_isolation.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_cleanup_condition_alerts.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_cleanup_material_news_alerts.py": {
+      "seconds": 1.7,
+      "shard": "6"
+    },
+    "tests/test_coach_reply.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_cockpit_fundamentals.py": {
+      "seconds": 3.04,
+      "shard": "7"
+    },
+    "tests/test_code_artifact.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_codex_primary_routing.py": {
+      "seconds": 2.0,
+      "shard": "3"
+    },
+    "tests/test_comment_processor_hardstop.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_comment_taxonomy.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_comments_process_endpoint.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_comments_server_actions.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_comments_server_alerting_routes.py": {
+      "seconds": 3.55,
+      "shard": "8"
+    },
+    "tests/test_comments_server_architecture_fixes.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_comments_server_budget.py": {
+      "seconds": 1.4,
+      "shard": "7"
+    },
+    "tests/test_comments_server_cors_and_chat.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_comments_server_dashboard.py": {
+      "seconds": 1.8,
+      "shard": "1 overflow"
+    },
+    "tests/test_comments_server_dcf.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_comments_server_dcf_globals.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_comments_server_operations.py": {
+      "seconds": 5.1,
+      "shard": "8"
+    },
+    "tests/test_comments_server_profile_routes.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_comments_server_proposal_routes.py": {
+      "seconds": 2.5,
+      "shard": "5"
+    },
+    "tests/test_comments_server_research_routes.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_comments_server_startup.py": {
+      "seconds": 2.0,
+      "shard": "1 overflow"
+    },
+    "tests/test_comments_store_atomicity.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_commitment_scan_receipts.py": {
+      "seconds": 7.52,
+      "shard": "2"
+    },
+    "tests/test_comp_set_context.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_comp_set_drift.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_comp_set_metrics.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_company_desk_mockup.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_company_filing_regimes.py": {
+      "seconds": 1.4,
+      "shard": "1 overflow"
+    },
+    "tests/test_companyfacts_match_gated_capture.py": {
+      "seconds": 5.71,
+      "shard": "4"
+    },
+    "tests/test_comparable_sets.py": {
+      "seconds": 1.8,
+      "shard": "8"
+    },
+    "tests/test_competitive_category_share.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_competitive_rbrk_spec.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_competitive_sec_watch.py": {
+      "seconds": 1.7,
+      "shard": "3 overflow"
+    },
+    "tests/test_competitive_transcript_mentions.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_compute_as_reported.py": {
+      "seconds": 2.5,
+      "shard": "3"
+    },
+    "tests/test_compute_balance_sheet.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_compute_cashflow.py": {
+      "seconds": 2.0,
+      "shard": "2"
+    },
+    "tests/test_compute_derived_metrics_cli.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_compute_earnings_surprise.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_compute_fmp_derived_kpis.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_compute_holdings_sanitize.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_compute_income_statement.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_compute_kpi_transform_derivers.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_compute_s1_financials.py": {
+      "seconds": 1.4,
+      "shard": "6"
+    },
+    "tests/test_compute_say_do.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_compute_say_do_extractor.py": {
+      "seconds": 4.23,
+      "shard": "2"
+    },
+    "tests/test_compute_segment_crosstabs_llm.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_compute_segment_oi_10k.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_compute_segments.py": {
+      "seconds": 1.7,
+      "shard": "8"
+    },
+    "tests/test_compute_soft_rule_evaluator.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_compute_thesis_evaluator.py": {
+      "seconds": 2.5,
+      "shard": "4"
+    },
+    "tests/test_compute_thesis_history.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_compute_transcript_ingest.py": {
+      "seconds": 2.0,
+      "shard": "6 overflow"
+    },
+    "tests/test_concentration_zones.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_confidence_scoring.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_consensus_extension.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_consequence_receipts_routes.py": {
+      "seconds": 3.29,
+      "shard": "4"
+    },
+    "tests/test_console_scaffold.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_copilot_conversation_mockup.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_core_fact_delete_architecture.py": {
+      "seconds": 1.4,
+      "shard": "3 overflow"
+    },
+    "tests/test_credibility_calibration.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_credibility_priors.py": {
+      "seconds": 1.8,
+      "shard": "8 overflow"
+    },
+    "tests/test_cron_hardening.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_cron_health_panel.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_cron_schedule_descriptions.py": {
+      "seconds": 1.7,
+      "shard": "8 overflow"
+    },
+    "tests/test_cross_sectional_detrend.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_csrf_origin_guard.py": {
+      "seconds": 2.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_current_evidence_reader_architecture.py": {
+      "seconds": 6.2,
+      "shard": "3"
+    },
+    "tests/test_customer_concentration_extractor.py": {
+      "seconds": 2.0,
+      "shard": "6"
+    },
+    "tests/test_daily_fetch_brief_gates.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_dashboard_evidence_drawer.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_dashboard_feed.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_dashboard_html.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_dashboard_inbox.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_dashboard_status.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_dashboard_style_master.py": {
+      "seconds": 1.4,
+      "shard": "2"
+    },
+    "tests/test_dashboard_upcoming.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_data_backbone_rehearsal.py": {
+      "seconds": 1.8,
+      "shard": "7"
+    },
+    "tests/test_data_coverage_dispositions.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_data_infrastructure_benchmark.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_data_infrastructure_migration_chain.py": {
+      "seconds": 12.27,
+      "shard": "2"
+    },
+    "tests/test_data_infrastructure_production_benchmark.py": {
+      "seconds": 5.74,
+      "shard": "5"
+    },
+    "tests/test_data_integrity_foundation.py": {
+      "seconds": 2.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_data_policy_settings_panel.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_db_fmp_refresh.py": {
+      "seconds": 2.0,
+      "shard": "3 overflow"
+    },
+    "tests/test_db_gc.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_db_gc_adversarial.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_db_path_sync.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_db_pragmas.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_db_track_company.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_db_write_lock_unification.py": {
+      "seconds": 2.0,
+      "shard": "8"
+    },
+    "tests/test_dcf_analyst_segments.py": {
+      "seconds": 1.4,
+      "shard": "1"
+    },
+    "tests/test_dcf_artifact.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_dcf_assumptions_doc.py": {
+      "seconds": 1.8,
+      "shard": "2"
+    },
+    "tests/test_dcf_country_risk.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_dcf_equity_bridge.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_dcf_forecast_series.py": {
+      "seconds": 1.7,
+      "shard": "7"
+    },
+    "tests/test_dcf_global_assumptions.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_dcf_grade_evidence.py": {
+      "seconds": 2.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_dcf_inject_mapping.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_dcf_latest.py": {
+      "seconds": 2.0,
+      "shard": "8 overflow"
+    },
+    "tests/test_dcf_live_write.py": {
+      "seconds": 22.45,
+      "shard": "8"
+    },
+    "tests/test_dcf_persist_provenance.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_dcf_primary_fact_overlay.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_dcf_redesign.py": {
+      "seconds": 45.61,
+      "shard": "3"
+    },
+    "tests/test_dcf_reverse.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_dcf_reverse_valuation.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_dcf_runs_over_under_convention.py": {
+      "seconds": 1.4,
+      "shard": "2 overflow"
+    },
+    "tests/test_dcf_sanity_gate.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_dcf_segment_coverage.py": {
+      "seconds": 1.8,
+      "shard": "2 overflow"
+    },
+    "tests/test_dcf_sheets.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_dcf_sync_and_coverage.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_dcf_sync_globals.py": {
+      "seconds": 1.7,
+      "shard": "2"
+    },
+    "tests/test_dcf_tweak.py": {
+      "seconds": 3.37,
+      "shard": "8 overflow"
+    },
+    "tests/test_dcf_universe.py": {
+      "seconds": 2.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_dcf_valuation_engine.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_decision_basis_capture.py": {
+      "seconds": 2.0,
+      "shard": "7"
+    },
+    "tests/test_decision_calibration.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_decision_capture.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_decision_conditions.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_decision_draft.py": {
+      "seconds": 3.77,
+      "shard": "2"
+    },
+    "tests/test_decision_extractor.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_decision_feed.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_decision_journal_panel.py": {
+      "seconds": 1.4,
+      "shard": "4"
+    },
+    "tests/test_decision_journal_view.py": {
+      "seconds": 16.24,
+      "shard": "3 overflow"
+    },
+    "tests/test_decision_nudge.py": {
+      "seconds": 1.8,
+      "shard": "4"
+    },
+    "tests/test_decisions_advice_link_migration.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_decisions_recording.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_deferred_fmp.py": {
+      "seconds": 1.7,
+      "shard": "2 overflow"
+    },
+    "tests/test_deleted_table_recovery_audit.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_design_conformance_canonical.py": {
+      "seconds": 179.71,
+      "shard": "1"
+    },
+    "tests/test_design_registry.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_design_sync.py": {
+      "seconds": 135.87,
+      "shard": "1 overflow"
+    },
+    "tests/test_design_tokens_export.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_diet_panel.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_disclosure_change_sweep.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_disclosure_changes.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_discover_ir_documents.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_discover_ir_documents_all.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_discovery.py": {
+      "seconds": 1.4,
+      "shard": "5"
+    },
+    "tests/test_discovery_need_rank.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_discovery_queue.py": {
+      "seconds": 1.8,
+      "shard": "5"
+    },
+    "tests/test_discovery_scoring.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_dispatch_registry.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_document_completeness.py": {
+      "seconds": 1.7,
+      "shard": "4"
+    },
+    "tests/test_document_processing_evidence.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_document_processing_evidence_migration.py": {
+      "seconds": 2.5,
+      "shard": "8"
+    },
+    "tests/test_document_processing_operation_migration.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_document_table_extractor.py": {
+      "seconds": 2.0,
+      "shard": "2 overflow"
+    },
+    "tests/test_draft_annual_letter.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_drain_executor.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_drift.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_earnings_brief.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_earnings_doorway.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_earnings_readout.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_earnings_surprise_observation_migration.py": {
+      "seconds": 19.42,
+      "shard": "5"
+    },
+    "tests/test_earnings_themes_resilience.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_edgar_8k_extract.py": {
+      "seconds": 1.8,
+      "shard": "6 overflow"
+    },
+    "tests/test_embedding_candidate_governance_migration.py": {
+      "seconds": 5.07,
+      "shard": "8 overflow"
+    },
+    "tests/test_embedding_eval.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_embedding_governance_cli.py": {
+      "seconds": 1.7,
+      "shard": "5"
+    },
+    "tests/test_embedding_promotion.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_embedding_runtime_artifact.py": {
+      "seconds": 2.5,
+      "shard": "2"
+    },
+    "tests/test_embedding_runtime_binding_migration.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_entity_store.py": {
+      "seconds": 2.0,
+      "shard": "4"
+    },
+    "tests/test_estimates_archive.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_etf_instrument_mvp.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_etf_onboarding_lite.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_etf_overlap.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_etf_score.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_etf_sources.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_etf_workup.py": {
+      "seconds": 1.4,
+      "shard": "6 overflow"
+    },
+    "tests/test_eval_caution_canary_cohorts.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_eval_cohort_integrity.py": {
+      "seconds": 1.8,
+      "shard": "3"
+    },
+    "tests/test_eval_key_metrics.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_eval_metadata_cohorts.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_eval_sampler.py": {
+      "seconds": 1.7,
+      "shard": "6 overflow"
+    },
+    "tests/test_eval_sector_benchmark_proposal.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_evals_ledger_triage_goldens.py": {
+      "seconds": 2.5,
+      "shard": "6"
+    },
+    "tests/test_evals_panel.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_evaluate_population_cutover_cli.py": {
+      "seconds": 2.0,
+      "shard": "5"
+    },
+    "tests/test_evaluation_dialogues.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_evaluation_investment_profile_mockup.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_evaluation_snapshot_scaling.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_event_study.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_evidence_backfill.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_evidence_bundle.py": {
+      "seconds": 6.46,
+      "shard": "3 overflow"
+    },
+    "tests/test_evidence_bundle_cli_paths.py": {
+      "seconds": 1.4,
+      "shard": "8"
+    },
+    "tests/test_evidence_bundle_inputs.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_evidence_governance.py": {
+      "seconds": 1.8,
+      "shard": "1 overflow"
+    },
+    "tests/test_evidence_integrity_audit.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_evidence_ledger.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_evidence_links.py": {
+      "seconds": 1.7,
+      "shard": "3"
+    },
+    "tests/test_evidence_native_candidates.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_evidence_revision.py": {
+      "seconds": 2.5,
+      "shard": "7"
+    },
+    "tests/test_execution_invocation_fingerprints.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_execution_lib.py": {
+      "seconds": 2.0,
+      "shard": "3"
+    },
+    "tests/test_execution_show_commands.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_execution_verify_commands.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_exit_postmortem.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_exit_quality_read.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_expected_earnings.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_expire_stale_research.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_explore_mockup.py": {
+      "seconds": 1.4,
+      "shard": "3"
+    },
+    "tests/test_explore_panel.py": {
+      "seconds": 6.2,
+      "shard": "6"
+    },
+    "tests/test_export_book_cma.py": {
+      "seconds": 1.8,
+      "shard": "6"
+    },
+    "tests/test_extractor_locator_coverage.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_extractor_locators.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_fact_anchor_lookup_index_migration.py": {
+      "seconds": 1.7,
+      "shard": "1 overflow"
+    },
+    "tests/test_fact_cutover_performance_indexes.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_fact_drivers.py": {
+      "seconds": 2.5,
+      "shard": "5"
+    },
+    "tests/test_fact_observation_match_proofs.py": {
+      "seconds": 3.23,
+      "shard": "6 overflow"
+    },
+    "tests/test_fact_overrides_panel.py": {
+      "seconds": 2.0,
+      "shard": "1 overflow"
+    },
+    "tests/test_fact_plane_v2.py": {
+      "seconds": 2.78,
+      "shard": "4"
+    },
+    "tests/test_fact_plane_v2_hardening_migration.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_fact_plane_v2_integrity_audit.py": {
+      "seconds": 4.86,
+      "shard": "3 overflow"
+    },
+    "tests/test_fact_plane_v2_migration.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_fact_read_model.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_fact_search_projection.py": {
+      "seconds": 2.42,
+      "shard": "5"
+    },
+    "tests/test_fact_selection.py": {
+      "seconds": 1.4,
+      "shard": "8 overflow"
+    },
+    "tests/test_fact_sheet.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_factor_proxies.py": {
+      "seconds": 1.8,
+      "shard": "3 overflow"
+    },
+    "tests/test_fade_calibration.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_fetch_audio_transcripts_security.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_fetch_drug_patent_status.py": {
+      "seconds": 1.7,
+      "shard": "6"
+    },
+    "tests/test_fetch_edgar_news.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_fetch_fmp_earnings_calendar_gate.py": {
+      "seconds": 2.5,
+      "shard": "3"
+    },
+    "tests/test_fetch_fmp_historical_retry.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_fetch_fmp_news.py": {
+      "seconds": 2.0,
+      "shard": "2"
+    },
+    "tests/test_fetch_ir_documents.py": {
+      "seconds": 4.36,
+      "shard": "2 overflow"
+    },
+    "tests/test_fetch_ir_from_urls.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_fetch_news_bounding.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_fetch_qa_transcript_policy.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_fetch_sec_xbrl_policy.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_fetch_windows_kpi_semantic_review.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_fetch_yf_estimates.py": {
+      "seconds": 1.4,
+      "shard": "7"
+    },
+    "tests/test_fetch_yf_grades.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_fetch_yf_news.py": {
+      "seconds": 1.8,
+      "shard": "8"
+    },
+    "tests/test_filing_sections.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_filing_text_fetcher_s1_sections.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_filing_xbrl_appcontainer_launcher.py": {
+      "seconds": 1.7,
+      "shard": "3 overflow"
+    },
+    "tests/test_filing_xbrl_bridge.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_filing_xbrl_extraction_disposition_migration.py": {
+      "seconds": 2.5,
+      "shard": "4"
+    },
+    "tests/test_filing_xbrl_extraction_ledger.py": {
+      "seconds": 30.54,
+      "shard": "5"
+    },
+    "tests/test_filing_xbrl_fact_adapter.py": {
+      "seconds": 2.0,
+      "shard": "6 overflow"
+    },
+    "tests/test_filing_xbrl_normalization_rejection.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_financial_fact_resolution_cutover.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_financials_calendar_quarter.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_financials_kpi_resolution.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_fiscal_periods.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_fix_kpi_series.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_fmp_backpop.py": {
+      "seconds": 1.4,
+      "shard": "1 overflow"
+    },
+    "tests/test_fmp_budget_ledger.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_fmp_client_migrations.py": {
+      "seconds": 1.8,
+      "shard": "8 overflow"
+    },
+    "tests/test_fmp_doc_index_evidence.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_fmp_provider_adapter_replay.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_fmp_recovery.py": {
+      "seconds": 3.64,
+      "shard": "7"
+    },
+    "tests/test_fmp_recovery_migration.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_fmp_recovery_runtime.py": {
+      "seconds": 23.26,
+      "shard": "8 overflow"
+    },
+    "tests/test_fmp_residual_client_migrations.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_fmp_stable_shape_invariant.py": {
+      "seconds": 2.0,
+      "shard": "6"
+    },
+    "tests/test_fmp_tier_ladder.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_foreign_filer_normalization.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_foreign_issuer_registry_bootstrap.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_foreign_oracle_backfill.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_format_changed.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_frontier.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_full_brief_chrome.py": {
+      "seconds": 1.4,
+      "shard": "6"
+    },
+    "tests/test_full_brief_editorial_hierarchy.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_fulltext_evidence_backfill.py": {
+      "seconds": 2.47,
+      "shard": "6"
+    },
+    "tests/test_function_inventory.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_gc_recovery.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_gc_restore.py": {
+      "seconds": 1.7,
+      "shard": "8"
+    },
+    "tests/test_gemini_backend.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_gemini_fallback_timeout.py": {
+      "seconds": 2.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_generic_xbrl_capture.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_geometry_master_slices.py": {
+      "seconds": 2.0,
+      "shard": "3 overflow"
+    },
+    "tests/test_governance_panels.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_governed_alert_action_routes.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_governed_alert_actions.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_governed_alert_actions_migration.py": {
+      "seconds": 2.95,
+      "shard": "3 overflow"
+    },
+    "tests/test_governed_conditions_fallback.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_governor.py": {
+      "seconds": 4.57,
+      "shard": "5"
+    },
+    "tests/test_grade_predictions.py": {
+      "seconds": 1.4,
+      "shard": "3 overflow"
+    },
+    "tests/test_grader_calibration_hooks.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_grounded_ask_retrieval.py": {
+      "seconds": 0.64,
+      "shard": "1 overflow"
+    },
+    "tests/test_grounded_numbers.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_grounded_search_foundation.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_grounding_filing_lookup.py": {
+      "seconds": 1.7,
+      "shard": "8 overflow"
+    },
+    "tests/test_guidance_lifecycle.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_guidance_triage.py": {
+      "seconds": 2.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_heterogeneous_retrieval.py": {
+      "seconds": 7.26,
+      "shard": "2 overflow"
+    },
+    "tests/test_higher_bar.py": {
+      "seconds": 2.0,
+      "shard": "8"
+    },
+    "tests/test_holdings_rule_kpi_alignment.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_identity.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_image_ocr_extraction_governance.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_immutable_artifact.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_import_owner_capacity.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_inbox_rank.py": {
+      "seconds": 0.87,
+      "shard": "3"
+    },
+    "tests/test_inbox_schema_drift.py": {
+      "seconds": 1.4,
+      "shard": "2"
+    },
+    "tests/test_index_manager.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_industry_classifier.py": {
+      "seconds": 1.8,
+      "shard": "7"
+    },
+    "tests/test_ingest_earnings_surprises.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_injection_canaries.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_inline_xbrl_processor.py": {
+      "seconds": 1.7,
+      "shard": "7"
+    },
+    "tests/test_insider_transactions.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_intake.py": {
+      "seconds": 2.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_intake_chain.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_integrity_audit_performance_indexes.py": {
+      "seconds": 2.0,
+      "shard": "8 overflow"
+    },
+    "tests/test_inventory_static_quality.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_investment_decision_card.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_investment_decision_card_budget_migration.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_investment_profile.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_investor_decks_extractor.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_ir_approval_actions.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_ir_approval_capture.py": {
+      "seconds": 1.4,
+      "shard": "1"
+    },
+    "tests/test_ir_approval_migration.py": {
+      "seconds": 3.72,
+      "shard": "6"
+    },
+    "tests/test_ir_approval_panel.py": {
+      "seconds": 4.87,
+      "shard": "6 overflow"
+    },
+    "tests/test_ir_approval_routes.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_ir_approval_store.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_ir_authority.py": {
+      "seconds": 1.7,
+      "shard": "2"
+    },
+    "tests/test_ir_authority_capture.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_ir_autofetch_registration.py": {
+      "seconds": 2.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_ir_candidate_caller.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_ir_candidate_clis.py": {
+      "seconds": 2.0,
+      "shard": "7"
+    },
+    "tests/test_ir_capture.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_ir_coverage_panel.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_ir_document_discovery_rules.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_ir_download.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_ir_events_ingestion.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_ir_evidence_capture.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_ir_fetch_status.py": {
+      "seconds": 1.4,
+      "shard": "2 overflow"
+    },
+    "tests/test_ir_generic_discovery.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_ir_home_authority.py": {
+      "seconds": 0.75,
+      "shard": "6"
+    },
+    "tests/test_ir_home_authority_registry.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_ir_manifest.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_ir_narrative_extract.py": {
+      "seconds": 1.7,
+      "shard": "2 overflow"
+    },
+    "tests/test_ir_net_guard.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_ir_pipeline.py": {
+      "seconds": 2.5,
+      "shard": "8"
+    },
+    "tests/test_ir_source_inventory.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_ir_spreadsheet_ingest.py": {
+      "seconds": 3.58,
+      "shard": "2 overflow"
+    },
+    "tests/test_ir_transcript_source.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_ir_uploads_fiscal.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_issuer_document_coverage.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_issuer_fact_manifest.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_issuer_registry.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_issuer_registry_bootstrap.py": {
+      "seconds": 5.41,
+      "shard": "8"
+    },
+    "tests/test_issuer_reporting_registry.py": {
+      "seconds": 6.45,
+      "shard": "7"
+    },
+    "tests/test_job_runtime.py": {
+      "seconds": 0.66,
+      "shard": "7"
+    },
+    "tests/test_job_runtime_process_tree.py": {
+      "seconds": 1.8,
+      "shard": "2"
+    },
+    "tests/test_journal_links.py": {
+      "seconds": 20.49,
+      "shard": "6 overflow"
+    },
+    "tests/test_journal_panel.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_judge_pool_cross_family.py": {
+      "seconds": 1.7,
+      "shard": "4"
+    },
+    "tests/test_key_metrics.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_kpi_capture_enumerate.py": {
+      "seconds": 2.5,
+      "shard": "2"
+    },
+    "tests/test_kpi_catalog.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_kpi_definition_origin.py": {
+      "seconds": 2.0,
+      "shard": "2 overflow"
+    },
+    "tests/test_kpi_definition_revision_migration.py": {
+      "seconds": 4.38,
+      "shard": "6"
+    },
+    "tests/test_kpi_definition_revisions.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_kpi_extract_summaries.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_kpi_financial_override_resolve.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_kpi_lineage.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_kpi_polarity.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_kpi_report_reference_resolution_v2.py": {
+      "seconds": 22.21,
+      "shard": "7"
+    },
+    "tests/test_kpi_resolver.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_kpi_semantic_dispositions.py": {
+      "seconds": 4.0,
+      "shard": "8 overflow"
+    },
+    "tests/test_kpi_semantic_refresh_executor.py": {
+      "seconds": 4.38,
+      "shard": "3"
+    },
+    "tests/test_kpi_semantic_review.py": {
+      "seconds": 3.31,
+      "shard": "2"
+    },
+    "tests/test_kpi_semantic_review_pagination.py": {
+      "seconds": 1.7,
+      "shard": "5"
+    },
+    "tests/test_kpi_semantic_revisions.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_kpi_semantics.py": {
+      "seconds": 2.5,
+      "shard": "6"
+    },
+    "tests/test_kpi_series_chips.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_lease_commitments_extractor.py": {
+      "seconds": 2.0,
+      "shard": "4"
+    },
+    "tests/test_ledger_answer.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_ledger_flow_async.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_ledger_insights.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_ledger_packet.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_ledger_panel.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_ledger_reply.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_ledger_seed.py": {
+      "seconds": 1.4,
+      "shard": "4"
+    },
+    "tests/test_ledger_ux_overhaul.py": {
+      "seconds": 5.11,
+      "shard": "3"
+    },
+    "tests/test_legacy_canonical_fact_parity.py": {
+      "seconds": 1.8,
+      "shard": "2 overflow"
+    },
+    "tests/test_legacy_chat_session_removed.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_legacy_document_evidence_bindings.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_legacy_fact_access_architecture.py": {
+      "seconds": 5.62,
+      "shard": "2"
+    },
+    "tests/test_legacy_fact_evidence_matches.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_legacy_llm_structured_boundaries.py": {
+      "seconds": 2.5,
+      "shard": "7"
+    },
+    "tests/test_legacy_report_body_migration.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_lens_spotlight.py": {
+      "seconds": 2.0,
+      "shard": "5"
+    },
+    "tests/test_list_type_reconcile.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_llm_artifact_store.py": {
+      "seconds": 1.6,
+      "shard": "1"
+    },
+    "tests/test_llm_batch_prep.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_llm_budget.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_llm_call_exception_resilience.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_llm_call_ledger.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_llm_capability_facades.py": {
+      "seconds": 1.4,
+      "shard": "5"
+    },
+    "tests/test_llm_capture.py": {
+      "seconds": 0.98,
+      "shard": "6 overflow"
+    },
+    "tests/test_llm_circuit_breaker_migration.py": {
+      "seconds": 2.4,
+      "shard": "3"
+    },
+    "tests/test_llm_client_budget_integration.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_llm_client_structured_routing.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_llm_evals.py": {
+      "seconds": 5.26,
+      "shard": "7"
+    },
+    "tests/test_llm_evals_ask_citations.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_llm_evals_ask_loop.py": {
+      "seconds": 2.5,
+      "shard": "5"
+    },
+    "tests/test_llm_evals_ask_router.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_llm_evals_pr4.py": {
+      "seconds": 2.0,
+      "shard": "3"
+    },
+    "tests/test_llm_evals_rubric.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_llm_extracted_parent_resolver.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_llm_fleet_policy.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_llm_governance.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_llm_ir_anchor.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_llm_ledger_db_context.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_llm_neutral_cwd.py": {
+      "seconds": 1.4,
+      "shard": "6 overflow"
+    },
+    "tests/test_llm_postprocess.py": {
+      "seconds": 6.39,
+      "shard": "8 overflow"
+    },
+    "tests/test_llm_prompt_caps.py": {
+      "seconds": 1.8,
+      "shard": "4"
+    },
+    "tests/test_llm_provider_neutrality.py": {
+      "seconds": 7.97,
+      "shard": "2 overflow"
+    },
+    "tests/test_llm_purpose_enforcement.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_llm_resolver.py": {
+      "seconds": 1.7,
+      "shard": "6 overflow"
+    },
+    "tests/test_llm_schema_contract_guard.py": {
+      "seconds": 7.04,
+      "shard": "8"
+    },
+    "tests/test_llm_structured_defaults.py": {
+      "seconds": 2.5,
+      "shard": "3"
+    },
+    "tests/test_llm_subpackage_layout.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_llm_tracectx.py": {
+      "seconds": 2.0,
+      "shard": "1 overflow"
+    },
+    "tests/test_llm_transport.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_llm_untrusted.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_llm_web_model_resolution.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_local_vector.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_locator_schema.py": {
+      "seconds": 15.44,
+      "shard": "6 overflow"
+    },
+    "tests/test_log_redact.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_log_scored_miss.py": {
+      "seconds": 1.4,
+      "shard": "8"
+    },
+    "tests/test_logging_config.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_macro_fetch_resilience.py": {
+      "seconds": 1.8,
+      "shard": "5"
+    },
+    "tests/test_macro_nyfed_effr.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_macro_regime_playbook.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_macro_scenarios.py": {
+      "seconds": 1.7,
+      "shard": "3"
+    },
+    "tests/test_macro_sensitivities.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_macro_series_stable.py": {
+      "seconds": 2.5,
+      "shard": "4"
+    },
+    "tests/test_macro_store.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_maintenance_endpoint.py": {
+      "seconds": 2.0,
+      "shard": "2"
+    },
+    "tests/test_manage_issuer_document_sources.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_managed_ir_sources.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_management_indicators.py": {
+      "seconds": 3.42,
+      "shard": "2 overflow"
+    },
+    "tests/test_materiality_judgment.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_meli_embedded_discovery.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_meli_platform_dcf.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_meta_eval_isolation.py": {
+      "seconds": 1.4,
+      "shard": "3"
+    },
+    "tests/test_metric_lifecycle.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_metric_ontology.py": {
+      "seconds": 2.43,
+      "shard": "7"
+    },
+    "tests/test_metric_ontology_migration.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_metric_ontology_operation_migration.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_metrics_engine.py": {
+      "seconds": 1.7,
+      "shard": "1 overflow"
+    },
+    "tests/test_metrics_engine_io.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_metrics_engine_parity.py": {
+      "seconds": 2.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_metrics_view_parity.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_migrated_db_cache.py": {
+      "seconds": 2.35,
+      "shard": "4"
+    },
+    "tests/test_migrated_db_parity.py": {
+      "seconds": 8.28,
+      "shard": "6 overflow"
+    },
+    "tests/test_migration_0029_retire_podcast.py": {
+      "seconds": 3.99,
+      "shard": "3"
+    },
+    "tests/test_migration_0069_brief_provenance.py": {
+      "seconds": 16.12,
+      "shard": "3"
+    },
+    "tests/test_migration_0071_check_constraints.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_migration_0072_reporting_cadence.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_migration_0073_tenant_identity.py": {
+      "seconds": 0.64,
+      "shard": "1 overflow"
+    },
+    "tests/test_migration_0076_over_under_check.py": {
+      "seconds": 2.19,
+      "shard": "6"
+    },
+    "tests/test_migration_0113_definition_origin.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_migration_0140_advisor_memos_position_review_kind.py": {
+      "seconds": 3.37,
+      "shard": "3"
+    },
+    "tests/test_migration_0142_alerts_dismiss_reason.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_migration_0147_red_team_items.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_migration_0160_metrics_engine_schema.py": {
+      "seconds": 1.7,
+      "shard": "6"
+    },
+    "tests/test_migration_0165_segment_quarterly_provenance.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_migration_0168_segment_quarterly_coverage.py": {
+      "seconds": 2.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_migration_0170_comparable_sets.py": {
+      "seconds": 1.34,
+      "shard": "8 overflow"
+    },
+    "tests/test_migration_0178_comp_set_metrics_locator.py": {
+      "seconds": 2.0,
+      "shard": "6 overflow"
+    },
+    "tests/test_migration_0181_fact_overrides_locator.py": {
+      "seconds": 0.64,
+      "shard": "7"
+    },
+    "tests/test_migration_0208_0209_transcripts_source_unique.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_migration_0214_evidence_selection_lifecycle.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_mobile_inbox_panel.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_model_eval.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_model_eval_panel.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_model_eval_sweep.py": {
+      "seconds": 1.4,
+      "shard": "8 overflow"
+    },
+    "tests/test_model_pin_overrides.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_model_provenance.py": {
+      "seconds": 1.8,
+      "shard": "6 overflow"
+    },
+    "tests/test_models_unit_convert.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_mz_catalog_discovery.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_naive_utc_timestamps.py": {
+      "seconds": 1.7,
+      "shard": "3 overflow"
+    },
+    "tests/test_native_artifact_projection.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_net_client.py": {
+      "seconds": 2.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_news_fallback_and_dispatch.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_news_ladder.py": {
+      "seconds": 2.0,
+      "shard": "6"
+    },
+    "tests/test_news_pipeline_repair.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_news_store.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_no_fetch_fmp_statements_orphan.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_no_inert_stat.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_nonbank_global_assumptions.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_numfmt.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_observation_resolution.py": {
+      "seconds": 1.4,
+      "shard": "7"
+    },
+    "tests/test_ocr_extraction_governance.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_offline_build_boundary.py": {
+      "seconds": 1.8,
+      "shard": "3"
+    },
+    "tests/test_omission_capture.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_onboard_ipo_backoff.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_onboard_pending_tickers.py": {
+      "seconds": 1.7,
+      "shard": "8"
+    },
+    "tests/test_onboard_ticker.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_onboarding_budget_gate.py": {
+      "seconds": 2.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_onmymind_feed.py": {
+      "seconds": 3.86,
+      "shard": "4"
+    },
+    "tests/test_ooxml_native_inventory.py": {
+      "seconds": 2.0,
+      "shard": "3 overflow"
+    },
+    "tests/test_open_loops.py": {
+      "seconds": 4.08,
+      "shard": "7"
+    },
+    "tests/test_openrouter_backend.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_operation_correlations.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_operation_detail_closure_migration.py": {
+      "seconds": 6.52,
+      "shard": "6"
+    },
+    "tests/test_operations_attention.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_operations_attention_projection.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_operations_attention_store.py": {
+      "seconds": 1.4,
+      "shard": "1 overflow"
+    },
+    "tests/test_operations_context.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_operations_journal.py": {
+      "seconds": 1.8,
+      "shard": "1 overflow"
+    },
+    "tests/test_operations_journal_migration.py": {
+      "seconds": 7.97,
+      "shard": "4"
+    },
+    "tests/test_operations_panel.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_operations_paths.py": {
+      "seconds": 1.7,
+      "shard": "8 overflow"
+    },
+    "tests/test_operations_registry.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_operations_review_bundle.py": {
+      "seconds": 2.5,
+      "shard": "8"
+    },
+    "tests/test_operations_runtime_collector.py": {
+      "seconds": 4.41,
+      "shard": "2 overflow"
+    },
+    "tests/test_operations_snapshot.py": {
+      "seconds": 2.0,
+      "shard": "8"
+    },
+    "tests/test_operations_style_master.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_operations_surface_governance.py": {
+      "seconds": 1.6,
+      "shard": "1"
+    },
+    "tests/test_optimizer_nominator.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_optimizer_panel_pr6.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_overlay_dismissal.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_owner_decision_checkpoint.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_owner_decision_checkpoint_migration.py": {
+      "seconds": 5.34,
+      "shard": "6 overflow"
+    },
+    "tests/test_owner_falsifier_conditions.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_owner_profile_anchor.py": {
+      "seconds": 1.8,
+      "shard": "6"
+    },
+    "tests/test_owner_profile_packet.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_owner_profile_store.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_p3_data_accessors.py": {
+      "seconds": 1.7,
+      "shard": "7"
+    },
+    "tests/test_panel_etag_and_metrics.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_pass_decisions.py": {
+      "seconds": 2.5,
+      "shard": "2"
+    },
+    "tests/test_pdf_render.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_pdf_table_evidence_backfill.py": {
+      "seconds": 2.27,
+      "shard": "8 overflow"
+    },
+    "tests/test_pdf_table_extraction.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_peek_fragments.py": {
+      "seconds": 4.36,
+      "shard": "5"
+    },
+    "tests/test_peeks_valuation_chip.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_peer_comp_scoring.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_peer_curation.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_peer_fmp_depth.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_peer_selection.py": {
+      "seconds": 1.4,
+      "shard": "6"
+    },
+    "tests/test_per_metric_provenance.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_performance_risk_mockup.py": {
+      "seconds": 1.8,
+      "shard": "3 overflow"
+    },
+    "tests/test_performance_risk_panel.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_period_axis.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_pipeline.py": {
+      "seconds": 1.7,
+      "shard": "2"
+    },
+    "tests/test_pipeline_freshness.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_pipeline_invocation_fingerprint.py": {
+      "seconds": 2.5,
+      "shard": "6"
+    },
+    "tests/test_pipeline_kpi_persistence.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_pipeline_lifecycle.py": {
+      "seconds": 2.0,
+      "shard": "8 overflow"
+    },
+    "tests/test_pipeline_quarterly_refresh.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_pipeline_refresh_eval.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_pipeline_run_callsite_architecture.py": {
+      "seconds": 19.26,
+      "shard": "4"
+    },
+    "tests/test_pipeline_sec_xbrl.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_pipeline_suppression_boundaries.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_pipeline_validation_engine.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_platform_scenario_emission.py": {
+      "seconds": 1.4,
+      "shard": "3 overflow"
+    },
+    "tests/test_pledge.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_populate_canonical_resolution_cli.py": {
+      "seconds": 1.8,
+      "shard": "8"
+    },
+    "tests/test_populate_document_processing_cli.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_populate_metric_ontology_cli.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_population_canonical_resolution.py": {
+      "seconds": 26.48,
+      "shard": "8"
+    },
+    "tests/test_population_cli_harness.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_population_completeness.py": {
+      "seconds": 2.5,
+      "shard": "7"
+    },
+    "tests/test_population_cutover_evaluator.py": {
+      "seconds": 2.14,
+      "shard": "6 overflow"
+    },
+    "tests/test_population_document_processing.py": {
+      "seconds": 2.0,
+      "shard": "7"
+    },
+    "tests/test_population_identity.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_population_metric_ontology.py": {
+      "seconds": 2.81,
+      "shard": "2"
+    },
+    "tests/test_population_research_snapshots.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_population_retrieval_runtime.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_population_source_facts.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_portfolio_allocation.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_portfolio_console_lazy.py": {
+      "seconds": 1.4,
+      "shard": "2"
+    },
+    "tests/test_portfolio_copilot_mockup.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_portfolio_correlation.py": {
+      "seconds": 1.8,
+      "shard": "8 overflow"
+    },
+    "tests/test_portfolio_decision_support.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_portfolio_foundation.py": {
+      "seconds": 10.03,
+      "shard": "7"
+    },
+    "tests/test_portfolio_montecarlo.py": {
+      "seconds": 1.7,
+      "shard": "2 overflow"
+    },
+    "tests/test_portfolio_montecarlo_panel.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_portfolio_policy_proxy.py": {
+      "seconds": 2.5,
+      "shard": "5"
+    },
+    "tests/test_portfolio_position_as_of.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_portfolio_readiness_receipt.py": {
+      "seconds": 2.0,
+      "shard": "2 overflow"
+    },
+    "tests/test_portfolio_risk.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_portfolio_risk_snapshot.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_portfolio_style_factors.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_portfolio_style_master.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_portfolio_style_panel.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_portfolio_svg_contract.py": {
+      "seconds": 1.05,
+      "shard": "5"
+    },
+    "tests/test_portfolio_tail_stress.py": {
+      "seconds": 1.4,
+      "shard": "1"
+    },
+    "tests/test_portfolio_thesis_collision_panel.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_portfolio_tracker_client.py": {
+      "seconds": 1.8,
+      "shard": "7"
+    },
+    "tests/test_portfolio_weights.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_position_guard.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_position_guard_cache.py": {
+      "seconds": 1.7,
+      "shard": "4"
+    },
+    "tests/test_position_lifecycle.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_position_lifecycle_routes.py": {
+      "seconds": 2.5,
+      "shard": "3"
+    },
+    "tests/test_position_review_behavioral_renderer.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_position_review_capacity_block.py": {
+      "seconds": 2.0,
+      "shard": "4"
+    },
+    "tests/test_position_review_command.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_position_review_graded_record.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_position_review_integration.py": {
+      "seconds": 13.22,
+      "shard": "5"
+    },
+    "tests/test_position_review_preanalysis.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_position_review_risk.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_position_review_verdict.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_position_tax.py": {
+      "seconds": 1.4,
+      "shard": "2 overflow"
+    },
+    "tests/test_positioning_coach.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_positioning_store.py": {
+      "seconds": 1.8,
+      "shard": "2"
+    },
+    "tests/test_post_earnings_readout_budget_migration.py": {
+      "seconds": 7.55,
+      "shard": "5"
+    },
+    "tests/test_predictions_store.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_pressure_test_annual.py": {
+      "seconds": 1.7,
+      "shard": "5"
+    },
+    "tests/test_price_action_bands.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_price_action_sensor_migration.py": {
+      "seconds": 2.5,
+      "shard": "4"
+    },
+    "tests/test_price_action_trigger.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_priced_in_card.py": {
+      "seconds": 2.0,
+      "shard": "5"
+    },
+    "tests/test_private_governance_boundary.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_process_ir_documents_state.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_process_ir_regenerate_missing.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_produce_issuer_fact_manifest.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_prompt_ab.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_prompt_ab_randomized.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_prompt_calibration.py": {
+      "seconds": 1.4,
+      "shard": "4"
+    },
+    "tests/test_prompt_reflect.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_prompt_registry.py": {
+      "seconds": 1.8,
+      "shard": "2 overflow"
+    },
+    "tests/test_prompt_registry_migrations.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_prompt_versions.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_propose_tenet_merge.py": {
+      "seconds": 1.7,
+      "shard": "6 overflow"
+    },
+    "tests/test_prototype_lifecycle.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_provenance_caution_eval.py": {
+      "seconds": 2.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_provenance_chip_override.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_provenance_coverage_report.py": {
+      "seconds": 2.0,
+      "shard": "3"
+    },
+    "tests/test_provenance_overrides.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_provenance_panel.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_provenance_peek.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_provenance_selection.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_provenance_severity_contract.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_provider_neutral_adapters.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_prune_llm_capture.py": {
+      "seconds": 1.4,
+      "shard": "5"
+    },
+    "tests/test_prune_misscaled_capture_facts.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_public_tree_guard.py": {
+      "seconds": 12.38,
+      "shard": "2 overflow"
+    },
+    "tests/test_qa_roster.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_qa_roster_resilience.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_qualitative_conditions.py": {
+      "seconds": 1.7,
+      "shard": "3"
+    },
+    "tests/test_quality_hash_filter.py": {
+      "seconds": 2.1,
+      "shard": "1 overflow"
+    },
+    "tests/test_query_criteria.py": {
+      "seconds": 2.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_reader_migration.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_reader_tier_selection.py": {
+      "seconds": 2.0,
+      "shard": "1 overflow"
+    },
+    "tests/test_readme_governance.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_readme_updater.py": {
+      "seconds": 1.6,
+      "shard": "1"
+    },
+    "tests/test_recent_developments_resilience.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_reconcile_quality_baseline.py": {
+      "seconds": 1.18,
+      "shard": "1"
+    },
+    "tests/test_reconstruction_manifest.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_record_decisions_resilience.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_red_team_panel_route.py": {
+      "seconds": 1.4,
+      "shard": "6 overflow"
+    },
+    "tests/test_red_team_respond_route.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_redesigned_dcf_smoke.py": {
+      "seconds": 4.67,
+      "shard": "2"
+    },
+    "tests/test_redteam_brief.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_redteam_decision_pnl.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_redteam_engine.py": {
+      "seconds": 3.35,
+      "shard": "6 overflow"
+    },
+    "tests/test_redteam_gate.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_redteam_pnl_panel.py": {
+      "seconds": 2.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_redteam_response.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_refetch_aggregator_policy.py": {
+      "seconds": 2.0,
+      "shard": "2"
+    },
+    "tests/test_refetch_aggregator_transcript_safety.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_refresh_cache_config.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_refresh_dispatch.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_refresh_dispatch_steps.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_refresh_ir_kpis_all.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_refresh_ir_kpis_policy.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_refresh_position_guard.py": {
+      "seconds": 1.4,
+      "shard": "8"
+    },
+    "tests/test_regime_backtest.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_renderer_forgone_budget.py": {
+      "seconds": 1.8,
+      "shard": "4"
+    },
+    "tests/test_repair_document_parent_links.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_repair_llm_call_attempt_columns.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_report_artifact_index.py": {
+      "seconds": 1.7,
+      "shard": "1 overflow"
+    },
+    "tests/test_report_break_rules_two_tier.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_report_company_description.py": {
+      "seconds": 2.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_report_earnings_surprise_card.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_report_earnings_themes_split.py": {
+      "seconds": 2.0,
+      "shard": "6 overflow"
+    },
+    "tests/test_report_kpi_naming.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_report_layout_discipline.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_report_saydo.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_report_thesis_kpi_history.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_reporting_entity_registry.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_reprice_dcf.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_request_scoped_report_db.py": {
+      "seconds": 1.4,
+      "shard": "3"
+    },
+    "tests/test_research_cockpit.py": {
+      "seconds": 5.64,
+      "shard": "3 overflow"
+    },
+    "tests/test_research_experience_mockup.py": {
+      "seconds": 1.8,
+      "shard": "5"
+    },
+    "tests/test_research_notify.py": {
+      "seconds": 4.31,
+      "shard": "6"
+    },
+    "tests/test_research_panel_styles.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_research_proposals.py": {
+      "seconds": 1.7,
+      "shard": "6"
+    },
+    "tests/test_research_question_artifact.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_research_routes.py": {
+      "seconds": 3.17,
+      "shard": "3"
+    },
+    "tests/test_research_run.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_research_snapshot.py": {
+      "seconds": 3.68,
+      "shard": "6 overflow"
+    },
+    "tests/test_research_snapshot_migration.py": {
+      "seconds": 2.34,
+      "shard": "2 overflow"
+    },
+    "tests/test_research_tables.py": {
+      "seconds": 13.74,
+      "shard": "7"
+    },
+    "tests/test_research_tier.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_research_triage.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_research_universe_migration.py": {
+      "seconds": 3.4,
+      "shard": "7"
+    },
+    "tests/test_restatement_detector.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_restore_drill.py": {
+      "seconds": 1.4,
+      "shard": "8 overflow"
+    },
+    "tests/test_risk_drift.py": {
+      "seconds": 4.97,
+      "shard": "7"
+    },
+    "tests/test_risk_factors.py": {
+      "seconds": 12.26,
+      "shard": "3"
+    },
+    "tests/test_risk_reward.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_risk_snapshot_history.py": {
+      "seconds": 3.21,
+      "shard": "2 overflow"
+    },
+    "tests/test_risk_snapshot_provenance.py": {
+      "seconds": 8.18,
+      "shard": "5"
+    },
+    "tests/test_risk_snapshot_refresh.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_roadmap_freeze.py": {
+      "seconds": 14.39,
+      "shard": "8 overflow"
+    },
+    "tests/test_roadmap_freeze_cli.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_roadmap_freeze_inputs.py": {
+      "seconds": 2.0,
+      "shard": "6"
+    },
+    "tests/test_roadmap_source.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_row_validation.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_run_calibration_grading.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_run_calibration_scorecard.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_run_due_lenses.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_run_lens_cli.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_run_lock.py": {
+      "seconds": 1.4,
+      "shard": "7"
+    },
+    "tests/test_run_morning_pipeline.py": {
+      "seconds": 3.34,
+      "shard": "6"
+    },
+    "tests/test_run_triggers_e2e.py": {
+      "seconds": 1.8,
+      "shard": "6 overflow"
+    },
+    "tests/test_run_validation_engine_gate.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_run_weekly_synthesis.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_run_weekly_validation.py": {
+      "seconds": 1.7,
+      "shard": "3 overflow"
+    },
+    "tests/test_runtime_secrets.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_runtime_state_migration.py": {
+      "seconds": 2.5,
+      "shard": "8"
+    },
+    "tests/test_save_fmp_data_empty_classification.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_save_fmp_data_validation_gate.py": {
+      "seconds": 2.0,
+      "shard": "3 overflow"
+    },
+    "tests/test_save_fmp_estimates_normalization.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_save_fmp_skip_existing_ttl.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_saydo_filter_dirty_refresh.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_scan_ir_transcripts.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_scenario_prior.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_scenario_prior_consume.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_scenario_reward.py": {
+      "seconds": 1.4,
+      "shard": "1 overflow"
+    },
+    "tests/test_scenario_weights.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_schedule_pre_earnings_refresh.py": {
+      "seconds": 1.8,
+      "shard": "3"
+    },
+    "tests/test_scheduled_provider_policy.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_scheduled_singleflight.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_scheduler_manifest.py": {
+      "seconds": 1.7,
+      "shard": "8"
+    },
+    "tests/test_schema_drift_detector.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_score_code_quality.py": {
+      "seconds": 2.5,
+      "shard": "2"
+    },
+    "tests/test_search_build_locking.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_search_corpus_builder.py": {
+      "seconds": 3.58,
+      "shard": "5"
+    },
+    "tests/test_search_projection_seals.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_sec_6k_fetch.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_sec_companyfacts_binding_backfill.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_sec_companyfacts_capture.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_sec_companyfacts_fact_matcher.py": {
+      "seconds": 2.1,
+      "shard": "1 overflow"
+    },
+    "tests/test_sec_delta_admission.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_sec_delta_planner.py": {
+      "seconds": 1.4,
+      "shard": "6"
+    },
+    "tests/test_sec_filing_package_inventory.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_sec_filing_xbrl_ingest_guards.py": {
+      "seconds": 1.8,
+      "shard": "1 overflow"
+    },
+    "tests/test_sec_filing_xbrl_manifest_binding.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_sec_former_ticker_bootstrap.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_sec_fpi_ingest.py": {
+      "seconds": 1.7,
+      "shard": "8 overflow"
+    },
+    "tests/test_sec_fund_registry_bootstrap.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_sec_historical_issuer_bootstrap.py": {
+      "seconds": 2.5,
+      "shard": "6"
+    },
+    "tests/test_sec_misfile_fix.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_sec_native_capture.py": {
+      "seconds": 2.0,
+      "shard": "8"
+    },
+    "tests/test_sec_silent_staleness.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_sec_submissions_inventory.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_sec_xbrl_unit_guard.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_section_budget_skip.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_section_coverage_panel.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_section_similarity.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_sector_benchmark_map.py": {
+      "seconds": 1.4,
+      "shard": "3 overflow"
+    },
+    "tests/test_secure_file_install.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_security_audit_fixes.py": {
+      "seconds": 1.8,
+      "shard": "6"
+    },
+    "tests/test_seed_decisions_backfill.py": {
+      "seconds": 1.6,
+      "shard": "1"
+    },
+    "tests/test_seed_kpi_definitions.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_seed_kpi_registry.py": {
+      "seconds": 3.45,
+      "shard": "8"
+    },
+    "tests/test_seed_kpi_registry_auto.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_seed_reconcile.py": {
+      "seconds": 2.5,
+      "shard": "7"
+    },
+    "tests/test_segment_cache_audit.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_segment_capex_headcount.py": {
+      "seconds": 2.0,
+      "shard": "8 overflow"
+    },
+    "tests/test_segment_junction.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_segment_provenance_override.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_segment_q4_derive.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_segment_quarterly_10q.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_segment_quarterly_6k.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_segment_quarterly_coverage_writer.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_semantic_disposition.py": {
+      "seconds": 1.4,
+      "shard": "2"
+    },
+    "tests/test_semantic_tension.py": {
+      "seconds": 0.97,
+      "shard": "8"
+    },
+    "tests/test_senior_partner_brief_budget_migration.py": {
+      "seconds": 1.8,
+      "shard": "3 overflow"
+    },
+    "tests/test_serve_portfolio_tracker.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_server_access.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_session_context_pack.py": {
+      "seconds": 1.7,
+      "shard": "7"
+    },
+    "tests/test_session_distill.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_set_filing_regime_from_profile.py": {
+      "seconds": 2.5,
+      "shard": "5"
+    },
+    "tests/test_set_instrument_type_from_fmp.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_show_prompt_calibration.py": {
+      "seconds": 2.0,
+      "shard": "7"
+    },
+    "tests/test_signal_writer.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_signals_diet_guard.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_signals_quality.py": {
+      "seconds": 3.22,
+      "shard": "8 overflow"
+    },
+    "tests/test_signals_section.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_signals_store.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_simulate_trade_impact.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_since_last.py": {
+      "seconds": 7.19,
+      "shard": "4"
+    },
+    "tests/test_single_user_boundary.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_sizing_intent_checkpoint_api.py": {
+      "seconds": 1.8,
+      "shard": "8"
+    },
+    "tests/test_sizing_intent_review.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_sizing_intent_review_page.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_smoke.py": {
+      "seconds": 1.7,
+      "shard": "2"
+    },
+    "tests/test_snapshot_decisions.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_snapshot_scenarios.py": {
+      "seconds": 2.5,
+      "shard": "3"
+    },
+    "tests/test_snapshot_trigger_held.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_socratic.py": {
+      "seconds": 4.67,
+      "shard": "4"
+    },
+    "tests/test_source_calls_panel.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_source_calls_routes.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_source_calls_summary.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_source_chips.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_source_cost_attribution.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_source_coverage.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_source_coverage_reconcile.py": {
+      "seconds": 12.48,
+      "shard": "4"
+    },
+    "tests/test_source_definition_identity_migration.py": {
+      "seconds": 9.19,
+      "shard": "6"
+    },
+    "tests/test_source_definition_taxonomy_identity_migration.py": {
+      "seconds": 1.8,
+      "shard": "8 overflow"
+    },
+    "tests/test_source_expectation_lifecycle.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_source_fact_publication_migration.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_source_fact_repository.py": {
+      "seconds": 13.9,
+      "shard": "3 overflow"
+    },
+    "tests/test_source_fact_stream.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_source_fact_stream_migration.py": {
+      "seconds": 2.5,
+      "shard": "4"
+    },
+    "tests/test_source_inventory_seals.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_source_policy_contract.py": {
+      "seconds": 2.0,
+      "shard": "2 overflow"
+    },
+    "tests/test_source_regime.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_source_reliability.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_source_viewers.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_sources_price.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_sources_registry.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_specialized_dcf_live_price.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_specificity.py": {
+      "seconds": 1.4,
+      "shard": "1"
+    },
+    "tests/test_split_normalization.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_split_root_legacy_adapters.py": {
+      "seconds": 1.8,
+      "shard": "7"
+    },
+    "tests/test_sqlite_bootstrap.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_sqlite_connection_architecture.py": {
+      "seconds": 14.03,
+      "shard": "8"
+    },
+    "tests/test_sqlite_runtime.py": {
+      "seconds": 1.7,
+      "shard": "2 overflow"
+    },
+    "tests/test_sqlite_snapshot.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_squashed_seed_recovery_migration.py": {
+      "seconds": 4.07,
+      "shard": "8"
+    },
+    "tests/test_staged_evidence_aliases.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_stance_scoring.py": {
+      "seconds": 2.0,
+      "shard": "4"
+    },
+    "tests/test_standing_rules_panel.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_standup.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_standup_stale_basis.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_streaming_runtime.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_structured_fact_search_projection_migration.py": {
+      "seconds": 2.1,
+      "shard": "1 overflow"
+    },
+    "tests/test_submit_saydo_batch.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_suite_migration_cost.py": {
+      "seconds": 1.4,
+      "shard": "2 overflow"
+    },
+    "tests/test_surprise_sources.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_surprise_yf_revenue.py": {
+      "seconds": 1.8,
+      "shard": "2"
+    },
+    "tests/test_sweep_output_history.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_sync_sec_filing_inventory_packages.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_sync_thesis_state.py": {
+      "seconds": 1.7,
+      "shard": "4"
+    },
+    "tests/test_synthesis_lens_citations.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_synthesis_lenses_package.py": {
+      "seconds": 2.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_tenant_identity_consistency.py": {
+      "seconds": 3.42,
+      "shard": "5"
+    },
+    "tests/test_tenet_accountability.py": {
+      "seconds": 2.0,
+      "shard": "5"
+    },
+    "tests/test_tenet_distill.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_tenets.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    },
+    "tests/test_test_harness_isolation.py": {
+      "seconds": 3.47,
+      "shard": "3 overflow"
+    },
+    "tests/test_theme_synth.py": {
+      "seconds": 1.5,
+      "shard": "8"
+    },
+    "tests/test_thesis_artifact.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_thesis_collision.py": {
+      "seconds": 1.3,
+      "shard": "6"
+    },
+    "tests/test_thesis_episode_attention.py": {
+      "seconds": 1.4,
+      "shard": "4"
+    },
+    "tests/test_thesis_episode_attention_migration.py": {
+      "seconds": 5.9,
+      "shard": "2 overflow"
+    },
+    "tests/test_thesis_episode_consumer_cutover.py": {
+      "seconds": 1.8,
+      "shard": "2 overflow"
+    },
+    "tests/test_thesis_evaluation_episode_integration.py": {
+      "seconds": 1.6,
+      "shard": "2"
+    },
+    "tests/test_thesis_evaluation_episode_migration.py": {
+      "seconds": 5.23,
+      "shard": "8 overflow"
+    },
+    "tests/test_thesis_evaluation_episodes.py": {
+      "seconds": 1.7,
+      "shard": "5"
+    },
+    "tests/test_thesis_ledger_panel.py": {
+      "seconds": 2.1,
+      "shard": "2"
+    },
+    "tests/test_thesis_preview_cache.py": {
+      "seconds": 2.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_thesis_preview_endpoint.py": {
+      "seconds": 1.5,
+      "shard": "3"
+    },
+    "tests/test_thesis_reunderwrite_gate.py": {
+      "seconds": 2.0,
+      "shard": "3"
+    },
+    "tests/test_thesis_status_view.py": {
+      "seconds": 27.09,
+      "shard": "6 overflow"
+    },
+    "tests/test_three_regime_renderer.py": {
+      "seconds": 1.6,
+      "shard": "1"
+    },
+    "tests/test_ticker_command_center.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_ticker_settings.py": {
+      "seconds": 1.5,
+      "shard": "8 overflow"
+    },
+    "tests/test_ticker_specific_extractors.py": {
+      "seconds": 2.1,
+      "shard": "6 overflow"
+    },
+    "tests/test_ticker_validation.py": {
+      "seconds": 1.3,
+      "shard": "3 overflow"
+    },
+    "tests/test_tier_runner.py": {
+      "seconds": 1.4,
+      "shard": "5"
+    },
+    "tests/test_timeseries.py": {
+      "seconds": 1.3,
+      "shard": "8 overflow"
+    },
+    "tests/test_tracker_v1_adoption.py": {
+      "seconds": 1.8,
+      "shard": "4"
+    },
+    "tests/test_tracker_v1_contract.py": {
+      "seconds": 1.6,
+      "shard": "2 overflow"
+    },
+    "tests/test_transcript_acquisition_receipt_migration.py": {
+      "seconds": 2.99,
+      "shard": "8"
+    },
+    "tests/test_transcript_acquisition_semantics.py": {
+      "seconds": 1.7,
+      "shard": "6 overflow"
+    },
+    "tests/test_transcript_dual_dir_scan.py": {
+      "seconds": 2.1,
+      "shard": "6"
+    },
+    "tests/test_transcript_entrypoint_authorization.py": {
+      "seconds": 10.21,
+      "shard": "8 overflow"
+    },
+    "tests/test_transcript_evidence_immutability.py": {
+      "seconds": 1.5,
+      "shard": "7"
+    },
+    "tests/test_transcript_immutable_staging.py": {
+      "seconds": 2.0,
+      "shard": "1 overflow"
+    },
+    "tests/test_transcript_longitudinal.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_transcript_period_guard.py": {
+      "seconds": 1.6,
+      "shard": "4"
+    },
+    "tests/test_transcript_promotion.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_transcript_version_migration.py": {
+      "seconds": 1.5,
+      "shard": "1 overflow"
+    },
+    "tests/test_triage_panel.py": {
+      "seconds": 2.1,
+      "shard": "8 overflow"
+    },
+    "tests/test_trigger_decision_condition.py": {
+      "seconds": 1.3,
+      "shard": "2"
+    },
+    "tests/test_trigger_earnings_tone.py": {
+      "seconds": 1.4,
+      "shard": "6 overflow"
+    },
+    "tests/test_trigger_earnings_tone_skeleton.py": {
+      "seconds": 1.3,
+      "shard": "1"
+    },
+    "tests/test_trigger_kpi_inflection.py": {
+      "seconds": 1.8,
+      "shard": "5"
+    },
+    "tests/test_trigger_llm_boundaries.py": {
+      "seconds": 1.6,
+      "shard": "5"
+    },
+    "tests/test_trigger_material_news.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_trigger_protocol.py": {
+      "seconds": 1.7,
+      "shard": "3"
+    },
+    "tests/test_trigger_restatement.py": {
+      "seconds": 2.1,
+      "shard": "7"
+    },
+    "tests/test_trigger_saydo_due.py": {
+      "seconds": 2.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_ts_narrative_wiring.py": {
+      "seconds": 1.5,
+      "shard": "6"
+    },
+    "tests/test_ui_controls.py": {
+      "seconds": 51.29,
+      "shard": "2 overflow"
+    },
+    "tests/test_ui_earnings_audio.py": {
+      "seconds": 1.2,
+      "shard": "1"
+    },
+    "tests/test_ui_prose_boundary.py": {
+      "seconds": 1.6,
+      "shard": "6 overflow"
+    },
+    "tests/test_ui_prose_citations.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
+    "tests/test_ui_tokens.py": {
+      "seconds": 1.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_upgrade_database.py": {
+      "seconds": 32.75,
+      "shard": "3 overflow"
+    },
+    "tests/test_upload_drive_backups.py": {
+      "seconds": 1.3,
+      "shard": "2 overflow"
+    },
+    "tests/test_user_state_crud.py": {
+      "seconds": 30.03,
+      "shard": "6"
+    },
+    "tests/test_validate_environment.py": {
+      "seconds": 1.3,
+      "shard": "4"
+    },
+    "tests/test_validation_issue_resolution.py": {
+      "seconds": 1.8,
+      "shard": "6 overflow"
+    },
+    "tests/test_valuation_basis_cache.py": {
+      "seconds": 1.6,
+      "shard": "8"
+    },
+    "tests/test_valuation_basis_resilience.py": {
+      "seconds": 1.2,
+      "shard": "4"
+    },
+    "tests/test_valuation_dirty_refresh.py": {
+      "seconds": 1.7,
+      "shard": "1 overflow"
+    },
+    "tests/test_valuation_model_label.py": {
+      "seconds": 2.1,
+      "shard": "2 overflow"
+    },
+    "tests/test_valuation_peg.py": {
+      "seconds": 2.5,
+      "shard": "3 overflow"
+    },
+    "tests/test_verifier_identity.py": {
+      "seconds": 1.5,
+      "shard": "2"
+    },
+    "tests/test_verify_cron_registration.py": {
+      "seconds": 2.0,
+      "shard": "2"
+    },
+    "tests/test_verify_ir_home_authorities.py": {
+      "seconds": 1.2,
+      "shard": "5"
+    },
+    "tests/test_view_artifact.py": {
+      "seconds": 1.6,
+      "shard": "3"
+    },
+    "tests/test_view_wiring.py": {
+      "seconds": 1.2,
+      "shard": "6 overflow"
+    },
+    "tests/test_viewspec.py": {
+      "seconds": 1.5,
+      "shard": "1"
+    },
+    "tests/test_viewspec_detail_domains.py": {
+      "seconds": 2.1,
+      "shard": "4"
+    },
+    "tests/test_viewspec_glossary.py": {
+      "seconds": 1.3,
+      "shard": "5"
+    },
+    "tests/test_viewspec_nl.py": {
+      "seconds": 9.02,
+      "shard": "8"
+    },
+    "tests/test_viewspec_picker_coverage.py": {
+      "seconds": 1.3,
+      "shard": "6 overflow"
+    },
+    "tests/test_viewspec_workbench.py": {
+      "seconds": 1.8,
+      "shard": "3"
+    },
+    "tests/test_wave2_llm_schema_contracts.py": {
+      "seconds": 1.6,
+      "shard": "1 overflow"
+    },
+    "tests/test_wealth_context_snapshot.py": {
+      "seconds": 1.2,
+      "shard": "8"
+    },
+    "tests/test_wealthplan_capacity.py": {
+      "seconds": 1.7,
+      "shard": "6"
+    },
+    "tests/test_web_prompt_transport_neutrality.py": {
+      "seconds": 2.1,
+      "shard": "5"
+    },
+    "tests/test_weekly_cleanup.py": {
+      "seconds": 2.5,
+      "shard": "8"
+    },
+    "tests/test_weekly_cleanup_schedule.py": {
+      "seconds": 1.5,
+      "shard": "2 overflow"
+    },
+    "tests/test_weekly_model_eval.py": {
+      "seconds": 2.0,
+      "shard": "6 overflow"
+    },
+    "tests/test_weekly_packet.py": {
+      "seconds": 1.2,
+      "shard": "3"
+    },
+    "tests/test_weekly_packet_profile_facts.py": {
+      "seconds": 26.81,
+      "shard": "7"
+    },
+    "tests/test_what_if.py": {
+      "seconds": 1.2,
+      "shard": "6"
+    },
+    "tests/test_wix_avdv_checkpoint_repair.py": {
+      "seconds": 1.5,
+      "shard": "4"
+    },
+    "tests/test_wix_avdv_postmortem.py": {
+      "seconds": 2.1,
+      "shard": "3"
+    },
+    "tests/test_work_os_briefs.py": {
+      "seconds": 1.3,
+      "shard": "8"
+    },
+    "tests/test_work_os_company.py": {
+      "seconds": 1.4,
+      "shard": "8"
+    },
+    "tests/test_work_os_copilot.py": {
+      "seconds": 1.3,
+      "shard": "3"
+    },
+    "tests/test_work_os_earnings.py": {
+      "seconds": 1.8,
+      "shard": "1 overflow"
+    },
+    "tests/test_work_os_evaluation.py": {
+      "seconds": 1.6,
+      "shard": "6"
+    },
+    "tests/test_work_os_portfolio.py": {
+      "seconds": 1.2,
+      "shard": "7"
+    },
+    "tests/test_work_os_route_contract.py": {
+      "seconds": 1.7,
+      "shard": "3 overflow"
+    },
+    "tests/test_work_os_shell.py": {
+      "seconds": 2.1,
+      "shard": "1 overflow"
+    },
+    "tests/test_work_os_style_master.py": {
+      "seconds": 2.5,
+      "shard": "2"
+    },
+    "tests/test_workload_inventory.py": {
+      "seconds": 1.5,
+      "shard": "5"
+    },
+    "tests/test_workspace_chat_sidebar.py": {
+      "seconds": 2.0,
+      "shard": "6"
+    },
+    "tests/test_workspace_comments_drafts.py": {
+      "seconds": 1.2,
+      "shard": "1 overflow"
+    },
+    "tests/test_workspace_comments_health.py": {
+      "seconds": 1.6,
+      "shard": "3 overflow"
+    },
+    "tests/test_workspace_comments_outbox.py": {
+      "seconds": 1.2,
+      "shard": "3 overflow"
+    },
+    "tests/test_workspace_cross_links.py": {
+      "seconds": 1.5,
+      "shard": "6 overflow"
+    },
+    "tests/test_workspace_design_language.py": {
+      "seconds": 2.1,
+      "shard": "3 overflow"
+    },
+    "tests/test_workspace_golden.py": {
+      "seconds": 1.3,
+      "shard": "7"
+    },
+    "tests/test_workspace_kpi_strip.py": {
+      "seconds": 1.4,
+      "shard": "3"
+    },
+    "tests/test_workspace_kpi_trend.py": {
+      "seconds": 1.3,
+      "shard": "1 overflow"
+    },
+    "tests/test_workspace_p3_panels.py": {
+      "seconds": 1.8,
+      "shard": "6"
+    },
+    "tests/test_workspace_report_capability.py": {
+      "seconds": 1.6,
+      "shard": "8 overflow"
+    },
+    "tests/test_workspace_tab_groups.py": {
+      "seconds": 1.2,
+      "shard": "8 overflow"
+    },
+    "tests/test_workspace_verdict_and_coaching.py": {
+      "seconds": 1.7,
+      "shard": "8"
+    },
+    "tests/test_workspace_visual_ownership.py": {
+      "seconds": 2.1,
+      "shard": "8"
+    },
+    "tests/test_worldview_anchor.py": {
+      "seconds": 2.71,
+      "shard": "8"
+    },
+    "tests/test_worldview_panel.py": {
+      "seconds": 4.13,
+      "shard": "6 overflow"
+    },
+    "tests/test_xbrl_value_classify.py": {
+      "seconds": 2.0,
+      "shard": "3 overflow"
+    },
+    "tests/test_you_said.py": {
+      "seconds": 1.2,
+      "shard": "2"
+    },
+    "tests/test_zz_atomic_data_cutover.py": {
+      "seconds": 1.6,
+      "shard": "7"
+    }
+  },
+  "shard_timings_seconds": {
+    "1": 84.99,
+    "1 overflow": 98.4,
+    "2": 178.83,
+    "2 overflow": 73.92,
+    "3": 78.72,
+    "3 overflow": 81.89,
+    "4": 160.43,
+    "5": 164.35,
+    "6": 78.88,
+    "6 overflow": 94.52,
+    "7": 193.54,
+    "8": 55.88,
+    "8 overflow": 199.13
+  }
+}

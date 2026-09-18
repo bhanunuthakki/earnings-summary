@@ -158,8 +158,8 @@ def test_design_sync_gate_is_wired_into_hosted_ci() -> None:
     test_job = workflow.split("\n  tests:\n", 1)[1].split("\n  design:\n", 1)[0]
     design_job = workflow.split("\n  design:\n", 1)[1].split("\n  quality:\n", 1)[0]
     assert "grep -v '^tests/test_design_computed_canary.py$'" in test_job
-    assert "pip install --require-hashes -r requirements.lock" in design_job
-    assert "pip install -e .[dev]" in design_job
+    assert 'bin/pip" install --require-hashes -r requirements.lock' in design_job
+    assert 'bin/pip" install -e .[dev]' in design_job
     assert "Build verified SQLite writer runtime" in design_job
     assert 'echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"' in design_job
     assert "python -m pytest -q tests/test_design_computed_canary.py -k" in design_job
