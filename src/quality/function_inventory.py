@@ -148,6 +148,7 @@ class _ModuleFacts(ast.NodeVisitor):
         self.registry_names: set[str] = set()
         self.reflection_names: set[str] = set()
         self.unresolved_reflection_modules: set[str] = set()
+        self.unresolved_external_reflection = False
         self.unresolved_dynamic = False
         self.exports: set[str] = set()
         self.imported_names: set[tuple[str, str]] = set()
@@ -196,11 +197,10 @@ class _ModuleFacts(ast.NodeVisitor):
                 self.reflection_names.add(attribute.value)
             else:
                 target = node.args[0] if node.args else None
-                target_module = (
-                    self.imported_modules.get(target.id) if isinstance(target, ast.Name) else None
-                )
+                target_module = self._imported_module_for_expr(target)
                 if target_module is None:
                     self.unresolved_dynamic = True
+                    self.unresolved_external_reflection = True
                 else:
                     self.unresolved_reflection_modules.add(target_module)
         elif dynamic_name in DYNAMIC_CALLS or name.endswith("import_module"):
@@ -231,6 +231,10 @@ class _ModuleFacts(ast.NodeVisitor):
     def _visit_assignment(self, node: ast.Assign | ast.AnnAssign) -> None:
         names = _assigned_names(node)
         value = node.value
+        imported_module = self._imported_module_for_expr(value)
+        if imported_module is not None:
+            for name in names:
+                self.imported_modules[name] = imported_module
         if "__all__" in names and isinstance(value, (ast.List, ast.Tuple, ast.Set)):
             self.exports.update(
                 item.value
@@ -246,7 +250,7 @@ class _ModuleFacts(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        module = node.module or ""
+        module = self._resolved_import_from_module(node)
         for alias in node.names:
             if alias.name == "*":
                 self.star_imports.add(module)
@@ -259,6 +263,33 @@ class _ModuleFacts(ast.NodeVisitor):
         for alias in node.names:
             local_name = alias.asname or alias.name.split(".", 1)[0]
             self.imported_modules[local_name] = alias.name
+
+    def _resolved_import_from_module(self, node: ast.ImportFrom) -> str:
+        if node.level == 0:
+            return node.module or ""
+        current = _module_name(self.path).split(".")
+        package = current if self.path.endswith("/__init__.py") else current[:-1]
+        keep = max(0, len(package) - (node.level - 1))
+        prefix = package[:keep]
+        if node.module:
+            prefix.extend(node.module.split("."))
+        return ".".join(prefix)
+
+    def _imported_module_for_expr(self, node: ast.expr | None) -> str | None:
+        if node is None:
+            return None
+        dotted = _decorator_name(node)
+        if not dotted:
+            return None
+        root, _, suffix = dotted.partition(".")
+        imported = self.imported_modules.get(root)
+        if imported is None:
+            return None
+        if not suffix or dotted == imported:
+            return imported
+        if imported == root:
+            return f"{imported}.{suffix}"
+        return None
 
 
 def _hazards(
@@ -305,14 +336,23 @@ def _hazards(
 
 
 def _module_matches(module: str, target: str) -> bool:
-    return module == target or module.endswith(f".{target}") or target.endswith(f".{module}")
+    return (
+        module == target
+        or module.startswith(f"{target}.")
+        or target.startswith(f"{module}.")
+        or module.endswith(f".{target}")
+        or target.endswith(f".{module}")
+    )
 
 
 def _safe_output_path(root: Path, requested: Path) -> Path:
     resolved_root = root.resolve()
     lexical = requested if requested.is_absolute() else resolved_root / requested
+    declared_tmp = resolved_root / ".tmp"
+    if declared_tmp.is_symlink():
+        raise FunctionInventoryError("repository .tmp directory cannot be a symlink")
     try:
-        resolved_tmp = (resolved_root / ".tmp").resolve()
+        resolved_tmp = declared_tmp.resolve()
         resolved_output = lexical.resolve()
     except OSError as exc:
         raise FunctionInventoryError("output path cannot be resolved safely") from exc
@@ -346,6 +386,7 @@ def build_inventory(root: Path) -> FunctionInventory:
     star_imports: set[str] = set()
     global_reflection_names: set[str] = set()
     unresolved_reflection_modules: set[str] = set()
+    unresolved_external_reflection = False
     global_references: Counter[str] = Counter()
     for path, raw in sources:
         try:
@@ -362,6 +403,9 @@ def build_inventory(root: Path) -> FunctionInventory:
         star_imports.update(facts.star_imports)
         global_reflection_names.update(facts.reflection_names)
         unresolved_reflection_modules.update(facts.unresolved_reflection_modules)
+        unresolved_external_reflection = (
+            unresolved_external_reflection or facts.unresolved_external_reflection
+        )
         global_references.update(facts.references)
 
     entries: list[FunctionEntry] = []
@@ -383,9 +427,13 @@ def build_inventory(root: Path) -> FunctionInventory:
             elif references:
                 disposition = "referenced"
                 reasons.add("static-reference")
-            elif facts.unresolved_dynamic or any(
-                _module_matches(_module_name(path), target)
-                for target in unresolved_reflection_modules
+            elif (
+                facts.unresolved_dynamic
+                or unresolved_external_reflection
+                or any(
+                    _module_matches(_module_name(path), target)
+                    for target in unresolved_reflection_modules
+                )
             ):
                 disposition = "unknown"
                 reasons.add("unresolved-dynamic-reflection")
