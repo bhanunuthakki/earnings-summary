@@ -165,6 +165,79 @@ def downgrade():
     assert orphaned.recovery_owner is None
 
 
+@pytest.mark.parametrize(
+    "migration_source",
+    [
+        """revision = "0001"
+down_revision = None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    SQL = "CREATE TABLE orphaned (id INTEGER)"
+    if True:
+        SQL = "SELECT 1"
+    op.execute(SQL)
+""",
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+SQL = "SELECT 1".strip()
+revision = "0001"
+down_revision = None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute(SQL)
+""",
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+revision = "0001"
+down_revision = None
+def helper(SQL):
+    op.execute(SQL)
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    helper("SELECT 1")
+""",
+        """revision = "0001"
+down_revision = None
+def helper():
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+from builtins import print as helper
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    helper()
+""",
+        """revision = "0001"
+down_revision = None
+def helper():
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+def upgrade(helper):
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    helper()
+""",
+    ],
+)
+def test_uncertain_bindings_do_not_manufacture_ownership(
+    tmp_path: Path, migration_source: str
+) -> None:
+    root, database = _repo(tmp_path, include_orphan=True)
+    migration = root / "alembic/versions/0001_base.py"
+    migration.write_text(migration_source, encoding="utf-8")
+    subprocess.run(
+        ["git", "commit", "-qam", "uncertain binding"],
+        cwd=root,
+        check=True,
+        env=clean_local_git_env(),
+    )
+
+    inventory = inventory_database(root, database, schema_revision="0001")
+    orphaned = next(entry for entry in inventory.entries if entry.name == "orphaned")
+    assert inventory.status == "HOLD"
+    assert orphaned.ownership == "unowned"
+    assert orphaned.recovery_owner is None
+
+
 def test_sqlite_prefix_filter_does_not_hide_similarly_named_user_table(
     tmp_path: Path,
 ) -> None:

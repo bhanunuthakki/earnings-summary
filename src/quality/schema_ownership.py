@@ -228,6 +228,15 @@ class _BindingVisitor(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.names.add(node.name)
 
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self.names.add(alias.asname or alias.name.split(".", 1)[0])
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            if alias.name != "*":
+                self.names.add(alias.asname or alias.name)
+
     def visit_Lambda(self, node: ast.Lambda) -> None:
         return
 
@@ -346,14 +355,19 @@ def _record_upgrade_evidence(
             functions.pop(bound_name, None)
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+            target_names = _bound_names([node])
+            for target_name in target_names:
+                constants.pop(target_name, None)
             try:
                 value: object = ast.literal_eval(node.value)
             except (TypeError, ValueError):
                 continue
             if isinstance(value, str):
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        constants[target.id] = value
+                simple_targets = tuple(
+                    target.id for target in targets if isinstance(target, ast.Name)
+                )
+                for target_name in simple_targets:
+                    constants[target_name] = value
 
     visited: set[str] = set()
 
@@ -364,7 +378,19 @@ def _record_upgrade_evidence(
         function = functions.get(name)
         if function is None:
             return
-        lexical_bindings = _bound_names(function.body)
+        parameter_names = {
+            argument.arg
+            for argument in (
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            )
+        }
+        if function.args.vararg is not None:
+            parameter_names.add(function.args.vararg.arg)
+        if function.args.kwarg is not None:
+            parameter_names.add(function.args.kwarg.arg)
+        lexical_bindings = _bound_names(function.body) | parameter_names
         function_constants = {
             key: value for key, value in constants.items() if key not in lexical_bindings
         }
@@ -418,6 +444,8 @@ def _record_upgrade_evidence(
                 break
             if isinstance(statement, ast.Raise):
                 break
+            for bound_name in _bound_names([statement]):
+                function_constants.pop(bound_name, None)
 
     visit_function("upgrade")
 
