@@ -54,6 +54,7 @@ from quality.test_db_models import (
 from quality.test_db_models import (
     TestDbAudit as _TestDbAudit,
 )
+from quality.test_db_patterns import audit_test_db_patterns
 
 
 @pytest.fixture(autouse=True)
@@ -138,11 +139,44 @@ def _audit_with_upgrade_files(count: int) -> _TestDbAudit:
     )
 
 
+def test_replay_reduction_withholds_a_measurement_from_a_halted_collection(tmp_path: Path) -> None:
+    """A halted collection must not read as a finished, perfect reduction.
+
+    A held collection reports zero builders, so recomputing from them yields
+    100% reduction with ``ratio_pass`` true. That is the gate's own success
+    condition produced from a scan that never ran.
+    """
+    # A real collector halt, not an imitation of one: an empty directory is not
+    # a git repository, so the scan cannot resolve a subject and holds. Binding
+    # to the collector means a change to either side breaks this test.
+    receipt = audit_test_db_patterns(tmp_path)
+    assert receipt.collection_status == "HOLD"
+    assert receipt.collection_note != ""
+    assert receipt.database_builders == ()
+    assert receipt.replay_reduction is None
+
+    fabricated = ReplayReduction.from_builders(receipt.database_builders)
+    assert fabricated.reduction_percent == 100.0
+    assert fabricated.ratio_pass is True
+
+    assert replay_reduction(receipt) is None
+
+    # The real receipt carries ``scoped_commit="UNKNOWN"``, which ``parse_source``
+    # rejects before reaching the semantic gate. Give the halt a resolvable
+    # subject so the rejection below is the semantic gate's, not the subject
+    # check's.
+    halted = receipt.model_copy(update={"scoped_commit": "a" * 40})
+    assert replay_reduction(halted) is None
+    assert not parse_source("test_db", halted.model_dump_json().encode(), "a" * 40).semantic_pass
+
+
 def test_replay_reduction_is_typed_and_integer_bounded() -> None:
     passing = _audit_with_upgrade_files(51)
     failing = _audit_with_upgrade_files(52)
     pass_measurement = replay_reduction(passing)
     fail_measurement = replay_reduction(failing)
+    assert pass_measurement is not None
+    assert fail_measurement is not None
     assert pass_measurement.baseline_files == TEST_DB_REPLAY_BASELINE_FILES == 172
     assert pass_measurement.remaining_files == 51
     assert pass_measurement.reduction_percent == pytest.approx(70.35)
@@ -167,6 +201,7 @@ def test_replay_reduction_rejects_duplicate_builder_paths() -> None:
     # the duplicated path keeps call:upgrade count at 51, so the ratio still passes.
     duplicate = duplicate.model_copy(update={"replay_reduction": replay_reduction(duplicate)})
     measurement = replay_reduction(duplicate)
+    assert measurement is not None
     assert measurement.remaining_files == 51
     assert measurement.ratio_pass is True
     assert measurement.unique_builder_paths is False
