@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
-
-from alembic.config import Config
-
-from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "execution" / "prune_misscaled_capture_facts.py"
@@ -26,18 +23,9 @@ def _module() -> ModuleType:
     return module
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "prune.db"
-    config = _config(path)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
+    migrated_db(path, stamp=PRIOR, archived=True, target=HEAD)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -59,8 +47,10 @@ def _conn(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def test_apply_appends_one_exclusion_and_preserves_legacy_facts(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_apply_appends_one_exclusion_and_preserves_legacy_facts(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         module = _module()
         matches = module.select_misscaled_capture_facts(conn)
@@ -122,8 +112,10 @@ def test_apply_appends_one_exclusion_and_preserves_legacy_facts(tmp_path: Path) 
         conn.close()
 
 
-def test_dry_run_summary_does_not_require_a_writer(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_dry_run_summary_does_not_require_a_writer(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         module = _module()
         summary = module.summarize_matches(
