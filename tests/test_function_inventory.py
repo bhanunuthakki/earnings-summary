@@ -117,6 +117,36 @@ def test_cross_module_reflection_protects_or_holds_target(tmp_path: Path) -> Non
     assert entries["dynamic_target"].reasons == ("unresolved-dynamic-reflection",)
 
 
+@pytest.mark.parametrize(
+    "import_line,receiver",
+    [
+        ("import pkg.handlers", "pkg.handlers"),
+        ("from pkg import handlers", "handlers"),
+        ("from . import handlers", "handlers"),
+        ("import pkg.handlers as handlers\nother = handlers", "other"),
+    ],
+)
+def test_qualified_and_aliased_module_reflection_holds_target(
+    tmp_path: Path, import_line: str, receiver: str
+) -> None:
+    root = _repo(tmp_path)
+    _write(root, "src/pkg/__init__.py", "")
+    _write(root, "src/pkg/handlers.py", "def hidden(): pass\n")
+    _write(
+        root,
+        "src/pkg/runner.py",
+        f"{import_line}\ngetattr({receiver}, name)()\n",
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True, env=clean_local_git_env())
+    entry = next(
+        item
+        for item in build_inventory(root).entries
+        if item.path == "src/pkg/handlers.py" and item.qualified_name == "hidden"
+    )
+    assert entry.disposition == "unknown"
+    assert entry.reasons == ("unresolved-dynamic-reflection",)
+
+
 def test_getattr_default_string_does_not_resolve_dynamic_name(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _write(root, "src/dynamic.py", "def hidden(): pass\ngetattr(object(), name, 'fallback')\n")
@@ -124,6 +154,32 @@ def test_getattr_default_string_does_not_resolve_dynamic_name(tmp_path: Path) ->
     entry = next(item for item in build_inventory(root).entries if item.qualified_name == "hidden")
     assert entry.disposition == "unknown"
     assert entry.reasons == ("unresolved-dynamic-reflection",)
+
+
+def test_other_dynamic_apis_keep_separate_string_semantics(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _write(
+        root,
+        "src/other_dynamic.py",
+        """import importlib
+def import_hidden(): pass
+def eval_hidden(): pass
+def exec_hidden(): pass
+importlib.import_module("pkg.mod")
+eval("eval_hidden")
+exec("exec_hidden()")
+""",
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True, env=clean_local_git_env())
+    entries = {
+        entry.qualified_name: entry
+        for entry in build_inventory(root).entries
+        if entry.path == "src/other_dynamic.py"
+    }
+    assert entries["eval_hidden"].disposition == "protected"
+    assert entries["eval_hidden"].reasons == ("reflection",)
+    assert entries["import_hidden"].disposition == "unknown"
+    assert entries["exec_hidden"].disposition == "unknown"
 
 
 def test_parse_error_holds_and_excluded_roots_stay_out(tmp_path: Path) -> None:
@@ -177,3 +233,15 @@ def test_cli_rejects_symlink_escape_from_tmp(
     assert main(["--repo-root", str(root), "--output", str(link / "app.py")]) == 1
     assert source.read_bytes() == before
     assert json.loads(capsys.readouterr().err)["error"] == "FunctionInventoryError"
+
+
+def test_cli_rejects_symlinked_tmp_root(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _repo(tmp_path)
+    (root / ".tmp").symlink_to(root / "src", target_is_directory=True)
+    source = root / "src/app.py"
+    before = source.read_bytes()
+    assert main(["--repo-root", str(root), "--output", ".tmp/app.py"]) == 1
+    assert source.read_bytes() == before
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "FunctionInventoryError"
+    assert "cannot be a symlink" in error["message"]
