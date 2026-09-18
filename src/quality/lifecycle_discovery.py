@@ -28,13 +28,27 @@ from .reachability import ReachabilityGraph
 
 REGISTRY_AUTHORITIES: tuple[str, ...] = (
     "src/ask/engine.py",
+    "src/compute/metrics_engine/registry.py",
     "src/dispatch_registry.py",
+    "src/document_table_extractor.py",
+    "src/etf_sources/issuer_registry.py",
+    "src/evals/run_registry.py",
+    "src/ir_pipeline/home_authority_registry.py",
+    "src/ir_uploads.py",
+    "src/issuer_registry.py",
     "src/llm/cli.py",
     "src/llm/prompt_registry.py",
+    "src/macro_regime_playbook.py",
+    "src/macro_series.py",
     "src/operations/registry.py",
+    "src/pipeline/source_policy.py",
+    "src/provenance/issuer_registry.py",
+    "src/provenance/reporting_entity_registry.py",
     "src/runtime/service_registry.py",
     "src/sources/registry.py",
     "src/triggers/registry.py",
+    "src/ui/design_registry.py",
+    "src/user_state/registry.py",
 )
 PYTHON_ROOTS = ("execution/", "cron/", "scripts/", ".github/scripts/")
 SRC_ROOT = "src/"
@@ -53,7 +67,32 @@ _ONE_SHOT = frozenset(
 _EV = re.compile(
     r"(?im)^\s*#\s*lifecycle:\s*(owner|invocation|completion|consumer|expiry|activation|review)\s*=\s*(\S+)\s*$"
 )
-_REG_ASSIGN = re.compile(r"(?m)^[A-Z_][A-Z0-9_]*REGISTRY[A-Z0-9_]*(?:\s*:[^=]+)?\s*=")
+
+
+def declares_registry(text: str) -> bool:
+    """Return whether a module defines a non-scalar ``*REGISTRY`` authority."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        targets: tuple[ast.expr, ...]
+        value: ast.expr | None
+        if isinstance(node, ast.Assign):
+            targets = tuple(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = (node.target,)
+            value = node.value
+        else:
+            continue
+        if isinstance(value, ast.Constant):
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id.endswith("REGISTRY") for target in targets
+        ):
+            return True
+    return False
 
 
 class LifecycleEvidenceFields(TypedDict):
@@ -843,7 +882,7 @@ def expected_candidates(
         and (
             Path(p).name == "registry.py"
             or Path(p).name.endswith("_registry.py")
-            or _REG_ASSIGN.search(read_text(root / p))
+            or declares_registry(read_text(root / p))
         )
     }
     uncat = sorted(discovered - set(REGISTRY_AUTHORITIES))

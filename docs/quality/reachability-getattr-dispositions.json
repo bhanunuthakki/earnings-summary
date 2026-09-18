@@ -503,6 +503,27 @@
       ]
     },
     {
+      "disposition": "closed_literal_set",
+      "evidence": "Seal parity compares only the 12 FactProjectionSeal fields in the adjacent literal tuple.",
+      "fingerprint": "df6a715a69c0501170e954bbfbb9c2754256e38f51b554307a8cd45f3d983051",
+      "line": 1945,
+      "path": "src/search/fact_projection.py",
+      "targets": [
+        "projection_run_id",
+        "manifest_id",
+        "eligible_fact_cell_count",
+        "membership_count",
+        "included_count",
+        "unresolved_material_count",
+        "missing_provenance_count",
+        "quarantined_count",
+        "row_count",
+        "membership_set_sha256",
+        "row_set_sha256",
+        "config_sha256"
+      ]
+    },
+    {
       "disposition": "schema_field",
       "evidence": "Columns come from EmbeddingEvaluationReceipt.model_fields.",
       "fingerprint": "885a71905692ea9666990039bbb90c10e66656f32a2693fa294ce356a09420cd",
@@ -527,13 +548,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c87d2adfb09fd804e3e5e5b5a36180568a337efcc221ec95cea43f782b07ff27",
+      "source_sha256": "e87615ad8a0d930265907ce480795792b25c443aa41ae1b1be534176426f1905",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "b695d5feb1db6ea7d3706e1a07bb6ed500bfea3904f4c2c6e1cbf5fc260ac114"
+    "source_manifest_sha256": "4cc4e2ce20cd1fc4753015cbb65b25f707b0a8a22dd1afbf8dfa17bd85764f3b"
   },
   "schema_version": "reachability-getattr-dispositions/v1"
 }
