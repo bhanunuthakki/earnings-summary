@@ -12,9 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -39,20 +37,18 @@ SHA_B = "b" * 64
 MODEL_MANIFEST = hashlib.sha256(('{"eng":"' + SHA_B + '"}').encode("utf-8")).hexdigest()
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 @pytest.fixture(scope="module")
-def schema_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def schema_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
+) -> Path:
     path = tmp_path_factory.mktemp("image-ocr-schema") / "template.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0234_image_ocr_governance")
-    return path
+    return migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        archived=True,
+        target="0234_image_ocr_governance",
+    )
 
 
 def _png_header(width: int = 640, height: int = 480) -> bytes:

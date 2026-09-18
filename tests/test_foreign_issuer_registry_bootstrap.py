@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from execution.resolve_foreign_identity_blockers import (
     build_known_request,
     known_source_specs,
@@ -35,13 +34,14 @@ HEAD = "0231_legacy_document_evidence_bindings"
 STAMP = datetime(2026, 7, 28, 1, 0, tzinfo=UTC)
 
 
-def _database(tmp_path: Path) -> sqlite3.Connection:
+def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "foreign-issuer.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        archived=True,
+        target=HEAD,
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -283,8 +283,9 @@ def _ivn_request(tmp_path: Path, *, apply: bool) -> ForeignIssuerBootstrapReques
 
 def test_nintendo_adr_stays_distinct_from_ordinary_and_replays_exactly(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     request = _nintendo_request(tmp_path, apply=True)
 
     dry_run = bootstrap_foreign_issuer(
@@ -350,8 +351,9 @@ def test_nintendo_adr_stays_distinct_from_ordinary_and_replays_exactly(
 
 def test_ivn_uses_sedar_identity_and_never_imports_sec_predecessor(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     result = bootstrap_foreign_issuer(
         conn,
         request=_ivn_request(tmp_path, apply=True),

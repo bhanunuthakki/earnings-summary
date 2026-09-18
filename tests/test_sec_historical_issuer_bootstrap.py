@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from execution.bootstrap_sec_historical_issuer import normalize_cik
 from provenance.issuer_registry_bootstrap import (
     SecCompanyTickerContractError,
@@ -52,13 +51,14 @@ def _body(*, current_tickers: list[str] | None = None) -> bytes:
     ).encode()
 
 
-def _database(tmp_path: Path) -> sqlite3.Connection:
+def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "historical-issuer.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        archived=True,
+        target=HEAD,
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -101,8 +101,9 @@ def test_historical_cli_normalizes_short_sec_cik_once_for_url_and_request() -> N
 
 def test_historical_bootstrap_is_append_only_and_exactly_replayable(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     dry_run = bootstrap_sec_historical_issuer(
         conn,
         request=_request(tmp_path, apply=False),

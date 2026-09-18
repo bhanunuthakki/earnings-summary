@@ -13,14 +13,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from dcf import redesign
 from dcf.fact_drivers import DRIVER_FIELDS_BY_KEY, apply_to_inputs
 from research.dcf_artifact import apply_dcf_proposal, draft_dcf_proposal
@@ -178,18 +176,13 @@ def test_recompute_row_matches_the_pure_valuation_unit_contract() -> None:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Iterator[Path]:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[Path]:
     db_file = tmp_path / "ledger.db"
     import db as dbmod
 
     saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
     dbmod.set_db_path(str(db_file))
-    dbmod.init_db()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
+    migrated_db(db_file)
     try:
         yield db_file
     finally:

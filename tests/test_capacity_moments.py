@@ -20,14 +20,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -69,15 +66,8 @@ def _stub_live_portfolio(live: LivePortfolio) -> object:
     return _fake
 
 
-def _cfg(db_file: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
-    return cfg
-
-
 @pytest.fixture
-def repo(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
+def repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[tuple[Path, Path]]:
     """(repo_root, db_path) — a real, fully-migrated DB at
     <repo_root>/data/portfolio.db. Saves/restores db.py's process-global
     DB_PATH/DATA_DIR/FMP_DIR (mirrors test_position_review_integration.py) so
@@ -87,10 +77,7 @@ def repo(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
     db_file = data_dir / "portfolio.db"
     saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
     dbmod.set_db_path(str(db_file))
-    dbmod.init_db()
-    cfg = _cfg(db_file)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
+    migrated_db(db_file)
     try:
         yield tmp_path, db_file
     finally:

@@ -20,15 +20,14 @@ poking the internal mapper, so they exercise the same path the dispatcher uses.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
 import execution.fetch_fmp_news as fmpnews
-from alembic import command
 from execution.fetch_fmp_news import fetch_news_for_ticker, to_utc
 from models.fmp_payloads import FmpStockNewsRecord
 from net.client import HttpCallError, HttpErrorKind, HttpJsonResponse, JsonValue
@@ -224,20 +223,15 @@ def test_fetch_schema_drift_dumps_and_halts(
 # ---------------------------------------------------------------------------
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def news_db(tmp_path: Path) -> Path:
+def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "fmp_news.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, "0064_queued_actions")
-    command.upgrade(cfg, "0065_news")
-    return db
+    return migrated_db(
+        db,
+        stamp="0064_queued_actions",
+        archived=True,
+        target="0065_news",
+    )
 
 
 def test_run_persists_mapped_rows(news_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:

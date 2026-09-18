@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 import ask.grounded_retrieval as grounded_retrieval_module
-from alembic import command
 from ask.grounded_retrieval import persist_answer_grounding, retrieve_grounded_ask
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -41,18 +40,14 @@ STAMP = datetime(2026, 7, 27, 6, 0, 0)
 A, B, C = "a" * 64, "b" * 64, "c" * 64
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "ask.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0221_ask_retrieval_traces")
+    migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        archived=True,
+        target="0221_ask_retrieval_traces",
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -189,8 +184,10 @@ def _seed_complete_corpus(conn: sqlite3.Connection) -> str:
     return corpus.manifest_id
 
 
-def test_ready_retrieval_and_answer_hashes_have_exact_lineage(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_ready_retrieval_and_answer_hashes_have_exact_lineage(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         manifest_id = _seed_complete_corpus(conn)
         result = retrieve_grounded_ask(
@@ -337,8 +334,9 @@ def test_enabled_semantic_retrieval_fails_when_verified_backend_is_unavailable(
 
 def test_missing_source_inventory_returns_audited_unavailable_outcome(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         result = retrieve_grounded_ask(
             conn,
@@ -358,8 +356,9 @@ def test_missing_source_inventory_returns_audited_unavailable_outcome(
 
 def test_reused_ticker_across_canonical_issuers_fails_closed(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_complete_corpus(conn)
         reconcile_source_coverage(
@@ -428,8 +427,10 @@ def test_reused_ticker_across_canonical_issuers_fails_closed(
         conn.close()
 
 
-def test_trace_item_exact_replay_rejects_conflicting_stored_bundle(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_trace_item_exact_replay_rejects_conflicting_stored_bundle(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_complete_corpus(conn)
         retrieve_grounded_ask(
@@ -461,8 +462,9 @@ def test_trace_item_exact_replay_rejects_conflicting_stored_bundle(tmp_path: Pat
 
 def test_integrity_audit_recomputes_trace_bundle_and_manifest_membership(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_complete_corpus(conn)
         retrieve_grounded_ask(

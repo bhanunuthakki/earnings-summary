@@ -27,14 +27,11 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 import requests
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -43,15 +40,8 @@ from advisor.position_review import build_pre_analysis, render_tax_lines  # noqa
 from integrations import portfolio_tracker_client as ptc  # noqa: E402
 
 
-def _cfg(db_file: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
-    return cfg
-
-
 @pytest.fixture
-def repo_root(tmp_path: Path) -> Iterator[Path]:
+def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[Path]:
     """A real ``<repo_root>/data/portfolio.db`` at alembic head — mirrors
     ``test_dcf_live_write.py``'s fixture (init_db + stamp baseline + upgrade
     head) so ``build_pre_analysis``'s conn-backed reads (break-rules, DCF,
@@ -64,10 +54,7 @@ def repo_root(tmp_path: Path) -> Iterator[Path]:
 
     saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
     dbmod.set_db_path(str(db_file))
-    dbmod.init_db()
-    cfg = _cfg(db_file)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
+    migrated_db(db_file)
     try:
         yield tmp_path
     finally:
