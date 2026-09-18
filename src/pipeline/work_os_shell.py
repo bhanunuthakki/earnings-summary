@@ -9,8 +9,10 @@ drill-through data providers while the old command-center navigation is retired.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -3298,11 +3300,83 @@ def _prototype_html() -> str:
     return _PROTOTYPE_PATH.read_text(encoding="utf-8")
 
 
+# The render is ~30 substitution passes over the lru-cached prototype; the only
+# request-varying byte is the `data-generated-at` stamp baked into the
+# live-status element. The shell JS never parses that attribute (it only
+# rewrites the element's textContent), so finished renders are memoized on a
+# 30s bucket — the same freshness window as the server's panel response cache —
+# and a served shell may carry a stamp up to one bucket (<=30s) old.
+_SHELL_MEMO_BUCKET_SECONDS = 30
+_SHELL_MEMO_MAX_ENTRIES = 4
+_SHELL_MEMO_LOCK = threading.Lock()
+_SHELL_MEMO: dict[tuple[int, str, int], str] = {}
+
+
+def _shell_memo_key(rendered_at: datetime, *, exact_stamp: bool) -> tuple[int, str, int]:
+    """Key every byte-affecting input of one shell render.
+
+    ``rendered_at`` enters the bytes only through the stamp. Implicitly clocked
+    renders are keyed by their 30s bucket (the accepted staleness above),
+    while an explicitly pinned ``generated_at`` is keyed exactly so contract
+    callers (tests, design canaries) always get their own bytes. The prototype
+    fingerprint makes a changed mockup — after ``_prototype_html.cache_clear()``
+    — a different key instead of a stale memo hit. ``db_path`` is deliberately
+    absent: ``_add_production_contract`` never reads it.
+    """
+    stamp_clock = rendered_at.astimezone(UTC)
+    return (
+        int(stamp_clock.timestamp()) // _SHELL_MEMO_BUCKET_SECONDS,
+        stamp_clock.isoformat() if exact_stamp else "",
+        hash(_prototype_html()),
+    )
+
+
+def _shell_memo_etag(key: tuple[int, str, int]) -> str:
+    """Derive the response validator from the memo key, not the rendered body."""
+    digest = hashlib.sha256("|".join(str(part) for part in key).encode("utf-8")).hexdigest()
+    return f'"{digest}"'
+
+
+@dataclass(frozen=True, slots=True)
+class ShellRenderResult:
+    """One memoized shell render plus the response headers that describe it."""
+
+    html: str
+    etag: str
+    cache_state: Literal["hit", "miss"]
+
+
+def render_work_os_shell_result(
+    *, generated_at: datetime | None = None, db_path: Path | None = None
+) -> ShellRenderResult:
+    """Render the shell together with its memo-key ETag and cache state.
+
+    The ETag is a pure function of the memo key, so two renders that share a
+    validator are byte-identical by construction, and a conditional request can
+    be answered from the validator without re-running the substitution passes.
+    """
+    rendered_at = generated_at or datetime.now(UTC)
+    key = _shell_memo_key(rendered_at, exact_stamp=generated_at is not None)
+    with _SHELL_MEMO_LOCK:
+        html = _SHELL_MEMO.get(key)
+        if html is None:
+            html = _make_allocation_language_honest(_prototype_html())
+            html = _add_production_contract(html, rendered_at, db_path=db_path)
+            if len(_SHELL_MEMO) >= _SHELL_MEMO_MAX_ENTRIES:
+                _SHELL_MEMO.pop(next(iter(_SHELL_MEMO)))
+            _SHELL_MEMO[key] = html
+            return ShellRenderResult(html, _shell_memo_etag(key), "miss")
+        return ShellRenderResult(html, _shell_memo_etag(key), "hit")
+
+
 def render_work_os_shell(
     *, generated_at: datetime | None = None, db_path: Path | None = None
 ) -> str:
     """Render the exact prototype shell with production-safe behavior."""
+    return render_work_os_shell_result(generated_at=generated_at, db_path=db_path).html
 
-    rendered_at = generated_at or datetime.now(UTC)
-    html = _make_allocation_language_honest(_prototype_html())
-    return _add_production_contract(html, rendered_at, db_path=db_path)
+
+def clear_work_os_shell_render_cache() -> None:
+    """Drop memoized renders (test seam around monkeypatched render internals)."""
+    with _SHELL_MEMO_LOCK:
+        _SHELL_MEMO.clear()

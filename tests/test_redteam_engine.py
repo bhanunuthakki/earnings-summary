@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -212,20 +213,15 @@ def test_profile_drift_prompt_pivots_to_empty_profile_when_nothing_affirmed() ->
     assert "graded decisions accumulating" in prompt
 
 
-def test_profile_drift_evidence_reads_affirmed_and_expiring_facts(tmp_path: Path) -> None:
+def test_profile_drift_evidence_reads_affirmed_and_expiring_facts(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     import sqlite3
 
-    from alembic.config import Config
-
-    from alembic import command
     from owner_profile.store import append_fact
 
     db = tmp_path / "portfolio.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0059_kpi_facts_restatement")
-    command.upgrade(cfg, "head")
+    migrated_db(db, stamp="0059_kpi_facts_restatement", archived=True, reanchor_to_active_head=True)
 
     conn = sqlite3.connect(str(db))
     try:

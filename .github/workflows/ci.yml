@@ -22,9 +22,20 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    # Nightly Design Sync safety net (declared new scope, workstream C1): the
+    # design job's `if:` runs it on this trigger even when the classifier found
+    # no design path, so a missed cross-surface coupling in a PR is caught
+    # within a day. The `changes` job requires no path group on schedule, so
+    # every other conditional job skips and the nightly run stays cheap.
+    - cron: "17 6 * * *"
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # The event name keeps the nightly schedule run (ref = refs/heads/main) in
+  # its own group so it can never cancel an in-progress main-push run (and is
+  # itself cancelled by one — that push runs the design job anyway). PR and
+  # push cancellation semantics are unchanged by the suffix.
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
@@ -37,6 +48,7 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
       python: ${{ steps.classify.outputs.python }}
+      design: ${{ steps.classify.outputs.design }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -52,6 +64,16 @@ jobs:
           CURRENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            # The nightly trigger exists solely for the scheduled Design Sync
+            # run (the design job's `if:` names it); it must not fan out the
+            # expensive matrix, so no path group is required and every other
+            # conditional job skips.
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "python=false" >> "$GITHUB_OUTPUT"
+            echo "design=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
             base="$PR_BASE_SHA"
             head="$PR_HEAD_SHA"
@@ -206,7 +228,11 @@ jobs:
   design:
     name: Design Sync
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    # Runs for a PR that touched a design path (classifier output), for every
+    # push to main, and for the nightly schedule trigger. A PR with no design
+    # path skips the job, and the aggregate gate tolerates that skip only
+    # because classify_paths said design=false.
+    if: ${{ needs.changes.outputs.design == 'true' || github.ref == 'refs/heads/main' || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -263,7 +289,11 @@ jobs:
           python -m playwright install --with-deps --only-shell chromium
       - name: Verify canonical design tokens and production Work OS contract
         env:
-          DESIGN_DEBT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # gen_design_conformance_debt.py REFUSES --allow-missing-base with an
+          # empty --base-ref, which a schedule event (no PR base, no before)
+          # would otherwise produce — so the nightly run compares against
+          # HEAD~1 ("did the last commit grow design debt") instead.
+          DESIGN_DEBT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
         run: |
           python scripts/check_design_sync.py
           python scripts/gen_design_conformance_debt.py --base-ref "$DESIGN_DEBT_BASE_REF" --allow-missing-base
@@ -407,16 +437,41 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
-            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+            base="origin/${{ github.base_ref }}"
           else
-            b="${{ github.event.before }}"
-            if ! git rev-parse --quiet --verify "$b^{commit}" >/dev/null 2>&1; then
-              b="HEAD~1"
+            base="${{ github.event.before }}"
+            if ! git rev-parse --quiet --verify "$base^{commit}" >/dev/null 2>&1; then
+              base="HEAD~1"
             fi
-            echo "ref=$b" >> "$GITHUB_OUTPUT"
           fi
+          echo "ref=$base" >> "$GITHUB_OUTPUT"
+          # The RESOLVED base tip sha keys the base-scan cache: for a PR this
+          # is the fetched origin/<base_ref> tip (not the recorded PR base),
+          # so every run on the same base tip — e.g. each new commit pushed to
+          # one PR — shares a single base scan.
+          echo "sha=$(git rev-parse "$base")" >> "$GITHUB_OUTPUT"
+      - name: Resolve tool versions for the base-scan cache key
+        id: tools
+        run: |
+          set -euo pipefail
+          echo "pyright=$(pyright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+          echo "python=$(python -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
+      - name: Cache base pyright scan
+        # Exact key ONLY — deliberately no restore-keys. A fuzzy restore keyed
+        # to a different base tip would silently compare HEAD against a stale
+        # ratchet. (base tip sha, resolved pyright version, python version,
+        # installed lock hash) fully determines the base scan's diagnostics:
+        # the base tree — including its pyright config — comes from the base
+        # sha's checkout.
+        id: base_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/pyright-base-cache
+          key: pyright-base-${{ steps.base.outputs.sha }}-pw${{ steps.tools.outputs.pyright }}-py${{ steps.tools.outputs.python }}-lock${{ hashFiles('requirements.lock') }}
       - name: pyright strict — no NEW errors vs base (ratchet)
         shell: bash
+        env:
+          BASE_CACHE_HIT: ${{ steps.base_cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
           head_json="$RUNNER_TEMP/pyright-head.json"
@@ -444,28 +499,51 @@ jobs:
           }
 
           run_pyright "$head_json" head "$GITHUB_WORKSPACE"
-          base="${{ steps.base.outputs.ref }}"
-          wt="$RUNNER_TEMP/base-pyright"
-          # Clear any stale worktree path from a retried job, then REQUIRE the
-          # base checkout to succeed. A broken ratchet must BLOCK (exit 1), never
-          # silently pass: the previous `exit 0` here was an escape hatch that
-          # disabled the type gate on a transient infra hiccup (v6 re-grade,
-          # Quality enforcement). fetch-depth:0 + the base fetch above make a
-          # genuine failure exceptional, so failing closed is safe.
-          rm -rf "$wt" 2>/dev/null || true
-          if ! git worktree add --quiet --detach "$wt" "$base" 2>/dev/null; then
-            echo "::error::could not check out base ($base) for the pyright ratchet — failing the type gate (a broken ratchet must block, not silently pass)."
-            exit 1
+          cache_dir="$RUNNER_TEMP/pyright-base-cache"
+          base_root=""
+          if [ "$BASE_CACHE_HIT" = "true" ] \
+              && [ -s "$cache_dir/pyright-base.json" ] \
+              && [ -s "$cache_dir/base-root.txt" ]; then
+            # Cache hit: skip the base worktree scan. The gate reads ONLY the
+            # two JSONs, and the cached JSON's diagnostics carry absolute paths
+            # from the run that produced them, so the stored base-root prefix
+            # string must be passed to --base-root verbatim (ci_gate.py strips
+            # it from every diagnostic path and message).
+            cp "$cache_dir/pyright-base.json" "$base_json"
+            base_root="$(cat "$cache_dir/base-root.txt")"
+            echo "base pyright scan restored from cache (base sha ${{ steps.base.outputs.sha }})"
+          else
+            base="${{ steps.base.outputs.ref }}"
+            wt="$RUNNER_TEMP/base-pyright"
+            # Clear any stale worktree path from a retried job, then REQUIRE the
+            # base checkout to succeed. A broken ratchet must BLOCK (exit 1), never
+            # silently pass: the previous `exit 0` here was an escape hatch that
+            # disabled the type gate on a transient infra hiccup (v6 re-grade,
+            # Quality enforcement). fetch-depth:0 + the base fetch above make a
+            # genuine failure exceptional, so failing closed is safe.
+            rm -rf "$wt" 2>/dev/null || true
+            if ! git worktree add --quiet --detach "$wt" "$base" 2>/dev/null; then
+              echo "::error::could not check out base ($base) for the pyright ratchet — failing the type gate (a broken ratchet must block, not silently pass)."
+              exit 1
+            fi
+            cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
+            trap cleanup EXIT
+            run_pyright "$base_json" base "$wt"
+            git worktree remove --force "$wt" 2>/dev/null || true
+            trap - EXIT
+            base_root="$wt"
+            # Persist the base JSON together with the root prefix it was
+            # produced under; this action's post-run saves them on an
+            # exact-key miss. (A hit with missing/empty files falls through
+            # to here and re-scans — fail toward running the scan.)
+            mkdir -p "$cache_dir"
+            cp "$base_json" "$cache_dir/pyright-base.json"
+            echo "$wt" > "$cache_dir/base-root.txt"
           fi
-          cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
-          trap cleanup EXIT
-          run_pyright "$base_json" base "$wt"
-          git worktree remove --force "$wt" 2>/dev/null || true
-          trap - EXIT
           python .github/scripts/ci_gate.py pyright-diff \
             --base-json "$base_json" \
             --head-json "$head_json" \
-            --base-root "$wt" \
+            --base-root "$base_root" \
             --head-root "$GITHUB_WORKSPACE"
 
   security:
@@ -556,6 +634,7 @@ jobs:
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
+          DESIGN_CHANGED: ${{ needs.changes.outputs.design || 'false' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           PUBLIC_BOUNDARY_RESULT: ${{ needs.public-boundary.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
@@ -567,6 +646,7 @@ jobs:
           python .github/scripts/ci_gate.py verify
           --code "$CODE_CHANGED"
           --python "$PYTHON_CHANGED"
+          --design "$DESIGN_CHANGED"
           --changes-result "$CHANGES_RESULT"
           --public-boundary-result "$PUBLIC_BOUNDARY_RESULT"
           --tests-result "$TESTS_RESULT"

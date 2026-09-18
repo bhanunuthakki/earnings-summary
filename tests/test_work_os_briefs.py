@@ -477,3 +477,20 @@ def test_shared_body_descriptor_keeps_body_route_when_file_is_missing(
     unavailable = work_os_client.get(item["body_url"])
     assert unavailable.status_code == 409
     assert unavailable.get_json()["status"] == "body_missing"
+
+
+def test_brief_library_api_is_server_cached_with_a_no_store_client_contract(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    brief = _persist_shared_brief(work_os_app_repo)
+    first = work_os_client.get("/api/work-os/briefs")
+    second = work_os_client.get("/api/work-os/briefs")
+
+    assert first.status_code == 200
+    assert first.headers["Cache-Control"] == "no-store"
+    assert first.headers["X-Panel-Cache"] == "miss"
+    assert second.status_code == 200
+    assert second.headers["Cache-Control"] == "no-store"
+    assert second.headers["X-Panel-Cache"] == "hit"
+    assert second.get_data() == first.get_data()
+    assert [item["artifact_id"] for item in second.get_json()["items"]] == [brief.artifact_id]

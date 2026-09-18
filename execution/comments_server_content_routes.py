@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from comments_server_evaluation_projection import resolve_work_os_evaluation_item
 from flask import Flask, Response, abort, redirect, request, send_file
 
 from integrations.portfolio_tracker_client import LivePortfolio
@@ -67,20 +68,20 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     def _evaluation_item(raw_ticker: str):
         """Resolve one item through the same no-cache projection as Evaluation."""
-        from pipeline.research_cockpit import build_cockpit_rows
-        from pipeline.work_os_evaluation import build_work_os_evaluation
-
         try:
             ticker = context.safe_ticker(raw_ticker)
         except ValueError:
             return None
         conn = context.get_read_db()
         try:
-            rows = build_cockpit_rows(conn, repo_root).get("evaluation", [])
-            payload = build_work_os_evaluation(rows, repo_root, conn)
+            return resolve_work_os_evaluation_item(
+                conn,
+                repo_root,
+                ticker,
+                safe_ticker=context.safe_ticker,
+            )
         except (OSError, ValueError, sqlite3.Error):
             return None
-        return next((item for item in payload.items if item.ticker == ticker), None)
 
     @app.route("/source/<int:doc_id>", methods=["GET"])
     def source_viewer(doc_id: int):

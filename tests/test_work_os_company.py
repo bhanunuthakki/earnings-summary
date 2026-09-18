@@ -878,6 +878,23 @@ def test_company_desk_api_is_read_only_and_no_store(
     }
 
 
+def test_company_desk_api_is_server_cached_with_a_no_store_client_contract(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    _seed_company_state(work_os_app_repo)
+    first = work_os_client.get("/api/work-os/companies/nu/desk")
+    second = work_os_client.get("/api/work-os/companies/nu/desk")
+
+    assert first.status_code == 200
+    assert first.headers["Cache-Control"] == "no-store"
+    assert first.headers["X-Panel-Cache"] == "miss"
+    assert second.status_code == 200
+    assert second.headers["Cache-Control"] == "no-store"
+    assert second.headers["X-Panel-Cache"] == "hit"
+    assert second.get_data() == first.get_data()
+    assert second.get_json()["company"]["ticker"] == "NU"
+
+
 def test_company_desk_api_fetches_one_canonical_tracker_snapshot(
     work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

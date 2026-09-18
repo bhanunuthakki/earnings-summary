@@ -469,6 +469,111 @@ def test_work_os_evaluation_api_returns_complete_versioned_projection(
     assert "stock" not in response.get_data(as_text=True).lower()
 
 
+def test_dashboard_page_revalidates_on_the_memo_bucket_etag(client: FlaskClient) -> None:
+    """GET / carries a memo-key ETag; a repeat load revalidates to a 304."""
+    first = client.get("/")
+
+    assert first.status_code == 200
+    assert first.mimetype == "text/html"
+    assert first.headers["Cache-Control"] == "no-cache"
+    etag = first.headers["ETag"]
+
+    second = client.get("/")
+    assert second.status_code == 200
+    assert second.get_data() == first.get_data()
+    assert second.headers["ETag"] == etag
+    assert second.headers["X-Panel-Cache"] == "hit"
+
+    again = client.get("/", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.get_data() == b""
+    assert again.headers["ETag"] == etag
+    assert again.headers["X-Panel-Cache"] == "hit"
+
+    stale = client.get("/", headers={"If-None-Match": '"deadbeef"'})
+    assert stale.status_code == 200
+    assert stale.get_data() == first.get_data()
+
+
+def test_work_os_evaluation_api_is_server_cached_with_a_no_store_client_contract(
+    client: FlaskClient,
+) -> None:
+    first = client.get("/api/work-os/evaluation")
+    second = client.get("/api/work-os/evaluation")
+
+    assert first.status_code == 200
+    assert first.headers["Cache-Control"] == "no-store"
+    assert first.headers["X-Panel-Cache"] == "miss"
+    assert second.status_code == 200
+    assert second.headers["Cache-Control"] == "no-store"
+    assert second.headers["X-Panel-Cache"] == "hit"
+    assert second.get_data() == first.get_data()
+    assert second.get_json()["schema_version"] == "evaluation_surface.v2"
+
+
+def test_work_os_portfolio_api_caches_its_degraded_tracker_payload(
+    app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A down tracker keeps serving its honest degraded snapshot — never a
+    success projection, never a re-probe per request — inside the cache TTL."""
+    tracker_calls = {"count": 0}
+
+    def down_tracker() -> LivePortfolio:
+        tracker_calls["count"] += 1
+        return LivePortfolio(available=False, api_url="http://tracker.test", error="tracker down")
+
+    monkeypatch.setattr(comments_server, "fetch_live_portfolio", down_tracker)
+    local_client = comments_server.create_app(app_repo).test_client()
+
+    first = local_client.get("/api/work-os/portfolio")
+    second = local_client.get("/api/work-os/portfolio")
+
+    assert first.status_code == 200
+    assert first.headers["Cache-Control"] == "no-store"
+    assert first.headers["X-Panel-Cache"] == "miss"
+    assert first.get_json()["status"] == "degraded"
+    assert tracker_calls["count"] == 1
+    assert second.status_code == 200
+    assert second.headers["Cache-Control"] == "no-store"
+    assert second.headers["X-Panel-Cache"] == "hit"
+    assert second.get_data() == first.get_data()
+    assert second.get_json()["status"] == "degraded"
+    # The hit serves the degraded snapshot; the tracker is not re-probed.
+    assert tracker_calls["count"] == 1
+
+
+def test_single_ticker_evaluation_projection_matches_the_full_build(app_repo: Path) -> None:
+    """The peek/label-review single-item projection is the Evaluation surface's
+    own item for the same ticker (same resolver, smaller input)."""
+    from comments_server_evaluation_projection import resolve_work_os_evaluation_item
+
+    import ticker_validation
+    from pipeline.research_cockpit import build_cockpit_rows
+    from pipeline.work_os_evaluation import build_work_os_evaluation
+
+    conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        full = build_work_os_evaluation(
+            build_cockpit_rows(conn, app_repo).get("evaluation", []),
+            app_repo,
+            conn,
+        )
+        single = resolve_work_os_evaluation_item(
+            conn,
+            app_repo,
+            "MELI",
+            safe_ticker=ticker_validation.safe_ticker,
+        )
+        expected = next((item for item in full.items if item.ticker == "MELI"), None)
+    finally:
+        conn.close()
+
+    assert expected is not None
+    assert single is not None
+    assert single == expected
+
+
 def test_investment_profile_review_is_fingerprint_bound_and_append_only(
     app_repo: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -7,8 +7,13 @@ then moves it into place;
 refuses to overwrite an existing DB without `--force`.
 
 Recovery objectives (sre-3):
-  - RPO (max data loss): <= 24h — backup_db runs daily at 02:45 and retains 14
-    snapshots. Re-run backup_db.py on demand before risky work to tighten it.
+  - RPO (max data loss): <= 24h of *changes* — backup_db runs daily at 02:45
+    and retains 14 snapshots; a day whose consistent snapshot is byte-identical
+    to the last successfully uploaded backup is skipped (`skipped_unchanged`)
+    instead of re-uploading, so the bound applies to changes: every committed
+    change is inside an uploaded snapshot within ~24h, and an unchanged day
+    loses nothing by being skipped. Re-run backup_db.py on demand before risky
+    work to tighten it.
   - RTO (time to restore): minutes — `python cron/restore_db.py --latest` is a
     single gunzip + integrity check + move.
 
