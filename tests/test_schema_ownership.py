@@ -330,6 +330,22 @@ def upgrade():
     op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
     helper(Noop())
 """,
+        """revision = "0001"
+down_revision = None
+op.execute = lambda *args: None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """revision = "0001"
+down_revision = None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.create_table = lambda *args: None
+    op.create_table("orphaned")
+""",
     ],
 )
 def test_uncertain_bindings_do_not_manufacture_ownership(
@@ -340,6 +356,34 @@ def test_uncertain_bindings_do_not_manufacture_ownership(
     migration.write_text("from alembic import op\n" + migration_source, encoding="utf-8")
     subprocess.run(
         ["git", "commit", "-qam", "uncertain binding"],
+        cwd=root,
+        check=True,
+        env=clean_local_git_env(),
+    )
+
+    inventory = inventory_database(root, database, schema_revision="0001")
+    orphaned = next(entry for entry in inventory.entries if entry.name == "orphaned")
+    assert inventory.status == "HOLD"
+    assert orphaned.ownership == "unowned"
+    assert orphaned.recovery_owner is None
+
+
+def test_relative_alembic_import_does_not_grant_receiver_authority(tmp_path: Path) -> None:
+    root, database = _repo(tmp_path, include_orphan=True)
+    migration = root / "alembic/versions/0001_base.py"
+    migration.write_text(
+        """from .alembic import op
+revision = "0001"
+down_revision = None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "commit", "-qam", "relative receiver"],
         cwd=root,
         check=True,
         env=clean_local_git_env(),

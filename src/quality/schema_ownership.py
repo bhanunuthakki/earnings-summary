@@ -342,10 +342,31 @@ def _record_upgrade_evidence(
     trusted_operation_receivers: set[str] = set()
     for statement in tree.body:
         trusted_operation_receivers.difference_update(_bound_names([statement]))
-        if isinstance(statement, ast.ImportFrom) and statement.module == "alembic":
+        if (
+            isinstance(statement, ast.ImportFrom)
+            and statement.level == 0
+            and statement.module == "alembic"
+        ):
             trusted_operation_receivers.update(
                 alias.asname or alias.name for alias in statement.names if alias.name == "op"
             )
+    mutated_receivers: set[str] = set()
+    for child in ast.walk(tree):
+        if isinstance(child, ast.Attribute) and isinstance(child.ctx, (ast.Store, ast.Del)):
+            receiver: ast.expr = child.value
+            while isinstance(receiver, ast.Attribute):
+                receiver = receiver.value
+            if isinstance(receiver, ast.Name):
+                mutated_receivers.add(receiver.id)
+        if (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id in {"setattr", "delattr"}
+            and child.args
+            and isinstance(child.args[0], ast.Name)
+        ):
+            mutated_receivers.add(child.args[0].id)
+    trusted_operation_receivers.difference_update(mutated_receivers)
     globally_mutable_symbols = {
         name
         for function in tree.body
