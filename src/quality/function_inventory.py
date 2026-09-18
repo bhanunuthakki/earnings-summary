@@ -214,6 +214,8 @@ class _ModuleFacts(ast.NodeVisitor):
             self.reflection_names.update(literal_names)
             if not literal_names:
                 self.unresolved_dynamic = True
+                if dynamic_name in {"eval", "exec"}:
+                    self.unresolved_external_reflection = True
         for arg in node.args:
             if isinstance(arg, ast.Name):
                 self.callback_names.add(arg.id)
