@@ -566,6 +566,50 @@ def test_duplicate_identities_and_uncatalogued(tmp_path: Path) -> None:
     assert "uncatalogued" in " ".join(build_inventory(repo).violations)
 
 
+def test_registry_metadata_constants_are_not_registry_authorities(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _w(
+        repo / "src/constants.py",
+        (
+            "REGISTRY_VERSION = '1'\n"
+            "REGISTRY_ID = 'example'\n"
+            "REGISTRY_TABLES = ('example',)\n"
+            "SERVICE_REGISTRY = 'src/runtime/service_registry.py'\n"
+        ),
+    )
+    _git(repo, "add", ".")
+    _refresh(repo)
+    inventory = build_inventory(repo)
+    assert inventory.status == "PASS"
+    assert not any("src/constants.py" in violation for violation in inventory.violations)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "HANDLER_REGISTRY_BY_NAME = {'run': 'execution/entry.py'}\n",
+        "HANDLER_REGISTRY_BY_NAME = dict(run='execution/entry.py')\n",
+        (
+            "handlers = {'run': 'execution/entry.py'}\n"
+            "HANDLER_REGISTRY_BY_NAME: dict[str, str] = handlers\n"
+        ),
+    ),
+)
+def test_mapping_registry_with_qualified_suffix_is_an_authority(
+    tmp_path: Path, declaration: str
+) -> None:
+    repo = _repo(tmp_path)
+    _w(repo / "src/handlers.py", declaration)
+    _git(repo, "add", ".")
+    _refresh(repo)
+    inventory = build_inventory(repo)
+    assert inventory.status == "HOLD"
+    assert any("src/handlers.py" in violation for violation in inventory.violations)
+    assert any(
+        entry.path == "src/handlers.py" and entry.kind == "registry" for entry in inventory.entries
+    )
+
+
 def test_test_imports_and_wrapper_comments(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _w(repo / "tests/test_only.py", "from execution import entry\n")
