@@ -135,6 +135,8 @@ python execution/build_operational_reachability.py \
   --output .tmp/quality/reachability-check.json
 python execution/classify_operational_lifecycle.py \
   --output .tmp/quality/lifecycle-inventory.json
+python execution/inventory_function_candidates.py \
+  --output .tmp/quality/function-candidate-inventory.json
 python execution/reconcile_quality_baseline.py \
   --output .tmp/quality/roadmap-reconciliation.json
 ```
