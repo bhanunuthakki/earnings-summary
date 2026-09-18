@@ -101,8 +101,17 @@ def test_comments_and_downgrade_sql_do_not_manufacture_ownership(tmp_path: Path)
     root, database = _repo(tmp_path, include_orphan=True)
     migration = root / "alembic/versions/0001_base.py"
     migration.write_text(
-        migration.read_text(encoding="utf-8")
-        + """
+        """revision = "0001"
+down_revision = None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    def unused_nested_helper():
+        op.execute("CREATE TABLE orphaned (id INTEGER)")
+    if False:
+        op.execute("CREATE TABLE orphaned (id INTEGER)")
+    op.execute("-- CREATE TABLE orphaned (id INTEGER)")
+    op.execute("SELECT 'CREATE TABLE orphaned (id INTEGER)'")
 # CREATE TABLE orphaned (id INTEGER)
 def downgrade():
     op.execute("CREATE TABLE orphaned (id INTEGER)")
@@ -153,6 +162,11 @@ def test_output_must_be_non_aliasing_path_under_repository_tmp(
     before = source.read_bytes()
     assert schema_ownership.main(["--repo-root", str(root), "--output", "src/store.py"]) == 1
     assert source.read_bytes() == before
+
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(schema_ownership, "MAX_STDOUT_BYTES", 0)
+    assert schema_ownership.main(["--repo-root", "."]) == 0
+    assert (root / ".tmp/quality/schema-ownership-inventory.json").is_file()
 
     symlink = tmp_path / ".tmp/link.json"
     symlink.symlink_to(source)

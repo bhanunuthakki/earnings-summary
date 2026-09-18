@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from alembic import command
 from quality.atomic_write import write_text_atomic
 from quality.git_env import clean_local_git_env
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 SCHEMA_VERSION = "schema-ownership-inventory/v1"
 PRODUCT_ROOTS = ("src/", "execution/", "cron/", "scripts/", ".github/scripts/")
@@ -205,6 +206,91 @@ def _static_migration_string(node: ast.expr, constants: dict[str, str]) -> str |
     return None
 
 
+def _direct_function_calls(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.Call, ...]:
+    calls: list[ast.Call] = []
+    for statement in function.body:
+        expression: ast.expr | None = None
+        if isinstance(statement, (ast.Expr, ast.Assign, ast.AnnAssign, ast.Return)):
+            expression = statement.value
+        if expression is not None:
+            calls.extend(node for node in ast.walk(expression) if isinstance(node, ast.Call))
+    return tuple(calls)
+
+
+def _created_schema_names(sql: str) -> tuple[str, ...]:
+    statements: list[str] = []
+    current: list[str] = []
+    index = 0
+    state = "normal"
+    while index < len(sql):
+        char = sql[index]
+        following = sql[index + 1] if index + 1 < len(sql) else ""
+        if state == "line-comment":
+            if char == "\n":
+                state = "normal"
+                current.append(char)
+            else:
+                current.append(" ")
+        elif state == "block-comment":
+            if char == "*" and following == "/":
+                current.extend((" ", " "))
+                index += 1
+                state = "normal"
+            else:
+                current.append("\n" if char == "\n" else " ")
+        elif state == "single-quote":
+            current.append(" ")
+            if char == "'" and following == "'":
+                current.append(" ")
+                index += 1
+            elif char == "'":
+                state = "normal"
+        elif state in {"double-quote", "backtick", "bracket"}:
+            current.append(char)
+            closing = {"double-quote": '"', "backtick": "`", "bracket": "]"}[state]
+            if char == closing:
+                if state != "bracket" and following == closing:
+                    current.append(following)
+                    index += 1
+                else:
+                    state = "normal"
+        elif char == "-" and following == "-":
+            current.extend((" ", " "))
+            index += 1
+            state = "line-comment"
+        elif char == "/" and following == "*":
+            current.extend((" ", " "))
+            index += 1
+            state = "block-comment"
+        elif char == "'":
+            current.append(" ")
+            state = "single-quote"
+        elif char == '"':
+            current.append(char)
+            state = "double-quote"
+        elif char == "`":
+            current.append(char)
+            state = "backtick"
+        elif char == "[":
+            current.append(char)
+            state = "bracket"
+        elif char == ";":
+            statements.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+        index += 1
+    statements.append("".join(current))
+    names: list[str] = []
+    for statement in statements:
+        match = CREATE_RE.match(statement.lstrip())
+        if match is not None:
+            names.append(match.group("name"))
+    return tuple(names)
+
+
 def _record_upgrade_evidence(
     tree: ast.Module,
     *,
@@ -239,7 +325,7 @@ def _record_upgrade_evidence(
         if function is None:
             return
         function_constants = dict(constants)
-        for assignment in ast.walk(function):
+        for assignment in function.body:
             if not isinstance(assignment, (ast.Assign, ast.AnnAssign)):
                 continue
             if assignment.value is None:
@@ -255,9 +341,7 @@ def _record_upgrade_evidence(
                 for target in targets:
                     if isinstance(target, ast.Name):
                         function_constants[target.id] = value
-        for node in ast.walk(function):
-            if not isinstance(node, ast.Call):
-                continue
+        for node in _direct_function_calls(function):
             if isinstance(node.func, ast.Name) and node.func.id in functions:
                 visit_function(node.func.id)
             if not node.args or not isinstance(node.func, ast.Attribute):
@@ -272,8 +356,8 @@ def _record_upgrade_evidence(
             sql = _static_migration_string(node.args[0], function_constants)
             if sql is None:
                 continue
-            for match in CREATE_RE.finditer(sql):
-                evidence[match.group("name")].append((rank, revision, f"{path}:{node.lineno}"))
+            for schema_name in _created_schema_names(sql):
+                evidence[schema_name].append((rank, revision, f"{path}:{node.lineno}"))
 
     visit_function("upgrade")
 
@@ -343,7 +427,7 @@ def _sql_references(
 
 def _schema_objects(database: Path) -> list[tuple[str, ObjectKind, str]]:
     try:
-        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        connection = connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         raise SchemaOwnershipError(
             "disposable schema database could not be opened read-only"
@@ -515,10 +599,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
-        inventory = build_inventory(args.repo_root)
+        repo_root = args.repo_root.resolve()
+        inventory = build_inventory(repo_root)
         payload = inventory.model_dump_json(indent=2) + "\n"
         if args.output is not None:
-            output = _safe_output_path(args.repo_root, args.output)
+            output = _safe_output_path(repo_root, args.output)
             write_text_atomic(output, payload)
             print(
                 json.dumps(
@@ -532,13 +617,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif len(payload.encode()) > MAX_STDOUT_BYTES:
             output = _safe_output_path(
-                args.repo_root, Path(".tmp/quality/schema-ownership-inventory.json")
+                repo_root, Path(".tmp/quality/schema-ownership-inventory.json")
             )
             write_text_atomic(output, payload)
             print(
                 json.dumps(
                     {
-                        "output": str(output.relative_to(args.repo_root)),
+                        "output": str(output.relative_to(repo_root)),
                         "status": inventory.status,
                         "counts": inventory.counts,
                     },
