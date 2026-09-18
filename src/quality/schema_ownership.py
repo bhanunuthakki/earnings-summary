@@ -211,6 +211,34 @@ def _static_migration_string(node: ast.expr, constants: dict[str, str]) -> str |
     return None
 
 
+class _BindingVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Store):
+            self.names.add(node.id)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.names.add(node.name)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.names.add(node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.names.add(node.name)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _bound_names(statements: list[ast.stmt] | tuple[ast.stmt, ...]) -> set[str]:
+    visitor = _BindingVisitor()
+    for statement in statements:
+        visitor.visit(statement)
+    return visitor.names
+
+
 def _created_schema_names(sql: str) -> tuple[str, ...]:
     statements: list[str] = []
     current: list[str] = []
@@ -303,11 +331,20 @@ def _record_upgrade_evidence(
     evidence: dict[str, list[tuple[int, str, str]]],
 ) -> None:
     constants: dict[str, str] = {}
-    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    functions: dict[str, ast.FunctionDef] = {}
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            functions[node.name] = node
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+        if isinstance(node, ast.FunctionDef):
+            is_generator = any(
+                isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(node)
+            )
+            if node.decorator_list or is_generator:
+                functions.pop(node.name, None)
+            else:
+                functions[node.name] = node
+            continue
+        for bound_name in _bound_names([node]):
+            functions.pop(bound_name, None)
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
             try:
                 value: object = ast.literal_eval(node.value)
@@ -327,10 +364,14 @@ def _record_upgrade_evidence(
         function = functions.get(name)
         if function is None:
             return
-        function_constants = dict(constants)
+        lexical_bindings = _bound_names(function.body)
+        function_constants = {
+            key: value for key, value in constants.items() if key not in lexical_bindings
+        }
+        callable_functions = set(functions) - lexical_bindings
 
         def record_call(node: ast.Call) -> None:
-            if isinstance(node.func, ast.Name) and node.func.id in functions:
+            if isinstance(node.func, ast.Name) and node.func.id in callable_functions:
                 visit_function(node.func.id)
             if not node.args or not isinstance(node.func, ast.Attribute):
                 return
@@ -354,9 +395,7 @@ def _record_upgrade_evidence(
                 targets = (
                     statement.targets if isinstance(statement, ast.Assign) else (statement.target,)
                 )
-                target_names = tuple(
-                    target.id for target in targets if isinstance(target, ast.Name)
-                )
+                target_names = _bound_names([statement])
                 for target_name in target_names:
                     function_constants.pop(target_name, None)
                 try:
@@ -364,7 +403,10 @@ def _record_upgrade_evidence(
                 except (TypeError, ValueError):
                     continue
                 if isinstance(value, str):
-                    for target_name in target_names:
+                    simple_targets = tuple(
+                        target.id for target in targets if isinstance(target, ast.Name)
+                    )
+                    for target_name in simple_targets:
                         function_constants[target_name] = value
                 continue
             if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):

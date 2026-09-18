@@ -107,6 +107,13 @@ down_revision = None
 def unreachable_after_return():
     return
     op.execute("CREATE TABLE orphaned (id INTEGER)")
+def shadowed_helper():
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+async def async_helper():
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+def generator_helper():
+    yield None
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
 def upgrade():
     op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
     op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
@@ -127,6 +134,15 @@ def upgrade():
     LATE_SQL = "CREATE TABLE orphaned (id INTEGER)"
     SQL = choose_sql_at_runtime()
     op.execute(SQL)
+    if True:
+        SQL = "SELECT 1"
+    op.execute(SQL)
+    SQL, other = ("SELECT 1", None)
+    op.execute(SQL)
+    shadowed_helper = lambda: None
+    shadowed_helper()
+    async_helper()
+    generator_helper()
     unreachable_after_return()
 # CREATE TABLE orphaned (id INTEGER)
 def downgrade():
