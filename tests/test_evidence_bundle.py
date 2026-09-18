@@ -186,6 +186,38 @@ def test_replay_reduction_is_typed_and_integer_bounded() -> None:
     assert not parse_source("test_db", failing.model_dump_json().encode(), "a" * 40).semantic_pass
 
 
+def test_replay_reduction_credits_only_scanned_recorded_conversions() -> None:
+    """The gate arithmetic is unchanged; only the numerator can move.
+
+    A recorded conversion removes exactly one file from the numerator, so the
+    52-file failure becomes the 51-file pass without touching the pinned 172
+    denominator or the 70% threshold.
+    """
+    failing = _audit_with_upgrade_files(52)
+    assert failing.replay_reduction is not None
+    assert failing.replay_reduction.ratio_pass is False
+
+    admitted = failing.model_copy(update={"converted_files": ("tests/test_upgrade_0.py",)})
+    admitted = admitted.model_copy(update={"replay_reduction": replay_reduction(admitted)})
+    measurement = replay_reduction(admitted)
+    assert measurement is not None
+    assert measurement.baseline_files == TEST_DB_REPLAY_BASELINE_FILES == 172
+    assert measurement.threshold_percent == 70
+    assert measurement.remaining_files == 51
+    assert measurement.reduction_percent == pytest.approx(70.35)
+    assert measurement.ratio_pass is True
+    assert parse_source("test_db", admitted.model_dump_json().encode(), "a" * 40).semantic_pass
+
+    # A conversion outside the scanned scope, or one claimed twice, is not a
+    # measurement the receipt is allowed to carry at all.
+    for forged in (["tests/test_absent.py"], ["tests/test_upgrade_0.py"] * 2):
+        payload = json.loads(failing.model_dump_json())
+        payload["converted_files"] = forged
+        parsed = parse_source("test_db", json.dumps(payload).encode(), "a" * 40)
+        assert parsed.typed_valid is False
+        assert parsed.semantic_pass is False
+
+
 def test_replay_reduction_rejects_duplicate_builder_paths() -> None:
     audit = _audit_with_upgrade_files(51)
     builders_with_duplicate = (

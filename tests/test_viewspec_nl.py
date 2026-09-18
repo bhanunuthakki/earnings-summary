@@ -9,8 +9,10 @@ test_explore_panel.py.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,8 @@ from flask.testing import FlaskClient
 import viewspec.nl_compile as nlc
 from alembic import command
 from pipeline.explore_panel import render_explore_panel
+from provenance.evidence_backfill import BackfillRequest, backfill_legacy_evidence
+from sqlite_runtime import register_sqlite_integrity_functions
 from viewspec.spec import ViewSpec
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -282,13 +286,16 @@ def test_migration_tolerates_missing_llm_budgets(tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
+def client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> FlaskClient:
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
-    cfg = _alembic_cfg(db)
-    command.stamp(cfg, "0078_stance_scores")
-    command.upgrade(cfg, "head")
-    _seed_facts_into_existing(db)
+    # The route test needs the current head schema; the cached template replaces
+    # the stamp-0078 -> upgrade-head replay. The two pinned 0080 migration tests
+    # below still walk the chain directly.
+    migrated_db(db, target="head")
+    _seed_facts_into_existing(db, tmp_path)
 
     def fake_call(*_a: object, **_k: object) -> str:
         return _GOOD_SPEC_JSON
@@ -297,17 +304,26 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
     return comments_server.create_app(tmp_path).test_client()
 
 
-def _seed_facts_into_existing(db: Path) -> None:
+def _seed_facts_into_existing(db: Path, repo_root: Path) -> None:
+    raw_bytes = b'{"line_item": "revenue"}'
+    (repo_root / "f.json").write_bytes(raw_bytes)
     conn = sqlite3.connect(db)
-    conn.executescript(_DDL)
+    conn.row_factory = sqlite3.Row
+    register_sqlite_integrity_functions(conn)
     conn.execute(
         "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256,"
-        " fetched_at, fetch_status) VALUES (1, 'TST', 'fmp', 'fmp_income_statement',"
-        " 'f.json', 'a', '2026-01-05 10:00:00', 'ok')"
+        " fetched_at, fetch_status, raw_bytes_size) VALUES (1, 'TST', 'fmp',"
+        " 'fmp_income_statement', 'f.json', ?, '2026-01-05 10:00:00', 'ok', ?)",
+        (hashlib.sha256(raw_bytes).hexdigest(), len(raw_bytes)),
     )
+    conn.commit()
+    # The current head requires fact writes to reference an evidence-backed
+    # source document, so bind the legacy row before seeding the fact.
+    backfill_legacy_evidence(conn, BackfillRequest(repo_root=repo_root, apply=True))
     conn.execute(
         "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item,"
-        " value, source_doc_id) VALUES ('TST', '2025-12-31 00:00:00', 'Q4', 'revenue', 100, 1)"
+        " value, unit, source_doc_id) VALUES ('TST', '2025-12-31 00:00:00', 'Q4',"
+        " 'revenue', 100, 'actual', 1)"
     )
     conn.commit()
     conn.close()

@@ -67,8 +67,18 @@ def _build_config(db_path: Path) -> Config:
     return cfg
 
 
+@pytest.fixture
+def head_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "risk_prov.db", target="head")
+
+
 @pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def chain_head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A head database Alembic actually walked to, for the downgrade test.
+
+    Downgrading to an archived revision requires the archived graph history in
+    ``alembic_version``, which a cached active-graph template cannot supply.
+    """
     db = tmp_path_factory.mktemp("risk_prov_tmpl") / "at_head.db"
     import db as dbmod
 
@@ -83,9 +93,9 @@ def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def head_db(head_template: Path, tmp_path: Path) -> Path:
-    db = tmp_path / "risk_prov.db"
-    shutil.copy(head_template, db)
+def chain_head_db(chain_head_template: Path, tmp_path: Path) -> Path:
+    db = tmp_path / "risk_prov_chain.db"
+    shutil.copy(chain_head_template, db)
     return db
 
 
@@ -165,7 +175,8 @@ def test_migration_backfills_preexisting_rows_to_current_definition(prior_db: Pa
     assert hist_row == ("v1", "observed")
 
 
-def test_migration_downgrade_removes_columns_cleanly(head_db: Path) -> None:
+def test_migration_downgrade_removes_columns_cleanly(chain_head_db: Path) -> None:
+    head_db = chain_head_db
     conn = sqlite3.connect(str(head_db))
     conn.execute(
         "INSERT INTO portfolio_risk_snapshots (user_id, captured_at, beta, metric_version, "

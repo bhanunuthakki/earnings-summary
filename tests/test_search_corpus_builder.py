@@ -5,15 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
 import search.corpus_builder as corpus_builder_module
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -39,35 +38,17 @@ from search.corpus_builder import (
     lexical_index_config_sha256,
 )
 from search.grounded import HybridRetriever
+from sqlite_runtime import register_sqlite_integrity_functions
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 2, 0, 0)
 A, B, C = "a" * 64, "b" * 64, "c" * 64
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path) -> sqlite3.Connection:
-    path = tmp_path / "corpus.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0215_observation_resolution_ledger")
-    command.upgrade(config, "0216_search_corpus_foundation")
-    command.stamp(config, "0221_ask_retrieval_traces")
-    command.upgrade(config, "0222_ocr_extraction_governance")
-    command.stamp(config, "0231_legacy_document_evidence_bindings")
-    command.upgrade(config, "0232_document_semantic_dispositions")
-    command.upgrade(config, "0233_search_projection_seals")
-    command.upgrade(config, "0234_image_ocr_governance")
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    path = migrated_db(tmp_path / "corpus.db", target="head")
     conn = sqlite3.connect(path)
-    conn.execute("ALTER TABLE search_projection_seals ADD COLUMN runtime_artifact_sha256 TEXT")
     conn.execute("PRAGMA foreign_keys = ON")
+    register_sqlite_integrity_functions(conn)
     return conn
 
 
@@ -532,8 +513,10 @@ def _structured_request(*, apply: bool = False) -> CorpusBuildRequest:
     )
 
 
-def test_dry_run_is_read_only_and_reports_exact_chunk_offsets(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_dry_run_is_read_only_and_reports_exact_chunk_offsets(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         result = build_grounded_search_corpus(conn, _request(apply=False))
@@ -554,8 +537,9 @@ def test_dry_run_is_read_only_and_reports_exact_chunk_offsets(tmp_path: Path) ->
 
 def test_corpus_ignores_evidence_revision_recorded_after_observation_clock(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         EvidenceLedger(conn).persist(
@@ -587,8 +571,9 @@ def test_corpus_ignores_evidence_revision_recorded_after_observation_clock(
 
 def test_v4_structured_nodes_choose_one_contextual_hierarchy_level(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_structured_hierarchy(conn)
         result = build_grounded_search_corpus(conn, _structured_request())
@@ -627,8 +612,9 @@ def test_v4_structured_nodes_choose_one_contextual_hierarchy_level(
 
 def test_non_pdf_uses_only_exact_promoted_fulltext_extractor_identity(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_structured_hierarchy(conn)
         ledger = EvidenceLedger(conn)
@@ -671,8 +657,9 @@ def test_non_pdf_uses_only_exact_promoted_fulltext_extractor_identity(
 
 def test_non_pdf_does_not_auto_promote_unknown_future_extractor_generation(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_structured_hierarchy(conn)
         ledger = EvidenceLedger(conn)
@@ -715,8 +702,9 @@ def test_non_pdf_does_not_auto_promote_unknown_future_extractor_generation(
 
 def test_ungoverned_image_ocr_run_cannot_complete_corpus_membership(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(
             conn,
@@ -773,8 +761,9 @@ def test_ungoverned_image_ocr_run_cannot_complete_corpus_membership(
 
 def test_current_governed_image_ocr_result_is_the_only_image_projection(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(
             conn,
@@ -905,8 +894,9 @@ def test_current_governed_image_ocr_result_is_the_only_image_projection(
 def test_manifest_and_chunk_config_commit_to_node_selection_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_structured_hierarchy(conn)
         baseline = build_grounded_search_corpus(conn, _structured_request())
@@ -927,8 +917,10 @@ def test_manifest_and_chunk_config_commit_to_node_selection_policy(
         conn.close()
 
 
-def test_apply_seals_manifest_then_records_verified_lexical_memberships(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_apply_seals_manifest_then_records_verified_lexical_memberships(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         request = _request(apply=True)
@@ -972,8 +964,9 @@ def test_apply_seals_manifest_then_records_verified_lexical_memberships(tmp_path
 
 def test_human_nonsemantic_disposition_completes_image_obligation_without_chunks(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = EvidenceLedger(conn)
         image_sha = "d" * 64
@@ -1084,8 +1077,9 @@ def test_nonsemantic_exclusion_cannot_be_automated(tmp_path: Path) -> None:
 
 def test_pdf_chunks_select_native_or_accepted_ocr_once_per_page(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_pdf_with_governed_ocr(conn)
         request = _request(
@@ -1119,8 +1113,10 @@ def test_pdf_chunks_select_native_or_accepted_ocr_once_per_page(
         conn.close()
 
 
-def test_runtime_rejects_stale_human_nonsemantic_disposition(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_runtime_rejects_stale_human_nonsemantic_disposition(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = EvidenceLedger(conn)
         image_sha = "d" * 64
@@ -1232,8 +1228,9 @@ def test_runtime_rejects_stale_human_nonsemantic_disposition(tmp_path: Path) -> 
 def test_runtime_rejects_tampered_lexical_projection(
     tmp_path: Path,
     tamper: str,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         result = build_grounded_search_corpus(conn, _request(apply=True))
@@ -1268,8 +1265,9 @@ def test_runtime_rejects_tampered_lexical_projection(
 
 def test_apply_stages_chunks_in_bounded_transactions_and_publishes_only_at_end(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn, text="one two three four five six seven eight nine ten")
         request = _request(apply=True).model_copy(update={"persist_batch_size": 2})
@@ -1306,8 +1304,9 @@ def _request_manifest_id(conn: sqlite3.Connection) -> str:
 
 def test_missing_expected_document_remains_visible_and_produces_incomplete_seal(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         request = _request(
@@ -1340,8 +1339,10 @@ def test_missing_expected_document_remains_visible_and_produces_incomplete_seal(
         conn.close()
 
 
-def test_included_document_requires_current_succeeded_evidence_anchor(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_included_document_requires_current_succeeded_evidence_anchor(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         request = _request(
@@ -1364,8 +1365,9 @@ def test_included_document_requires_current_succeeded_evidence_anchor(tmp_path: 
 
 def test_included_document_quarantines_unapproved_or_placeholder_only_extraction(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed(conn)
         request = _request(apply=False).model_copy(
@@ -1385,11 +1387,13 @@ def test_included_document_quarantines_unapproved_or_placeholder_only_extraction
 
 
 def test_cli_uses_closed_inventory_file_and_defaults_to_read_only_dry_run(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
     from execution.build_grounded_search_corpus import main
 
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     db_path = tmp_path / "corpus.db"
     try:
         _seed(conn)

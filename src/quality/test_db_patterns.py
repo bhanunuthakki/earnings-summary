@@ -8,10 +8,26 @@ import os
 import posixpath
 import stat
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from quality.git_env import clean_local_git_env
+from quality.test_db_conversions import (
+    CONVERSION_REGISTRY_PATH as CONVERSION_REGISTRY_PATH,
+)
+from quality.test_db_conversions import (
+    ConversionRecord as ConversionRecord,
+)
+from quality.test_db_conversions import (
+    ConversionRegistry as ConversionRegistry,
+)
+from quality.test_db_conversions import (
+    evaluate_registry as _evaluate_registry,
+)
+from quality.test_db_conversions import (
+    load_registry as _load_registry,
+)
 from quality.test_db_invocations import (
     apply_conversions as _apply_conversions,
 )
@@ -82,6 +98,7 @@ HoldReason = Literal[
 _CLOSURE = (
     "execution/audit_test_db_patterns.py",
     "src/quality/git_env.py",
+    "src/quality/test_db_conversions.py",
     "src/quality/test_db_invocations.py",
     "src/quality/test_db_models.py",
     "src/quality/test_db_patterns.py",
@@ -465,9 +482,44 @@ def _running_closure_bytes() -> list[tuple[str, bytes]]:
     return _closure_bytes(Path(__file__).resolve().parents[2])
 
 
+def _registry_bytes(root: Path) -> bytes | None:
+    """Read the tracked conversion registry, or ``None`` when there is none.
+
+    An untracked or unreadable registry holds the whole scan: a file that git
+    does not carry cannot be reviewed, so it must not be able to forgive a
+    replaying test file.
+    """
+    target = root / CONVERSION_REGISTRY_PATH
+    try:
+        present = target.exists() and not target.is_symlink()
+    except OSError as exc:
+        raise _HoldError("closure-unreadable") from exc
+    tracked = _split_nul(_run_git(root, ("ls-files", "-z", "--", CONVERSION_REGISTRY_PATH)))
+    if not present:
+        if tracked:
+            raise _HoldError("missing-path")
+        return None
+    if tracked != [CONVERSION_REGISTRY_PATH]:
+        raise _HoldError("closure-untracked")
+    try:
+        return _secure_read_bytes(root, target)
+    except OSError as exc:
+        raise _HoldError("closure-unreadable") from exc
+
+
 def _assert_clean(root: Path) -> None:
     raw = _run_git(
-        root, ("status", "--porcelain=v1", "-z", "--untracked-files=no", "--", *_ROOTS, *_CLOSURE)
+        root,
+        (
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=no",
+            "--",
+            *_ROOTS,
+            *_CLOSURE,
+            CONVERSION_REGISTRY_PATH,
+        ),
     )
     try:
         text = raw.decode("utf-8")
@@ -738,15 +790,19 @@ def audit_test_db_patterns(
         running_items = _running_closure_bytes()
         if closure_items != running_items:
             raise _HoldError("scanner-closure-mismatch")
+        registry_raw = _registry_bytes(repo)
     except _HoldError as hold:
         return _hold_receipt(hold.note)
     scanner_digest = hashlib.sha256()
     for name, data in closure_items:
         scanner_digest.update(name.encode("utf-8") + b"\x00" + data + b"\x00")
     source_digest = hashlib.sha256()
+    source_digest.update(CONVERSION_REGISTRY_PATH.encode("utf-8") + b"\x00")
+    source_digest.update((b"" if registry_raw is None else registry_raw) + b"\x00")
     findings: list[PatternFinding] = []
     builders: list[BuilderClassification] = []
     invocations: list[BuilderInvocation] = []
+    file_sha256: dict[str, str] = {}
     for path in paths:
         source_digest.update(path.encode("utf-8") + b"\x00")
         try:
@@ -775,6 +831,7 @@ def audit_test_db_patterns(
         lowered = text.lower()
         base = _builder_evidence(tree)
         file_sha = hashlib.sha256(raw).hexdigest()
+        file_sha256[path] = file_sha
         invocations.extend(_collect_invocations(path, tree, file_sha))
         if base:
             enriched = _enrich_evidence(lowered, path, base)
@@ -797,6 +854,29 @@ def audit_test_db_patterns(
     except _HoldError as hold:
         return _hold_receipt(hold.note)
     builders_sorted = sorted(builders, key=lambda b: b.path)
+    migrated_invocations: dict[str, frozenset[str]] = {}
+    for invocation in invocations:
+        if invocation.canonical_identity != "migrated_db":
+            continue
+        migrated_invocations[invocation.path] = migrated_invocations.get(
+            invocation.path, frozenset()
+        ) | {invocation.invocation_id}
+    converted_paths: tuple[str, ...] = tuple()
+    registry_violations: tuple[str, ...] = tuple()
+    if registry_raw is not None:
+        try:
+            registry = _load_registry(registry_raw)
+        except (UnicodeDecodeError, ValueError):
+            registry_violations = ("conversion-registry-invalid",)
+        else:
+            verdict = _evaluate_registry(
+                registry,
+                file_sha256=file_sha256,
+                migrated_invocations=migrated_invocations,
+                now=datetime.now(UTC),
+            )
+            converted_paths = verdict.converted_paths
+            registry_violations = verdict.violations
     decided = _apply_conversions(invocations, effective, repo)
     if malformed_input:
         decided = [
@@ -815,6 +895,7 @@ def audit_test_db_patterns(
     for item in builders_sorted:
         if item.taxonomy == "unclassified":
             violations.append(f"unclassified-builder:{item.path}")
+    violations.extend(registry_violations)
     status: Literal["PASS", "HOLD"] = "HOLD" if violations else "PASS"
     return TestDbAudit(
         scoped_commit=commit,
@@ -841,5 +922,6 @@ def audit_test_db_patterns(
                 ),
             )
         ),
-        replay_reduction=ReplayReduction.from_builders(tuple(builders_sorted)),
+        converted_files=converted_paths,
+        replay_reduction=ReplayReduction.from_builders(tuple(builders_sorted), converted_paths),
     )

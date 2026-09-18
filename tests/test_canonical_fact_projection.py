@@ -46,7 +46,12 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _empty_database(path: Path) -> sqlite3.Connection:
+def _chain_empty_database(path: Path) -> sqlite3.Connection:
+    """Replay the chain to ``HEAD``, for the cutover-refusal migration test only.
+
+    Downgrading to 0254 requires a database Alembic actually walked there, so
+    this one caller cannot copy the cached current-head template.
+    """
     legacy = sqlite3.connect(path)
     legacy.executescript(
         """
@@ -75,6 +80,14 @@ def _empty_database(path: Path) -> sqlite3.Connection:
     config = _config(path)
     command.stamp(config, BASE_REVISION)
     command.upgrade(config, HEAD)
+    return _seed_empty_database(path)
+
+
+def _empty_database(path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    return _seed_empty_database(migrated_db(path, target="head"))
+
+
+def _seed_empty_database(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute(
@@ -399,8 +412,9 @@ def _synthetic_selected_source(ordinal: int) -> dict[str, object]:
 
 def test_empty_generation_is_exact_replayable_and_row_factory_neutral(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _empty_database(tmp_path / "empty-projection.db")
+    conn = _empty_database(tmp_path / "empty-projection.db", migrated_db)
     try:
         first = build_canonical_projection_generation(conn, _request())
         replay = build_canonical_projection_generation(conn, _request())
@@ -440,8 +454,9 @@ def test_empty_generation_is_exact_replayable_and_row_factory_neutral(
 
 def test_projection_verifier_requires_artifact_to_exist_by_observation_clock(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _empty_database(tmp_path / "dual-clock-projection.db")
+    conn = _empty_database(tmp_path / "dual-clock-projection.db", migrated_db)
     recorded_at = T0 + timedelta(hours=1)
     request = _request().model_copy(update={"recorded_at": recorded_at})
     try:
@@ -476,9 +491,10 @@ def test_projection_verifier_requires_artifact_to_exist_by_observation_clock(
 
 def test_strict_verification_streams_large_generation_and_detects_tamper(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     database = tmp_path / "streamed-projection-audit.db"
-    conn = _empty_database(database)
+    conn = _empty_database(database, migrated_db)
     try:
         build_canonical_projection_generation(conn, _request())
         _replace_empty_generation_with_deletes(conn, count=2_501)
@@ -523,9 +539,10 @@ def test_strict_verification_streams_large_generation_and_detects_tamper(
 def test_checkpoint_build_streams_skewed_bucket_and_enforces_storage_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     database = tmp_path / "skewed-bucket-build.db"
-    conn = _empty_database(database)
+    conn = _empty_database(database, migrated_db)
     try:
         build_canonical_projection_generation(conn, _request())
         request, write_buckets_and_seal, entry_columns = _reset_empty_generation(conn)
@@ -568,8 +585,9 @@ def test_checkpoint_build_streams_skewed_bucket_and_enforces_storage_cap(
 def test_unchanged_delta_prefetches_parent_state_once_and_resets_scan_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _empty_database(tmp_path / "delta-prefetch-regression.db")
+    conn = _empty_database(tmp_path / "delta-prefetch-regression.db", migrated_db)
     try:
         build_canonical_projection_generation(conn, _request())
         request, _, entry_columns = _reset_empty_generation(conn)
@@ -660,8 +678,10 @@ def test_unchanged_delta_prefetches_parent_state_once_and_resets_scan_cap(
         conn.close()
 
 
-def test_delta_rejects_parent_from_another_issuer_scope(tmp_path: Path) -> None:
-    conn = _empty_database(tmp_path / "scope-mismatch.db")
+def test_delta_rejects_parent_from_another_issuer_scope(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _empty_database(tmp_path / "scope-mismatch.db", migrated_db)
     try:
         parent = build_canonical_projection_generation(conn, _request("generation-parent"))
         assert parent.resolution_scope_sha256 == EMPTY_SCOPE.scope_sha256
@@ -769,7 +789,7 @@ def test_0255_refuses_inferred_upgrade_and_nonempty_downgrade(tmp_path: Path) ->
         command.upgrade(legacy_config, HEAD)
 
     scoped_path = tmp_path / "scoped-populated.db"
-    scoped = _empty_database(scoped_path)
+    scoped = _chain_empty_database(scoped_path)
     scoped.commit()
     scoped.close()
     with pytest.raises(RuntimeError, match="refuses to discard committed scoped"):
@@ -778,8 +798,9 @@ def test_0255_refuses_inferred_upgrade_and_nonempty_downgrade(tmp_path: Path) ->
 
 def test_failed_generation_is_atomic_and_replay_conflicts_fail(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _empty_database(tmp_path / "atomic-projection.db")
+    conn = _empty_database(tmp_path / "atomic-projection.db", migrated_db)
     try:
         build_canonical_projection_generation(conn, _request())
         conflict = _request().model_copy(update={"recorded_at": datetime(2026, 1, 2, tzinfo=UTC)})

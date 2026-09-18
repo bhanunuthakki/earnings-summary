@@ -115,6 +115,29 @@ class ParityReceipt(BaseModel):
     source_sha256: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")
 
 
+class ConversionRecord(BaseModel):
+    """One converted test file bound to the parity evidence that admitted it.
+
+    ``source_sha256`` is the file's content *after* conversion, so any later
+    edit to the file makes the record stale and the conversion claim is
+    withdrawn until the record is restamped against the new content.
+    """
+
+    model_config = _STRICT
+    path: str = Field(min_length=1, max_length=256)
+    source_sha256: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")
+    parity_receipt: ParityReceipt
+    owner_issue: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=500)
+    expires_at: datetime
+
+
+class ConversionRegistry(BaseModel):
+    model_config = _STRICT
+    schema_version: Literal["test-db-conversions/v1"]
+    records: tuple[ConversionRecord, ...] = Field(default_factory=tuple)
+
+
 class PatternFinding(BaseModel):
     model_config = _STRICT
     path: str
@@ -142,9 +165,24 @@ class ReplayReduction(BaseModel):
     ratio_pass: bool
 
     @classmethod
-    def from_builders(cls, builders: tuple[BuilderClassification, ...]) -> ReplayReduction:
+    def from_builders(
+        cls,
+        builders: tuple[BuilderClassification, ...],
+        converted_paths: tuple[str, ...] = (),
+    ) -> ReplayReduction:
+        """Count files that still replay the chain, minus admitted conversions.
+
+        ``converted_paths`` must already have been validated against parity
+        evidence by the caller; an unvalidated path here would silently forgive
+        a replaying file.
+        """
+        admitted = frozenset(converted_paths)
         builder_paths = tuple(item.path for item in builders)
-        upgrade_paths = tuple(item.path for item in builders if "call:upgrade" in item.evidence)
+        upgrade_paths = tuple(
+            item.path
+            for item in builders
+            if "call:upgrade" in item.evidence and item.path not in admitted
+        )
         remaining = len(upgrade_paths)
         return cls(
             baseline_files=TEST_DB_REPLAY_BASELINE_FILES,
@@ -191,4 +229,14 @@ class TestDbAudit(BaseModel):
     findings: tuple[PatternFinding, ...] = Field(default_factory=tuple)
     violations: tuple[str, ...] = Field(default_factory=tuple)
     builder_invocations: tuple[BuilderInvocation, ...] = Field(default_factory=tuple)
+    converted_files: tuple[str, ...] = Field(default_factory=tuple)
     replay_reduction: ReplayReduction | None = None
+
+    @model_validator(mode="after")
+    def _converted_files_in_scope(self) -> TestDbAudit:
+        """Reject a receipt that forgives files the scan never covered."""
+        if self.converted_files != tuple(sorted(set(self.converted_files))):
+            raise ValueError("converted files must be sorted and unique")
+        if not frozenset(self.converted_files) <= frozenset(self.tracked_test_files):
+            raise ValueError("converted files must be scanned test files")
+        return self

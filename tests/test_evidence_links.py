@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -22,6 +23,7 @@ from provenance.evidence_links import (
     DocumentObservationLink,
     EvidenceLinkLedger,
 )
+from sqlite_runtime import register_sqlite_integrity_functions
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0217_fact_selection_ledger"
@@ -39,15 +41,11 @@ def _config(db_path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
-    db_path = tmp_path / "links.db"
-    config = _config(db_path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, LEDGER_HEAD)
-    command.stamp(config, PRIOR_HEAD)
-    command.upgrade(config, HEAD)
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    db_path = migrated_db(tmp_path / "links.db", target="head")
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
+    register_sqlite_integrity_functions(conn)
     return conn
 
 
@@ -129,8 +127,10 @@ def _location(
     )
 
 
-def test_one_blob_can_have_multiple_immutable_replica_locations(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_one_blob_can_have_multiple_immutable_replica_locations(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_ledger(conn)
         ledger = EvidenceLinkLedger(conn)
@@ -161,8 +161,10 @@ def test_one_blob_can_have_multiple_immutable_replica_locations(tmp_path: Path) 
         conn.close()
 
 
-def test_location_availability_is_a_chained_revision_not_an_overwrite(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_location_availability_is_a_chained_revision_not_an_overwrite(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_ledger(conn)
         ledger = EvidenceLinkLedger(conn)
@@ -197,8 +199,10 @@ def test_location_availability_is_a_chained_revision_not_an_overwrite(tmp_path: 
         conn.close()
 
 
-def test_same_bytes_can_be_retrieved_again_and_linked_to_one_document(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_same_bytes_can_be_retrieved_again_and_linked_to_one_document(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_ledger(conn)
         core = EvidenceLedger(conn)
@@ -249,8 +253,10 @@ def test_same_bytes_can_be_retrieved_again_and_linked_to_one_document(tmp_path: 
         conn.close()
 
 
-def test_link_mismatch_and_replay_conflicts_fail_loudly(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_link_mismatch_and_replay_conflicts_fail_loudly(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         _seed_ledger(conn)
         core = EvidenceLedger(conn)

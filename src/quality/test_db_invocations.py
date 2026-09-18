@@ -24,7 +24,10 @@ from quality.test_db_models import (
     Taxonomy,
 )
 
-_OWNER_RE = re.compile(r"^[A-Z]{2,10}-[0-9]+$")
+# Owner issues are cited either bare (``BHA-104``) or tracker-qualified
+# (``linear:BHA-104``); both name the same issue and must be accepted wherever a
+# disposition is authorised.
+_OWNER_RE = re.compile(r"^(?:linear:)?[A-Z]{2,10}-[0-9]+$")
 _RECEIPT_PREFIXES = (".tmp/", "tmp/", "evidence/", "parity/")
 _MAX_REASON_LEN = 500
 _LEAF_EVIDENCE: dict[str, Evidence] = {
@@ -624,6 +627,16 @@ def _is_canonical_reason(value: str) -> bool:
     if value != value.strip():
         return False
     return not any(ord(c) < 32 or ord(c) == 127 for c in value)
+
+
+def is_canonical_issue(value: str) -> bool:
+    """Shared owner-issue rule for every disposition surface."""
+    return _is_canonical_issue(value)
+
+
+def is_canonical_reason(value: str) -> bool:
+    """Shared one-line reason rule for every disposition surface."""
+    return _is_canonical_reason(value)
 
 
 def _collect_getattr_aliases(tree: ast.AST, modules: dict[str, str]) -> dict[str, str | None]:

@@ -349,7 +349,7 @@ def replay_reduction(audit: TestDbAudit) -> ReplayReduction | None:
 
     if audit.collection_status != "COMPLETE" or audit.collection_note != "":
         return None
-    return ReplayReduction.from_builders(audit.database_builders)
+    return ReplayReduction.from_builders(audit.database_builders, audit.converted_files)
 
 
 def _test_db_semantic(m: TestDbAudit) -> bool:
