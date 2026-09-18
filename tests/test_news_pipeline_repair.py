@@ -18,14 +18,14 @@ scoring (correctly wired) never executed once. Four seams, hermetic:
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
-from alembic.config import Config
 
 import execution.fetch_fmp_news as fmpnews
 import execution.fetch_news as fetch_news
-from alembic import command
 from news.store import NewsRow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +35,19 @@ def _no_additive_rows(*_a: object, **_k: object) -> list[NewsRow]:
     return []
 
 
+def _no_s1_watch(*_a: object, **_k: object) -> list[NewsRow]:
+    return []
+
+
+def _no_scored(*_a: object, **_k: object) -> dict[str, int]:
+    return {}
+
+
+# The dead-man is a private seam of execution.fetch_news; tests reach it via
+# the repo's cast+getattr pattern (see tests/test_advisor_memos.py).
+_FIRE_DEADMAN_IF_STALE = cast(Callable[..., None], getattr(fetch_news, "_fire_deadman_if_stale"))
+
+
 @pytest.fixture(autouse=True)
 def _hermetic_additive_feeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fetch_news.edgarnews, "fetch_edgar_news_for_ticker", _no_additive_rows)
@@ -42,23 +55,14 @@ def _hermetic_additive_feeds(monkeypatch: pytest.MonkeyPatch) -> None:
     # yf_news joined the additive feeds 2026-07-25 (it replaced the paid
     # WebSearch+LLM path); unstubbed it would reach Yahoo from the test suite.
     monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", _no_additive_rows)
-    monkeypatch.setattr(fetch_news, "check_s1_watch", lambda *_a, **_k: [])
-
-
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
+    monkeypatch.setattr(fetch_news, "check_s1_watch", _no_s1_watch)
 
 
 @pytest.fixture
-def news_db(tmp_path: Path) -> Path:
+def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """DB with the real `news` table (0065 slice, matching the dispatcher suite)."""
     db = tmp_path / "news_repair.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, "0064_queued_actions")
-    command.upgrade(cfg, "0065_news")
+    migrated_db(db, stamp="0064_queued_actions", archived=True, target="0065_news")
     conn = sqlite3.connect(str(db))
     try:
         # Deliberately minimal 0065 contract fixture, not a production
@@ -71,19 +75,12 @@ def news_db(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def head_db(tmp_path: Path) -> Path:
+def head_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """Full at-head DB — the dead-man test needs the alerts table + the 0183
-    widened trigger-kind CHECK."""
+    widened trigger-kind CHECK. The squashed active-head template carries the
+    baseline tables ``db.init_db()`` used to provide before the chain ran."""
     db = tmp_path / "head.db"
-    import db as dbmod
-
-    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
+    migrated_db(db)
     return db
 
 
@@ -124,7 +121,7 @@ def test_earlier_tickers_rows_survive_a_later_ticker_failure(
 
     monkeypatch.setattr(fetch_news.fmpnews, "FMP_API_KEY", "key")
     monkeypatch.setattr(fetch_news.fmpnews, "fetch_news_for_ticker", fmp)
-    monkeypatch.setattr(fetch_news, "score_unscored_signals", lambda *_a, **_k: {})
+    monkeypatch.setattr(fetch_news, "score_unscored_signals", _no_scored)
 
     rc = fetch_news.run(["GOOD", "BAD"], source="fmp", db_path=str(news_db), days=2, limit=10)
     assert rc == 0
@@ -175,10 +172,17 @@ def test_auto_fallback_gated_to_portfolio_names(
     news_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     refused = fmpnews.FmpNewsResult("X", 200, {"Error Message": "Limit Reach"}, [], None)
+
+    def _refused(*_a: object, **_k: object) -> fmpnews.FmpNewsResult:
+        return refused
+
+    def _portfolio(_db: object) -> frozenset[str]:
+        return frozenset({"NU"})
+
     monkeypatch.setattr(fetch_news.fmpnews, "FMP_API_KEY", "key")
-    monkeypatch.setattr(fetch_news.fmpnews, "fetch_news_for_ticker", lambda *_a, **_k: refused)
-    monkeypatch.setattr(fetch_news, "portfolio_tickers", lambda _db: frozenset({"NU"}))
-    monkeypatch.setattr(fetch_news, "score_unscored_signals", lambda *_a, **_k: {})
+    monkeypatch.setattr(fetch_news.fmpnews, "fetch_news_for_ticker", _refused)
+    monkeypatch.setattr(fetch_news, "portfolio_tickers", _portfolio)
+    monkeypatch.setattr(fetch_news, "score_unscored_signals", _no_scored)
     ws = _WsRecorder()
     monkeypatch.setattr(fetch_news, "fetch_websearch_news_for_ticker", ws)
 
@@ -190,9 +194,13 @@ def test_websearch_scope_all_restores_ungated_fallback(
     news_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     refused = fmpnews.FmpNewsResult("X", 200, {"Error Message": "Limit Reach"}, [], None)
+
+    def _refused(*_a: object, **_k: object) -> fmpnews.FmpNewsResult:
+        return refused
+
     monkeypatch.setattr(fetch_news.fmpnews, "FMP_API_KEY", "key")
-    monkeypatch.setattr(fetch_news.fmpnews, "fetch_news_for_ticker", lambda *_a, **_k: refused)
-    monkeypatch.setattr(fetch_news, "score_unscored_signals", lambda *_a, **_k: {})
+    monkeypatch.setattr(fetch_news.fmpnews, "fetch_news_for_ticker", _refused)
+    monkeypatch.setattr(fetch_news, "score_unscored_signals", _no_scored)
     ws = _WsRecorder()
     monkeypatch.setattr(fetch_news, "fetch_websearch_news_for_ticker", ws)
 
@@ -231,10 +239,10 @@ def test_deadman_fires_once_on_a_stale_table(head_db: Path) -> None:
     finally:
         conn.close()
 
-    fetch_news._fire_deadman_if_stale(str(head_db), tickers_n=10, inserted_total=0)
+    _FIRE_DEADMAN_IF_STALE(str(head_db), tickers_n=10, inserted_total=0)
     assert _alert_count(head_db) == 1
     # Same day, same signature — deduped.
-    fetch_news._fire_deadman_if_stale(str(head_db), tickers_n=10, inserted_total=0)
+    _FIRE_DEADMAN_IF_STALE(str(head_db), tickers_n=10, inserted_total=0)
     assert _alert_count(head_db) == 1
     # The alert is book-level (the 0171 'PORTFOLIO' sentinel convention).
     conn = sqlite3.connect(str(head_db))
@@ -259,7 +267,7 @@ def test_deadman_quiet_on_fresh_table_and_targeted_runs(head_db: Path) -> None:
     finally:
         conn.close()
 
-    fetch_news._fire_deadman_if_stale(str(head_db), tickers_n=10, inserted_total=1)
+    _FIRE_DEADMAN_IF_STALE(str(head_db), tickers_n=10, inserted_total=1)
     assert _alert_count(head_db) == 0  # fresh table — quiet
-    fetch_news._fire_deadman_if_stale(str(head_db), tickers_n=1, inserted_total=0)
+    _FIRE_DEADMAN_IF_STALE(str(head_db), tickers_n=1, inserted_total=0)
     assert _alert_count(head_db) == 0  # targeted run — never judges feed health

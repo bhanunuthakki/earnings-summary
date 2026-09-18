@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -42,11 +43,9 @@ def _config(db_path: Path) -> Config:
     return cfg
 
 
-def _migrated_conn(tmp_path: Path) -> sqlite3.Connection:
+def _migrated_conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     db_path = tmp_path / "observation-resolution.db"
-    cfg = _config(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
+    migrated_db(db_path, stamp=PRIOR_HEAD, archived=True, target=HEAD)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -223,8 +222,10 @@ def test_migration_round_trip_creates_only_additive_observation_resolution_objec
         conn.close()
 
 
-def test_persisted_observations_are_idempotent_immutable_and_evidence_bound(tmp_path: Path) -> None:
-    conn = _migrated_conn(tmp_path)
+def test_persisted_observations_are_idempotent_immutable_and_evidence_bound(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         _seed_evidence_node(conn)
         ledger = ObservationResolutionLedger(conn)
@@ -252,8 +253,9 @@ def test_persisted_observations_are_idempotent_immutable_and_evidence_bound(tmp_
 
 def test_resolution_requires_the_complete_candidate_set_and_selected_membership(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _migrated_conn(tmp_path)
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         _seed_evidence_node(conn)
         ledger = ObservationResolutionLedger(conn)
@@ -299,8 +301,9 @@ def test_resolution_requires_the_complete_candidate_set_and_selected_membership(
 
 def test_resolution_revisions_preserve_conflict_dissent_and_project_current_view(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _migrated_conn(tmp_path)
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         _seed_evidence_node(conn)
         ledger = ObservationResolutionLedger(conn)

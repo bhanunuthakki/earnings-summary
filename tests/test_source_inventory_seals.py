@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -46,11 +47,9 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "inventory.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     ledger = EvidenceLedger(conn)
@@ -139,8 +138,9 @@ def _components() -> tuple[InventoryComponent, ...]:
 
 def test_components_seal_exact_complete_inventory_and_become_immutable(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         store = SourceInventorySealStore(conn)
         components = _components()
@@ -171,8 +171,10 @@ def test_components_seal_exact_complete_inventory_and_become_immutable(
         conn.close()
 
 
-def test_incomplete_required_component_cannot_claim_complete_seal(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_incomplete_required_component_cannot_claim_complete_seal(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         store = SourceInventorySealStore(conn)
         failed = InventoryComponent(
@@ -203,8 +205,10 @@ def test_incomplete_required_component_cannot_claim_complete_seal(tmp_path: Path
         conn.close()
 
 
-def test_manifest_inventory_link_requires_both_immutable_parents(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_manifest_inventory_link_requires_both_immutable_parents(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         store = SourceInventorySealStore(conn)
         components = _components()
@@ -256,8 +260,9 @@ def test_migration_round_trip(tmp_path: Path) -> None:
 
 def test_coverage_reconciliation_atomically_seals_component_inventory(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         conn.commit()
         request = SourceCoverageImport(
