@@ -101,8 +101,12 @@ def test_comments_and_downgrade_sql_do_not_manufacture_ownership(tmp_path: Path)
     root, database = _repo(tmp_path, include_orphan=True)
     migration = root / "alembic/versions/0001_base.py"
     migration.write_text(
-        """revision = "0001"
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+revision = "0001"
 down_revision = None
+def unreachable_after_return():
+    return
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
 def upgrade():
     op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
     op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
@@ -110,8 +114,20 @@ def upgrade():
         op.execute("CREATE TABLE orphaned (id INTEGER)")
     if False:
         op.execute("CREATE TABLE orphaned (id INTEGER)")
+    False and op.execute("CREATE TABLE orphaned (id INTEGER)")
+    unused_lambda = lambda: op.execute("CREATE TABLE orphaned (id INTEGER)")
+    unused_generator = (op.execute("CREATE TABLE orphaned (id INTEGER)") for _ in [0])
+    unused_conditional = op.execute("CREATE TABLE orphaned (id INTEGER)") if False else None
     op.execute("-- CREATE TABLE orphaned (id INTEGER)")
     op.execute("SELECT 'CREATE TABLE orphaned (id INTEGER)'")
+    op.execute('CREATE TABLE "orphaned-other" (id INTEGER)')
+    op.execute("CREATE TABLE main.orphaned (id INTEGER)")
+    LATE_SQL = "SELECT 1"
+    op.execute(LATE_SQL)
+    LATE_SQL = "CREATE TABLE orphaned (id INTEGER)"
+    SQL = choose_sql_at_runtime()
+    op.execute(SQL)
+    unreachable_after_return()
 # CREATE TABLE orphaned (id INTEGER)
 def downgrade():
     op.execute("CREATE TABLE orphaned (id INTEGER)")

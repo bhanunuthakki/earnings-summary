@@ -29,8 +29,13 @@ SCHEMA_VERSION = "schema-ownership-inventory/v1"
 PRODUCT_ROOTS = ("src/", "execution/", "cron/", "scripts/", ".github/scripts/")
 MIGRATION_ROOT = "alembic/versions/"
 CREATE_RE = re.compile(
-    r"\bCREATE\s+(?:VIRTUAL\s+)?(?P<kind>TABLE|VIEW)\s+"
-    r"(?:IF\s+NOT\s+EXISTS\s+)?[\"`\[]?(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
+    r"\ACREATE\s+(?:VIRTUAL\s+)?(?P<kind>TABLE|VIEW)\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?(?:"
+    r'"(?P<double_name>[^"]+)"|'
+    r"`(?P<backtick_name>[^`]+)`|"
+    r"\[(?P<bracket_name>[^\]]+)\]|"
+    r"'(?P<single_name>[^']+)'|"
+    r"(?P<bare_name>[A-Za-z_][A-Za-z0-9_]*))(?=\s|\(|$)",
     re.IGNORECASE,
 )
 MAX_STDOUT_BYTES = 100_000
@@ -206,19 +211,6 @@ def _static_migration_string(node: ast.expr, constants: dict[str, str]) -> str |
     return None
 
 
-def _direct_function_calls(
-    function: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> tuple[ast.Call, ...]:
-    calls: list[ast.Call] = []
-    for statement in function.body:
-        expression: ast.expr | None = None
-        if isinstance(statement, (ast.Expr, ast.Assign, ast.AnnAssign, ast.Return)):
-            expression = statement.value
-        if expression is not None:
-            calls.extend(node for node in ast.walk(expression) if isinstance(node, ast.Call))
-    return tuple(calls)
-
-
 def _created_schema_names(sql: str) -> tuple[str, ...]:
     statements: list[str] = []
     current: list[str] = []
@@ -241,9 +233,9 @@ def _created_schema_names(sql: str) -> tuple[str, ...]:
             else:
                 current.append("\n" if char == "\n" else " ")
         elif state == "single-quote":
-            current.append(" ")
+            current.append(char)
             if char == "'" and following == "'":
-                current.append(" ")
+                current.append(following)
                 index += 1
             elif char == "'":
                 state = "normal"
@@ -265,7 +257,7 @@ def _created_schema_names(sql: str) -> tuple[str, ...]:
             index += 1
             state = "block-comment"
         elif char == "'":
-            current.append(" ")
+            current.append(char)
             state = "single-quote"
         elif char == '"':
             current.append(char)
@@ -287,7 +279,18 @@ def _created_schema_names(sql: str) -> tuple[str, ...]:
     for statement in statements:
         match = CREATE_RE.match(statement.lstrip())
         if match is not None:
-            names.append(match.group("name"))
+            name = next(
+                group
+                for group in (
+                    match.group("double_name"),
+                    match.group("backtick_name"),
+                    match.group("bracket_name"),
+                    match.group("single_name"),
+                    match.group("bare_name"),
+                )
+                if group is not None
+            )
+            names.append(name)
     return tuple(names)
 
 
@@ -325,39 +328,54 @@ def _record_upgrade_evidence(
         if function is None:
             return
         function_constants = dict(constants)
-        for assignment in function.body:
-            if not isinstance(assignment, (ast.Assign, ast.AnnAssign)):
-                continue
-            if assignment.value is None:
-                continue
-            targets = (
-                assignment.targets if isinstance(assignment, ast.Assign) else (assignment.target,)
-            )
-            try:
-                value: object = ast.literal_eval(assignment.value)
-            except (TypeError, ValueError):
-                continue
-            if isinstance(value, str):
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        function_constants[target.id] = value
-        for node in _direct_function_calls(function):
+
+        def record_call(node: ast.Call) -> None:
             if isinstance(node.func, ast.Name) and node.func.id in functions:
                 visit_function(node.func.id)
             if not node.args or not isinstance(node.func, ast.Attribute):
-                continue
+                return
             if node.func.attr == "create_table":
                 table_name = _static_migration_string(node.args[0], function_constants)
                 if table_name is not None:
                     evidence[table_name].append((rank, revision, f"{path}:{node.lineno}"))
-                continue
+                return
             if node.func.attr != "execute":
-                continue
+                return
             sql = _static_migration_string(node.args[0], function_constants)
             if sql is None:
-                continue
+                return
             for schema_name in _created_schema_names(sql):
                 evidence[schema_name].append((rank, revision, f"{path}:{node.lineno}"))
+
+        for statement in function.body:
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                if statement.value is None:
+                    continue
+                targets = (
+                    statement.targets if isinstance(statement, ast.Assign) else (statement.target,)
+                )
+                target_names = tuple(
+                    target.id for target in targets if isinstance(target, ast.Name)
+                )
+                for target_name in target_names:
+                    function_constants.pop(target_name, None)
+                try:
+                    value: object = ast.literal_eval(statement.value)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(value, str):
+                    for target_name in target_names:
+                        function_constants[target_name] = value
+                continue
+            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+                record_call(statement.value)
+                continue
+            if isinstance(statement, ast.Return):
+                if isinstance(statement.value, ast.Call):
+                    record_call(statement.value)
+                break
+            if isinstance(statement, ast.Raise):
+                break
 
     visit_function("upgrade")
 
