@@ -421,7 +421,29 @@ jobs:
           set -euo pipefail
           head_json="$RUNNER_TEMP/pyright-head.json"
           base_json="$RUNNER_TEMP/pyright-base.json"
-          pyright --outputjson > "$head_json" 2>/dev/null || true
+
+          # pyright exits non-zero merely because this repo carries a large
+          # pre-existing strict baseline, so its exit status cannot tell
+          # "reported diagnostics" apart from "crashed before writing anything".
+          # Judge the JSON instead. An unparseable payload means the pyright RUN
+          # failed, and that must block naming its own reason rather than
+          # reaching the comparison below as an opaque "invalid pyright
+          # comparison: Expecting value: line 1 column 1" — which it did on two
+          # consecutive PRs, each time costing a manual re-run to diagnose.
+          # stderr is kept for the same reason: 2>/dev/null discarded the only
+          # evidence of why pyright died.
+          run_pyright() {
+            local out="$1" label="$2" dir="$3"
+            local log="$RUNNER_TEMP/pyright-$label.stderr"
+            ( cd "$dir" && pyright --outputjson ) > "$out" 2>"$log" || true
+            if ! python -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
+              echo "::error::pyright produced no parseable JSON for the $label side of the ratchet. This is a pyright or runner failure, not a new type error; re-running the job usually clears it. Its stderr follows."
+              tail -n 40 "$log" || true
+              exit 1
+            fi
+          }
+
+          run_pyright "$head_json" head "$GITHUB_WORKSPACE"
           base="${{ steps.base.outputs.ref }}"
           wt="$RUNNER_TEMP/base-pyright"
           # Clear any stale worktree path from a retried job, then REQUIRE the
@@ -437,7 +459,7 @@ jobs:
           fi
           cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
           trap cleanup EXIT
-          (cd "$wt" && pyright --outputjson > "$base_json" 2>/dev/null) || true
+          run_pyright "$base_json" base "$wt"
           git worktree remove --force "$wt" 2>/dev/null || true
           trap - EXIT
           python .github/scripts/ci_gate.py pyright-diff \
