@@ -201,6 +201,20 @@ def test_cross_module_eval_and_exec_hold_targets(tmp_path: Path, dynamic_call: s
     assert entry.reasons == ("unresolved-dynamic-reflection",)
 
 
+def test_cross_module_namespace_access_holds_targets(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _write(root, "src/handlers.py", "def hidden(): pass\n")
+    _write(root, "src/runner.py", "import handlers\nvars(handlers)['hidden']()\n")
+    subprocess.run(["git", "add", "."], cwd=root, check=True, env=clean_local_git_env())
+    entry = next(
+        item
+        for item in build_inventory(root).entries
+        if item.path == "src/handlers.py" and item.qualified_name == "hidden"
+    )
+    assert entry.disposition == "unknown"
+    assert entry.reasons == ("unresolved-dynamic-reflection",)
+
+
 def test_parse_error_holds_and_excluded_roots_stay_out(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _write(root, "src/broken.py", "def broken(:\n")
