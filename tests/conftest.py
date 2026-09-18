@@ -597,3 +597,49 @@ def direct_chain_db(
         return dest
 
     return build
+
+
+_ARCHIVED_CHAIN_DBS: dict[tuple[str, str], Path] = {}
+
+
+@pytest.fixture(scope="session")
+def archived_chain_db(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Callable[..., Path]:
+    """Return a builder that replays an archived stamp-to-head chain.
+
+    This is the parity control for ``migrated_db(..., archived=True,
+    reanchor_to_active_head=True)``. The migration harness routes the explicit
+    historical stamp and subsequent ``head`` upgrade through the archived graph,
+    then exposes the completed schema at the active head.
+    """
+    from alembic.config import Config
+
+    from alembic import command
+
+    project_root = Path(__file__).resolve().parents[1]
+    cache_dir = tmp_path_factory.mktemp("archived_chain_dbs")
+
+    def build(
+        dest: Path,
+        *,
+        stamp: str = "0059_kpi_facts_restatement",
+        target: str = "head",
+    ) -> Path:
+        key = (stamp, target)
+        source = _ARCHIVED_CHAIN_DBS.get(key)
+        if source is None or not source.exists():
+            safe_stamp = stamp.replace("/", "_").replace("\\", "_")
+            safe_target = target.replace("/", "_").replace("\\", "_")
+            source = cache_dir / f"archived_{safe_stamp}_{safe_target}.db"
+            cfg = Config(str(project_root / "alembic.ini"))
+            cfg.set_main_option("script_location", str(project_root / "alembic"))
+            cfg.set_main_option("sqlalchemy.url", f"sqlite:///{source.as_posix()}")
+            command.stamp(cfg, stamp)
+            command.upgrade(cfg, target)
+            _ARCHIVED_CHAIN_DBS[key] = source
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, dest)
+        return dest
+
+    return build

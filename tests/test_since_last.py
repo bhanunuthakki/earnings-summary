@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
@@ -73,19 +71,10 @@ CREATE TABLE documents (
 """
 
 
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "since_last.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
     conn = sqlite3.connect(str(db))
     try:
         conn.executescript(_DECISIONS_DDL + _DOCUMENTS_DDL)
