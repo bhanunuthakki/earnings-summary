@@ -77,6 +77,9 @@ from comments_server_content_routes import (  # noqa: E402
     register_content_routes,
 )
 from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes  # noqa: E402
+from comments_server_evaluation_projection import (  # noqa: E402
+    resolve_work_os_evaluation_item,
+)
 from comments_server_governed_alert_routes import (  # noqa: E402
     GovernedAlertRouteContext,
     register_governed_alert_routes,
@@ -236,7 +239,7 @@ from pipeline.work_os_portfolio import (  # noqa: E402
     build_work_os_portfolio_research_links,
     load_work_os_price_action_bands,
 )
-from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
+from pipeline.work_os_shell import render_work_os_shell_result  # noqa: E402
 from portfolio_risk_snapshot_store import read_latest_snapshot  # noqa: E402
 from readme_updater import evidence_sha256  # noqa: E402
 from research.proposal_approval import bind_ask_proposal_events  # noqa: E402
@@ -284,6 +287,26 @@ _MAX_REQUEST_BYTES = 262_144
 _MAX_USER_INPUT_CHARS = 8_000
 _STREAM_QUEUE_MAXSIZE = 64
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+
+# The four work-os hydration GETs join the panel response cache: same 30s TTL,
+# same single-flight, same mutation-clear. Server-side only — the client keeps
+# its strict no-store contract on every one of these routes.
+_WORK_OS_CACHE_ROUTE_PATHS = frozenset(
+    {
+        "/api/work-os/portfolio",
+        "/api/work-os/evaluation",
+        "/api/work-os/briefs",
+    }
+)
+
+
+def _is_work_os_cached_route(path: str) -> bool:
+    """Match exactly the cached work-os surfaces (never the brief-body subroute)."""
+    if path in _WORK_OS_CACHE_ROUTE_PATHS:
+        return True
+    return path.startswith("/api/work-os/companies/") and path.endswith("/desk")
+
+
 _BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
 _README_RUN_ID_RX = re.compile(r"[0-9a-f]{32}\Z")
 _LOGGER = logging.getLogger(__name__)
@@ -892,7 +915,10 @@ def create_app(
 
     @app.before_request
     def serve_fresh_panel_cache() -> Response | None:
-        if request.method != "GET" or not request.path.startswith("/api/panel/"):
+        if request.method != "GET":
+            return None
+        work_os_cached = _is_work_os_cached_route(request.path)
+        if not work_os_cached and not request.path.startswith("/api/panel/"):
             return None
         if request.path == "/api/panel/cron_health" and request.args.get("fragment") == "live":
             g.panel_cache_bypass = True
@@ -905,8 +931,17 @@ def create_app(
         assert isinstance(lookup, PanelCacheHit)
         body = lookup.entry.body
         content_type = lookup.entry.content_type
-        etag = lookup.entry.etag
         g.panel_cache_hit = True
+        if work_os_cached:
+            # Work-os hydration is server-side only: the client contract stays
+            # Cache-Control no-store (the browser never caches these payloads),
+            # so the hit carries no ETag and no 304 — just the observation
+            # header and the untouched route semantics.
+            response = Response(body, content_type=content_type)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Panel-Cache"] = "hit"
+            return response
+        etag = lookup.entry.etag
         if request.if_none_match.contains(etag.strip('"')):
             response = Response(status=304)
         else:
@@ -959,6 +994,36 @@ def create_app(
         # first and the CORS headers still land on the 304.)
         if getattr(g, "panel_cache_bypass", False):
             response.headers["Cache-Control"] = "no-store"
+            return response
+        if (
+            request.method == "GET"
+            and response.status_code == 200
+            and not response.direct_passthrough
+            and _is_work_os_cached_route(request.path)
+        ):
+            # Work-os hydration joins the same 30s single-flight cache. The
+            # client contract is unchanged — no-store, no ETag, no 304 — only
+            # the X-Panel-Cache observation header is added. Degraded
+            # 200-with-degraded tracker payloads are cached under the same TTL
+            # so a down tracker keeps serving its honest degraded state instead
+            # of re-probing per request. External cron writes are not
+            # invalidation events (parity with panel fragments today); HTTP
+            # mutations still clear the whole cache in start_request_timer.
+            if not getattr(g, "panel_cache_hit", False):
+                reservation = g.pop("panel_cache_reservation", None)
+                if isinstance(reservation, PanelCacheReservation):
+                    body = response.get_data()
+                    panel_cache.store(
+                        reservation,
+                        PanelCacheEntry(
+                            body=body,
+                            content_type=response.content_type or "application/octet-stream",
+                            # Internal freshness validator only; work-os
+                            # responses never emit it (no-store).
+                            etag=hashlib.sha256(body).hexdigest(),
+                        ),
+                    )
+                response.headers["X-Panel-Cache"] = "miss"
             return response
         if (
             request.method == "GET"
@@ -1297,7 +1362,21 @@ def create_app(
     @app.route("/", methods=["GET"])
     def dashboard_page():
         """Eight-screen Work OS; legacy panel endpoints remain drill-throughs."""
-        return Response(render_work_os_shell(db_path=db_path), mimetype="text/html")
+        render = render_work_os_shell_result(db_path=db_path)
+        response = Response(render.html, mimetype="text/html")
+        # no-cache = store but always revalidate. The ETag is derived from the
+        # render memo key (30s bucket, pinned stamp if any, prototype
+        # fingerprint), so a repeat load inside the bucket revalidates to a 304
+        # with no body transfer and even a full revalidation render is a memo
+        # hit. Staleness contract: the shell's data-generated-at stamp may
+        # trail wall-clock time by up to one 30s bucket; the shell JS never
+        # parses the stamp (it only rewrites the element's textContent).
+        response.headers["ETag"] = render.etag
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Panel-Cache"] = render.cache_state
+        # make_conditional mutates + returns self; the cast restores the
+        # Flask subclass the werkzeug stub erases.
+        return cast("Response", response.make_conditional(request))
 
     @app.route("/api/work-os/portfolio", methods=["GET"])
     def work_os_portfolio_api():
@@ -1381,9 +1460,16 @@ def create_app(
         fingerprint = str(review_body.get("suggestion_fingerprint") or "").strip()
 
         read_conn = get_read_db()
-        rows = build_cockpit_rows(read_conn, repo_root).get("evaluation", [])
-        payload = build_work_os_evaluation(rows, repo_root, read_conn)
-        item = next((candidate for candidate in payload.items if candidate.ticker == symbol), None)
+        item = resolve_work_os_evaluation_item(
+            read_conn,
+            repo_root,
+            symbol,
+            safe_ticker=ticker_validation.safe_ticker,
+            # The route keeps its own projection bindings so tests (and any
+            # future seam) patch the comments_server names exactly as before.
+            build_cockpit_rows=build_cockpit_rows,
+            build_work_os_evaluation=build_work_os_evaluation,
+        )
         if item is None or item.profile is None:
             return _client_error("not_found: current investment profile is unavailable", 404)
         try:
