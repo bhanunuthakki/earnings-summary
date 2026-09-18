@@ -5,16 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlunsplit
 
 import pytest
-from alembic.config import Config
 
-import db as dbmod
-from alembic import command
 from execution import capture_ir_authority_surfaces as cli
 from ir_pipeline.authority import SurfaceOutcome
 from ir_pipeline.authority_capture import (
@@ -95,34 +92,25 @@ class FakeSession:
         return None
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "authority-capture.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0227_issuer_reporting_registry")
+    migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        archived=True,
+        target="0227_issuer_reporting_registry",
+    )
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     _seed_registry(conn)
     return conn
 
 
-def _full_conn(tmp_path: Path) -> sqlite3.Connection:
+def _full_conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    """Full at-head DB via the squashed active template (which carries the
+    baseline tables ``db.init_db()`` used to provide before the chain ran)."""
     path = tmp_path / "authority-capture-full.db"
-    saved_paths = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    try:
-        dbmod.set_db_path(str(path))
-        dbmod.init_db()
-        command.stamp(_config(path), "0000_baseline")
-        command.upgrade(_config(path), "head")
-    finally:
-        dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved_paths
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     _seed_registry(conn)
@@ -212,8 +200,9 @@ def test_required_exhausted_surface_requires_at_least_one_observed_document() ->
 
 def test_claimed_document_must_be_present_in_captured_surface_bytes(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         result = capture_ir_authority_surfaces(
             conn,
@@ -235,8 +224,9 @@ def test_claimed_document_must_be_present_in_captured_surface_bytes(
 
 def test_exhausted_surface_rejects_an_unclaimed_document_reference(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     q1_url = "https://ir.acme.test/q1-2026-results.pdf"
     body = (
         b"<html>"
@@ -265,8 +255,9 @@ def test_exhausted_surface_rejects_an_unclaimed_document_reference(
 
 def test_dry_run_fetches_without_database_or_durable_blob_writes(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     blob_root = tmp_path / "blobs"
     try:
         result = capture_ir_authority_surfaces(
@@ -291,8 +282,9 @@ def test_dry_run_fetches_without_database_or_durable_blob_writes(
 
 def test_apply_persists_hash_bound_evidence_and_verified_surface(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     blob_root = tmp_path / "blobs"
     digest = hashlib.sha256(BODY).hexdigest()
     try:
@@ -324,8 +316,8 @@ def test_apply_persists_hash_bound_evidence_and_verified_surface(
         conn.close()
 
 
-def test_exact_apply_replay_is_idempotent(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_exact_apply_replay_is_idempotent(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    conn = _conn(tmp_path, migrated_db)
     blob_root = tmp_path / "blobs"
     try:
         first = capture_ir_authority_surfaces(
@@ -353,8 +345,10 @@ def test_exact_apply_replay_is_idempotent(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_failed_required_surface_is_not_verified_or_complete(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_failed_required_surface_is_not_verified_or_complete(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         result = capture_ir_authority_surfaces(
             conn,
@@ -390,8 +384,9 @@ def test_failed_or_oversized_fetch_emits_no_unbound_authority(
     tmp_path: Path,
     response: FakeResponse,
     reason_code: str,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     maximum = 8 if reason_code == "surface_too_large" else 1_000_000
     try:
         result = capture_ir_authority_surfaces(
@@ -412,8 +407,9 @@ def test_failed_or_oversized_fetch_emits_no_unbound_authority(
 
 def test_redirects_are_bounded_and_credential_redirect_is_rejected(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
 
     def redirect(location: str) -> FakeResponse:
         return FakeResponse(
@@ -463,8 +459,10 @@ def test_request_rejects_credentials_and_non_https(source_url: str) -> None:
         _request(source_url=source_url)
 
 
-def test_canonical_ticker_mismatch_stops_before_network(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_canonical_ticker_mismatch_stops_before_network(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     session = FakeSession([])
     try:
         with pytest.raises(IRAuthorityCaptureIdentityError):
@@ -484,8 +482,9 @@ def test_cli_uses_job_lock_and_json_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _full_conn(tmp_path)
+    conn = _full_conn(tmp_path, migrated_db)
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     conn.close()
     request_path = tmp_path / "request.json"
