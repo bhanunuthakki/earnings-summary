@@ -16,12 +16,11 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 import ask.store as ask_store
 import capture.sessions as capture_sessions
-from alembic import command
 from clock import now_naive_utc
+from synthesis.semantic_tension import TensionCall
 from synthesis.session_distill import (
     Candidate,
     SessionRef,
@@ -33,13 +32,6 @@ from user_state.notes import create_note, get_note, list_notes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
 
 
 @pytest.fixture
@@ -398,7 +390,11 @@ def test_new_tenet_with_semantic_match_lands_with_tension_with(
     import synthesis.session_distill as sd
 
     def fake_semantic(
-        body_md: str, *, exclude_scope_key: str | None = None, db_path=None, call=None
+        body_md: str,
+        *,
+        exclude_scope_key: str | None = None,
+        db_path: Path | str | None = None,
+        call: TensionCall | None = None,
     ):
         return live
 
@@ -446,7 +442,13 @@ def test_new_tenet_lands_even_when_semantic_detection_raises(
 
     import synthesis.session_distill as sd
 
-    def boom(body_md: str, *, exclude_scope_key: str | None = None, db_path=None, call=None):
+    def boom(
+        body_md: str,
+        *,
+        exclude_scope_key: str | None = None,
+        db_path: Path | str | None = None,
+        call: TensionCall | None = None,
+    ):
         raise RuntimeError("simulated failure")
 
     monkeypatch.setattr(sd, "detect_semantic_tension", boom)
@@ -615,14 +617,12 @@ def test_success_marks_ask_session_distilled(db_path: Path) -> None:
 
 
 def test_land_session_notes_transcript_kind_writes_a_raw_session(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "data").mkdir(parents=True)
     db = repo_root / "data" / "portfolio.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+    migrated_db(db, stamp=PRIOR_HEAD)
 
     transcript_file = tmp_path / "transcript.txt"
     transcript_file.write_text("the whole deep-session braindump", encoding="utf-8")

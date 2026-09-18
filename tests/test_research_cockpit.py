@@ -16,19 +16,15 @@ import json
 import shutil
 import sqlite3
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import db as dbmod  # noqa: E402
 from pipeline.dashboard_status import DashboardRow  # noqa: E402
 from pipeline.research_cockpit import (  # noqa: E402
     CockpitRow,
@@ -62,16 +58,17 @@ def _iso(dt: datetime) -> str:
 
 
 @pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """One fully-migrated DB (init_db + alembic head), shared across the module."""
+def head_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
+) -> Path:
+    """One fully-migrated DB (squashed active head), shared across the module.
+
+    The squashed baseline carries the tables ``db.init_db()`` used to provide,
+    so a plain ``migrated_db`` copy replaces the old init_db + full-chain
+    build."""
     db = tmp_path_factory.mktemp("cockpit_tmpl") / "head.db"
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
+    migrated_db(db)
     return db
 
 

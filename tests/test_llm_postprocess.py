@@ -8,6 +8,9 @@ else — content opening with a heading, a claim, or data is untouched.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 import pytest
 
 from llm.postprocess import strip_inline_markdown, strip_llm_preamble
@@ -78,25 +81,24 @@ def test_never_strips_to_empty() -> None:
     assert strip_llm_preamble("   \n \n") == "   \n \n"
 
 
-def test_persist_memo_strips_preamble_before_summary(tmp_path) -> None:
+def test_persist_memo_strips_preamble_before_summary(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """The advisor write path applies the stripper BEFORE deriving the
     note-sized summary line, so the feed card never shows narration."""
     import sqlite3
-    from pathlib import Path
-
-    from alembic.config import Config
 
     from advisor.memos import persist_memo
-    from alembic import command
     from identity import DEFAULT_USER_ID
 
-    project_root = Path(__file__).resolve().parents[1]
     db = tmp_path / "memos.db"
-    cfg = Config(str(project_root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(project_root / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0059_kpi_facts_restatement")
-    command.upgrade(cfg, "head")
+    migrated_db(
+        db,
+        stamp="0059_kpi_facts_restatement",
+        archived=True,
+        target="head",
+        reanchor_to_active_head=True,
+    )
 
     result = persist_memo(
         db_path=db,
@@ -188,26 +190,25 @@ def test_strip_inline_markdown_is_idempotent() -> None:
     assert strip_inline_markdown(once) == once
 
 
-def test_persist_memo_scalars_land_plain_but_body_keeps_markdown(tmp_path) -> None:
+def test_persist_memo_scalars_land_plain_but_body_keeps_markdown(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """Persist boundary: an LLM `**bold**` title and a summary line with
     inline markdown land as plain scalars; body_md keeps its markdown for
     render_prose."""
     import sqlite3
-    from pathlib import Path
-
-    from alembic.config import Config
 
     from advisor.memos import persist_memo
-    from alembic import command
     from identity import DEFAULT_USER_ID
 
-    project_root = Path(__file__).resolve().parents[1]
     db = tmp_path / "memos.db"
-    cfg = Config(str(project_root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(project_root / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0059_kpi_facts_restatement")
-    command.upgrade(cfg, "head")
+    migrated_db(
+        db,
+        stamp="0059_kpi_facts_restatement",
+        archived=True,
+        target="head",
+        reanchor_to_active_head=True,
+    )
 
     body = (
         "## Where the next dollar works hardest\n"

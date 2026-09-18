@@ -15,10 +15,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 import db as dbmod
-from alembic import command
 from capture import coach_reply, telegram
 from capture.matcher import build_roster_index
 from research import governor
@@ -33,27 +31,21 @@ PRE_MIGRATION_HEAD = (
 ROSTER = build_roster_index(symbols=["NU", "MELI"], phrases={"nubank": "NU"})
 
 
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
 def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     return migrated_db(tmp_path / "ledger.db", stamp=PRIOR_HEAD)
 
 
 @pytest.fixture
-def pre_migration_db_path(tmp_path: Path) -> Path:
+def pre_migration_db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """A fully-migrated DB stopping ONE revision short of 0188 — coach_pings
     exists (0131) but has no ``telegram_message_id`` column yet."""
-    db = tmp_path / "pre.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, PRE_MIGRATION_HEAD)
-    return db
+    return migrated_db(
+        tmp_path / "pre.db",
+        stamp=PRIOR_HEAD,
+        archived=True,
+        target=PRE_MIGRATION_HEAD,
+    )
 
 
 def _seed_ping(
@@ -113,18 +105,19 @@ def _window_update(update_id: int, text: str) -> telegram.Update:
 
 
 def _stub_classify(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
-    monkeypatch.setattr(
-        coach_reply,
-        "classify_reply",
-        lambda ping, text, **kw: coach_reply.ReplyVerdict(intent=intent),
-    )
+    def _classify(ping: coach_reply.PingLike, text: str, **kw: object) -> coach_reply.ReplyVerdict:
+        return coach_reply.ReplyVerdict(intent=intent)
+
+    monkeypatch.setattr(coach_reply, "classify_reply", _classify)
 
 
 def _stub_send(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+
+    def _send(token: str, chat_id: int, text: str, **k: object) -> None:
+        sent.append(text)
+
+    monkeypatch.setattr(telegram, "send_message", _send)
     return sent
 
 
@@ -447,24 +440,22 @@ def test_record_ping_message_id_noops_on_pre_migration_schema(
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
+def repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[tuple[Path, Path]]:
     """(repo_root, db_path) — a real, fully-migrated DB at
-    <repo_root>/data/portfolio.db, mirroring test_capacity_moments.py's fixture
-    (``db.init_db()`` for the inline-managed baseline tables, then alembic
-    ``0000_baseline`` -> head). ``run_coach_pings.main()`` calls
+    <repo_root>/data/portfolio.db. ``run_coach_pings.main()`` calls
     ``synthesis.auto_reconcile.auto_reconcile``, which queries ``decisions``/
     ``tracked_companies`` UNCONDITIONALLY (no missing-table guard) — the
     lighter stamp-past-a-prior-head fixture used above leaves those
-    init_db-owned tables absent and would raise ``OperationalError`` here."""
+    tables absent and would raise ``OperationalError`` here. The squashed
+    active-head template carries every baseline table, so a plain
+    ``migrated_db`` copy covers what ``init_db()`` + the full chain used to
+    build."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     db_file = data_dir / "portfolio.db"
     saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
     dbmod.set_db_path(str(db_file))
-    dbmod.init_db()
-    cfg = _cfg(db_file)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
+    migrated_db(db_file)
     try:
         yield tmp_path, db_file
     finally:
@@ -504,12 +495,24 @@ def test_run_coach_pings_send_records_message_id(
     root, db_file = repo
     _seed_open_intent(db_file)
 
-    monkeypatch.setattr("capture.token_store.load_token", lambda path=None: "tok")
-    monkeypatch.setattr("capture.token_store.load_chat_id", lambda path=None: 1)
-    monkeypatch.setattr(
-        "capture.telegram.send_message",
-        lambda token, chat_id, text, reply_markup=None, **k: {"message_id": 777},
-    )
+    def _load_token(path: Path | str | None = None) -> str:
+        return "tok"
+
+    def _load_chat_id(path: Path | str | None = None) -> int:
+        return 1
+
+    def _send(
+        token: str,
+        chat_id: int,
+        text: str,
+        reply_markup: dict[str, object] | None = None,
+        **k: object,
+    ) -> dict[str, int]:
+        return {"message_id": 777}
+
+    monkeypatch.setattr("capture.token_store.load_token", _load_token)
+    monkeypatch.setattr("capture.token_store.load_chat_id", _load_chat_id)
+    monkeypatch.setattr("capture.telegram.send_message", _send)
 
     monkeypatch.setattr(sys, "argv", ["run_coach_pings.py", "--repo-root", str(root)])
     rc = run_coach_pings.main()
