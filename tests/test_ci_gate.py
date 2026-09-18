@@ -277,7 +277,15 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "dorny/paths-filter" not in workflow
     assert 'git diff --name-only --no-renames -z "$base...$head"' in workflow
     assert 'git diff --name-only --no-renames -z "$PUSH_BEFORE_SHA" "$CURRENT_SHA"' in workflow
-    assert 'pyright --outputjson > "$head_json" 2>/dev/null || true' in workflow
+    # Both ratchet sides run through one helper. pyright's non-zero exit from the
+    # tolerated baseline must stay non-fatal, but an unparseable payload has to
+    # block on its own terms rather than reach the comparison as a parse error.
+    assert 'pyright --outputjson > "$head_json" 2>/dev/null || true' not in workflow
+    assert '( cd "$dir" && pyright --outputjson ) > "$out" 2>"$log" || true' in workflow
+    assert 'run_pyright "$head_json" head "$GITHUB_WORKSPACE"' in workflow
+    assert 'run_pyright "$base_json" base "$wt"' in workflow
+    assert "json.load(open(sys.argv[1]))" in workflow
+    assert 'tail -n 40 "$log"' in workflow
     assert "ci_gate.py pyright-diff" in workflow
     assert (
         'pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"' in workflow
