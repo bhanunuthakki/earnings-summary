@@ -336,18 +336,30 @@ def _reachability_semantic(m: ReachabilityGraph) -> bool:
     )
 
 
-def replay_reduction(audit: TestDbAudit) -> ReplayReduction:
-    """Measure the pinned file-based replay reduction without admitting it."""
+def replay_reduction(audit: TestDbAudit) -> ReplayReduction | None:
+    """Measure the pinned file-based replay reduction without admitting it.
 
+    Returns ``None`` when the collection cannot be trusted. A halted collection
+    reports zero builders, and measuring an empty scan yields a perfect 100%
+    reduction, so the measurement is withheld rather than fabricated. The
+    collector already stores ``None`` on that path; this keeps a caller that
+    recomputes from an audit it did not collect from reaching the same wrong
+    conclusion.
+    """
+
+    if audit.collection_status != "COMPLETE" or audit.collection_note != "":
+        return None
     return ReplayReduction.from_builders(audit.database_builders)
 
 
 def _test_db_semantic(m: TestDbAudit) -> bool:
+    # ``replay_reduction`` returns None for exactly the untrustworthy collection
+    # states, so the None guard is this gate's collection-status check.
     measurement = replay_reduction(m)
+    if measurement is None:
+        return False
     return (
-        m.collection_status == "COMPLETE"
-        and m.collection_note == ""
-        and m.raw_audit_status == "PASS"
+        m.raw_audit_status == "PASS"
         and not m.violations
         and m.replay_reduction == measurement
         and measurement.unique_builder_paths
