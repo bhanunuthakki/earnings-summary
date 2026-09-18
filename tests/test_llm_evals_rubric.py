@@ -15,14 +15,13 @@ import os
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
 import pytest
-from alembic.config import Config
 
 import evals.judge as ej
-from alembic import command
 from evals.corpora import (
     CORPUS_LOADERS,
     AuditItem,
@@ -285,7 +284,11 @@ def test_mode_a_transient_failure_is_marked_infra(monkeypatch: pytest.MonkeyPatc
 
 def test_mode_a_unparseable_is_not_infra(monkeypatch: pytest.MonkeyPatch) -> None:
     """The judge RAN and answered garbage — a judge-quality fact, kept fail-closed."""
-    monkeypatch.setattr(ej, "call_llm", lambda *_a, **_k: "not json at all")
+
+    def garbage(prompt: str, **_kw: object) -> str:
+        return "not json at all"
+
+    monkeypatch.setattr(ej, "call_llm", garbage)
     outcome = ej.run_judge("q", "{}", "{}", "diff", run_id="r1")
     assert outcome.verdict is None and not outcome.infra
 
@@ -491,22 +494,19 @@ def test_filter_since_excludes_old_and_undated() -> None:
 # ----------------------------------------------------------------------------
 
 
-def _alembic_cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
-def _migrated_repo(tmp_path: Path) -> Path:
+def _migrated_repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """A repo-root with data/portfolio.db migrated to 0083 (eval tables) +
     a hand-built prompt_calibration_scores (its migration predates the
     stamp), mirroring test_llm_evals._migrated_db."""
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
     db_path = repo / "data" / "portfolio.db"
-    cfg = _alembic_cfg(db_path)
-    command.stamp(cfg, "0082_expected_earnings_revival")
+    migrated_db(
+        db_path,
+        stamp="0082_expected_earnings_revival",
+        archived=True,
+        target="0083_eval_runs",
+    )
     conn = sqlite3.connect(db_path)
     conn.executescript(
         """
@@ -525,12 +525,13 @@ def _migrated_repo(tmp_path: Path) -> Path:
     )
     conn.commit()
     conn.close()
-    command.upgrade(cfg, "0083_eval_runs")
     return repo
 
 
-def test_run_rubric_eval_end_to_end_persists(tmp_path: Path) -> None:
-    repo = _migrated_repo(tmp_path)
+def test_run_rubric_eval_end_to_end_persists(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    repo = _migrated_repo(tmp_path, migrated_db)
     base = repo / "data" / "bear_case"
     base.mkdir()
     (base / "NU.json").write_text(json.dumps({"failure_modes": ["good"]}), encoding="utf-8")
@@ -672,8 +673,10 @@ def _seed_judged_cases(repo: Path) -> None:
     conn.close()
 
 
-def test_spot_check_records_agreement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = _migrated_repo(tmp_path)
+def test_spot_check_records_agreement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    repo = _migrated_repo(tmp_path, migrated_db)
     _seed_judged_cases(repo)
     mod = _load_execution_module("spot_check_eval_judge")
 
@@ -695,9 +698,11 @@ def test_spot_check_records_agreement(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_spot_check_skip_quit_and_no_persist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    repo = _migrated_repo(tmp_path)
+    repo = _migrated_repo(tmp_path, migrated_db)
     _seed_judged_cases(repo)
     mod = _load_execution_module("spot_check_eval_judge")
 
@@ -712,8 +717,10 @@ def test_spot_check_skip_quit_and_no_persist(
     assert count == 0  # --no-persist honored
 
 
-def test_spot_check_empty_db_is_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = _migrated_repo(tmp_path)
+def test_spot_check_empty_db_is_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    repo = _migrated_repo(tmp_path, migrated_db)
     mod = _load_execution_module("spot_check_eval_judge")
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert mod.main(["--repo-root", str(repo)]) == 0

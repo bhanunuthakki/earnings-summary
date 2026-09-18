@@ -8,6 +8,7 @@ of each logical evidence node without rewriting history.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -44,11 +45,9 @@ def _config(db_path: Path) -> Config:
     return cfg
 
 
-def _migrated_conn(tmp_path: Path) -> sqlite3.Connection:
+def _migrated_conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     db_path = tmp_path / "evidence-ledger.db"
-    cfg = _config(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
+    migrated_db(db_path, stamp=PRIOR_HEAD, archived=True, target=HEAD)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -215,8 +214,10 @@ def test_models_reject_reverse_clocks_periods_and_locator_ranges() -> None:
         EvidenceLocator(legacy_row_id=42)
 
 
-def test_migration_creates_all_ledger_tables_and_current_projection(tmp_path: Path) -> None:
-    conn = _migrated_conn(tmp_path)
+def test_migration_creates_all_ledger_tables_and_current_projection(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         objects = {
             str(row[0])
@@ -258,8 +259,10 @@ def test_migration_creates_all_ledger_tables_and_current_projection(tmp_path: Pa
         conn.close()
 
 
-def test_foreign_keys_and_cross_record_hash_contracts_are_enforced(tmp_path: Path) -> None:
-    conn = _migrated_conn(tmp_path)
+def test_foreign_keys_and_cross_record_hash_contracts_are_enforced(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
@@ -283,8 +286,10 @@ def test_foreign_keys_and_cross_record_hash_contracts_are_enforced(tmp_path: Pat
         conn.close()
 
 
-def test_idempotency_and_immutable_ledger_rows(tmp_path: Path) -> None:
-    conn = _migrated_conn(tmp_path)
+def test_idempotency_and_immutable_ledger_rows(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         ledger = _seed_chain(conn)
         assert ledger.persist(_blob()).created is False
@@ -303,8 +308,10 @@ def test_idempotency_and_immutable_ledger_rows(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_append_only_nodes_project_only_the_current_revision(tmp_path: Path) -> None:
-    conn = _migrated_conn(tmp_path)
+def test_append_only_nodes_project_only_the_current_revision(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         ledger = _seed_chain(conn)
         assert ledger.persist(_node(node_id="node-r1", revision=1)).created
@@ -324,8 +331,10 @@ def test_append_only_nodes_project_only_the_current_revision(tmp_path: Path) -> 
         conn.close()
 
 
-def test_failed_extraction_run_cannot_emit_evidence_nodes(tmp_path: Path) -> None:
-    conn = _migrated_conn(tmp_path)
+def test_failed_extraction_run_cannot_emit_evidence_nodes(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         ledger = _seed_chain(conn)
         failed_values = _run().model_dump()
@@ -345,8 +354,10 @@ def test_failed_extraction_run_cannot_emit_evidence_nodes(tmp_path: Path) -> Non
         conn.close()
 
 
-def test_locator_is_typed_canonical_and_supports_the_full_corpus_node_kinds(tmp_path: Path) -> None:
-    conn = _migrated_conn(tmp_path)
+def test_locator_is_typed_canonical_and_supports_the_full_corpus_node_kinds(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         ledger = _seed_chain(conn)
         node = _node(node_id="table-row", revision=1, node_kind="table_row")
@@ -385,8 +396,9 @@ def test_locator_closes_office_slide_and_worksheet_coordinates() -> None:
 
 def test_legacy_document_bridge_is_unique_and_validated_when_documents_exist(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _migrated_conn(tmp_path)
+    conn = _migrated_conn(tmp_path, migrated_db)
     try:
         ledger = _ledger(conn)
         conn.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY)")
