@@ -238,6 +238,58 @@ def upgrade():
     helper()
     op.execute(SQL)
 """,
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+revision = "0001"
+down_revision = None
+def mutate():
+    global SQL
+    SQL = "SELECT 1"
+def read_sql_helper():
+    op.execute(SQL)
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    mutate()
+    read_sql_helper()
+""",
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+revision = "0001"
+down_revision = None
+def mutate():
+    global SQL
+    SQL = "SELECT 1"
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    result = mutate()
+    op.execute(SQL)
+""",
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+revision = "0001"
+down_revision = None
+def mutate():
+    global SQL
+    SQL = "SELECT 1"
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    if True:
+        mutate()
+    op.execute(SQL)
+""",
+        """revision = "0001"
+down_revision = None
+def helper():
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+def mutate():
+    global helper
+    helper = lambda: None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    mutate()
+    helper()
+""",
     ],
 )
 def test_uncertain_bindings_do_not_manufacture_ownership(
