@@ -49,11 +49,16 @@ _PRIORITY_JOBS: list[tuple[str, str]] = [
 _PRIORITY_DIRECTIVES: frozenset[str] = frozenset(d for d, _ in _PRIORITY_JOBS)
 
 
-def _query_runs(db_path: Path, since: datetime) -> dict[tuple[str, str], str]:
+def _query_runs(
+    db_path: Path, since: datetime, *, conn: sqlite3.Connection | None = None
+) -> dict[tuple[str, str], str]:
     """Return {(directive, "YYYY-MM-DD"): latest_status} for runs since *since*."""
     result: dict[tuple[str, str], str] = {}
+    own = conn is None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        if own:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        previous_row_factory = conn.row_factory
         conn.row_factory = sqlite3.Row
         try:
             cur = conn.execute(
@@ -67,7 +72,9 @@ def _query_runs(db_path: Path, since: datetime) -> dict[tuple[str, str], str]:
                 key: tuple[str, str] = (str(row["directive"]), str(row["run_date"]))
                 result[key] = str(row["status"])
         finally:
-            conn.close()
+            conn.row_factory = previous_row_factory
+            if own:
+                conn.close()
     except sqlite3.Error:
         # DB/table not ready (e.g. ingestion_runs absent on a fresh setup) —
         # render whatever rows were gathered rather than failing the panel.
@@ -296,7 +303,7 @@ def _timeline_table(
     )
 
 
-def render_cron_health_live_body(db_path: Path) -> str:
+def render_cron_health_live_body(db_path: Path, *, conn: sqlite3.Connection | None = None) -> str:
     """The time-varying part of the panel (KPI strip + 7-day timeline) — the
     fragment the operational panel route returns when explicitly requested so today's
     pipeline verdict flips from "Not run yet" to OK/FAILED in place, without a
@@ -320,7 +327,7 @@ def render_cron_health_live_body(db_path: Path) -> str:
         + operational_alarms(db_path)
     )
 
-    all_runs = _query_runs(db_path, since)
+    all_runs = _query_runs(db_path, since, conn=conn)
     if not all_runs:
         return alarms + (
             '<p class="muted">No pipeline run rows yet. '
@@ -349,7 +356,7 @@ def render_cron_health_live_body(db_path: Path) -> str:
     )
 
 
-def render_cron_health_panel(db_path: Path) -> str:
+def render_cron_health_panel(db_path: Path, *, conn: sqlite3.Connection | None = None) -> str:
     """The Cron Health tab fragment: a KPI strip + 7-day per-job timeline.
 
     The live body self-refreshes every 60s with bounded native fetch while the
@@ -367,7 +374,7 @@ def render_cron_health_panel(db_path: Path) -> str:
             '<div id="cc-cron-live" '
             'data-cron-fragment-url="/api/panel/cron_health?fragment=live" '
             'data-refresh-ms="60000">',
-            render_cron_health_live_body(db_path),
+            render_cron_health_live_body(db_path, conn=conn),
             "</div>",
             '<p class="muted" data-cron-status aria-live="polite">'
             "Auto-refreshes every 60 seconds while visible.</p>",

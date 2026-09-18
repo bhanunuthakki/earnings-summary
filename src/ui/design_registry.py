@@ -699,6 +699,7 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "decision_conditions.py",
     "decision_extractor.py",
     "etf_sources/nport.py",
+    "execution/comments_server_panel_cache.py",
     "execution/design_route_canaries.py",
     "execution/land_session_notes.py",
     "execution/verify_design_conformance.py",

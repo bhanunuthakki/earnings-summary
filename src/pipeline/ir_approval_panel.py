@@ -225,19 +225,30 @@ def _candidate_from_row(row: sqlite3.Row) -> IrCandidateReview:
     )
 
 
-def read_ir_approval_review(db_path: Path | None) -> IrApprovalReviewView:
-    """Read candidates and latest decisions without creating or mutating a database."""
+def read_ir_approval_review(
+    db_path: Path | None, *, conn: sqlite3.Connection | None = None
+) -> IrApprovalReviewView:
+    """Read candidates and latest decisions without creating or mutating a database.
+
+    A request-scoped read-only ``conn`` is reused when supplied (the server
+    threads one per request); otherwise a short-lived connection is opened and
+    closed here. An unavailable database still degrades to the unavailable view.
+    """
 
     if db_path is None or not db_path.is_file():
         return _unavailable_view()
+    own = conn is None
     try:
-        connection = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        connection: sqlite3.Connection = (
+            connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) if own else conn
+        )
         try:
             candidates = tuple(
                 _candidate_from_row(row) for row in connection.execute(_LATEST_DECISION_QUERY)
             )
         finally:
-            connection.close()
+            if own:
+                connection.close()
     except (OSError, sqlite3.Error, ValidationError, ValueError):
         return _unavailable_view()
     if not candidates:

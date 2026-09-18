@@ -97,6 +97,7 @@ from comments_server_panel_cache import (  # noqa: E402
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
+    resolve_mutation_families,
 )
 from comments_server_profile_routes import (  # noqa: E402
     ProfileRouteContext,
@@ -656,7 +657,8 @@ def create_app(
         return _client_error(f"{message}; retry the request", status)
 
     def _log_redacted_failure(message: str, exc: object, *, level: str = "error") -> None:
-        log = getattr(app.logger, level)
+        logger = cast(logging.Logger, app.logger)
+        log = getattr(logger, level)
         log(
             "%s: %s",
             message,
@@ -797,17 +799,26 @@ def create_app(
     @app.before_request
     def start_request_timer() -> None:
         g.request_started_ns = time.perf_counter_ns()
-        if (
-            request.method not in ("GET", "HEAD", "OPTIONS")
-            and request.path != "/api/metrics/panel"
-            and not request.path.startswith("/api/operations/attention/")
-        ):
-            # A successful mutation can affect several panels. Clear before it
-            # runs so the next read cannot reuse a pre-mutation fragment; a
-            # rejected mutation merely causes a harmless extra rebuild. Panel
-            # timing telemetry is observational and must not evict the fragment
-            # whose latency it just measured.
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return
+        # A successful mutation can affect several cached surfaces. Instead of
+        # evicting the whole 256-entry panel + work-os response cache, resolve
+        # the exact families that route's writes can staleness from the
+        # mutation-route registry (W6) and invalidate only those prefixes.
+        # Panel timing telemetry (/api/metrics/panel) and the operations
+        # attention routes are registered as declared no-ops (the latter
+        # invalidates at its own precise success moment inside the route). The
+        # registry is total over the non-GET route table — enforced by a test
+        # that walks app.url_map — and an unknown route resolves to None,
+        # which FAILS SAFE to a full clear() so new mutation routes can never
+        # serve a pre-mutation fragment.
+        route_rule = cast(object, request.url_rule)
+        families = resolve_mutation_families(getattr(route_rule, "rule", None))
+        if families is None:
             panel_cache.clear()
+            return
+        for prefix in families:
+            panel_cache.invalidate_prefix(prefix)
 
     @app.errorhandler(413)
     def request_too_large(_error: object):
@@ -1008,7 +1019,8 @@ def create_app(
             # so a down tracker keeps serving its honest degraded state instead
             # of re-probing per request. External cron writes are not
             # invalidation events (parity with panel fragments today); HTTP
-            # mutations still clear the whole cache in start_request_timer.
+            # mutations evict only the cache families their route's registry
+            # entry declares in start_request_timer.
             if not getattr(g, "panel_cache_hit", False):
                 reservation = g.pop("panel_cache_reservation", None)
                 if isinstance(reservation, PanelCacheReservation):
@@ -1044,6 +1056,7 @@ def create_app(
                             etag=response.headers["ETag"],
                         ),
                     )
+                response.headers["X-Panel-Cache"] = "miss"
             # make_conditional mutates + returns self; the cast restores the
             # Flask subclass the werkzeug stub erases.
             return cast("Response", response.make_conditional(request))
@@ -1940,7 +1953,10 @@ def create_app(
 
             fragment = request.args.get("fragment")
             if fragment:
-                return Response(render_health_fragment(db_path, fragment), mimetype="text/html")
+                return Response(
+                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    mimetype="text/html",
+                )
             return Response(
                 render_performance_risk_panel(
                     db_path,
@@ -1960,7 +1976,10 @@ def create_app(
             # card stays on Performance).
             from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
-            return Response(render_portfolio_synthesis_panel(db_path), mimetype="text/html")
+            return Response(
+                render_portfolio_synthesis_panel(db_path, conn=get_read_db()),
+                mimetype="text/html",
+            )
 
         if name == "positioning":
             # Portfolio → Positioning: the owner's durable target book
@@ -1980,7 +1999,10 @@ def create_app(
             # to an offline note; macro stress reads the local cache regardless.
             from pipeline.portfolio_panel import render_portfolio_risk_panel
 
-            return Response(render_portfolio_risk_panel(db_path=db_path), mimetype="text/html")
+            return Response(
+                render_portfolio_risk_panel(db_path=db_path, conn=get_read_db()),
+                mimetype="text/html",
+            )
 
         if name == "red_team":
             # Portfolio -> Red Team (PR5): the monthly First-Saturday
@@ -2002,7 +2024,10 @@ def create_app(
 
             fragment = request.args.get("fragment")
             if fragment:
-                return Response(render_health_fragment(db_path, fragment), mimetype="text/html")
+                return Response(
+                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    mimetype="text/html",
+                )
             user_id = DEFAULT_USER_ID
             return Response(
                 render_portfolio_health_panel(db_path, user_id=user_id), mimetype="text/html"
@@ -2055,8 +2080,13 @@ def create_app(
             )
 
             if request.args.get("fragment") == "live":
-                return Response(render_cron_health_live_body(db_path), mimetype="text/html")
-            return Response(render_cron_health_panel(db_path), mimetype="text/html")
+                return Response(
+                    render_cron_health_live_body(db_path, conn=get_read_db()),
+                    mimetype="text/html",
+                )
+            return Response(
+                render_cron_health_panel(db_path, conn=get_read_db()), mimetype="text/html"
+            )
 
         if name == "dcf_coverage":
             # Which of the ~90 DCF workbooks are live / stale / skipped /
@@ -2178,7 +2208,7 @@ def create_app(
             # investor-day agenda. Pure read; never feeds the inbox scorer.
             from pipeline.diet_panel import render_diet_panel
 
-            return Response(render_diet_panel(db_path), mimetype="text/html")
+            return Response(render_diet_panel(db_path, conn=get_read_db()), mimetype="text/html")
 
         if name == "musings":
             # Review → Ledger (Phase-5 IA): the `musings` panel id now serves the
@@ -2359,7 +2389,11 @@ def create_app(
             from pipeline.data_policy_settings_panel import render_data_policy_settings_panel
 
             return Response(
-                render_data_policy_settings_panel(db_path=db_path), mimetype="text/html"
+                render_data_policy_settings_panel(
+                    db_path=db_path,
+                    conn=get_read_db() if db_path.is_file() else None,
+                ),
+                mimetype="text/html",
             )
 
         if name == "restatements":
@@ -2679,7 +2713,11 @@ def create_app(
     )
     register_ir_approval_routes(
         app,
-        IrApprovalRouteContext(db_path=db_path, owner_actor=DEFAULT_USER_ID),
+        IrApprovalRouteContext(
+            db_path=db_path,
+            owner_actor=DEFAULT_USER_ID,
+            get_read_db=get_read_db,
+        ),
     )
     register_research_task_routes(
         app,
