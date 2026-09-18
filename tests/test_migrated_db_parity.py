@@ -49,6 +49,7 @@ from pathlib import Path
 SchemaObject = tuple[str, str, str, tuple[str, ...]]
 #: cid, name, declared type, notnull, primary-key position.
 ColumnInfo = tuple[int, str, str, int, int]
+ARCHIVED_PARITY_STAMP = "0059_kpi_facts_restatement"
 
 
 def _canonical_clauses(sql: str) -> tuple[str, ...]:
@@ -218,3 +219,66 @@ def test_the_active_graph_cache_ignores_the_compatibility_stamp(
     # fidelity tests above to notice a stamp that selected a narrower build.
     assert _revisions(stamped) == _revisions(default)
     assert _revisions(stamped) != ["0006_add_ask_proposal_approval"]
+
+
+def test_an_archived_template_matches_an_archived_chain_replay(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    archived_chain_db: Callable[..., Path],
+) -> None:
+    cached = migrated_db(
+        tmp_path / "cached-archived.db",
+        stamp=ARCHIVED_PARITY_STAMP,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
+    direct = archived_chain_db(
+        tmp_path / "direct-archived.db",
+        stamp=ARCHIVED_PARITY_STAMP,
+    )
+
+    cached_schema = _schema(cached)
+    assert len(cached_schema) > 1000
+    assert cached_schema == _schema(direct)
+    assert _columns(cached) == _columns(direct)
+
+
+def test_an_archived_template_carries_the_same_seed_row_counts(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    archived_chain_db: Callable[..., Path],
+) -> None:
+    cached = migrated_db(
+        tmp_path / "cached-archived.db",
+        stamp=ARCHIVED_PARITY_STAMP,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
+    direct = archived_chain_db(
+        tmp_path / "direct-archived.db",
+        stamp=ARCHIVED_PARITY_STAMP,
+    )
+
+    cached_counts = _row_counts(cached)
+    assert sum(cached_counts.values()) > 0
+    assert cached_counts == _row_counts(direct)
+
+
+def test_an_archived_template_reports_the_active_head_after_reanchoring(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    archived_chain_db: Callable[..., Path],
+) -> None:
+    cached = migrated_db(
+        tmp_path / "cached-archived.db",
+        stamp=ARCHIVED_PARITY_STAMP,
+        archived=True,
+        reanchor_to_active_head=True,
+    )
+    direct = archived_chain_db(
+        tmp_path / "direct-archived.db",
+        stamp=ARCHIVED_PARITY_STAMP,
+    )
+
+    assert _revisions(cached) == _revisions(direct)
+    assert _revisions(cached) == ["0039_add_dcf_forecast_series"]
