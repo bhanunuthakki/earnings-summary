@@ -70,7 +70,7 @@ _EV = re.compile(
 
 
 def declares_registry(text: str) -> bool:
-    """Return whether a module defines a non-scalar ``*REGISTRY`` authority."""
+    """Return whether a module defines a non-scalar registry-named authority."""
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -89,7 +89,12 @@ def declares_registry(text: str) -> bool:
         if isinstance(value, ast.Constant):
             continue
         if any(
-            isinstance(target, ast.Name) and target.id.endswith("REGISTRY") for target in targets
+            isinstance(target, ast.Name)
+            and (
+                target.id.endswith("REGISTRY")
+                or re.search(r"(?:^|_)REGISTRY_BY_", target.id) is not None
+            )
+            for target in targets
         ):
             return True
     return False
