@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -125,11 +125,20 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path, *, source_url: str = SOURCE_URL) -> sqlite3.Connection:
+def _conn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    *,
+    source_url: str = SOURCE_URL,
+) -> sqlite3.Connection:
     path = tmp_path / "sec-native-capture.db"
+    migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        archived=True,
+        target="0220_source_inventory_seals",
+    )
     config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0220_source_inventory_seals")
     # Indexed coverage is a current-runtime contract. Projection seals were
     # added later without changing the SEC capture tables, so this focused
     # fixture fast-forwards only that additive search publication gate.
@@ -278,8 +287,10 @@ def _request(
     )
 
 
-def test_fetch_candidates_exclude_authority_omitted_locators(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_fetch_candidates_exclude_authority_omitted_locators(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     coverage = SourceCoverageLedger(conn)
     coverage.persist(
         ExpectedDocument(
@@ -342,8 +353,9 @@ def test_fetch_candidates_exclude_authority_omitted_locators(tmp_path: Path) -> 
 
 def test_captured_package_excludes_authority_omitted_financial_locator(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     coverage = SourceCoverageLedger(conn)
     coverage.persist(
         ExpectedDocument(
@@ -412,8 +424,9 @@ def test_captured_package_excludes_authority_omitted_financial_locator(
 
 def test_dry_run_fetches_to_checkpoint_without_database_or_durable_blob_writes(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     session = FakeSession([FakeResponse()])
     try:
         result = capture_expected_sec_documents(
@@ -439,8 +452,9 @@ def test_dry_run_fetches_to_checkpoint_without_database_or_durable_blob_writes(
 
 def test_apply_reuses_verified_checkpoint_and_atomically_persists_full_chain(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     request = _request(tmp_path, apply=False)
     dry_session = FakeSession([FakeResponse()])
     try:
@@ -488,8 +502,9 @@ def test_apply_reuses_verified_checkpoint_and_atomically_persists_full_chain(
 
 def test_extraction_lineage_promotes_current_coverage_without_rescanning_inventory(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         captured = capture_expected_sec_documents(
             conn,
@@ -606,8 +621,9 @@ def test_extraction_lineage_promotes_current_coverage_without_rescanning_invento
 
 def test_transient_failure_is_deferred_then_retried_and_audited(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     request = _request(tmp_path, apply=True)
     try:
         first = capture_expected_sec_documents(
@@ -637,8 +653,9 @@ def test_transient_failure_is_deferred_then_retried_and_audited(
 
 def test_sec_403_is_a_hard_stop_with_checkpoint_and_no_database_mutation(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     try:
         with pytest.raises(SecNativeCaptureHardStopError):
             capture_expected_sec_documents(
@@ -656,9 +673,11 @@ def test_sec_403_is_a_hard_stop_with_checkpoint_and_no_database_mutation(
         conn.close()
 
 
-def test_sealed_identity_mismatch_fails_before_network_access(tmp_path: Path) -> None:
+def test_sealed_identity_mismatch_fails_before_network_access(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     wrong = SOURCE_URL.replace("000000000126000001", "000000000126999999")
-    conn = _conn(tmp_path, source_url=wrong)
+    conn = _conn(tmp_path, migrated_db, source_url=wrong)
     session = FakeSession([])
     try:
         with pytest.raises(SecNativeCaptureError, match="rejected identity"):
@@ -674,8 +693,9 @@ def test_sealed_identity_mismatch_fails_before_network_access(tmp_path: Path) ->
 
 def test_metadata_conflict_rolls_back_the_entire_database_batch(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     digest = hashlib.sha256(BODY).hexdigest()
     ledger = EvidenceLedger(conn)
     ledger.persist(
@@ -752,8 +772,9 @@ def test_cli_defaults_to_read_only_dry_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     conn.close()
     session = FakeSession([FakeResponse()])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -27,11 +28,9 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "fact-selection.db"
-    config = _config(path)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
+    migrated_db(path, stamp=PRIOR, archived=True, target=HEAD)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     # This focused migration test stamps the predecessor rather than replaying
@@ -87,8 +86,10 @@ def test_selection_decision_requires_a_closed_target_and_ordered_clocks() -> Non
         )
 
 
-def test_ledger_validates_target_row_and_makes_exact_replay_a_noop(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_ledger_validates_target_row_and_makes_exact_replay_a_noop(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = FactSelectionLedger(conn)
         first = ledger.persist(_decision())
@@ -123,8 +124,10 @@ def test_ledger_validates_target_row_and_makes_exact_replay_a_noop(tmp_path: Pat
         conn.close()
 
 
-def test_ledger_requires_a_same_target_revision_chain_and_is_append_only(tmp_path: Path) -> None:
-    conn = _conn(tmp_path)
+def test_ledger_requires_a_same_target_revision_chain_and_is_append_only(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
     try:
         ledger = FactSelectionLedger(conn)
         ledger.persist(_decision())
