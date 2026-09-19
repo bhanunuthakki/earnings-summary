@@ -53,12 +53,12 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run invokes only the checked-in HERE/script names via managed_python_prefix.",
+      "evidence": "_run invokes only the checked-in refresh_dcf_assumptions.py and build_redesigned_dcf.py names via managed_python_prefix; --opus remains a flag alias for the same refresh operation.",
       "fingerprint": "26eace15ab44707d05140cba68923176df379854169e2a2eb00096eca00e2935",
       "line": 64,
       "path": "execution/build_all_redesigned_dcf.py",
       "targets": [
-        "execution/dcf_opus_assumptions.py",
+        "execution/refresh_dcf_assumptions.py",
         "execution/build_redesigned_dcf.py"
       ]
     },
@@ -94,6 +94,16 @@
         "execution/refresh_dcf.py",
         "execution/build_artifacts.py",
         "execution/sweep_output_history.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Compatibility shim executes only the fixed sibling refresh_dcf_assumptions.py through runpy.run_path with __main__; the caller cannot select another target.",
+      "fingerprint": "8dc20d40fb7295da9932a762fbf3d48c82b92b0ac5d4f2f1966a02e4815a0726",
+      "line": 9,
+      "path": "execution/dcf_opus_assumptions.py",
+      "targets": [
+        "execution/refresh_dcf_assumptions.py"
       ]
     },
     {
@@ -509,8 +519,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "_run_target executes the operator-supplied script or -m module path.",
-      "fingerprint": "4f77fbfb907f915eb608291bccd9d6e7a0b38d893cba1140e9eb375bd64cb1bb",
-      "line": 90,
+      "fingerprint": "ba6a1f5a8d84be4a3493fbd707fc5fb3ae298e70b2525df9df74fb60e4492fd7",
+      "line": 95,
       "path": "execution/sqlite_bootstrap.py",
       "targets": [
         "operator-supplied Python target"
@@ -529,8 +539,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Conformance check runs the fixed execution/verify_design_conformance.py --check command.",
-      "fingerprint": "c479d698ed8dbc5fc0ca74223f6645c357760080e75980a3e316efbb6da5d99a",
-      "line": 87,
+      "fingerprint": "35b493e2d3bbbcc9cb25ae87a5226ccb7160edbeb1a230946eec85fd764bd734",
+      "line": 89,
       "path": "scripts/check_design_sync.py",
       "targets": [
         "execution/verify_design_conformance.py"
@@ -614,6 +624,16 @@
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "PDF_WORKER_PATH is the fixed sibling pdf_worker.py; _run_pdf invokes only this file with sys.executable -I, no shell, bounded timeout, and PDF operation arguments supplied as JSON stdin rather than executable argv.",
+      "fingerprint": "304ff9a9762506d20b93e02c047ca8ddc4725a2ba24e9dc7c82d3cd91a3a47a3",
+      "line": 72,
+      "path": "src/pipeline/pdf_render.py",
+      "targets": [
+        "src/pipeline/pdf_worker.py"
       ]
     },
     {
@@ -868,16 +888,16 @@
     }
   ],
   "graph_provenance": {
+    "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "0b43e823a55c206707e71a4da0173b1e9085e6618e39ca49508acf120248e45a",
-      "version": "1.2.1"
+      "source_sha256": "792b366dbe9037e1b1944bf30028437002d4f4c9eda1641cafdeea29961c9505",
+      "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
-    "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
-    "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "58cf5e1e9b927469cecbe9b992490f133091912a55e4960779ce8aa492a2b852"
+    "scanner_sha256": "dffd867eda03733d7e0d9581dd6b8730d6c09f0a1b3d3245bba00b3c28e208db",
+    "schema_version": "operational-reachability-raw/v1"
   },
-  "schema_version": "reachability-process-dispositions/v1"
+  "schema_version": "reachability-process-dispositions/v2"
 }

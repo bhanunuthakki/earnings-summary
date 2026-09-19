@@ -225,15 +225,9 @@ jobs:
       - name: Activate dependency environment
         shell: bash
         run: echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"
-      - name: Ensure data dir exists
-        # The suite is hermetic (tmp_path everywhere); the few tests that touch
-        # the gitignored data/portfolio.db degrade gracefully when it is absent
-        # — verified by running the full suite with data/ moved aside (1940
-        # passed). We only guarantee the directory exists so a test that writes
-        # into data/ does not trip over a missing folder. (Full bootstrap is
-        # init_db() + alembic, not `alembic upgrade head` alone — the 0000
-        # baseline assumes the legacy init_db tables — so we skip it here.)
-        run: mkdir -p data
+      # tests/conftest.py creates one migrated template per worker and clones
+      # disposable databases for tests. The checkout data/portfolio.db is never
+      # bootstrapped or used as a test/live authority.
       - name: Run test-suite shard
         shell: bash
         run: |
@@ -243,6 +237,7 @@ jobs:
           mapfile -t all_files < <(
             find tests -type f -name 'test_*.py' \
               | grep -v '^tests/test_design_computed_canary.py$' \
+              | grep -v '^tests/test_browser_security_canary.py$' \
               | sort
           )
           mapfile -t selected < <(
@@ -386,6 +381,8 @@ jobs:
           # paying for that matrix a second time.
           python -m pytest -q tests/test_design_computed_canary.py -k "not route_canary_matrix_covers_all_required_routes_and_viewports"
           python execution/verify_design_conformance.py --check --route-canaries
+      - name: Verify browser security boundaries with isolated synthetic state
+        run: python -m pytest -q -n 0 tests/test_browser_security_canary.py --basetemp="$RUNNER_TEMP/browser-security-canary"
 
   quality:
     needs: [changes]
@@ -503,6 +500,11 @@ jobs:
         run: |
           pip-audit -r requirements.lock --progress-spinner off
           pip-audit -r requirements-design.lock --progress-spinner off
+      - name: npm audit — design dependency CVEs
+        id: npm_audit
+        continue-on-error: true
+        working-directory: design-system
+        run: npm audit --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org
       - name: bandit — no new medium+ SAST findings
         id: bandit
         continue-on-error: true
@@ -534,6 +536,7 @@ jobs:
         if: ${{ always() }}
         env:
           PIP_AUDIT_OUTCOME: ${{ steps.pip_audit.outcome }}
+          NPM_AUDIT_OUTCOME: ${{ steps.npm_audit.outcome }}
           BANDIT_OUTCOME: ${{ steps.bandit.outcome }}
           DETECT_SECRETS_OUTCOME: ${{ steps.detect_secrets.outcome }}
           SBOM_OUTCOME: ${{ steps.sbom.outcome }}
@@ -543,6 +546,7 @@ jobs:
           status=0
           for result in \
             "$PIP_AUDIT_OUTCOME" \
+            "$NPM_AUDIT_OUTCOME" \
             "$BANDIT_OUTCOME" \
             "$DETECT_SECRETS_OUTCOME" \
             "$SBOM_OUTCOME"; do

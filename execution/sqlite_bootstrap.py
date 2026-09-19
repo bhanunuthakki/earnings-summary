@@ -56,6 +56,11 @@ def preload_sqlite() -> str:
             "Python did not bind to the verified SQLite runtime: "
             f"expected {EXPECTED_SQLITE_VERSION}, got {sqlite3.sqlite_version}"
         )
+    # Import application adapters only after the verified SQLite library loads.
+    sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
+    from runtime.sqlite_adapters import register_datetime_adapters
+
+    register_datetime_adapters()
     _LOADED_VERSION = sqlite3.sqlite_version
     return _LOADED_VERSION
 

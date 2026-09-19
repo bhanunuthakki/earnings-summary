@@ -1,0 +1,2767 @@
+  // These are the existing read-only content handlers registered by
+  // comments_server_content_routes.  Full-page detail never upgrades an
+  // arbitrary prototype callback or an unregistered endpoint into navigation.
+  const WORK_OS_FULL_PAGE_PEEK_PATHS = [
+    new RegExp('^/api/peek/(?:alerts|news-events|documents|score|earnings-prep|earnings-readout|fit|investment-profile|portfolio-impact|weekly-packet|whatif|etf_workup|discovery-compare)$'),
+    new RegExp('^/api/peek/(?:alert/[0-9]+|ticker/[A-Za-z0-9.=-]+|memo/[a-z_]+|review/[A-Za-z0-9.=-]+|provenance(?:/[A-Za-z0-9_:-]+)?)$'),
+    new RegExp('^/api/governed-alerts/[1-9][0-9]*/evidence$'),
+    new RegExp('^/source/[0-9]+$')
+  ];
+  const WORK_OS_HISTORY_DRAWER_TYPES = new Set([
+    'comparative-viewer', 'dcf-priors', 'dcf-sensitivity', 'factor-heatmap',
+    'falsifier', 'financials', 'governance-limits', 'live-detail', 'llm-routing',
+    'peers', 'rebalance-plan', 'saydo', 'thresholds', 'updates'
+  ]);
+  const workOsRequests = new WeakMap();
+  let workOsRequestGeneration = 0;
+  const WORK_OS_FETCH_TIMEOUT_MS = 15000;
+  const originalNavigateTo = window.navigateTo;
+  // The URL is the durable company-context boundary.  workOsActiveTicker remains
+  // a compatibility mirror for embedded prototype callbacks only.
+  window.workOsActiveTicker = 'NU';
+  const WORK_OS_COMPANY_CONTEXT_SCREENS = {
+    'company-desk': 'screen-workspace',
+    'analytics-playground': 'screen-analytics-playground'
+  };
+  let workOsPortfolioHydration = null;
+  let workOsPortfolioLoading = null;
+  let workOsEvaluationSurfaceLoading = null;
+  let workOsResearchCompanies = null;
+  let workOsCompanyRequestSequence = 0;
+  let workOsCompanyRequestController = null;
+  let workOsPeekRequestSequence = 0;
+  let workOsPeekRequestController = null;
+  let workOsFullPageDetailRequestSequence = 0;
+  let workOsFullPageDetailRequestController = null;
+  let workOsLastTransientFocusId = null;
+  let workOsReplayingHistory = false;
+  let workOsReaderContext = null;
+  let workOsFactPlaygroundLoading = null;
+  let workOsFactPlaygroundRequestSequence = 0;
+  let workOsFactPlaygroundRequestController = null;
+  let companyPickerMatches = [];
+  let companyPickerActiveIndex = -1;
+  const workOsLaunchParams = new URLSearchParams(window.location.search);
+
+  function workOsNormalizeTicker(ticker) {
+    return String(ticker || '').trim().toUpperCase();
+  }
+
+  function workOsReadCompanyContext() {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      ticker: workOsNormalizeTicker(params.get('ticker')),
+      screen: String(params.get('screen') || '')
+    };
+  }
+
+  function workOsCurrentCompanyTicker() {
+    return workOsReadCompanyContext().ticker || workOsNormalizeTicker(window.workOsActiveTicker) || 'NU';
+  }
+
+  function workOsRenderCompanyBreadcrumb() {
+    const context = workOsReadCompanyContext();
+    const breadcrumb = document.getElementById('breadcrumb-title');
+    if (!breadcrumb || !context.ticker) return;
+    if (context.screen === 'company-desk') breadcrumb.textContent = 'Company Desk';
+    if (context.screen === 'analytics-playground') breadcrumb.textContent = 'Explore';
+  }
+
+  function workOsCompanyContextUrl(ticker, screen) {
+    const url = new URL(window.location.href);
+    const normalized = workOsNormalizeTicker(ticker);
+    if (normalized) url.searchParams.set('ticker', normalized);
+    else url.searchParams.delete('ticker');
+    if (screen) url.searchParams.set('screen', screen);
+    else url.searchParams.delete('screen');
+    url.hash = WORK_OS_COMPANY_CONTEXT_SCREENS[screen] || workOsScreenFromHash();
+    return url.pathname + url.search + url.hash;
+  }
+
+  function workOsWriteCompanyContext(ticker, screen, options) {
+    const normalized = workOsNormalizeTicker(ticker);
+    if (!normalized || !WORK_OS_COMPANY_CONTEXT_SCREENS[screen]) return false;
+    const nextUrl = workOsCompanyContextUrl(normalized, screen);
+    window.workOsActiveTicker = normalized;
+    if (!(options && options.fromHistory)) {
+      const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+      if (currentUrl !== nextUrl) {
+        window.history.pushState({ screenId: WORK_OS_COMPANY_CONTEXT_SCREENS[screen], ticker: normalized }, '', nextUrl);
+      }
+    }
+    workOsRenderCompanyBreadcrumb();
+    return true;
+  }
+
+  function workOsValidHistoryTicker(value) {
+    return value == null || (/^[A-Z][A-Z0-9.=-]{0,14}$/).test(String(value));
+  }
+
+  function workOsValidHistorySection(value) {
+    return value == null || (/^[a-z][a-z0-9_-]*$/).test(String(value));
+  }
+
+  function workOsPushHistoryState(state, url) {
+    try {
+      window.history.pushState(state, '', url);
+      return true;
+    } catch (_error) {
+      // Embedded/static specimens can have an opaque origin. History is a
+      // progressive enhancement there; the requested research view must still open.
+      return false;
+    }
+  }
+
+  function workOsEncodeHistoryRoute(route) {
+    const origin = route.origin || {};
+    return [
+      route.surface || '', route.ticker || '', route.section || '', route.overlay || '',
+      origin.surface || '', origin.ticker || '', origin.section || ''
+    ].join('|');
+  }
+
+  function workOsRouteFromHistoryState(state) {
+    if (!state || typeof state !== 'object' || Array.isArray(state) || typeof state.workOsRoute !== 'string') return null;
+    const fields = state.workOsRoute.split('|');
+    if (fields.length !== 7 || fields.some(function (field) { return field.indexOf('\0') !== -1; })) return null;
+    const surface = fields[0];
+    const ticker = fields[1] || null;
+    const section = fields[2] || null;
+    const overlay = fields[3] || null;
+    const originSurface = fields[4] || null;
+    const originTicker = fields[5] || null;
+    const originSection = fields[6] || null;
+    if (!WORK_OS_ROUTE_DESTINATIONS.includes(surface) || !WORK_OS_ROUTE_DESTINATIONS.includes(originSurface)) return null;
+    if (overlay !== 'risk_drawer' && overlay !== 'peek') return null;
+    if (!workOsValidHistoryTicker(ticker) || !workOsValidHistoryTicker(originTicker)) return null;
+    if (!workOsValidHistorySection(section) || !workOsValidHistorySection(originSection)) return null;
+    return {
+      surface: surface, ticker: ticker, section: section, overlay: overlay,
+      origin: { surface: originSurface, ticker: originTicker, section: originSection }
+    };
+  }
+
+  function workOsHistoryFocusId() {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && active.id ? active.id : null;
+  }
+
+  function workOsHistoryOrigin() {
+    const current = workOsRouteFromHistoryState(window.history.state);
+    if (current) return current.origin;
+    const context = workOsReadCompanyContext();
+    const screen = workOsScreenFromHash();
+    return {
+      surface: WORK_OS_ROUTE_DESTINATIONS.includes(screen) ? screen : 'screen-cockpit',
+      ticker: workOsValidHistoryTicker(context.ticker) ? context.ticker || null : null,
+      section: workOsValidHistorySection(context.screen) ? context.screen || null : null
+    };
+  }
+
+  function workOsPushTransientHistory(overlay, transient) {
+    const origin = workOsHistoryOrigin();
+    const route = {
+      surface: origin.surface, ticker: origin.ticker, section: origin.section,
+      overlay: overlay, origin: origin
+    };
+    const state = Object.assign({}, window.history.state || {}, {
+      screenId: route.surface,
+      ticker: route.ticker,
+      workOsRoute: workOsEncodeHistoryRoute(route),
+      workOsTransient: transient
+    });
+    const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+    workOsLastTransientFocusId = transient.focusId || null;
+    workOsPushHistoryState(state, currentUrl);
+  }
+
+  function workOsRestoreHistoryFocus(focusId) {
+    if (!focusId) return;
+    const focusTarget = document.getElementById(focusId);
+    if (focusTarget && typeof focusTarget.focus === 'function') focusTarget.focus();
+  }
+
+  window.workOsOpenGlobalCopilot = function () {
+    window.openWorkOsCopilot({
+      company_ticker: workOsCurrentCompanyTicker(),
+      category: 'research',
+      origin_key: 'work-os:global-launcher',
+      coverage_role_at_creation: 'unknown',
+      lifecycle_at_creation: 'unknown'
+    });
+  };
+  const workOsPersistentMountIds = {
+    'screen-performance': 'workOsPerformanceMount',
+    'screen-audit-log': 'workOsAuditMount'
+  };
+  const originalOpenDrillDrawer = window.openDrillDrawer;
+  const originalCloseDrillDrawer = window.closeDrillDrawer;
+  const originalOpenPeekDrawer = window.openPeekDrawer;
+  const originalClosePeekDrawer = window.closePeekDrawer;
+  const drillDrawer = document.getElementById('drillDrawer');
+  const peekDrawer = document.getElementById('peekDrawer');
+  const fullPageDetail = document.getElementById('workOsFullPageDetail');
+  const briefReader = document.getElementById('workOsBriefReader');
+  const companyPickerRoot = document.getElementById('companyPickerRoot');
+  const companyPickerTrigger = document.getElementById('companyPickerTrigger');
+  const companyPickerPopover = document.getElementById('companyPickerPopover');
+  const companyPickerSearch = document.getElementById('companyPickerSearch');
+  const companyPickerList = document.getElementById('companyPickerList');
+  const companyPickerStatus = document.getElementById('companyPickerStatus');
+
+  const drillOverlay = drillDrawer && window.CCOverlay.register(drillDrawer, {
+    modal: true, priority: window.CCOverlay.PRIORITY.DRAWER, scrim: true,
+    trapFocus: true, restoreFocus: true, motion: 'slide-right',
+    group: 'work-os-drawer', closeId: 'drillDrawerClose', wireClose: false,
+    onOpen: function () {
+      drillDrawer.classList.add('is-open');
+      drillDrawer.setAttribute('aria-hidden', 'false');
+    },
+    onBeforeClose: function () {
+      workOsAbortTarget(document.getElementById('drawerBody'), 'hidden');
+    },
+    onClose: function () {
+      drillDrawer.classList.remove('is-open');
+      drillDrawer.setAttribute('aria-hidden', 'true');
+      originalCloseDrillDrawer();
+      workOsDiscardClosedTransient('risk_drawer');
+    }
+  });
+  const peekOverlay = peekDrawer && window.CCOverlay.register(peekDrawer, {
+    modal: true, priority: window.CCOverlay.PRIORITY.PEEK, scrim: true,
+    trapFocus: true, restoreFocus: true, motion: 'slide-right',
+    group: 'work-os-drawer', closeId: 'peekDrawerClose', wireClose: false,
+    onOpen: function () {
+      peekDrawer.classList.add('is-open');
+      peekDrawer.setAttribute('aria-hidden', 'false');
+    },
+    onBeforeClose: function () { workOsAbortPeekRequest(); },
+    onClose: function () {
+      peekDrawer.classList.remove('is-open');
+      peekDrawer.setAttribute('aria-hidden', 'true');
+      originalClosePeekDrawer();
+      workOsDiscardClosedTransient('peek');
+    }
+  });
+  const fullPageDetailOverlay = fullPageDetail && window.CCOverlay.register(fullPageDetail, {
+    modal: true, priority: window.CCOverlay.PRIORITY.PEEK, scrim: false,
+    trapFocus: true, restoreFocus: true, motion: 'fade',
+    group: 'work-os-detail-page', closeId: 'workOsFullPageDetailClose', wireClose: true,
+    onOpen: function () { fullPageDetail.hidden = false; fullPageDetail.setAttribute('aria-hidden', 'false'); },
+    onBeforeClose: function () { workOsAbortFullPageDetailRequest(); },
+    onClose: function () { fullPageDetail.hidden = true; fullPageDetail.setAttribute('aria-hidden', 'true'); }
+  });
+  const briefReaderOverlay = briefReader && window.CCOverlay.register(briefReader, {
+    modal: true, priority: window.CCOverlay.PRIORITY.PALETTE, scrim: false,
+    trapFocus: true, restoreFocus: true, motion: 'fade',
+    group: 'work-os-reader', closeId: 'workOsBriefReaderClose', wireClose: true,
+    onOpen: function () { briefReader.hidden = false; briefReader.setAttribute('aria-hidden', 'false'); },
+    onClose: function () {
+      briefReader.hidden = true;
+      briefReader.setAttribute('aria-hidden', 'true');
+      workOsReaderContext = null;
+    }
+  });
+  const companyPickerOverlay = companyPickerPopover && window.CCOverlay.register(companyPickerPopover, {
+    priority: 0, scrim: false, trapFocus: false, restoreFocus: true,
+    autofocus: false, motion: 'rise', group: 'work-os-company-picker',
+    onOpen: function () {
+      if (companyPickerTrigger) companyPickerTrigger.setAttribute('aria-expanded', 'true');
+      if (companyPickerSearch) {
+        companyPickerSearch.setAttribute('aria-expanded', 'true');
+        companyPickerSearch.focus();
+      }
+    },
+    onClose: function () {
+      if (companyPickerTrigger) companyPickerTrigger.setAttribute('aria-expanded', 'false');
+      if (companyPickerSearch) {
+        companyPickerSearch.setAttribute('aria-expanded', 'false');
+        companyPickerSearch.removeAttribute('aria-activedescendant');
+        companyPickerSearch.value = '';
+      }
+    }
+  });
+
+  window.openDrillDrawer = function (type, options) {
+    const drawerType = typeof type === 'string' && WORK_OS_HISTORY_DRAWER_TYPES.has(type)
+      ? type : null;
+    if (!drawerType) return false;
+    if (!(options && options.fromHistory)) {
+      workOsPushTransientHistory('risk_drawer', {
+        drawerType: drawerType, focusId: workOsHistoryFocusId()
+      });
+    }
+    originalOpenDrillDrawer(drawerType);
+    const reportTabs = { financials: 'financials', saydo: 'saydo', peers: 'comps', falsifier: 'bear' };
+    if (reportTabs[drawerType]) {
+      const ticker = workOsCurrentCompanyTicker();
+      const title = document.getElementById('drawerTitle');
+      const subtitle = document.getElementById('drawerSubtitle');
+      const body = document.getElementById('drawerBody');
+      if (title) title.textContent = ticker + ' · ' + drawerType;
+      if (subtitle) subtitle.textContent = 'Live company brief detail';
+      if (body) body.innerHTML = workOsReportFrame(ticker, reportTabs[drawerType], 'work-os-report-frame');
+    }
+    if (drillOverlay) drillOverlay.open();
+    return true;
+  };
+  function workOsDiscardClosedTransient(overlay) {
+    if (workOsReplayingHistory) return false;
+    const route = workOsRouteFromHistoryState(window.history.state);
+    if (!route || route.overlay !== overlay) return false;
+    window.history.back();
+    return true;
+  }
+  function workOsCloseTransientFromHistory(overlay) {
+    return workOsDiscardClosedTransient(overlay);
+  }
+  window.closeDrillDrawer = function () {
+    if (!workOsCloseTransientFromHistory('risk_drawer') && drillOverlay) drillOverlay.close();
+  };
+  window.openPeekDrawer = function (refKey) {
+    originalOpenPeekDrawer(refKey);
+    if (peekOverlay) peekOverlay.open();
+  };
+  window.closePeekDrawer = function () {
+    if (!workOsCloseTransientFromHistory('peek') && peekOverlay) peekOverlay.close();
+  };
+
+  function workOsReportFrame(ticker, tabId, className) {
+    const safeTicker = encodeURIComponent(String(ticker || 'NU').toUpperCase());
+    const safeTab = encodeURIComponent(tabId || 'overview');
+    return '<iframe class="' + className + '" src="/reports/' + safeTicker + '#tab=' + safeTab + '" title="' + safeTicker + ' live research brief" loading="lazy"></iframe>';
+  }
+
+  function workOsBriefUrl(ticker, origin, focusId) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('work_os_brief', ticker);
+    url.searchParams.set('work_os_detail_origin', workOsEncodeDetailOrigin(origin));
+    if (focusId) url.searchParams.set('work_os_focus', focusId);
+    url.hash = origin.surface;
+    return url.pathname + url.search + url.hash;
+  }
+  window.closeWorkOsBriefReader = function () {
+    if (window.history.state && window.history.state.workOsBriefReader) { window.history.back(); return; }
+    if (briefReaderOverlay) briefReaderOverlay.close();
+  };
+  const briefReaderBack = document.getElementById('workOsBriefReaderBack');
+  if (briefReaderBack) briefReaderBack.addEventListener('click', window.closeWorkOsBriefReader);
+
+  function escapeWorkOsHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  const WORK_OS_BRIEF_GROUP_IDS = [
+    'overview', 'quarter', 'financials', 'thesis-risk', 'valuation-comps', 'sources'
+  ];
+
+  async function workOsLoadBriefResearchItems(ticker) {
+    const mount = document.getElementById('workOsBriefResearchItemsMount');
+    if (!mount || !ticker) return;
+    mount.innerHTML = '<div class="k-well" role="status">Loading live research items…</div>';
+    try {
+      const response = await fetch('/api/panel/journal?items=1&band=brief&ticker=' + encodeURIComponent(ticker), { headers: { Accept: 'text/html' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      window.workOsMountHtml(mount, await response.text(), '/api/panel/journal');
+    } catch (error) {
+      mount.innerHTML = '<div class="k-well" role="alert">Research Items are unavailable; the persisted brief remains readable.</div>';
+    }
+  }
+
+  async function workOsLoadBriefArtifact(artifact, options) {
+    const title = document.getElementById('workOsBriefReaderTitle');
+    const body = document.getElementById('workOsBriefReaderBody');
+    const meta = document.getElementById('workOsBriefReaderMeta');
+    const sections = document.getElementById('workOsBriefReaderSections');
+    workOsReaderContext = artifact;
+    void workOsLoadBriefResearchItems(artifact.ticker);
+    const displayTitle = artifact.title && String(artifact.title).toUpperCase().startsWith(String(artifact.ticker).toUpperCase())
+      ? artifact.title
+      : artifact.ticker + ' · ' + (artifact.title || 'Full Research Brief');
+    if (title) title.textContent = displayTitle;
+    if (meta) meta.textContent = artifact.report_date + ' · ' + String(artifact.coverage_role || 'unknown') + ' coverage';
+    if (sections) sections.replaceChildren();
+    workOsRenderReaderDecision(null);
+    if (briefReaderOverlay) briefReaderOverlay.open();
+    if (artifact.reader_mode !== 'shared_body') {
+      if (body) workOsReaderUnavailable(body, artifact, 'legacy_standalone');
+      return;
+    }
+    if (!body) return;
+    body.innerHTML = '<div class="k-well" role="status">Loading complete persisted brief…</div>';
+    try {
+      const bodyUrl = artifact.body_url || ('/api/work-os/briefs/' + encodeURIComponent(artifact.artifact_id) + '/body');
+      const response = await fetch(bodyUrl, { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        const unavailable = response.status === 409 ? await response.json() : null;
+        const error = new Error('HTTP ' + response.status);
+        error.readerStatus = unavailable && unavailable.status;
+        throw error;
+      }
+      const payload = await response.json();
+      if (!payload || payload.schema_version !== 'report_reader_payload.v1' || !payload.body_html || !payload.style_url || !payload.decision) throw new Error('invalid reader payload');
+      workOsRenderReaderDecision(payload.decision);
+      const host = document.createElement('div');
+      host.className = 'work-os-report-host';
+      host.setAttribute('role', 'document');
+      host.setAttribute('aria-label', artifact.ticker + ' complete research brief');
+      host.tabIndex = 0;
+      const root = host.attachShadow({ mode: 'open' });
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = payload.style_url;
+      const content = document.createElement('div');
+      content.className = 'work-os-report-content k-doc';
+      content.dataset.readerFormat = 'editorial.v1';
+      content.innerHTML = payload.body_html;
+      root.append(stylesheet, content);
+      body.replaceChildren(host);
+      if (sections && Array.isArray(payload.sections)) {
+        const sectionLookup = new Map(payload.sections
+          .filter(function (section) { return section && section.section_id && section.dom_id; })
+          .map(function (section) { return [String(section.section_id), section]; }));
+        const discoveredGroups = Array.from(
+          root.querySelectorAll('.tab-group-pane[data-tab-group]')
+        );
+        const groupById = new Map(discoveredGroups.map(function (pane) {
+          return [String(pane.dataset.tabGroup || ''), pane];
+        }));
+        const canonicalGroups = WORK_OS_BRIEF_GROUP_IDS
+          .map(function (groupId) { return groupById.get(groupId); })
+          .filter(Boolean);
+        const orderedGroups = canonicalGroups.length ? canonicalGroups : discoveredGroups;
+        const groupControls = new Map();
+        const sectionControls = new Map();
+        const sectionGroupIds = new Map();
+
+        function activateReaderSection(groupPane, sectionId, shouldScroll) {
+          const sectionPanes = Array.from(groupPane.querySelectorAll('.subtab-pane[data-tab]'));
+          sectionPanes.forEach(function (sectionPane) {
+            const candidateSectionId = String(sectionPane.dataset.tab || '');
+            const isActive = candidateSectionId === sectionId;
+            sectionPane.dataset.readerSectionActive = isActive ? 'true' : 'false';
+            const sectionButton = sectionControls.get(candidateSectionId);
+            if (sectionButton) {
+              if (isActive) sectionButton.setAttribute('aria-current', 'location');
+              else sectionButton.removeAttribute('aria-current');
+            }
+            if (isActive && shouldScroll) {
+              const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+              sectionPane.scrollIntoView({
+                behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'
+              });
+              if (typeof sectionPane.focus === 'function') {
+                sectionPane.setAttribute('tabindex', '-1');
+                sectionPane.focus({ preventScroll: true });
+              }
+            }
+          });
+        }
+
+        function activateReaderGroup(groupId, shouldScroll) {
+          orderedGroups.forEach(function (groupPane) {
+            const candidateId = String(groupPane.dataset.tabGroup || '');
+            const isActive = candidateId === groupId;
+            groupPane.dataset.readerGroupActive = isActive ? 'true' : 'false';
+            const controls = groupControls.get(candidateId);
+            if (controls) {
+              controls.button.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+              controls.nested.hidden = !isActive;
+              if (isActive) controls.button.setAttribute('aria-current', 'location');
+              else controls.button.removeAttribute('aria-current');
+            }
+            if (!isActive) return;
+            const firstPane = groupPane.querySelector('.subtab-pane[data-tab]');
+            if (firstPane) activateReaderSection(
+              groupPane, String(firstPane.dataset.tab || ''), shouldScroll
+            );
+          });
+        }
+
+        orderedGroups.forEach(function (groupPane) {
+          const groupId = String(groupPane.dataset.tabGroup || '');
+          if (!groupId) return;
+          const group = document.createElement('div');
+          group.className = 'work-os-reader-group';
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'work-os-reader-group-button k-btn k-btn-quiet k-btn-sm';
+          const heading = groupPane.querySelector('.reader-group-title');
+          button.textContent = heading && heading.textContent
+            ? heading.textContent.trim()
+            : workOsHumanizeSection(groupId);
+          button.dataset.groupId = groupId;
+          button.setAttribute('aria-expanded', 'false');
+          const nested = document.createElement('div');
+          nested.className = 'work-os-reader-group-sections';
+          nested.setAttribute('role', 'group');
+          nested.setAttribute('aria-label', button.textContent + ' sections');
+          nested.hidden = true;
+          groupControls.set(groupId, { button: button, nested: nested });
+          button.addEventListener('click', function () { activateReaderGroup(groupId, true); });
+          groupPane.querySelectorAll('.subtab-pane[data-tab]').forEach(function (sectionPane) {
+            const sectionId = String(sectionPane.dataset.tab || '');
+            const section = sectionLookup.get(sectionId);
+            if (!section || !root.getElementById(section.dom_id)) return;
+            const sectionButton = document.createElement('button');
+            sectionButton.type = 'button';
+            sectionButton.className = 'work-os-reader-section-button k-btn k-btn-quiet k-btn-sm';
+            sectionButton.textContent = section.label || workOsHumanizeSection(sectionId);
+            sectionButton.dataset.sectionId = sectionId;
+            sectionControls.set(sectionId, sectionButton);
+            sectionGroupIds.set(sectionId, groupId);
+            sectionButton.addEventListener('click', function () {
+              activateReaderGroup(groupId, false);
+              activateReaderSection(groupPane, sectionId, true);
+            });
+            nested.appendChild(sectionButton);
+          });
+          group.append(button, nested);
+          sections.appendChild(group);
+        });
+        const requestedSectionId = options && typeof options.sectionId === 'string'
+          ? options.sectionId : '';
+        const requestedGroupId = sectionGroupIds.get(requestedSectionId);
+        const requestedGroup = requestedGroupId ? groupById.get(requestedGroupId) : null;
+        if (requestedGroup) {
+          activateReaderGroup(requestedGroupId, false);
+          activateReaderSection(requestedGroup, requestedSectionId, true);
+        } else {
+          const initialGroup = orderedGroups[0];
+          if (initialGroup) activateReaderGroup(String(initialGroup.dataset.tabGroup || ''), false);
+        }
+        const requestedFactRef = options && typeof options.factRef === 'string' ? options.factRef : '';
+        if (requestedFactRef) {
+          const factAnchor = Array.from(root.querySelectorAll('[data-fact-ref]')).find(function (node) {
+            return node.getAttribute('data-fact-ref') === requestedFactRef;
+          });
+          if (factAnchor) {
+            factAnchor.classList.add('is-cited-location');
+            factAnchor.scrollIntoView({ block: 'center' });
+          }
+        }
+      }
+      root.addEventListener('click', function (event) {
+        const trigger = event.composedPath().find(function (node) { return node && node.dataset && node.dataset.peekUrl; });
+        if (trigger) {
+          event.preventDefault();
+          window.workOsOpenPeekRoute(trigger.dataset.peekUrl, trigger.dataset.peekTitle || 'Source detail');
+          return;
+        }
+        const sourceLink = event.composedPath().find(function (node) {
+          return node && node.tagName === 'A' && typeof node.getAttribute === 'function'
+            && String(node.getAttribute('href') || '').startsWith('/source/');
+        });
+        if (!sourceLink) return;
+        event.preventDefault();
+        const sourceUrl = new URL(sourceLink.getAttribute('href'), window.location.origin);
+        sourceUrl.searchParams.set('fragment', '1');
+        window.workOsOpenPeekRoute(sourceUrl.pathname + sourceUrl.search + sourceUrl.hash, sourceLink.textContent.trim() || 'Source detail');
+      });
+    } catch (error) {
+      workOsReaderUnavailable(body, artifact, error && error.readerStatus);
+    }
+  }
+
+  window.openWorkOsBriefReader = async function (tickerOrArtifact, options) {
+    if (tickerOrArtifact && typeof tickerOrArtifact === 'object' && tickerOrArtifact.artifact_id) {
+      if (!(options && options.fromHistory)) {
+        const origin = workOsHistoryOrigin();
+        const focusId = workOsHistoryFocusId();
+        workOsPushHistoryState(Object.assign({}, window.history.state || {}, { workOsBriefReader: { ticker: tickerOrArtifact.ticker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId } }), workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId));
+      }
+      await workOsLoadBriefArtifact(tickerOrArtifact, options);
+      return;
+    }
+    const requestedTicker = workOsNormalizeTicker(tickerOrArtifact) || workOsCurrentCompanyTicker();
+    if (!requestedTicker) return;
+    if (!(options && options.fromHistory)) {
+      const origin = workOsHistoryOrigin();
+      const focusId = workOsHistoryFocusId();
+      workOsPushHistoryState(Object.assign({}, window.history.state || {}, { workOsBriefReader: { ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId } }), workOsBriefUrl(requestedTicker, origin, focusId));
+    }
+    const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&artifact_kind=full_brief&limit=1', { headers: { Accept: 'application/json' } });
+    const payload = response.ok ? await response.json() : null;
+    if (!payload || !payload.items || !payload.items.length) {
+      const title = document.getElementById('workOsBriefReaderTitle');
+      const body = document.getElementById('workOsBriefReaderBody');
+      if (title) title.textContent = requestedTicker + ' Brief';
+      if (body) body.innerHTML = '<div class="k-well" role="alert">No persisted research brief is indexed for this company.</div>';
+      if (briefReaderOverlay) briefReaderOverlay.open();
+      return;
+    }
+    await workOsLoadBriefArtifact(payload.items[0], options);
+  };
+  window.openFullBriefCanvas = window.openWorkOsBriefReader;
+
+  function workOsMoney(value, currency) {
+    if (!Number.isFinite(value)) return '-';
+    const resolvedCurrency = typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? currency : 'USD';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: resolvedCurrency, maximumFractionDigits: value >= 1000 ? 0 : 2 }).format(value);
+  }
+
+  function workOsPercent(value) {
+    if (!Number.isFinite(value)) return '-';
+    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, signDisplay: 'exceptZero' }).format(value) + '%';
+  }
+
+  function workOsPortfolioPercent(value) {
+    if (!Number.isFinite(value)) return 'Weight unavailable';
+    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value) + '%';
+  }
+
+  function workOsIntegerMoney(value, currency) {
+    if (!Number.isFinite(value)) return '—';
+    const resolvedCurrency = typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? currency : 'USD';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: resolvedCurrency, maximumFractionDigits: 0, minimumFractionDigits: 0 }).format(value);
+  }
+
+  function workOsAllocationRows(allocation) {
+    if (!allocation || allocation.state !== 'available' || !allocation.buckets) {
+      return '<div class="stat-subtext">Allocation mix unavailable</div>';
+    }
+    const buckets = allocation.buckets;
+    const entries = [
+      ['Domestic ETF', buckets.us_etf], ['Intl ETF', buckets.international_etf],
+      ['Domestic Equity', buckets.us_equity], ['Intl Equity', buckets.international_equity],
+      ['Cash reserve', buckets.cash], ['Unclassified', buckets.unclassified]
+    ];
+    const rendered = entries.filter(function (entry) { return Number.isFinite(Number(entry[1] && entry[1].weight_pct)); })
+      .map(function (entry) { return '<div class="stat-subtext work-os-allocation-row">' + workOsPortfolioPercent(Number(entry[1].weight_pct)) + ' ' + entry[0] + '</div>'; });
+    return rendered.length ? rendered.join('') : '<div class="stat-subtext">Allocation mix unavailable</div>';
+  }
+
+  function workOsPillClass(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized.includes('breach') || normalized.includes('fail')) return 'k-pill k-pill-bad';
+    if (normalized && !['intact', 'pass', 'passing', 'ok'].includes(normalized)) return 'k-pill k-pill-warn';
+    return 'k-pill k-pill-ok';
+  }
+
+  function workOsSplitThesisSentences(value) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return [];
+    const acronymMarker = '__WORK_OS_ACRONYM_PERIOD__';
+    const protectedText = text.replace(/\b(?:[A-Za-z]\.){2,}/g, function (acronym) {
+      return acronym.replace(/\./g, acronymMarker);
+    });
+    return protectedText.replace(/([.!?])\s+(?=[A-Z0-9(])/g, '$1\n').split('\n').map(function (sentence) {
+      return sentence.split(acronymMarker).join('.').trim();
+    }).filter(Boolean);
+  }
+
+  function workOsFormatThesisNumber(value) {
+    if (value == null || String(value).trim() === '') return '';
+    const numeric = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(numeric)) return String(value);
+    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(numeric);
+  }
+
+  function workOsThesisStatus(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (['ok', 'intact', 'pass', 'passing'].includes(normalized)) return { label: 'PASS', className: 'k-pill k-pill-ok' };
+    if (['warn', 'warning', 'watch'].includes(normalized)) return { label: 'WATCH', className: 'k-pill k-pill-warn' };
+    if (['breach', 'breached', 'fail', 'failed'].includes(normalized)) return { label: 'BREACH', className: 'k-pill k-pill-bad' };
+    return { label: 'UNRESOLVED', className: 'k-pill k-pill-warn' };
+  }
+
+  function workOsRenderEarningsDoorway(doorway, latestReadout, ticker) {
+    const target = document.getElementById('workOsEarningsDoorway');
+    if (!target) return;
+    if (doorway && doorway.status === 'available' && doorway.route) {
+      const title = doorway.phase === 'post'
+        ? 'Post-earnings readout — ' + ticker
+        : 'Earnings prep — ' + ticker;
+      target.innerHTML = '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(doorway.route) + '" data-peek-title="' + escapeWorkOsHtml(title) + '">' + escapeWorkOsHtml(doorway.label) + '</button>';
+      return;
+    }
+    const latestButton = latestReadout && latestReadout.route
+      ? '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(latestReadout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(ticker) + '">' + escapeWorkOsHtml(latestReadout.period_label) + ' readout &rarr;</button>'
+      : '';
+    if (doorway && doorway.status === 'pending') {
+      const fallbackRoute = doorway.route || (doorway.phase === 'post'
+        ? '/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker)
+        : '/api/peek/earnings-prep?ticker=' + encodeURIComponent(ticker));
+      const title = (doorway.phase === 'post' ? 'Post-earnings readout — ' : 'Earnings prep — ') + ticker;
+      target.innerHTML = '<button class="k-chip" type="button" data-peek-url="' + escapeWorkOsHtml(fallbackRoute) + '" data-peek-title="' + escapeWorkOsHtml(title) + '">' + escapeWorkOsHtml(doorway.label) + '</button>' + latestButton;
+      return;
+    }
+    if (latestButton) { target.innerHTML = latestButton; return; }
+    target.innerHTML = '<span class="k-card-meta">Earnings artifact unavailable</span>';
+  }
+
+  function workOsCanonicalDetailRoute(route) {
+    let parsed;
+    try { parsed = new URL(route, window.location.origin); } catch (_error) { return null; }
+    if (parsed.origin !== window.location.origin || !WORK_OS_FULL_PAGE_PEEK_PATHS.some(function (pattern) { return pattern.test(parsed.pathname); })) return null;
+    if (parsed.pathname.startsWith('/source/')) parsed.searchParams.set('fragment', '1');
+    return parsed.pathname + parsed.search + parsed.hash;
+  }
+
+  function workOsEncodeDetailOrigin(origin) {
+    return [origin.surface || '', origin.ticker || '', origin.section || ''].join('|');
+  }
+
+  function workOsDecodeDetailOrigin(value) {
+    const fields = typeof value === 'string' ? value.split('|') : [];
+    if (fields.length !== 3 || !WORK_OS_ROUTE_DESTINATIONS.includes(fields[0])) return null;
+    const ticker = fields[1] || null;
+    const section = fields[2] || null;
+    if (!workOsValidHistoryTicker(ticker) || !workOsValidHistorySection(section)) return null;
+    return { surface: fields[0], ticker: ticker, section: section };
+  }
+
+  function workOsFullPageDetailUrl(route, title, origin) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('work_os_detail', route);
+    url.searchParams.set('work_os_detail_title', String(title || 'Research detail'));
+    url.searchParams.set('work_os_detail_origin', workOsEncodeDetailOrigin(origin));
+    url.hash = origin.surface;
+    return url.pathname + url.search + url.hash;
+  }
+
+  function workOsDetailOriginUrl(origin) {
+    const safeOrigin = origin || { surface: 'screen-cockpit', ticker: null, section: null };
+    const url = new URL(window.location.href);
+    url.searchParams.delete('work_os_detail');
+    url.searchParams.delete('work_os_detail_title');
+    url.searchParams.delete('work_os_detail_origin');
+    if (safeOrigin.ticker) url.searchParams.set('ticker', safeOrigin.ticker);
+    else url.searchParams.delete('ticker');
+    if (safeOrigin.section === 'company-desk' || safeOrigin.section === 'analytics-playground') url.searchParams.set('screen', safeOrigin.section);
+    else url.searchParams.delete('screen');
+    url.hash = safeOrigin.surface || 'screen-cockpit';
+    return url.pathname + url.search + url.hash;
+  }
+
+  function workOsAbortFullPageDetailRequest() {
+    workOsFullPageDetailRequestSequence += 1;
+    if (workOsFullPageDetailRequestController) {
+      workOsFullPageDetailRequestController.abort();
+      workOsFullPageDetailRequestController = null;
+    }
+  }
+
+  async function workOsOpenPeekFullPage(route, title, options) {
+    const canonicalRoute = workOsCanonicalDetailRoute(route);
+    const body = document.getElementById('workOsFullPageDetailBody');
+    const heading = document.getElementById('workOsFullPageDetailTitle');
+    if (!canonicalRoute || !body || !heading || !fullPageDetailOverlay) return false;
+    const origin = options && options.origin ? options.origin : workOsHistoryOrigin();
+    if (!(options && options.fromHistory)) {
+      workOsPushHistoryState(Object.assign({}, window.history.state || {}, {
+        screenId: origin.surface, ticker: origin.ticker,
+        workOsFullPageDetail: { route: canonicalRoute, title: String(title || 'Research detail'), origin: workOsEncodeDetailOrigin(origin) }
+      }), workOsFullPageDetailUrl(canonicalRoute, title, origin));
+    }
+    heading.textContent = String(title || 'Research detail');
+    body.innerHTML = '<div class="k-well" role="status">Loading persisted research detail…</div>';
+    const requestSequence = ++workOsFullPageDetailRequestSequence;
+    if (workOsFullPageDetailRequestController) workOsFullPageDetailRequestController.abort();
+    const controller = new AbortController();
+    workOsFullPageDetailRequestController = controller;
+    fullPageDetailOverlay.open();
+    try {
+      const parsedRoute = new URL(canonicalRoute, window.location.origin);
+      const response = await fetch(parsedRoute.pathname + parsedRoute.search, { signal: controller.signal, headers: { Accept: 'text/html' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const markup = await response.text();
+      if (requestSequence !== workOsFullPageDetailRequestSequence) return false;
+      body.innerHTML = markup;
+      const sourceLocator = parsedRoute.hash ? parsedRoute.hash.slice(1) : '';
+      if (sourceLocator) {
+        const located = body.querySelector('#' + CSS.escape(sourceLocator));
+        if (located) { located.classList.add('is-cited-location'); located.scrollIntoView({ block: 'center' }); }
+      }
+      return true;
+    } catch (error) {
+      if ((error && error.name === 'AbortError') || requestSequence !== workOsFullPageDetailRequestSequence) return false;
+      body.innerHTML = '<div class="k-well" role="alert">This persisted research detail is unavailable.</div>';
+      return false;
+    } finally {
+      if (requestSequence === workOsFullPageDetailRequestSequence && workOsFullPageDetailRequestController === controller) workOsFullPageDetailRequestController = null;
+    }
+  }
+  window.workOsOpenPeekFullPage = workOsOpenPeekFullPage;
+
+  function workOsClosePeekFullPage() {
+    const state = window.history.state && window.history.state.workOsFullPageDetail;
+    if (state) { window.history.back(); return; }
+    const params = new URLSearchParams(window.location.search);
+    const origin = workOsDecodeDetailOrigin(params.get('work_os_detail_origin')) || { surface: 'screen-cockpit', ticker: null, section: null };
+    window.history.replaceState({ screenId: origin.surface, ticker: origin.ticker }, '', workOsDetailOriginUrl(origin));
+    if (fullPageDetailOverlay) fullPageDetailOverlay.close();
+    window.navigateTo(origin.surface, { fromHistory: true });
+  }
+  window.closeWorkOsFullPageDetail = workOsClosePeekFullPage;
+  const fullPageDetailBack = document.getElementById('workOsFullPageDetailBack');
+  if (fullPageDetailBack) fullPageDetailBack.addEventListener('click', workOsClosePeekFullPage);
+
+  async function workOsOpenPeekRoute(route, title, options) {
+    const ref = document.getElementById('peekRefKey');
+    const body = document.getElementById('peekProse');
+    const openFullPage = document.getElementById('workOsPeekOpenFullPage');
+    const canonicalRoute = workOsCanonicalDetailRoute(route);
+    if (!ref || !body || !peekOverlay || !canonicalRoute) return;
+    if (!(options && options.fromHistory) && window.matchMedia('(max-width: 47.5rem)').matches) {
+      return workOsOpenPeekFullPage(canonicalRoute, title);
+    }
+    const parsedRoute = new URL(canonicalRoute, window.location.origin);
+    if (!(options && options.fromHistory)) {
+      workOsPushTransientHistory('peek', {
+        route: canonicalRoute,
+        title: String(title || 'Research detail'),
+        focusId: workOsHistoryFocusId()
+      });
+    }
+    const requestSequence = ++workOsPeekRequestSequence;
+    const sourceLocator = parsedRoute.hash ? parsedRoute.hash.slice(1) : '';
+    if (workOsPeekRequestController) workOsPeekRequestController.abort();
+    const controller = new AbortController();
+    workOsPeekRequestController = controller;
+    ref.textContent = title || 'Research detail';
+    if (openFullPage) {
+      openFullPage.hidden = false;
+      openFullPage.onclick = function () {
+        const origin = workOsHistoryOrigin();
+        const routeState = workOsRouteFromHistoryState(window.history.state);
+        if (routeState && routeState.overlay === 'peek') {
+          window.history.replaceState({ screenId: origin.surface, ticker: origin.ticker }, '', workOsDetailOriginUrl(origin));
+        }
+        if (peekOverlay) peekOverlay.close();
+        void workOsOpenPeekFullPage(canonicalRoute, title, { origin: origin });
+      };
+    }
+    body.innerHTML = '<div class="k-well" role="status">Loading persisted research artifact…</div>';
+    peekOverlay.open();
+    try {
+      const response = await fetch(parsedRoute.pathname + parsedRoute.search, {
+        signal: controller.signal,
+        headers: { Accept: 'text/html' }
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const html = await response.text();
+      if (requestSequence !== workOsPeekRequestSequence) return;
+      body.innerHTML = html;
+      if (sourceLocator) {
+        const located = body.querySelector('#' + CSS.escape(sourceLocator));
+        if (located) {
+          located.classList.add('is-cited-location');
+          located.scrollIntoView({ block: 'center' });
+        }
+      }
+    } catch (error) {
+      if ((error && error.name === 'AbortError') || requestSequence !== workOsPeekRequestSequence) return;
+      body.innerHTML = '<div class="k-well" role="alert">The persisted earnings artifact is unavailable.</div>';
+    } finally {
+      if (requestSequence === workOsPeekRequestSequence && workOsPeekRequestController === controller) {
+        workOsPeekRequestController = null;
+      }
+    }
+  }
+
+  function workOsOpenThresholdReview(ticker) {
+    const safeTicker = workOsNormalizeTicker(ticker);
+    if (!safeTicker) return false;
+    const origin = workOsHistoryOrigin();
+    const url = new URL('/advisor/sizing-intents/' + encodeURIComponent(safeTicker), window.location.origin);
+    url.searchParams.set('work_os_origin', workOsEncodeDetailOrigin(origin));
+    window.location.assign(url.pathname + url.search);
+    return true;
+  }
+
+  function workOsAbortPeekRequest() {
+    workOsPeekRequestSequence += 1;
+    if (workOsPeekRequestController) {
+      workOsPeekRequestController.abort();
+      workOsPeekRequestController = null;
+    }
+  }
+  window.workOsOpenPeekRoute = workOsOpenPeekRoute;
+
+  document.addEventListener('click', function (event) {
+    const trigger = event.target instanceof Element
+      ? event.target.closest('[data-peek-url]') : null;
+    if (!trigger) return;
+    const route = trigger.getAttribute('data-peek-url') || '';
+    if (!route.startsWith('/api/peek/') && !/^\/api\/governed-alerts\/[1-9][0-9]*\/evidence$/.test(route)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    workOsOpenPeekRoute(route, trigger.getAttribute('data-peek-title') || 'Research detail');
+  });
+
+  document.addEventListener('click', async function (event) {
+    const trigger = event.target instanceof Element
+      ? event.target.closest('[data-generate-readout]') : null;
+    if (!trigger) return;
+    const ticker = trigger.getAttribute('data-generate-readout') || '';
+    if (!ticker) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const originalText = trigger.textContent;
+    trigger.disabled = true;
+    trigger.textContent = 'Generating persisted readout…';
+    try {
+      const response = await fetch('/api/earnings-readout/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ ticker: ticker })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data && data.error ? data.error : 'HTTP ' + response.status);
+      }
+      const artifactId = Number(data.artifact_id);
+      if (!Number.isInteger(artifactId) || artifactId <= 0) throw new Error('Invalid artifact identity');
+      workOsPortfolioHydration = null;
+      await workOsEnsurePortfolioHydration();
+      await workOsOpenPeekRoute('/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker) + '&artifact_id=' + encodeURIComponent(String(artifactId)), 'Post-earnings readout — ' + ticker);
+      if (workOsCurrentCompanyTicker() === ticker) {
+        await workOsRenderCompanyDesk(ticker);
+      }
+    } catch (err) {
+      trigger.disabled = false;
+      trigger.textContent = originalText;
+      const statusEl = document.createElement('span');
+      statusEl.className = 'stat-subtext';
+      statusEl.dataset.tone = 'bad';
+      statusEl.textContent = ' (' + (err.message || 'Generation failed') + ')';
+      trigger.insertAdjacentElement('afterend', statusEl);
+    }
+  });
+
+  function workOsCompanyByTicker(ticker) {
+    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
+      ? workOsPortfolioHydration.companies : [];
+    const researchCompanies = Array.isArray(workOsResearchCompanies) ? workOsResearchCompanies : [];
+    return portfolioCompanies.concat(researchCompanies).find(function (company) { return company.ticker === ticker; }) || null;
+  }
+
+  function workOsCompanyPickerCompanies() {
+    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
+      ? workOsPortfolioHydration.companies : [];
+    const seenTickers = new Set();
+    return portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (company) {
+      const ticker = String(company.ticker || '').toUpperCase();
+      if (!ticker || seenTickers.has(ticker)) return false;
+      seenTickers.add(ticker);
+      return true;
+    });
+  }
+
+  function workOsRenderCompanyPickerOptions(query, resetSelection) {
+    if (!companyPickerList || !companyPickerSearch) return;
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    companyPickerMatches = workOsCompanyPickerCompanies().filter(function (company) {
+      return String(company.ticker || '').toLowerCase().includes(normalizedQuery)
+        || String(company.name || '').toLowerCase().includes(normalizedQuery);
+    }).sort(function (left, right) {
+      const leftRank = left.coverage_role === 'portfolio' ? 0 : 1;
+      const rightRank = right.coverage_role === 'portfolio' ? 0 : 1;
+      return leftRank - rightRank || String(left.ticker).localeCompare(String(right.ticker));
+    }).slice(0, 12);
+    if (resetSelection) companyPickerActiveIndex = companyPickerMatches.length ? 0 : -1;
+    else if (companyPickerActiveIndex >= companyPickerMatches.length) companyPickerActiveIndex = companyPickerMatches.length - 1;
+    companyPickerList.innerHTML = companyPickerMatches.length ? companyPickerMatches.map(function (company, index) {
+      const selected = index === companyPickerActiveIndex;
+      return '<li role="option" id="companyPickerOption-' + index + '" aria-selected="' + (selected ? 'true' : 'false') + '" data-company-picker-ticker="' + escapeWorkOsHtml(company.ticker) + '"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name || company.ticker) + '</span></li>';
+    }).join('') : '<li class="k-card-meta">No matching companies</li>';
+    if (companyPickerActiveIndex >= 0) companyPickerSearch.setAttribute('aria-activedescendant', 'companyPickerOption-' + companyPickerActiveIndex);
+    else companyPickerSearch.removeAttribute('aria-activedescendant');
+  }
+
+  async function workOsOpenCompanyPicker() {
+    if (!companyPickerOverlay || companyPickerOverlay.isOpen()) return;
+    companyPickerActiveIndex = -1;
+    if (companyPickerStatus) companyPickerStatus.textContent = 'Loading company list';
+    companyPickerOverlay.open();
+    try { await workOsEnsureResearchCompanies(); } catch (error) { workOsResearchCompanies = []; }
+    workOsRenderCompanyPickerOptions('', true);
+    if (companyPickerStatus) companyPickerStatus.textContent = companyPickerMatches.length + ' companies available';
+  }
+
+  function workOsChooseCompany(ticker) {
+    if (companyPickerOverlay) companyPickerOverlay.close();
+    window.switchCompanyWorkspace(ticker);
+  }
+
+  if (companyPickerTrigger) {
+    companyPickerTrigger.addEventListener('click', function () {
+      if (companyPickerOverlay && companyPickerOverlay.isOpen()) companyPickerOverlay.close();
+      else workOsOpenCompanyPicker();
+    });
+    companyPickerTrigger.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); workOsOpenCompanyPicker(); }
+    });
+  }
+  if (companyPickerSearch) {
+    companyPickerSearch.addEventListener('input', function () { workOsRenderCompanyPickerOptions(companyPickerSearch.value, true); });
+    companyPickerSearch.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        if (companyPickerMatches.length) companyPickerActiveIndex = Math.min(companyPickerActiveIndex + 1, companyPickerMatches.length - 1);
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (companyPickerMatches.length) companyPickerActiveIndex = Math.max(companyPickerActiveIndex - 1, 0);
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (companyPickerActiveIndex >= 0 && companyPickerMatches[companyPickerActiveIndex]) workOsChooseCompany(companyPickerMatches[companyPickerActiveIndex].ticker);
+        return;
+      } else { return; }
+      workOsRenderCompanyPickerOptions(companyPickerSearch.value, false);
+    });
+  }
+  if (companyPickerList) companyPickerList.addEventListener('click', function (event) {
+    const option = event.target instanceof Element ? event.target.closest('[data-company-picker-ticker]') : null;
+    if (option) workOsChooseCompany(option.getAttribute('data-company-picker-ticker'));
+  });
+  document.addEventListener('click', function (event) {
+    if (companyPickerOverlay && companyPickerOverlay.isOpen() && companyPickerRoot
+        && event.target instanceof Node && !companyPickerRoot.contains(event.target)) {
+      companyPickerOverlay.close();
+    }
+  });
+
+  function workOsSwitchCompanyDeskSection(section, focus) {
+    const buttons = Array.from(document.querySelectorAll('[data-company-desk-section]'));
+    const panels = Array.from(document.querySelectorAll('[data-company-desk-panel]'));
+    if (!buttons.some(function (button) { return button.dataset.companyDeskSection === section; })) return false;
+    buttons.forEach(function (button) {
+      const active = button.dataset.companyDeskSection === section;
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+      button.tabIndex = active ? 0 : -1;
+      if (active && focus) button.focus();
+    });
+    panels.forEach(function (panel) { panel.hidden = panel.dataset.companyDeskPanel !== section; });
+    return true;
+  }
+
+  document.addEventListener('click', function (event) {
+    const tab = event.target instanceof Element ? event.target.closest('[data-company-desk-section]') : null;
+    if (tab) workOsSwitchCompanyDeskSection(tab.dataset.companyDeskSection, false);
+  });
+  document.addEventListener('keydown', function (event) {
+    const tab = event.target instanceof Element ? event.target.closest('[data-company-desk-section]') : null;
+    if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const buttons = Array.from(document.querySelectorAll('[data-company-desk-section]'));
+    let index = buttons.indexOf(tab);
+    if (index < 0) return;
+    event.preventDefault();
+    if (event.key === 'Home') index = 0;
+    else if (event.key === 'End') index = buttons.length - 1;
+    else index = (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    workOsSwitchCompanyDeskSection(buttons[index].dataset.companyDeskSection, true);
+  });
+
+  async function workOsEnsureResearchCompanies() {
+    if (Array.isArray(workOsResearchCompanies)) return workOsResearchCompanies;
+    const response = await fetch('/api/tickers', { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const payload = await response.json();
+    workOsResearchCompanies = Array.isArray(payload.tickers) ? payload.tickers.filter(function (item) {
+      return item.list_type === 'portfolio' || item.list_type === 'evaluation';
+    }).map(function (item) {
+      return { ticker: String(item.ticker || '').toUpperCase(), name: item.name || item.ticker, coverage_role: item.list_type || 'unknown' };
+    }) : [];
+    return workOsResearchCompanies;
+  }
+
+  async function workOsRenderCompanyDesk(ticker) {
+    const normalized = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
+    const screen = document.getElementById('screen-workspace');
+    if (!normalized || !screen) return false;
+    const requestSequence = ++workOsCompanyRequestSequence;
+    if (workOsCompanyRequestController) workOsCompanyRequestController.abort();
+    const controller = new AbortController();
+    workOsCompanyRequestController = controller;
+    if (companyPickerStatus) companyPickerStatus.textContent = 'Loading ' + normalized + ' company desk';
+    screen.setAttribute('aria-busy', 'true');
+    try {
+      try { await workOsEnsureResearchCompanies(); } catch (error) { workOsResearchCompanies = []; }
+      if (requestSequence !== workOsCompanyRequestSequence) return false;
+      const company = workOsCompanyByTicker(normalized);
+      if (!company) throw new Error('Unknown company ' + normalized);
+      const response = await fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', { signal: controller.signal, headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const desk = await response.json();
+      const sayDo = desk.say_do || { status: 'unavailable', commitments: [], quarters: [] };
+      if (requestSequence !== workOsCompanyRequestSequence) return false;
+      const identity = desk.company || {};
+      const identityTicker = String(identity.ticker || normalized).toUpperCase();
+      if (identityTicker !== normalized) throw new Error('Company response mismatch');
+      document.getElementById('deskTicker').textContent = identity.ticker || normalized;
+      document.getElementById('deskCompanyName').textContent = identity.name || company.name;
+      document.getElementById('deskCoverageRole').textContent = String(identity.coverage_role || 'unknown') + ' coverage';
+      const decision = desk.current_decision || { relationship: 'unavailable' };
+      const ownerDecision = decision.owner || null;
+      const modelDecision = decision.model || null;
+      document.getElementById('deskDecisionBand').dataset.freshness = decision.freshness || 'unavailable';
+      document.getElementById('deskOwnerState').textContent = ownerDecision ? String(ownerDecision.value).toUpperCase() : '—';
+      document.getElementById('deskModelState').textContent = modelDecision ? String(modelDecision.value).toUpperCase() : '—';
+      document.getElementById('deskOwnerRevision').textContent = workOsDecisionMeta(ownerDecision, 'No owner decision recorded') + (decision.freshness === 'stale' ? ' · stale' : '');
+      document.getElementById('deskModelRevision').textContent = workOsDecisionMeta(modelDecision, 'No model recommendation recorded');
+      const relationship = String(decision.relationship || 'unavailable');
+      const decisionRelationship = document.getElementById('deskDecisionRelationship');
+      if (decisionRelationship) {
+        decisionRelationship.textContent = relationship.replaceAll('_', ' ').toUpperCase();
+        decisionRelationship.className = 'k-pill';
+        decisionRelationship.classList.toggle('k-pill-ok', relationship === 'agree');
+        decisionRelationship.classList.toggle('k-pill-bad', relationship === 'conflict');
+        decisionRelationship.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
+      }
+      const decisionFreshness = document.getElementById('deskDecisionFreshness');
+      if (decisionFreshness) {
+        const freshness = String(decision.freshness || 'unavailable');
+        decisionFreshness.textContent = freshness === 'current'
+          ? 'Current decision state'
+          : 'Decision state ' + freshness.replaceAll('_', ' ') + ' · do not treat as current';
+      }
+      const position = desk.position || {};
+      const weight = Number.isFinite(position.weight_pct) ? position.weight_pct : null;
+      const positionState = String(position.position_state || 'unavailable');
+      document.getElementById('deskPositionWeight').textContent = Number.isFinite(weight)
+        ? workOsPercent(weight)
+        : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
+      document.getElementById('deskHeroPositionWeight').textContent = Number.isFinite(weight)
+        ? workOsPercent(weight)
+        : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
+      const trackerPositionSource = position.position_source === 'portfolio_tracker_api'
+        ? 'Portfolio Tracker snapshot'
+        : 'Portfolio Tracker';
+      document.getElementById('deskPositionSource').textContent = positionState === 'unavailable'
+        ? 'Tracker snapshot unavailable'
+        : trackerPositionSource + (position.position_as_of ? ' · as of ' + position.position_as_of : '') + (positionState === 'not_held' ? ' · not held' : '');
+      const valuationSource = position.source ? String(position.source).replaceAll('_', ' ') : 'governed DCF snapshot';
+      document.getElementById('deskLivePrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'Unavailable';
+      document.getElementById('deskInputPrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : '—';
+      document.getElementById('deskInputPriceSource').textContent = Number.isFinite(position.price) ? valuationSource + ' · as of ' + (position.price_as_of || 'date unavailable') : 'No governed input price';
+      document.getElementById('deskFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
+      document.getElementById('deskFairValueSource').textContent = Number.isFinite(position.fair_value) ? valuationSource + ' · as of ' + (position.fair_value_as_of || 'date unavailable') : 'No governed fair value';
+      document.getElementById('deskHeroFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
+      const valuationGap = Number.isFinite(position.price) && Number.isFinite(position.fair_value) && position.price !== 0
+        ? ((position.fair_value / position.price) - 1) * 100 : null;
+      document.getElementById('deskValuationGap').innerHTML = Number.isFinite(valuationGap)
+        ? '<span class="k-pill ' + (valuationGap >= 0 ? 'k-pill-ok' : 'k-pill-bad') + '">' + escapeWorkOsHtml(workOsPercent(valuationGap)) + '</span>'
+        : '<span class="k-pill">Unavailable</span>';
+      const financials = document.getElementById('deskFinancialsSummary');
+      if (financials) financials.innerHTML = Number.isFinite(position.price) || Number.isFinite(position.fair_value)
+        ? '<div class="k-well"><strong>Governed valuation snapshot</strong><div class="stat-subtext">Price: ' + escapeWorkOsHtml(Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'unavailable') + ' · Fair value: ' + escapeWorkOsHtml(Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : 'unavailable') + ' · Source: ' + escapeWorkOsHtml(valuationSource) + ' · Price as of ' + escapeWorkOsHtml(position.price_as_of || 'unavailable') + ' · Fair value as of ' + escapeWorkOsHtml(position.fair_value_as_of || 'unavailable') + '</div></div>'
+        : '<div class="k-well">Governed valuation inputs are unavailable for this company.</div>';
+      const commitments = sayDo.status === 'available' && Array.isArray(sayDo.commitments) ? sayDo.commitments : [];
+      const sayDoNumber = function (value) {
+        return Number.isFinite(value) ? Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 }) : 'not observed';
+      };
+      document.getElementById('deskSayDoTimeline').innerHTML = commitments.length ? commitments.map(function (commitment) {
+        const outcome = String(commitment.outcome || 'tracking');
+        const outcomeLabel = outcome === 'hit' ? 'MET' : outcome === 'beat' ? 'BEAT' : outcome === 'miss' ? 'MISS' : outcome === 'mixed' ? 'MIXED' : outcome === 'no_data' ? 'AWAITING DATA' : 'TRACKING';
+        const outcomeClass = outcome === 'hit' || outcome === 'beat' ? 'k-pill k-pill-ok' : outcome === 'miss' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
+        const target = escapeWorkOsHtml(String(commitment.kpi_name || 'Commitment')) + ' ' + escapeWorkOsHtml(String(commitment.comparator || '')) + ' ' + escapeWorkOsHtml(sayDoNumber(commitment.target_value)) + ' ' + escapeWorkOsHtml(String(commitment.unit || ''));
+        const actual = Number.isFinite(commitment.realized_value) ? ' · actual ' + escapeWorkOsHtml(sayDoNumber(commitment.realized_value)) + ' ' + escapeWorkOsHtml(String(commitment.unit || '')) : '';
+        return '<article class="k-well"><div class="research-row"><strong>' + escapeWorkOsHtml(String(commitment.narrative || commitment.kpi_name || 'Management commitment')) + '</strong><span class="' + outcomeClass + '">' + outcomeLabel + '</span></div><div class="stat-subtext">Said ' + escapeWorkOsHtml(String(commitment.period_made || 'date unavailable').slice(0, 10)) + ' · target ' + escapeWorkOsHtml(String(commitment.period_target || 'date unavailable').slice(0, 10)) + '</div><div class="stat-subtext">' + target + actual + '</div><div class="stat-subtext">Source ' + escapeWorkOsHtml(String(commitment.source_ref || 'unavailable')) + (commitment.evaluated_at ? ' · evaluated ' + escapeWorkOsHtml(String(commitment.evaluated_at).slice(0, 10)) : '') + '</div></article>';
+      }).join('') : (sayDo.status === 'available'
+        ? '<div class="k-well">No management commitments are recorded for the latest four statement quarters.</div>'
+        : '<div class="k-well" role="alert">Say / Do history is unavailable because the canonical commitment ledger is ' + escapeWorkOsHtml(String(sayDo.unavailable_reason || 'unavailable').replaceAll('_', ' ')) + '.</div>');
+      const transcripts = document.getElementById('deskTranscriptsQA');
+      if (transcripts) transcripts.innerHTML = desk.latest_earnings_readout
+        ? '<div class="k-well"><strong>' + escapeWorkOsHtml(desk.latest_earnings_readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Open the governed earnings artifact for sourced transcript evidence.</div></div>'
+        : '<div class="k-well">No governed transcript Q&amp;A projection is available.</div>';
+      const provenance = document.getElementById('deskProvenanceLinks');
+      if (provenance) provenance.innerHTML = desk.latest_brief
+        ? '<div class="k-well"><strong>Persisted research brief</strong><div class="stat-subtext">' + escapeWorkOsHtml(desk.latest_brief.report_date || 'date unavailable') + ' · ' + escapeWorkOsHtml(desk.latest_brief.coverage_role || 'unknown') + ' coverage</div></div>'
+        : '<div class="k-well">No persisted research artifact is indexed for provenance.</div>';
+      const brief = desk.latest_brief || null;
+      document.getElementById('deskBriefDate').textContent = brief ? brief.report_date : '—';
+      document.getElementById('deskBriefStatus').textContent = brief ? (brief.reader_mode === 'shared_body' ? 'Shared reader ready' : 'Legacy standalone') : 'No indexed artifact';
+      const briefButton = document.getElementById('workOsFullBriefButton');
+      if (briefButton) {
+        briefButton.disabled = !brief;
+        briefButton.onclick = brief ? function () { openWorkOsBriefReader(brief); } : null;
+      }
+      const dcfLink = document.getElementById('workOsDcfLink');
+      if (dcfLink) {
+        const dcfUrl = desk.position && desk.position.dcf_url ? String(desk.position.dcf_url) : '';
+        if (dcfUrl) dcfLink.setAttribute('href', dcfUrl);
+        else dcfLink.removeAttribute('href');
+        dcfLink.setAttribute('aria-disabled', dcfUrl ? 'false' : 'true');
+        dcfLink.tabIndex = dcfUrl ? 0 : -1;
+        dcfLink.onclick = dcfUrl ? null : function (event) { event.preventDefault(); };
+      }
+      const readout = desk.latest_earnings_readout || null;
+      const quarterLabel = document.getElementById('deskQuarterLabel');
+      if (quarterLabel) quarterLabel.textContent = readout && readout.period_label ? readout.period_label : 'Pending';
+      const q2Update = document.getElementById('deskQ2Update');
+      if (q2Update) {
+        q2Update.innerHTML = readout
+          ? '<div class="k-well"><strong>' + escapeWorkOsHtml(readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Generated ' + escapeWorkOsHtml(readout.generated_at || 'date unavailable') + ' · governed artifact</div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quarter-readout>Open earnings readout →</button></div>'
+          : '<div class="k-well">The governed quarterly readout is pending. No illustrative update is shown.</div>';
+        const readoutButton = q2Update.querySelector('[data-quarter-readout]');
+        if (readoutButton) readoutButton.addEventListener('click', function () {
+          window.workOsOpenPeekRoute(readout.route, (readout.period_label || normalized) + ' earnings readout');
+        });
+      }
+      const recentUpdates = document.getElementById('deskRecentUpdates');
+      if (recentUpdates) {
+        const updates = [];
+        if (readout) updates.push('<div class="k-well"><strong>' + escapeWorkOsHtml(readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Governed earnings artifact · ' + escapeWorkOsHtml(readout.generated_at || 'date unavailable') + '</div></div>');
+        if (brief) updates.push('<div class="k-well"><strong>Latest full brief</strong><div class="stat-subtext">' + escapeWorkOsHtml(brief.report_date || 'date unavailable') + ' · ' + escapeWorkOsHtml(brief.coverage_role || 'unknown') + ' coverage</div></div>');
+        recentUpdates.innerHTML = updates.length ? updates.join('') : '<div class="k-well">No governed recent update is available.</div>';
+      }
+      const bands = desk.price_action_bands || { state: 'unavailable', reason_codes: ['price_action_band_source_unavailable'] };
+      const trackingBands = document.getElementById('deskTrackingBands');
+      if (trackingBands) {
+        const currency = bands.currency || position.currency || 'USD';
+        const bandMoney = function (value) { return Number.isFinite(value) ? workOsMoney(value, currency) : 'Not encoded'; };
+        const reasonCodes = Array.isArray(bands.reason_codes) ? bands.reason_codes : [];
+        // The canonical projection does not yet carry a separate Buy rung;
+        // add_buy_below is an approach checkpoint and must not be relabeled.
+        const buyLabel = 'Not encoded';
+        const addLabel = Number.isFinite(bands.add_below) ? '< ' + bandMoney(bands.add_below) : 'Not encoded';
+        const holdLabel = Number.isFinite(bands.hold_low) && Number.isFinite(bands.hold_high)
+          ? bandMoney(bands.hold_low) + ' to ' + bandMoney(bands.hold_high)
+          : 'Not encoded';
+        const trimLabel = Number.isFinite(bands.trim_above) ? '> ' + bandMoney(bands.trim_above) : 'Not encoded';
+        const reason = reasonCodes.includes('price_action_bands_unencoded')
+          ? 'No checkpoint-ratified price ladder has been encoded.'
+          : (bands.is_actionable ? 'Checkpoint-ratified owner ladder.' : 'Price ladder is unavailable or incomplete.');
+        trackingBands.innerHTML = [
+          ['Buy', buyLabel, 'buy'], ['Add', addLabel, 'add'], ['Hold', holdLabel, 'hold'], ['Trim', trimLabel, 'trim']
+        ].map(function (item) { return '<div class="k-well tracking-band tracking-band-' + item[2] + '"><span class="stat-heading">' + item[0] + '</span><strong>' + escapeWorkOsHtml(item[1]) + '</strong></div>'; }).join('')
+          + '<div class="stat-subtext company-desk-tracking-note">' + escapeWorkOsHtml(reason) + '</div>';
+      }
+      const fullSayDo = document.getElementById('workOsOpenFullSayDo');
+      if (fullSayDo) {
+        fullSayDo.disabled = !brief;
+        fullSayDo.onclick = brief ? function () { openWorkOsBriefReader(brief, { sectionId: 'saydo' }); } : null;
+      }
+      const thesisRisk = desk.thesis_risk || { status: 'unavailable', unavailable_reason: 'missing' };
+      const thesisAvailable = thesisRisk.status === 'available';
+      const thesisStatus = document.getElementById('deskThesisStatus');
+      if (thesisStatus) {
+        const status = thesisAvailable ? String(thesisRisk.overall_breach_status || 'unavailable') : 'unavailable';
+        const presentation = workOsThesisStatus(status);
+        thesisStatus.textContent = presentation.label;
+        thesisStatus.className = 'k-pill';
+        thesisStatus.classList.toggle('k-pill-ok', presentation.label === 'PASS');
+        thesisStatus.classList.toggle('k-pill-bad', presentation.label === 'BREACH');
+        thesisStatus.classList.toggle('k-pill-warn', presentation.label !== 'PASS' && presentation.label !== 'BREACH');
+      }
+      const thesisAsOf = document.getElementById('deskThesisAsOf');
+      if (thesisAsOf) {
+        thesisAsOf.textContent = thesisAvailable
+          ? 'Evaluated · as of ' + String(thesisRisk.evaluated_at || 'date unavailable')
+          : 'Thesis evidence ' + String(thesisRisk.unavailable_reason || 'unavailable') + ' · do not treat as current';
+      }
+      const thesisMount = document.getElementById('deskThesisRisk');
+      if (thesisMount) {
+        if (!thesisAvailable) {
+          thesisMount.innerHTML = '<div class="k-well" role="alert">Current thesis risk is unavailable because its report-backed facts are ' + escapeWorkOsHtml(String(thesisRisk.unavailable_reason || 'unavailable')) + '.</div>';
+        } else {
+          const breakRules = Array.isArray(thesisRisk.break_rules) ? thesisRisk.break_rules : [];
+          const thesisSentences = workOsSplitThesisSentences(thesisRisk.thesis);
+          const thesisCopy = thesisSentences.length
+            ? '<p class="stat-subtext">' + escapeWorkOsHtml(thesisSentences[0]) + '</p>'
+              + (thesisSentences.length > 1
+                ? '<ul class="research-list">' + thesisSentences.slice(1).map(function (sentence) { return '<li>' + escapeWorkOsHtml(sentence) + '</li>'; }).join('') + '</ul>'
+                : '')
+            : '';
+          const attentionRules = breakRules.filter(function (rule) { return workOsThesisStatus(rule.status).label !== 'PASS'; });
+          const passingCount = breakRules.length - attentionRules.length;
+          const passingSummary = passingCount
+            ? '<div class="stat-subtext">' + passingCount + ' thesis contract' + (passingCount === 1 ? '' : 's') + ' passing.</div>'
+            : '';
+          const ruleList = attentionRules.length
+            ? passingSummary + '<ul class="research-list">' + attentionRules.map(function (rule) {
+                const ruleStatus = workOsThesisStatus(rule.status);
+                const latest = Number.isFinite(rule.latest_value) ? workOsFormatThesisNumber(rule.latest_value) + (rule.unit ? ' ' + String(rule.unit) : '') : 'unknown';
+                const threshold = workOsFormatThesisNumber(rule.threshold);
+                const distance = Number.isFinite(rule.distance_to_threshold) ? ' · distance ' + workOsFormatThesisNumber(rule.distance_to_threshold) : '';
+                const doorway = brief
+                  ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-thesis-rule="true">Open thesis evidence →</button>'
+                  : '';
+                return '<li><span class="' + ruleStatus.className + '">' + ruleStatus.label + '</span> · ' + escapeWorkOsHtml(String(rule.kpi_name || rule.rule_id || 'Break rule')) + ' · latest ' + escapeWorkOsHtml(latest) + ' vs ' + escapeWorkOsHtml(String(rule.comparator || '')) + ' ' + escapeWorkOsHtml(threshold) + distance + '<div class="stat-subtext">Source ' + escapeWorkOsHtml(String(rule.provenance_ref || 'unavailable')) + ' · ' + escapeWorkOsHtml(String(rule.latest_period || thesisRisk.evaluated_at || 'date unavailable')) + '</div>' + doorway + '</li>';
+              }).join('') + '</ul>'
+            : (passingSummary || '<div class="stat-subtext">No evaluated canonical break rules are available.</div>');
+          const overallStatus = workOsThesisStatus(thesisRisk.overall_breach_status);
+          thesisMount.innerHTML = '<div class="k-well"><span class="' + overallStatus.className + '">' + overallStatus.label + '</span><div class="stat-subtext">Report evaluation · as of ' + escapeWorkOsHtml(String(thesisRisk.evaluated_at || 'date unavailable')) + '</div>' + thesisCopy + ruleList + '</div>';
+          thesisMount.querySelectorAll('[data-desk-thesis-rule]').forEach(function (button) {
+            button.addEventListener('click', function () {
+              openWorkOsBriefReader(brief, { sectionId: 'thesis' });
+            });
+          });
+        }
+      }
+      const thesisBriefDoorway = document.getElementById('deskThesisBriefDoorway');
+      if (thesisBriefDoorway) {
+        thesisBriefDoorway.disabled = !brief;
+        thesisBriefDoorway.onclick = brief ? function () { openWorkOsBriefReader(brief, { sectionId: 'thesis' }); } : null;
+      }
+      const kpiSummary = desk.kpi_summary || { status: 'unavailable', unavailable_reason: 'missing' };
+      const kpiMount = document.getElementById('deskKpiSummary');
+      if (kpiMount) {
+        const kpis = Array.isArray(kpiSummary.items) ? kpiSummary.items : [];
+        if (kpiSummary.status !== 'available' || !kpis.length) {
+          kpiMount.innerHTML = '<div class="k-well" role="alert">Tier-1 KPI evidence is ' + escapeWorkOsHtml(String(kpiSummary.unavailable_reason || 'unavailable')) + '. No inferred values are shown.</div>';
+        } else {
+          kpiMount.innerHTML = kpis.map(function (kpi) {
+            const currentStatus = String(kpi.current_status || 'unknown');
+            const state = String(kpi.state || 'awaiting_data');
+            const evidenceButton = brief && kpi.evidence_ref
+              ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-kpi-evidence="' + escapeWorkOsHtml(String(kpi.evidence_ref)) + '" data-desk-kpi-name="' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '">Open exact evidence →</button>'
+              : '';
+            return '<div class="k-well research-row"><div><strong>' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '</strong><div class="stat-subtext">Tier 1 · source ' + escapeWorkOsHtml(String(kpi.evidence_ref || kpi.source_hint || 'unavailable')) + ' · as of ' + escapeWorkOsHtml(String(kpi.latest_period || 'date unavailable')) + '</div><div class="stat-number">' + (Number.isFinite(kpi.latest_value) ? escapeWorkOsHtml(String(kpi.latest_value)) + (kpi.unit ? ' ' + escapeWorkOsHtml(String(kpi.unit)) : '') : 'Awaiting data') + '</div></div><div><span class="' + workOsPillClass(currentStatus) + '">' + escapeWorkOsHtml(state.replaceAll('_', ' ').toUpperCase()) + '</span>' + evidenceButton + '</div></div>';
+          }).join('');
+          kpiMount.querySelectorAll('[data-desk-kpi-evidence]').forEach(function (button) {
+            button.addEventListener('click', function () {
+              openWorkOsBriefReader(brief, {
+                sectionId: 'thesis',
+                factRef: button.getAttribute('data-desk-kpi-evidence')
+              });
+            });
+          });
+        }
+      }
+      workOsRenderEarningsDoorway(
+        desk.earnings_doorway || null,
+        desk.latest_earnings_readout || null,
+        normalized
+      );
+      const conditions = Array.isArray(desk.conditions) ? desk.conditions : [];
+      document.getElementById('deskConditions').innerHTML = conditions.length ? conditions.map(function (condition) {
+        const latest = Number.isFinite(condition.latest_value) ? String(condition.latest_value) + ' ' + String(condition.observation_unit || condition.unit || '') + ' · ' + String(condition.observation_period || 'period unavailable') : 'No observed value';
+        const prior = Number.isFinite(condition.prior_value)
+          ? 'Prior ' + String(condition.prior_value) + ' ' + String(condition.prior_observation_unit || condition.unit || '') + ' · ' + String(condition.prior_observation_period || 'period unavailable') + (Number.isFinite(condition.observation_delta) ? ' · ' + (condition.observation_delta >= 0 ? '+' : '') + String(condition.observation_delta) + ' (' + String(condition.observation_comparison || 'unavailable') + ')' : ' · comparison unavailable')
+          : 'No prior observation';
+        const detail = condition.status_detail || condition.note || 'Governed decision condition';
+        const status = String(condition.status || 'PENDING DATA');
+        return '<div class="k-well research-row" data-stable-id="' + escapeWorkOsHtml(condition.stable_id) + '"><div><strong>' + escapeWorkOsHtml(condition.metric) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(latest) + ' · ' + escapeWorkOsHtml(detail) + '</div><div class="stat-subtext">' + escapeWorkOsHtml(prior) + '</div><div class="stat-subtext">Evidence: ' + escapeWorkOsHtml(condition.evidence_ref || 'unavailable') + '</div></div><div><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="stat-subtext">' + escapeWorkOsHtml(condition.operator) + ' ' + escapeWorkOsHtml(condition.threshold) + ' ' + escapeWorkOsHtml(condition.unit) + (Number(condition.for_periods) > 1 ? ' · ' + escapeWorkOsHtml(condition.for_periods) + ' periods' : '') + '</div></div></div>';
+      }).join('') : '<div class="k-well">No governed conditions are attached to the current decision.</div>';
+      const questions = Array.isArray(desk.open_questions) ? desk.open_questions : [];
+      document.getElementById('deskQuestions').innerHTML = questions.length ? questions.map(function (question) {
+        return '<div class="k-well" data-stable-id="' + escapeWorkOsHtml(question.stable_id) + '"><strong>' + escapeWorkOsHtml(question.body) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(question.origin) + ' · ' + escapeWorkOsHtml(question.approval) + ' · revision ' + escapeWorkOsHtml(question.revision) + '</div></div>';
+      }).join('') : (desk.question_store_status === 'unavailable'
+        ? '<div class="k-well" role="alert">Open-question store unavailable.</div>'
+        : '<div class="k-well">No open research questions.</div>');
+      const askCompany = document.getElementById('workOsAskCompany');
+      const askContracts = document.getElementById('workOsAskContracts');
+      const askQuestions = document.getElementById('workOsAskQuestions');
+      if (askCompany) askCompany.disabled = false;
+      if (askContracts) askContracts.disabled = !conditions.length;
+      if (askQuestions) askQuestions.disabled = !questions.length;
+      const warnings = Array.isArray(desk.warnings) ? desk.warnings : [];
+      const warningBox = document.getElementById('deskWarnings');
+      if (warningBox) { warningBox.hidden = !warnings.length; warningBox.textContent = warnings.length ? 'Unavailable: ' + warnings.join(', ') : ''; }
+      if (companyPickerStatus) companyPickerStatus.textContent = identityTicker + ' company desk loaded';
+      return true;
+    } catch (error) {
+      if ((error && error.name === 'AbortError') || requestSequence !== workOsCompanyRequestSequence) return false;
+      const warningBox = document.getElementById('deskWarnings');
+      if (warningBox) { warningBox.hidden = false; warningBox.textContent = 'Unable to switch company desks. The prior company remains open.'; }
+      if (companyPickerStatus) companyPickerStatus.textContent = normalized + ' could not be loaded; ' + workOsCurrentCompanyTicker() + ' remains open';
+      return false;
+    } finally {
+      if (requestSequence === workOsCompanyRequestSequence) {
+        screen.removeAttribute('aria-busy');
+        if (workOsCompanyRequestController === controller) workOsCompanyRequestController = null;
+      }
+    }
+  }
+
+  function workOsBriefFacetCounts(payload, facetName) {
+    const facets = payload && payload.facets && Array.isArray(payload.facets[facetName])
+      ? payload.facets[facetName] : [];
+    return facets.map(function (facet) {
+      return {
+        value: String(facet.value || ''),
+        label: String(facet.label || facet.value || ''),
+        count: Number.isFinite(Number(facet.count)) ? Number(facet.count) : 0
+      };
+    });
+  }
+
+  function workOsUpdateBriefFacet(select, facets, allLabel) {
+    if (!select) return false;
+    const selected = select.value;
+    select.replaceChildren(new Option(allLabel, ''));
+    facets.forEach(function (facet) {
+      const option = new Option(facet.label, facet.value);
+      option.dataset.count = String(facet.count);
+      option.dataset.searchAliases = facet.value + ' ' + facet.label;
+      select.add(option);
+    });
+    const compatible = !selected || Array.from(select.options).some(function (option) {
+      return option.value === selected;
+    });
+    select.value = compatible ? selected : '';
+    if (window.KSelect) window.KSelect.sync(select);
+    return !compatible;
+  }
+
+  function workOsArtifactTitle(item) {
+    const supplied = String(item && item.title || '').trim();
+    if (supplied) return supplied;
+    const labels = { full_brief: 'Brief', pre_earnings: 'Pre-Earnings', post_earnings: 'Post-Earnings' };
+    return [String(item && item.ticker || '').toUpperCase(), labels[item && item.artifact_kind] || 'Research']
+      .filter(Boolean).join(' ');
+  }
+
+  function workOsBriefChipClass(item, field) {
+    if (field === 'kind') {
+      if (item.artifact_kind === 'post_earnings') return 'k-chip k-chip-accent';
+      if (item.artifact_kind === 'pre_earnings') return 'k-chip k-chip-warn';
+      return 'k-chip';
+    }
+    if (item.coverage_role === 'portfolio') return 'k-chip k-chip-ok';
+    if (item.coverage_role === 'evaluation') return 'k-chip k-chip-warn';
+    return 'k-chip';
+  }
+
+  function workOsClearBriefFilters() {
+    const tickerFilter = document.getElementById('briefTickerFilter');
+    const roleFilter = document.getElementById('briefRoleFilter');
+    const kindFilter = document.getElementById('briefKindFilter');
+    const filters = [tickerFilter, roleFilter, kindFilter].filter(Boolean);
+    if (roleFilter) roleFilter.value = '';
+    if (kindFilter) kindFilter.value = '';
+    if (tickerFilter) tickerFilter.value = '';
+    filters.forEach(function (select) { if (window.KSelect) window.KSelect.sync(select); });
+    workOsRenderBriefLibrary();
+  }
+
+  async function workOsRenderBriefLibrary() {
+    const target = document.getElementById('workOsBriefLibrary');
+    if (!target) return;
+    const tickerFilter = document.getElementById('briefTickerFilter');
+    const roleFilter = document.getElementById('briefRoleFilter');
+    const kindFilter = document.getElementById('briefKindFilter');
+    if (tickerFilter && !tickerFilter.dataset.bound) {
+      tickerFilter.addEventListener('change', workOsRenderBriefLibrary);
+      tickerFilter.dataset.bound = '1';
+    }
+    if (roleFilter && !roleFilter.dataset.bound) { roleFilter.addEventListener('change', workOsRenderBriefLibrary); roleFilter.dataset.bound = '1'; }
+    if (kindFilter && !kindFilter.dataset.bound) { kindFilter.addEventListener('change', workOsRenderBriefLibrary); kindFilter.dataset.bound = '1'; }
+    const params = new URLSearchParams({ limit: '100' });
+    if (tickerFilter && tickerFilter.value) params.set('ticker', tickerFilter.value);
+    if (roleFilter && roleFilter.value) params.set('coverage_role', roleFilter.value);
+    if (kindFilter && kindFilter.value) params.set('artifact_kind', kindFilter.value);
+    target.setAttribute('aria-busy', 'true');
+    target.innerHTML = '<div class="k-well" role="status">Loading persisted research artifacts…</div>';
+    try {
+      const response = await fetch('/api/work-os/briefs?' + params.toString(), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      const kindCleared = workOsUpdateBriefFacet(kindFilter, workOsBriefFacetCounts(payload, 'artifact_kind'), 'All artifacts');
+      const tickerCleared = workOsUpdateBriefFacet(tickerFilter, workOsBriefFacetCounts(payload, 'ticker'), 'All companies');
+      const roleCleared = workOsUpdateBriefFacet(roleFilter, workOsBriefFacetCounts(payload, 'coverage_role'), 'All coverage');
+      if (kindCleared || tickerCleared || roleCleared) {
+        await workOsRenderBriefLibrary();
+        return;
+      }
+      const rows = items.map(function (item) {
+        const kindLabels = { full_brief: 'Brief', pre_earnings: 'Pre-Earnings', post_earnings: 'Post-Earnings' };
+        const generated = String(item.generated_at || item.report_date || '').slice(0, 10) || 'Date unavailable';
+        const actionLabel = item.artifact_kind === 'full_brief' ? 'Read brief →' : 'Open artifact →';
+        return '<article class="k-card k-card-action research-library-row" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '" data-artifact-kind="' + escapeWorkOsHtml(item.artifact_kind) + '" data-coverage-role="' + escapeWorkOsHtml(item.coverage_role) + '"><div class="research-library-row-copy"><h3 class="k-card-row-title research-library-row-title">' + escapeWorkOsHtml(workOsArtifactTitle(item)) + '</h3><div class="research-library-row-chips"><span class="' + workOsBriefChipClass(item, 'kind') + '">' + escapeWorkOsHtml(kindLabels[item.artifact_kind] || 'Research') + '</span><span class="' + workOsBriefChipClass(item, 'coverage') + '">' + escapeWorkOsHtml(item.coverage_role || 'unknown') + '</span><span class="k-chip k-chip-mono">' + escapeWorkOsHtml(generated) + '</span>' + (item.status === 'degraded' ? '<span class="k-chip k-chip-warn">degraded</span>' : '') + '</div></div><button class="k-btn k-btn-primary k-btn-sm research-library-row-action" type="button" data-open-library-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">' + actionLabel + '</button></article>';
+      }).join('');
+      target.innerHTML = rows || '<div class="k-well"><p>No persisted research artifacts match these filters.</p><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-clear-brief-filters aria-label="Clear Brief Library filters">Clear filters</button></div>';
+      target.querySelectorAll('[data-open-library-artifact]').forEach(function (button) {
+        const artifact = items.find(function (item) { return item.artifact_id === button.dataset.openLibraryArtifact; });
+        button.addEventListener('click', function () {
+          if (!artifact) return;
+          if (artifact.reader_mode === 'peek') {
+            workOsOpenPeekRoute(artifact.open_url, workOsArtifactTitle(artifact));
+          } else {
+            openWorkOsBriefReader(artifact);
+          }
+        });
+      });
+      target.querySelectorAll('[data-clear-brief-filters]').forEach(function (button) {
+        button.addEventListener('click', workOsClearBriefFilters);
+      });
+    } catch (error) {
+      target.innerHTML = '<div class="k-well" role="alert">Brief Library inventory is temporarily unavailable.</div>';
+    } finally {
+      target.removeAttribute('aria-busy');
+    }
+  }
+
+  window.switchCompanyWorkspace = async function (ticker, options) {
+    const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
+    const committed = await workOsRenderCompanyDesk(requested);
+    if (!committed) return false;
+    workOsWriteCompanyContext(requested, 'company-desk', options);
+    window.navigateTo('screen-workspace', { fromHistory: true, companyReady: true });
+    return true;
+  };
+
+  function workOsActionEvidence(action) {
+    const actionId = action && typeof action.action_id === 'string' ? action.action_id : '';
+    const alertMatch = /^alert:([1-9][0-9]*)$/.exec(actionId);
+    if (!alertMatch) {
+      return '<div class="k-card-meta" data-work-os-action-evidence="unbound">Unbound source/evidence · exact pending-alert identity unavailable</div>';
+    }
+    const actionType = typeof action.action_type === 'string' ? action.action_type.trim() : '';
+    const lifecycleState = action.lifecycle_state === 'pending' ? action.lifecycle_state : '';
+    const sourceRef = typeof action.source_ref === 'string' ? action.source_ref.trim() : '';
+    const evidenceRef = typeof action.evidence_ref === 'string' ? action.evidence_ref.trim() : '';
+    const hasFullIdentity = Boolean(actionType && lifecycleState && sourceRef === actionId && evidenceRef);
+    if (!hasFullIdentity) {
+      return '<div class="k-card-meta" data-work-os-action-evidence="partial">Alert evidence doorway · full identity metadata unavailable</div>';
+    }
+    const alertId = alertMatch[1];
+    const humanActionType = actionType.replaceAll('_', ' ');
+    return '<div class="k-card-meta" data-work-os-action-evidence="exact">Evidence-bound alert · ' + escapeWorkOsHtml(humanActionType) + ' · ' + escapeWorkOsHtml(lifecycleState) + ' · evidence available</div>' + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-peek-url="/api/governed-alerts/' + escapeWorkOsHtml(alertId) + '/evidence" data-peek-title="Pending alert evidence — ' + escapeWorkOsHtml(action.ticker) + '">Open alert evidence &rarr;</button>';
+  }
+
+  // The core owns the transition rules.  This small, closed browser map only
+  // exposes controls whose action types the core accepts for each alert class.
+  const WORK_OS_GOVERNED_ALERT_ACTION_RECIPES = Object.freeze({
+    thesis_drift: Object.freeze(['acknowledge', 'defer', 'complete', 'supersede']),
+    default: Object.freeze(['review', 'dismiss'])
+  });
+  const workOsGovernedAlertActionKeys = new Map();
+
+  function workOsExactGovernedAlert(action) {
+    const actionId = action && typeof action.action_id === 'string' ? action.action_id : '';
+    const alertMatch = /^alert:([1-9][0-9]*)$/.exec(actionId);
+    const triggerKind = action && typeof action.action_type === 'string' ? action.action_type.trim() : '';
+    const sourceRef = action && typeof action.source_ref === 'string' ? action.source_ref.trim() : '';
+    const evidenceRef = action && typeof action.evidence_ref === 'string' ? action.evidence_ref.trim().toLowerCase() : '';
+    if (!alertMatch || action.lifecycle_state !== 'pending' || !triggerKind || sourceRef !== actionId || !/^[0-9a-f]{64}$/.test(evidenceRef)) return null;
+    return { alertId: alertMatch[1], actionId: actionId, triggerKind: triggerKind, evidenceRef: evidenceRef };
+  }
+
+  function workOsGovernedActionControls(action) {
+    const identity = workOsExactGovernedAlert(action);
+    if (!identity) return '';
+    const recipes = WORK_OS_GOVERNED_ALERT_ACTION_RECIPES[identity.triggerKind] || WORK_OS_GOVERNED_ALERT_ACTION_RECIPES.default;
+    const labels = { review: 'Mark reviewed', dismiss: 'Dismiss', acknowledge: 'Acknowledge', defer: 'Defer', complete: 'Complete', supersede: 'Supersede' };
+    const buttons = recipes.map(function (actionType) {
+      const tone = actionType === 'dismiss' ? 'k-btn-danger' : 'k-btn-quiet';
+      return '<button class="k-btn ' + tone + ' k-btn-sm" type="button" data-governed-alert-action="' + actionType + '" data-governed-alert-id="' + identity.alertId + '" data-governed-alert-evidence="' + escapeWorkOsHtml(identity.evidenceRef) + '" data-governed-alert-trigger="' + escapeWorkOsHtml(identity.triggerKind) + '">' + labels[actionType] + '</button>';
+    }).join('');
+    return '<div class="research-actions" data-governed-alert-controls="' + identity.alertId + '">' + buttons + '</div><div class="k-card-meta" role="status" aria-live="polite" data-governed-alert-status="' + identity.alertId + '">Actions are evidence-bound and recorded locally.</div>';
+  }
+
+  function workOsGovernedActionKey(identity, actionType) {
+    const key = identity.alertId + ':' + actionType;
+    let value = workOsGovernedAlertActionKeys.get(key);
+    if (!value) {
+      value = 'work-os-alert:' + identity.alertId + ':' + actionType + ':' + (window.crypto && typeof window.crypto.randomUUID === 'function' ? window.crypto.randomUUID() : Date.now().toString(36));
+      workOsGovernedAlertActionKeys.set(key, value);
+    }
+    return value;
+  }
+
+  function workOsGovernedActionFields(actionType) {
+    if (actionType === 'dismiss') {
+      const dismissReason = window.prompt('Reason for dismissal (required):', '');
+      return dismissReason && dismissReason.trim() ? { dismiss_reason: dismissReason.trim() } : null;
+    }
+    if (actionType === 'acknowledge') {
+      const note = window.prompt('Acknowledgement note (optional):', '');
+      return { note: note && note.trim() ? note.trim() : null };
+    }
+    if (actionType === 'defer') {
+      const note = window.prompt('Reason for deferral (required):', '');
+      if (!note || !note.trim()) return null;
+      const until = window.prompt('Defer until (ISO date or date/time, required):', '');
+      const parsed = until ? new Date(until) : new Date('');
+      if (Number.isNaN(parsed.getTime())) return null;
+      return { note: note.trim(), defer_until: parsed.toISOString() };
+    }
+    if (actionType === 'complete') {
+      const decisionId = window.prompt('Owner decision ID (positive integer, required):', '');
+      if (!/^[1-9][0-9]*$/.test(String(decisionId || ''))) return null;
+      return { decision_id: Number(decisionId) };
+    }
+    if (actionType === 'supersede') {
+      const replacementEpisodeId = window.prompt('Replacement thesis episode ID (required):', '');
+      return replacementEpisodeId && replacementEpisodeId.trim() ? { replacement_episode_id: replacementEpisodeId.trim() } : null;
+    }
+    return {};
+  }
+
+  async function workOsSubmitGovernedAlertAction(button) {
+    const alertId = String(button.getAttribute('data-governed-alert-id') || '');
+    const actionType = String(button.getAttribute('data-governed-alert-action') || '');
+    const evidenceRef = String(button.getAttribute('data-governed-alert-evidence') || '').toLowerCase();
+    const triggerKind = String(button.getAttribute('data-governed-alert-trigger') || '');
+    const recipes = WORK_OS_GOVERNED_ALERT_ACTION_RECIPES[triggerKind] || WORK_OS_GOVERNED_ALERT_ACTION_RECIPES.default;
+    if (!/^[1-9][0-9]*$/.test(alertId) || !/^[0-9a-f]{64}$/.test(evidenceRef) || !recipes.includes(actionType)) return;
+    const fields = workOsGovernedActionFields(actionType);
+    if (fields === null) return;
+    const controls = button.closest('[data-governed-alert-controls]');
+    const status = controls && controls.parentElement ? controls.parentElement.querySelector('[data-governed-alert-status="' + alertId + '"]') : null;
+    if (controls) controls.querySelectorAll('button').forEach(function (control) { control.disabled = true; });
+    if (status) status.textContent = 'Saving evidence-bound action…';
+    const identity = { alertId: alertId };
+    const body = Object.assign({
+      idempotency_key: workOsGovernedActionKey(identity, actionType),
+      evidence_ref: evidenceRef,
+      action_type: actionType,
+      occurred_at: new Date().toISOString()
+    }, fields);
+    try {
+      const response = await fetch('/api/governed-alerts/' + alertId + '/actions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body)
+      });
+      const payload = await response.json().catch(function () { return null; });
+      if (!response.ok) {
+        if (status) status.textContent = response.status === 409 ? 'Alert changed or conflicts with an existing action. Refresh evidence before retrying.' : response.status === 503 ? 'Alert action store unavailable; no action was recorded.' : 'Alert action could not be saved.';
+        if (controls) controls.querySelectorAll('button').forEach(function (control) { control.disabled = false; });
+        return;
+      }
+      const result = payload && payload.receipt && payload.receipt.result_state ? String(payload.receipt.result_state) : 'recorded';
+      if (status) status.textContent = 'Saved · ' + result + '. Evidence remains available; Open Company returns to the Company Desk.';
+    } catch (error) {
+      if (status) status.textContent = 'Offline or unavailable; no action was recorded.';
+      if (controls) controls.querySelectorAll('button').forEach(function (control) { control.disabled = false; });
+    }
+  }
+
+  let workOsPortfolioSort = { key: 'company', direction: 'ascending' };
+
+  function workOsPortfolioSortValue(company, key) {
+    if (key === 'weight') return Number.isFinite(company.current_weight_pct) ? company.current_weight_pct : -Infinity;
+    if (key === 'price') return Number.isFinite(company.price) ? company.price : -Infinity;
+    if (key === 'status') return String(company.thesis_status || 'status pending').toLowerCase();
+    if (key === 'links') {
+      return (company.report_url ? 1 : 0) + (company.earnings_route ? 1 : 0) + 2;
+    }
+    return String(company.name || company.ticker || '').toLowerCase();
+  }
+
+  function workOsRenderPriceActionBands(company) {
+    const bands = company.price_action_bands || { state: 'unavailable' };
+    const currency = typeof bands.currency === 'string' ? bands.currency : 'USD';
+    const money = function (value) {
+      return Number.isFinite(value) ? workOsMoney(value, currency) : '';
+    };
+    const rungs = [];
+    if (Number.isFinite(bands.add_below)) rungs.push('<div class="k-card-meta"><strong>Add/Buy ≤</strong> ' + escapeWorkOsHtml(money(bands.add_below)) + '</div>');
+    if (Number.isFinite(bands.hold_low) && Number.isFinite(bands.hold_high)) rungs.push('<div class="k-card-meta"><strong>Hold</strong> ' + escapeWorkOsHtml(money(bands.hold_low) + '\u2013' + money(bands.hold_high)) + '</div>');
+    if (Number.isFinite(bands.trim_above)) rungs.push('<div class="k-card-meta"><strong>Trim ≥</strong> ' + escapeWorkOsHtml(money(bands.trim_above)) + '</div>');
+    if (Number.isFinite(bands.sell_above)) rungs.push('<div class="k-card-meta"><strong>Sell ≥</strong> ' + escapeWorkOsHtml(money(bands.sell_above)) + '</div>');
+    const state = String(bands.state || 'unavailable');
+    const note = state === 'ratified' && bands.is_actionable
+      ? 'Checkpoint-ratified owner ladder.'
+      : state === 'unencoded'
+        ? 'No checkpoint-ratified price ladder recorded.'
+        : state === 'unavailable'
+          ? 'Price ladder evidence unavailable.'
+          : 'Price ladder is incomplete or not actionable.';
+    const reviewLink = bands.review_url
+      ? '<a class="k-card-meta work-os-threshold-link" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="' + escapeWorkOsHtml(bands.review_url) + '">Review sizing evidence</a>'
+      : '<a class="k-card-meta work-os-threshold-link" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="/advisor/sizing-intents/' + encodeURIComponent(company.ticker) + '">Review sizing evidence</a>';
+    return (rungs.length ? '<div class="work-os-price-action-bands" aria-label="Price action bands">' + rungs.join('') + '</div>' : '') +
+      '<div class="k-card-meta work-os-price-action-note">' + escapeWorkOsHtml(note) +
+      '</div>' + reviewLink;
+  }
+
+  function workOsRenderPortfolioRows(companies) {
+    const rows = document.getElementById('workOsPortfolioRows');
+    if (!rows) return;
+    const direction = workOsPortfolioSort.direction === 'ascending' ? 1 : -1;
+    const ordered = companies.slice().sort(function (left, right) {
+      const leftValue = workOsPortfolioSortValue(left, workOsPortfolioSort.key);
+      const rightValue = workOsPortfolioSortValue(right, workOsPortfolioSort.key);
+      if (typeof leftValue === 'number' && typeof rightValue === 'number') return direction * (leftValue - rightValue);
+      return direction * String(leftValue).localeCompare(String(rightValue));
+    });
+    rows.innerHTML = ordered.length ? ordered.map(function (company) {
+      const weight = workOsPortfolioPercent(company.current_weight_pct);
+      const status = company.thesis_status || 'status pending';
+      const readout = company.latest_earnings_readout || null;
+      const statusDetail = company.pending_tier1_alerts
+        ? company.pending_tier1_alerts + ' thesis-decisive alert' + (company.pending_tier1_alerts === 1 ? '' : 's')
+        : company.pending_alerts
+          ? company.pending_alerts + ' pending alert' + (company.pending_alerts === 1 ? '' : 's')
+          : company.new_documents
+            ? company.new_documents + ' new document' + (company.new_documents === 1 ? '' : 's')
+            : 'No current portfolio alert';
+      const readoutAction = readout && readout.route
+        ? '<button class="k-chip is-active" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(company.ticker) + '">Earnings</button>'
+        : company.earnings_route
+          ? '<button class="k-chip" type="button" data-peek-url="' + escapeWorkOsHtml(company.earnings_route) + '" data-peek-title="Earnings research — ' + escapeWorkOsHtml(company.ticker) + '">Earnings</button>'
+          : '';
+      const briefAction = company.report_url
+        ? '<a class="k-chip is-active" href="' + escapeWorkOsHtml(company.report_url) + '" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Brief</a>'
+        : '';
+      const dcfAction = company.dcf_url
+        ? '<a class="k-chip" href="' + escapeWorkOsHtml(company.dcf_url) + '">DCF</a>'
+        : '';
+      return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
+        '<td class="num"><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono"><div>' + workOsIntegerMoney(company.price) + ' / <strong>' + workOsIntegerMoney(company.fair_value) + '</strong></div>' + workOsRenderPriceActionBands(company) + '</td>' +
+        '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="k-card-meta">' + escapeWorkOsHtml(statusDetail) + '</div></td><td><div class="research-actions"><a class="k-chip" href="/ticker/' + encodeURIComponent(company.ticker) + '" data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '">Company Desk</a>' + dcfAction + briefAction + readoutAction + '</div></td></tr>';
+    }).join('') : '<tr><td colspan="5"><div class="k-well">No governed portfolio companies are available.</div></td></tr>';
+  }
+
+  function workOsSortPortfolioRows(key) {
+    if (!workOsPortfolioHydration || !Array.isArray(workOsPortfolioHydration.companies)) return;
+    workOsPortfolioSort = { key: key, direction: workOsPortfolioSort.key === key && workOsPortfolioSort.direction === 'ascending' ? 'descending' : 'ascending' };
+    document.querySelectorAll('[data-work-os-portfolio-sort]').forEach(function (button) {
+      const active = button.getAttribute('data-work-os-portfolio-sort') === key;
+      const header = button.closest('th');
+      if (header) header.setAttribute('aria-sort', active ? workOsPortfolioSort.direction : 'none');
+      const icon = button.querySelector('[aria-hidden="true"]');
+      if (icon) icon.textContent = active && workOsPortfolioSort.direction === 'descending' ? '↓' : '↑';
+    });
+    const status = document.getElementById('workOsPortfolioSortStatus');
+    if (status) status.textContent = key + ' ' + workOsPortfolioSort.direction;
+    workOsRenderPortfolioRows(workOsPortfolioHydration.companies);
+    workOsBindPortfolioInteractions();
+  }
+
+  function workOsBindPortfolioInteractions() {
+    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {
+      if (node.dataset.workOsTickerBound === 'true') return;
+      node.dataset.workOsTickerBound = 'true';
+      node.addEventListener('click', async function (event) {
+        if (node.tagName === 'TR' && event.target instanceof Element && event.target.closest('button, a')) return;
+        if (node.tagName === 'A') {
+          event.preventDefault();
+          const opened = await switchCompanyWorkspace(node.dataset.workOsTicker);
+          if (!opened) window.location.assign(node.getAttribute('href'));
+          return;
+        }
+        switchCompanyWorkspace(node.dataset.workOsTicker);
+      });
+    });
+    document.querySelectorAll('[data-governed-alert-action]').forEach(function (node) {
+      if (node.dataset.workOsAlertBound === 'true') return;
+      node.dataset.workOsAlertBound = 'true';
+      node.addEventListener('click', function (event) {
+        event.preventDefault(); event.stopPropagation(); workOsSubmitGovernedAlertAction(node);
+      });
+    });
+    document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {
+      if (node.dataset.workOsBriefBound === 'true') return;
+      node.dataset.workOsBriefBound = 'true';
+      node.addEventListener('click', function (event) {
+        event.preventDefault(); event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief);
+      });
+    });
+    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {
+      if (node.dataset.workOsThresholdBound === 'true') return;
+      node.dataset.workOsThresholdBound = 'true';
+      node.addEventListener('click', function (event) {
+        event.preventDefault(); event.stopPropagation(); workOsOpenThresholdReview(node.dataset.workOsThresholds);
+      });
+    });
+  }
+
+  function workOsRenderPortfolio(payload) {
+    workOsPortfolioHydration = payload;
+    const companies = Array.isArray(payload.companies) ? payload.companies : [];
+    const nav = document.getElementById('workOsPortfolioNav');
+    const navDetail = document.getElementById('workOsPortfolioNavDetail');
+    const allocation = document.getElementById('workOsPortfolioAllocation');
+    if (nav) nav.textContent = workOsIntegerMoney(payload.total_market_value);
+    if (navDetail) navDetail.textContent = String(payload.tracker_detail || 'Tracker unavailable · research data only');
+    if (allocation) allocation.innerHTML = workOsAllocationRows(payload.allocation);
+    const actionHeading = document.getElementById('workOsActionHeading');
+    const actionCount = document.getElementById('workOsActionCount');
+    if (actionHeading) actionHeading.textContent = 'Actions';
+    if (actionCount) actionCount.textContent = String((payload.actions || []).length) + ' open';
+    const actionQueue = document.getElementById('workOsActionQueue');
+    if (actionQueue) {
+      actionQueue.innerHTML = payload.actions && payload.actions.length ? payload.actions.map(function (action) {
+        return '<article class="k-well work-os-action-card"><div class="work-os-action-row"><div class="work-os-action-copy">' +
+          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
+          '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div>' + workOsActionEvidence(action) + workOsGovernedActionControls(action) + '</div></div>' +
+          '<a class="k-btn k-btn-primary k-btn-sm" href="/ticker/' + encodeURIComponent(action.ticker) + '" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company</a></div></article>';
+      }).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
+    }
+    workOsRenderPortfolioRows(companies);
+    workOsBindPortfolioInteractions();
+  }
+
+  let workOsEvalFilter = 'all';
+  let workOsEvalSort = 'relevance';
+  let workOsEvalLimit = 3;
+  let workOsEvalAbortController = null;
+  let workOsEvalControlsBound = false;
+  let workOsEvalRequestGeneration = 0;
+
+  async function workOsRenderEvaluationDialogues() {
+    const target = document.getElementById('workOsEvaluationDialogues');
+    const count = document.getElementById('workOsEvaluationCount');
+    if (!target) return;
+
+    if (workOsEvalAbortController) {
+      workOsEvalAbortController.abort();
+    }
+    workOsEvalAbortController = new AbortController();
+    const signal = workOsEvalAbortController.signal;
+    const currentGen = ++workOsEvalRequestGeneration;
+
+    if (count) count.textContent = 'Loading…';
+    target.innerHTML = '<div class="k-well" role="status">Loading bounded evaluation dialogues…</div>';
+
+    if (!workOsEvalControlsBound) {
+      workOsBindEvaluationControls();
+      workOsEvalControlsBound = true;
+    }
+
+    try {
+      const url = '/api/work-os/evaluation-dialogues?limit=' + encodeURIComponent(workOsEvalLimit) +
+        '&sort=' + encodeURIComponent(workOsEvalSort) +
+        '&filter=' + encodeURIComponent(workOsEvalFilter);
+      const response = await fetch(url, {
+        signal: signal,
+        headers: { Accept: 'application/json' }
+      });
+      const payload = response.ok ? await response.json() : null;
+
+      if (currentGen !== workOsEvalRequestGeneration) return;
+
+      if (!payload || payload.state === 'unavailable' || payload.total_active == null) {
+        if (count) count.textContent = 'Unavailable';
+        target.innerHTML = '<div class="k-well" role="alert">Evaluation dialogues are temporarily unavailable. No prototype candidates are being shown.</div>';
+        return;
+      }
+
+      if (payload.total_active === 0) {
+        if (count) count.textContent = '0 active';
+        target.innerHTML = '<div class="k-well">No active evaluation companies recorded.</div>';
+        return;
+      }
+
+      if (payload.matching_state === 'indeterminate') {
+        if (count) count.textContent = 'Verification unavailable · ' + payload.total_active + ' active total';
+        target.innerHTML = '<div class="k-well" role="alert">Source data for this filter is temporarily unavailable. Matching dialogues cannot be verified.</div>';
+        return;
+      }
+
+      if (payload.total_matching === 0) {
+        if (count) count.textContent = '0 matching · ' + payload.total_active + ' active total';
+        target.innerHTML = '<div class="k-well">No evaluation companies match the selected filter.</div>';
+        return;
+      }
+
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      if (count) {
+        if (workOsEvalFilter === 'all') {
+          count.textContent = 'Showing ' + items.length + ' of ' + payload.total_active + ' active';
+        } else {
+          count.textContent = 'Showing ' + items.length + ' of ' + payload.total_matching + ' matching · ' + payload.total_active + ' active total';
+        }
+      }
+
+      let html = '';
+      if (workOsEvalSort === 'relevance' && Array.isArray(payload.reason_codes) && payload.reason_codes.includes('relevance_partial')) {
+        html += '<div class="k-card-meta work-os-eval-notice">Activity recency is partially unavailable; ranking reflects available sources.</div>';
+      }
+
+      html += items.map(function (item) {
+        const ticker = String(item.ticker || '').toUpperCase();
+        const instrument = item.instrument_type === 'etf' ? 'ETF' : item.instrument_type === 'stock' ? 'Company' : 'Instrument unavailable';
+        const sessionId = typeof item.ask_session_id === 'string' ? item.ask_session_id.trim() : '';
+        const readiness = String(item.workup_readiness || 'unavailable').replaceAll('_', ' ');
+        const freshnessClass = item.freshness === 'available'
+          ? 'k-pill k-pill-ok'
+          : item.freshness === 'unavailable' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
+        const noteDetail = Number.isInteger(item.open_note_count) && item.open_note_count > 0
+          ? item.open_note_count + ' owner note' + (item.open_note_count === 1 ? '' : 's')
+          : 'No owner notes recorded';
+        const candidateId = Number.isInteger(item.discovery_candidate_id) && item.discovery_candidate_id > 0 ? String(item.discovery_candidate_id) : '';
+        const instrumentValue = item.instrument_type === 'stock' || item.instrument_type === 'etf' ? item.instrument_type : '';
+        let dialogueAction = '';
+        if (item.ask_session_link_state === 'linked' && sessionId) {
+          dialogueAction = '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-session="' + escapeWorkOsHtml(sessionId) + '" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Continue dialogue</button>';
+        } else if (item.ask_session_link_state === 'unlinked') {
+          dialogueAction = '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-session="" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Start dialogue</button>';
+        } else {
+          dialogueAction = '<button class="k-btn k-btn-quiet k-btn-sm" type="button" disabled title="Dialogue status temporarily unavailable">Dialogue unavailable</button>';
+        }
+        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div class="work-os-evaluation-copy"><h3 class="k-card-title k-card-row-title work-os-evaluation-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip work-os-evaluation-kind">' + escapeWorkOsHtml(instrument) + '</span><span class="' + freshnessClass + ' work-os-evaluation-readiness">' + escapeWorkOsHtml(readiness) + ' workup</span><div class="k-card-meta work-os-evaluation-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions work-os-evaluation-actions">' + dialogueAction + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button></div></article>';
+      }).join('');
+      target.innerHTML = html;
+    } catch (error) {
+      if (error && error.name === 'AbortError') return;
+      if (currentGen !== workOsEvalRequestGeneration) return;
+      if (count) count.textContent = 'Unavailable';
+      target.innerHTML = '<div class="k-well" role="alert">Evaluation dialogues are temporarily unavailable. No prototype candidates are being shown.</div>';
+    }
+  }
+
+  function workOsBindEvaluationControls() {
+    const filterButtons = document.querySelectorAll('[data-work-os-eval-filter]');
+    filterButtons.forEach(function (button) {
+      button.addEventListener('click', function () {
+        const filterVal = button.getAttribute('data-work-os-eval-filter');
+        if (!filterVal || filterVal === workOsEvalFilter) return;
+        workOsEvalFilter = filterVal;
+        filterButtons.forEach(function (btn) {
+          const isActive = btn === button;
+          btn.classList.toggle('is-active', isActive);
+          btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+        workOsRenderEvaluationDialogues();
+      });
+    });
+
+    const sortSelect = document.getElementById('workOsEvaluationSort');
+    if (sortSelect) {
+      sortSelect.addEventListener('change', function () {
+        workOsEvalSort = sortSelect.value || 'relevance';
+        workOsRenderEvaluationDialogues();
+      });
+    }
+
+    const limitSelect = document.getElementById('workOsEvaluationLimit');
+    if (limitSelect) {
+      limitSelect.addEventListener('change', function () {
+        const parsed = parseInt(limitSelect.value, 10);
+        workOsEvalLimit = [3, 5, 10].includes(parsed) ? parsed : 3;
+        workOsRenderEvaluationDialogues();
+      });
+    }
+  }
+
+  function workOsHumanCopy(value, fallback) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return fallback || 'Unavailable';
+    return text.replace(/\b(?:sha256:)?[a-f0-9]{40,}\b/gi, 'source reference');
+  }
+
+  function workOsFiniteNumber(value) {
+    if (value == null || String(value).trim() === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function workOsEvaluationActions(item) {
+    const actions = [];
+    const ticker = workOsNormalizeTicker(item.ticker);
+    if (item.instrument_type === 'company' && item.company_desk_url) {
+      actions.push('<a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(item.company_desk_url) + '" data-work-os-evaluation-company="' + escapeWorkOsHtml(ticker) + '">Company Desk</a>');
+    }
+    if (item.instrument_type === 'etf' && item.workup_url) {
+      actions.push('<a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-url="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-title="ETF workup — ' + escapeWorkOsHtml(ticker) + '">ETF workup</a>');
+    }
+    if (item.dcf_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">DCF</a>');
+    if (item.report_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.report_url) + '">Brief</a>');
+    return actions.length ? '<div class="research-actions">' + actions.join('') + '</div>' : '<span class="k-card-meta">No verified artifact available</span>';
+  }
+
+  function workOsProfileState(profile) {
+    const state = profile && typeof profile.state === 'string' ? profile.state : 'unavailable';
+    if (state === 'owner_ratified') return ['Owner ratified', 'k-pill k-pill-ok'];
+    if (state === 'review_suggested') return ['Review suggested', 'k-pill k-pill-warn'];
+    if (state === 'system_suggested') return ['System suggested', 'k-pill'];
+    return ['Profile pending', 'k-pill k-pill-warn'];
+  }
+
+  function workOsLabelChips(labels) {
+    if (!Array.isArray(labels) || !labels.length) return '<span class="k-card-meta">No current labels</span>';
+    return '<div class="research-actions">' + labels.map(function (label) {
+      const value = String(label.label || '');
+      return '<button class="k-chip k-chip-btn" type="button" data-work-os-evaluation-filter="label:' + escapeWorkOsHtml(value) + '" aria-pressed="false">' + escapeWorkOsHtml(label.display_label || value || 'Label') + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function workOsEvaluationPercent(value) {
+    const number = workOsFiniteNumber(value);
+    return number === null ? 'Unavailable' : workOsPercent(number);
+  }
+
+  function workOsInvestmentProfileCell(item) {
+    const profile = item && item.profile;
+    const state = workOsProfileState(profile);
+    const labels = profile && Array.isArray(profile.labels) ? profile.labels : [];
+    const ticker = workOsNormalizeTicker(item.ticker);
+    return workOsLabelChips(labels) +
+      '<div class="research-actions"><span class="' + state[1] + '">' + state[0] + '</span>' +
+      '<button class="k-chip k-chip-btn" type="button" data-peek-url="/api/peek/investment-profile?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Investment profile — ' + escapeWorkOsHtml(ticker) + '">Rationale &rarr;</button></div>';
+  }
+
+  function workOsBusinessCell(item) {
+    const profile = item && item.profile;
+    const moat = profile && profile.moat;
+    const moatNames = {
+      multi_business: 'Multi-business moat',
+      core_business: 'Core-business moat',
+      narrow_conditional: 'Narrow / conditional moat',
+      none_demonstrated: 'No demonstrated moat'
+    };
+    const moatLabel = moat && moat.level && moatNames[moat.level] ? moatNames[moat.level] : 'Evidence insufficient';
+    const coverage = moat && moat.evidence_coverage ? String(moat.evidence_coverage).replaceAll('_', ' ') : 'insufficient';
+    const ticker = workOsNormalizeTicker(item.ticker);
+    return '<div><strong>' + escapeWorkOsHtml(moatLabel) + '</strong></div>' +
+      '<div class="k-card-meta">Moat evidence ' + escapeWorkOsHtml(coverage) + '</div>' +
+      '<div class="k-card-meta">Growth ' + escapeWorkOsHtml(workOsEvaluationPercent(item.revenue_growth_yoy_pct)) + ' · FCF margin ' + escapeWorkOsHtml(workOsEvaluationPercent(item.fcf_margin_pct)) + '</div>' +
+      '<button class="k-chip k-chip-btn" type="button" data-peek-url="/api/peek/investment-profile?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Business and moat — ' + escapeWorkOsHtml(ticker) + '">Evidence &rarr;</button>';
+  }
+
+  function workOsPortfolioRoleCell(item) {
+    const ticker = workOsNormalizeTicker(item.ticker);
+    const labels = Array.isArray(item.portfolio_role_labels) ? item.portfolio_role_labels : [];
+    const content = labels.length ? '<div class="research-actions">' + labels.map(function (label) { return '<span class="k-chip">' + escapeWorkOsHtml(label) + '</span>'; }).join('') + '</div>' : '<span class="k-card-meta">Book-impact evidence unavailable</span>';
+    return content + '<button class="k-chip k-chip-btn" type="button" data-peek-url="/api/peek/portfolio-impact?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Portfolio impact — ' + escapeWorkOsHtml(ticker) + '">Impact detail &rarr;</button>';
+  }
+
+  function workOsApplyEvaluationFilter(filter) {
+    const selected = String(filter || 'all');
+    const rows = Array.from(document.querySelectorAll('[data-work-os-evaluation-row]'));
+    let visible = 0;
+    rows.forEach(function (row) {
+      const labels = String(row.getAttribute('data-profile-labels') || '').split(',');
+      const state = row.getAttribute('data-profile-state') || '';
+      const instrument = row.getAttribute('data-instrument') || '';
+      const show = selected === 'all' ||
+        (selected === 'compounders' && labels.includes('long_term_compounder')) ||
+        (selected === 'garp' && labels.includes('garp')) ||
+        (selected === 'needs_review' && state === 'review_suggested') ||
+        (selected === 'etfs' && instrument === 'etf') ||
+        (selected.startsWith('label:') && labels.includes(selected.slice(6)));
+      row.hidden = !show;
+      if (show) visible += 1;
+    });
+    document.querySelectorAll('[data-work-os-evaluation-filter]').forEach(function (button) {
+      const active = button.getAttribute('data-work-os-evaluation-filter') === selected;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    const empty = document.getElementById('workOsEvaluationFilterEmpty');
+    if (empty) empty.hidden = visible !== 0;
+    const count = document.getElementById('workOsEvaluationSurfaceCount');
+    if (count) count.textContent = String(visible) + ' shown';
+  }
+
+  function workOsRenderEvaluationRows(payload) {
+    const target = document.getElementById('workOsEvaluationRows');
+    const count = document.getElementById('workOsEvaluationSurfaceCount');
+    if (!target) return;
+    const items = payload && Array.isArray(payload.items) ? payload.items : [];
+    if (count) count.textContent = String(items.length) + ' under evaluation';
+    target.innerHTML = items.length ? items.map(function (item) {
+      const ticker = workOsNormalizeTicker(item.ticker);
+      const type = item.instrument_type === 'etf' ? 'ETF' : 'Company';
+      const typeClass = item.instrument_type === 'etf' ? 'k-pill k-pill-warn' : 'k-pill';
+      const profile = item.profile;
+      const profileLabels = profile && Array.isArray(profile.labels) ? profile.labels.map(function (label) { return label.label; }).join(',') : '';
+      const profileState = profile && profile.state ? profile.state : 'unavailable';
+      const dcfUpside = workOsFiniteNumber(item.dcf_upside_pct);
+      const dcf = dcfUpside !== null ? workOsPercent(dcfUpside) : 'Unavailable';
+      const valuationLink = item.dcf_url ? '<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">Open DCF</a>' : '';
+      const valuationValue = item.instrument_type === 'company' ? dcf : 'Not applicable';
+      const valuationContext = item.instrument_type === 'company' ? 'DCF upside' : 'Company DCF';
+      return '<tr data-work-os-evaluation-row="' + escapeWorkOsHtml(ticker) + '" data-profile-labels="' + escapeWorkOsHtml(profileLabels) + '" data-profile-state="' + escapeWorkOsHtml(profileState) + '" data-instrument="' + escapeWorkOsHtml(item.instrument_type) + '">' +
+        '<td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(workOsHumanCopy(item.name, ticker)) + '</span></div><span class="' + typeClass + '">' + type + '</span></td>' +
+        '<td>' + workOsInvestmentProfileCell(item) + '</td>' +
+        '<td>' + (item.instrument_type === 'company' ? workOsBusinessCell(item) : '<span class="k-card-meta">Not applicable to ETF baskets</span>') + '</td>' +
+        '<td>' + workOsPortfolioRoleCell(item) + '</td>' +
+        '<td><strong class="t-mono">' + escapeWorkOsHtml(valuationValue) + '</strong><div class="k-card-meta">' + valuationContext + '</div>' + valuationLink + '</td>' +
+        '<td>' + workOsEvaluationActions(item) + '</td></tr>';
+    }).join('') + '<tr id="workOsEvaluationFilterEmpty" hidden><td colspan="6"><div class="k-well" role="status">No companies or ETFs match this filter.</div></td></tr>' : '<tr><td colspan="6"><div class="k-well">No companies or ETFs are currently under evaluation.</div></td></tr>';
+    workOsApplyEvaluationFilter('all');
+  }
+  window.workOsRenderEvaluationRows = workOsRenderEvaluationRows;
+
+  async function workOsRenderEvaluationSurface() {
+    const target = document.getElementById('workOsEvaluationRows');
+    const count = document.getElementById('workOsEvaluationSurfaceCount');
+    if (!target) return false;
+    if (workOsEvaluationSurfaceLoading) return workOsEvaluationSurfaceLoading;
+    target.setAttribute('aria-busy', 'true');
+    workOsEvaluationSurfaceLoading = (async function () {
+      try {
+        const response = await fetch('/api/work-os/evaluation', { headers: { Accept: 'application/json' } });
+        const payload = response.ok ? await response.json() : null;
+        if (!payload || payload.schema_version !== 'evaluation_surface.v2' || !Array.isArray(payload.items)) throw new Error('Invalid evaluation response');
+        workOsRenderEvaluationRows(payload);
+        return true;
+      } catch (_error) {
+        if (count) count.textContent = 'Unavailable';
+        target.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Evaluation coverage is temporarily unavailable. No prototype rows are being shown.</div></td></tr>';
+        return false;
+      } finally {
+        target.removeAttribute('aria-busy');
+        workOsEvaluationSurfaceLoading = null;
+      }
+    })();
+    return workOsEvaluationSurfaceLoading;
+  }
+  window.workOsRenderEvaluationSurface = workOsRenderEvaluationSurface;
+
+  window.addEventListener('work-os:investment-evidence-updated', function (event) {
+    const detail = event && event.detail ? event.detail : {};
+    if (detail.kind === 'dcf' || detail.kind === 'research_refresh') {
+      workOsRenderEvaluationSurface();
+      const state = window.history.state && typeof window.history.state === 'object'
+        ? window.history.state : {};
+      const transient = state.workOsTransient;
+      if (transient && typeof transient.route === 'string' && transient.route.startsWith('/api/peek/investment-profile?')) {
+        workOsOpenPeekRoute(transient.route, transient.title || 'Investment profile', { fromHistory: true });
+      }
+      const fullPage = state.workOsFullPageDetail;
+      if (fullPage && typeof fullPage.route === 'string' && fullPage.route.startsWith('/api/peek/investment-profile?')) {
+        workOsOpenPeekFullPage(fullPage.route, fullPage.title || 'Investment profile', { fromHistory: true });
+      }
+    }
+  });
+
+  function workOsOpenEvaluationDialogue(button) {
+    const sessionId = String(button.getAttribute('data-work-os-evaluation-session') || '').trim();
+    if (sessionId && typeof window.openWorkOsCopilotSession === 'function') {
+      window.openWorkOsCopilotSession(sessionId);
+      return;
+    }
+    const ticker = workOsNormalizeTicker(button.getAttribute('data-work-os-evaluation-dialogue'));
+    if (!ticker || !window.openWorkOsCopilot) return;
+    const candidateId = Number(button.getAttribute('data-work-os-evaluation-candidate'));
+    const instrument = button.getAttribute('data-work-os-evaluation-instrument');
+    window.openWorkOsCopilot({
+      company_ticker: ticker, category: 'research', origin_key: 'work-os:evaluation-dialogue:' + ticker,
+      coverage_role_at_creation: 'evaluation', lifecycle_at_creation: 'active',
+      evaluation_candidate_id: Number.isInteger(candidateId) && candidateId > 0 ? candidateId : null,
+      evaluation_instrument_type: instrument === 'stock' || instrument === 'etf' ? instrument : null
+    });
+  }
+
+  function workOsOpenEvaluationWorkup(button) {
+    const safeTicker = workOsNormalizeTicker(button.getAttribute('data-work-os-evaluation-workup'));
+    const instrument = button.getAttribute('data-work-os-evaluation-instrument');
+    if (!safeTicker || (instrument !== 'stock' && instrument !== 'etf')) return;
+    if (instrument === 'etf') {
+      workOsOpenPeekRoute('/api/peek/etf_workup?ticker=' + encodeURIComponent(safeTicker), 'ETF workup — ' + safeTicker);
+      return;
+    }
+    window.switchCompanyWorkspace(safeTicker);
+  }
+
+  function workOsCompareEvaluation(ticker) {
+    const safeTicker = workOsNormalizeTicker(ticker);
+    if (safeTicker) workOsOpenPeekRoute('/api/peek/discovery-compare?tickers=' + encodeURIComponent(safeTicker), 'Compare — ' + safeTicker);
+  }
+
+  document.addEventListener('click', async function (event) {
+    const target = event.target instanceof Element ? event.target.closest('[data-work-os-portfolio-sort], [data-work-os-evaluation-dialogue], [data-work-os-evaluation-workup], [data-work-os-evaluation-compare], [data-work-os-evaluation-company], [data-work-os-refresh-evaluation], [data-work-os-evaluation-filter], [data-profile-review-action]') : null;
+    if (!target) return;
+    if (target.hasAttribute('data-work-os-refresh-evaluation')) { workOsRenderEvaluationSurface(); return; }
+    if (target.hasAttribute('data-work-os-evaluation-filter')) {
+      event.preventDefault();
+      workOsApplyEvaluationFilter(target.getAttribute('data-work-os-evaluation-filter'));
+      return;
+    }
+    if (target.hasAttribute('data-profile-review-action')) {
+      event.preventDefault();
+      const ticker = workOsNormalizeTicker(target.getAttribute('data-profile-review-ticker'));
+      const label = String(target.getAttribute('data-profile-review-label') || '');
+      const action = String(target.getAttribute('data-profile-review-action') || '');
+      const fingerprint = String(target.getAttribute('data-profile-review-fingerprint') || '');
+      if (!ticker || !label || !action || !fingerprint) return;
+      const originalText = target.textContent;
+      target.disabled = true;
+      target.textContent = 'Recording…';
+      try {
+        const response = await fetch('/api/research/investment-profile/' + encodeURIComponent(ticker) + '/labels/' + encodeURIComponent(label) + '/' + encodeURIComponent(action), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ suggestion_fingerprint: fingerprint })
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        await workOsRenderEvaluationSurface();
+        workOsOpenPeekRoute('/api/peek/investment-profile?ticker=' + encodeURIComponent(ticker), 'Investment profile — ' + ticker);
+      } catch (_error) {
+        target.disabled = false;
+        target.textContent = originalText || 'Retry review';
+      }
+      return;
+    }
+    if (target.hasAttribute('data-work-os-evaluation-company')) {
+      const ticker = workOsNormalizeTicker(target.getAttribute('data-work-os-evaluation-company'));
+      if (ticker && typeof window.switchCompanyWorkspace === 'function') {
+        event.preventDefault();
+        const opened = await window.switchCompanyWorkspace(ticker);
+        if (!opened) window.location.assign(target.getAttribute('href'));
+      }
+      return;
+    }
+    if (target.hasAttribute('data-work-os-portfolio-sort')) { workOsSortPortfolioRows(target.getAttribute('data-work-os-portfolio-sort')); return; }
+    if (target.hasAttribute('data-work-os-evaluation-dialogue')) { workOsOpenEvaluationDialogue(target); return; }
+    if (target.hasAttribute('data-work-os-evaluation-workup')) { workOsOpenEvaluationWorkup(target); return; }
+    if (target.hasAttribute('data-work-os-evaluation-compare')) workOsCompareEvaluation(target.getAttribute('data-work-os-evaluation-compare'));
+  });
+
+  async function workOsApplyRequestedResearchState() {
+    const context = workOsReadCompanyContext();
+    if (context.screen === 'company-desk' && context.ticker) {
+      await window.switchCompanyWorkspace(context.ticker, { fromHistory: true });
+    } else if (context.screen === 'analytics-playground' && context.ticker) {
+      await window.switchFactPlayground(context.ticker, { fromHistory: true });
+    } else if (context.screen === 'brief-library') {
+      window.navigateTo('screen-brief-library', { fromHistory: true });
+      workOsRenderBriefLibrary();
+    }
+  }
+
+  async function workOsEnsurePortfolioHydration() {
+    if (workOsPortfolioHydration) return;
+    if (!workOsPortfolioLoading) {
+      workOsPortfolioLoading = (async function () {
+        const status = document.getElementById('workOsLiveStatus');
+        try {
+          const response = await fetch('/api/work-os/portfolio', { headers: { Accept: 'application/json' } });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const payload = await response.json();
+          if (!payload || !Array.isArray(payload.companies)) throw new Error('Invalid portfolio response');
+          workOsRenderPortfolio(payload);
+          if (status) status.textContent = String(payload.tracker_detail || 'Tracker unavailable · research data only');
+        } catch (error) {
+          const nav = document.getElementById('workOsPortfolioNav');
+          const navDetail = document.getElementById('workOsPortfolioNavDetail');
+          if (nav) nav.textContent = '—';
+          if (navDetail) navDetail.textContent = 'Tracker unavailable · research data only';
+          const queue = document.getElementById('workOsActionQueue');
+          if (queue) queue.innerHTML = '<div class="k-well" role="alert">Portfolio companies are temporarily unavailable. No prototype values are being shown.</div>';
+          const rows = document.getElementById('workOsPortfolioRows');
+          if (rows) rows.innerHTML = '<tr><td colspan="5"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
+          if (status) status.textContent = 'Tracker unavailable · research data only';
+        }
+      })().finally(function () { workOsPortfolioLoading = null; });
+    }
+    await workOsPortfolioLoading;
+  }
+
+  async function workOsHydratePortfolio() {
+    await Promise.all([workOsEnsurePortfolioHydration(), workOsRenderEvaluationDialogues()]);
+    workOsApplyRequestedResearchState();
+  }
+
+  function workOsScreenFromHash() {
+    const raw = window.location.hash.replace(/^#/, '').split('?')[0];
+    if (!raw) return 'screen-cockpit';
+    if (WORK_OS_ENDPOINTS[raw]) return raw;
+    return WORK_OS_LEGACY_HASHES[raw] || 'screen-cockpit';
+  }
+
+  function workOsScreenUrl(screenId) {
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    params.delete('screen');
+    url.hash = screenId;
+    return url.pathname + url.search + url.hash;
+  }
+
+  const deskQuestionCapture = document.getElementById('deskQuestionCapture');
+  const workOsManageResearchItems = document.getElementById('workOsManageResearchItems');
+  if (workOsManageResearchItems) workOsManageResearchItems.addEventListener('click', function () {
+    window.navigateTo('screen-audit-log');
+    window.setTimeout(function () {
+      const researchItems = document.getElementById('csec-research-items');
+      if (researchItems) researchItems.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 250);
+  });
+  if (deskQuestionCapture) deskQuestionCapture.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const input = document.getElementById('deskQuestionInput');
+    const status = document.getElementById('deskQuestionCaptureStatus');
+    const body = input ? input.value.trim() : '';
+    if (!body) return;
+    if (status) status.textContent = 'Saving owner question…';
+    try {
+      const response = await fetch('/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ ticker: workOsCurrentCompanyTicker(), kind: 'question', body: body })
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      if (input) input.value = '';
+      if (status) status.textContent = 'Question saved';
+      await workOsRenderCompanyDesk(workOsCurrentCompanyTicker());
+    } catch (error) {
+      if (status) status.textContent = 'Question could not be saved';
+    }
+  });
+
+  function workOsFormatDecisionDate(rawDate) {
+    if (!rawDate) return '';
+    const parsed = new Date(rawDate);
+    return Number.isNaN(parsed.getTime()) ? String(rawDate) : parsed.toISOString().slice(0, 10);
+  }
+
+  function workOsDecisionMeta(state, emptyLabel) {
+    if (!state) return emptyLabel;
+    const source = state.source_lens ? String(state.source_lens).replaceAll('_', ' ') : state.decided_by;
+    const revision = workOsFormatDecisionDate(state.revision);
+    const asOf = workOsFormatDecisionDate(state.as_of);
+    return source + (revision ? ' · revision ' + revision : '') + (asOf ? ' · as of ' + asOf : '');
+  }
+
+  function workOsRenderReaderDecision(decision) {
+    const projection = decision || { relationship: 'unavailable' };
+    const owner = projection.owner || null;
+    const model = projection.model || null;
+    const ownerStateEl = document.getElementById('workOsBriefOwnerState');
+    const ownerMetaEl = document.getElementById('workOsBriefOwnerMeta');
+    const modelStateEl = document.getElementById('workOsBriefModelState');
+    const modelMetaEl = document.getElementById('workOsBriefModelMeta');
+    if (ownerStateEl) ownerStateEl.textContent = owner ? String(owner.value).toUpperCase() : '—';
+    if (ownerMetaEl) ownerMetaEl.textContent = workOsDecisionMeta(owner, 'No owner decision recorded');
+    if (modelStateEl) modelStateEl.textContent = model ? String(model.value).toUpperCase() : '—';
+    if (modelMetaEl) modelMetaEl.textContent = workOsDecisionMeta(model, 'No model recommendation recorded');
+    const relationship = String(projection.relationship || 'unavailable');
+    const freshness = projection.freshness ? String(projection.freshness).replaceAll('_', ' ') : '';
+    const relationshipNode = document.getElementById('workOsBriefDecisionRelationship');
+    if (relationshipNode) {
+      relationshipNode.textContent = relationship.replaceAll('_', ' ').toUpperCase() + (freshness ? ' · ' + freshness : '');
+      relationshipNode.className = 'k-pill';
+      relationshipNode.classList.toggle('k-pill-ok', relationship === 'agree');
+      relationshipNode.classList.toggle('k-pill-bad', relationship === 'conflict');
+      relationshipNode.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
+    }
+  }
+
+  function workOsReaderUnavailable(body, artifact, status) {
+    const reasons = {
+      legacy_standalone: 'This legacy brief has not been migrated to the shared reader body.',
+      body_missing: 'The indexed shared reader body is missing.',
+      body_checksum_mismatch: 'The persisted reader body failed its integrity check.'
+    };
+    const message = reasons[status] || 'The complete reader body is unavailable.';
+    body.innerHTML = '<div class="k-well" role="alert">' + escapeWorkOsHtml(message) + ' <a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(artifact.standalone_url) + '">Open persisted standalone brief →</a></div>';
+  }
+
+  function workOsHumanizeSection(sectionId) {
+    return String(sectionId || 'section').replace(/^section[-_:]?/i, '').replaceAll('_', ' ').replaceAll('-', ' ');
+  }
+
+  async function workOsRenderFactPlayground() {
+    const mount = document.getElementById('workOsFactPlayground');
+    const picker = document.getElementById('workOsFactTicker');
+    const endpoint = WORK_OS_ENDPOINTS['screen-analytics-playground'];
+    const ticker = workOsCurrentCompanyTicker();
+    if (!mount || !endpoint || !ticker) return false;
+    if (mount.dataset.loadedEndpoint === endpoint && mount.dataset.loadedTicker === ticker) return true;
+    const requestSequence = ++workOsFactPlaygroundRequestSequence;
+    if (workOsFactPlaygroundRequestController) workOsFactPlaygroundRequestController.abort();
+    const controller = new AbortController();
+    workOsFactPlaygroundRequestController = controller;
+    workOsFactPlaygroundLoading = (async function () {
+      mount.setAttribute('aria-busy', 'true');
+      mount.innerHTML = '<div class="k-well" role="status">Loading governed facts and metrics…</div>';
+      try {
+        const companies = await workOsEnsureResearchCompanies();
+        if (requestSequence !== workOsFactPlaygroundRequestSequence) return false;
+        if (picker) {
+          picker.innerHTML = companies.map(function (company) {
+            const selected = company.ticker === ticker ? ' selected' : '';
+            return '<option value="' + escapeWorkOsHtml(company.ticker) + '"' + selected + '>' +
+              escapeWorkOsHtml(company.ticker + ' · ' + company.name) + '</option>';
+          }).join('');
+        }
+        const response = await fetch(endpoint + '?fragment=work-os&tickers=' + encodeURIComponent(ticker), {
+          signal: controller.signal, headers: { Accept: 'text/html' }
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const markup = await response.text();
+        if (requestSequence !== workOsFactPlaygroundRequestSequence) return false;
+        mount.innerHTML = markup;
+        if (typeof window.initExplorePanel !== 'function') throw new Error('Explore initializer unavailable');
+        window.initExplorePanel();
+        mount.dataset.loadedEndpoint = endpoint;
+        mount.dataset.loadedTicker = ticker;
+        return true;
+      } catch (error) {
+        if ((error && error.name === 'AbortError') || requestSequence !== workOsFactPlaygroundRequestSequence) return false;
+        mount.innerHTML = '<div class="k-well" role="alert">Explore is temporarily unavailable. No prototype values are being shown.</div>';
+        return false;
+      } finally {
+        if (requestSequence === workOsFactPlaygroundRequestSequence) {
+          mount.removeAttribute('aria-busy');
+          if (workOsFactPlaygroundRequestController === controller) workOsFactPlaygroundRequestController = null;
+          workOsFactPlaygroundLoading = null;
+        }
+      }
+    })();
+    return workOsFactPlaygroundLoading;
+  }
+
+  window.switchFactPlayground = async function (ticker, options) {
+    const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
+    if (!workOsWriteCompanyContext(requested, 'analytics-playground', options)) return false;
+    window.navigateTo('screen-analytics-playground', { fromHistory: true, companyContextReady: true });
+    return workOsRenderFactPlayground();
+  };
+
+  const workOsFactTicker = document.getElementById('workOsFactTicker');
+  if (workOsFactTicker) workOsFactTicker.addEventListener('change', function () {
+    if (!workOsFactTicker.value) return;
+    window.switchFactPlayground(workOsFactTicker.value);
+  });
+
+  window.navigateTo = function (screenId, options) {
+    const target = WORK_OS_ENDPOINTS[screenId] ? screenId : 'screen-cockpit';
+    if (target === 'screen-workspace' && workOsPortfolioHydration && !(options && options.companyReady)) {
+      const ticker = workOsCurrentCompanyTicker();
+      if (ticker) { window.switchCompanyWorkspace(ticker, { fromHistory: !!(options && options.fromHistory) }); return; }
+    }
+    if (target === 'screen-brief-library') workOsRenderBriefLibrary();
+    if (target === 'screen-evaluation') workOsRenderEvaluationSurface();
+    if (target === 'screen-analytics-playground' && !(options && options.companyContextReady)) {
+      const ticker = workOsCurrentCompanyTicker();
+      if (ticker) { window.switchFactPlayground(ticker, { fromHistory: !!(options && options.fromHistory) }); return; }
+    }
+    if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
+    originalNavigateTo(target);
+    workOsRenderCompanyBreadcrumb();
+    const persistentMountId = workOsPersistentMountIds[target];
+    const persistentMount = persistentMountId ? document.getElementById(persistentMountId) : null;
+    if (persistentMount && persistentMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {
+      workOsLoadScreen(target, persistentMount);
+    }
+    if (target === 'screen-execution-queue') {
+      const operationsMount = document.getElementById('workOsOperationsMount');
+      if (operationsMount && operationsMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {
+        workOsLoadScreen(target, operationsMount);
+      }
+    }
+    const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+    if (!(options && options.fromHistory) && currentUrl !== workOsScreenUrl(target)) {
+      window.history.pushState({ screenId: target }, '', workOsScreenUrl(target));
+    }
+  };
+
+  window.goCounterreadHome = function () {
+    if (briefReaderOverlay) briefReaderOverlay.close();
+    if (drillOverlay) drillOverlay.close();
+    if (peekOverlay) peekOverlay.close();
+    window.navigateTo('screen-cockpit');
+  };
+
+  async function workOsRestoreCompanyContextFromHistory() {
+    const context = workOsReadCompanyContext();
+    if (context.screen === 'company-desk' && context.ticker) {
+      return window.switchCompanyWorkspace(context.ticker, { fromHistory: true });
+    }
+    if (context.screen === 'analytics-playground' && context.ticker) {
+      return window.switchFactPlayground(context.ticker, { fromHistory: true });
+    }
+    window.navigateTo(workOsScreenFromHash(), { fromHistory: true });
+    return true;
+  }
+
+  function workOsCloseHistoryTransients() {
+    if (peekOverlay) peekOverlay.close();
+    if (drillOverlay) drillOverlay.close();
+    if (briefReaderOverlay) briefReaderOverlay.close();
+    workOsRestoreHistoryFocus(workOsLastTransientFocusId);
+    workOsLastTransientFocusId = null;
+  }
+
+  async function workOsRestoreTransientFromHistory(state) {
+    const route = workOsRouteFromHistoryState(state);
+    if (!route) {
+      workOsReplayingHistory = true;
+      try {
+        workOsCloseHistoryTransients();
+        return await workOsRestoreCompanyContextFromHistory();
+      } finally {
+        workOsReplayingHistory = false;
+      }
+    }
+    const transient = state && typeof state === 'object' ? state.workOsTransient : null;
+    if (!transient || typeof transient !== 'object') {
+      workOsReplayingHistory = true;
+      try {
+        workOsCloseHistoryTransients();
+        return await workOsRestoreCompanyContextFromHistory();
+      } finally {
+        workOsReplayingHistory = false;
+      }
+    }
+    workOsReplayingHistory = true;
+    try {
+      workOsCloseHistoryTransients();
+      await workOsRestoreCompanyContextFromHistory();
+      workOsLastTransientFocusId = typeof transient.focusId === 'string' ? transient.focusId : null;
+      if (route.overlay === 'peek' && typeof transient.route === 'string') {
+        return await workOsOpenPeekRoute(transient.route, transient.title, { fromHistory: true });
+      }
+      if (route.overlay === 'risk_drawer' && typeof transient.drawerType === 'string') {
+        return window.openDrillDrawer(transient.drawerType, { fromHistory: true });
+      }
+      return true;
+    } finally {
+      workOsReplayingHistory = false;
+    }
+  }
+
+  async function workOsApplyHash(replaceLegacy) {
+    const screenId = workOsScreenFromHash();
+    if (replaceLegacy && window.location.hash !== '#' + screenId) {
+      window.history.replaceState({ screenId }, '', '#' + screenId);
+    }
+    const stateDetail = window.history.state && window.history.state.workOsFullPageDetail;
+    const params = new URLSearchParams(window.location.search);
+    const route = stateDetail && typeof stateDetail.route === 'string'
+      ? stateDetail.route : params.get('work_os_detail');
+    if (route && workOsCanonicalDetailRoute(route)) {
+      const origin = workOsDecodeDetailOrigin(stateDetail && stateDetail.origin)
+        || workOsDecodeDetailOrigin(params.get('work_os_detail_origin'))
+        || { surface: 'screen-cockpit', ticker: null, section: null };
+      return workOsOpenPeekFullPage(route, stateDetail && stateDetail.title || params.get('work_os_detail_title') || 'Research detail', { fromHistory: true, origin: origin });
+    }
+    if (route) {
+      const fallback = { surface: 'screen-cockpit', ticker: null, section: null };
+      window.history.replaceState({ screenId: fallback.surface }, '', workOsDetailOriginUrl(fallback));
+      window.navigateTo(fallback.surface, { fromHistory: true });
+      return false;
+    }
+    const briefState = window.history.state && window.history.state.workOsBriefReader;
+    const briefTicker = briefState && typeof briefState.ticker === 'string'
+      ? briefState.ticker : params.get('work_os_brief');
+    if (briefTicker && workOsValidHistoryTicker(briefTicker)) {
+      workOsLastTransientFocusId = briefState && typeof briefState.focusId === 'string'
+        ? briefState.focusId : params.get('work_os_focus');
+      return window.openWorkOsBriefReader(briefTicker, { fromHistory: true });
+    }
+    if (fullPageDetailOverlay) fullPageDetailOverlay.close();
+    return workOsRestoreTransientFromHistory(window.history.state);
+  }
+
+  window.addEventListener('hashchange', function () { workOsApplyHash(false); });
+  window.addEventListener('popstate', function () { workOsApplyHash(false); });
+  workOsApplyHash(true);
+  workOsHydratePortfolio();
+  function workOsCopilotScopeItems(trigger, readerScoped) {
+    const scope = String(trigger.getAttribute('data-copilot-scope') || '');
+    const items = [];
+    if (scope === 'company') {
+      const ticker = workOsCurrentCompanyTicker();
+      if (ticker) items.push({ kind: 'company', stable_id: 'company:' + ticker, label: ticker + ' company context' });
+    } else if (scope === 'thesis-contracts') {
+      document.querySelectorAll('#deskConditions [data-stable-id]').forEach(function (node) {
+        const stableId = String(node.getAttribute('data-stable-id') || '');
+        const labelNode = node.querySelector('strong');
+        if (stableId && labelNode) items.push({ kind: 'thesis_contract', stable_id: stableId, label: String(labelNode.textContent || '').trim() });
+      });
+    } else if (scope === 'open-questions') {
+      document.querySelectorAll('#deskQuestions [data-stable-id]').forEach(function (node) {
+        const stableId = String(node.getAttribute('data-stable-id') || '');
+        const labelNode = node.querySelector('strong');
+        if (stableId && labelNode) items.push({ kind: 'open_question', stable_id: stableId, label: String(labelNode.textContent || '').trim() });
+      });
+    } else if (scope === 'full-brief' && readerScoped && workOsReaderContext.artifact_id) {
+      items.push({
+        kind: 'brief_artifact', stable_id: String(workOsReaderContext.artifact_id),
+        label: String(workOsReaderContext.ticker || '') + ' full research brief'
+      });
+    }
+    return items;
+  }
+
+  document.addEventListener('click', function (event) {
+    const trigger = event.target instanceof Element ? event.target.closest('[data-research-chat][data-copilot-scope]') : null;
+    if (!trigger) return;
+    const readerScoped = !!(briefReader && briefReader.contains(trigger) && workOsReaderContext);
+    const chatTicker = readerScoped ? workOsReaderContext.ticker : workOsCurrentCompanyTicker();
+    const originSuffix = readerScoped ? ':artifact:' + workOsReaderContext.artifact_id : '';
+    const contextKind = String(trigger.getAttribute('data-copilot-scope') || 'company');
+    window.openWorkOsCopilot({
+      company_ticker: chatTicker || null,
+      category: contextKind === 'thesis-contracts' ? 'thesis' : 'research',
+      origin_key: 'work-os:' + String(trigger.getAttribute('data-research-chat') || 'company') + originSuffix,
+      context_kind: contextKind,
+      scope_items: workOsCopilotScopeItems(trigger, readerScoped),
+      coverage_role_at_creation: readerScoped
+        ? (workOsReaderContext.coverage_role || 'unknown')
+        : ((workOsCompanyByTicker(workOsCurrentCompanyTicker()) || {}).coverage_role || 'unknown'),
+      lifecycle_at_creation: 'active'
+    });
+  });
+  if (workOsLaunchParams.get('copilot') === '1') {
+    window.setTimeout(function () {
+      window.openWorkOsCopilot({
+        company_ticker: workOsLaunchParams.get('ticker') || null,
+        category: 'research',
+        report_date: workOsLaunchParams.get('report_date') || null,
+        origin_key: workOsLaunchParams.get('origin_key') || 'standalone-report',
+        coverage_role_at_creation: 'unknown',
+        lifecycle_at_creation: 'unknown'
+      });
+    }, 0);
+  }
+
+  function workOsEndpoint(screenId) {
+    const base = WORK_OS_ENDPOINTS[screenId];
+    if (!base) return '';
+    const ticker = workOsCurrentCompanyTicker();
+    if (screenId === 'screen-workspace' && ticker) {
+      return base + '?ticker=' + encodeURIComponent(ticker);
+    }
+    return base;
+  }
+
+  function workOsTrustedFragmentEndpoint(endpoint) {
+    try {
+      const url = new URL(endpoint, window.location.href);
+      return url.origin === window.location.origin && url.pathname.startsWith('/api/');
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function workOsMountHtml(target, markup, endpoint) {
+    if (!workOsTrustedFragmentEndpoint(endpoint)) {
+      throw new Error('Untrusted fragment endpoint');
+    }
+    target.innerHTML = markup;
+    Array.from(target.querySelectorAll('script')).forEach(function (script) {
+      if (script.src) {
+        const scriptUrl = new URL(script.src, window.location.href);
+        const trusted = script.hasAttribute('data-work-os-trusted-script') &&
+          scriptUrl.origin === window.location.origin;
+        if (!trusted) {
+          script.remove();
+          throw new Error('Untrusted fragment script source');
+        }
+      }
+      const replacement = document.createElement('script');
+      Array.from(script.attributes).forEach(function (attribute) {
+        replacement.setAttribute(attribute.name, attribute.value);
+      });
+      replacement.textContent = script.textContent;
+      script.replaceWith(replacement);
+    });
+  }
+  window.workOsMountHtml = workOsMountHtml;
+
+  function workOsLoadError(target, screenId, message) {
+    target.innerHTML = '<div class="k-well k-well-warn" role="alert">' + message + ' ' +
+      '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-work-os-retry>Retry</button></div>';
+    target.dataset.workOsScreenId = screenId;
+  }
+
+  function workOsTargetVisible(target) {
+    return target.isConnected !== false &&
+      !(target.closest && target.closest('[hidden], [aria-hidden="true"]'));
+  }
+
+  function workOsAbortTarget(target, reason) {
+    if (!target) return;
+    const requestState = workOsRequests.get(target);
+    if (!requestState) return;
+    requestState.abortReason = reason;
+    window.clearTimeout(requestState.timeoutId);
+    requestState.controller.abort();
+    target.removeAttribute('aria-busy');
+    workOsRequests.delete(target);
+  }
+
+  async function workOsLoadScreen(screenId, target, endpointOverride) {
+    const endpoint = endpointOverride || workOsEndpoint(screenId);
+    if (!endpoint || !workOsTrustedFragmentEndpoint(endpoint) ||
+        !target || !workOsTargetVisible(target)) return;
+    const prior = workOsRequests.get(target);
+    if (prior) {
+      prior.abortReason = 'superseded';
+      prior.controller.abort();
+      window.clearTimeout(prior.timeoutId);
+    }
+    const controller = new AbortController();
+    const requestState = {
+      controller: controller,
+      generation: ++workOsRequestGeneration,
+      abortReason: '',
+      timeoutId: 0
+    };
+    requestState.timeoutId = window.setTimeout(function () {
+      requestState.abortReason = 'timeout';
+      controller.abort();
+    }, WORK_OS_FETCH_TIMEOUT_MS);
+    workOsRequests.set(target, requestState);
+    target.setAttribute('aria-busy', 'true');
+    target.dataset.workOsScreenId = screenId;
+    if (endpointOverride) target.dataset.workOsEndpoint = endpoint;
+    else delete target.dataset.workOsEndpoint;
+    const status = document.getElementById('workOsLiveStatus');
+    if (status) status.textContent = 'Loading live ' + screenId.replace('screen-', '') + ' data';
+    try {
+      const response = await fetch(endpoint, { signal: controller.signal, headers: { Accept: 'text/html' } });
+      if (workOsRequests.get(target) !== requestState || !workOsTargetVisible(target)) return;
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const markup = await response.text();
+      if (workOsRequests.get(target) !== requestState || !workOsTargetVisible(target)) return;
+      workOsMountHtml(target, markup, endpoint);
+      target.dataset.loadedEndpoint = endpoint;
+      if (status) status.textContent = 'Live data fetched at ' + new Date().toLocaleTimeString();
+    } catch (error) {
+      if (workOsRequests.get(target) !== requestState ||
+          requestState.abortReason === 'superseded' || requestState.abortReason === 'hidden') return;
+      const timedOut = requestState.abortReason === 'timeout';
+      workOsLoadError(
+        target,
+        screenId,
+        timedOut
+          ? 'Live detail timed out. The screen summary remains usable.'
+          : 'Live detail is temporarily unavailable. The screen summary remains usable.'
+      );
+      if (status) status.textContent = timedOut ? 'Live data timed out' : 'Live data could not be loaded';
+    } finally {
+      window.clearTimeout(requestState.timeoutId);
+      if (workOsRequests.get(target) === requestState) {
+        target.removeAttribute('aria-busy');
+        workOsRequests.delete(target);
+      }
+    }
+  }
+  window.workOsLoadScreen = workOsLoadScreen;
+
+  document.addEventListener('click', function (event) {
+    const refresh = event.target && event.target.closest
+      ? event.target.closest('[data-work-os-refresh-screen]')
+      : null;
+    if (refresh) {
+      const screenId = refresh.dataset.workOsRefreshScreen;
+      const mountId = workOsPersistentMountIds[screenId];
+      const mount = mountId ? document.getElementById(mountId) : null;
+      if (mount) workOsLoadScreen(screenId, mount);
+      return;
+    }
+    const retry = event.target && event.target.closest
+      ? event.target.closest('[data-work-os-retry]')
+      : null;
+    if (!retry) return;
+    const target = retry.closest('[data-work-os-screen-id]');
+    if (target && target.dataset.workOsScreenId) {
+      workOsLoadScreen(
+        target.dataset.workOsScreenId,
+        target,
+        target.dataset.workOsEndpoint || undefined
+      );
+    }
+  });
+
+  function openLiveDetail(screenId) {
+    const endpoint = workOsEndpoint(screenId);
+    if (!endpoint) return;
+    openDrillDrawer('live-detail');
+    const body = document.getElementById('drawerBody');
+    const title = document.getElementById('drawerTitle');
+    const subtitle = document.getElementById('drawerSubtitle');
+    if (title) title.textContent = 'Live system detail';
+    if (subtitle) subtitle.textContent = endpoint;
+    if (body) {
+      body.innerHTML = '<div class="k-well" role="status">Loading live detail…</div>';
+      workOsLoadScreen(screenId, body);
+    }
+  }
+
+  window.workOsOpenRelatedView = function (endpoint, title) {
+    if (!workOsTrustedFragmentEndpoint(endpoint)) return;
+    openDrillDrawer('live-detail');
+    const body = document.getElementById('drawerBody');
+    const heading = document.getElementById('drawerTitle');
+    const subtitle = document.getElementById('drawerSubtitle');
+    if (heading) heading.textContent = title;
+    if (subtitle) subtitle.textContent = 'Related Operations view';
+    if (!body) return;
+    body.innerHTML = '<div class="k-well" role="status">Loading related view…</div>';
+    workOsLoadScreen('related-operations', body, endpoint);
+  };

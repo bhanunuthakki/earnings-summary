@@ -652,8 +652,7 @@ def render_socratic_page(ticker: str) -> str:
         "scoring.</p>"
         '<div id="soc-body"></div></section>'
         # Standalone document (not the shell): the CCAction primitive rides
-        # along explicitly, same as palette + controls (mirrors
-        # render_mobile_inbox's inlining for the same reason).
+        # along explicitly, same as palette + controls.
         f"</main><script>{CC_ACTION_JS}</script><script>{_SOCRATIC_JS}</script>"
         f"<script data-k-select-runtime>{controls_js()}</script></body></html>"
     )

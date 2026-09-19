@@ -40,6 +40,7 @@ from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.workspace_chat import JS as CHAT_JS
 from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_data import (
+    PanelAvailability,
     WorkspaceP3Panels,
     load_graded_sell_base_rate,
     load_workspace_p3_panels,
@@ -189,7 +190,7 @@ from report.renderers.workspace_sections.thesis_risk import (
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CHAT_CSS, COMMENTS_CSS, CSS, DCF_CSS
 from report.sections.p3_data import PeerCompRow
-from ui.controls import controls_css, controls_js, icon_svg
+from ui.controls import controls_css, controls_js, icon_svg, k_empty
 from ui.living_grid import head_assets as _living_grid_head_assets
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.tokens import FAVICON_LINK
@@ -358,6 +359,12 @@ def render_report_body(spec: ReportSpec) -> RenderedReportBody:
     _tabs(body, groups, ticker=spec.ticker)
     body.write('<div class="l1-root">')
     _identity(body, spec, p3.saydo_verdicts)
+    if PanelAvailability.UNAVAILABLE in p3.availability.values():
+        body.write(
+            k_empty(
+                "Some supporting research data is unavailable for this report. Empty panels may be incomplete."
+            )
+        )
     _forgone_strip(body, spec.forgone_due_to_budget)
     _thesis_strip(body, spec.snapshot, spec.thesis)
     _reread_strip(body, spec.synthesis)

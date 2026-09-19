@@ -156,9 +156,8 @@ def _pending_draft_confirmation_debt(
     db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
 ) -> tuple[int, str]:
     """Decision drafts (tracker/Telegram/web capture — any ``source_channel``)
-    still ``awaiting_confirmation`` — the same ``decision_drafts`` read
-    ``pipeline.mobile_inbox_panel._drafts_section`` uses, so this line and
-    the mobile Inbox never drift."""
+    still ``awaiting_confirmation`` in the canonical decision-draft store.
+    The mobile Inbox link opens the responsive Cockpit action queue."""
     db_conn = conn or open_read_conn(db_path)
     try:
         row = db_conn.execute(
@@ -175,8 +174,7 @@ def _undispositioned_card_debt(
     db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
 ) -> int:
     """Evaluation-list Investment Decision Cards with no pass/watch/promote
-    disposition recorded yet — the same read
-    ``pipeline.mobile_inbox_panel._card_dispositions_section`` uses."""
+    disposition recorded yet. The mobile Inbox link opens the responsive Cockpit."""
     db_conn = conn or open_read_conn(db_path)
     try:
         row = db_conn.execute(

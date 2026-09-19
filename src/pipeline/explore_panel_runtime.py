@@ -438,13 +438,11 @@ window.initExplorePanel = function () {
     el('vx-inspector-origin').textContent = entry.origin || entry.domain;
     el('vx-inspector').hidden = false;
     root.classList.add('vx-inspector-open');
-    persistRails();
   }
   function closeInspector() {
     drawerMetric = null;
     el('vx-inspector').hidden = true;
     root.classList.remove('vx-inspector-open');
-    persistRails();
   }
   function setView(view) {
     var result = el('vx-result');
@@ -499,11 +497,9 @@ window.initExplorePanel = function () {
     var rail = el('vx-fields-rail');
     rail.hidden = !rail.hidden;
     root.classList.toggle('vx-fields-open', !rail.hidden);
-    persistRails();
   });
   el('vx-fields-minimize').addEventListener('click', function () {
     el('vx-fields-rail').hidden = true; root.classList.remove('vx-fields-open');
-    persistRails();
   });
   el('vx-inspector-close').addEventListener('click', closeInspector);
   el('vx-saved-toggle').addEventListener('click', toggleSavedViews);
@@ -536,18 +532,12 @@ window.initExplorePanel = function () {
     var view = event.target.closest('[data-result-view]');
     if (view) setView(view.getAttribute('data-result-view'));
   });
-  function wireResizer(handle, target, storageKey, min, max) {
-    var rails = window.CCState ? window.CCState.getJSON('exploreWorkbenchRails') : null;
-    var saved = rails && parseInt(rails[storageKey], 10);
+  function wireResizer(handle, target, min, max) {
     function apply(next) {
       next = Math.max(min, Math.min(max, next));
       target.style.width = next + 'px';
       handle.setAttribute('aria-valuenow', String(next));
-      var currentRails = window.CCState ? (window.CCState.getJSON('exploreWorkbenchRails') || {}) : {};
-      currentRails[storageKey] = next;
-      if (window.CCState) window.CCState.setJSON('exploreWorkbenchRails', currentRails);
     }
-    if (saved >= min && saved <= max) apply(saved);
     handle.addEventListener('pointerdown', function (event) {
       event.preventDefault(); handle.setPointerCapture(event.pointerId);
       var start = event.clientX;
@@ -570,31 +560,8 @@ window.initExplorePanel = function () {
       apply(current + direction * 16);
     });
   }
-  function persistRails() {
-    if (!window.CCState) return;
-    var rails = window.CCState.getJSON('exploreWorkbenchRails') || {};
-    rails.fieldsOpen = !el('vx-fields-rail').hidden;
-    rails.inspectorOpen = !el('vx-inspector').hidden;
-    window.CCState.setJSON('exploreWorkbenchRails', rails);
-  }
-  wireResizer(el('vx-fields-resizer'), el('vx-fields-rail'), 'fieldsWidth', 240, 520);
-  wireResizer(el('vx-inspector-resizer'), el('vx-inspector'), 'inspectorWidth', 260, 560);
-  var restoredRails = window.CCState ? window.CCState.getJSON('exploreWorkbenchRails') : null;
-  if (restoredRails && restoredRails.fieldsOpen === true) {
-    el('vx-fields-rail').hidden = false; root.classList.add('vx-fields-open');
-  }
-  function consumePaletteQuery() {
-    if (!window.CCState) return;
-    var query = window.CCState.get('askQ');
-    if (!query) return;
-    window.CCState.del('askQ'); ask(query);
-  }
-  if (window.__explorePaletteHandler) {
-    window.removeEventListener('cc-ask-q', window.__explorePaletteHandler);
-  }
-  window.__explorePaletteHandler = consumePaletteQuery;
-  window.addEventListener('cc-ask-q', window.__explorePaletteHandler);
-  consumePaletteQuery();
+  wireResizer(el('vx-fields-resizer'), el('vx-fields-rail'), 240, 520);
+  wireResizer(el('vx-inspector-resizer'), el('vx-inspector'), 260, 560);
   loadCatalog([]);
 };
 window.initExplorePanel();

@@ -275,8 +275,8 @@ def _load_dcf_module(
     _write_dcf_fixture(repo_root)
     monkeypatch.setenv("DCF_REPO_ROOT", str(repo_root))
     monkeypatch.setenv("DCF_TICKER", "TEST")
-    path = Path(__file__).resolve().parents[1] / "execution" / "dcf_opus_assumptions.py"
-    spec = importlib.util.spec_from_file_location("dcf_opus_assumptions_audit_test", path)
+    path = Path(__file__).resolve().parents[1] / "execution" / "refresh_dcf_assumptions.py"
+    spec = importlib.util.spec_from_file_location("refresh_dcf_assumptions_audit_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     database = migrated_db(repo_root / "fixture.sqlite")
@@ -351,6 +351,7 @@ def test_dcf_assumptions_cannot_rewrite_owner_debt_scope(
 
     updated = json.loads(cache.read_text(encoding="utf-8"))
     assert updated["redesign"]["dcf_debt_scope"] == "debt_and_lease_obligations"
+    assert updated["opus_baseline"]["set_by"] == "purpose:dcf_assumptions"
 
 
 def test_empty_pressure_evidence_renders_gap_without_empty_section(tmp_path: Path) -> None:

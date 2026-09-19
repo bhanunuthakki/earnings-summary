@@ -16,18 +16,14 @@ integration lives in ``test_dcf_redesign.py``).
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date
 from pathlib import Path
 
 import openpyxl
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from dcf import assumptions_doc as doc  # noqa: E402
-from dcf import redesign  # noqa: E402
+from dcf import assumptions_doc as doc
+from dcf import redesign
 
 _TODAY = date(2026, 6, 12)
 
@@ -139,9 +135,9 @@ def test_baseline_absent_and_corrupt_cases(tmp_path: Path) -> None:
         doc.ensure_opus_baseline(bad)
 
 
-def test_baseline_from_opus_pass_is_authoritative() -> None:
-    payload = doc.baseline_from_opus_pass(dict(_BLOCK), today=_TODAY)
-    assert payload["set_by"] == "opus-4.8"
+def test_baseline_from_assumption_refresh_records_known_purpose() -> None:
+    payload = doc.baseline_from_assumption_refresh(dict(_BLOCK), today=_TODAY)
+    assert payload["set_by"] == "purpose:dcf_assumptions"
     assert payload["seeded"] is False
     assert payload["as_of"] == "2026-06-12"
     values = payload["values"]
@@ -203,18 +199,18 @@ def test_rows_classify_opus_user_and_default(tmp_path: Path) -> None:
     wb = _dashboard_workbook()
     rows = {r.label: r for r in doc.build_assumption_rows(wb, edited, baseline, ledger)}
 
-    assert rows["Exit multiple"].source == doc.SOURCE_OPUS
+    assert rows["Exit multiple"].source == doc.SOURCE_UNKNOWN
     assert rows["Exit multiple"].baseline_display == "12.0x"
 
     margin = rows["Near-term operating margin"]
     assert margin.source == doc.SOURCE_USER
-    assert "overridden from Opus 20.0% on 2026-06-12" in margin.note
+    assert "overridden from unattributed baseline 20.0% on 2026-06-12" in margin.note
 
     assert rows["Beta (levered)"].source == doc.SOURCE_DEFAULT
-    assert rows["Total company — near-term growth"].source == doc.SOURCE_OPUS
+    assert rows["Total company — near-term growth"].source == doc.SOURCE_UNKNOWN
 
     capex = rows["2026 capex ($M)"]
-    assert capex.source == doc.SOURCE_OPUS
+    assert capex.source == doc.SOURCE_UNKNOWN
     assert "6% of FY1E revenue" in capex.note and "not tracked" in capex.note
 
     # Scenario Δs at the documented seeds read as seed defaults.
@@ -233,7 +229,7 @@ def test_write_provenance_sheet_comments_and_ledger(tmp_path: Path) -> None:
     counts = doc.write_provenance(
         wb_path, edited, p, ticker="TESTCO", update_ledger=True, today=_TODAY
     )
-    assert counts[doc.SOURCE_USER] >= 1 and counts[doc.SOURCE_OPUS] >= 1
+    assert counts[doc.SOURCE_USER] >= 1 and counts[doc.SOURCE_UNKNOWN] >= 1
 
     wb = openpyxl.load_workbook(str(wb_path))
     try:
@@ -246,15 +242,15 @@ def test_write_provenance_sheet_comments_and_ledger(tmp_path: Path) -> None:
         text = "\n".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
         assert "REDESIGN NARRATIVE" in text
         assert "KEY JUDGMENTS" in text
-        assert "overridden from Opus 12.0x on 2026-06-12" in text
+        assert "overridden from unattributed baseline 12.0x on 2026-06-12" in text
         # Current values are live links, not stale literals.
         assert "=Dashboard!B45" in text
 
         comment = wb[redesign.DASHBOARD_SHEET]["B45"].comment
         assert comment is not None
-        assert "overridden from Opus 12.0x on 2026-06-12" in comment.text
+        assert "overridden from unattributed baseline 12.0x on 2026-06-12" in comment.text
         opus_comment = wb[redesign.DASHBOARD_SHEET]["B29"].comment
-        assert opus_comment is not None and "Opus" in opus_comment.text
+        assert opus_comment is not None and "unattributed baseline" in opus_comment.text
     finally:
         wb.close()
 
@@ -301,7 +297,7 @@ def test_write_provenance_without_assumptions_file(tmp_path: Path) -> None:
     try:
         ws = wb[doc.ASSUMPTIONS_SHEET]
         text = "\n".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
-        assert "no Opus assumptions file" in text
+        assert "no assumptions file" in text
     finally:
         wb.close()
 
@@ -318,3 +314,55 @@ def test_sheet_is_replaced_in_place_on_rewrite(tmp_path: Path) -> None:
         assert wb.sheetnames.count(doc.ASSUMPTIONS_SHEET) == 1
     finally:
         wb.close()
+
+
+@pytest.mark.parametrize(
+    ("producer", "expected_source"),
+    [
+        ("opus-4.8", "Opus"),
+        ("purpose:dcf_assumptions", "DCF assumption refresh"),
+        ("", "unattributed baseline"),
+        ("seeded_from_redesign_block", "unattributed baseline"),
+    ],
+)
+def test_recorded_author_survives_read_and_labels_sheet_and_comments(
+    tmp_path: Path, producer: str, expected_source: str
+) -> None:
+    path = tmp_path / "TESTCO.json"
+    _write_json(
+        path,
+        {
+            "redesign": dict(_BLOCK),
+            "opus_baseline": {
+                "as_of": "2026-06-12",
+                "set_by": producer,
+                "seeded": producer == "seeded_from_redesign_block",
+                "values": doc.snapshot_baseline_values(dict(_BLOCK)),
+            },
+        },
+    )
+    original_bytes = path.read_bytes()
+    baseline = doc.ensure_opus_baseline(path, today=date(2027, 1, 1))
+    assert baseline is not None and baseline.set_by == producer
+    assert baseline.author_label == expected_source
+    assert path.read_bytes() == original_bytes
+
+    workbook = _dashboard_workbook()
+    counts = doc.write_provenance_into(
+        workbook, _INP, path, ticker="TESTCO", update_ledger=False, today=_TODAY
+    )
+    assert counts[expected_source] > 0
+    comment = workbook[redesign.DASHBOARD_SHEET]["B45"].comment
+    assert comment is not None and comment.text == f"{expected_source}: 12.0x"
+    sheet_text = "\n".join(
+        str(cell.value)
+        for row in workbook[doc.ASSUMPTIONS_SHEET].iter_rows()
+        for cell in row
+        if cell.value is not None
+    )
+    assert expected_source in sheet_text
+    assert "purpose:dcf_assumptions" not in sheet_text
+    if producer != "opus-4.8":
+        assert "Opus" not in sheet_text
+    assert path.read_bytes() == original_bytes
+    workbook.close()

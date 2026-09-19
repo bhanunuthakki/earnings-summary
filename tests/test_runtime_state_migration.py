@@ -10,14 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_runtime_state_uses_master_css_and_closed_class_transitions() -> None:
-    mobile = (ROOT / "src/pipeline/mobile_inbox_panel.py").read_text(encoding="utf-8")
     operations = (ROOT / "src/pipeline/operations_panel.py").read_text(encoding="utf-8")
-    styles = (ROOT / "src/pipeline/operations_styles.py").read_text(encoding="utf-8")
     card = (ROOT / "src/dashboard/_card.py").read_text(encoding="utf-8")
     alerts = (ROOT / "execution/comments_server_alert_routes.py").read_text(encoding="utf-8")
 
-    assert ".style.opacity" not in mobile
-    assert "mi-deferred" in mobile and ".mi-card.mi-deferred" in styles
     assert "className = 'k-pill k-pill-' + body.tone" not in operations
     assert all(token in operations for token in ("k-pill-ok", "k-pill-warn", "k-pill-bad"))
     assert "<h4>Queued actions</h4>" not in card
@@ -26,7 +22,6 @@ def test_runtime_state_uses_master_css_and_closed_class_transitions() -> None:
 
 def test_owned_surfaces_have_no_direct_conformance_findings_or_geometry_debt() -> None:
     for rel in (
-        "pipeline/mobile_inbox_panel.py",
         "pipeline/operations_panel.py",
         "pipeline/operations_styles.py",
         "dashboard/_card.py",

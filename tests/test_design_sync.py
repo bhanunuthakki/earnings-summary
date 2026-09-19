@@ -184,8 +184,11 @@ def test_work_os_contract_checks_the_runtime_prototype_and_mobile_rail() -> None
     renderer = (
         check_design_sync.WORK_OS_RENDERER.read_text(encoding="utf-8")
         + "\n"
+        + check_design_sync.WORK_OS_RUNTIME.read_text(encoding="utf-8")
+        + "\n"
         + check_design_sync.WORK_OS_STYLE_MASTER.read_text(encoding="utf-8")
     )
+    assert check_design_sync.work_os_contract_failures(renderer_source=renderer) == []
     regressed = renderer.replace(
         "font-size: var(--mobile-control-font-size) !important",
         "font-size: var(--fs-title) !important",

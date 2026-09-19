@@ -23,13 +23,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import TypeVar, cast
 
+from advisor.store import count_memos
 from llm_client import (
     compose_anchor_block,
     generate_saydo_filter,
@@ -68,6 +72,9 @@ from report.sections.p3_data import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.notes import AnalystNoteRow, list_notes
+
+log = logging.getLogger(__name__)
+_ReadResult = TypeVar("_ReadResult")
 
 # Editorial-typography characters hoisted to module constants so the call
 # sites don't trip ruff's RUF001 (ambiguous unicode in code). Built via chr()
@@ -812,17 +819,30 @@ def quarter_short(label: str) -> str:
 # data movement.
 
 
-def _load_comp_set_context_safe(
-    ticker: str, db_path: Path, repo_root: Path
-) -> CompSetContextSection | None:
-    """Best-effort wrapper (Phase 3, comparable_sets_bottoms_up.md §11):
-    missing table / no frozen set / any read failure all degrade to None —
-    the Company tab card hides entirely, never crashes the build. Mirrors
-    ``_load_open_notes_safe``'s degrade contract."""
-    try:
-        return load_comp_set_context(ticker, db_path=db_path, repo_root=repo_root)
-    except (sqlite3.Error, OSError, ValueError, KeyError):
-        return None
+class PanelAvailability(StrEnum):
+    PRESENT = "present"
+    EMPTY = "empty"
+    NOT_CONFIGURED = "not_configured"
+    UNAVAILABLE = "unavailable"
+
+
+_DATABASE_PANELS = (
+    "macro_sensitivities",
+    "strategic_targets",
+    "customer_concentrations",
+    "lease_ladder",
+    "decision_history",
+    "saydo_verdicts",
+    "open_notes",
+    "position_review_count",
+    "standing_rules",
+    "comp_set_context",
+    "peer_comp",
+)
+
+
+def _new_availability() -> dict[str, PanelAvailability]:
+    return {}
 
 
 def _new_open_notes() -> list[AnalystNoteRow]:
@@ -833,9 +853,9 @@ def _new_open_notes() -> list[AnalystNoteRow]:
 class WorkspaceP3Panels:
     """All P3 accessor rows for one (ticker, repo) render, pre-loaded.
 
-    Empty lists / zero-row summary when the source tables are absent or the
-    ticker has no rows — the renderer's panel functions render an empty-state
-    callout in that case so the workspace stays visually complete.
+    Availability records distinguish successful empty reads from unconfigured
+    or unavailable sources. Data fields retain the renderer's empty shapes;
+    review counts stay None unless their source was successfully read.
     """
 
     macro_sensitivities: list[MacroSensitivityRow]
@@ -850,9 +870,9 @@ class WorkspaceP3Panels:
     open_notes: list[AnalystNoteRow] = field(default_factory=_new_open_notes)
     # Position-tab coaching line (REQ-3/REQ-6): count of advisor_memos rows
     # with kind='position_review' for this ticker — "Guard: never run on this
-    # name · N position reviews". 0 when the table/DB is absent (best-effort,
-    # same degrade contract as every other P3 accessor).
-    position_review_count: int = 0
+    # name · N position reviews". None means the history was not available;
+    # zero is reserved for a successful count with no matching rows.
+    position_review_count: int | None = None
     # PR10 (Monthly Red Team surface wiring): the ticker's standing sizing
     # rules (position_sizing_intent history + guard coverage read) for the
     # Position tab's Standing-rules block. None = no rows on file / DB absent
@@ -866,8 +886,12 @@ class WorkspaceP3Panels:
     # the pool, on a phased rollout).
     comp_set_context: CompSetContextSection | None = None
 
+    availability: dict[str, PanelAvailability] = field(default_factory=_new_availability)
+
     @classmethod
-    def empty(cls) -> WorkspaceP3Panels:
+    def empty(
+        cls, status: PanelAvailability = PanelAvailability.NOT_CONFIGURED
+    ) -> WorkspaceP3Panels:
         return cls(
             macro_sensitivities=[],
             strategic_targets=[],
@@ -883,40 +907,15 @@ class WorkspaceP3Panels:
             saydo_verdicts=[],
             peer_comp=[],
             open_notes=[],
-            position_review_count=0,
+            position_review_count=None,
+            availability=dict.fromkeys(_DATABASE_PANELS, status),
         )
 
 
-def _load_open_notes_safe(ticker: str, db_path: Path) -> list[AnalystNoteRow]:
-    """Open analyst notes for the report strip — watch items + questions lead.
-
-    Best-effort like the P3 accessors: missing DB / pre-0074 schema → []."""
-    if not db_path.exists():
-        return []
-    try:
-        rows = list_notes(ticker=ticker, status="open", limit=12, db_path=db_path)
-    except sqlite3.Error:
-        return []
+def _load_open_notes(ticker: str, conn: sqlite3.Connection) -> list[AnalystNoteRow]:
+    rows = list_notes(ticker=ticker, status="open", limit=12, conn=conn)
     kind_rank = {"watch": 0, "question": 1}
-    return sorted(rows, key=lambda n: kind_rank.get(n.kind, 9))
-
-
-def _load_position_review_count_safe(ticker: str, db_path: Path) -> int:
-    """Count of ``advisor_memos`` rows with kind='position_review' for this
-    ticker — the Position-tab guard line's "N position reviews" figure.
-
-    Best-effort like ``_load_open_notes_safe``: missing DB / pre-0140 schema
-    (the kind predates migration 0140) both degrade to 0 rather than raising,
-    so the coaching line still renders (as "0 position reviews") instead of
-    crashing the build."""
-    if not db_path.exists():
-        return 0
-    try:
-        from advisor.store import list_memos
-
-        return len(list_memos(kind="position_review", ticker=ticker, limit=10_000, db_path=db_path))
-    except sqlite3.Error:
-        return 0
+    return sorted(rows, key=lambda note: kind_rank.get(note.kind, 9))
 
 
 def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
@@ -1007,29 +1006,41 @@ def _parse_intent_dt(raw: object) -> datetime | None:
     return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
-def load_standing_rules(ticker: str, db_path: Path, repo_root: Path) -> StandingRulesPanel | None:
+def load_standing_rules(
+    ticker: str, db_path: Path | None, repo_root: Path, *, conn: sqlite3.Connection | None = None
+) -> StandingRulesPanel | None:
     """The ticker's ``position_sizing_intent`` history as a render-ready
     panel, or ``None`` when there are no rows on file (hide-don't-stub) or the
     DB/table is absent — the same best-effort degrade contract as every other
     loader in this module."""
-    if not db_path.exists():
+    if conn is None and (db_path is None or not db_path.exists()):
         return None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        db_conn = (
+            conn
+            if conn is not None
+            else connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        )
     except sqlite3.Error:
         return None
-    conn.row_factory = sqlite3.Row
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
-        raw_rows = conn.execute(
+        raw_rows = db_conn.execute(
             "SELECT intent_kind, intent_value, narrative, updated_at "
             "FROM position_sizing_intent WHERE ticker = ? "
             "ORDER BY updated_at DESC, id DESC",
             (ticker.upper().strip(),),
         ).fetchall()
     except sqlite3.Error:
+        if conn is not None:
+            raise
         return None
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
     if not raw_rows:
         return None
 
@@ -1090,33 +1101,144 @@ def load_standing_rules(ticker: str, db_path: Path, repo_root: Path) -> Standing
 
 
 def load_workspace_p3_panels(
-    ticker: str, repo_root: Path, *, db_path: Path | None = None
+    ticker: str,
+    repo_root: Path,
+    *,
+    db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> WorkspaceP3Panels:
-    """Call every P3 accessor once and return the bundle.
+    """Read the optional panels through one connection with explicit availability.
 
-    No database is inferred from the artifact root. An explicit database
-    supplies the optional panels; missing tables retain the empty-list contract.
+    A supplied connection remains caller-owned. Optional data failures do not
+    erase successfully read panels or become evidence of an empty history.
     """
-    if db_path is None:
+    if db_path is None and conn is None:
         return WorkspaceP3Panels.empty()
-    return WorkspaceP3Panels(
-        macro_sensitivities=load_macro_sensitivities(ticker, db_path=db_path),
-        strategic_targets=load_strategic_targets(ticker, db_path=db_path),
-        customer_concentrations=load_customer_concentrations(ticker, db_path=db_path),
-        lease_ladder=load_lease_ladder(ticker, db_path=db_path),
-        decision_history=load_decision_history(ticker, db_path=db_path),
-        saydo_verdicts=load_saydo_verdicts(ticker, db_path=db_path),
-        peer_comp=load_peer_comp(ticker, repo_root=repo_root),
-        open_notes=_load_open_notes_safe(ticker, db_path),
-        position_review_count=_load_position_review_count_safe(ticker, db_path),
-        standing_rules=load_standing_rules(ticker, db_path, repo_root),
-        comp_set_context=_load_comp_set_context_safe(ticker, db_path, repo_root),
-    )
+    try:
+        db_conn = (
+            conn
+            if conn is not None
+            else connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        )
+    except (sqlite3.Error, OSError):
+        log.warning({"event": "workspace_database_unavailable"})
+        return WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
+    try:
+        try:
+            tables = {
+                str(row[0])
+                for row in db_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+                )
+            }
+        except sqlite3.Error:
+            log.warning({"event": "workspace_database_unavailable"})
+            return WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
+        availability: dict[str, PanelAvailability] = {}
+
+        def read(
+            name: str,
+            table: str,
+            loader: Callable[[], _ReadResult],
+            fallback: _ReadResult,
+            has_data: Callable[[_ReadResult], bool] = bool,
+        ) -> _ReadResult:
+            if table not in tables:
+                availability[name] = PanelAvailability.UNAVAILABLE
+                log.warning({"event": "workspace_panel_unavailable", "panel": name})
+                return fallback
+            try:
+                result = loader()
+            except (sqlite3.Error, OSError, ValueError, KeyError):
+                availability[name] = PanelAvailability.UNAVAILABLE
+                log.warning({"event": "workspace_panel_unavailable", "panel": name})
+                return fallback
+            availability[name] = (
+                PanelAvailability.PRESENT if has_data(result) else PanelAvailability.EMPTY
+            )
+            return result
+
+        empty = WorkspaceP3Panels.empty()
+        panels = WorkspaceP3Panels(
+            macro_sensitivities=read(
+                "macro_sensitivities",
+                "macro_sensitivities",
+                lambda: load_macro_sensitivities(ticker, conn=db_conn),
+                [],
+            ),
+            strategic_targets=read(
+                "strategic_targets",
+                "strategic_targets",
+                lambda: load_strategic_targets(ticker, conn=db_conn),
+                [],
+            ),
+            customer_concentrations=read(
+                "customer_concentrations",
+                "customer_concentrations",
+                lambda: load_customer_concentrations(ticker, conn=db_conn),
+                [],
+            ),
+            lease_ladder=read(
+                "lease_ladder",
+                "lease_commitments",
+                lambda: load_lease_ladder(ticker, conn=db_conn),
+                [],
+            ),
+            decision_history=read(
+                "decision_history",
+                "decisions",
+                lambda: load_decision_history(ticker, conn=db_conn),
+                empty.decision_history,
+                lambda history: history.total > 0,
+            ),
+            saydo_verdicts=read(
+                "saydo_verdicts",
+                "management_commitments",
+                lambda: load_saydo_verdicts(ticker, conn=db_conn),
+                [],
+            ),
+            peer_comp=read(
+                "peer_comp",
+                "tracked_companies",
+                lambda: load_peer_comp(ticker, repo_root=repo_root, conn=db_conn),
+                [],
+            ),
+            open_notes=read(
+                "open_notes", "analyst_notes", lambda: _load_open_notes(ticker, db_conn), []
+            ),
+            position_review_count=read(
+                "position_review_count",
+                "advisor_memos",
+                lambda: count_memos(kind="position_review", ticker=ticker, conn=db_conn),
+                None,
+            ),
+            standing_rules=read(
+                "standing_rules",
+                "position_sizing_intent",
+                lambda: load_standing_rules(ticker, db_path, repo_root, conn=db_conn),
+                None,
+            ),
+            comp_set_context=read(
+                "comp_set_context",
+                "comparable_sets",
+                lambda: load_comp_set_context(ticker, repo_root=repo_root, conn=db_conn),
+                None,
+            ),
+        )
+        return replace(panels, availability=availability)
+    finally:
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
 
 
 __all__ = [
     "KpiStripTile",
     "NewsTile",
+    "PanelAvailability",
     "PrintVsGuideRow",
     "StandingRuleRow",
     "StandingRulesPanel",

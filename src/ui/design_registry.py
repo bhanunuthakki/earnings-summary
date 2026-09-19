@@ -432,6 +432,7 @@ GRID_ARCHETYPES = (
 
 TITLE_PLACEMENTS = (
     TitlePlacement("card-title", ".k-card-title", "interior"),
+    TitlePlacement("action-card-title", ".k-card-row-title", "interior"),
     TitlePlacement("well-title", ".k-well-title", "interior"),
     TitlePlacement("drawer-head", ".cc-drawer-head", "interior"),
     TitlePlacement("peek-head", ".cc-peek-head", "interior"),
@@ -510,9 +511,6 @@ CCACTION_REGRESSION_FLOOR = (
         "pipeline/journal_panel.py", "research-ui", "Current CCAction adopter."
     ),
     CCActionRegressionFloor("pipeline/ledger_panel.py", "research-ui", "Current CCAction adopter."),
-    CCActionRegressionFloor(
-        "pipeline/mobile_inbox_panel.py", "work-os", "Current CCAction adopter."
-    ),
     CCActionRegressionFloor("pipeline/peeks.py", "work-os", "Current CCAction adopter."),
     CCActionRegressionFloor(
         "pipeline/portfolio_panel.py", "portfolio", "Current CCAction adopter."
@@ -579,7 +577,6 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/ir_coverage_panel.py",
         "pipeline/journal_panel.py",
         "pipeline/ledger_panel.py",
-        "pipeline/mobile_inbox_panel.py",
         "pipeline/model_eval_panel.py",
         "pipeline/open_loops.py",
         "pipeline/operations_panel.py",
@@ -602,6 +599,7 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/work_os_copilot.py",
         "pipeline/work_os_evaluation.py",
         "pipeline/work_os_shell.py",
+        "pipeline/work_os_runtime.js",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
         "report/renderers/charts_v2.py",
@@ -709,7 +707,6 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "provenance/fulltext_backfill.py",
     "ir_uploads.py",
     "llm_client.py",
-    "pipeline/cc_state.py",
     "redteam/telegram_cmd.py",
     "report/sections/qa_roster.py",
     "research/dcf_tweak.py",
@@ -738,7 +735,6 @@ _PYTHON_CSS_SURFACES = frozenset(
         "pipeline/analytical_dashboard_html.py",
         "pipeline/cc_action.py",
         "pipeline/cc_overlay.py",
-        "pipeline/cc_state.py",
         "pipeline/console_scaffold.py",
         "pipeline/cron_health_panel.py",
         "pipeline/dashboard_html.py",
@@ -751,7 +747,6 @@ _PYTHON_CSS_SURFACES = frozenset(
         "pipeline/ir_approval_panel.py",
         "pipeline/journal_panel.py",
         "pipeline/ledger_panel.py",
-        "pipeline/mobile_inbox_panel.py",
         "pipeline/operations_panel.py",
         "pipeline/operations_styles.py",
         "pipeline/peeks.py",
@@ -770,6 +765,7 @@ _PYTHON_CSS_SURFACES = frozenset(
         "pipeline/validation_issues_panel.py",
         "pipeline/work_os_copilot.py",
         "pipeline/work_os_shell.py",
+        "pipeline/work_os_runtime.js",
         "pipeline/work_os_styles.py",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
@@ -800,7 +796,6 @@ _NON_HTML_PYTHON_SURFACES = frozenset(
         "execution/land_session_notes.py",
         "execution/verify_design_conformance.py",
         "pipeline/cc_overlay.py",
-        "pipeline/cc_state.py",
         "pipeline/work_os_evaluation.py",
         "redteam/telegram_cmd.py",
         "report/renderers/workspace_chat.py",
@@ -829,7 +824,6 @@ _RUNTIME_JS_SURFACES = frozenset(
         "pipeline/ir_approval_panel.py",
         "pipeline/journal_panel.py",
         "pipeline/ledger_panel.py",
-        "pipeline/mobile_inbox_panel.py",
         "pipeline/operations_panel.py",
         "pipeline/performance_risk_panel.py",
         "pipeline/portfolio_console_panel.py",
@@ -844,6 +838,7 @@ _RUNTIME_JS_SURFACES = frozenset(
         "pipeline/work_os_copilot.py",
         "pipeline/work_os_evaluation.py",
         "pipeline/work_os_shell.py",
+        "pipeline/work_os_runtime.js",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
         "report/renderers/workspace_chat.py",
@@ -918,7 +913,7 @@ def _adapters_for_surface(path: str) -> frozenset[EvidenceAdapter]:
         return _FRONTEND_ADAPTERS[path]
     if path == "ui/tokens.py":
         return frozenset({EvidenceAdapter.SVG})
-    if path.endswith(".py"):
+    if path.endswith((".py", ".js", ".mjs")):
         adapters: set[EvidenceAdapter] = set()
         if path not in _NON_HTML_PYTHON_SURFACES:
             adapters.add(EvidenceAdapter.HTML)
@@ -966,6 +961,18 @@ VISUAL_EMITTER_MANIFEST = (
             "React adapter is governed by deterministic Python generation and parity checks.",
         )
         for path in _GENERATED_FRONTEND_EMITTERS
+    )
+    + (
+        VisualEmitterEntry(
+            "ui/vendor/alpinejs-3.14.1.min.js",
+            EmitterDisposition.VENDOR,
+            frozenset(
+                {EvidenceAdapter.HTML, EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.RUNTIME_JS}
+            ),
+            frozenset({EvidenceMode.STATIC}),
+            "design-system",
+            "Vendored Alpine runtime mutates consumer-owned markup; application surfaces own design.",
+        ),
     )
     + tuple(
         VisualEmitterEntry(
@@ -1032,7 +1039,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "design-system/src/tokens/tokens.css": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
-        "pipeline/operations_styles.py": "80479df16d7055543dc3af1010c69ff7542234b2b2c21ba59f7179f1bc58e1f4",  # pragma: allowlist secret
+        "pipeline/operations_styles.py": "137755c548ddc80fa25d51832b0b3de479a8c159864696f1deb10a5d34c10c5e",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "596388526bd3d0cc6c64747d990b57391cbd2be2d734fb3eb75a38e954b1e759",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "5d901a8a31ef1064638d0ae66d063f64cdc6490921e67cbcea85b6224545f29b",  # pragma: allowlist secret
@@ -1069,7 +1076,6 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/calibration_scorecard_panel.py": "1edfbfb1291c38be645133eaab45f78343920da72bf42b3e96c1a36e60a91eac",  # pragma: allowlist secret
         "pipeline/cron_health_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
         "pipeline/explore_panel.py": "fc1dd2e109d4f31a63e523c6f6ba3bc016b10b1faa443d32240e35fabed2fa8c",  # pragma: allowlist secret
-        "pipeline/mobile_inbox_panel.py": "a79bb9271eb683af81c99be486b8bcc3487f601002b74437d39fb50b5dd631a3",  # pragma: allowlist secret
         "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret
         "pipeline/peeks.py": "02f325abd05b440ba3efcede16e7ee446036926b0edabae9bbd11a9a34021a4b",  # pragma: allowlist secret
         "pipeline/performance_risk_panel.py": "f4399458107940b948664fe2e664892e2390d0f100cc1ad6f300e5233e2dd831",  # pragma: allowlist secret
@@ -1079,7 +1085,8 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "b8898cc42ac613e79ddb290f1c2677faea7e6fc9d6c11881626b878baa0a504c",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "7449e57db7d43c7cf29d0c76f132667ff189f1170be72fe73aa2a350c56c346e",  # pragma: allowlist secret
+        "pipeline/work_os_runtime.js": "9f130216532bb0e7da89aec20d6a804eacb74799e5d74b4f2ce01ed03216ba83",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "38895e26b31e240446d2cd93ebf38869df6a86bdcd3ad4ea8be9d040f4102f29",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "867b089ceac45baa3dd1f72d35e74feba80f1af19ae6b8c4f4bdeeb2a5d60c05",  # pragma: allowlist secret

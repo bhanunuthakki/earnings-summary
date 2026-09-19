@@ -34,7 +34,7 @@ def _position_tab(
     pp: PortfolioPositionSection | None,
     *,
     ticker: str = "",
-    position_review_count: int = 0,
+    position_review_count: int | None = 0,
     graded_sell_line: str | None = None,
     standing_rules: StandingRulesPanel | None = None,
     you_said_html: str | None = None,
@@ -305,7 +305,7 @@ def _position_tab(
 def _position_coaching(
     body: StringIO,
     ticker: str,
-    position_review_count: int,
+    position_review_count: int | None,
     graded_sell_line: str | None,
 ) -> None:
     """Position-tab coaching lines (REQ-3/REQ-6): the behavioral-guard status,
@@ -319,7 +319,9 @@ def _position_coaching(
     consulted on each of them."""
     body.write('<div class="position-coaching">')
     reviews_word = "review" if position_review_count == 1 else "reviews"
-    if position_review_count == 0:
+    if position_review_count is None:
+        guard_line = "Position review history is unavailable for this report"
+    elif position_review_count == 0:
         # Honest-zero starvation: no review has ever run the guard on this name.
         guard_line = "Guard: never run on this name &middot; 0 position reviews"
     else:

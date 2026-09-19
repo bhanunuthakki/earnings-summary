@@ -18,17 +18,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from scripts.gen_design_controls import check as check_generated_controls
+from scripts.gen_design_tokens import check as check_generated_tokens
+from ui.tokens import CHROME_TOKENS, PALETTE_DARK, SPACING_SCALE, TYPE_SCALE
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(SRC))
-
-from scripts.gen_design_controls import check as check_generated_controls  # noqa: E402
-from scripts.gen_design_tokens import check as check_generated_tokens  # noqa: E402
-from ui.tokens import CHROME_TOKENS, PALETTE_DARK, SPACING_SCALE, TYPE_SCALE  # noqa: E402
 
 WORK_OS_PROTOTYPE = PROJECT_ROOT / "mockups" / "harvey_sidebar_flow.html"
 WORK_OS_RENDERER = SRC / "pipeline" / "work_os_shell.py"
+WORK_OS_RUNTIME = SRC / "pipeline" / "work_os_runtime.js"
 WORK_OS_STYLE_MASTER = SRC / "pipeline" / "work_os_styles.py"
 _ROOT_RULE = re.compile(r":root(?:\[[^\]]+\])?\s*\{[^{}]*\}", re.DOTALL)
 _RAW_FONT_SIZE = re.compile(r"font-size\s*:\s*[0-9.]+px")
@@ -112,6 +114,8 @@ def work_os_contract_failures(
     mockup = WORK_OS_PROTOTYPE.read_text(encoding="utf-8") if mockup_text is None else mockup_text
     renderer = (
         WORK_OS_RENDERER.read_text(encoding="utf-8")
+        + "\n"
+        + WORK_OS_RUNTIME.read_text(encoding="utf-8")
         + "\n"
         + WORK_OS_STYLE_MASTER.read_text(encoding="utf-8")
         if renderer_source is None

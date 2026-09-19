@@ -104,6 +104,20 @@ def insert_memo(
         conn.close()
 
 
+def _memo_filter(
+    user_id: str, kind: str | None, ticker: str | None
+) -> tuple[str, tuple[object, ...]]:
+    where = ["user_id = ?"]
+    params: list[object] = [user_id]
+    if kind is not None:
+        where.append("kind = ?")
+        params.append(kind)
+    if ticker is not None:
+        where.append("ticker = ?")
+        params.append(ticker.upper())
+    return " AND ".join(where), tuple(params)
+
+
 def list_memos(
     *,
     user_id: str = DEFAULT_USER_ID,
@@ -113,25 +127,38 @@ def list_memos(
     db_path: Path | str | None = None,
 ) -> list[AdvisorMemoRow]:
     """Newest-first memos, optionally filtered by kind and/or ticker."""
-    where = ["user_id = ?"]
-    params: list[object] = [user_id]
-    if kind is not None:
-        where.append("kind = ?")
-        params.append(kind)
-    if ticker is not None:
-        where.append("ticker = ?")
-        params.append(ticker.upper())
-    params.append(int(limit))
+    where, params = _memo_filter(user_id, kind, ticker)
+    params = (*params, int(limit))
     conn = open_read_conn(db_path)
     try:
         rows = conn.execute(
-            f"SELECT * FROM advisor_memos WHERE {' AND '.join(where)} "
-            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            f"SELECT * FROM advisor_memos WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ?",
             tuple(params),
         ).fetchall()
         return [_row_to_dc(r) for r in rows]
     finally:
         conn.close()
+
+
+def count_memos(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    kind: str | None = None,
+    ticker: str | None = None,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Count all matching memo rows without fetching or truncating their bodies."""
+    where, params = _memo_filter(user_id, kind, ticker)
+    db_conn = conn if conn is not None else open_read_conn(db_path)
+    try:
+        row = db_conn.execute(
+            f"SELECT COUNT(*) FROM advisor_memos WHERE {where}", params
+        ).fetchone()
+        return int(row[0])
+    finally:
+        if conn is None:
+            db_conn.close()
 
 
 def get_memo(memo_id: int, *, db_path: Path | str | None = None) -> AdvisorMemoRow | None:

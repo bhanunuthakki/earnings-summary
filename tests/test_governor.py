@@ -9,9 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from research.governor import (
     DAILY_CAP,
     MUTE_AFTER,
@@ -23,47 +21,6 @@ from research.governor import (
     run_governor,
     unmute,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0130_owner_decision_extension"
-HEAD = "0131_coach_pings"
-
-_PRE_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    conviction VARCHAR(16),
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
-    scope VARCHAR(16) NOT NULL DEFAULT 'ticker',
-    falsifier TEXT,
-    size_usd FLOAT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-CREATE TABLE alerts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT,
-    trigger_kind TEXT NOT NULL,
-    fired_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'open',
-    evidence_json TEXT,
-    dismissed_at TEXT
-);
-CREATE TABLE analyst_notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT,
-    kind TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'open',
-    body TEXT NOT NULL,
-    source TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE tracked_companies (ticker TEXT PRIMARY KEY, list_type TEXT NOT NULL);
-INSERT INTO tracked_companies VALUES ('NU','portfolio');
-"""
 
 _NOW = datetime(2026, 7, 10, 12, 0, 0)
 
@@ -85,27 +42,12 @@ def _always_fresh(*a: object, **kw: object) -> bool:
 
 
 @pytest.fixture
-def db(tmp_path: Path) -> Path:
-    path = tmp_path / "gov.db"
-    conn = sqlite3.connect(str(path))
-    try:
-        conn.executescript(_PRE_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    conn = sqlite3.connect(str(path))
-    try:
-        # Deliberately minimal 0131 contract fixture, not a production
-        # versioned database; guarded stores may enforce their local tables.
-        conn.execute("DROP TABLE alembic_version")
-        conn.commit()
-    finally:
-        conn.close()
+def db(tmp_path: Path, migrated_db: Callable[[Path], Path]) -> Path:
+    path = migrated_db(tmp_path / "gov.db")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type) VALUES ('NU', 'Nu', 'portfolio')"
+        )
     return path
 
 
@@ -119,9 +61,9 @@ def _seed_breach(db: Path, *, falsifier: str = "15-90d NPL >5% for 2Q") -> int:
         )
         did = int(cur.lastrowid or 0)
         conn.execute(
-            "INSERT INTO alerts (ticker, trigger_kind, fired_at, evidence_json) VALUES "
-            "('NU','decision_condition','2026-07-10T08:00:00',?)",
-            (json.dumps({"decision_id": did}),),
+            "INSERT INTO alerts (ticker, trigger_kind, fired_at, evidence_json, signature_sha) VALUES "
+            "('NU','decision_condition','2026-07-10T08:00:00',?,?)",
+            (json.dumps({"decision_id": did}), f"fixture-breach-{did}"),
         )
         conn.commit()
         return did
@@ -165,9 +107,9 @@ def test_freshness_gate_blocks_stale_and_inferred(db: Path) -> None:
     try:
         conn.execute("UPDATE decisions SET falsifier='Memory cycle rolls over.' WHERE id=?", (did,))
         conn.execute(
-            "INSERT INTO alerts (ticker, trigger_kind, fired_at, evidence_json) VALUES "
-            "('NU','decision_condition','2026-07-10T09:00:00',?)",
-            (json.dumps({"decision_id": did}),),
+            "INSERT INTO alerts (ticker, trigger_kind, fired_at, evidence_json, signature_sha) VALUES "
+            "('NU','decision_condition','2026-07-10T09:00:00',?,?)",
+            (json.dumps({"decision_id": did}), f"fixture-ratified-{did}"),
         )
         conn.commit()
     finally:
@@ -651,70 +593,7 @@ def test_falsifier_breach_ping_gets_the_two_button_keyboard() -> None:
 # ---------------------------------------------------------------------------
 # tenet_challenge (B5, 2026-07-19 program overhaul)
 #
-# collect_moments touches decisions/alerts/analyst_notes UNCONDITIONALLY
-# (only the falsifier_breach block has its own try/except) — those tables
-# are created by migrations 0046/0063/0074, all BELOW 0130 (the `db` fixture
-# above's PRIOR_HEAD) and even below 0059. A stamp-past-a-mid-chain-revision
-# fixture would silently skip creating them for real, so this fixture instead
-# bootstraps the pre-alembic base tables and runs EVERY migration from 0001
-# (verbatim pattern: tests/test_decision_journal_view.py) — the only way to
-# get a real decisions/alerts/analyst_notes/insight_notes/v_decision_journal
-# schema in one DB. These tests get their OWN fixture and never touch the
-# `db` fixture other tests in this file rely on.
-# ---------------------------------------------------------------------------
-
-_GOV_BOOTSTRAP_DDL = """
-CREATE TABLE IF NOT EXISTS tracked_companies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT DEFAULT 'bhanu',
-    ticker TEXT NOT NULL,
-    name TEXT NOT NULL,
-    list_type TEXT NOT NULL CHECK(list_type IN (
-        'portfolio', 'watchlist', 'evaluation', 'none', 'etf', 'index_member'
-    )),
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sec_validated BOOLEAN DEFAULT 0,
-    ir_url TEXT DEFAULT NULL,
-    model_url TEXT DEFAULT NULL,
-    publishes_release BOOLEAN DEFAULT 0,
-    publishes_slides BOOLEAN DEFAULT 0,
-    publishes_transcript BOOLEAN DEFAULT 0,
-    fmp_data_upto TEXT DEFAULT NULL,
-    manual_data_quarters TEXT DEFAULT '[]',
-    fmp_data_saved BOOLEAN DEFAULT 0,
-    UNIQUE(user_id, ticker)
-);
-CREATE TABLE IF NOT EXISTS quarterly_artifacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    year INTEGER NOT NULL,
-    quarter TEXT NOT NULL,
-    has_release_file    BOOLEAN DEFAULT 0,
-    has_slides_file     BOOLEAN DEFAULT 0,
-    has_transcript_file BOOLEAN DEFAULT 0,
-    has_audio_file      BOOLEAN DEFAULT 0,
-    step_audio_transcribed BOOLEAN DEFAULT 0,
-    step_llm_summarized    BOOLEAN DEFAULT 0,
-    step_saydo_analyzed    BOOLEAN DEFAULT 0,
-    step_thesis_updated    BOOLEAN DEFAULT 0,
-    UNIQUE(ticker, year, quarter)
-);
-CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
-    ticker         TEXT    NOT NULL,
-    endpoint       TEXT    NOT NULL,
-    period         TEXT    NOT NULL DEFAULT '',
-    status         TEXT    NOT NULL,
-    http_code      INTEGER,
-    record_count   INTEGER,
-    earliest_date  TEXT,
-    latest_date    TEXT,
-    file_path      TEXT,
-    file_bytes     INTEGER,
-    error_msg      TEXT,
-    last_pulled    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (ticker, endpoint, period)
-);
-"""
+# These integration cases use the same cached current schema as the other governor tests.
 
 
 @pytest.fixture

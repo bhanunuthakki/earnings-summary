@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "4df9394e4e9d61cd01adfe43769a85e751d608b1faeb1c00579b0ce45090432f",
-      "line": 687,
+      "fingerprint": "ceabce454b0eb84840bc7e4b9882122d761fdb85e7f80ecaa56431c7eaae2e6e",
+      "line": 688,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -225,8 +225,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _BASELINE_SCALAR_FIELDS attributes.",
-      "fingerprint": "7032c3644f874cf966c5a1b0360032832d9d891e89ef33413db1e81957ca83c3",
-      "line": 262,
+      "fingerprint": "8094493b39f51023e7ef74f9a416db008bb10ce9d06424ff1c08b17d10a3f771",
+      "line": 259,
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
         "_BASELINE_SCALAR_FIELDS"
@@ -235,8 +235,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Scenario row reads only the declared scenario delta attributes.",
-      "fingerprint": "8d9c0adf6b8b9422bee58f2441df486ce8474c320936857712f2b1bc37ac3091",
-      "line": 534,
+      "fingerprint": "54759f35844d9097c973e11719833241b75d5614032c5693eec069ccbc5984d8",
+      "line": 532,
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
         "bull_deltas",
@@ -246,8 +246,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Scenario seed reads only the declared scenario delta attributes.",
-      "fingerprint": "1ad5b4ec0db73eb99ddda100866cb87017d6b74a5d885726ccd6450d5d5e275a",
-      "line": 535,
+      "fingerprint": "c41c220b8f97127c5bcdbc32adc5f1d4a5cc38b255d2848cae745193ea93f195",
+      "line": 533,
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
         "bull_deltas",
@@ -595,16 +595,16 @@
     }
   ],
   "graph_provenance": {
+    "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "0b43e823a55c206707e71a4da0173b1e9085e6618e39ca49508acf120248e45a",
-      "version": "1.2.1"
+      "source_sha256": "792b366dbe9037e1b1944bf30028437002d4f4c9eda1641cafdeea29961c9505",
+      "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
-    "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
-    "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "58cf5e1e9b927469cecbe9b992490f133091912a55e4960779ce8aa492a2b852"
+    "scanner_sha256": "dffd867eda03733d7e0d9581dd6b8730d6c09f0a1b3d3245bba00b3c28e208db",
+    "schema_version": "operational-reachability-raw/v1"
   },
-  "schema_version": "reachability-getattr-dispositions/v1"
+  "schema_version": "reachability-getattr-dispositions/v2"
 }

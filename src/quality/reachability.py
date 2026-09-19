@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from quality.git_env import clean_local_git_env
 
-PARSER_VERSION = "1.2.1"
+PARSER_VERSION = "1.3.0"
 # Parser provenance is compared as part of the semantic lifecycle receipt.
 # Record the supported interpreter contract rather than the runtime's patch or
 # minor version, which would make equivalent receipts stale across clean clones.
@@ -80,12 +80,12 @@ RAW_SCHEMA = "operational-reachability-raw/v1"
 DYNAMIC_MANIFEST_PATH = "docs/quality/reachability-dynamic-import-dispositions.json"
 GETATTR_MANIFEST_PATH = "docs/quality/reachability-getattr-dispositions.json"
 PROCESS_MANIFEST_PATH = "docs/quality/reachability-process-dispositions.json"
-DYNAMIC_SCHEMA = Literal["reachability-dynamic-import-dispositions/v1"]
-GETATTR_SCHEMA = Literal["reachability-getattr-dispositions/v1"]
-PROCESS_SCHEMA = Literal["reachability-process-dispositions/v1"]
-DYNAMIC_SCHEMA_VALUE = "reachability-dynamic-import-dispositions/v1"
-GETATTR_SCHEMA_VALUE = "reachability-getattr-dispositions/v1"
-PROCESS_SCHEMA_VALUE = "reachability-process-dispositions/v1"
+DYNAMIC_SCHEMA = Literal["reachability-dynamic-import-dispositions/v2"]
+GETATTR_SCHEMA = Literal["reachability-getattr-dispositions/v2"]
+PROCESS_SCHEMA = Literal["reachability-process-dispositions/v2"]
+DYNAMIC_SCHEMA_VALUE = "reachability-dynamic-import-dispositions/v2"
+GETATTR_SCHEMA_VALUE = "reachability-getattr-dispositions/v2"
+PROCESS_SCHEMA_VALUE = "reachability-process-dispositions/v2"
 _DISPOSITION_MANIFESTS: tuple[tuple[str, EdgeKind, str], ...] = (
     (DYNAMIC_MANIFEST_PATH, "dynamic_import", DYNAMIC_SCHEMA_VALUE),
     (GETATTR_MANIFEST_PATH, "getattr", GETATTR_SCHEMA_VALUE),
@@ -134,7 +134,7 @@ class ExcludedInput(BaseModel):
 class DispositionParserProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     name: Literal["ast+xml+literal-scanner"]
-    version: Literal["1.2.1"]
+    version: Literal["1.3.0"]
     python: Literal[">=3.11"]
     source_sha256: str
 
@@ -144,7 +144,7 @@ class DispositionGraphProvenance(BaseModel):
     path: GraphProvenancePath
     schema_version: Literal["operational-reachability-raw/v1"]
     parser: DispositionParserProvenance
-    source_manifest_sha256: str
+    input_scope: Literal["scanner-consumed-inputs/v1"]
     scanner_sha256: str
 
 
@@ -162,9 +162,9 @@ class DispositionEntry(BaseModel):
 class DispositionManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: Literal[
-        "reachability-dynamic-import-dispositions/v1",
-        "reachability-getattr-dispositions/v1",
-        "reachability-process-dispositions/v1",
+        "reachability-dynamic-import-dispositions/v2",
+        "reachability-getattr-dispositions/v2",
+        "reachability-process-dispositions/v2",
     ]
     graph_provenance: DispositionGraphProvenance
     entries: tuple[DispositionEntry, ...] = ()
@@ -590,7 +590,6 @@ def _apply_reviewed_dispositions(
     root: Path,
     edges: list[GraphEdge],
     expected_parser: dict[str, str],
-    source_manifest_sha256: str,
     scanner_sha256: str,
     input_bytes: dict[str, bytes],
     tracked: set[str],
@@ -670,7 +669,6 @@ def _apply_reviewed_dispositions(
             and prov.parser.version == expected_parser.get("version")
             and prov.parser.python == expected_parser.get("python")
             and prov.parser.source_sha256 == expected_parser.get("source_sha256")
-            and prov.source_manifest_sha256 == source_manifest_sha256
             and prov.scanner_sha256 == scanner_sha256
         )
         if not parser_ok:
@@ -1231,7 +1229,7 @@ def build_graph(repo_root: str | Path) -> ReachabilityGraph:
         collection_reasons.append(f"unable to hash reachability scanner: {exc}")
     tracked = set(attempted_paths)
     reviewed_edges, disposition_diagnostics, disposition_hashes = _apply_reviewed_dispositions(
-        root, edges, expected_parser, source_manifest_sha256, scanner_sha256, input_bytes, tracked
+        root, edges, expected_parser, scanner_sha256, input_bytes, tracked
     )
     edges = reviewed_edges
     diagnostics.extend(disposition_diagnostics)

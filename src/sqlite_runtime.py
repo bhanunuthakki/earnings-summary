@@ -14,6 +14,7 @@ import unicodedata
 from enum import StrEnum
 from pathlib import Path
 
+from runtime.sqlite_adapters import register_datetime_adapters
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
 
@@ -105,6 +106,7 @@ def connect_sqlite(
     destinations are new, caller-owned local files used by backup or isolated
     synthetic tooling and intentionally retain the default journal mode.
     """
+    register_datetime_adapters()
     reject_forbidden_mac_checkout_database(path)
     if role is SQLiteConnectionRole.WRITER:
         require_safe_sqlite_writer_runtime()

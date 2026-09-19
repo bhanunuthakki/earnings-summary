@@ -59,19 +59,8 @@ def _hermetic_additive_feeds(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    """DB with the real `news` table (0065 slice, matching the dispatcher suite)."""
-    db = tmp_path / "news_repair.db"
-    migrated_db(db, stamp="0064_queued_actions", archived=True, target="0065_news")
-    conn = sqlite3.connect(str(db))
-    try:
-        # Deliberately minimal 0065 contract fixture, not a production
-        # versioned database.
-        conn.execute("DROP TABLE alembic_version")
-        conn.commit()
-    finally:
-        conn.close()
-    return db
+def news_db(tmp_path: Path, migrated_db: Callable[[Path], Path]) -> Path:
+    return migrated_db(tmp_path / "news.db")
 
 
 @pytest.fixture

@@ -638,3 +638,52 @@ def test_builder_refuses_missing_profile(tmp_path: Path, missing_file: bool) -> 
     assert result.returncode != 0
     assert "DCF profile is missing or empty" in result.stderr
     assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    ("producer", "expected_author"),
+    [
+        ("opus-4.8", "Opus 4.8"),
+        ("purpose:dcf_assumptions", "DCF assumption refresh"),
+        ("", "unattributed baseline"),
+    ],
+)
+def test_builder_cover_reports_recorded_assumption_author(
+    tmp_path: Path, producer: str, expected_author: str
+) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture(repo, "TESTCO")
+    assumptions = repo / "data" / "dcf_assumptions" / "TESTCO.json"
+    assumptions.parent.mkdir(parents=True)
+    assumptions.write_text(
+        json.dumps(
+            {
+                "redesign": {"dcf_applicable": True, "narrative": "Recorded narrative"},
+                "opus_baseline": {
+                    "as_of": "2026-06-12",
+                    "set_by": producer,
+                    "seeded": False,
+                    "values": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_bytes = assumptions.read_bytes()
+    destination = tmp_path / "TESTCO.xlsx"
+    result = _run_builder(repo, "TESTCO", destination)
+    assert result.returncode == 0, result.stderr
+    workbook = openpyxl.load_workbook(destination)
+    try:
+        assert workbook["Cover"]["B6"].value == (f"{expected_author} — values as of 2026-06-12")
+        if producer != "opus-4.8":
+            for worksheet in workbook.worksheets:
+                assert not any(
+                    "Opus" in str(cell.value)
+                    for row in worksheet.iter_rows()
+                    for cell in row
+                    if cell.value is not None
+                )
+    finally:
+        workbook.close()
+    assert assumptions.read_bytes() == original_bytes

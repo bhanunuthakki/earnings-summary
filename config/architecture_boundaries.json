@@ -110,7 +110,7 @@
     "execution/create_sqlite_snapshot.py",
     "execution/daily_fetch_and_brief.py",
     "execution/db_gc.py",
-    "execution/dcf_opus_assumptions.py",
+    "execution/refresh_dcf_assumptions.py",
     "execution/dcf_sheets.py",
     "execution/dedupe_transcripts.py",
     "execution/deferred_fmp_log.py",

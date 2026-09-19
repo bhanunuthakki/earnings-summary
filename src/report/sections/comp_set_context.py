@@ -384,7 +384,11 @@ def _scope_summary(
 
 
 def load_comp_set_context(
-    ticker: str, *, db_path: Path | str, repo_root: Path
+    ticker: str,
+    *,
+    db_path: Path | str | None = None,
+    repo_root: Path,
+    conn: sqlite3.Connection | None = None,
 ) -> CompSetContextSection | None:
     """The Company tab's "Sector context" card data, or ``None`` when
     ``ticker`` has no frozen comparable set yet (hide-don't-stub — most of
@@ -395,26 +399,30 @@ def load_comp_set_context(
     from compute.sector_benchmark_map import get_benchmark_proxy
 
     ticker = ticker.upper()
-    conn = _open(db_path)
-    if conn is None or not _table_exists(conn, "comparable_sets"):
+    db_conn = conn if conn is not None else (_open(db_path) if db_path is not None else None)
+    if db_conn is None:
         return None
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
+        if not _table_exists(db_conn, "comparable_sets"):
+            return None
         set_id = _set_id(ticker, METHOD_VERSION)
-        set_row = conn.execute(
+        set_row = db_conn.execute(
             "SELECT metric_class FROM comparable_sets WHERE comparable_set_id = ?", (set_id,)
         ).fetchone()
         if set_row is None:
             return None
         metric_class = str(set_row["metric_class"])
 
-        as_of = _latest_as_of(conn, "comparable_set", set_id, METHOD_VERSION)
-        member_tuples = _open_members(conn, set_id)
+        as_of = _latest_as_of(db_conn, "comparable_set", set_id, METHOD_VERSION)
+        member_tuples = _open_members(db_conn, set_id)
         n_members = sum(1 for _t, _r, ctx in member_tuples if not ctx)
 
         scope_rows: dict[tuple[str, str], dict[str, object]] = {}
         subject_rows: dict[tuple[str, str], dict[str, object]] = {}
         if as_of is not None:
-            scope_rows = _metric_rows_at(conn, "comparable_set", set_id, as_of, METHOD_VERSION)
+            scope_rows = _metric_rows_at(db_conn, "comparable_set", set_id, as_of, METHOD_VERSION)
             try:
                 subj_metric_rows = compute_comparable_set_metrics(
                     repo_root,
@@ -460,9 +468,9 @@ def load_comp_set_context(
 
         industry, sector = _industry_sector_for_ticker(repo_root, ticker)
         industry_scope = (
-            _scope_summary(conn, "industry", industry, METHOD_VERSION) if industry else None
+            _scope_summary(db_conn, "industry", industry, METHOD_VERSION) if industry else None
         )
-        sector_scope = _scope_summary(conn, "sector", sector, METHOD_VERSION) if sector else None
+        sector_scope = _scope_summary(db_conn, "sector", sector, METHOD_VERSION) if sector else None
 
         proxy = get_benchmark_proxy(industry)
         if proxy is None:
@@ -476,7 +484,7 @@ def load_comp_set_context(
             benchmark_sector_etf = proxy.sector_etf
             note = proxy.note
 
-        member_names = _member_names(conn, [t for t, _r, _c in member_tuples])
+        member_names = _member_names(db_conn, [t for t, _r, _c in member_tuples])
         members = tuple(
             CompSetMemberRef(
                 ticker=t,
@@ -507,4 +515,7 @@ def load_comp_set_context(
             members=members,
         )
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory

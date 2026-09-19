@@ -1,35 +1,18 @@
 """Assumption provenance for the redesigned DCF workbook.
 
-The yellow Dashboard cells are bare literals: nothing in the workbook says
-which values came from the Opus assumption pass (``data/dcf_assumptions/
-<T>.json["redesign"]``), which the user has since overridden, and which are
-builder defaults — and the Opus ``narrative``/``reasoning`` prose never
-surfaces next to the numbers it justifies. This module closes that gap with
-three pieces, all regenerated on every build/refresh (the same survive-the-
-rebuild contract as the Sensitivity sheet):
+The historical ``opus_baseline`` key retains an immutable snapshot of the
+assumption values, separate from the editable ``redesign`` block. New routed
+refreshes record the known producing purpose; existing producer records are
+preserved. A baseline seeded from current values has unknown authorship and
+may already contain user edits.
 
-* an **opus_baseline** block in the assumptions JSON — an immutable snapshot
-  of the Opus-set values. ``sync_assumptions_json`` deliberately mirrors
-  workbook edits back into the ``redesign`` block (single source of truth for
-  from-scratch builds), which destroys the original Opus values — so
-  provenance needs its own copy that sync never touches. Written fresh by
-  each Opus pass; seeded once from the current ``redesign`` block for names
-  whose pass predates provenance tracking (flagged ``seeded`` — those values
-  may already include user edits, the best record that still exists).
-* an **assumption_overrides** ledger in the same JSON — per input, the Opus
-  value and the date the refresher first saw the workbook diverge from it
-  (cleared when the value returns to baseline). This is what lets the sheet
-  say "overridden from Opus 11.5% on 2026-06-12" rather than just "edited".
-* the read-only **Assumptions sheet** + native comments on the yellow cells —
-  one row per Dashboard input: live current value (cross-sheet formula, so it
-  never goes stale between refreshes), source (Opus / user-edited / builder
-  default), the Opus value, and a note; headed by the Opus narrative and
-  reasoning prose. Comments carry the same per-cell verdict into
-  hover-in-place, and survive the Sheets round-trip as notes.
+The ``assumption_overrides`` ledger records each original value and the first
+refresh that observed an edit. Its historical ``opus_value`` field remains
+unchanged. The Assumptions sheet and Dashboard comments compare live workbook
+values against that baseline and display only the recorded authorship.
 
-Capture/inject never touches this sheet (it is not a marker sheet and holds
-no inputs); the builder and the refresher both rewrite it after the input
-cells settle, so it reflects the injected values, not the builder defaults.
+Every build/refresh regenerates this read-only documentation after editable
+inputs settle. Capture/inject never treats it as an input sheet.
 """
 
 from __future__ import annotations
@@ -53,7 +36,10 @@ from dcf import redesign as redesign_mod
 ASSUMPTIONS_SHEET = "Assumptions"
 
 # Source labels — the sheet's Source column and the cell-comment headline.
-SOURCE_OPUS = "Opus"
+SOURCE_OPUS = "Opus"  # Only records explicitly attributed to the historical Opus producer.
+DCF_REFRESH_PRODUCER = "purpose:dcf_assumptions"
+SOURCE_DCF_REFRESH = "DCF assumption refresh"
+SOURCE_UNKNOWN = "unattributed baseline"
 SOURCE_USER = "user-edited"
 SOURCE_DEFAULT = "builder default"
 SOURCE_SYNCED = "workbook (synced)"  # block created by sync, no Opus pass behind it
@@ -94,12 +80,21 @@ class ProvenanceError(Exception):
 
 @dataclass(frozen=True)
 class OpusBaseline:
-    """The immutable Opus-set values + where they came from."""
+    """Immutable baseline; the class/key names retain the historical storage contract."""
 
     as_of: str
     set_by: str
     seeded: bool
     values: dict[str, object]  # flat scalars + "segments" sub-dict
+
+    @property
+    def author_label(self) -> str:
+        """Name only the producer recorded by this baseline."""
+        if self.set_by == "opus-4.8":
+            return SOURCE_OPUS
+        if self.set_by == DCF_REFRESH_PRODUCER:
+            return SOURCE_DCF_REFRESH
+        return SOURCE_UNKNOWN
 
     def scalar(self, field: str) -> object | None:
         return self.values.get(field)
@@ -203,15 +198,17 @@ def ensure_opus_baseline(
     return baseline
 
 
-def baseline_from_opus_pass(
+def baseline_from_assumption_refresh(
     redesign_block: dict[str, object], *, today: date | None = None
 ) -> dict[str, object]:
-    """The ``opus_baseline`` payload a fresh Opus pass writes alongside its
-    redesign block — authoritative (not seeded), so a re-run of the pass
-    resets provenance to the new Opus values."""
+    """Snapshot a routed DCF refresh under the unchanged ``opus_baseline`` key.
+
+    The producing purpose is known; the selected model is not returned by this
+    call contract, so the record must not invent a provider or model identity.
+    """
     return {
         "as_of": (today or date.today()).isoformat(),
-        "set_by": "opus-4.8",
+        "set_by": DCF_REFRESH_PRODUCER,
         "seeded": False,
         "values": snapshot_baseline_values(redesign_block),
     }
@@ -372,14 +369,15 @@ def _classify(
     base = _baseline_fields(baseline).get(field_id) if baseline is not None else None
     if base is None:
         if block_origin == "sync":
-            return SOURCE_SYNCED, None, "no Opus pass — value synced from this workbook"
+            return SOURCE_SYNCED, None, "no assumption refresh — value synced from this workbook"
         return SOURCE_DEFAULT, None, ""
     if _values_match(field_id, current, base):
-        return SOURCE_OPUS, base, ""
+        return baseline.author_label if baseline is not None else SOURCE_UNKNOWN, base, ""
     entry = ledger.get(field_id, {})
     opus_v = entry.get("opus_value", base)
     on = entry.get("overridden_on")
-    note = f"overridden from Opus {_fmt_value(opus_v, _field_fmt(field_id))}"
+    author = baseline.author_label if baseline is not None else SOURCE_UNKNOWN
+    note = f"overridden from {author} {_fmt_value(opus_v, _field_fmt(field_id))}"
     if isinstance(on, str) and on:
         note += f" on {on}"
     return SOURCE_USER, base, note
@@ -453,7 +451,7 @@ def build_assumption_rows(
     *,
     block_origin: str | None = None,
 ) -> list[AssumptionRow]:
-    """One row per Dashboard input, classified against the Opus baseline."""
+    """One row per Dashboard input, classified against the retained baseline."""
     rows: list[AssumptionRow] = []
     seg_rows = _segment_rows_on_sheet(wb, inp.segments)
 
@@ -505,9 +503,9 @@ def build_assumption_rows(
     # where the number came from instead of guessing.
     capex_pct = baseline.scalar("capex_pct_revenue_2026") if baseline is not None else None
     if isinstance(capex_pct, (int, float)) and not isinstance(capex_pct, bool):
-        capex_source = SOURCE_OPUS
+        capex_source = baseline.author_label if baseline is not None else SOURCE_UNKNOWN
         capex_note = (
-            f"set from Opus {float(capex_pct) * 100:.0f}% of FY1E revenue; "
+            f"set from {capex_source} {float(capex_pct) * 100:.0f}% of FY1E revenue; "
             "edits not tracked (unit differs from the JSON)"
         )
     else:
@@ -559,7 +557,7 @@ _LINK_FONT = Font(color="008000")
 _USER_FONT = Font(bold=True, color="9C5700")
 _WRAP = Alignment(wrap_text=True, vertical="top")
 
-_COLS = ("Input", "Cell", "Current", "Source", "Opus value", "Note")
+_COLS = ("Input", "Cell", "Current", "Source", "Baseline value", "Note")
 _COL_WIDTHS = (38, 7, 12, 16, 12, 52)
 _COMMENT_AUTHOR = "DCF provenance"
 
@@ -591,7 +589,7 @@ def write_assumptions_sheet(
     """(Re)write the read-only Assumptions sheet directly after the Dashboard.
 
     Current values are live cross-sheet formulas (they track edits made after
-    this write); Source / Opus value / Note are static, refreshed by every
+    this write); Source / Baseline value / Note are static, refreshed by every
     build/refresh — the subtitle says so.
     """
     if ASSUMPTIONS_SHEET in wb.sheetnames:
@@ -614,14 +612,14 @@ def write_assumptions_sheet(
         2,
         1,
         "Provenance of every Dashboard input. Read-only — regenerated by each "
-        "build/refresh. Current is a live link to the Dashboard; Source / Opus "
+        "build/refresh. Current is a live link to the Dashboard; Source / Baseline "
         "value / Note are as of the last refresh_dcf run.",
     ).font = _SUB_FONT
 
     row = 4
     if baseline is not None:
         provenance = (
-            f"Opus pass {baseline.as_of}"
+            f"{baseline.author_label} — {baseline.as_of}"
             if not baseline.seeded
             else (
                 f"seeded {baseline.as_of} from the synced assumptions block "
@@ -633,14 +631,14 @@ def write_assumptions_sheet(
         row += 2
     else:
         ws.cell(row, 1, "Assumptions baseline").font = _HDR_FONT
-        ws.cell(row, 2, "no Opus assumptions file — every input is a builder default")
+        ws.cell(row, 2, "no assumptions file — every input is a builder default")
         row += 2
 
     if narrative:
-        _band(ws, row, "THE STORY (Opus narrative)")
+        _band(ws, row, "THE STORY (assumption narrative)")
         row = _prose_block(ws, row + 1, narrative, n_rows=4)
     if reasoning:
-        _band(ws, row, "KEY JUDGMENTS (Opus reasoning)")
+        _band(ws, row, "KEY JUDGMENTS (assumption reasoning)")
         row = _prose_block(ws, row + 1, reasoning, n_rows=4)
 
     _band(ws, row, "DASHBOARD INPUTS — value · source · reasoning")
@@ -689,8 +687,8 @@ def annotate_dashboard_comments(wb: Workbook, rows: list[AssumptionRow]) -> None
     for r in rows:
         if r.source == SOURCE_USER and r.note:
             text = f"User-edited — {r.note}"
-        elif r.source == SOURCE_OPUS:
-            text = f"Opus: {r.baseline_display}"
+        elif r.source in {SOURCE_OPUS, SOURCE_DCF_REFRESH, SOURCE_UNKNOWN}:
+            text = f"{r.source}: {r.baseline_display}"
             if r.note:
                 text += f"\n{r.note}"
         else:

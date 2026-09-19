@@ -129,7 +129,7 @@ def default_artifact_specs() -> tuple[ArtifactSpec, ...]:
             artifact_id="reachability",
             canonical_path="docs/quality/reachability-check.json",
             generator_path="src/quality/reachability.py",
-            generator_version="1.2.1",
+            generator_version="1.3.0",
             command=(py, "src/quality/reachability.py", "--repo-root", "."),
             native_scope="WORKTREE",
             output_flag="--output",

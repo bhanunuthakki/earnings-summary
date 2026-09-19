@@ -1,11 +1,12 @@
+# Dependency declarations and security floors; CI installs the reviewed hash locks.
 # Security floor: Flask serves the localhost app — keep it past the 2.x
-# session-cookie CVE (CVE-2023-30861, fixed 2.3.2). CI installs latest.
+# session-cookie CVE (CVE-2023-30861, fixed 2.3.2).
 flask>=3.0.0
 pandas
 # Security floor: lxml parses UNTRUSTED filing XML/HTML on the ingest path —
-# keep it past the old XXE/ReDoS CVEs (cleared by 5.x). CI installs latest.
+# keep it past the old XXE/ReDoS CVEs (cleared by 5.x).
 lxml>=5.2.0
-# Security floor: CVE-2026-25645 (fixed 2.33.0). CI installs latest; the floor
+# Security floor: CVE-2026-25645 (fixed 2.33.0). The floor
 # stops dev/prod from resolving a known-vulnerable build.
 requests>=2.33.0
 python-dotenv
@@ -24,32 +25,23 @@ pymupdf>=1.27.2.3
 # that reject entity expansion and related XML attacks.
 defusedxml>=0.7.1
 # Security floor: reportlab renders PDFs — keep it past the 3.x toRGB RCE
-# (CVE-2023-33733, cleared by 4.x). CI installs latest.
+# (CVE-2023-33733, cleared by 4.x).
 reportlab>=4.0.0
 mcp
-# LLM access — primary path: Claude Code CLI (`claude -p`) via subprocess. No Python
-# SDK dependency. Install separately: see https://code.claude.com/docs/en/setup. The
-# CLI honors either ANTHROPIC_API_KEY (metered API billing) or `claude auth login`
-# (Pro/Max subscription) — see .env.example.
-#
-# LLM access — fallback path: Gemini via the Google Gen AI SDK. Used only when the
-# Claude CLI call fails (timeout, non-zero exit, empty output, binary missing). Reads
-# GEMINI_API_KEY (or GOOGLE_API_KEY) from .env via python-dotenv. See .env.example.
+# Provider adapters use the per-purpose routing owned by src/llm/cli.py.
+# The Claude CLI is installed separately; Python SDKs below support the SDK
+# and batch adapters. See directives/model_eval_loop.md for routing changes.
 google-genai
-# Anthropic Python SDK — used ONLY by execution/submit_saydo_batch.py for the
-# message-batches API (which the Claude CLI doesn't expose). Reads
-# ANTHROPIC_API_KEY from .env (metered API billing — already the project default;
-# see feedback_anthropic_api_key.md). The synchronous LLM path still goes through
-# the CLI; this is the off-hours bulk-submission lane only.
+# Anthropic SDK supports the explicitly selected message-batch adapter.
 anthropic
 # Security floor: openpyxl parses UNTRUSTED IR spreadsheets — keep it past the
-# old XXE-era versions. CI installs latest.
+# old XXE-era versions.
 openpyxl>=3.1.0
 pydantic
 yt-dlp
 faster-whisper
 # Security floor: beautifulsoup4 parses UNTRUSTED HTML — keep it past the old
-# ReDoS CVEs. CI installs latest.
+# ReDoS CVEs.
 beautifulsoup4>=4.12.3
 # Security floor: markdown renders to HTML in the report/UI layer — keep current.
 markdown>=3.5

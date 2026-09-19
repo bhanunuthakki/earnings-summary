@@ -6,7 +6,7 @@ import os
 import sqlite3
 import subprocess
 import sys
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,12 +14,15 @@ from uuid import uuid4
 
 import pytest
 import upgrade_database as upgrade_database_module
+from alembic.config import Config
 from upgrade_database import (
     ACTIVE_HEAD,
     UpgradeDatabaseError,
     upgrade_database,
 )
 
+import db as legacy_db
+from alembic import command
 from execution import portfolio_readiness_receipt as readiness_module
 from execution.backup_restore_readiness_receipt import (
     collect_backup_restore_receipt,
@@ -858,3 +861,197 @@ def test_supported_archived_schema_bridges_with_preserved_payload(
     assert receipt.backup_path is not None
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT value FROM retained_payload").fetchall() == [("owner state",)]
+
+
+ForeignKeyRow = tuple[int, int, str, str, str | None, str, str, str]
+ForeignKeyColumn = tuple[int, str, str, str | None, str, str, str]
+
+
+def _foreign_key_constraints(
+    rows: Sequence[ForeignKeyRow],
+) -> tuple[tuple[ForeignKeyColumn, ...], ...]:
+    """Compare complete constraints without SQLite's declaration-order IDs."""
+    groups: dict[int, list[ForeignKeyColumn]] = {}
+    for identifier, sequence, table, source, target, on_update, on_delete, match in rows:
+        groups.setdefault(identifier, []).append(
+            (sequence, table, source, target, on_update, on_delete, match)
+        )
+    return tuple(
+        sorted(
+            (tuple(sorted(columns, key=lambda column: column[0])) for columns in groups.values()),
+            key=repr,
+        )
+    )
+
+
+def test_foreign_key_parity_ignores_ids_without_merging_composite_constraints() -> None:
+    with sqlite3.connect(":memory:") as connection:
+        connection.executescript(
+            """
+            CREATE TABLE parent (x, y, z, w);
+            CREATE TABLE original (
+                a, b, c, d,
+                FOREIGN KEY (a, b) REFERENCES parent (x, y) ON DELETE CASCADE,
+                FOREIGN KEY (c, d) REFERENCES parent (z, w) ON DELETE CASCADE
+            );
+            CREATE TABLE reordered (
+                a, b, c, d,
+                FOREIGN KEY (c, d) REFERENCES parent (z, w) ON DELETE CASCADE,
+                FOREIGN KEY (a, b) REFERENCES parent (x, y) ON DELETE CASCADE
+            );
+            CREATE TABLE regrouped (
+                a, b, c, d,
+                FOREIGN KEY (a, d) REFERENCES parent (x, w) ON DELETE CASCADE,
+                FOREIGN KEY (c, b) REFERENCES parent (z, y) ON DELETE CASCADE
+            );
+            """
+        )
+        original = connection.execute("PRAGMA foreign_key_list(original)").fetchall()
+        reordered = connection.execute("PRAGMA foreign_key_list(reordered)").fetchall()
+        regrouped = connection.execute("PRAGMA foreign_key_list(regrouped)").fetchall()
+    assert original != reordered
+    assert _foreign_key_constraints(original) == _foreign_key_constraints(reordered)
+    # Flattening away IDs alone would falsely equate these different composites.
+    assert sorted(row[1:] for row in original) == sorted(row[1:] for row in regrouped)
+    assert _foreign_key_constraints(original) != _foreign_key_constraints(regrouped)
+
+
+IndexColumn = tuple[int, int, str | None, int, str, int]
+IndexConstraint = tuple[int, str, int, tuple[IndexColumn, ...]]
+
+
+def _index_constraints(connection: sqlite3.Connection, table: str) -> tuple[IndexConstraint, ...]:
+    """Retain index properties and ordered columns without declaration-order IDs."""
+    escaped = table.replace('"', '""')
+    constraints: list[IndexConstraint] = []
+    for _sequence, name, unique, origin, partial in connection.execute(
+        f'PRAGMA index_list("{escaped}")'
+    ):
+        index = str(name).replace('"', '""')
+        columns: list[IndexColumn] = connection.execute(f'PRAGMA index_xinfo("{index}")').fetchall()
+        constraints.append(
+            (unique, origin, partial, tuple(sorted(columns, key=lambda row: row[0])))
+        )
+    return tuple(sorted(constraints, key=repr))
+
+
+def _schema_signature(connection: sqlite3.Connection) -> list[tuple[str, str, tuple[str, ...]]]:
+    """Normalize table declaration order; preserve executable SQL statement order."""
+    schema_sql = "SELECT type,name,COALESCE(sql,'') FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+    signatures: list[tuple[str, str, tuple[str, ...]]] = []
+    for kind, name, sql in connection.execute(schema_sql):
+        lines = tuple(line.strip() for line in str(sql).splitlines() if line.strip())
+        if kind == "table":
+            # Table meaning is also constrained by table_info, grouped foreign
+            # keys, and ordered index columns in the parity test below.
+            lines = tuple(sorted(line.rstrip(",").strip() for line in lines))
+        signatures.append((str(kind), str(name), lines))
+    return signatures
+
+
+def test_schema_parity_preserves_trigger_statement_order() -> None:
+    with sqlite3.connect(":memory:") as original, sqlite3.connect(":memory:") as reordered:
+        original.executescript(
+            "CREATE TABLE target (value INTEGER);\n"
+            "CREATE TRIGGER observe AFTER INSERT ON target BEGIN\n"
+            "SELECT 1;\nSELECT 2;\nEND;"
+        )
+        reordered.executescript(
+            "CREATE TABLE target (value INTEGER);\n"
+            "CREATE TRIGGER observe AFTER INSERT ON target BEGIN\n"
+            "SELECT 2;\nSELECT 1;\nEND;"
+        )
+        assert _schema_signature(original) != _schema_signature(reordered)
+
+
+def test_genuine_archived_chain_bridges_to_active_schema(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "genuine-archived.db"
+    with monkeypatch.context() as isolated:
+        isolated.setattr(legacy_db, "DB_PATH", str(database))
+        legacy_db.init_db()
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic" / "versions_archived"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
+    command.upgrade(config, "head")
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type) VALUES ('TST','Retained issuer','portfolio')"
+        )
+        archived_budget = conn.execute(
+            "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose='senior_partner_brief'"
+        ).fetchone()
+        archived_revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+        retained = conn.execute(
+            "SELECT id,ticker,name,list_type FROM tracked_companies WHERE ticker='TST'"
+        ).fetchall()
+    receipt = upgrade_database(database, repo_root=ROOT, runtime_root=ROOT, allow_isolated_db=True)
+    active = migrated_db(tmp_path / "active.db")
+    assert receipt.status == "bridged"
+    assert receipt.to_revision == ACTIVE_HEAD
+    assert receipt.backup_path is not None
+    with sqlite3.connect(receipt.backup_path) as backup:
+        assert (
+            backup.execute("SELECT version_num FROM alembic_version").fetchone()
+            == archived_revision
+        )
+        assert (
+            backup.execute(
+                "SELECT id,ticker,name,list_type FROM tracked_companies WHERE ticker='TST'"
+            ).fetchall()
+            == retained
+        )
+    with sqlite3.connect(database) as conn, sqlite3.connect(active) as control:
+        assert _schema_signature(conn) == _schema_signature(control)
+        # Compare admitted purpose/policy seeds. The historical 0201 hard_block
+        # flag differs from the squash default; bridging must preserve it.
+        assert archived_budget == (0, "block")
+        assert (
+            conn.execute(
+                "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose='senior_partner_brief'"
+            ).fetchone()
+            == archived_budget
+        )
+        assert control.execute(
+            "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose='senior_partner_brief'"
+        ).fetchone() == (1, "block")
+        seeds = "SELECT purpose,monthly_cap_usd,warn_threshold_pct,hard_block,on_exceed FROM llm_budgets ORDER BY purpose"
+        bridged_seeds = conn.execute(seeds).fetchall()
+        fresh_seeds = control.execute(seeds).fetchall()
+        assert [row[0] for row in bridged_seeds] == [row[0] for row in fresh_seeds]
+        assert [
+            (old, new) for old, new in zip(bridged_seeds, fresh_seeds, strict=True) if old != new
+        ] == [
+            (
+                ("senior_partner_brief", 6, 0.8, 0, "block"),
+                ("senior_partner_brief", 6, 0.8, 1, "block"),
+            )
+        ]
+
+        assert (
+            conn.execute(
+                "SELECT id,ticker,name,list_type FROM tracked_companies WHERE ticker='TST'"
+            ).fetchall()
+            == retained
+        )
+        objects = "SELECT type,name,tbl_name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name,tbl_name"
+        assert conn.execute(objects).fetchall() == control.execute(objects).fetchall()
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        for (table,) in tables:
+            assert _index_constraints(conn, str(table)) == _index_constraints(
+                control, str(table)
+            ), table
+            name = str(table).replace('"', '""')
+            assert (
+                conn.execute(f'PRAGMA table_info("{name}")').fetchall()
+                == control.execute(f'PRAGMA table_info("{name}")').fetchall()
+            ), table
+            assert _foreign_key_constraints(
+                conn.execute(f'PRAGMA foreign_key_list("{name}")').fetchall()
+            ) == _foreign_key_constraints(
+                control.execute(f'PRAGMA foreign_key_list("{name}")').fetchall()
+            ), table

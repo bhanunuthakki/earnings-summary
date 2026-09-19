@@ -45,8 +45,7 @@ The kit (``ui.controls``) owns the LOOK + open motion of ``.k-scrim`` /
 ``.k-overlay``; CCOverlay owns dismissal + close motion (the close keyframes
 live in ``CC_OVERLAY_CSS`` here, co-located with the JS that triggers them so
 the report iframe — a separate document that can't import ``controls_css`` —
-inlines the same pair). It does **not** join ``cc_state.py``'s ``cc:v1:*``
-sessionStorage: the open-surface stack is in-memory and ephemeral by design (it
+inlines the same pair). The open-surface stack is in-memory and ephemeral by design (it
 dies with the tab; nothing about which overlay is open should survive a reload).
 
 History/Back-button dismissal is deliberately out of v1 (it collides with the

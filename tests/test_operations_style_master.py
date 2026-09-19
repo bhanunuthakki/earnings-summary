@@ -12,7 +12,6 @@ OWNED = (
     "calibration_scorecard_panel.py",
     "evals_panel.py",
     "discovery_panel.py",
-    "mobile_inbox_panel.py",
     "cron_health_panel.py",
     "operations_panel.py",
     "provenance_panel.py",
