@@ -674,17 +674,25 @@ _bridge_period_end_raw = _bal_latest.get("date")
 _bridge_currency_raw = _bal_latest.get("reportedCurrency")
 _bridge_period_end = _bridge_period_end_raw if isinstance(_bridge_period_end_raw, str) else None
 _bridge_currency = _bridge_currency_raw if isinstance(_bridge_currency_raw, str) else None
-_cash_resolution = (
-    equity_bridge.resolve_primary_reported_aggregate(
-        _bal_latest,
-        aggregate_field="cashAndShortTermInvestments",
-        overlay={"statements": PRIMARY_FACT_OVERLAY},
-        period_end=_bridge_period_end,
-        fiscal_period_type=latest[1],
-        currency=_bridge_currency,
-    )
-    if _bridge_period_end is not None and _bridge_currency is not None
-    else None
+_cash_field = "cashAndShortTermInvestments"
+_cash_resolution = None
+if _bridge_period_end is not None and _bridge_currency is not None:
+    for _candidate_cash_field in ("cashAndShortTermInvestments", "cashAndCashEquivalents"):
+        _cash_resolution = equity_bridge.resolve_primary_reported_aggregate(
+            _bal_latest,
+            aggregate_field=_candidate_cash_field,
+            overlay={"statements": PRIMARY_FACT_OVERLAY},
+            period_end=_bridge_period_end,
+            fiscal_period_type=latest[1],
+            currency=_bridge_currency,
+        )
+        if _cash_resolution is not None:
+            _cash_field = _candidate_cash_field
+            break
+_cash_label = (
+    "Cash & ST Investments"
+    if _cash_field == "cashAndShortTermInvestments"
+    else "Cash & Equivalents"
 )
 _verified_debt_resolution = (
     equity_bridge.resolve_primary_debt_scope(
@@ -755,6 +763,7 @@ print(
             "fiscal_period_type": latest[1],
             "reporting_currency": _bridge_currency,
             "cash_m": cash_now,
+            "cash_field": _cash_field,
             "total_debt_m": debt_now,
             "diluted_shares_m": shares_now,
             "cash_basis": _cash_resolution.basis,
@@ -1284,8 +1293,26 @@ def _bs_getter(field: str) -> Callable[[int, tuple[int, str]], float | None]:
     return _aggregate
 
 
+def _debt_getter(i: int, k: tuple[int, str]) -> float | None:
+    """Keep each displayed debt row within the same primary-source scope as the bridge."""
+    record = bal_i.get(k, {})
+    period_end = record.get("date")
+    currency = record.get("reportedCurrency")
+    if not isinstance(period_end, str) or not isinstance(currency, str):
+        return None
+    resolved = equity_bridge.resolve_primary_debt_scope(
+        record,
+        scope=DCF_DEBT_SCOPE,
+        overlay={"statements": PRIMARY_FACT_OVERLAY},
+        period_end=period_end,
+        fiscal_period_type=k[1],
+        currency=currency,
+    )
+    return m(resolved.value) if resolved is not None else None
+
+
 for lab, fld in [
-    ("Cash & ST Investments", "cashAndShortTermInvestments"),
+    (_cash_label, _cash_field),
     ("Total Current Assets", "totalCurrentAssets"),
     ("PP&E (net)", "propertyPlantEquipmentNet"),
     ("Total Assets", "totalAssets"),
@@ -1296,7 +1323,7 @@ for lab, fld in [
     ("Total Debt", "totalDebt"),
     ("Total Equity", "totalStockholdersEquity"),
 ]:
-    fin_row[lab] = write_qrow(lab, _bs_getter(fld))
+    fin_row[lab] = write_qrow(lab, _debt_getter if fld == "totalDebt" else _bs_getter(fld))
 
 band(fs, frow, "CASH FLOW", NQ + 1)
 frow += 1
@@ -1565,7 +1592,7 @@ r += 1
 EQ_F, DB_F, CA_F = (
     fin_row["Total Equity"],
     fin_row["Total Debt"],
-    fin_row["Cash & ST Investments"],
+    fin_row[_cash_label],
 )
 
 
@@ -1805,9 +1832,9 @@ br = tr + 12
 band(vs, br, "EQUITY BRIDGE -> VALUE / SHARE", 3)
 put(vs, br + 1, 1, "Operating value (enterprise value)", bold=True)
 put(vs, br + 1, 2, f"=B{sumpv}+B{tr + 10}", fmt=USD, bold=True)
-put(vs, br + 2, 1, "+ Cash & ST investments")
-put(vs, br + 2, 2, f"=Financials!{LAST}{fin_row['Cash & ST Investments']}", fmt=USD)
-put(vs, br + 3, 1, "- Long-term debt")
+put(vs, br + 2, 1, f"+ {_cash_label}")
+put(vs, br + 2, 2, f"=Financials!{LAST}{fin_row[_cash_label]}", fmt=USD)
+put(vs, br + 3, 1, "- Debt (selected scope)")
 put(vs, br + 3, 2, f"=-Financials!{LAST}{fin_row['Total Debt']}", fmt=USD)
 put(vs, br + 4, 1, "Equity value", bold=True)
 put(vs, br + 4, 2, f"=B{br + 1}+B{br + 2}+B{br + 3}", fmt=USD, bold=True)
@@ -1935,7 +1962,7 @@ for i, (lab, v) in enumerate(
         ("nwc (% incr revenue)", 0.005),
         ("tax", "=Valuation!$B$5"),
         ("k (calibration)", kcal),
-        ("cash", f"=Financials!{LAST}{fin_row['Cash & ST Investments']}"),
+        ("cash", f"=Financials!{LAST}{fin_row[_cash_label]}"),
         ("debt", f"=Financials!{LAST}{fin_row['Total Debt']}"),
         ("shares", f"=Financials!{LAST}{fin_row['Diluted Shares (M)']}"),
     ]

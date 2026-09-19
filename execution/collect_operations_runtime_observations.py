@@ -36,6 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from db_paths import configured_db_path  # noqa: E402
 from log_redact import sanitize_operational_text  # noqa: E402
+from operations.host_runtime import collect_host_receipt, publish_host_receipt  # noqa: E402
 from operations.models import (  # noqa: E402
     RUNTIME_PAIR_RECEIPT_FILENAME,
     OperationsRegistry,
@@ -324,7 +325,7 @@ def _service_state(output: str, returncode: int) -> ServiceRuntimeState:
     return "Unknown"
 
 
-def collect_scheduler_tasks_from_system(timeout: float = 4.0) -> SchedulerProbe:
+def collect_scheduler_tasks_from_system(timeout: float = 15.0) -> SchedulerProbe:
     """Read all Scheduler task states once, with no Scheduler mutation or task run."""
 
     if not _is_windows_platform():
@@ -1412,6 +1413,13 @@ def main(argv: list[str] | None = None) -> int:
     lock_ok = True
     if arguments.emit_receipts:
         scheduler, services, lock_ok = emit_runtime_receipts(registry, root, observed_at)
+        # Independent cached host evidence: no effect on the existing paired protocol.
+        try:
+            with JobLock(root, "operations-host-receipt", ["operations-host-receipt"], wait_s=0):
+                publish_host_receipt(root, collect_host_receipt(root, datetime.now(UTC)))
+        except (OSError, ValueError, JobAlreadyRunningError):
+            log_event("host_observation_publication_failed")
+            lock_ok = False
     else:
         scheduler = collect_scheduler_receipt(registry, observed_at)
         services = collect_service_receipt(registry, observed_at)

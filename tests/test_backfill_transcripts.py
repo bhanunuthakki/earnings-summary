@@ -384,7 +384,7 @@ def test_canonical_processed_collision_compares_db_and_live_bytes(
 
     monkeypatch.setattr(mod.db, "get_connection", connection)
     monkeypatch.setattr(mod.db, "PROJECT_ROOT", str(repo_root))
-    assert mod._canonical_processed_path_conflicts(  # pyright: ignore[reportPrivateUsage]
+    assert mod._canonical_processed_path_conflicts(
         mod.FetchedTranscriptIdentity(
             label="Q1_2026",
             receipt_id="a" * 64,
@@ -393,7 +393,7 @@ def test_canonical_processed_collision_compares_db_and_live_bytes(
             size_bytes=1,
         )
     )
-    assert not mod._canonical_processed_path_conflicts(  # pyright: ignore[reportPrivateUsage]
+    assert not mod._canonical_processed_path_conflicts(
         mod.FetchedTranscriptIdentity(
             label="Q1_2026",
             receipt_id="a" * 64,
@@ -1092,7 +1092,7 @@ def test_ambiguous_selected_transcript_is_explicit_terminal_failure(
     assert mod._terminal_exit_code(None, [], acquisition_errors=len(result.errors)) == 1
 
 
-def test_scheduled_transcript_scope_is_portfolio_only_but_explicit_evaluation_is_allowed(
+def test_scheduled_transcript_scope_includes_all_research_roles_and_checks_instruments(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1101,10 +1101,10 @@ def test_scheduled_transcript_scope_is_portfolio_only_but_explicit_evaluation_is
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, "
-            "fiscal_year_end TEXT)"
+            "fiscal_year_end TEXT, instrument_type TEXT)"
         )
         conn.executemany(
-            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31')",
+            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31', 'equity')",
             [
                 ("PORT", "portfolio"),
                 ("EVAL", "evaluation"),
@@ -1118,11 +1118,23 @@ def test_scheduled_transcript_scope_is_portfolio_only_but_explicit_evaluation_is
         connection.row_factory = sqlite3.Row
         return connection
 
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            "INSERT INTO tracked_companies VALUES (?, 'evaluation', NULL, '12-31', ?)",
+            [("FUND", "etf"), ("UNTYPED", None), ("AMBIG", "equity"), ("AMBIG", "equity")],
+        )
+        conn.execute(
+            "INSERT INTO tracked_companies VALUES ('ARCH', 'portfolio', '2026-01-01', '12-31', 'equity')"
+        )
     monkeypatch.setattr(mod.db, "get_connection", connect)
-    assert mod._resolve_tickers(None) == [("PORT", 12)]
+    assert mod._resolve_tickers(None) == [("PORT", 12), ("EVAL", 12), ("WATCH", 12)]
     assert mod._resolve_tickers("EVAL") == [("EVAL", 12)]
-    assert mod._resolve_tickers("WATCH") == []
+    assert mod._resolve_tickers("WATCH") == [("WATCH", 12)]
     assert mod._resolve_tickers("IDX") == []
+    assert mod._resolve_tickers("FUND") == []
+    assert mod._resolve_tickers("UNTYPED") == []
+    assert mod._resolve_tickers("AMBIG") == []
+    assert mod._resolve_tickers("ARCH") == []
 
 
 def test_transcript_automatic_lookback_defaults_to_five() -> None:
@@ -1140,3 +1152,38 @@ def test_help_does_not_advertise_retired_audio_fallback() -> None:
 
     assert result.returncode == 0
     assert "--audio-fallback" not in result.stdout
+
+
+@pytest.mark.parametrize("owner_requested", [False, True])
+def test_acquisition_scope_does_not_expand_automatic_commitment_llm_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner_requested: bool
+) -> None:
+    mod = _load_module()
+    database = tmp_path / "scope.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "CREATE TABLE tracked_companies "
+            "(ticker TEXT,list_type TEXT,archived_at TEXT,instrument_type TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies VALUES (?,?,NULL,?)",
+            [
+                ("PORT", "portfolio", "equity"),
+                ("EVAL", "evaluation", "equity"),
+                ("WATCH", "watchlist", "adr"),
+                ("FUND", "evaluation", "etf"),
+            ],
+        )
+
+    def connect() -> sqlite3.Connection:
+        return sqlite3.connect(database)
+
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+    results = [
+        mod.TickerBackfillResult(ticker=ticker, fye_month=12)
+        for ticker in ("PORT", "EVAL", "WATCH", "FUND")
+    ]
+    selected = mod._commitment_extraction_scope(results, owner_requested=owner_requested)
+    assert [item.ticker for item in selected] == (
+        ["PORT", "EVAL", "WATCH"] if owner_requested else ["PORT"]
+    )

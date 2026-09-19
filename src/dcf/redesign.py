@@ -908,6 +908,8 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
             base_rev[s] = _fy_sum(fs, seg_row, fy_cols) if seg_row is not None else rev_ly
 
         cash_row = _find_row(fs, "Cash & ST Investments")
+        if cash_row is None:
+            cash_row = _find_row(fs, "Cash & Equivalents")
         debt_row = _find_row(fs, "Total Debt")
         if debt_row is None:
             debt_row = _find_row(fs, "Long-term Debt")

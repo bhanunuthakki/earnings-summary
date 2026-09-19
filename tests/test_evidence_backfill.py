@@ -380,6 +380,18 @@ def test_apply_reuses_verified_legacy_file_observation_from_a_clone_root(
             conn.execute("SELECT sha256 FROM documents WHERE id = 1").fetchone()[0],
             "present",
         )
+        clocks = conn.execute(
+            "SELECT verified_at, recorded_at FROM evidence_blob_location_observations "
+            "WHERE storage_uri = ?",
+            (clone_path.as_uri(),),
+        ).fetchone()
+        assert datetime.fromisoformat(clocks[0]) == result.run_at
+        assert datetime.fromisoformat(clocks[1]) == result.run_at
+        original_clock = conn.execute(
+            "SELECT observed_at FROM evidence_source_observations "
+            "WHERE idempotency_key = 'legacy-document:1:observation'"
+        ).fetchone()[0]
+        assert datetime.fromisoformat(original_clock).date() < result.run_at.date()
     finally:
         conn.close()
 
@@ -538,6 +550,42 @@ def test_hash_mismatch_is_quarantined_without_evidence_writes(tmp_path: Path) ->
         conn.close()
 
 
+@pytest.mark.parametrize("batch", [False, True])
+def test_changed_bytes_between_verification_and_persistence_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, batch: bool
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    raw_path = repo_root / "data" / "ACME_10q.html"
+    original_read = Path.read_bytes
+    reads = 0
+
+    def replace_after_read(path: Path) -> bytes:
+        nonlocal reads
+        payload = original_read(path)
+        if path == raw_path:
+            reads += 1
+            if reads == 1:
+                path.write_bytes(payload.replace(b"official", b"tampered"))
+        return payload
+
+    monkeypatch.setattr(Path, "read_bytes", replace_after_read)
+    try:
+        with pytest.raises(ValueError, match="legacy document 1 changed during evidence capture"):
+            if batch:
+                backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+            else:
+                ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=1)
+        assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM evidence_content_blobs").fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT COUNT(*) FROM evidence_blob_location_observations").fetchone()[0]
+            == 0
+        )
+        assert not (repo_root / ".tmp" / "evidence-ledger-test" / "state.json").exists()
+    finally:
+        conn.close()
+
+
 def test_apply_checkpoints_and_resumes_bounded_documents(tmp_path: Path) -> None:
     conn, _, repo_root = _connection(tmp_path)
     try:
@@ -659,6 +707,40 @@ def test_sec_fragment_is_retained_but_not_treated_as_a_filename(tmp_path: Path) 
         conn.close()
 
 
+@pytest.mark.parametrize(
+    ("source_type", "fragment", "synthetic", "finding"),
+    [
+        ("sec_xbrl", "accn=0000000001-26-000001", True, "legacy_sec_accession_identity"),
+        ("sec_edgar", "accn=0000000001-26-000001", True, "sha256_mismatch"),
+        ("sec_xbrl", "accn=not-an-accession", True, "sha256_mismatch"),
+        ("sec_xbrl", "accn=0000000001-26-000001", False, None),
+    ],
+)
+def test_sec_accession_identity_is_not_misreported_as_corrupt_source_bytes(
+    tmp_path: Path, source_type: str, fragment: str, synthetic: bool, finding: str | None
+) -> None:
+    conn, _, root = _connection(tmp_path)
+    try:
+        conn.execute(
+            "UPDATE documents SET source_type=?,file_path=? WHERE id=1",
+            (source_type, f"data/ACME_10q.html#{fragment}"),
+        )
+        if synthetic:
+            digest = hashlib.sha256(fragment.removeprefix("accn=").encode()).hexdigest()
+            conn.execute("UPDATE documents SET sha256=? WHERE id=1", (digest,))
+        conn.commit()
+        result = backfill_legacy_evidence(conn, _request(root, apply=True))
+        assert result.documents_quarantined == int(finding is not None)
+        assert result.documents_backfilled == int(finding is None)
+        if finding is not None:
+            assert result.finding_counts == {finding: 1}
+            assert (
+                conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
+            )
+    finally:
+        conn.close()
+
+
 def test_section_uses_legacy_created_clock_when_available(tmp_path: Path) -> None:
     conn, _, repo_root = _connection(tmp_path)
     try:
@@ -694,3 +776,100 @@ def test_cli_writes_only_summary_json_to_stdout(tmp_path: Path) -> None:
     )
     assert json.loads(completed.stdout)["dry_run"] is True
     assert all(json.loads(line)["event"] for line in completed.stderr.splitlines() if line)
+
+
+def test_repaired_quarantine_is_retried_after_fresh_documents(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        path = repo_root / "data" / "ACME_10q.html"
+        original = path.read_bytes()
+        path.unlink()
+        first = backfill_legacy_evidence(conn, _request(repo_root, apply=True, batch_size=1))
+        assert first.documents_quarantined == 1
+        assert first.has_more
+        path.write_bytes(original)
+        recovered = backfill_legacy_evidence(conn, _request(repo_root, apply=True, batch_size=1))
+        assert recovered.documents_backfilled == 1
+        assert not recovered.has_more
+    finally:
+        conn.close()
+
+
+def test_checkpoint_cannot_resume_another_database(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other, _, _ = _connection(other_dir)
+    try:
+        backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        with pytest.raises(ValueError, match="checkpoint database"):
+            backfill_legacy_evidence(other, _request(repo_root, apply=True))
+        assert other.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
+    finally:
+        conn.close()
+        other.close()
+
+
+def test_inaccessible_source_is_quarantined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    original_read = Path.read_bytes
+
+    def inaccessible(path: Path) -> bytes:
+        if path.name == "ACME_10q.html":
+            raise PermissionError("unavailable source")
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", inaccessible)
+    try:
+        result = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert result.documents_quarantined == 1
+        assert result.finding_counts == {"content_unreadable": 1}
+        assert result.records_created == 0
+    finally:
+        conn.close()
+
+
+def test_quarantine_retry_does_not_block_new_documents(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        raw_path = repo_root / "data" / "ACME_10q.html"
+        raw = raw_path.read_bytes()
+        (repo_root / "data" / "BETA.html").write_bytes(raw)
+        conn.execute(
+            "INSERT INTO documents VALUES (2, 'BETA', 'ir_doc', 'investor_presentation', NULL, NULL, "
+            "?, ?, ?, 'ok', ?, NULL, NULL)",
+            ("data/BETA.html", hashlib.sha256(raw).hexdigest(), "2026-07-21", len(raw)),
+        )
+        conn.commit()
+        raw_path.unlink()
+        first = backfill_legacy_evidence(conn, _request(repo_root, apply=True, batch_size=1))
+        assert first.documents_quarantined == 1
+        second = backfill_legacy_evidence(conn, _request(repo_root, apply=True, batch_size=1))
+        assert second.documents_backfilled == 1
+        assert second.last_document_id_after == 2
+        assert second.has_more
+        third = backfill_legacy_evidence(conn, _request(repo_root, apply=True, batch_size=1))
+        assert third.documents_quarantined == 1
+        assert third.last_document_id_after == 2
+        raw_path.write_bytes(raw)
+        recovered = backfill_legacy_evidence(conn, _request(repo_root, apply=True, batch_size=1))
+        assert recovered.documents_backfilled == 1
+        assert recovered.last_document_id_after == 2
+        assert not recovered.has_more
+    finally:
+        conn.close()
+
+
+def test_unbound_legacy_checkpoint_requires_new_namespace(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        state = repo_root / ".tmp" / "evidence-ledger-test" / "state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({"last_document_id": 1, "updated_at": "2026-09-19T00:00:00Z"}))
+        with pytest.raises(ValueError, match="checkpoint database"):
+            backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
+    finally:
+        conn.close()

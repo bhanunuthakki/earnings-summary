@@ -47,15 +47,17 @@ import sqlite3
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from log_redact import redact as _redact
 from pipeline.sec_xbrl import CIK_MAP
+from provenance.evidence_backfill import emit_structured_event, ensure_legacy_document_evidence
+from provenance.immutable_artifact import publish_bytes_no_clobber
 from sec_identity import sec_user_agent
 from table_extractors.period_axis import NominalQuarter, expected_period_ends
 
@@ -282,7 +284,7 @@ def register_6k_document(
     repo_root: Path,
     period_end: datetime,
 ) -> int:
-    """Persist the raw exhibit HTML to ``data/historical/sec/`` and insert one
+    """Persist a UTF-8 serialization of decoded exhibit HTML and insert one
     ``documents`` row (``doc_type='sec_6k'``, ``source_type='sec_xbrl'`` --
     the same source_type ``pipeline.sec_xbrl`` uses for SEC-origin evidence,
     tier=SEC_OFFICIAL; this
@@ -293,35 +295,106 @@ def register_6k_document(
 
     Idempotent on sha256: re-running
     against the same exhibit content returns the existing row's id."""
-    sha256 = hashlib.sha256(fetched.raw_html.encode("utf-8")).hexdigest()
-    existing = conn.execute(
-        "SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)
-    ).fetchone()
-    if existing is not None:
-        return int(existing[0])
-
-    out_dir = repo_root / "data" / "historical" / "sec"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{ticker.upper()}_6k_{fetched.located.filing_date}.html"
-    out_path.write_text(fetched.raw_html, encoding="utf-8")
-    rel_path = str(out_path.relative_to(repo_root)).replace("\\", "/")
-
-    cur = conn.execute(
-        "INSERT INTO documents "
-        "(ticker, source_type, doc_type, period_start, period_end, file_path, "
-        " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
-        " parent_document_id, accession_number, filing_date) "
-        "VALUES (?, 'sec_xbrl', 'sec_6k', NULL, ?, ?, ?, ?, 'ok', 200, ?, ?, NULL, ?, ?)",
-        (
-            ticker.upper(),
-            period_end,
-            rel_path,
-            sha256,
-            datetime.now(),
-            len(fetched.raw_html.encode("utf-8")),
-            fetched.located.exhibit_url,
-            fetched.located.accession,
-            fetched.located.filing_date,
-        ),
+    return register_sec_exhibit_snapshot(
+        conn,
+        ticker=ticker,
+        raw_html=fetched.raw_html,
+        repo_root=repo_root,
+        period_end=period_end,
+        doc_type="sec_6k",
+        source_url=fetched.located.exhibit_url,
+        accession=fetched.located.accession,
+        filing_date=fetched.located.filing_date,
     )
-    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+
+
+def register_sec_exhibit_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    raw_html: str,
+    repo_root: Path,
+    period_end: datetime,
+    doc_type: Literal["sec_6k", "sec_20f"],
+    source_url: str,
+    accession: str,
+    filing_date: str,
+) -> int:
+    """Retain a UTF-8 serialization of decoded HTML, never claiming wire-byte identity.
+
+    Filename and digest use the exact published bytes, independent of platform
+    newline rules. Database and ledger writes stay in the caller's transaction.
+    """
+    content = raw_html.encode("utf-8")
+    digest = hashlib.sha256(content).hexdigest()
+    relative = Path("data/historical/sec/exhibit_snapshots") / digest[:2] / f"{digest}.utf8.html"
+    destination = (repo_root / "data").resolve() / relative.relative_to("data")
+    publish_bytes_no_clobber(destination, content)
+    started = not conn.in_transaction
+    if started:
+        conn.execute("BEGIN IMMEDIATE")
+    conn.execute("SAVEPOINT sec_exhibit_capture")
+    try:
+        existing = conn.execute(
+            "SELECT id,ticker,source_type,doc_type,period_end,raw_bytes_size,accession_number "
+            "FROM documents WHERE sha256=?",
+            (digest,),
+        ).fetchone()
+        if existing is None:
+            cursor = conn.execute(
+                "INSERT INTO documents "
+                "(ticker,source_type,doc_type,period_start,period_end,file_path,sha256,"
+                "fetched_at,fetch_status,http_code,raw_bytes_size,source_url,"
+                "parent_document_id,accession_number,filing_date) "
+                "VALUES (?,'sec_xbrl',?,NULL,?,?,?,?,'ok',200,?,?,NULL,?,?)",
+                (
+                    ticker.upper(),
+                    doc_type,
+                    period_end,
+                    relative.as_posix(),
+                    digest,
+                    datetime.now(UTC),
+                    len(content),
+                    source_url,
+                    accession,
+                    filing_date,
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("SEC exhibit registration returned no identity")
+            document_id = cursor.lastrowid
+        else:
+            if (
+                tuple(existing[1:4]) != (ticker.upper(), "sec_xbrl", doc_type)
+                or datetime.fromisoformat(str(existing[4])).date() != period_end.date()
+                or existing[5] != len(content)
+                or existing[6] != accession
+            ):
+                raise ValueError("SEC exhibit bytes conflict with registered identity or scope")
+            document_id = int(existing[0])
+            conn.execute(
+                "UPDATE documents SET file_path=? WHERE id=?", (relative.as_posix(), document_id)
+            )
+        evidence_available = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_document_versions'"
+            ).fetchone()
+            is not None
+        )
+        if evidence_available:
+            ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=document_id)
+        conn.execute("RELEASE SAVEPOINT sec_exhibit_capture")
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT sec_exhibit_capture")
+        conn.execute("RELEASE SAVEPOINT sec_exhibit_capture")
+        if started:
+            conn.rollback()
+        raise
+    emit_structured_event(
+        "sec_exhibit_serialization_captured",
+        document_id=document_id,
+        representation="utf8_serialization_of_decoded_html",
+        wire_bytes_retained=False,
+        evidence_anchored=evidence_available,
+    )
+    return document_id

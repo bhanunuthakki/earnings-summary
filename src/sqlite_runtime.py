@@ -20,9 +20,11 @@ from scope_identity import derive_retrieval_scope_id
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 _WAL_TRANSITION_RETRY_INTERVAL_S = 0.01
-_FORBIDDEN_MAC_CHECKOUT_DB = (
-    Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
-).resolve()
+_FORBIDDEN_MAC_CHECKOUT_DB: Path | None = (
+    (Path(__file__).resolve().parents[1] / "data" / "portfolio.db").resolve()
+    if sys.platform == "darwin"
+    else None
+)
 
 
 def _normalized_component(value: str) -> str:
@@ -31,6 +33,8 @@ def _normalized_component(value: str) -> str:
 
 
 def _is_forbidden_mac_checkout_database(path: str | os.PathLike[str]) -> bool:
+    if _FORBIDDEN_MAC_CHECKOUT_DB is None:
+        return False
     candidate = Path(path).expanduser().resolve(strict=False)
     if candidate == _FORBIDDEN_MAC_CHECKOUT_DB:
         return True

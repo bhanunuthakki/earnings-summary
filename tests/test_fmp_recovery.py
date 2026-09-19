@@ -41,7 +41,7 @@ from pipeline.fmp_recovery import (
     recoverable_work,
 )
 
-REVISION = "0008_add_fmp_recovery"
+REVISION = "0040_fmp_watchlist_recovery"
 NOW = datetime(2026, 8, 11, 12, 0, 0)
 POLICY_A = "a" * 64
 POLICY_B = "b" * 64
@@ -207,7 +207,7 @@ def test_work_id_is_deterministic_and_commits_generation_and_policy() -> None:
 
 
 def test_enqueue_work_persists_authorized_intent_without_leasing(db_path: Path) -> None:
-    specs = (_spec("RBRK"), _spec("WIX"))
+    specs = (_spec("RBRK"), _spec("WIX", role=ListType.WATCHLIST))
     with _connection(db_path) as connection:
         receipt = enqueue_work(
             connection,
@@ -218,6 +218,12 @@ def test_enqueue_work_persists_authorized_intent_without_leasing(db_path: Path) 
         assert receipt.work_ids == tuple(make_work_id(spec) for spec in specs)
         assert receipt.backlog.pending_count == 2
         assert receipt.backlog.leased_count == 0
+        assert tuple(
+            connection.execute(
+                "SELECT coverage_role,priority,requested,owner_request_id "
+                "FROM fmp_work_backlog WHERE ticker='WIX'"
+            ).fetchone()
+        ) == ("watchlist", 150, 0, None)
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM fmp_recovery_events WHERE event_type='work_leased'"
@@ -235,37 +241,39 @@ def test_enqueue_work_denial_is_atomic(db_path: Path) -> None:
                     now=NOW,
                     work=(
                         _spec("RBRK"),
-                        _spec("WATCH", role=ListType.WATCHLIST),
+                        _spec("CAT", role=ListType.NONE),
                     ),
                 ),
             )
         assert connection.execute("SELECT COUNT(*) FROM fmp_work_backlog").fetchone()[0] == 0
 
 
-def test_plan_prioritizes_portfolio_then_requested_evaluation_then_index(
+def test_plan_prioritizes_portfolio_then_automatic_evaluation_then_watchlist_then_index(
     db_path: Path,
 ) -> None:
     specs = (
         _spec("IDX", role=ListType.INDEX_MEMBER, endpoint="profile"),
-        _spec(
-            "EVAL",
-            role=ListType.EVALUATION,
-            requested=True,
-            owner_request_id="owner-request-7",
-        ),
+        _spec("WATCH", role=ListType.WATCHLIST),
+        _spec("EVAL", role=ListType.EVALUATION),
         _spec("PORT", role=ListType.PORTFOLIO),
     )
     with _connection(db_path) as connection:
         plan = _plan(connection, *specs)
-        assert [item.ticker for item in plan.items] == ["PORT", "EVAL", "IDX"]
-        assert [item.priority for item in plan.items] == [300, 200, 100]
+        assert [item.ticker for item in plan.items] == ["PORT", "EVAL", "WATCH", "IDX"]
+        assert [item.priority for item in plan.items] == [300, 200, 150, 100]
         assert all(item.execution_mode is ExecutionMode.LIVE for item in plan.items)
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT requested,owner_request_id FROM fmp_work_backlog "
+                "WHERE ticker IN ('EVAL','WATCH')"
+            )
+        ] == [(0, None), (0, None)]
 
 
 @pytest.mark.parametrize(
     "spec",
     [
-        _spec("WATCH", role=ListType.WATCHLIST),
         _spec("CAT", role=ListType.NONE),
         _spec("IDX", role=ListType.INDEX_MEMBER, endpoint="analyst_estimates"),
     ],
@@ -277,9 +285,10 @@ def test_policy_denials_fail_before_any_backlog_write(db_path: Path, spec: WorkS
         assert connection.execute("SELECT COUNT(*) FROM fmp_work_backlog").fetchone()[0] == 0
 
 
-def test_evaluation_requires_an_explicit_owner_request_before_planning() -> None:
+@pytest.mark.parametrize("role", [ListType.PORTFOLIO, ListType.EVALUATION, ListType.WATCHLIST])
+def test_claimed_owner_request_requires_an_actual_request_identity(role: ListType) -> None:
     with pytest.raises(ValidationError, match="owner request_id"):
-        _spec("EVAL", role=ListType.EVALUATION)
+        _spec("CLAIM", role=role, requested=True)
 
 
 def test_screening_allowlist_matches_peer_depth_contract() -> None:

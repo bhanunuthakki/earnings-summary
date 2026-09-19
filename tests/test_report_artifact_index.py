@@ -166,6 +166,11 @@ def test_fiscal_period_backfill_leaves_missing_or_conflicting_evidence_unresolve
     assert result.eligible == 0
     assert result.applied == 0
     assert result.unresolved == 2
+    assert result.unresolved_reasons == {
+        "no_active_earnings_selector": 1,
+        "conflicting_active_selectors": 1,
+    }
+    assert {item.unresolved_reason for item in result.items} == set(result.unresolved_reasons)
     assert {item.evidence.observed_values for item in result.items if item.evidence} == {
         (),
         ("Q1 2026", "Q2 2026"),

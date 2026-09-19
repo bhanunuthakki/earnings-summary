@@ -14,6 +14,7 @@ class ArgumentProfile(StrEnum):
     NONE = "none"
     DB_PATH = "db_path"
     DB = "db"
+    DB_AND_STATE_ROOT = "db_and_state_root"
     REPO_ROOT_FROM_DB = "repo_root_from_db"
 
 
@@ -38,6 +39,7 @@ STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_LIFECYCLE = "stage_0c_lifecycle"
 STAGE_DECISION_ACTIONS = "stage_0c2_decision_actions"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
+STAGE_DOCUMENT_EVIDENCE = "stage_0d1_document_evidence"
 STAGE_DERIVED_METRICS = "stage_0d2_derived_metrics"
 STAGE_REPRICE = "stage_0e_reprice"
 STAGE_CANDIDATE_FIT = "stage_0f_candidate_fit"
@@ -127,6 +129,16 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         ArgumentProfile.DB_PATH,
     ),
     StageSpec(
+        STAGE_DOCUMENT_EVIDENCE,
+        "Stage 0d1 - deterministic source evidence (process_document_evidence.py)",
+        "process_document_evidence.py",
+        ("--apply", "--resume", "--batch-size", "100"),
+        600,
+        (STAGE_PREFLIGHT, STAGE_LIST_TYPE),
+        ("skip_triggers",),
+        ArgumentProfile.DB_AND_STATE_ROOT,
+    ),
+    StageSpec(
         STAGE_DERIVED_METRICS,
         "Stage 0d2 - derived metrics (compute_derived_metrics.py)",
         "compute_derived_metrics.py",
@@ -205,6 +217,7 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         (
             STAGE_NEWS,
             STAGE_LIFECYCLE,
+            STAGE_DOCUMENT_EVIDENCE,
             STAGE_DERIVED_METRICS,
             STAGE_REPRICE,
             STAGE_CANDIDATE_FIT,

@@ -8,20 +8,31 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
 from earnings_surprise_store import EarningsSurpriseRecordV1, append_observation
-from execution.ingest_earnings_surprises import (
-    _persist_ingested_coverage,  # pyright: ignore[reportPrivateUsage] - migration seam
-    ingest_one_ticker,
+from execution import ingest_earnings_surprises as surprise_ingest
+from execution.ingest_earnings_surprises import ingest_one_ticker
+from schema_compat import expected_head
+
+
+class CoverageWriter(Protocol):
+    def __call__(
+        self, conn: sqlite3.Connection, *, ticker: str, observed_at: datetime
+    ) -> list[str]: ...
+
+
+persist_ingested_coverage = cast(
+    CoverageWriter, getattr(surprise_ingest, "_persist_ingested_coverage")
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0039_add_dcf_forecast_series"
+ACTIVE_HEAD = expected_head()
 
 
 def _config(path: Path) -> Config:
@@ -187,7 +198,7 @@ def test_satisfied_coverage_requires_persisted_observation_and_projection(
                 observation_id,
             ),
         )
-        persisted = _persist_ingested_coverage(
+        persisted = persist_ingested_coverage(
             connection,
             ticker="WIX",
             observed_at=datetime(2026, 9, 5, tzinfo=UTC),
@@ -304,7 +315,7 @@ def test_legacy_projection_cannot_emit_satisfied_coverage(
     )
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
-        persisted = _persist_ingested_coverage(
+        persisted = persist_ingested_coverage(
             connection,
             ticker="WIX",
             observed_at=datetime(2026, 9, 5, tzinfo=UTC),

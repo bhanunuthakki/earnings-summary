@@ -39,9 +39,10 @@ def _create_db(path: Path, *, ticker: str = "RBRK", list_type: str = "portfolio"
         CREATE TABLE tracked_companies (
             ticker TEXT NOT NULL,
             list_type TEXT NOT NULL,
-            archived_at TEXT
+            archived_at TEXT,
+            instrument_type TEXT NOT NULL DEFAULT 'equity'
         );
-        INSERT INTO tracked_companies VALUES ('{ticker}', '{list_type}', NULL);
+        INSERT INTO tracked_companies(ticker,list_type,archived_at) VALUES ('{ticker}', '{list_type}', NULL);
         CREATE TABLE source_inventory_snapshots (
             snapshot_id TEXT PRIMARY KEY,
             inventory_key TEXT NOT NULL,
@@ -124,7 +125,7 @@ def test_admits_one_ready_portfolio_native_inventory_task(tmp_path: Path) -> Non
 
     result = admit_native_inventory_task(_request(plan_path, raw_plan, db, task_id))
 
-    assert result.schema_version == "sec_delta_native_inventory_authorization.v1"
+    assert result.schema_version == "sec_delta_native_inventory_authorization.v2"
     assert result.network_policy == "FORBIDDEN"
     assert result.task_id == task_id
     assert result.ticker == "RBRK"
@@ -143,6 +144,20 @@ def test_admits_one_ready_portfolio_native_inventory_task(tmp_path: Path) -> Non
 
     with pytest.raises(ValidationError, match="frozen"):
         setattr(result, "next_inventory_revision", 2)
+
+
+@pytest.mark.parametrize("role", ["evaluation", "watchlist"])
+def test_admits_automatic_research_roles_without_owner_request(tmp_path: Path, role: str) -> None:
+    db = tmp_path / "snapshot.db"
+    _create_db(db, ticker="WIX", list_type=role)
+    plan_path, raw_plan, task_id = _write_plan(tmp_path, db)
+
+    result = admit_native_inventory_task(_request(plan_path, raw_plan, db, task_id))
+
+    assert result.coverage_role == role
+    assert result.authorization == "AUTOMATIC"
+    assert result.authorization_attestation == "NOT_APPLICABLE"
+    assert result.owner_request_id is None
 
 
 def test_admits_owner_requested_evaluation_only_with_bound_attestation(tmp_path: Path) -> None:
@@ -356,3 +371,19 @@ def test_authorization_self_seal_rejects_tampering(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="authorization_sha256"):
         SecDeltaNativeInventoryAuthorization.model_validate_json(json.dumps(payload))
+
+
+def test_old_plan_schema_requires_replanning_and_preserves_old_artifact(tmp_path: Path) -> None:
+    db = tmp_path / "snapshot.db"
+    _create_db(db)
+    plan_path, raw_plan, task_id = _write_plan(tmp_path, db)
+    old = json.loads(raw_plan)
+    old["schema_version"] = "sec_delta_plan_receipt.v1"
+    old["planner_version"] = "sec-delta-planner.v1"
+    old_raw = json.dumps(old).encode("utf-8")
+    plan_path.write_bytes(old_raw)
+
+    with pytest.raises(SecDeltaAdmissionError, match="sealed SEC delta plan validation failed"):
+        admit_native_inventory_task(_request(plan_path, old_raw, db, task_id))
+
+    assert plan_path.read_bytes() == old_raw

@@ -26,24 +26,26 @@ import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from ir_pipeline.config import configured_tickers, get_config, save_config  # noqa: E402
-from ir_pipeline.download import download_spreadsheet  # noqa: E402
-from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
-from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
+from ir_pipeline.config import configured_tickers, get_config, save_config
+from ir_pipeline.download import download_spreadsheet
+from ir_pipeline.ingest import ingest_spreadsheet_kpis
+from ir_pipeline.spreadsheet import parse_spreadsheet
+from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     suppression_payload,
 )
-from pipeline.source_policy import (  # noqa: E402
+from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     authorize_stored_collection_target,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def main() -> int:
@@ -226,7 +228,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--owner-requested",
         action="store_true",
-        help="Explicit owner request; required for evaluation-company collection",
+        help="Record an explicit owner request within stored collection policy",
     )
     return p.parse_args()
 

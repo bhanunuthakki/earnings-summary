@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import importlib.util
@@ -39,13 +38,15 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
-def test_refetch_scope_is_portfolio_automatic_and_explicit_evaluation_only() -> None:
+def test_refetch_scope_respects_requested_universe_with_automatic_research_roles() -> None:
     mod = _load_module()
     with _conn() as conn:
-        assert mod._scope_tickers(conn, "portfolio_evaluation", None) == frozenset({"PORT"})
-        assert mod._scope_tickers(conn, "all_active", None) == frozenset({"PORT"})
+        assert mod._scope_tickers(conn, "portfolio_evaluation", None) == frozenset({"PORT", "EVAL"})
+        assert mod._scope_tickers(conn, "all_active", None) == frozenset({"PORT", "EVAL", "WATCH"})
         assert mod._scope_tickers(conn, "portfolio", ["EVAL"]) == frozenset({"EVAL"})
-        assert mod._scope_tickers(conn, "portfolio", ["WATCH", "IDX", "UNKNOWN"]) == frozenset()
+        assert mod._scope_tickers(conn, "portfolio", ["WATCH", "IDX", "UNKNOWN"]) == frozenset(
+            {"WATCH"}
+        )
 
 
 def test_refetch_index_is_bounded_to_five_latest_quarters_per_ticker(tmp_path: Path) -> None:
@@ -64,3 +65,13 @@ def test_refetch_index_is_bounded_to_five_latest_quarters_per_ticker(tmp_path: P
         ("PORT", 2026, 1),
         ("PORT", 2026, 2),
     ]
+
+
+def test_refetch_scope_denies_untyped_and_ambiguous_instruments() -> None:
+    mod = _load_module()
+    with _conn() as conn:
+        conn.executemany(
+            "INSERT INTO tracked_companies VALUES (?, 'evaluation', NULL, ?)",
+            [("UNTYPED", None), ("AMBIG", "equity"), ("AMBIG", "equity")],
+        )
+        assert mod._scope_tickers(conn, "all_active", None) == frozenset({"PORT", "EVAL", "WATCH"})

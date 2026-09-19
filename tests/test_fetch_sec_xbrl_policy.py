@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import argparse
@@ -20,7 +19,10 @@ from pipeline import sec_xbrl
 def _companies(rows: list[tuple[str, ListType]]) -> list[Company]:
     return cast(
         "list[Company]",
-        [SimpleNamespace(ticker=ticker, list_type=role) for ticker, role in rows],
+        [
+            SimpleNamespace(ticker=ticker, list_type=role, instrument_type="equity")
+            for ticker, role in rows
+        ],
     )
 
 
@@ -28,7 +30,7 @@ def _args(ticker: str | None = None, *, all_mapped: bool = False) -> argparse.Na
     return argparse.Namespace(ticker=ticker, all_mapped=all_mapped)
 
 
-def test_sec_scheduled_scope_is_portfolio_only_and_priority_ordered(
+def test_sec_scheduled_scope_includes_all_research_roles_and_is_priority_ordered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def tracked(_conn: sqlite3.Connection) -> list[Company]:
@@ -43,9 +45,14 @@ def test_sec_scheduled_scope_is_portfolio_only_and_priority_ordered(
 
     monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
     with sqlite3.connect(":memory:") as conn:
-        assert fetch_sec_xbrl._resolve_tickers(_args(all_mapped=True), conn) == [
+        assert cast(
+            Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+            getattr(fetch_sec_xbrl, "_resolve_tickers"),
+        )(_args(all_mapped=True), conn) == [
             "META",
             "RBRK",
+            "WIX",
+            "NOW",
         ]
 
 
@@ -64,10 +71,50 @@ def test_sec_explicit_request_uses_stored_role_and_cannot_bypass_denial(
     monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
     monkeypatch.setattr(fetch_sec_xbrl, "CIK_MAP", {"WIX": "1", "NOW": "2", "IDX": "3"})
     with sqlite3.connect(":memory:") as conn:
-        assert fetch_sec_xbrl._resolve_tickers(_args("WIX"), conn) == ["WIX"]
-        assert fetch_sec_xbrl._resolve_tickers(_args("NOW"), conn) == []
-        assert fetch_sec_xbrl._resolve_tickers(_args("IDX"), conn) == []
-        assert fetch_sec_xbrl._resolve_tickers(_args("UNKNOWN"), conn) == []
+        assert cast(
+            Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+            getattr(fetch_sec_xbrl, "_resolve_tickers"),
+        )(_args("WIX"), conn) == ["WIX"]
+        assert cast(
+            Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+            getattr(fetch_sec_xbrl, "_resolve_tickers"),
+        )(_args("NOW"), conn) == ["NOW"]
+        assert (
+            cast(
+                Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+                getattr(fetch_sec_xbrl, "_resolve_tickers"),
+            )(_args("IDX"), conn)
+            == []
+        )
+        assert (
+            cast(
+                Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+                getattr(fetch_sec_xbrl, "_resolve_tickers"),
+            )(_args("UNKNOWN"), conn)
+            == []
+        )
+
+
+@pytest.mark.parametrize("instrument", ["equity", "adr", "etf", None])
+def test_sec_evaluation_scope_requires_corporate_instrument(
+    monkeypatch: pytest.MonkeyPatch, instrument: str | None
+) -> None:
+    def tracked(_conn: sqlite3.Connection) -> list[Company]:
+        return cast(
+            "list[Company]",
+            [
+                SimpleNamespace(
+                    ticker="WIX", list_type=ListType.EVALUATION, instrument_type=instrument
+                )
+            ],
+        )
+
+    monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
+    with sqlite3.connect(":memory:") as conn:
+        assert cast(
+            Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+            getattr(fetch_sec_xbrl, "_resolve_tickers"),
+        )(_args(), conn) == (["WIX"] if instrument in ("equity", "adr") else [])
 
 
 def test_sec_documented_foreign_non_filer_emits_an_honest_disposition(
@@ -79,7 +126,13 @@ def test_sec_documented_foreign_non_filer_emits_an_honest_disposition(
 
     monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
     with sqlite3.connect(":memory:") as conn:
-        assert fetch_sec_xbrl._resolve_tickers(_args(), conn) == []
+        assert (
+            cast(
+                Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+                getattr(fetch_sec_xbrl, "_resolve_tickers"),
+            )(_args(), conn)
+            == []
+        )
 
     stderr = capsys.readouterr().err
     assert '"event": "sec_no_filer_disposition"' in stderr
@@ -97,7 +150,7 @@ def test_companyfacts_boundary_classifies_auth_denial(
 
     response = AuthResponse()
     response.status_code = status
-    response._content = b"denied"
+    setattr(response, "_content", b"denied")
 
     def get_response(*_args: object, **_kwargs: object) -> AuthResponse:
         return response

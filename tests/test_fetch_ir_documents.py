@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for execution/fetch_ir_documents.py — the IR document downloader.
 
 The load-bearing fix guarded here: the downloader must send a real BROWSER
@@ -13,30 +12,25 @@ from __future__ import annotations
 import email.message
 import json
 import sqlite3
-import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 from openpyxl import Workbook
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from execution import fetch_ir_documents as fid  # noqa: E402
-from models.documents import DocType  # noqa: E402
-from models.ir_uploads import CategorizationResult, Confidence  # noqa: E402
-from pipeline.issuer_document_inventory import (  # noqa: E402
+from execution import fetch_ir_documents as fid
+from models.documents import DocType
+from models.ir_uploads import CategorizationResult, Confidence
+from pipeline.issuer_document_inventory import (
     ExpectedIssuerDocument,
     IssuerDocumentInventoryRequest,
 )
-from provenance import secure_file_install  # noqa: E402
-from provenance.secure_file_install import (  # noqa: E402
+from provenance import secure_file_install
+from provenance.secure_file_install import (
     SecureFileInstallError,
     SecureFileInstallResult,
 )
@@ -93,10 +87,10 @@ def _make_policy_db(db: Path, rows: list[tuple[str, str]]) -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db) as conn:
         conn.execute(
-            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)"
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, instrument_type TEXT)"
         )
         conn.executemany(
-            "INSERT INTO tracked_companies VALUES (?, ?, NULL)",
+            "INSERT INTO tracked_companies VALUES (?, ?, NULL, 'equity')",
             rows,
         )
 
@@ -246,9 +240,14 @@ def test_direct_ticker_and_all_cannot_bypass_stored_roles(
     db = tmp_path / "portfolio.db"
     _make_policy_db(
         db,
-        [("PORT", "portfolio"), ("EVAL", "evaluation"), ("WATCH", "watchlist")],
+        [
+            ("PORT", "portfolio"),
+            ("EVAL", "evaluation"),
+            ("WATCH", "watchlist"),
+            ("IDX", "index_member"),
+        ],
     )
-    for ticker in ("PORT", "EVAL", "WATCH", "UNKNOWN"):
+    for ticker in ("PORT", "EVAL", "WATCH", "IDX", "UNKNOWN"):
         _write_manifest(tmp_path, ticker, f"https://issuer.example/{ticker}/2026Q1.pdf")
     calls: list[str] = []
 
@@ -263,7 +262,7 @@ def test_direct_ticker_and_all_cannot_bypass_stored_roles(
         fid.main(
             [
                 "--ticker",
-                "WATCH",
+                "IDX",
                 "--repo-root",
                 str(tmp_path),
                 "--db",
@@ -276,7 +275,11 @@ def test_direct_ticker_and_all_cannot_bypass_stored_roles(
     assert "source_collection_policy_denied" in capsys.readouterr().err
 
     assert fid.main(["--all", "--repo-root", str(tmp_path), "--db", str(db)]) == 0
-    assert calls == ["https://issuer.example/PORT/2026Q1.pdf"]
+    assert set(calls) == {
+        "https://issuer.example/PORT/2026Q1.pdf",
+        "https://issuer.example/EVAL/2026Q1.pdf",
+        "https://issuer.example/WATCH/2026Q1.pdf",
+    }
 
 
 def test_fetch_boundary_skips_manifest_periods_outside_canonical_window(
@@ -329,7 +332,9 @@ def test_staging_download_rejects_symlinked_objects_parent(
     monkeypatch.setattr(fid, "_fetch_bytes", fake_fetch)
 
     with pytest.raises(fid.IssuerDocumentPreparationError, match="staging_destination_unsafe"):
-        fid._download("https://issuer.example/report.pdf", staging / "objects", "report")
+        cast(Callable[[str, Path, str], Path | None], getattr(fid, "_download"))(
+            "https://issuer.example/report.pdf", staging / "objects", "report"
+        )
 
     assert sentinel.read_bytes() == b"unchanged"
     assert not (outside / "report.pdf").exists()
@@ -357,7 +362,9 @@ def test_staging_download_rejects_success_with_retained_residue(
     monkeypatch.setattr(fid, "install_bytes_no_clobber", install_with_residue)
 
     with pytest.raises(fid.IssuerDocumentPreparationError, match="staging_residue_retained") as exc:
-        fid._download("https://issuer.example/report.pdf", objects, "report")
+        cast(Callable[[str, Path, str], Path | None], getattr(fid, "_download"))(
+            "https://issuer.example/report.pdf", objects, "report"
+        )
 
     assert exc.value.phase == "download"
     assert exc.value.residue_paths == (residue.name,)
@@ -381,7 +388,9 @@ def test_staging_download_preserves_installer_failure_residue(
     with pytest.raises(
         fid.IssuerDocumentPreparationError, match="staging_destination_unsafe"
     ) as exc:
-        fid._download("https://issuer.example/report.pdf", objects, "report")
+        cast(Callable[[str, Path, str], Path | None], getattr(fid, "_download"))(
+            "https://issuer.example/report.pdf", objects, "report"
+        )
 
     assert exc.value.phase == "download"
     assert exc.value.residue_paths == (residue.name,)
@@ -398,7 +407,9 @@ def test_attempt_receipt_publish_preserves_installer_residue(
 
     monkeypatch.setattr(fid, "install_bytes_no_clobber", fail_install)
     with pytest.raises(fid.IssuerDocumentPreparationError) as exc:
-        fid._publish_attempt_text(attempt / "staging_receipt.json", "{}")
+        cast(Callable[[Path, str], None], getattr(fid, "_publish_attempt_text"))(
+            attempt / "staging_receipt.json", "{}"
+        )
 
     assert exc.value.code == "staging_receipt_publish_failed"
     assert exc.value.attempt_id == "attempt-0001"

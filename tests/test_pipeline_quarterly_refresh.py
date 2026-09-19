@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-# pyright: reportPrivateUsage=false
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -371,7 +372,7 @@ def test_validate_segment_cache_flags_contamination(
 
 
 def test_refresh_ticker_includes_sec_stage_when_opt_in(
-    conn: sqlite3.Connection, tmp_path: Path, monkeypatch
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """fetch_sec=True prepends the SEC fetch stage. Stub the network call."""
     _seed_thesis_state(conn, "MELI")
@@ -381,7 +382,7 @@ def test_refresh_ticker_includes_sec_stage_when_opt_in(
     from pipeline import quarterly_refresh as qr_mod
     from pipeline.sec_xbrl import IngestStats
 
-    def fake_ingest(conn, *, ticker, project_root):
+    def fake_ingest(conn: sqlite3.Connection, *, ticker: str, project_root: Path) -> IngestStats:
         return IngestStats(accessions_inserted=2, facts_inserted=10)
 
     monkeypatch.setattr(qr_mod, "ingest_sec_for_ticker", fake_ingest)
@@ -416,7 +417,7 @@ def test_refresh_ticker_skips_sec_stage_for_unmapped_ticker(
     assert "no CIK" in sec_stage.notes
 
 
-def test_quarterly_sec_stage_denies_watchlist_before_network(
+def test_quarterly_sec_stage_denies_index_member_before_network(
     conn: sqlite3.Connection,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -425,16 +426,18 @@ def test_quarterly_sec_stage_denies_watchlist_before_network(
 
     conn.execute(
         "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
-        "fiscal_year_end TEXT, archived_at TEXT)"
+        "fiscal_year_end TEXT, archived_at TEXT, instrument_type TEXT)"
     )
-    conn.execute("INSERT INTO tracked_companies VALUES ('MELI', 'watchlist', '12-31', NULL)")
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES ('MELI', 'index_member', '12-31', NULL, 'equity')"
+    )
 
     def _unexpected_ingest(*_args: object, **_kwargs: object) -> object:
         pytest.fail("network boundary was crossed")
 
     monkeypatch.setattr(module, "ingest_sec_for_ticker", _unexpected_ingest)
 
-    stage = module._stage_fetch_sec_xbrl(
+    stage = cast(Callable[..., StageResult], getattr(module, "_stage_fetch_sec_xbrl"))(
         conn,
         ticker="MELI",
         project_root=tmp_path,
@@ -455,9 +458,11 @@ def test_quarterly_sec_stage_allows_explicit_evaluation(
 
     conn.execute(
         "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
-        "fiscal_year_end TEXT, archived_at TEXT)"
+        "fiscal_year_end TEXT, archived_at TEXT, instrument_type TEXT)"
     )
-    conn.execute("INSERT INTO tracked_companies VALUES ('MELI', 'evaluation', '12-31', NULL)")
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES ('MELI', 'evaluation', '12-31', NULL, 'equity')"
+    )
     calls: list[str] = []
 
     def _ingest(*_args: object, ticker: str, **_kwargs: object) -> IngestStats:
@@ -465,7 +470,7 @@ def test_quarterly_sec_stage_allows_explicit_evaluation(
         return IngestStats(accessions_inserted=1, facts_inserted=2)
 
     monkeypatch.setattr(module, "ingest_sec_for_ticker", _ingest)
-    stage = module._stage_fetch_sec_xbrl(
+    stage = cast(Callable[..., StageResult], getattr(module, "_stage_fetch_sec_xbrl"))(
         conn,
         ticker="MELI",
         project_root=tmp_path,

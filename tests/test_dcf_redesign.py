@@ -2185,3 +2185,43 @@ def test_gsheets_reingest_carries_dashboard_edit_to_dcf_runs(
     # The persisted value reflects the edited (higher) terminal margin.
     assert float(row[0]) == pytest.approx(edited.value_per_share_usd, rel=0.05)
     assert float(row[0]) > base.value_per_share_usd
+
+
+@pytest.mark.parametrize("cash_equivalents_only", [False, True])
+def test_builder_reader_preserve_exact_cash_field_and_governed_debt_scope(
+    tmp_path: Path, cash_equivalents_only: bool
+) -> None:
+    repo = tmp_path / "fixture"
+    _write_fmp(repo, "TEST")
+    balance_path = repo / "data" / "historical" / "fmp" / "TEST_balance_sheet_quarterly.json"
+    balances = cast("list[dict[str, object]]", json.loads(balance_path.read_text()))
+    for record in balances:
+        if cash_equivalents_only:
+            record["cashAndCashEquivalents"] = record.pop("cashAndShortTermInvestments")
+    balance_path.write_text(json.dumps(balances))
+    with sqlite3.connect(repo / "data" / "portfolio.db") as conn:
+        conn.execute("UPDATE financial_facts SET value=130000000 WHERE line_item='total_debt'")
+        conn.execute(
+            "UPDATE financial_facts SET value=30000000 WHERE line_item='finance_lease_liability'"
+        )
+        if cash_equivalents_only:
+            conn.execute(
+                "UPDATE financial_facts SET line_item='cash_and_equivalents' "
+                "WHERE line_item='cash_and_short_term_investments'"
+            )
+        conn.commit()
+    dest = tmp_path / "TEST.xlsx"
+    builder_value = _build(repo, "TEST", dest)
+    inputs = redesign.read_inputs(dest)
+    assert inputs is not None
+    assert inputs.total_debt_m == pytest.approx(100.0)
+    assert redesign.value(inputs).value_per_share_usd == pytest.approx(builder_value, rel=0.03)
+    workbook = openpyxl.load_workbook(dest, read_only=True)
+    try:
+        labels = [row[0].value for row in workbook["Financials"].iter_rows(min_col=1, max_col=1)]
+        expected_cash_label = (
+            "Cash & Equivalents" if cash_equivalents_only else "Cash & ST Investments"
+        )
+        assert expected_cash_label in labels
+    finally:
+        workbook.close()

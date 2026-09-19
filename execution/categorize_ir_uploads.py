@@ -37,20 +37,14 @@ import sys
 from pathlib import Path
 from typing import cast
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-# When running from a git worktree, the gitignored data/ and ir_documents/
-# folders typically live next to the main checkout, not the worktree root.
-# Honor IR_PROJECT_ROOT for that case — purely a path override; logic identical.
-_PROJECT_ROOT_OVERRIDE = os.environ.get("IR_PROJECT_ROOT")
-if _PROJECT_ROOT_OVERRIDE:
-    PROJECT_ROOT = Path(_PROJECT_ROOT_OVERRIDE).resolve()
-
-import index_manager  # noqa: E402
-from ir_uploads import (  # noqa: E402
+import index_manager
+from compute.evidence_snapshot import capture_snapshot
+from ir_uploads import (
     CategorizationFailure,
     canonical_path,
     classify_ir_file,
@@ -60,8 +54,17 @@ from ir_uploads import (  # noqa: E402
     sha256_of,
     ticker_hint_from_path,
 )
-from models.documents import DocType, FetchStatus, SourceType  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from models.documents import DocType, FetchStatus, SourceType
+from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.immutable_artifact import publish_bytes_no_clobber
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+# When running from a git worktree, the gitignored data/ and ir_documents/
+# folders typically live next to the main checkout, not the worktree root.
+# Honor IR_PROJECT_ROOT for that case — purely a path override; logic identical.
+_PROJECT_ROOT_OVERRIDE = os.environ.get("IR_PROJECT_ROOT")
+if _PROJECT_ROOT_OVERRIDE:
+    PROJECT_ROOT = Path(_PROJECT_ROOT_OVERRIDE).resolve()
 
 IR_DIR = PROJECT_ROOT / "ir_documents"
 UNSORTED_DIR = IR_DIR / "_unsorted"
@@ -78,7 +81,7 @@ log = logging.getLogger("categorize_ir_uploads")
 
 # Subset of DocType values that the legacy `process_ir_documents.py` step
 # knows how to LLM-process via the (ticker, year, quarter, doc_type) keying.
-# `IR_EVENT` uses a separate event-keyed path — handled below in `_process_one`.
+# `IR_EVENT` uses a separate event-keyed path — handled below in `process_ir_document`.
 # Other doc_types (SEC_10K/10Q, IR_SUPPLEMENT) are still registered in `documents`
 # (canonical) but not mirrored to the legacy JSON index because the LLM step
 # has no handler for them.
@@ -142,27 +145,99 @@ def _insert_document_row(
     source_url: str,
     rel_root: Path,
 ) -> bool:
-    """INSERT OR IGNORE on the `documents` table. Returns True if inserted."""
+    """Admit verified bytes and same-identity relocation as one database unit."""
+    snapshot = capture_snapshot(file_path, file_path.parent)
+    if snapshot.sha256 != sha256 or len(snapshot.payload) != raw_bytes_size:
+        raise ValueError("IR document changed before registration")
     rel = _safe_rel(file_path, rel_root)
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO documents "
-        "(ticker, source_type, doc_type, period_end, file_path, sha256, "
-        " fetched_at, fetch_status, raw_bytes_size, source_url) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            ticker,
-            SourceType.IR_DOC.value,
-            doc_type.value,
-            dt.datetime.combine(period_end, dt.time(0, 0)).isoformat(),
-            rel,
-            sha256,
-            fetched_at.isoformat(),
-            FetchStatus.OK.value,
-            raw_bytes_size,
-            source_url,
-        ),
-    )
-    return cur.rowcount > 0
+    conn.execute("SAVEPOINT ir_document_capture")
+    try:
+        existing = conn.execute(
+            "SELECT id,ticker,source_type,doc_type,period_end,raw_bytes_size "
+            "FROM documents WHERE sha256=?",
+            (sha256,),
+        ).fetchone()
+        inserted = existing is None
+        if existing is None:
+            cursor = conn.execute(
+                "INSERT INTO documents "
+                "(ticker,source_type,doc_type,period_end,file_path,sha256,"
+                "fetched_at,fetch_status,raw_bytes_size,source_url) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    ticker,
+                    SourceType.IR_DOC.value,
+                    doc_type.value,
+                    dt.datetime.combine(period_end, dt.time()).isoformat(),
+                    rel,
+                    sha256,
+                    fetched_at.isoformat(),
+                    FetchStatus.OK.value,
+                    raw_bytes_size,
+                    source_url,
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("IR document registration returned no identity")
+            document_id = cursor.lastrowid
+        else:
+            existing_period = dt.datetime.fromisoformat(str(existing[4])).date()
+            if (
+                tuple(existing[1:4]) != (ticker, SourceType.IR_DOC.value, doc_type.value)
+                or existing_period != period_end
+                or existing[5] != raw_bytes_size
+            ):
+                raise ValueError("IR bytes already have conflicting registered identity or scope")
+            document_id = int(existing[0])
+            conn.execute("UPDATE documents SET file_path=? WHERE id=?", (rel, document_id))
+        if (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_document_versions'"
+            ).fetchone()
+            is not None
+        ):
+            ensure_legacy_document_evidence(conn, repo_root=rel_root, document_id=document_id)
+        else:
+            log.warning(
+                {"event": "ir_capture_legacy_schema_without_evidence", "document_id": document_id}
+            )
+        conn.execute("RELEASE SAVEPOINT ir_document_capture")
+        return inserted
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT ir_document_capture")
+        conn.execute("RELEASE SAVEPOINT ir_document_capture")
+        raise
+
+
+def _retire_unreferenced_input(
+    source: Path, destination: Path, conn: sqlite3.Connection, digest: str, root: Path
+) -> None:
+    """Remove only a committed, unchanged duplicate with no retained evidence alias."""
+    if conn.in_transaction or source.resolve() == destination.resolve():
+        return
+    if (
+        conn.execute(
+            "SELECT 1 FROM documents WHERE file_path IN (?,?)",
+            (_safe_rel(source, root), str(source.resolve())),
+        ).fetchone()
+        is not None
+    ):
+        return
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_content_blobs'"
+        ).fetchone()
+        is not None
+        and conn.execute(
+            "SELECT 1 FROM evidence_content_blobs WHERE storage_uri=? "
+            "UNION ALL SELECT 1 FROM evidence_blob_location_observations WHERE storage_uri=? LIMIT 1",
+            (source.resolve().as_uri(), source.resolve().as_uri()),
+        ).fetchone()
+        is not None
+    ):
+        return
+    if capture_snapshot(source, source.parent).sha256 != digest:
+        raise ValueError("IR incoming source changed after its snapshot was registered")
+    source.unlink()
 
 
 def _move_or_error(src: Path, dest: Path, dry_run: bool) -> None:
@@ -219,7 +294,7 @@ def _safe_rel(p: Path, root: Path) -> str:
         return str(p).replace("\\", "/")
 
 
-def _process_one(
+def process_ir_document(
     path: Path,
     conn: sqlite3.Connection | None,
     dry_run: bool,
@@ -237,13 +312,21 @@ def _process_one(
     Files inside a ticker subdir but not at a canonical filename get the parent
     folder's ticker passed to `classify_ir_file` as a hint.
     """
-    canonical = parse_canonical_path(path, ir_dir)
+    try:
+        relative_source = path.relative_to(ir_dir)
+    except ValueError:
+        relative_source = path.relative_to(ir_dir.resolve())
+    path = ir_dir.resolve() / relative_source
+    source_snapshot = capture_snapshot(path, path.parent)
+    canonical = parse_canonical_path(path.resolve(), ir_dir.resolve())
     if canonical is not None:
         if ticker_filter and canonical.ticker != ticker_filter:
             log.info({"event": "skipped_filter", "file": path.name, "ticker": canonical.ticker})
             return {"status": "skipped", "original": path.name, "ticker": canonical.ticker}
-        sha = sha256_of(path)
-        raw_bytes_size = path.stat().st_size
+        sha = source_snapshot.sha256
+        raw_bytes_size = len(source_snapshot.payload)
+        if canonical_path(ir_dir, canonical, sha, path.suffix).resolve() != path.resolve():
+            raise ValueError("IR canonical filename does not match its bytes")
         log.info(
             {
                 "event": "reindexed",
@@ -271,8 +354,12 @@ def _process_one(
             legacy = _LEGACY_INDEX_MAP.get(canonical.doc_type)
             if legacy is not None:
                 year, qlabel = _quarter_label_from_period_end(canonical.period_end)
-                existing_idx = index_manager.has_document(canonical.ticker, year, qlabel, legacy)
-                already_processed = bool(existing_idx and existing_idx.get("processed"))
+                existing_idx = cast(
+                    object, index_manager.has_document(canonical.ticker, year, qlabel, legacy)
+                )
+                already_processed = (
+                    isinstance(existing_idx, dict) and existing_idx.get("processed") is True
+                )
                 if not already_processed:
                     index_manager.register_ir_document(
                         ticker=canonical.ticker,
@@ -298,6 +385,8 @@ def _process_one(
 
     hint = ticker_hint_from_path(path, ir_dir)
     outcome = classify_ir_file(path, ticker_hint=hint, calendar_override=calendar_override)
+    if capture_snapshot(path, path.parent).sha256 != source_snapshot.sha256:
+        raise ValueError("IR source changed during classification")
     src_url = (url_overrides or {}).get(path.name)
     if isinstance(outcome, CategorizationFailure):
         log.warning({"event": "rejected", "file": path.name, "reason": outcome.reason})
@@ -327,9 +416,9 @@ def _process_one(
             "ticker": outcome.ticker,
         }
 
-    sha = sha256_of(path)
-    raw_bytes_size = path.stat().st_size
-    new_path = canonical_path(ir_dir, outcome, sha, path.suffix)
+    sha = source_snapshot.sha256
+    raw_bytes_size = len(source_snapshot.payload)
+    new_path = canonical_path(ir_dir.resolve(), outcome, sha, path.suffix)
 
     log.info(
         {
@@ -343,11 +432,13 @@ def _process_one(
         }
     )
 
-    _move_or_error(path, new_path, dry_run)
+    if not dry_run:
+        snapshot = capture_snapshot(path, path.parent)
+        if snapshot.sha256 != sha or len(snapshot.payload) != raw_bytes_size:
+            raise ValueError("IR source changed during categorization")
+        publish_bytes_no_clobber(new_path, snapshot.payload)
 
-    fetched_at = dt.datetime.fromtimestamp(
-        path.stat().st_mtime if path.exists() else new_path.stat().st_mtime
-    )
+    fetched_at = dt.datetime.fromtimestamp(path.stat().st_mtime)
 
     db_inserted = False
     if not dry_run and conn is not None:
@@ -363,6 +454,7 @@ def _process_one(
             source_url=src_url or f"manual_upload:{path.name}",
             rel_root=rel_root,
         )
+        _retire_unreferenced_input(path, new_path, conn, sha, rel_root)
         legacy = _LEGACY_INDEX_MAP.get(outcome.doc_type)
         if legacy is not None:
             year, qlabel = _quarter_label_from_period_end(outcome.period_end)
@@ -483,7 +575,7 @@ def main() -> int:
     counts = {"categorized": 0, "rejected": 0, "skipped": 0}
     try:
         for f in files:
-            record = _process_one(
+            record = process_ir_document(
                 f,
                 conn,
                 args.dry_run,
@@ -494,7 +586,10 @@ def main() -> int:
                 calendar_override=args.calendar,
             )
             records.append(record)
-            counts[record["status"]] = counts.get(record["status"], 0) + 1
+            status = record["status"]
+            if not isinstance(status, str):
+                raise RuntimeError("IR categorization returned an invalid status")
+            counts[status] = counts.get(status, 0) + 1
             if conn is not None:
                 conn.commit()
     finally:

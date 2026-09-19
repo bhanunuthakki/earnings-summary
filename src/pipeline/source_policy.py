@@ -14,11 +14,11 @@ from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from models.companies import ListType
+from models.companies import InstrumentType, ListType
 from models.documents import DocType
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-POLICY_VERSION = "2026-08-12.2"
+POLICY_VERSION = "2026-09-19.1"
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
@@ -215,6 +215,8 @@ class StoredIdentityStatus(StrEnum):
     IDENTITY_AMBIGUOUS = "stored_identity_ambiguous"
     ROLE_INVALID = "stored_role_invalid"
     POLICY_DENIED = "policy_denied"
+    INSTRUMENT_UNAVAILABLE = "stored_instrument_unavailable"
+    INSTRUMENT_NOT_APPLICABLE = "stored_instrument_not_applicable"
 
 
 class StoredCollectionAuthorization(BaseModel):
@@ -379,8 +381,8 @@ class IssuerAcquisitionPolicy(BaseModel):
 
 _ROLE_MODES: dict[ListType, CollectionMode] = {
     ListType.PORTFOLIO: CollectionMode.AUTOMATIC_FULL,
-    ListType.EVALUATION: CollectionMode.ON_DEMAND_FULL,
-    ListType.WATCHLIST: CollectionMode.METADATA_ONLY,
+    ListType.EVALUATION: CollectionMode.AUTOMATIC_FULL,
+    ListType.WATCHLIST: CollectionMode.AUTOMATIC_FULL,
     ListType.INDEX_MEMBER: CollectionMode.SCREENING_ONLY,
     ListType.NONE: CollectionMode.CATALOG_ONLY,
     ListType.ETF: CollectionMode.CATALOG_ONLY,
@@ -526,7 +528,7 @@ def select_collection_targets(
 ) -> CollectionSelection:
     """Authorize and priority-order a runner scope through the canonical policy.
 
-    Portfolio always precedes explicitly requested evaluation work. Denied names
+    Portfolio precedes evaluation and watchlist work at equal collection depth. Denied names
     remain in the receipt so scheduled runners can explain skipped coverage
     instead of silently broadening their crawl.
     """
@@ -553,6 +555,22 @@ def select_collection_targets(
     )
 
 
+def instrument_allows_artifact(
+    instrument_type: str | None,
+    *,
+    source: CollectionSource,
+    artifact_kind: ArtifactKind,
+    require_corporate_instrument: bool = False,
+) -> bool:
+    """Require a stored corporate instrument before fetching corporate source bytes."""
+
+    if artifact_kind is ArtifactKind.METADATA or (
+        source is CollectionSource.FMP and not require_corporate_instrument
+    ):
+        return True
+    return instrument_type in (InstrumentType.EQUITY, InstrumentType.ADR)
+
+
 def authorize_stored_collection_target(
     db_path: Path,
     ticker: str,
@@ -560,6 +578,7 @@ def authorize_stored_collection_target(
     requested: bool,
     source: CollectionSource,
     artifact_kind: ArtifactKind,
+    require_corporate_instrument: bool = False,
 ) -> StoredCollectionAuthorization:
     """Bind a network decision to one active stored company identity.
 
@@ -579,6 +598,7 @@ def authorize_stored_collection_target(
                 requested=requested,
                 source=source,
                 artifact_kind=artifact_kind,
+                require_corporate_instrument=require_corporate_instrument,
             )
         finally:
             conn.close()
@@ -593,6 +613,7 @@ def authorize_collection_target_in_connection(
     requested: bool,
     source: CollectionSource,
     artifact_kind: ArtifactKind,
+    require_corporate_instrument: bool = False,
 ) -> StoredCollectionAuthorization:
     """Authorize one active stored identity using a caller-owned connection."""
 
@@ -621,6 +642,30 @@ def authorize_collection_target_in_connection(
     columns = {
         str(column[1]) for column in conn.execute("PRAGMA table_info(tracked_companies)").fetchall()
     }
+    instrument_row = (
+        conn.execute(
+            "SELECT instrument_type FROM tracked_companies "
+            "WHERE UPPER(ticker)=? AND archived_at IS NULL",
+            (normalized_ticker,),
+        ).fetchone()
+        if "instrument_type" in columns
+        else None
+    )
+    instrument = instrument_row[0] if instrument_row is not None else None
+    if not instrument_allows_artifact(
+        instrument,
+        source=source,
+        artifact_kind=artifact_kind,
+        require_corporate_instrument=require_corporate_instrument,
+    ):
+        return StoredCollectionAuthorization(
+            status=(
+                StoredIdentityStatus.INSTRUMENT_NOT_APPLICABLE
+                if instrument == InstrumentType.ETF
+                else StoredIdentityStatus.INSTRUMENT_UNAVAILABLE
+            ),
+            target=target,
+        )
     fye_row = (
         conn.execute(
             "SELECT fiscal_year_end FROM tracked_companies "

@@ -10,9 +10,10 @@ from alembic.config import Config
 from sqlalchemy.exc import OperationalError
 
 from alembic import command
+from schema_compat import expected_head
 
 ROOT = Path(__file__).resolve().parents[1]
-ACTIVE_HEAD = "0039_add_dcf_forecast_series"
+ACTIVE_HEAD = expected_head()
 GROUNDING_REVISION = "0016_add_ask_grounding_traces"
 
 

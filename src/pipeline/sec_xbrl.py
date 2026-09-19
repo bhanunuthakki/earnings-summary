@@ -112,6 +112,7 @@ CIK_MAP: dict[str, str] = {
     "BEPC": "0001791863",
     "BHP": "0000811809",
     "BIPC": "0001788348",
+    "BIRK": "0001977102",
     "BKNG": "0001075531",
     "BN": "0001001085",
     "BRK-B": "0001067983",
@@ -140,6 +141,7 @@ CIK_MAP: dict[str, str] = {
     "FRVO": "0001853868",
     "FTNT": "0001262039",
     "GOOG": "0001652044",
+    "GOOS": "0001690511",
     "GTLB": "0001653482",
     "HASI": "0001561894",
     "HBM": "0001322422",
@@ -197,6 +199,7 @@ CIK_MAP: dict[str, str] = {
     "V": "0001403161",
     "VALE": "0000917851",
     "VEEV": "0001393052",
+    "VFC": "0000103379",
     "WGS": "0001818331",
     "WIX": "0001576789",
     "WMB": "0000107263",
@@ -442,6 +445,18 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
         ("us-gaap", "LongTermDebtNoncurrent"),
         ("us-gaap", "LongTermDebt"),
         ("ifrs-full", "LongtermBorrowings"),
+    ),
+    # Preserve the lease-exclusive current/non-current carrying amounts as
+    # distinct source concepts.  They are not substitutes for FMP's
+    # lease-inclusive debt fields. Even together, they do not establish complete
+    # borrowing coverage: standalone short-term borrowings may remain separate.
+    _ladder(
+        "long_term_debt_current_excluding_leases",
+        ("us-gaap", "LongTermDebtCurrent"),
+    ),
+    _ladder(
+        "long_term_debt_non_current_excluding_leases",
+        ("us-gaap", "LongTermDebtNoncurrent"),
     ),
     _ladder(
         # This taxonomy concept is explicitly the complete short-term plus

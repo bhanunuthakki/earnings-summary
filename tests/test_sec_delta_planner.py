@@ -42,7 +42,8 @@ def _create_db(path: Path, *, complete_schema: bool = True) -> None:
         CREATE TABLE tracked_companies (
             ticker TEXT NOT NULL,
             list_type TEXT NOT NULL,
-            archived_at TEXT
+            archived_at TEXT,
+            instrument_type TEXT NOT NULL DEFAULT 'equity'
         );
         """
     )
@@ -87,7 +88,7 @@ def _create_db(path: Path, *, complete_schema: bool = True) -> None:
 def _seed_roster(path: Path) -> None:
     conn = sqlite3.connect(path)
     conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?,?,?)",
+        "INSERT INTO tracked_companies(ticker,list_type,archived_at) VALUES (?,?,?)",
         (
             ("META", "portfolio", None),
             ("RBRK", "portfolio", None),
@@ -169,16 +170,23 @@ def test_plan_is_deterministic_tiered_and_fail_closed(tmp_path: Path) -> None:
     assert first.alembic_revision == planner.SUPPORTED_ALEMBIC_REVISION
     assert first.database_storage_identity.entries[0].suffix == ""
     assert len(first.database_storage_identity.entries) == 1
-    assert first.source_policy_version == "2026-08-12.2"
+    assert first.source_policy_version == "2026-09-19.1"
     assert first.source_policy_sha256 == _sha256(
         Path(__file__).parents[1] / "src" / "pipeline" / "source_policy.py"
     )
-    assert [plan.ticker for plan in first.ticker_plans] == ["DUOL", "META", "RBRK", "ZZZZ"]
+    assert [plan.ticker for plan in first.ticker_plans] == [
+        "AMD",
+        "DUOL",
+        "META",
+        "RBRK",
+        "WIX",
+        "ZZZZ",
+    ]
 
     roster = {item.ticker: item for item in first.roster}
     assert roster["DUOL"].selection == "OWNER_REQUESTED_EVALUATION"
-    assert roster["WIX"].selection == "EXCLUDED_EVALUATION_REQUEST_REQUIRED"
-    assert roster["AMD"].selection == "EXCLUDED_LIST_TYPE"
+    assert roster["WIX"].selection == "AUTOMATIC_FULL"
+    assert roster["AMD"].selection == "AUTOMATIC_FULL"
     assert roster["GOOG"].selection == "EXCLUDED_LIST_TYPE"
     assert roster["ARCH"].selection == "EXCLUDED_ARCHIVED"
     assert roster["IVN"].selection == "EXCLUDED_NO_SEC_FILER"
@@ -240,7 +248,9 @@ def test_plan_refuses_wal_snapshot_before_opening_or_mutating_shm(tmp_path: Path
     connection = sqlite3.connect(db)
     try:
         assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
-        connection.execute("INSERT INTO tracked_companies VALUES ('META','portfolio',NULL)")
+        connection.execute(
+            "INSERT INTO tracked_companies(ticker,list_type,archived_at) VALUES ('META','portfolio',NULL)"
+        )
         connection.commit()
         wal = Path(f"{db}-wal")
         shm = Path(f"{db}-shm")
@@ -414,7 +424,9 @@ def test_cli_failure_is_compact_truthful_and_does_not_write_output(tmp_path: Pat
     connection = sqlite3.connect(db)
     try:
         assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
-        connection.execute("INSERT INTO tracked_companies VALUES ('META','portfolio',NULL)")
+        connection.execute(
+            "INSERT INTO tracked_companies(ticker,list_type,archived_at) VALUES ('META','portfolio',NULL)"
+        )
         connection.commit()
         script = Path(__file__).parents[1] / "execution" / "plan_sec_delta_refresh.py"
         output = tmp_path / "governed" / "must-not-exist.json"
@@ -521,3 +533,24 @@ def test_ordinary_output_rechecks_immutable_database_storage(tmp_path: Path) -> 
     assert terminal.plan_path == str(output.resolve())
     assert output.exists()
     assert planner.database_storage_identity(db) == plan.database_storage_identity
+
+
+@pytest.mark.parametrize("instrument", ["etf", None, "unknown"])
+def test_planner_excludes_noncorporate_evaluation_identity(
+    tmp_path: Path, instrument: str | None
+) -> None:
+    db = tmp_path / "snapshot.db"
+    _create_db(db)
+    with sqlite3.connect(db) as conn:
+        # Keep unknown instrument explicit without weakening the normal fixture.
+        conn.execute("DROP TABLE tracked_companies")
+        conn.execute(
+            "CREATE TABLE tracked_companies "
+            "(ticker TEXT, list_type TEXT, archived_at TEXT, instrument_type TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO tracked_companies VALUES ('WIX','evaluation',NULL,?)", (instrument,)
+        )
+    receipt = build_sec_delta_plan(_request(db))
+    assert receipt.ticker_plans == ()
+    assert receipt.roster[0].selection == "EXCLUDED_INSTRUMENT"

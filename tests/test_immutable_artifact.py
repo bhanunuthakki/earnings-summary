@@ -11,9 +11,21 @@ import provenance.immutable_artifact as immutable
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
     assert_artifact_unchanged,
+    publish_bytes_no_clobber,
     publish_text_no_clobber,
     read_stable_artifact,
 )
+
+
+def test_exact_byte_publication_preserves_binary_and_rejects_replacement(tmp_path: Path) -> None:
+    path = tmp_path / "source.bin"
+    payload = b"\xff\x00\r\nraw"
+    assert publish_bytes_no_clobber(path, payload)
+    assert path.read_bytes() == payload
+    assert not publish_bytes_no_clobber(path, payload)
+    with pytest.raises(ImmutableArtifactConflictError, match="different content"):
+        publish_bytes_no_clobber(path, b"changed")
+    assert path.read_bytes() == payload
 
 
 def test_stable_artifact_snapshot_detects_later_replacement(tmp_path: Path) -> None:

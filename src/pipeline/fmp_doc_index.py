@@ -32,8 +32,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+from compute.evidence_snapshot import capture_snapshot
 from net.client import HTTP_CLIENT, HttpCallError, JsonShape
 from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.immutable_artifact import publish_bytes_no_clobber
 
 _PERIOD_SUFFIXES = ("annual", "quarterly", "ttm")
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -104,12 +106,11 @@ def classify_fmp_filename(fname: str) -> str:
     return _FMP_DOC_TYPE_MAP.get(rest, "fmp_other")
 
 
-def _max_date_in_records(path: Path) -> datetime | None:
+def _max_date_in_records(content: bytes) -> datetime | None:
     """Scan FMP JSON for max `date` or `fillingDate`; return as datetime or None."""
     try:
-        with open(path, encoding="utf-8") as f:
-            raw: object = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        raw: object = json.loads(content)
+    except (UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(raw, list):
         return None
@@ -129,14 +130,6 @@ def _max_date_in_records(path: Path) -> datetime | None:
     if max_iso is None:
         return None
     return datetime.fromisoformat(max_iso)
-
-
-def _sha256_of(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def set_fiscal_year_end_from_fmp(
@@ -429,72 +422,101 @@ def set_filing_regime_from_profile(
     return regime
 
 
+def register_fmp_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    source_filename: str,
+    content: bytes,
+    project_root: Path,
+    captured_at: datetime,
+    period_end: datetime | None,
+) -> tuple[int, bool]:
+    """Register exact retained bytes and evidence inside the caller's transaction.
+
+    The evolving FMP cache remains a current-value projection. Registered source
+    documents point at no-clobber snapshots; matching legacy rows may change only
+    their physical location, never their recorded hash or source identity.
+    """
+    if not conn.in_transaction:
+        raise RuntimeError("FMP snapshot registration requires a caller-owned transaction")
+    upper = ticker.upper()
+    if (
+        Path(source_filename).name != source_filename
+        or not source_filename.startswith(f"{upper}_")
+        or not source_filename.endswith(".json")
+    ):
+        raise ValueError("FMP source filename does not match its ticker")
+    digest = hashlib.sha256(content).hexdigest()
+    relative = Path("data/historical/fmp_snapshots") / digest[:2] / digest / source_filename
+    # Resolve the configured data junction only; nested aliases must still be
+    # rejected by the immutable publisher rather than redirecting a write.
+    snapshot = (project_root / "data").resolve() / relative.relative_to("data")
+    publish_bytes_no_clobber(snapshot, content)
+    doc_type = classify_fmp_filename(source_filename)
+    existing = conn.execute(
+        "SELECT id,ticker,source_type,doc_type,raw_bytes_size FROM documents WHERE sha256=?",
+        (digest,),
+    ).fetchone()
+    created = existing is None
+    if existing is None:
+        cursor = conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
+            "fetch_status,raw_bytes_size,source_url) VALUES (?,'fmp',?,?,?,?,?,'ok',?,NULL)",
+            (upper, doc_type, period_end, relative.as_posix(), digest, captured_at, len(content)),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("FMP document registration returned no identity")
+        document_id = cursor.lastrowid
+    else:
+        if tuple(existing[1:]) != (upper, "fmp", doc_type, len(content)):
+            raise ValueError("FMP snapshot hash conflicts with registered document metadata")
+        document_id = int(existing[0])
+        conn.execute(
+            "UPDATE documents SET file_path=? WHERE id=?", (relative.as_posix(), document_id)
+        )
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_document_versions'"
+        ).fetchone()
+        is not None
+    ):
+        ensure_legacy_document_evidence(conn, repo_root=project_root, document_id=document_id)
+    return document_id, created
+
+
 def index_fmp_files_for_ticker(
     conn: sqlite3.Connection,
     ticker: str,
     project_root: Path,
 ) -> int:
-    """Index every `data/historical/fmp/{TICKER}_*.json` into `documents`.
-
-    Returns the count of newly-inserted rows. INSERT OR IGNORE on sha256 means
-    files whose content is already in the table are skipped. Files whose
-    classification can't be derived land in `fmp_other` (matching 0003 behavior).
-    """
+    """Retain and index each current FMP file; exact bytes replay idempotently."""
     fmp_dir = project_root / "data" / "historical" / "fmp"
     if not fmp_dir.exists():
         return 0
-
     upper = ticker.upper()
     prefix = f"{upper}_"
     inserted = 0
-    capture_evidence = (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master "
-            "WHERE type = 'table' AND name = 'evidence_document_versions'"
-        ).fetchone()
-        is not None
-    )
-
-    for path in sorted(fmp_dir.iterdir()):
-        if not path.is_file() or not path.name.startswith(prefix) or path.suffix != ".json":
-            continue
-
-        doc_type = classify_fmp_filename(path.name)
-        period_end = _max_date_in_records(path)
-        sha = _sha256_of(path)
-        stat = path.stat()
-        rel_path = str(path.relative_to(project_root)).replace("\\", "/")
-
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO documents "
-            "(ticker, source_type, doc_type, period_end, file_path, sha256, "
-            " fetched_at, fetch_status, raw_bytes_size, source_url) "
-            "VALUES (?, 'fmp', ?, ?, ?, ?, ?, 'ok', ?, NULL)",
-            (
-                upper,
-                doc_type,
-                period_end,
-                rel_path,
-                sha,
-                datetime.fromtimestamp(stat.st_mtime),
-                stat.st_size,
-            ),
-        )
-        if cur.rowcount > 0:
-            inserted += 1
-        if capture_evidence:
-            document = conn.execute(
-                "SELECT id FROM documents WHERE sha256 = ? ORDER BY id LIMIT 1",
-                (sha,),
-            ).fetchone()
-            if document is None:
-                raise RuntimeError(f"indexed FMP document disappeared for {path.name}")
-            document_id = int(document[0])
-            ensure_legacy_document_evidence(
+    try:
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        for path in sorted(fmp_dir.iterdir()):
+            if not path.is_file() or not path.name.startswith(prefix) or path.suffix != ".json":
+                continue
+            held = capture_snapshot(path, fmp_dir)
+            _, created = register_fmp_snapshot(
                 conn,
-                repo_root=project_root,
-                document_id=document_id,
+                ticker=upper,
+                source_filename=path.name,
+                content=held.payload,
+                project_root=project_root,
+                captured_at=datetime.fromtimestamp(path.stat().st_mtime),
+                period_end=_max_date_in_records(held.payload),
             )
-
-    conn.commit()
+            inserted += int(created)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return inserted

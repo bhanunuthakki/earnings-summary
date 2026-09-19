@@ -19,23 +19,26 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from compute._common import insert_financial_facts  # noqa: E402
-from compute.s1_financials import (  # noqa: E402
+from compute._common import insert_financial_facts
+from compute.evidence_snapshot import capture_snapshot
+from compute.s1_financials import (
     EXTRACTED_BY,
     build_financial_facts,
     parse_s1_text,
 )
-from models.documents import DocType, FetchStatus, SourceType, tier_for_source_type  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
+from models.documents import DocType, FetchStatus, SourceType, tier_for_source_type
+from pipeline.queries import open_db
 
 
 def _resolve_s1_path(repo_root: Path, ticker: str, override: Path | None) -> Path | None:
@@ -51,7 +54,7 @@ def _resolve_s1_path(repo_root: Path, ticker: str, override: Path | None) -> Pat
 
 
 def _upsert_s1_document(
-    conn,
+    conn: sqlite3.Connection,
     *,
     ticker: str,
     rel_path: str,
@@ -132,7 +135,9 @@ def main() -> int:
         )
         return 1
 
-    text = s1_path.read_text(encoding="utf-8")
+    source = capture_snapshot(s1_path, s1_path.parent)
+    # Preserve universal-newline parsing while retaining exact source-byte identity.
+    text = source.payload.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     data = parse_s1_text(text)
     if not data:
         print(
@@ -161,8 +166,8 @@ def main() -> int:
         print(json.dumps(summary, indent=2))
         return 0
 
-    raw_bytes_size = len(text.encode("utf-8"))
-    sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    raw_bytes_size = len(source.payload)
+    sha256 = source.sha256
     try:
         rel_path = str(s1_path.relative_to(repo_root)).replace("\\", "/")
     except ValueError:

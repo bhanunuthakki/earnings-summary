@@ -108,3 +108,75 @@ button. Its current supported state is `hold`: deterministic resolver readiness 
 receipt, while reader activation requires separately approved portfolio evidence and an explicit owner
 decision. The CLI is the primary operator surface for this rehearsal; no current-health projection is
 claimed from an old receipt.
+
+### Legacy evidence backfill and managed IR byte admission
+
+`execution/backfill_evidence_ledger.py` remains an explicit, bounded manual operation;
+its CLI is the primary surface, with no scheduled job or Operations-workspace control.
+Apply holds the exact target database-adjacent writer lock and a checkpoint lock
+rooted at the artifact state location, shared across code checkouts. A validated
+ancestor lock is reused only when it owns this exact target database. Exit 2 reports quarantined
+items in the current batch, and exit 75 reports lock contention; exit 0 alone never
+proves population completeness. Inspect `has_more` and the retained checkpoint.
+Checkpoints bind the resolved database path, retain quarantined document identities,
+and process unseen documents before bounded rotating retries. A legacy unbound
+checkpoint requires a new task ID; do not alter its cursor to imply successful repair.
+Do not loop unchanged failing batches merely because `has_more` is true. Restore or
+recapture missing/mismatched source bytes under their own authority before retrying.
+The path binding is not proof against an in-place database replacement; retain the
+canonical state authority and its recovery/version checks.
+
+Managed IR publication keeps its existing operation and visible receipt contract.
+It now anchors retained bytes in the evidence ledger within the publication transaction
+and verifies that foundation on replay. This does not establish extraction completeness,
+semantic admission, or a current-health claim. Historical publication receipts without
+that foundation require explicit reconciliation; changed verifier identity can require
+re-preparing staged artifacts. **No surface change:** the canonical Operations registry
+and visible Jobs, Sources, Data, and Actions contracts remain unchanged. Regression
+coverage lives in `test_evidence_backfill.py`, `test_evidence_backfill_cli_guard.py`, and
+`test_managed_ir_sources.py`, including quarantine recovery, contention, byte drift,
+replay integrity, and transaction rollback.
+
+### Recovery queue policy migration
+
+Migration `0040_fmp_watchlist_recovery` admits automatic evaluation and watchlist
+work in the existing FMP queue. It preserves stable work IDs, retained rows, indexes,
+attempts, and events; provider budgets, circuit controls, and source-policy checks
+remain operative. Claimed explicit requests require a nonblank request identity.
+Schema upgrade belongs to the canonical database writer under the existing backup
+and deployment procedure. Downgrade fails without deleting rows that require the
+newer role/request constraints. No scheduler activation or new UI action is implied.
+
+### Progressive document evidence continuation
+
+`execution/process_document_evidence.py` provides a read-only plan by default and
+an explicit bounded `--apply` mode for stored active portfolio, evaluation, and
+watchlist documents. It captures matching retained bytes, runs supported deterministic
+full-text extraction through existing owners, and refreshes only already-linked
+source inventories. It performs no source crawl, LLM call, financial semantic
+admission, or completeness initialization. Newest stored document IDs receive
+priority; that ordering is not proof of the latest issuer disclosure.
+
+The existing morning pipeline includes this deterministic stage, with an explicit
+database and product-state root, bounded batches, and existing runtime accounting.
+No additional scheduler task or LLM window is created. `--resume` retains an atomic
+database/scope-bound receipt and cursor under the product-state Operations runtime
+directory. A failed item remains in the pending set; completed input/extractor
+versions replay without another extraction. Structural scope mismatch fails closed.
+The exact target database-adjacent writer lock and a product-state-root receipt
+lock coordinate across code checkouts; inherited ownership is reused only for
+the same verified target.
+
+The JSON result is the primary detailed operator surface: it distinguishes capture,
+extraction, already-covered, quarantine, unsupported, failed, and not-attempted
+outcomes, plus missing source inventory. Exit 2 indicates degraded/unfinished proof;
+75 indicates contention. The existing morning stage status exposes degradation,
+while the receipt explains individual documents. Do not interpret a stored batch
+receipt as current proof after inputs, extractor versions, or inventory scope change.
+No new Operations-workspace action or health badge is introduced.
+
+Historical accession-key documents use the dedicated append-only SEC binding/fact-match
+repair owners, not a hash overwrite. Those owners' isolated-target restrictions remain
+in force. Restoring unavailable original bytes, bootstrapping issuer authority and
+source inventories, semantic admission, and production cutover require their own
+evidence; this continuation cannot imply those steps passed.

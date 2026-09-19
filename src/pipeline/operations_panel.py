@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from log_redact import sanitize_operational_text
 from operations.attention_projection import AttentionPanelView
+from operations.host_runtime import HostReceipt, State
+from operations.host_runtime import attention_count as host_attention_count
 from operations.models import (
     JobReceiptObservation,
     ObservationEnvelope,
@@ -61,7 +63,20 @@ class RelatedOperationsView(_ViewModel):
     section_ids: tuple[str, ...] = ()
 
 
+HOST_RUNTIME_DISPOSITION = SurfaceDisposition(
+    field="host_runtime.v1",
+    destination="linked_view",
+    targets=("host_runtime",),
+    rationale="Private host owners use their own typed cached receipt; gaps contribute to Operations attention without controls.",
+)
+
+
 OPERATIONS_RELATED_VIEWS = (
+    RelatedOperationsView(
+        key="host_runtime",
+        label="Windows host owners",
+        endpoint="/api/panel/host-runtime",
+    ),
     RelatedOperationsView(
         key="settings",
         label="Settings",
@@ -211,6 +226,12 @@ OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS = (
 
 OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
     SurfaceDisposition(
+        field="host_runtime_state",
+        destination="overview",
+        rationale="Host evidence state and gap count are visible beside the headline and contribute attention.",
+    ),
+    HOST_RUNTIME_DISPOSITION.model_copy(update={"field": "host_runtime_receipt"}),
+    SurfaceDisposition(
         field="attention",
         destination="attention",
         rationale="The Attention tab owns safe, writer-governed lifecycle findings.",
@@ -283,6 +304,8 @@ class OperationsPanelView(_ViewModel):
     readme_status: ReadmeGovernanceStatus | None = None
     portfolio_tracker_runtime: EvidenceView | None = None
     attention: AttentionPanelView | None = None
+    host_runtime_state: State | None = None
+    host_runtime_receipt: HostReceipt | None = None
 
 
 def _clock(value: datetime | None, *, prefix: str) -> str:
@@ -639,6 +662,7 @@ def build_operations_panel_view(
     *,
     readme_status: ReadmeGovernanceStatus | None = None,
     attention: AttentionPanelView | None = None,
+    host_runtime: tuple[State, HostReceipt | None] | None = None,
 ) -> OperationsPanelView:
     """Join declared task ownership to bounded observations without doing I/O."""
 
@@ -918,7 +942,8 @@ def build_operations_panel_view(
     evidence_gap_count = len(evidence_gap_keys)
     return OperationsPanelView(
         observed_label=_clock(snapshot.observed_at, prefix="Observed"),
-        attention_count=attention_count,
+        attention_count=attention_count
+        + (host_attention_count(*host_runtime) if host_runtime else 0),
         evidence_gap_count=evidence_gap_count,
         runtime_summary_tone="ok" if attention_count == 0 and evidence_gap_count == 0 else "warn",
         tasks=tuple(
@@ -928,6 +953,8 @@ def build_operations_panel_view(
         readme_status=readme_status,
         portfolio_tracker_runtime=portfolio_tracker_runtime,
         attention=attention,
+        host_runtime_state=host_runtime[0] if host_runtime else None,
+        host_runtime_receipt=host_runtime[1] if host_runtime else None,
     )
 
 
@@ -1189,6 +1216,36 @@ def _governance(view: OperationsPanelView) -> str:
     )
 
 
+def render_host_runtime(state: State, receipt: HostReceipt | None) -> str:
+    """Linked read-only projection; every value is typed and HTML escaped."""
+    rows = ""
+    if receipt is not None:
+        for row in receipt.owners:
+            findings = (
+                ", ".join(f.replace("_", " ") for f in row.findings)
+                or "No findings in this observation"
+            )
+            rows += (
+                "<tr>"
+                f"<th scope='row'>{_html(row.name)}</th><td>{_html(row.state)} · declared {_html(row.declared_cadence.replace('_', ' '))}</td>"
+                f"<td>{_html(findings)}</td><td>{_html(_clock(row.last_successful_at, prefix='Last success'))}</td>"
+                f"<td>{_html(_clock(row.next_expected_at, prefix='Next expected'))}</td></tr>"
+            )
+    recorded = _clock(receipt.observed_at if receipt else None, prefix="Evidence recorded")
+    return (
+        '<section class="k-card k-card-section" aria-labelledby="host-runtime-title">'
+        f"{OPERATIONS_STYLE}"
+        '<h2 class="k-card-title" id="host-runtime-title">Windows host owners</h2>'
+        f'<p class="k-card-meta">{_html(state.title())} · {_html(recorded)} · '
+        f"{host_attention_count(state, receipt)} need attention. Cached read-only evidence; no repair controls.</p>"
+        '<p class="k-card-meta">Running does not prove readiness or detect a hung process. '
+        "Retained historical rows never establish current health.</p>"
+        '<div class="policy-scroll" role="region" aria-label="Host owner observations" tabindex="0">'
+        "<table><thead><tr><th>Owner</th><th>State</th><th>Findings</th><th>Last successful attempt</th>"
+        f"<th>Next expected</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+
+
 def render_operations_panel(view: OperationsPanelView) -> str:
     """Render only the supplied projection; no database, filesystem, or network access."""
 
@@ -1196,6 +1253,14 @@ def render_operations_panel(view: OperationsPanelView) -> str:
         f'''<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-operations-related="{_html(item.key)}" onclick="window.workOsOpenRelatedView('{escape(item.endpoint, quote=True)}', '{_html(item.label)}')">{_html(item.label)}</button>'''
         for item in OPERATIONS_RELATED_VIEWS
     )
+    host_link = ""
+    if view.host_runtime_state is not None:
+        count = host_attention_count(view.host_runtime_state, view.host_runtime_receipt)
+        host_link = (
+            '<div class="k-well" role="status" data-host-runtime-summary>'
+            f"Windows host owners: {_html(view.host_runtime_state)} · {count} need attention. "
+            "Use Windows host owners above to review the cached evidence.</div>"
+        )
     return f"""
 <section class="k-card k-card-section operations-panel" aria-labelledby="operations-title">
   {OPERATIONS_STYLE}
@@ -1205,6 +1270,7 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     <span class="k-pill k-pill-warn">{view.attention_count} need attention</span>
   </div>
   <div class="operations-related" aria-label="Related Operations views">{related_views}</div>
+  {host_link}
   <div class="operations-tabs" role="tablist" aria-label="Operations views">
     <button type="button" class="k-chip k-chip-btn k-chip-tab is-on operations-tab" id="operations-tab-overview" role="tab" aria-selected="true" aria-controls="operations-pane-overview" tabindex="0">Overview</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-attention" role="tab" aria-selected="false" aria-controls="operations-pane-attention" tabindex="-1">Attention</button>

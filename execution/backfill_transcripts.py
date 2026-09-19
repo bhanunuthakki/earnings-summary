@@ -1,8 +1,8 @@
 """Policy-bounded text-transcript backfill and commitment extraction.
 
-Scheduled runs cover non-archived portfolio names. An evaluation name runs only
-when explicitly selected with ``--ticker``; watchlist and index members do not
-enter transcript collection.
+Scheduled runs cover non-archived portfolio, evaluation, and watchlist equities
+and ADRs. Stored identity, instrument applicability, and the source policy are
+checked before enqueueing; index members and unknown instruments are excluded.
 
   1. Compute the last N (default and maximum 5) fiscal-quarter end dates that have already
      passed, using `tracked_companies.fiscal_year_end` to map fiscal-quarter
@@ -13,8 +13,8 @@ enter transcript collection.
   3. After acquisition, invoke `execution/ingest_transcripts.py` separately
      for each ticker with a new artifact. A quarantined peer ticker cannot
      block the rest of the portfolio batch (ingest remains idempotent on sha256).
-  4. For each exact transcript in the configured recent-quarter window that
-     lacks a durable scan receipt, invoke
+  4. For automatic portfolio work (or an explicitly selected company), each
+     exact transcript in the recent-quarter window lacking a durable scan receipt invokes
      `execution/extract_commitments_from_transcript.py --auto --transcript-id X`.
      Out-of-window historical transcripts are not admitted to this job.
 
@@ -54,19 +54,21 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
-from llm.prompt_versions import prompt_version_for  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from pipeline.commitment_scan_receipts import (  # noqa: E402
+from compute.evidence_snapshot import snapshot_recorded_evidence
+from llm.prompt_versions import prompt_version_for
+from models.companies import ListType
+from pipeline.commitment_scan_receipts import (
     CommitmentScanCoverage,
     CommitmentScanCoverageState,
     commitment_scan_coverage,
     current_transcript_scan_binding,
 )
-from pipeline.data_coverage_dispositions import (  # noqa: E402
+from pipeline.data_coverage_dispositions import (
     COMMITMENT_SCAN_POLICY_NAME,
     COMMITMENT_SCAN_POLICY_PROVIDERS,
     COMMITMENT_SCAN_POLICY_VERSION,
@@ -78,38 +80,38 @@ from pipeline.data_coverage_dispositions import (  # noqa: E402
     append_data_coverage_disposition,
     policy_config_sha256,
 )
-from pipeline.source_policy import (  # noqa: E402
+from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     CollectionTarget,
+    authorize_collection_target_in_connection,
     select_collection_targets,
 )
-from pipeline.transcript_acquisition import (  # noqa: E402
+from pipeline.transcript_acquisition import (
     TranscriptAcquisitionDeniedError,
 )
-from provenance.selection import selected_transcripts_relation  # noqa: E402
-from runtime.python_process import managed_python_prefix  # noqa: E402
-from transcripts.acquisition_semantics import (  # noqa: E402
+from provenance.selection import selected_transcripts_relation
+from runtime.python_process import managed_python_prefix
+from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
 )
 
-# Sibling scripts in execution/ — needed when this module is imported (e.g.
-# from tests) rather than run directly via `python execution/backfill_transcripts.py`.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import fetch_qa_transcript as fetch_qa_transcript_module
+    from fetch_qa_transcript import SOURCES as TRANSCRIPT_SOURCES
+    from fetch_qa_transcript import FetchQaAttemptStatus, FetchQaSpec, FetchQaStatus, fetch_qa
+except ImportError:
+    from execution import fetch_qa_transcript as fetch_qa_transcript_module
+    from execution.fetch_qa_transcript import SOURCES as TRANSCRIPT_SOURCES
+    from execution.fetch_qa_transcript import (
+        FetchQaAttemptStatus,
+        FetchQaSpec,
+        FetchQaStatus,
+        fetch_qa,
+    )
 
-import fetch_qa_transcript as fetch_qa_transcript_module  # type: ignore[import-not-found]  # noqa: E402
-from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
-    SOURCES as TRANSCRIPT_SOURCES,
-)
-from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
-    FetchQaAttemptStatus,
-    FetchQaSpec,
-    FetchQaStatus,
-    fetch_qa,
-)
-
-import db  # noqa: E402
+import db
 
 _RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 _PROCESSED_DIR = PROJECT_ROOT / "transcripts" / "processed"
@@ -651,51 +653,51 @@ def _backfill_one(
 def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
     """Return policy-authorized transcript work in company-priority order."""
     conn = db.get_connection()
-    try:
-        if arg_ticker:
-            cur = conn.execute(
-                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
-                "WHERE ticker = ? AND archived_at IS NULL",
-                (arg_ticker.upper(),),
-            )
-        else:
-            cur = conn.execute(
-                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
-                "WHERE archived_at IS NULL ORDER BY ticker"
-            )
-        rows = cur.fetchall()
-    finally:
-        conn.close()
     months_by_ticker: dict[str, int] = {}
     targets: list[CollectionTarget] = []
-    for r in rows:
-        fye_raw = r["fiscal_year_end"]
-        if not isinstance(fye_raw, str) or len(fye_raw) < 2:
-            sys.stderr.write(
-                f"[skip] {r['ticker']}: fiscal_year_end is missing/malformed ({fye_raw!r})\n"
-            )
-            continue
-        try:
-            month = int(fye_raw[:2])
-        except ValueError:
-            sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end={fye_raw!r} not parseable\n")
-            continue
-        if not 1 <= month <= 12:
-            sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end month {month} out of range\n")
-            continue
-        ticker = str(r["ticker"]).upper()
-        try:
-            role = ListType(str(r["list_type"]))
-        except ValueError:
-            continue
-        months_by_ticker[ticker] = month
-        targets.append(
-            CollectionTarget(
-                ticker=ticker,
-                coverage_role=role,
+    try:
+        if arg_ticker:
+            rows = conn.execute(
+                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                "WHERE UPPER(ticker) = ? AND archived_at IS NULL",
+                (arg_ticker.upper(),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                "WHERE archived_at IS NULL ORDER BY UPPER(ticker)"
+            ).fetchall()
+        for row in rows:
+            ticker = str(row[0])
+            authorization = authorize_collection_target_in_connection(
+                conn,
+                ticker,
                 requested=arg_ticker is not None,
+                source=CollectionSource.TRANSCRIPT,
+                artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
             )
-        )
+            if not authorization.allowed or authorization.target is None:
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "source_collection_policy_denied",
+                            "ticker": ticker,
+                            "source": CollectionSource.TRANSCRIPT.value,
+                            "artifact_kind": ArtifactKind.TEXT_TRANSCRIPT.value,
+                            "reason": authorization.status.value,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+                continue
+            if authorization.fiscal_year_end_month is None:
+                sys.stderr.write(f"[skip] {ticker}: fiscal_year_end is missing or malformed\n")
+                continue
+            months_by_ticker[ticker] = authorization.fiscal_year_end_month
+            targets.append(authorization.target)
+    finally:
+        conn.close()
     selection = select_collection_targets(
         tuple(targets),
         source=CollectionSource.TRANSCRIPT,
@@ -719,6 +721,37 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
     return [
         (item.target.ticker, months_by_ticker[item.target.ticker]) for item in selection.allowed
     ]
+
+
+# Shared by the focused post-earnings scan; acquisition authority must not drift.
+resolve_transcript_targets = _resolve_tickers
+
+
+def _commitment_extraction_scope(
+    results: list[TickerBackfillResult], *, owner_requested: bool
+) -> list[TickerBackfillResult]:
+    """Keep automatic LLM extraction at its existing portfolio-only depth."""
+
+    conn = db.get_connection()
+    try:
+        selected: list[TickerBackfillResult] = []
+        for result in results:
+            authorization = authorize_collection_target_in_connection(
+                conn,
+                result.ticker,
+                requested=owner_requested,
+                source=CollectionSource.TRANSCRIPT,
+                artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
+            )
+            if (
+                authorization.allowed
+                and authorization.target is not None
+                and (owner_requested or authorization.target.coverage_role is ListType.PORTFOLIO)
+            ):
+                selected.append(result)
+        return selected
+    finally:
+        conn.close()
 
 
 def _run_ingest(
@@ -1143,7 +1176,7 @@ def main() -> int:
     )
     p.add_argument(
         "--ticker",
-        help="Owner-requested stored portfolio/evaluation ticker",
+        help="Explicit active portfolio/evaluation/watchlist equity or ADR ticker",
     )
     p.add_argument(
         "--lookback-quarters",
@@ -1255,9 +1288,17 @@ def main() -> int:
     extract_results: list[dict[str, object]] = []
     commitment_scan_targets: list[CommitmentScanTarget] = []
     commitment_scan_tickers: set[str] = set()
+    commitment_extraction_deferred: list[str] = []
     if not args.skip_extract and not args.dry_run:
+        extraction_scope = _commitment_extraction_scope(
+            per_ticker, owner_requested=args.ticker is not None
+        )
+        extraction_tickers = {result.ticker for result in extraction_scope}
+        commitment_extraction_deferred = [
+            result.ticker for result in per_ticker if result.ticker not in extraction_tickers
+        ]
         commitment_scan_targets = _commitment_scan_targets(
-            per_ticker,
+            extraction_scope,
             today,
             args.lookback_quarters,
         )
@@ -1304,6 +1345,7 @@ def main() -> int:
         "ingest_rc": ingest_rc,
         "ingest_results": ingest_results,
         "extract_results": extract_results,
+        "commitment_extraction_deferred": commitment_extraction_deferred,
         "totals": {
             "fetched": sum(len(r.fetched) for r in per_ticker),
             "artifact_conflicts": sum(len(r.artifact_conflicts) for r in per_ticker),

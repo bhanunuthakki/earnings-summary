@@ -139,8 +139,8 @@ def test_0018_receipts_are_append_only_and_projection_bound(
         schema_preflight=False,
     ) as connection:
         connection.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','equity','12-31')"
         )
         authorization = require_authorized_transcript_request(
             connection,

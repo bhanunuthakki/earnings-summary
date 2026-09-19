@@ -22,9 +22,9 @@ written):
   - ``wealthplan/data/plan.local.json``, read via wealthplan's OWN Pydantic
     models (``sys.path`` insertion at this CLI boundary — owner decision
     2026-07-17: "Tier-A import reads wealthplan's models, not hand-copied
-    values"). ``wealthplan.persistence.load_plan()`` returns
-    ``(Household, Scenario)``; every field this script reads is named
-    explicitly below.
+    values"). The exact requested-root file is validated as
+    ``(Household, Scenario)`` without an ambient plan-loader fallback;
+    every field this script reads is named explicitly below.
   - ``portfolio-tracker/CIO_CONTEXT.local.md``, the human-capital
     correlation bucket-caps table. That file is hand-written prose (no
     structured export exists), so it is parsed by regex against the ONE
@@ -74,15 +74,19 @@ import os
 import re
 import sqlite3
 import sys
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
+from importlib import import_module
 from pathlib import Path
-from typing import cast
+from typing import Protocol, TypeVar, cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from owner_profile.models import (  # noqa: E402
+from owner_profile.models import (
     CashBufferMonths,
     EquityFraction,
     GlidePosture,
@@ -94,8 +98,8 @@ from owner_profile.models import (  # noqa: E402
     ParentCareWindow,
     TaxBucketBalances,
 )
-from owner_profile.store import append_fact  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from owner_profile.store import append_fact
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _DEFAULT_WEALTHPLAN_ROOT = Path(
     os.environ.get("WEALTHPLAN_ROOT")
@@ -108,6 +112,106 @@ _DEFAULT_CIO_CONTEXT_PATH = Path(
         "CIO_CONTEXT.local.md",
     )
 )
+
+
+# Structural read contracts only: validation and event identity stay with the
+# optional sibling's actual models. No private financial fields are declared.
+class _EnumValue(Protocol):
+    value: str
+
+
+class _Starting(Protocol):
+    balances: Mapping[_EnumValue, float]
+    as_of: date
+    equity_fraction: float
+
+
+class _Retirement(Protocol):
+    cash_buffer_months: float
+    target_retirement_age: int
+    horizon_age: int
+
+
+class _Glide(Protocol):
+    equity_accumulation: float
+    equity_retirement: float
+    derisk_years: float
+
+
+class _Promotion(Protocol):
+    label: str | None
+    effective: date
+
+
+class _Person(Protocol):
+    name: str
+    promotions: Iterable[_Promotion]
+
+
+class _Household(Protocol):
+    starting: _Starting
+    retirement: _Retirement
+    glide: _Glide
+    home_city: str
+    person_a: _Person
+    person_b: _Person
+
+
+class _Scenario(Protocol):
+    events: Iterable[object]
+
+
+class _BabyEvent(Protocol):
+    label: str
+    birth_date: date
+
+
+class _BuyHouseEvent(Protocol):
+    label: str
+    purchase_date: date
+
+
+class _MoveCityEvent(Protocol):
+    label: str
+    to_city: str
+    move_date: date
+
+
+class _WorkWindowEvent(Protocol):
+    label: str
+    start_date: date
+    end_date: date | None
+    person: _EnumValue
+
+
+class _ExitPayoutEvent(Protocol):
+    label: str
+    payout_date: date
+
+
+class _ParentCareEvent(Protocol):
+    label: str
+    start_age: int
+    end_age: int
+
+
+_ModelT = TypeVar("_ModelT", covariant=True)
+
+
+class _OwnerValidator(Protocol[_ModelT]):
+    def model_validate(self, value: object) -> _ModelT: ...
+
+
+class _WealthplanModels(Protocol):
+    Household: _OwnerValidator[_Household]
+    Scenario: _OwnerValidator[_Scenario]
+    BabyEvent: type[_BabyEvent]
+    BuyHouseEvent: type[_BuyHouseEvent]
+    MoveCityEvent: type[_MoveCityEvent]
+    WorkBreakEvent: type[_WorkWindowEvent]
+    StartupEvent: type[_WorkWindowEvent]
+    ExitPayoutEvent: type[_ExitPayoutEvent]
+    ParentCareEvent: type[_ParentCareEvent]
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -158,28 +262,26 @@ def stage_wealthplan_facts(
     dated life events, home city. Returns ``[]`` (never raises) when the plan
     file doesn't exist — a fresh machine or a moved wealthplan checkout is a
     quiet no-op, not a crash."""
+    plan_path = wealthplan_root / "data" / "plan.local.json"
+    try:
+        plan_path.stat()
+    except FileNotFoundError:
+        _log("wealthplan_plan_missing", root=str(wealthplan_root))
+        return []
     src = str(wealthplan_root / "src")
     if src not in sys.path:
         sys.path.insert(0, src)
     try:
-        from wealthplan.models import (
-            BabyEvent,
-            BuyHouseEvent,
-            ExitPayoutEvent,
-            MoveCityEvent,
-            ParentCareEvent,
-            StartupEvent,
-            WorkBreakEvent,
-        )
-        from wealthplan.persistence import load_plan
+        models = cast("_WealthplanModels", import_module("wealthplan.models"))
     except ImportError as exc:
         _log("wealthplan_import_unavailable", reason=str(exc))
         return []
 
-    plan = load_plan()
-    if plan is None:
-        _log("wealthplan_plan_missing", root=str(wealthplan_root))
-        return []
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan = (
+        models.Household.model_validate(payload["household"]),
+        models.Scenario.model_validate(payload["baseline"]),
+    )
     household, baseline = plan
     source = f"wealthplan/data/plan.local.json as_of={household.starting.as_of.isoformat()}"
     facts: list[StagedFact] = []
@@ -284,15 +386,15 @@ def stage_wealthplan_facts(
     # -- dated life events (type + label + date ONLY — no amounts) ------
     for event in baseline.events:
         life: LifeEventFact | None = None
-        if isinstance(event, BabyEvent):
+        if isinstance(event, models.BabyEvent):
             life = LifeEventFact(kind="baby", label=event.label, date=event.birth_date)
-        elif isinstance(event, BuyHouseEvent):
+        elif isinstance(event, models.BuyHouseEvent):
             life = LifeEventFact(kind="buy_house", label=event.label, date=event.purchase_date)
-        elif isinstance(event, MoveCityEvent):
+        elif isinstance(event, models.MoveCityEvent):
             life = LifeEventFact(
                 kind="move", label=f"{event.label} to {event.to_city}", date=event.move_date
             )
-        elif isinstance(event, WorkBreakEvent):
+        elif isinstance(event, models.WorkBreakEvent):
             life = LifeEventFact(
                 kind="work_break",
                 label=event.label,
@@ -300,7 +402,7 @@ def stage_wealthplan_facts(
                 end_date=event.end_date,
                 person=event.person.value,
             )
-        elif isinstance(event, StartupEvent):
+        elif isinstance(event, models.StartupEvent):
             life = LifeEventFact(
                 kind="startup",
                 label=event.label,
@@ -308,9 +410,9 @@ def stage_wealthplan_facts(
                 end_date=event.end_date,
                 person=event.person.value,
             )
-        elif isinstance(event, ExitPayoutEvent):
+        elif isinstance(event, models.ExitPayoutEvent):
             life = LifeEventFact(kind="exit_payout", label=event.label, date=event.payout_date)
-        elif isinstance(event, ParentCareEvent):
+        elif isinstance(event, models.ParentCareEvent):
             pc = ParentCareWindow(
                 label=event.label, start_age=event.start_age, end_age=event.end_age
             )

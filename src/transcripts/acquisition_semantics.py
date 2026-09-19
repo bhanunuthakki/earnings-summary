@@ -24,6 +24,7 @@ from pydantic import (
 
 from models.companies import ListType
 from models.documents import DocType, SourceType
+from pipeline.source_policy import POLICY_VERSION, ArtifactKind, CollectionSource, decision_for
 from provenance.source_regime import (
     EvidenceAuthority,
     SourceDomain,
@@ -44,7 +45,8 @@ _CanonicalTicker = Annotated[
     str,
     StringConstraints(pattern=r"^[A-Z0-9][A-Z0-9.-]{0,15}$"),
 ]
-TRANSCRIPT_ACQUISITION_POLICY_VERSION = "2026-08-12.2"
+TRANSCRIPT_ACQUISITION_POLICY_VERSION = POLICY_VERSION
+TranscriptSourcePolicyVersion = Literal["2026-08-12.2", "2026-09-19.1"]
 _MAX_REPORTED_QUARTERS = 5
 
 
@@ -77,6 +79,8 @@ class StoredTargetStatus(StrEnum):
     IDENTITY_AMBIGUOUS = "stored_identity_ambiguous"
     ROLE_INVALID = "stored_role_invalid"
     POLICY_DENIED = "policy_denied"
+    INSTRUMENT_UNAVAILABLE = "stored_instrument_unavailable"
+    INSTRUMENT_NOT_APPLICABLE = "stored_instrument_not_applicable"
 
 
 class TranscriptReportingStatus(StrEnum):
@@ -165,7 +169,7 @@ class TranscriptAcquisitionRequest(BaseModel):
     owner_requested: bool
     existing_artifact: bool
     existing_artifact_behavior: ExistingArtifactBehavior
-    source_policy_version: Literal["2026-08-12.2"]
+    source_policy_version: TranscriptSourcePolicyVersion
     source_regime_identity: SourceRegimeReceiptIdentity
 
     @model_validator(mode="after")
@@ -191,7 +195,7 @@ class TranscriptAuthorizationProvenance(BaseModel):
     source_type: SourceType
     document_type: DocType
     provider: TranscriptProvider
-    source_policy_version: Literal["2026-08-12.2"]
+    source_policy_version: TranscriptSourcePolicyVersion
     source_regime_identity: SourceRegimeReceiptIdentity
     source_authority: EvidenceAuthority | None
 
@@ -208,14 +212,18 @@ class TranscriptStoredTarget(BaseModel):
     owner_requested: bool
     coverage_role: ListType | None
     fiscal_year_end_month: int | None = Field(default=None, ge=1, le=12)
-    source_policy_version: Literal["2026-08-12.2"]
+    source_policy_version: TranscriptSourcePolicyVersion
     source_regime_identity: SourceRegimeReceiptIdentity
     status: StoredTargetStatus
     reporting_status: TranscriptReportingStatus
 
     @model_validator(mode="after")
     def _closed_status_pair(self) -> Self:
-        role_allowed = _role_is_authorized(self.coverage_role, requested=self.owner_requested)
+        role_allowed = _role_is_authorized(
+            self.coverage_role,
+            requested=self.owner_requested,
+            policy_version=self.source_policy_version,
+        )
         if self.status is StoredTargetStatus.AUTHORIZED:
             if not role_allowed:
                 raise ValueError("stored target status does not match coverage-role policy")
@@ -239,6 +247,14 @@ class TranscriptStoredTarget(BaseModel):
         if self.status is StoredTargetStatus.POLICY_DENIED:
             if self.coverage_role is None or role_allowed:
                 raise ValueError("stored target denial does not match coverage-role policy")
+        elif self.status in {
+            StoredTargetStatus.INSTRUMENT_UNAVAILABLE,
+            StoredTargetStatus.INSTRUMENT_NOT_APPLICABLE,
+        }:
+            if self.coverage_role is None or self.fiscal_year_end_month is not None:
+                raise ValueError(
+                    "instrument denial requires a resolved role and no reporting claim"
+                )
         elif self.coverage_role is not None or self.fiscal_year_end_month is not None:
             raise ValueError("unresolved stored identity must not report company policy fields")
         return self
@@ -274,7 +290,7 @@ class _TranscriptIdempotencyInput(BaseModel):
     provider: TranscriptProvider
     source_type: SourceType
     document_type: DocType
-    source_policy_version: Literal["2026-08-12.2"]
+    source_policy_version: TranscriptSourcePolicyVersion
     source_regime_identity: SourceRegimeReceiptIdentity
 
 
@@ -287,8 +303,19 @@ def _canonical_json(payload: object) -> str:
     )
 
 
-def _role_is_authorized(role: ListType | None, *, requested: bool) -> bool:
-    return role is ListType.PORTFOLIO or (role is ListType.EVALUATION and requested)
+def _role_is_authorized(
+    role: ListType | None, *, requested: bool, policy_version: TranscriptSourcePolicyVersion
+) -> bool:
+    # Historical receipts retain their original authority. Only the current
+    # version uses the shared acquisition policy; old denials are not grants.
+    if policy_version == "2026-08-12.2":
+        return role is ListType.PORTFOLIO or (role is ListType.EVALUATION and requested)
+    return (
+        role is not None
+        and decision_for(
+            role, CollectionSource.TRANSCRIPT, ArtifactKind.TEXT_TRANSCRIPT, requested=requested
+        ).allowed
+    )
 
 
 def _reported_quarter_is_in_window(

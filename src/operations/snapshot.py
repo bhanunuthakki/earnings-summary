@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import stat
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, TypedDict, TypeVar, cast
@@ -576,7 +577,10 @@ def _portfolio_tracker_runtime_state(
 
 
 def _job_receipts(
-    registry: OperationsRegistry, repo_root: Path, observed_at: datetime
+    registry: OperationsRegistry,
+    repo_root: Path,
+    observed_at: datetime,
+    receipt_roots: Mapping[str, Path] | None = None,
 ) -> tuple[JobReceiptObservation, ...]:
     job_contracts: dict[str, tuple[set[str], int]] = {}
     for step in registry.job_steps:
@@ -585,7 +589,9 @@ def _job_receipts(
         job_contracts[step.job] = (lanes, max(ttl, step.receipt_ttl_seconds))
     observations: list[JobReceiptObservation] = []
     for job, (expected_lanes, ttl_seconds) in sorted(job_contracts.items()):
-        latest = health_receipt_directory(repo_root, job) / "latest.json"
+        # Read the declared writer's root only; another root is never a fallback.
+        root = (receipt_roots or {}).get(job, repo_root)
+        latest = health_receipt_directory(root, job) / "latest.json"
         source = str(latest)
         try:
             metadata = latest.lstat()
@@ -973,9 +979,12 @@ def collect_operations_snapshot(
     observed_at: datetime,
     scheduler_receipt_path: Path | None = None,
     service_receipt_path: Path | None = None,
+    job_receipt_roots: Mapping[str, Path] | None = None,
 ) -> OperationsSnapshot:
     if observed_at.tzinfo is None:
         raise ValueError("observed_at must be timezone-aware")
+    if set(job_receipt_roots or {}) - {step.job for step in registry.job_steps}:
+        raise ValueError("job receipt root names an unregistered job")
     tables, metadata_error = _metadata_tables(conn)
     runs, sources, llm, backlog, circuit = _database_observations(
         conn, tables, registry, observed_at, metadata_error
@@ -1021,7 +1030,7 @@ def collect_operations_snapshot(
         schema_revision=_schema_revision(conn, tables, registry, observed_at, metadata_error),
         scheduler=SchedulerObservation.model_validate(scheduler.model_dump()),
         services=ServiceObservation.model_validate(services.model_dump()),
-        job_receipts=_job_receipts(registry, repo_root, observed_at),
+        job_receipts=_job_receipts(registry, repo_root, observed_at, job_receipt_roots),
         database_runs=runs,
         source_calls=sources,
         llm_calls=llm,

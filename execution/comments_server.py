@@ -123,6 +123,7 @@ from comments_server_settings_routes import (
     SettingsRouteContext,
     register_settings_routes,
 )
+from comments_server_tracker_routes import register_tracker_read_routes
 from process_report_comments import (
     preview_thesis_edits,
     process_comments_for_ticker,
@@ -629,6 +630,7 @@ def create_app(
     server_origin: str | None = None,
 ) -> Flask:
     app = _RedactingFlask(__name__)
+    register_tracker_read_routes(app)
     app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
     resolved_db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
     db_path = resolved_db_path

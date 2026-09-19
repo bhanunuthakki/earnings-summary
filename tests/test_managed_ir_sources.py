@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Adversarial regressions for the managed staging/publish trust boundary."""
 
 from __future__ import annotations
@@ -222,7 +221,9 @@ def test_managed_json_publish_preserves_installer_residue(
 
     monkeypatch.setattr(managed_ir_sources, "install_bytes_no_clobber", fail_install)
     with pytest.raises(PreparedIssuerDocumentPublisherError) as exc:
-        managed_ir_sources._publish_managed_text(target, "{}")
+        cast(Callable[..., None], getattr(managed_ir_sources, "_publish_managed_text"))(
+            target, "{}"
+        )
 
     assert exc.value.code == "managed_artifact_publish_failed"
     assert exc.value.remaining_paths == (str(residue),)
@@ -351,6 +352,115 @@ def test_completed_publication_replays_after_attempt_tmp_is_deleted(
     assert publish_prepared_issuer_documents(request, state_root=root, db_path=db_path) == result
 
 
+def test_publication_anchors_document_bytes_without_claiming_extraction(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "state"
+    (root / "data").mkdir(parents=True)
+    db_path = migrated_db(root / "data" / "portfolio.db")
+    monkeypatch.setattr(managed_ir_sources, "_policy", _no_policy)
+    monkeypatch.setattr(managed_ir_sources, "classify_ir_file", _classify)
+    request = _request()
+    receipt = _receipt(root, request)
+    result = publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
+    document_id = result.inserted_document_ids[0]
+    with sqlite3.connect(db_path) as conn:
+        versions = conn.execute(
+            "SELECT document_version_id,blob_sha256,issuer_id FROM evidence_document_versions "
+            "WHERE legacy_document_id=?",
+            (document_id,),
+        ).fetchall()
+        assert versions == [
+            (f"legacy-doc-{document_id}", receipt.documents[0].sha256, "legacy-ticker:MELI")
+        ]
+        assert conn.execute("SELECT node_kind FROM evidence_nodes").fetchall() == [("document",)]
+        assert conn.execute("SELECT COUNT(*) FROM source_coverage_assessments").fetchone() == (0,)
+        assert conn.execute(
+            "SELECT document_version_id FROM legacy_document_evidence_binding_revisions "
+            "WHERE legacy_document_id=?",
+            (document_id,),
+        ).fetchall() == [(f"legacy-doc-{document_id}",)]
+    assert publish_prepared_issuer_documents(request, state_root=root, db_path=db_path) == result
+    next_request = request.model_copy(update={"attempt_id": "attempt-reuse"})
+    _receipt(root, next_request)
+
+    def reject_recapture(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("existing immutable document evidence must be reused")
+
+    monkeypatch.setattr(managed_ir_sources, "ensure_legacy_document_evidence", reject_recapture)
+    reused = publish_prepared_issuer_documents(next_request, state_root=root, db_path=db_path)
+    assert reused.inserted_document_ids == ()
+    assert reused.reused_document_ids == (document_id,)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone() == (1,)
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "evidence_document_observation_links",
+        "legacy_document_evidence_binding_revisions",
+        "evidence_blob_location_observations",
+    ],
+)
+def test_publication_replay_rejects_missing_document_evidence(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table: str
+) -> None:
+    root = tmp_path / "state"
+    (root / "data").mkdir(parents=True)
+    db_path = migrated_db(root / "data" / "portfolio.db")
+    monkeypatch.setattr(managed_ir_sources, "_policy", _no_policy)
+    monkeypatch.setattr(managed_ir_sources, "classify_ir_file", _classify)
+    request = _request()
+    _receipt(root, request)
+    publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
+    with sqlite3.connect(db_path) as conn:
+        triggers = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name=?", (table,)
+        ).fetchall()
+        for (name,) in triggers:
+            conn.execute('DROP TRIGGER "' + name.replace('"', '""') + '"')
+        conn.execute(f"DELETE FROM {table}")  # nosec B608 -- fixed test parameter values
+    with pytest.raises(
+        PreparedIssuerDocumentPublisherError, match="document_evidence_missing_or_invalid"
+    ):
+        publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)  # nosec B608
+
+
+def test_evidence_capture_failure_rolls_back_document_and_evidence_together(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "state"
+    (root / "data").mkdir(parents=True)
+    db_path = migrated_db(root / "data" / "portfolio.db")
+    monkeypatch.setattr(managed_ir_sources, "_policy", _no_policy)
+    monkeypatch.setattr(managed_ir_sources, "classify_ir_file", _classify)
+    request = _request()
+    _receipt(root, request)
+    original = managed_ir_sources.ensure_legacy_document_evidence
+
+    def fail_after_capture(conn: sqlite3.Connection, *, repo_root: Path, document_id: int) -> None:
+        original(conn, repo_root=repo_root, document_id=document_id)
+        raise ValueError("forced evidence failure")
+
+    monkeypatch.setattr(managed_ir_sources, "ensure_legacy_document_evidence", fail_after_capture)
+    with pytest.raises(PreparedIssuerDocumentPublisherError):
+        publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
+    with sqlite3.connect(db_path) as conn:
+        for table in (
+            "documents",
+            "evidence_document_versions",
+            "evidence_content_blobs",
+            "evidence_source_observations",
+            "evidence_nodes",
+            "managed_ir_publications",
+            "legacy_document_evidence_binding_revisions",
+        ):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)  # nosec B608
+
+
 class _CommitRaisesAfterDurability:
     """A driver wrapper that loses only the commit acknowledgment."""
 
@@ -433,7 +543,9 @@ def test_commit_acknowledgment_reconciliation_failure_preserves_durable_publicat
 
     monkeypatch.setattr(managed_ir_sources, "connect_sqlite", connect_with_lost_acknowledgment)
     if reconciliation == "durable":
-        original_recovery = cast(Callable[..., object], managed_ir_sources._durable_recovery)
+        original_recovery = cast(
+            Callable[..., object], getattr(managed_ir_sources, "_durable_recovery")
+        )
 
         def fail_fresh_recovery(*args: object, **kwargs: object) -> object:
             if injected:
@@ -442,7 +554,13 @@ def test_commit_acknowledgment_reconciliation_failure_preserves_durable_publicat
 
         monkeypatch.setattr(managed_ir_sources, "_durable_recovery", fail_fresh_recovery)
     else:
-        original_rows = cast(Callable[..., object], managed_ir_sources._canonical_rows)
+        original_rows = cast(
+            Callable[..., object],
+            cast(
+                Callable[..., tuple[tuple[int, ...], tuple[Path, ...]]],
+                getattr(managed_ir_sources, "_canonical_rows"),
+            ),
+        )
 
         def fail_fresh_rows(*args: object, **kwargs: object) -> object:
             if injected:
@@ -456,7 +574,9 @@ def test_commit_acknowledgment_reconciliation_failure_preserves_durable_publicat
 
     assert raised.value.code == "publication_commit_outcome_unknown"
     assert raised.value.committed
-    target = managed_ir_sources._target(root, receipt.documents[0])
+    target = cast(Callable[..., Path], getattr(managed_ir_sources, "_target"))(
+        root, receipt.documents[0]
+    )
     assert target.read_bytes() == b"presentation"
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM documents").fetchone() == (1,)
@@ -550,16 +670,28 @@ def test_copy_no_replace_returns_created_token_and_reused_none(tmp_path: Path) -
     target = tmp_path / "target.pdf"
     source.write_bytes(b"same bytes")
     digest = hashlib.sha256(b"same bytes").hexdigest()
-    created = managed_ir_sources._copy_no_replace(source, target, digest, len(b"same bytes"))
+    created = cast(
+        Callable[..., managed_ir_sources.SecureFileOwnershipToken | None],
+        getattr(managed_ir_sources, "_copy_no_replace"),
+    )(source, target, digest, len(b"same bytes"))
     assert created is not None and created.path == target
-    assert managed_ir_sources._copy_no_replace(source, target, digest, len(b"same bytes")) is None
+    assert (
+        cast(
+            Callable[..., managed_ir_sources.SecureFileOwnershipToken | None],
+            getattr(managed_ir_sources, "_copy_no_replace"),
+        )(source, target, digest, len(b"same bytes"))
+        is None
+    )
 
 
 def test_owned_cleanup_retains_a_replacement_at_the_created_canonical_path(tmp_path: Path) -> None:
     source = tmp_path / "stage.pdf"
     target = tmp_path / "canonical.pdf"
     source.write_bytes(b"authorized")
-    artifact = managed_ir_sources._copy_no_replace(
+    artifact = cast(
+        Callable[..., managed_ir_sources.SecureFileOwnershipToken | None],
+        getattr(managed_ir_sources, "_copy_no_replace"),
+    )(
         source,
         target,
         hashlib.sha256(b"authorized").hexdigest(),
@@ -568,7 +700,10 @@ def test_owned_cleanup_retains_a_replacement_at_the_created_canonical_path(tmp_p
     assert artifact is not None
     target.unlink()
     target.write_bytes(b"replacement survives")
-    removed, remaining = managed_ir_sources._cleanup_owned_artifacts([artifact])
+    removed, remaining = cast(
+        Callable[..., tuple[tuple[str, ...], tuple[str, ...]]],
+        getattr(managed_ir_sources, "_cleanup_owned_artifacts"),
+    )([artifact])
     assert removed == ()
     assert remaining == (str(target),)
     assert target.read_bytes() == b"replacement survives"
@@ -576,7 +711,7 @@ def test_owned_cleanup_retains_a_replacement_at_the_created_canonical_path(tmp_p
 
 def test_canonical_relative_path_is_windows_separator_independent() -> None:
     assert (
-        managed_ir_sources._canonical_relative_path(
+        cast(Callable[..., str], getattr(managed_ir_sources, "_canonical_relative_path"))(
             PureWindowsPath("C:/state"),
             PureWindowsPath("C:/state/ir_documents/MELI/2026-06-30/report.pdf"),
         )
@@ -595,7 +730,9 @@ def test_preexisting_canonical_hardlink_blocks_before_any_row_or_episode(
     request = _request()
     receipt = _receipt(root, request)
     stage = root / ".tmp" / "managed_ir_staging" / request.attempt_id / "objects" / "q2.pdf"
-    target = managed_ir_sources._target(root, receipt.documents[0])
+    target = cast(Callable[..., Path], getattr(managed_ir_sources, "_target"))(
+        root, receipt.documents[0]
+    )
     target.parent.mkdir(parents=True)
     os.link(stage, target)
     with pytest.raises(
@@ -665,9 +802,10 @@ def test_held_seam_rejects_partial_claims(
         JobLock(root, "outer-managed-admission", ["ir-discovery", "portfolio-db"], wait_s=0),
         pytest.raises(PreparedIssuerDocumentPublisherError, match="managed_lock_claim_missing"),
     ):
-        managed_ir_sources._publish_prepared_issuer_documents_held(
-            request, state_root=root, db_path=db_path
-        )
+        cast(
+            Callable[..., managed_ir_sources.PreparedIssuerDocumentPublication],
+            getattr(managed_ir_sources, "_publish_prepared_issuer_documents_held"),
+        )(request, state_root=root, db_path=db_path)
 
 
 def test_two_document_rollback_removes_all_new_rows_files_and_episode(
@@ -684,7 +822,7 @@ def test_two_document_rollback_removes_all_new_rows_files_and_episode(
         return _press_outcome() if path.name == "q2b.pdf" else _outcome()
 
     monkeypatch.setattr(managed_ir_sources, "classify_ir_file", classify)
-    original = managed_ir_sources._preflight_existing_targets
+    original = cast(Callable[..., None], getattr(managed_ir_sources, "_preflight_existing_targets"))
     calls = 0
 
     def fail_final(items: list[tuple[StagedIssuerDocument, Path, Path]]) -> None:
@@ -728,7 +866,9 @@ def test_mixed_reuse_insert_rollback_preserves_reuse_and_reports_dispositions(
 
     monkeypatch.setattr(managed_ir_sources, "classify_ir_file", classify)
     reused_item = receipt.documents[0]
-    reused_target = managed_ir_sources._target(root, reused_item)
+    reused_target = cast(Callable[..., Path], getattr(managed_ir_sources, "_target"))(
+        root, reused_item
+    )
     reused_target.parent.mkdir(parents=True)
     reused_target.write_bytes(b"presentation")
     expected = (
@@ -736,7 +876,9 @@ def test_mixed_reuse_insert_rollback_preserves_reuse_and_reports_dispositions(
         "ir_doc",
         reused_item.document_type,
         reused_item.period_end,
-        managed_ir_sources._relative_path(root, reused_target),
+        cast(Callable[..., str], getattr(managed_ir_sources, "_relative_path"))(
+            root, reused_target
+        ),
         reused_item.sha256,
         reused_item.fetched_at.isoformat(),
         "ok",
@@ -750,7 +892,7 @@ def test_mixed_reuse_insert_rollback_preserves_reuse_and_reports_dispositions(
         )
         assert cursor.lastrowid is not None
         reused_id = int(cursor.lastrowid)
-    original = managed_ir_sources._preflight_existing_targets
+    original = cast(Callable[..., None], getattr(managed_ir_sources, "_preflight_existing_targets"))
     calls = 0
 
     def fail_final(items: list[tuple[StagedIssuerDocument, Path, Path]]) -> None:
@@ -827,20 +969,25 @@ def test_insert_planned_partial_state_is_ambiguous_not_reused(
     def stop_after_intent(*_args: object, **_kwargs: object) -> bool:
         raise PreparedIssuerDocumentPublisherError("forced_after_intent")
 
-    original_copy = managed_ir_sources._copy_no_replace
+    original_copy = cast(
+        Callable[..., managed_ir_sources.SecureFileOwnershipToken | None],
+        getattr(managed_ir_sources, "_copy_no_replace"),
+    )
     monkeypatch.setattr(managed_ir_sources, "_copy_no_replace", stop_after_intent)
     with pytest.raises(PreparedIssuerDocumentPublisherError, match="forced_after_intent"):
         publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
     intent = root / ".tmp" / "managed_ir_staging" / request.attempt_id / "publication_intent.json"
     assert intent.exists()
     item = receipt.documents[0]
-    target = managed_ir_sources._target(root, item)
+    target = cast(Callable[..., Path], getattr(managed_ir_sources, "_target"))(root, item)
     target.parent.mkdir(parents=True)
     target.write_bytes(b"presentation")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "INSERT INTO documents (ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_url) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            managed_ir_sources._expected_row(item, root, target),
+            cast(Callable[..., tuple[object, ...]], getattr(managed_ir_sources, "_expected_row"))(
+                item, root, target
+            ),
         )
     monkeypatch.setattr(managed_ir_sources, "_copy_no_replace", original_copy)
     with pytest.raises(PreparedIssuerDocumentPublisherError, match="publication_outcome_ambiguous"):
@@ -879,7 +1026,7 @@ def test_evidence_less_inventory_must_equal_current_pinned_snapshot(
     def stop_evidence(*_args: object, **_kwargs: object) -> object:
         raise PreparedIssuerDocumentPublisherError("forced_evidence_gap")
 
-    original = managed_ir_sources._seal_inventory_evidence
+    original = cast(Callable[..., object], getattr(managed_ir_sources, "_seal_inventory_evidence"))
     monkeypatch.setattr(managed_ir_sources, "_seal_inventory_evidence", stop_evidence)
     with pytest.raises(PreparedIssuerDocumentPublisherError) as partial:
         publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
@@ -891,8 +1038,12 @@ def test_evidence_less_inventory_must_equal_current_pinned_snapshot(
     forged = IssuerDocumentInventoryReceipt.model_validate(
         {
             **unsigned,
-            "receipt_sha256": issuer_document_inventory._sha256_text(
-                issuer_document_inventory._canonical_json(unsigned)
+            "receipt_sha256": cast(
+                Callable[..., str], getattr(issuer_document_inventory, "_sha256_text")
+            )(
+                cast(Callable[..., str], getattr(issuer_document_inventory, "_canonical_json"))(
+                    unsigned
+                )
             ),
         }
     )

@@ -195,7 +195,7 @@ def test_valid_policy_denial_and_exact_replay_are_admitted() -> None:
         denied_request,
         status=StoredTargetStatus.POLICY_DENIED,
         reporting_status=TranscriptReportingStatus.NOT_EVALUATED,
-        coverage_role=ListType.WATCHLIST,
+        coverage_role=ListType.INDEX_MEMBER,
     )
     denied = _authorization(
         denied_request,
@@ -274,7 +274,7 @@ def test_reporting_and_source_policy_identity_must_match_stored_target() -> None
     with pytest.raises(ValueError, match="stored target does not exactly match request"):
         validate_transcript_acquisition_authorization(reporting_receipt)
     policy_receipt = valid.model_copy(update={"stored_target": policy_forgery})
-    with pytest.raises(ValidationError, match=r"Input should be '2026-08-12\.2'"):
+    with pytest.raises(ValidationError, match="Input should be"):
         validate_transcript_acquisition_authorization(policy_receipt)
 
 
@@ -313,7 +313,7 @@ def test_coordinated_reporting_and_role_policy_forgeries_fail_closed() -> None:
     role_forgery = valid.model_copy(
         update={
             "stored_target": valid.stored_target.model_copy(
-                update={"coverage_role": ListType.WATCHLIST}
+                update={"coverage_role": ListType.INDEX_MEMBER}
             )
         }
     )
@@ -362,7 +362,7 @@ def test_provenance_authority_and_policy_version_are_canonical() -> None:
 
     with pytest.raises(ValueError, match="provenance does not exactly match request"):
         validate_transcript_acquisition_authorization(authority_forgery)
-    with pytest.raises(ValidationError, match=r"Input should be '2026-08-12\.2'"):
+    with pytest.raises(ValidationError, match="Input should be"):
         TranscriptAcquisitionRequest.model_validate(
             {
                 **request.model_dump(mode="python"),
@@ -389,3 +389,30 @@ def test_model_construct_and_extra_fields_do_not_bypass_semantics() -> None:
         TranscriptAcquisitionRequest.model_validate(
             {**_request().model_dump(mode="python"), "network_allowed": True}
         )
+
+
+@pytest.mark.parametrize("role", [ListType.EVALUATION, ListType.WATCHLIST])
+def test_current_policy_authorizes_automatic_research_roles(role: ListType) -> None:
+    request = _request().model_copy(update={"source_policy_version": "2026-09-19.1"})
+    authorization = _authorization(
+        request, stored_target=_stored_target(request, coverage_role=role)
+    )
+    assert validate_transcript_acquisition_authorization(authorization).allowed
+
+
+def test_historical_watchlist_denial_keeps_original_policy_meaning() -> None:
+    request = _request().model_copy(update={"source_policy_version": "2026-08-12.2"})
+    target = _stored_target(
+        request,
+        coverage_role=ListType.WATCHLIST,
+        status=StoredTargetStatus.POLICY_DENIED,
+        reporting_status=TranscriptReportingStatus.NOT_EVALUATED,
+    )
+    receipt = _authorization(
+        request,
+        stored_target=target,
+        status=TranscriptAuthorizationStatus.DENIED,
+        reason=TranscriptAuthorizationReason.STORED_IDENTITY_DENIED,
+        failure=TranscriptAuthorizationFailure.STORED_IDENTITY_POLICY,
+    )
+    assert not validate_transcript_acquisition_authorization(receipt).allowed

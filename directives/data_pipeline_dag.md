@@ -4,7 +4,51 @@
 
 **Why this exists**: The pipeline as it stood was ad-hoc script-calls-script with `.tmp/` JSON as the only inter-stage contract. That doesn't scale to the FMP × SEC × IR × audio × manual matrix. Every per-task directive (`fetch_transcripts`, `fetch_ir_documents`, `quarterly_refresh`, etc.) is now expressed as a slice of these 8 stages with explicit per-stage status, contracts, and resumption.
 
-## Stages
+## Progressive acquisition and proof policy (2026-09-19)
+
+The owner-approved scope is automatic full source acquisition for portfolio,
+evaluation, and watchlist companies. `src/pipeline/source_policy.py` owns executable
+authorization. List priority may order work; it does not reduce evidence standards.
+Corporate SEC, IR, and transcript lanes require a resolved active equity/ADR identity;
+ETFs need their applicable fund sources, and unknown instrument identity needs repair.
+The five-reported-quarter bound for IR/text transcripts, source authorization,
+provider entitlement limits, and audio/webcast exclusion remain in force. This does
+not expand expensive narrative, DCF, or LLM schedules. FMP recovery uses the same
+roles at both service and database boundaries, ordering portfolio, evaluation,
+watchlist, then permitted index screening. Automatic work records `requested=false`;
+an explicit request records its actual invocation identity. A scheduler run ID
+must not be fabricated into owner authorization to satisfy an obsolete role rule.
+
+Apply scrutiny at the boundary that can establish the claimed property:
+
+| Boundary | Required check | What may proceed |
+|---|---|---|
+| Discovery | Stored issuer/instrument/role, approved source, bounded period and request budget | Record candidate and explicit unavailable/denied outcomes; never claim archive completeness |
+| Capture | Exact raw bytes, SHA-256/size, immutable location, source URL/time, document/observation version | Retain and register bytes atomically before interpretation; no semantic approval required |
+| Deterministic extraction | Current extractor identity + exact input version; locators, output identity, supported format and failure disposition | Parse each available document independently; preserve raw management wording and novel observations |
+| Financial admission | Issuer, period, unit/currency, scope/basis, definition revision, evidence locator and conflict/comparability disposition | Admit evidenced facts through the shared resolver; unresolved candidates remain explicit |
+| Completeness and publication | Authoritative expected population, acquisition and extraction receipts for the stated scope, reader/reconstruction parity | Claim decision-grade only for the scope proved; expose all missing prerequisites |
+
+A missing archive inventory must not prevent safe capture or deterministic parsing of
+an available document. It does prevent an archive-complete or decision-grade claim.
+A complete single document does not establish complete issuer coverage. Confidence
+scores, a successful subprocess, a file count, and narrative caches are not proof seals.
+
+Drain stored processing debt independently of whether discovery downloaded anything.
+Select by immutable input version and extractor identity; retry scoped failures rather
+than replaying successful LLM work. `execution/process_document_evidence.py` owns the
+bounded deterministic capture/extraction plan and apply interface. It does not crawl,
+run LLMs, admit financial meaning, or invent missing source inventories. Its explicit
+cursor lets an operator advance past quarantine and retry those document IDs separately.
+Existing source-inventory and document-processing owners retain completeness authority.
+
+Structural/identity/schema failures require repair, not unchanged automatic retries.
+Transient failures may retry within the owning source's budget; authentication denial
+stops that provider. Independent items may proceed with a degraded batch result;
+dependent stages cannot consume a failed prerequisite as success. Retry checkpoints
+are bound to the intended database and retain failed item identities.
+
+## Stage sequence
 
 ```
 INGEST → TRANSCRIBE → PARSE → VALIDATE → PERSIST → COMPUTE → SYNTHESIZE → PUBLISH
@@ -84,21 +128,25 @@ After failure, `python execution/daily_fetch_and_brief.py --ticker <T>` (or re-r
 
 ## Routing at INGEST
 
-Per `directives/data_provenance.md`, routing is decided at INGEST based on `(instrument_type, kpi_definitions)`:
+Shared source policy authorizes acquisition using stored active identity, role,
+instrument, and artifact kind. Source availability, filing regime, and provider
+entitlements then determine applicable lanes. `kpi_definitions.primary_source`
+selects metric extraction authority; it must not exclude other authorized issuer
+documents from capture. An ETF is not a failed corporate filer. Unknown identity
+is unresolved, never silently treated as an equity.
 
-- If `companies.instrument_type == 'etf'`: sources = `{etf_endpoint_set}` only.
-- Else if any `kpi_definitions` row for this ticker has `primary_source != 'fmp'`: sources = `{fmp, ir_doc, sec_xbrl}` (the union of what's needed).
-- Else: sources = `{fmp}`.
-
-Routing is data-driven — no hardcoded ticker logic. Adding a name to the IR-override registry (a `kpi_definitions` row) automatically opts that name into IR-fetch on the next run.
-
-**Manual IR uploads are an additional, orthogonal source.** The user typically uploads IR PDFs/XLSX only for portfolio names + a subset of watchlist names, not for every tracked ticker. `categorize_ir_uploads.py` picks them up from the root of `ir_documents/`, classifies them, and registers `documents` rows with `source_type='ir_doc'` independent of the routing rules above. Tickers with manual uploads but no `kpi_definitions` IR override still get IR rows in `documents` — downstream consumers should query `documents` directly rather than gating on the routing decision. Tickers with neither auto-fetch routing nor manual uploads simply have no `ir_doc` rows; downstream queries `LEFT JOIN`, and synthesis proceeds with whatever facts are present.
+**Manual IR uploads are an additional, orthogonal source.** Explicitly supplied
+documents enter the same byte/lineage contract through `categorize_ir_uploads.py`.
+They do not authorize an unbounded crawl. A missing IR document remains a visible
+coverage gap; preliminary analysis may use other available evidence with that
+limitation, but may not claim complete source coverage.
 
 ## Refresh cadence
 
 Per `directives/data_provenance.md` §6 (per-source overrides) and the project memory:
 
-- One-time backfill: full history per name on entry into the book.
+- Initial acquisition: source-policy-bounded history per name; wider historical work
+  requires its own scope and provider budget.
 - Quarterly refresh: triggered by either (a) a new period appearing in `FMP_FINANCIAL_REPORTS_DATES`, or (b) elapsed wall-clock quarter, whichever fires first.
 - Stage 3 IR-override fetches run on the same trigger as the FMP refresh.
 
@@ -106,5 +154,6 @@ Per `directives/data_provenance.md` §6 (per-source overrides) and the project m
 
 - No transformation logic in Layer 2 (orchestration). Layer 2 sequences and reads stdout/stderr; it does not parse, validate, or compute.
 - No long-running monolithic scripts that cross stages. Each stage is its own executable in `execution/`.
-- No "this run partially succeeded so we'll just keep going." A `HALT` validation kills the run.
+- No partial success reported as completeness. A `HALT` blocks its dependent write set;
+  explicitly isolated items may continue with non-success accounting for failed items.
 - No skipping VALIDATE. PERSIST never reads from PARSE directly.

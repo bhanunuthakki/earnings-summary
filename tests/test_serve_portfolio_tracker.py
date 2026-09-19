@@ -796,7 +796,7 @@ def test_supervisor_persists_fresh_pid_attribution_and_fails_after_child_exit(
     assert receipt.listener.health_checked_at == now
     assert receipt.scheduler is not None
     assert receipt.scheduler.terminal_result == "activation_required"
-    assert receipt.failure_detail == "Portfolio Tracker API process exited"
+    assert receipt.failure_detail == "Portfolio Tracker API process exited; exit_code=0"
 
 
 def test_supervisor_terminates_child_before_retry_after_ownership_proof_fails(
@@ -877,4 +877,4 @@ def test_supervisor_terminates_child_before_retry_after_ownership_proof_fails(
     assert process.terminated is True
     assert process.waited is True
     receipt = RuntimeReceipt.model_validate_json((tmp_path / "receipt.json").read_bytes())
-    assert receipt.failure_detail == "listener health or endpoint ownership proof is missing"
+    assert receipt.failure_detail == "listener_ownership_mismatch"

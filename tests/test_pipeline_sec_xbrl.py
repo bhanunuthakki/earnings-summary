@@ -539,11 +539,14 @@ _FMP_LINE_ITEMS = {
 }
 
 
-def test_every_ladder_targets_an_fmp_canonical_line_item() -> None:
-    """SEC rows must land on the SAME logical keys FMP writes, or the
-    tier-aware dedup + source_disagreement validation never see them."""
+def test_every_ladder_targets_a_declared_financial_line_item() -> None:
+    """Comparable aggregates share FMP keys; source-only components stay distinct."""
+    sec_component_items = {
+        "long_term_debt_current_excluding_leases",
+        "long_term_debt_non_current_excluding_leases",
+    }
     for ladder in TAG_LADDERS:
-        assert ladder.line_item in _FMP_LINE_ITEMS, ladder.line_item
+        assert ladder.line_item in _FMP_LINE_ITEMS | sec_component_items, ladder.line_item
 
 
 def test_outflow_ladders_carry_negative_sign() -> None:
@@ -1021,3 +1024,14 @@ def test_multiframe_same_accession_collapses_deterministically(
     assert len(rows) == 1  # collapsed, not one row per frame
     assert int(rows[0]["value"]) == 21_000_000  # latest-start winner, both orders
     assert int(rows[0]["source_doc_id"]) == accn_to_doc[accn]
+
+
+def test_lease_exclusive_debt_concepts_remain_distinct_from_total_debt() -> None:
+    by_item = {ladder.line_item: ladder for ladder in TAG_LADDERS}
+    assert by_item["long_term_debt_current_excluding_leases"].rungs == (
+        ("us-gaap", "LongTermDebtCurrent"),
+    )
+    assert by_item["long_term_debt_non_current_excluding_leases"].rungs == (
+        ("us-gaap", "LongTermDebtNoncurrent"),
+    )
+    assert by_item["total_debt"].rungs == (("us-gaap", "DebtAndCapitalLeaseObligations"),)

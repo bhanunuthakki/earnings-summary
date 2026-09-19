@@ -8,6 +8,12 @@ The core library is under `src/`. Command-line entry points are under
 `execution/`, and SQLite schema migrations live in `alembic/`. The project is
 designed for one local operator and does not provide a hosted service.
 
+Portfolio, evaluation, and watchlist companies share automatic full source acquisition,
+subject to stored instrument identity, source availability, provider limits, and the
+five-reported-quarter IR/text-transcript bound. Byte capture, parsing, completeness,
+and semantic verification are separate proof stages; a successful download is not
+decision-grade evidence. See [the pipeline policy](directives/data_pipeline_dag.md).
+
 ## Quick start
 
 Use Python 3.11 or later and install the project plus development dependencies:

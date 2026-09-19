@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-import sys
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -20,18 +19,14 @@ from dcf.forecast_series import (
 )
 from dcf.persist import DcfRunRow, upsert
 from dcf.provenance import DcfInputProvenance
+from execution import refresh_dcf
 from provenance.metric_ontology import (
     CanonicalMetric,
     CanonicalMetricDefinitionRevision,
     MetricOntology,
 )
+from schema_compat import expected_head
 from sqlite_runtime import register_sqlite_integrity_functions
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT / "execution") not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import refresh_dcf  # noqa: E402
 
 _DIMENSIONS_JSON = "[]"
 _DIMENSIONS_DIGEST = hashlib.sha256(_DIMENSIONS_JSON.encode()).hexdigest()
@@ -95,7 +90,7 @@ def test_active_migration_installs_the_forecast_plane(
     revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
     conn.close()
 
-    assert revision == ("0039_add_dcf_forecast_series",)
+    assert revision == (expected_head(),)
     assert ("table", "dcf_forecast_metric_mapping_revisions") in objects
     assert ("table", "dcf_forecast_series_points") in objects
     assert ("trigger", "trg_dcf_forecast_point_mapping") in objects

@@ -23,6 +23,7 @@ from pipeline.source_policy import (
     CollectionMode,
     CollectionSource,
     decision_for,
+    instrument_allows_artifact,
     issuer_policy,
     mode_for_role,
 )
@@ -175,17 +176,17 @@ _ROLE_CONTENT: dict[ListType, tuple[str, str, str]] = {
     ListType.PORTFOLIO: (
         "Portfolio",
         "Automatic full",
-        "Automatic full collection. Portfolio companies receive the deepest recurring coverage.",
+        "Automatic full collection with portfolio-first scheduling.",
     ),
     ListType.EVALUATION: (
         "Evaluation",
-        "On demand",
-        "Full collection only after an owner request. No background document crawl.",
+        "Automatic full",
+        "Automatic full collection with the same source and evidence requirements as portfolio.",
     ),
     ListType.WATCHLIST: (
         "Watchlist",
-        "Metadata only",
-        "Metadata only. No financial-fact, filing, IR-document, or transcript hydration.",
+        "Automatic full",
+        "Automatic full collection with the same source and evidence requirements as portfolio.",
     ),
     ListType.INDEX_MEMBER: (
         "Index members",
@@ -460,8 +461,11 @@ def read_sec_coverage_state(db_path: Path | None) -> SecCoverageSummaryView:
             ).fetchone()
             if not has_table:
                 return SecCoverageSummaryView()
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+            instrument_column = "instrument_type" if "instrument_type" in columns else "NULL"
             rows = conn.execute(
-                "SELECT ticker, name, list_type, sec_validated, filing_regime, archived_at "
+                f"SELECT {instrument_column} AS instrument_type, "
+                "ticker, name, list_type, sec_validated, filing_regime, archived_at "
                 "FROM tracked_companies WHERE archived_at IS NULL "
                 "ORDER BY CASE list_type WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 ELSE 3 END, ticker"
             ).fetchall()
@@ -486,32 +490,41 @@ def read_sec_coverage_state(db_path: Path | None) -> SecCoverageSummaryView:
 
         if role == "portfolio":
             portfolio_count += 1
-            if sec_validated:
-                status = "Automatic full"
-                tone: Tone = "ok"
-                notes = f"Active SEC collection ({filing_regime})"
-                validated_count += 1
-            else:
-                status = "Coverage gap"
-                tone = "warn"
-                notes = "Portfolio issuer pending SEC profile validation"
-                gap_count += 1
         elif role == "evaluation":
             evaluation_count += 1
-            if sec_validated:
-                status = "On demand"
-                tone = "ok"
-                notes = f"Owner-requested SEC collection ready ({filing_regime})"
-                validated_count += 1
-            else:
-                status = "Pending validation"
-                tone = "warn"
-                notes = "Evaluation issuer pending SEC profile validation"
-                gap_count += 1
-        else:
+        elif role == "watchlist":
             watchlist_count += 1
-            status = "Metadata only"
-            tone = "ok"
+        try:
+            allowed = decision_for(
+                role,
+                CollectionSource.SEC,
+                ArtifactKind.FILING_PACKAGE,
+                requested=False,
+            ).allowed
+        except ValueError:
+            allowed = False
+        applicable = instrument_allows_artifact(
+            row["instrument_type"],
+            source=CollectionSource.SEC,
+            artifact_kind=ArtifactKind.FILING_PACKAGE,
+        )
+        tone: Tone = "ok"
+        if allowed and not applicable:
+            status = "Instrument review required"
+            tone = "warn"
+            notes = "Corporate SEC collection requires a confirmed equity or ADR identity"
+            gap_count += 1
+        elif allowed and sec_validated:
+            status = "Automatic full"
+            notes = f"SEC collection authorized ({filing_regime}); processing proof is separate"
+            validated_count += 1
+        elif allowed:
+            status = "Coverage gap"
+            tone = "warn"
+            notes = f"{role.capitalize()} issuer pending SEC profile validation"
+            gap_count += 1
+        else:
+            status = "Excluded by policy"
             notes = "SEC document crawl excluded by policy"
 
         companies.append(
@@ -656,8 +669,8 @@ def _render_sec_coverage(coverage: SecCoverageSummaryView) -> str:
     cards = (
         '<div class="policy-grid">'
         f'<div class="k-well"><div class="k-label">Portfolio issuers</div><div class="k-card-row-title">{coverage.portfolio_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
-        f'<div class="k-well"><div class="k-label">Evaluation issuers</div><div class="k-card-row-title">{coverage.evaluation_count}</div><div class="k-card-meta">On-demand collection</div></div>'
-        f'<div class="k-well"><div class="k-label">Watchlist / Index</div><div class="k-card-row-title">{coverage.watchlist_count}</div><div class="k-card-meta">Crawl excluded by policy</div></div>'
+        f'<div class="k-well"><div class="k-label">Evaluation issuers</div><div class="k-card-row-title">{coverage.evaluation_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
+        f'<div class="k-well"><div class="k-label">Watchlist issuers</div><div class="k-card-row-title">{coverage.watchlist_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
         f'<div class="k-well"><div class="k-label">SEC Profile Gaps</div><div class="k-card-row-title">{coverage.gap_count}</div><div class="k-card-meta">Pending SEC validation</div></div>'
         "</div>"
     )
@@ -787,9 +800,9 @@ def render_data_policy_settings_panel(
         '<div><h2 class="k-card-title" id="data-policy-settings-title">Data collection policy</h2>'
         f'<div class="k-card-meta">Read-only · policy {escape(resolved.policy_version)}</div></div>'
         '<span class="k-pill k-pill-ok">Policy enforced</span></div>'
-        "<p>Company priority controls collection depth. Portfolio runs automatically; evaluation "
-        "runs only after an owner request; watchlist remains metadata-only; index members receive "
-        "FMP screening facts only. Webcasts are excluded.</p>"
+        "<p>Portfolio, evaluation, and watchlist receive automatic full collection with the same "
+        "evidence requirements. Priority controls scheduling; index members receive FMP screening "
+        "facts only. Webcasts are excluded. Collection authorization does not prove completeness.</p>"
         + _render_roles(resolved)
         + '<h3 class="k-card-title">Source behavior by company priority</h3>'
         + _render_matrix(resolved)

@@ -9,17 +9,12 @@ the wiring around it (manifest write, brief_dirty, status, URL dedup).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from execution import fetch_ir_from_urls as mod  # noqa: E402
-from ir_pipeline.manifest import load_manifest  # noqa: E402
+from execution import fetch_ir_from_urls as mod
+from ir_pipeline.manifest import load_manifest
 
 
 def _make_db(db: Path, *, role: str = "portfolio") -> None:
@@ -27,7 +22,7 @@ def _make_db(db: Path, *, role: str = "portfolio") -> None:
     conn = sqlite3.connect(str(db))
     conn.execute(
         "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, "
-        "fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0)"
+        "fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0, instrument_type TEXT DEFAULT 'equity')"
     )
     conn.execute(
         "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) "
@@ -141,7 +136,7 @@ def test_collect_urls_dedups_args_and_file(tmp_path: Path) -> None:
     ]  # arg first, file adds new, comment skipped
 
 
-@pytest.mark.parametrize("role", ["watchlist", "index_member"])
+@pytest.mark.parametrize("role", ["none", "index_member"])
 def test_approved_url_denial_never_crosses_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

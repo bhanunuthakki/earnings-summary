@@ -43,7 +43,10 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
+from typing import cast
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +147,14 @@ def _discover_sources(repo_root: Path, ticker: str) -> dict[tuple[str, str], lis
     return out
 
 
+def has_pending_narrative(repo_root: Path, ticker: str) -> bool:
+    """Use the extractor's source and cache rules to find retryable local work."""
+    return any(
+        not _cache_path_for(repo_root, ticker, doctype, period).is_file()
+        for doctype, period in _discover_sources(repo_root, ticker)
+    )
+
+
 def extract_for_ticker(
     repo_root: Path,
     ticker: str,
@@ -161,7 +172,9 @@ def extract_for_ticker(
     src_dir = Path(__file__).resolve().parents[1]
     if str(src_dir) not in sys.path:
         sys.path.insert(0, str(src_dir))
-    from parser import extract_text_from_pdf
+    extract_text_from_pdf = cast(
+        Callable[[str], str], import_module("parser").extract_text_from_pdf
+    )
 
     sources = _discover_sources(repo_root, ticker)
     counts = {"processed": 0, "cached": 0, "failed": 0, "skipped_empty": 0}
@@ -196,11 +209,11 @@ def extract_for_ticker(
                 cleaned = cleaned[:_MAX_CHARS_PER_DOC].rstrip() + "\n[...truncated]"
             chunks.append(cleaned)
 
+        if had_failure:
+            counts["failed"] += 1
+            continue
         if not chunks:
-            if had_failure:
-                counts["failed"] += 1
-            else:
-                counts["skipped_empty"] += 1
+            counts["skipped_empty"] += 1
             continue
 
         merged = _SOURCE_BREAK.join(chunks)
@@ -247,8 +260,10 @@ def main() -> int:
             p.name for p in base.iterdir() if p.is_dir() and not p.name.startswith("_")
         )
     summary: list[dict[str, object]] = []
+    failures = 0
     for ticker in tickers:
         counts = extract_for_ticker(repo_root, ticker, refresh=args.refresh)
+        failures += counts["failed"]
         row: dict[str, object] = dict(counts)
         row["ticker"] = ticker
         summary.append(row)
@@ -258,7 +273,7 @@ def main() -> int:
             file=sys.stderr,
         )
     print(json.dumps(summary, indent=2))
-    return 0
+    return int(failures > 0)
 
 
 if __name__ == "__main__":

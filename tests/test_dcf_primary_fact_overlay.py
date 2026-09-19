@@ -695,3 +695,31 @@ def test_generated_fcff_workbook_does_not_fake_current_input_observation(tmp_pat
     assert provenance.inputs_as_of == datetime(1970, 1, 1, tzinfo=UTC)
     assert provenance.detail is not None
     assert provenance.detail["inputs_as_of_status"] == "unavailable"
+
+
+def test_lease_exclusive_long_term_debt_components_do_not_replace_total_debt() -> None:
+    conn = _db()
+    for index, (line_item, value) in enumerate(
+        (
+            ("long_term_debt_current_excluding_leases", 10_000),
+            ("long_term_debt_non_current_excluding_leases", 90_000),
+        ),
+        start=10,
+    ):
+        conn.execute(
+            "INSERT INTO financial_facts (id,ticker,period_end,fiscal_period_type,line_item,"
+            "value,currency,unit,source_doc_id,extracted_by) "
+            "VALUES (?,'TEST','2026-06-30','Q2',?,?,'USD','actual',1,'sec_xbrl')",
+            (index, line_item, value),
+        )
+    result = overlay_quarterly_records(
+        conn, ticker="TEST", statement="balance", records=[_income_row()]
+    )
+    assert result.records[0]["interestBearingDebtCurrent"] == 10_000
+    assert result.records[0]["interestBearingDebtNoncurrent"] == 90_000
+    assert result.records[0]["totalDebt"] == 900_000
+    assert {item.fmp_field for item in result.applied} == {
+        "interestBearingDebtCurrent",
+        "interestBearingDebtNoncurrent",
+    }
+    conn.close()

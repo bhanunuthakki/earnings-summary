@@ -3,19 +3,35 @@
 The default is a read-only dry run.  ``--apply`` writes one bounded batch and
 only then advances ``.tmp/<task-id>/state.json``.  stdout is one JSON summary;
 structured progress and quarantine events are emitted to stderr.
+Exit 2 means this batch contains quarantined documents; exit 75 means another
+job owns a required write set.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from provenance.evidence_backfill import BackfillRequest, backfill_legacy_evidence  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from provenance.evidence_backfill import (
+    BackfillRequest,
+    backfill_legacy_evidence,
+    emit_structured_event,
+)
+from run_lock import RunLockHeldError, hold_run_lock
+from runtime.job_runtime import (
+    JobAlreadyRunningError,
+    JobLock,
+    inherited_lock_is_valid,
+    portfolio_db_path,
+)
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,14 +60,54 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
         task_id=args.task_id,
     )
+    if request.apply:
+        target_database = args.db.resolve()
+        try:
+            with ExitStack() as locks:
+                if not _inherited_database_lock(target_database):
+                    locks.enter_context(
+                        hold_run_lock(
+                            target_database, owner="evidence-ledger-backfill", timeout_s=0
+                        )
+                    )
+                if request.document_id is None:
+                    checkpoint = (
+                        request.repo_root.resolve() / ".tmp" / request.task_id / "state.json"
+                    )
+                    locks.enter_context(
+                        JobLock(
+                            request.repo_root,
+                            "evidence-ledger-backfill",
+                            [f"artifact:{checkpoint}"],
+                            wait_s=0,
+                        )
+                    )
+                return _run(target_database, request)
+        except (JobAlreadyRunningError, RunLockHeldError) as error:
+            emit_structured_event("evidence_ledger_backfill_locked", detail=str(error))
+            return 75
+    return _run(args.db, request)
+
+
+def _inherited_database_lock(target_database: Path) -> bool:
+    """Reuse parent ownership only when its configured lock is for this exact --db."""
+    try:
+        return portfolio_db_path(
+            PROJECT_ROOT
+        ).resolve() == target_database and inherited_lock_is_valid(PROJECT_ROOT, "portfolio-db")
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _run(db_path: Path, request: BackfillRequest) -> int:
     role = SQLiteConnectionRole.WRITER if request.apply else SQLiteConnectionRole.READ_ONLY
-    conn = connect_sqlite(args.db, role=role, schema_preflight=request.apply)
+    conn = connect_sqlite(db_path, role=role, schema_preflight=request.apply)
     try:
         result = backfill_legacy_evidence(conn, request)
     finally:
         conn.close()
     sys.stdout.write(result.model_dump_json() + "\n")
-    return 0
+    return 2 if result.documents_quarantined else 0
 
 
 if __name__ == "__main__":

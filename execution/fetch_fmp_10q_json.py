@@ -34,19 +34,27 @@ import time
 from datetime import date
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from net.client import (  # noqa: E402
+from net.client import (
     FMP_CLIENT,
     HttpCallError,
     JsonShape,
     JsonValue,
     RetryPolicy,
 )
-from pipeline.fmp_doc_index import index_fmp_files_for_ticker  # noqa: E402
-from runtime.secrets import load_project_env, project_env_file  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from pipeline.fmp_doc_index import index_fmp_files_for_ticker
+from pipeline.source_policy import (
+    ArtifactKind,
+    CollectionMode,
+    CollectionSource,
+    authorize_stored_collection_target,
+)
+from runtime.secrets import load_project_env, project_env_file
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # .env is loaded lazily in main(), AFTER --db-path is known — when running
 # from a worktree against the main checkout's DB (data/ is gitignored and a
@@ -70,10 +78,44 @@ DEFAULT_START_YEAR = 2018
 _FMP_RETRY = RetryPolicy(max_attempts=3, backoff_base_s=5.0)
 
 
+def _authorized_ticker(symbol: str, *, owner_requested: bool) -> bool:
+    authorization = authorize_stored_collection_target(
+        DB_PATH,
+        symbol,
+        requested=owner_requested,
+        source=CollectionSource.FMP,
+        artifact_kind=ArtifactKind.FINANCIAL_FACT,
+        require_corporate_instrument=True,
+    )
+    if (
+        authorization.allowed
+        and authorization.decision is not None
+        and authorization.decision.mode
+        in (CollectionMode.AUTOMATIC_FULL, CollectionMode.ON_DEMAND_FULL)
+    ):
+        return True
+    sys.stderr.write(
+        json.dumps(
+            {
+                "event": "source_collection_policy_denied",
+                "ticker": symbol,
+                "reason": authorization.status.value
+                if not authorization.allowed
+                else "full_collection_required",
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    return False
+
+
 def _fetch_once(
-    symbol: str, year: int, quarter: str
+    symbol: str, year: int, quarter: str, *, owner_requested: bool = True
 ) -> tuple[int, dict[str, JsonValue] | list[JsonValue] | None, str | None]:
-    """One FMP call with 429 backoff. Returns (http_code, body, error_msg)."""
+    """One authorized FMP call with 429 backoff; return status, body, and error."""
+    if not _authorized_ticker(symbol, owner_requested=owner_requested):
+        return (0, None, "source_collection_policy_denied")
     try:
         response = FMP_CLIENT.get_json(
             "financial-reports-json",
@@ -101,7 +143,12 @@ def _fetch_once(
 
 def _resolve_tickers(arg_tickers: str | None) -> list[str]:
     if arg_tickers:
-        return [t.strip().upper() for t in arg_tickers.split(",") if t.strip()]
+        return [
+            ticker
+            for value in arg_tickers.split(",")
+            if (ticker := value.strip().upper())
+            and _authorized_ticker(ticker, owner_requested=True)
+        ]
     conn = connect_sqlite(str(DB_PATH), role=SQLiteConnectionRole.READ_ONLY)
     cur = conn.cursor()
     cur.execute(
@@ -111,7 +158,7 @@ def _resolve_tickers(arg_tickers: str | None) -> list[str]:
     )
     tickers = [r[0] for r in cur.fetchall()]
     conn.close()
-    return tickers
+    return [ticker for ticker in tickers if _authorized_ticker(ticker, owner_requested=False)]
 
 
 def _is_real_payload(body: dict[str, JsonValue] | list[JsonValue] | None) -> bool:
@@ -186,7 +233,9 @@ def main() -> int:
                     skipped_existing += 1
                     continue
                 time.sleep(DELAY_S)
-                code, body, err = _fetch_once(ticker, year, q)
+                code, body, err = _fetch_once(
+                    ticker, year, q, owner_requested=args.tickers is not None
+                )
                 if code != 200 or body is None:
                     failed += 1
                     sys.stderr.write(f"  FAIL {ticker} {year} {q}: HTTP {code} {err or ''}\n")

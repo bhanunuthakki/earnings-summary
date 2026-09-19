@@ -32,6 +32,7 @@ from provenance.sec_companyfacts_capture import (
     capture_sec_companyfacts,
     parse_companyfacts_body,
 )
+from schema_compat import expected_head
 
 ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, 0, tzinfo=UTC)
@@ -552,7 +553,7 @@ def test_current_schema_companyfacts_fact_admission_is_ordered(
         ):
             assert forbidden not in receipt_keys
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
-            "0039_add_dcf_forecast_series"
+            expected_head()
         )
         snapshot_documents = conn.execute(
             "SELECT id, doc_type, accession_number, sha256 FROM documents"
