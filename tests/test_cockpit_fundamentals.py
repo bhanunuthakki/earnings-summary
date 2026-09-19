@@ -12,14 +12,11 @@ import json
 import shutil
 import sqlite3
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -45,16 +42,13 @@ from provenance.evidence_ledger import (  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def head_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
+) -> Path:
     db = tmp_path_factory.mktemp("fund_tmpl") / "head.db"
     dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    return db
+    return migrated_db(db)
 
 
 @pytest.fixture
