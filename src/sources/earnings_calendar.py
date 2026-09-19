@@ -25,14 +25,33 @@ Usage:
 
 from __future__ import annotations
 
+import importlib
 import json
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast, runtime_checkable
 
 from sources.registry import CallStatus, log_call
+
+
+class _YFinanceTicker(Protocol):
+    calendar: object
+
+
+class _TickerFactory(Protocol):
+    def __call__(self, ticker: str) -> _YFinanceTicker: ...
+
+
+class _YFinanceModule(Protocol):
+    Ticker: _TickerFactory
+
+
+@runtime_checkable
+class _HasValues(Protocol):
+    values: object
 
 
 @dataclass(frozen=True)
@@ -174,10 +193,11 @@ def _try_fmp_cache(repo_root: Path, ticker: str) -> NextEarnings | None:
 
     today = date.today()
     upcoming: list[date] = []
-    for rec in payload:
+    for rec in cast("list[object]", payload):
         if not isinstance(rec, dict):
             continue
-        ds = rec.get("date") or rec.get("fiscalDateEnding")
+        typed_rec = cast("dict[object, object]", rec)
+        ds = typed_rec.get("date") or typed_rec.get("fiscalDateEnding")
         if not isinstance(ds, str):
             continue
         try:
@@ -215,7 +235,7 @@ def _try_yfinance(ticker: str) -> NextEarnings | None:
     """Pull from yfinance.Ticker(t).calendar. Returns None on miss or error."""
     started = time.monotonic()
     try:
-        import yfinance as yf  # type: ignore[import-untyped]
+        yf = cast("_YFinanceModule", importlib.import_module("yfinance"))
     except ImportError:
         log_call(
             source_name="yfinance",
@@ -233,19 +253,27 @@ def _try_yfinance(ticker: str) -> NextEarnings | None:
         # a DataFrame depending on version. Normalize both.
         candidates: list[date] = []
         if isinstance(cal, dict):
-            raw = cal.get("Earnings Date") or cal.get("earningsDate") or []
+            typed_cal = cast("dict[object, object]", cal)
+            raw: object = typed_cal.get("Earnings Date") or typed_cal.get("earningsDate") or ()
             if isinstance(raw, list):
-                for v in raw:
+                for v in cast("list[object]", raw):
                     if isinstance(v, datetime):
                         candidates.append(v.date())
                     elif isinstance(v, date):
                         candidates.append(v)
-        else:
+        elif isinstance(cal, _HasValues):
             # DataFrame path (older yfinance versions)
             try:
-                values = list(getattr(cal, "values", lambda: [])())  # type: ignore[arg-type]
-                for row in values:
-                    for v in row:
+                values_source = cal.values
+                values = values_source() if callable(values_source) else values_source
+                rows: Iterable[object] = (
+                    cast("Iterable[object]", values) if isinstance(values, Iterable) else ()
+                )
+                for row in rows:
+                    cells: Iterable[object] = (
+                        cast("Iterable[object]", row) if isinstance(row, Iterable) else ()
+                    )
+                    for v in cells:
                         if isinstance(v, datetime):
                             candidates.append(v.date())
             except Exception:
