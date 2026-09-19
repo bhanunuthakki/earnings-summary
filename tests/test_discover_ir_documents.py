@@ -152,6 +152,7 @@ def test_auth_denial_is_not_reported_as_no_docs(
 ) -> None:
     db = tmp_path / "m.db"
     _make_tracked_db(db, "NU", "portfolio")
+
     def deny_auth(**_kwargs: object) -> list[object]:
         raise IrDiscoveryAuthenticationDeniedError(status)
 

@@ -57,6 +57,7 @@ def test_stable_flat_list_round_trip_parses(monkeypatch: pytest.MonkeyPatch) -> 
         return payload
 
     monkeypatch.setattr(fms, "_fetch_json", fake_fetch)
+
     # The yfinance candidate now sits FIRST (2026-07-19 revival); fail it so
     # the FMP fallback path under test is actually exercised — and so this
     # suite never touches the network.
