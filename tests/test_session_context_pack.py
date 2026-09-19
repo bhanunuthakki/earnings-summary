@@ -1,12 +1,11 @@
 """Tests for the Claude-session bridge's READ surface (B8,
 execution/session_context_pack.py).
 
-One fully-migrated tmp-db fixture (the ``test_decision_journal_view.py``
-bootstrap-DDL + ``command.upgrade(cfg, "head")`` pattern — every real
-migration runs in order against the bootstrap tables ``db.py``'s
-``init_db()`` normally creates, so the pack is validated against the true
-production schema). Seeds one tenet, one stance, one open musing, one owner
-decision; calls ``build_pack`` directly (no subprocess) and asserts each
+One fully-migrated tmp-db fixture (the ``migrated_db`` template
+pattern — every real migration runs in order against the bootstrap tables
+``db.py``'s ``init_db()`` normally creates, so the pack is validated against
+the true production schema). Seeds one tenet, one stance, one open musing,
+one owner decision; calls ``build_pack`` directly (no subprocess) and asserts each
 section renders its seed, the empty-section behavior for research-task
 prompts (no ``research_tasks`` row carries a ``session_prompt`` in its
 the legacy ``run_id`` metadata field in this fixture), and that the whole build is zero-LLM.
@@ -21,7 +20,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 from execution import session_context_pack
 from synthesis.insights import record_insight
@@ -29,80 +27,6 @@ from synthesis.tenets import record_tenet
 from user_state.notes import create_note
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-# Verbatim from tests/test_decision_journal_view.py — the three tables
-# db.py:init_db() creates outside alembic; every migration from 0001 on
-# assumes these already exist. Duplicated per the repo's
-# duplicate-simple-shared-logic convention rather than importing a sibling
-# test module.
-_BOOTSTRAP_DDL = """
-CREATE TABLE IF NOT EXISTS tracked_companies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT DEFAULT 'bhanu',
-    ticker TEXT NOT NULL,
-    name TEXT NOT NULL,
-    list_type TEXT NOT NULL CHECK(list_type IN (
-        'portfolio', 'watchlist', 'evaluation', 'none', 'etf', 'index_member'
-    )),
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sec_validated BOOLEAN DEFAULT 0,
-    ir_url TEXT DEFAULT NULL,
-    model_url TEXT DEFAULT NULL,
-    publishes_release BOOLEAN DEFAULT 0,
-    publishes_slides BOOLEAN DEFAULT 0,
-    publishes_transcript BOOLEAN DEFAULT 0,
-    fmp_data_upto TEXT DEFAULT NULL,
-    manual_data_quarters TEXT DEFAULT '[]',
-    fmp_data_saved BOOLEAN DEFAULT 0,
-    UNIQUE(user_id, ticker)
-);
-CREATE TABLE IF NOT EXISTS quarterly_artifacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    year INTEGER NOT NULL,
-    quarter TEXT NOT NULL,
-    has_release_file    BOOLEAN DEFAULT 0,
-    has_slides_file     BOOLEAN DEFAULT 0,
-    has_transcript_file BOOLEAN DEFAULT 0,
-    has_audio_file      BOOLEAN DEFAULT 0,
-    step_audio_transcribed BOOLEAN DEFAULT 0,
-    step_llm_summarized    BOOLEAN DEFAULT 0,
-    step_saydo_analyzed    BOOLEAN DEFAULT 0,
-    step_thesis_updated    BOOLEAN DEFAULT 0,
-    UNIQUE(ticker, year, quarter)
-);
-CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
-    ticker         TEXT    NOT NULL,
-    endpoint       TEXT    NOT NULL,
-    period         TEXT    NOT NULL DEFAULT '',
-    status         TEXT    NOT NULL,
-    http_code      INTEGER,
-    record_count   INTEGER,
-    earliest_date  TEXT,
-    latest_date    TEXT,
-    file_path      TEXT,
-    file_bytes     INTEGER,
-    error_msg      TEXT,
-    last_pulled    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (ticker, endpoint, period)
-);
-"""
-
-
-def _bootstrap_base_tables(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executescript(_BOOTSTRAP_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _cfg(db: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    return cfg
 
 
 @pytest.fixture

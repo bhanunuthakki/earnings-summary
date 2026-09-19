@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from research.pledge import (
     annotate_latest_pending,
     build_challenge,
@@ -16,93 +15,11 @@ from research.pledge import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0129_commitment_scan_log"
-HEAD = "0130_owner_decision_extension"
-
-_PRE_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16) NOT NULL,
-    recommendation_kind VARCHAR(32) NOT NULL,
-    conviction VARCHAR(16),
-    source_artifact_id INTEGER,
-    source_memo_id INTEGER,
-    source_dismissal_id INTEGER,
-    rationale_excerpt TEXT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    outcome_label VARCHAR(16),
-    created_at DATETIME NOT NULL,
-    CONSTRAINT ck_decisions_source_present CHECK (
-        source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL
-        OR recommendation_kind = 'avoid')
-);
-CREATE TABLE tenants (id TEXT PRIMARY KEY);
-INSERT INTO tenants (id) VALUES ('bhanu');
-CREATE TABLE analyst_notes (
-    id INTEGER NOT NULL,
-    user_id TEXT DEFAULT 'bhanu' NOT NULL,
-    ticker TEXT,
-    kind TEXT NOT NULL,
-    status TEXT DEFAULT 'open' NOT NULL,
-    body TEXT NOT NULL,
-    anchor_type TEXT,
-    anchor_key TEXT,
-    source TEXT NOT NULL,
-    source_ref TEXT,
-    supersedes_id INTEGER,
-    resolution_note TEXT,
-    context_json TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    resolved_at TEXT,
-    decision_id INTEGER,
-    position_entry_id INTEGER,
-    link_auto_resolve INTEGER DEFAULT 0 NOT NULL,
-    fact_ref TEXT,
-    PRIMARY KEY (id),
-    CONSTRAINT ck_analyst_notes_kind CHECK (kind IN
-        ('question','decision','watch','assumption','observation','musing'))
-);
-CREATE VIRTUAL TABLE analyst_notes_fts USING fts5(
-    body, content='analyst_notes', content_rowid='id');
-CREATE TABLE capture_audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER,
-    note_id INTEGER,
-    channel TEXT NOT NULL,
-    utterance_summary TEXT NOT NULL,
-    action TEXT NOT NULL,
-    detail TEXT,
-    purpose TEXT,
-    model TEXT,
-    prompt_sha256 TEXT,
-    run_id TEXT,
-    cost_usd REAL NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-);
-"""
 
 
 @pytest.fixture
-def db(tmp_path: Path) -> Path:
-    path = tmp_path / "pledge.db"
-    conn = sqlite3.connect(str(path))
-    try:
-        conn.executescript(_PRE_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    # This fixture intentionally exercises the historical 0130 contract while
-    # current runtime writers enforce the repository's present Alembic head.
-    with sqlite3.connect(str(path)) as marker_conn:
-        marker_conn.execute("DROP TABLE alembic_version")
-    return path
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "pledge.db")
 
 
 def _land_musing(db: Path, body: str) -> int:

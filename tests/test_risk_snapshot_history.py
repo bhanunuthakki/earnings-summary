@@ -13,16 +13,14 @@ response — the sole prod row was all-NULL. Three seams:
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from integrations.portfolio_tracker_client import (
     BetaStats,
     PerformancePoint,
@@ -39,33 +37,9 @@ from portfolio_risk_snapshot_store import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
-@pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    db = tmp_path_factory.mktemp("risk_hist_tmpl") / "at_head.db"
-    import db as dbmod
-
-    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
-    return db
-
-
 @pytest.fixture
-def head_db(head_template: Path, tmp_path: Path) -> Path:
-    db = tmp_path / "risk_hist.db"
-    shutil.copy(head_template, db)
-    return db
+def head_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "risk_hist.db")
 
 
 def test_every_write_appends_history_while_latest_view_upserts(head_db: Path) -> None:
