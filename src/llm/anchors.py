@@ -58,9 +58,12 @@ import logging
 import os
 import sqlite3
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+if TYPE_CHECKING:
+    from timeseries import Observation
 
 log = logging.getLogger(__name__)
 
@@ -188,14 +191,14 @@ _STATS_LINE_ITEMS: tuple[str, ...] = (
 )
 
 
-def _stats_block_from_series(series_label: str, series: list[object]) -> str | None:
+def _stats_block_from_series(series_label: str, series: list[Observation]) -> str | None:
     """One-line markdown summary of a series: direction + slope + (inflection
     when present). Returns None when the series is too short to analyze."""
     from timeseries import detect_inflection, detect_trend
 
     if len(series) < 4:
         return None
-    trend = detect_trend(cast("list[object]", series))
+    trend = detect_trend(series)
     if trend.get("insufficient_data"):
         return None
     direction = str(trend.get("direction") or "?")
@@ -210,7 +213,7 @@ def _stats_block_from_series(series_label: str, series: list[object]) -> str | N
 
     # Add inflection callout when the series is long enough
     if len(series) >= 8:
-        infl = detect_inflection(cast("list[object]", series))
+        infl = detect_inflection(series)
         if (
             infl.get("inflection_period")
             and float(cast("float", infl.get("magnitude") or 0)) >= 1.0
@@ -246,7 +249,7 @@ def _statistical_patterns_block(
             continue
         if not s:
             continue
-        rendered = _stats_block_from_series(line_item.replace("_", " "), cast("list[object]", s))
+        rendered = _stats_block_from_series(line_item.replace("_", " "), s)
         if rendered:
             lines.append(rendered)
 
@@ -285,7 +288,7 @@ def _statistical_patterns_block(
             if not s_kpi:
                 continue
             short_label = kpi_name if len(kpi_name) <= 60 else kpi_name[:57] + "…"
-            rendered = _stats_block_from_series(short_label, cast("list[object]", s_kpi))
+            rendered = _stats_block_from_series(short_label, s_kpi)
             if rendered:
                 lines.append(rendered)
 
