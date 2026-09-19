@@ -181,7 +181,7 @@ def load_feed(
     has_more = len(rows) > limit
     rows = rows[:limit]
     tasks = get_tasks_for_notes([r.id for r in rows], db_path=db_path)
-    items = []
+    items: list[FeedItem] = []
     for r in rows:
         task = tasks.get(r.id)
         route, why = _wondering_route_and_why(r, has_task=task is not None)
