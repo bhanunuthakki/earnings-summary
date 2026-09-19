@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportUnknownMemberType=false
 """Browser-level Playwright integration tests for homepage evaluation dialogues."""
 
 from __future__ import annotations
