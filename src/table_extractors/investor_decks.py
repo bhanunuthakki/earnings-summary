@@ -41,12 +41,18 @@ from typing import cast
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+import parser as parser_module
 from llm.structured import StructuredParseError, call_llm_structured
 from llm.untrusted import spotlight
-from parser import extract_text_from_pdf
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
+
+
+def extract_text_from_pdf(filepath: str | Path) -> str:
+    """Typed boundary around the legacy PDF parser."""
+    return parser_module.extract_text_from_pdf(filepath)
+
 
 EXTRACTOR_ID = "investor_decks_v1"
 EXTRACTOR_VERSION = "1"
