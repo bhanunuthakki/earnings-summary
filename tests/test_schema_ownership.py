@@ -381,6 +381,44 @@ def upgrade():
     op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
     op.execute("CREATE TABLE orphaned (id INTEGER)")
 """,
+        """revision = "0001"
+down_revision = None
+class Noop:
+    def execute(self, sql):
+        return None
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    match Noop():
+        case op:
+            pass
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """revision = "0001"
+down_revision = None
+class Noop:
+    def execute(self, sql):
+        return None
+globals()["op"] = Noop()
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """SQL = "CREATE TABLE orphaned (id INTEGER)"
+revision = "0001"
+down_revision = None
+class Mutator:
+    @staticmethod
+    def mutate():
+        global SQL
+        SQL = "SELECT 1"
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    Mutator.mutate()
+    op.execute(SQL)
+""",
     ],
 )
 def test_uncertain_bindings_do_not_manufacture_ownership(

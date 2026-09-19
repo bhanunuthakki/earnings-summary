@@ -237,6 +237,25 @@ class _BindingVisitor(ast.NodeVisitor):
             if alias.name != "*":
                 self.names.add(alias.asname or alias.name)
 
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name is not None:
+            self.names.add(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        if node.name is not None:
+            self.names.add(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        if node.name is not None:
+            self.names.add(node.name)
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        if node.rest is not None:
+            self.names.add(node.rest)
+        self.generic_visit(node)
+
     def visit_Lambda(self, node: ast.Lambda) -> None:
         return
 
@@ -339,6 +358,18 @@ def _record_upgrade_evidence(
     revision: str,
     evidence: dict[str, list[tuple[int, str, str]]],
 ) -> None:
+    dynamic_namespace_names = {"eval", "exec", "globals", "locals", "vars"}
+    if any(
+        isinstance(child, ast.Call)
+        and (
+            (isinstance(child.func, ast.Name) and child.func.id in dynamic_namespace_names)
+            or (
+                isinstance(child.func, ast.Attribute) and child.func.attr in dynamic_namespace_names
+            )
+        )
+        for child in ast.walk(tree)
+    ):
+        return
     trusted_operation_receivers: set[str] = set()
     for statement in tree.body:
         trusted_operation_receivers.difference_update(_bound_names([statement]))
@@ -372,12 +403,7 @@ def _record_upgrade_evidence(
             escaped_receivers.add(child.id)
     trusted_operation_receivers.difference_update(escaped_receivers)
     globally_mutable_symbols = {
-        name
-        for function in tree.body
-        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
-        for child in ast.walk(function)
-        if isinstance(child, ast.Global)
-        for name in child.names
+        name for child in ast.walk(tree) if isinstance(child, ast.Global) for name in child.names
     }
     trusted_operation_receivers.difference_update(globally_mutable_symbols)
     constants: dict[str, str] = {}
