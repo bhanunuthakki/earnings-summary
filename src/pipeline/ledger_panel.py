@@ -230,7 +230,7 @@ def _ticker_candidate_chips(cands: object) -> str:
 
 
 def _musing_card(row: AnalystNoteRow) -> str:
-    ctx = row.context or {}
+    ctx: dict[str, object] = row.context or {}
     channel = str(ctx.get("channel") or "")
     chan = f'<span class="ledger-chan">{escape(channel)}</span>' if channel else ""
     when = stamp_html(row.created_at, css="ledger-when")
@@ -238,7 +238,7 @@ def _musing_card(row: AnalystNoteRow) -> str:
     if row.ticker:
         ident = ticker_label(row.ticker)
     elif ctx.get("needs_ticker"):
-        cands = ctx.get("ticker_candidates")
+        cands: object = ctx.get("ticker_candidates")
         names = (
             ", ".join(escape(str(c)) for c in cast("list[object]", cands))
             if isinstance(cands, list)
@@ -1212,7 +1212,7 @@ def _feed_body(item: FeedItem) -> str:
     anchor (owner-provided URL, opened in a new tab), a doc as its filename +
     caption."""
     note = item.note
-    ctx = note.context or {}
+    ctx: dict[str, object] = note.context or {}
     if item.item_type == "link":
         url = str(ctx.get("url") or note.body)
         return (
@@ -1363,7 +1363,7 @@ def _wondering_badge(item: FeedItem) -> str:
 
 def _feed_card(item: FeedItem) -> str:
     note = item.note
-    ctx = note.context or {}
+    ctx: dict[str, object] = note.context or {}
     chips = ""
     if note.ticker:
         ident = ticker_label(note.ticker)
@@ -1374,7 +1374,7 @@ def _feed_card(item: FeedItem) -> str:
         # 2026-07-14: the chips existed only on the legacy _musing_card, so a
         # needs_ticker capture had NO way to be attributed once the feed flag
         # was on). Mirrors _musing_card's needs-ticker branch.
-        cands = ctx.get("ticker_candidates")
+        cands: object = ctx.get("ticker_candidates")
         names = (
             ", ".join(escape(str(c)) for c in cast("list[object]", cands))
             if isinstance(cands, list)

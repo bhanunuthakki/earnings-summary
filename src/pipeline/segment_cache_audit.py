@@ -26,6 +26,7 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import cast
@@ -118,7 +119,9 @@ def audit_ticker_cache(
         for rec in recs:
             date = str(rec.get("date") or "")
             data = rec.get("data")
-            values = data.values() if isinstance(data, dict) else []
+            values: Iterable[object] = (
+                cast("dict[object, object]", data).values() if isinstance(data, dict) else ()
+            )
             revenue = revenue_by_date.get(date)
             if revenue is None or revenue == 0:
                 continue

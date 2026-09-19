@@ -296,7 +296,7 @@ def register_journal_routes(app: Flask, context: JournalRouteContext) -> None:
         if action == "route":
             from pipeline import triage_panel
 
-            raw_intent_labels: object = vars(triage_panel).get("_INTENT_LABELS")
+            raw_intent_labels: object = vars(triage_panel).get("INTENT_LABELS")
             intent_labels = (
                 cast("dict[str, str]", raw_intent_labels)
                 if isinstance(raw_intent_labels, dict)
