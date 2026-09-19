@@ -21,6 +21,15 @@ def _write(root: Path, relative: str, text: str) -> None:
 
 def _repo(tmp_path: Path, *, include_orphan: bool = False) -> tuple[Path, Path]:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, env=clean_local_git_env())
+    subprocess.run(
+        ["git", "config", "user.name", "T"], cwd=tmp_path, check=True, env=clean_local_git_env()
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+        env=clean_local_git_env(),
+    )
     _write(
         tmp_path,
         "alembic/versions/0001_base.py",
@@ -154,7 +163,16 @@ def downgrade():
     )
     subprocess.run(["git", "add", "."], cwd=root, check=True, env=clean_local_git_env())
     subprocess.run(
-        ["git", "commit", "-qm", "misleading ddl"],
+        [
+            "git",
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-qm",
+            "misleading ddl",
+        ],
         cwd=root,
         check=True,
         env=clean_local_git_env(),
@@ -428,7 +446,16 @@ def test_uncertain_bindings_do_not_manufacture_ownership(
     migration = root / "alembic/versions/0001_base.py"
     migration.write_text("from alembic import op\n" + migration_source, encoding="utf-8")
     subprocess.run(
-        ["git", "commit", "-qam", "uncertain binding"],
+        [
+            "git",
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-qam",
+            "uncertain binding",
+        ],
         cwd=root,
         check=True,
         env=clean_local_git_env(),
@@ -456,7 +483,16 @@ def upgrade():
         encoding="utf-8",
     )
     subprocess.run(
-        ["git", "commit", "-qam", "relative receiver"],
+        [
+            "git",
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-qam",
+            "relative receiver",
+        ],
         cwd=root,
         check=True,
         env=clean_local_git_env(),
