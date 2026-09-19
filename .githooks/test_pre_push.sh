@@ -65,6 +65,6 @@ unset FAST_PUSH
 : >"$log"
 run_hook
 grep -qx -- 'execution/verify_public_tree.py' "$log"
-grep -qx -- '-m pytest -q' "$log"
+grep -qx -- '-m quality.check_changed --base base --mode committed --check full-tests' "$log"
 
 printf 'pre-push-tests: ok\n'

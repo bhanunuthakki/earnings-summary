@@ -11,6 +11,7 @@ from quality.changed_suppressions import (
     changed_retained_python_files,
     suppression_findings,
 )
+from quality.git_env import clean_local_git_env
 
 
 def _runner(paths: Sequence[str], *, returncode: int = 0):
@@ -86,6 +87,7 @@ def test_worktree_selection_includes_local_work_and_omits_deleted_paths(tmp_path
             capture_output=True,
             text=True,
             check=True,
+            env=clean_local_git_env(),
         )
         return result.stdout.strip()
 
@@ -132,6 +134,7 @@ def test_committed_selection_rejects_dirty_python_before_checks(
             capture_output=True,
             text=True,
             check=True,
+            env=clean_local_git_env(),
         )
         return result.stdout.strip()
 

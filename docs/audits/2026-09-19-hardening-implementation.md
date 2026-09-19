@@ -51,4 +51,10 @@ Keep the archive and active migrations separate; another squash is not needed fo
 
 ## Delivery state
 
-Implemented and validated locally; uncommitted on the isolated branch. No merge, push, deployment, production migration, or live verification was performed. Validation logs are retained under `.tmp/audit-tests/`, including `full-suite-verified.txt`, `changed-final.txt`, and `static-final-exact.txt`. Neither checkout contains `data/portfolio.db`.
+The audited candidate was implemented and validated locally. Publication was subsequently authorized; integration and publication evidence are recorded below. No deployment, production migration, or live verification was performed. Validation logs are retained under `.tmp/audit-tests/`, including `full-suite-verified.txt`, `changed-final.txt`, and `static-final-exact.txt`. Neither checkout contains `data/portfolio.db`.
+
+## Publication integration
+
+The candidate was rebased onto upstream `6fb85152`, preserving concurrent type-cleanup changes. The combined exact ceilings are 3,125 Pyright diagnostics and 2,699 suppressions across 2,503 retained Python files.
+
+The first push check exposed inherited Git hook context reaching test subprocesses. Five temporary-repository fixtures initialized outside their intended directories and stopped at the first add; their later commits and renames did not execute. Shared `core.bare` was restored to false by the coordinating task, and observed branch/reflog/index evidence showed no fixture commit or rename requiring restoration. A disposable-repository regression reproduced configuration redirection with inherited Git context. Both changed and full test launches now sanitize that context through the existing helper, and the two affected fixture helpers also sanitize their own Git commands. The repair passes 96 focused tests, the shell hook checks, Ruff/format, and strict Pyright. The original full-suite result above predates this small hook repair; the publication candidate is verified by its push checks and CI.

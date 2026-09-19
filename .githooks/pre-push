@@ -42,7 +42,7 @@ run "$python_bin" -m quality.check_changed --base "$base" --mode committed --che
 if [ "${FAST_PUSH:-0}" = "1" ]; then
   run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check tests
 else
-  run "$python_bin" -m pytest -q
+  run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check full-tests
 fi
 
 printf 'pre-push gate passed.\n' >&2

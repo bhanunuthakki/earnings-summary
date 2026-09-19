@@ -13,6 +13,7 @@ from quality.changed_suppressions import (
     changed_retained_python_files,
     suppression_findings,
 )
+from quality.git_env import clean_local_git_env
 
 
 def run_checks(root: Path, paths: Sequence[str], checks: Sequence[str]) -> int:
@@ -37,7 +38,9 @@ def run_checks(root: Path, paths: Sequence[str], checks: Sequence[str]) -> int:
                 and Path(path).parts[0] in {"tests", "instruction_tests"}
             ]
             print("Changed-test check only; full suite remains required for delivery.", flush=True)
-        if not selected:
+        if check == "full-tests":
+            selected = []
+        if not selected and check != "full-tests":
             print(f"{check}: no selected files", flush=True)
             continue
         commands = {
@@ -45,10 +48,14 @@ def run_checks(root: Path, paths: Sequence[str], checks: Sequence[str]) -> int:
             "lint": ["ruff", "check"],
             "types": ["pyright", "--pythonpath", sys.executable],
             "tests": ["pytest", "-q"],
+            "full-tests": ["pytest", "-q"],
         }
         command = [sys.executable, "-m", *commands[check], *(f"./{p}" for p in selected)]
-        print(f"{check}: {len(selected)} retained files", flush=True)
-        result = subprocess.run(command, cwd=root, check=False)
+        population = (
+            "complete test suite" if check == "full-tests" else f"{len(selected)} retained files"
+        )
+        print(f"{check}: {population}", flush=True)
+        result = subprocess.run(command, cwd=root, check=False, env=clean_local_git_env())
         if result.returncode:
             return result.returncode
     return 0
@@ -61,7 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--mode", choices=("committed", "worktree"), default="worktree")
     parser.add_argument(
         "--check",
-        choices=("format", "lint", "types", "suppressions", "tests"),
+        choices=("format", "lint", "types", "suppressions", "tests", "full-tests"),
         action="append",
         dest="checks",
     )

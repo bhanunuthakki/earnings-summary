@@ -857,8 +857,8 @@
     {
       "disposition": "closed_command_set",
       "evidence": "run_checks invokes this Python interpreter with -m and only the fixed ruff, pyright, or pytest module choices; selected retained paths are separate argv entries and no shell is used.",
-      "fingerprint": "df5c6a50b814e4f5b52638a22c55602de1bd40d951ef69d30a7febbd634222f2",
-      "line": 51,
+      "fingerprint": "dc5eb0382df532053ed604cc8b92697e554401f92ae386453fdb4df5350ea7a3",
+      "line": 58,
       "path": "src/quality/check_changed.py",
       "targets": [
         "ruff",
