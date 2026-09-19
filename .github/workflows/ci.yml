@@ -424,32 +424,8 @@ jobs:
             fi
           fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
-          # Changed .py files, excluding generated migrations and scratch/
-          # (both excluded from the ruff config too).
-          changed=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- '*.py' \
-            | grep -vE '^(alembic/versions(_archived)?/|scratch/)' || true)
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$changed" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-          if [ -z "$changed" ]; then
-            echo "No Python files changed — quality gate is a no-op."
-          else
-            echo "Changed Python files:"
-            echo "$changed"
-          fi
-      - name: ruff format (changed retained files are wholly clean)
-        # Train 2 Step 1 cleared active format debt. Historical migrations and
-        # approved retirement candidates remain outside this changed-file set.
-        if: steps.changed.outputs.files != ''
-        run: |
-          echo "${{ steps.changed.outputs.files }}" | xargs ruff format --check
-      - name: ruff check (changed retained files are wholly clean)
-        if: steps.changed.outputs.files != ''
-        run: |
-          echo "${{ steps.changed.outputs.files }}" | xargs ruff check
-      - name: changed retained files contain no inline suppressions
-        if: steps.changed.outputs.files != ''
-        run: PYTHONPATH=src python -m quality.changed_suppressions --base "${{ steps.changed.outputs.base }}"
+      - name: Check changed retained files with the shared local gate
+        run: PYTHONPATH=src python -m quality.check_changed --base "${{ steps.changed.outputs.base }}" --mode committed --check format --check lint --check suppressions
 
   typecheck:
     needs: [changes]
@@ -493,16 +469,9 @@ jobs:
           fi
           echo "ref=$base" >> "$GITHUB_OUTPUT"
       - name: pyright strict — changed retained files are wholly clean
-        shell: bash
-        run: |
-          set -euo pipefail
-          changed=$(git diff --name-only --diff-filter=ACMR "${{ steps.base.outputs.ref }}"...HEAD -- '*.py' \
-            | grep -vE '^(alembic/versions(_archived)?/|scratch/)' || true)
-          if [ -z "$changed" ]; then
-            echo "No retained Python files changed."
-          else
-            echo "$changed" | xargs pyright --pythonpath "$(command -v python)"
-          fi
+        env:
+          CHECK_BASE: ${{ steps.base.outputs.ref }}
+        run: PYTHONPATH=src python -m quality.check_changed --base "$CHECK_BASE" --mode committed --check types
       - name: pyright and suppression ceilings — complete active population is exact
         run: PYTHONPATH=src python execution/enforce_static_quality.py --pythonpath "$(command -v python)"
 

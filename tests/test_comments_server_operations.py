@@ -10,48 +10,45 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import Mock
 
+import comments_server
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-from comments_server_panel_cache import (  # noqa: E402
+from comments_server_panel_cache import (
     PanelCacheEntry,
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
 )
 
-import runtime.portfolio_tracker as portfolio_tracker_runtime  # noqa: E402
-from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch  # noqa: E402
-from operations.attention import (  # noqa: E402
+import runtime.portfolio_tracker as portfolio_tracker_runtime
+from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch
+from operations.attention import (
     EvidenceIdentity,
     EvidenceKind,
     FindingKind,
     derive_finding_id,
 )
-from operations.kpi_semantic_review_export import (  # noqa: E402
+from operations.kpi_semantic_review_export import (
     KpiSemanticReviewExport,
     KpiSemanticReviewTickerManifest,
 )
-from operations.models import OperationsRegistry, OperationsSnapshot  # noqa: E402
-from operations.paths import (  # noqa: E402
+from operations.models import OperationsRegistry, OperationsSnapshot
+from operations.paths import (
     portfolio_tracker_activation_receipt_path,
     portfolio_tracker_receipt_path,
     scheduler_receipt_path,
     service_receipt_path,
 )
-from operations.registry import build_operations_registry  # noqa: E402
-from operations.snapshot import collect_operations_snapshot  # noqa: E402
-from pipeline.operations_panel import OperationsPanelView, render_operations_panel  # noqa: E402
-from runtime.portfolio_tracker import (  # noqa: E402
+from operations.registry import build_operations_registry
+from operations.snapshot import collect_operations_snapshot
+from pipeline.operations_panel import OperationsPanelView, render_operations_panel
+from runtime.portfolio_tracker import (
     ListenerObservation,
     RuntimeConfig,
     RuntimeReceipt,
     write_runtime_receipt,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 ATTENTION_NOW = datetime(2026, 8, 24, 19, 0, tzinfo=UTC)
 ATTENTION_FINGERPRINT = "b" * 64
@@ -900,7 +897,7 @@ def test_operations_review_bundle_fails_closed_without_private_origin(
     response = (
         comments_server.create_app(tmp_path)
         .test_client()
-        .get("/api/operations/review-bundle", base_url="https://review.example.ts.net")
+        .get("/api/operations/review-bundle", base_url="http://localhost")
     )
 
     assert response.status_code == 503
@@ -953,7 +950,7 @@ def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
     app = comments_server.create_app(tmp_path, db_path=database, code_root=PROJECT_ROOT)
     response = app.test_client().get(
         "/api/operations/kpi-semantic-review/NU",
-        base_url="https://review.example.ts.net",
+        base_url="http://localhost",
     )
 
     assert response.status_code == 200
@@ -966,7 +963,7 @@ def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
         app.test_client()
         .post(
             "/api/operations/kpi-semantic-review/NU",
-            base_url="https://review.example.ts.net",
+            base_url="http://localhost",
         )
         .status_code
         == 405
@@ -989,7 +986,7 @@ def test_kpi_semantic_review_route_fails_closed_without_current_portfolio_artifa
         .test_client()
         .get(
             "/api/operations/kpi-semantic-review/NOW",
-            base_url="https://review.example.ts.net",
+            base_url="http://localhost",
         )
     )
 
@@ -1029,7 +1026,7 @@ def test_kpi_semantic_review_partition_route_serves_only_current_index_reference
     app = comments_server.create_app(tmp_path, db_path=database, code_root=PROJECT_ROOT)
     response = app.test_client().get(
         f"/api/operations/kpi-semantic-review/NU/partitions/{content_sha256}",
-        base_url="https://review.example.ts.net",
+        base_url="http://localhost",
     )
 
     assert response.status_code == 200
@@ -1048,7 +1045,7 @@ def test_kpi_semantic_review_partition_route_serves_only_current_index_reference
     monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_partition", not_current)
     rejected = app.test_client().get(
         f"/api/operations/kpi-semantic-review/NU/partitions/{content_sha256}",
-        base_url="https://review.example.ts.net",
+        base_url="http://localhost",
     )
     assert rejected.status_code == 404
     assert rejected.get_json()["error"] == "semantic review partition not found"

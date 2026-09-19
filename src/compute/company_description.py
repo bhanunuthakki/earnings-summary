@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from filing_text_fetcher import load_canonical_narrative
+from filings.fmp_sections import locate_annual_filing
 from llm_client import (
     DEFAULT_MODEL,
     JSON_FENCE_RE,
@@ -68,13 +69,13 @@ class CompanyDescriptionResult:
     model: str = DEFAULT_MODEL
     sector: str | None = None
     industry: str | None = None
-    segment_names_requested: list[str] = field(default_factory=list)
-    geo_names_requested: list[str] = field(default_factory=list)
+    segment_names_requested: list[str] = field(default_factory=list[str])
+    geo_names_requested: list[str] = field(default_factory=list[str])
     elevator_pitch: str | None = None
     business_overview: str | None = None
     revenue_model: str | None = None
-    segments: list[dict[str, str | None]] = field(default_factory=list)
-    geographies: list[dict[str, str | None]] = field(default_factory=list)
+    segments: list[dict[str, str | None]] = field(default_factory=list[dict[str, str | None]])
+    geographies: list[dict[str, str | None]] = field(default_factory=list[dict[str, str | None]])
     skipped_reason: str | None = None
 
 
@@ -98,11 +99,11 @@ def extract_for_ticker(
     ticker = ticker.upper()
     cache_path = _cache_path(repo_root, ticker)
 
-    source_path, year = _locate_form_10k(repo_root, ticker, fiscal_year)
-    profile = _load_profile(repo_root, ticker)
-    profile_description = _profile_str(profile, "description") or ""
-    sector = _profile_str(profile, "sector")
-    industry = _profile_str(profile, "industry")
+    source_path, year = locate_annual_filing(repo_root, ticker, fiscal_year)
+    profile = load_profile(repo_root, ticker)
+    profile_description = profile_str(profile, "description") or ""
+    sector = profile_str(profile, "sector")
+    industry = profile_str(profile, "industry")
 
     # Recently-IPO'd issuers (holdings JSON `data_anchor: "s1"`) don't have an
     # FMP 10-K JSON yet. The canonical narrative comes from the cached S-1
@@ -136,7 +137,7 @@ def extract_for_ticker(
         raw_bytes = source_path.read_bytes()
         sha256 = hashlib.sha256(raw_bytes).hexdigest()
         payload = cast("dict[str, object]", json.loads(raw_bytes.decode("utf-8")))
-        relevant_text = _extract_relevant_text(payload)
+        relevant_text = extract_relevant_text(payload)
     elif s1_text:
         # S-1 narrative path (recently-IPO'd). Hash the S-1 text so refresh
         # triggers when the analyst re-fetches the prospectus.
@@ -176,8 +177,8 @@ def extract_for_ticker(
         if cached.get("source_sha256") == composite_sha and cached.get("fiscal_year") == year:
             return CompanyDescriptionResult(**cached)
 
-    segment_names = _segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
-    geo_names = _segment_names_from_db(db_conn, ticker, metric="revenue_by_geography")
+    segment_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
+    geo_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_geography")
 
     start_dt = datetime.now(UTC)
     t0 = time.perf_counter()
@@ -238,32 +239,7 @@ def _cache_path(repo_root: Path, ticker: str) -> Path:
     return repo_root / "data" / "company_description" / f"{ticker.upper()}.json"
 
 
-def _locate_form_10k(
-    repo_root: Path, ticker: str, fiscal_year: int | None
-) -> tuple[Path | None, int | None]:
-    fmp_dir = repo_root / "data" / "historical" / "fmp"
-    if not fmp_dir.exists():
-        return (None, None)
-    candidates: list[tuple[int, Path]] = []
-    pattern = re.compile(rf"^{re.escape(ticker)}_form_10k_(\d{{4}})\.json$")
-    for p in fmp_dir.iterdir():
-        m = pattern.match(p.name)
-        if not m:
-            continue
-        candidates.append((int(m.group(1)), p))
-    if not candidates:
-        return (None, None)
-    if fiscal_year is not None:
-        for y, p in candidates:
-            if y == fiscal_year:
-                return (p, y)
-        return (None, None)
-    candidates.sort()
-    y, p = candidates[-1]
-    return (p, y)
-
-
-def _profile_str(profile: dict[str, object] | None, key: str) -> str | None:
+def profile_str(profile: dict[str, object] | None, key: str) -> str | None:
     """Pull a string field from the FMP profile.json payload safely."""
     if profile is None:
         return None
@@ -273,7 +249,7 @@ def _profile_str(profile: dict[str, object] | None, key: str) -> str | None:
     return None
 
 
-def _load_profile(repo_root: Path, ticker: str) -> dict[str, object] | None:
+def load_profile(repo_root: Path, ticker: str) -> dict[str, object] | None:
     """FMP profile.json carries `description` / `sector` / `industry`."""
     path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_profile.json"
     if not path.exists():
@@ -289,7 +265,7 @@ def _load_profile(repo_root: Path, ticker: str) -> dict[str, object] | None:
     return None
 
 
-def _segment_names_from_db(conn: sqlite3.Connection, ticker: str, metric: str) -> list[str]:
+def segment_names_from_db(conn: sqlite3.Connection, ticker: str, metric: str) -> list[str]:
     """Return distinct segment names for the (legacy) metric, reading the junction.
 
     Callers still pass `revenue_by_product` / `revenue_by_geography`; this
@@ -351,7 +327,7 @@ def _slice_s1_for_llm(s1_text: str) -> str:
     return s1_text[best_start : best_start + _MAX_TEXT_BUDGET]
 
 
-def _extract_relevant_text(payload: dict[str, object]) -> str:
+def extract_relevant_text(payload: dict[str, object]) -> str:
     """Concatenate flattened text from every 10-K section whose key matches a keyword."""
     parts: list[str] = []
     total_chars = 0
@@ -633,7 +609,7 @@ def _coerce_named_rows(raw: object, allowed: set[str]) -> list[dict[str, str | N
     if not isinstance(raw, list):
         return []
     out: list[dict[str, str | None]] = []
-    for row in raw:
+    for row in cast("list[object]", raw):
         if not isinstance(row, dict):
             continue
         row_d = cast("dict[str, object]", row)

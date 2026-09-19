@@ -1,7 +1,7 @@
 """Phase C — the bounded packet walk, the research→Telegram push-back, and
 the per-action instrumentation.
 
-* ``_packet_section``: a finite "N need you" walk over research proposals,
+* ``render_ledger_packet``: a finite "N need you" walk over research proposals,
   proposed Tenets, triage suggestions, and the reconcile queue — reusing each
   section's own card builders; absent entirely when nothing needs the owner.
 * a WEB-initiated research run pushes its drafted proposal card to the
@@ -13,25 +13,19 @@ the per-action instrumentation.
 from __future__ import annotations
 
 import sqlite3
-import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
+from pipeline.ledger_panel import render_ledger_panel
+from research.proposals import create_proposal, create_task
+from user_state.notes import TRIAGE_INTENT, create_note, patch_note_context
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from pipeline.ledger_panel import render_ledger_panel  # noqa: E402
-from research.proposals import create_proposal, create_task  # noqa: E402
-from user_state.notes import TRIAGE_INTENT, create_note, patch_note_context  # noqa: E402
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 @pytest.fixture
@@ -44,12 +38,7 @@ def ctx(
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     monkeypatch.setenv("LEDGER_WORLDVIEW", "1")
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(
-        db,
-        stamp=_PRIOR_HEAD,
-        archived=True,
-        reanchor_to_active_head=True,
-    )
+    migrated_db(db)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db, tmp_path
 
@@ -158,9 +147,9 @@ def test_packet_reconcile_copy_drops_duplicate_id(
     single-blob append made the first row-action's settle-detector skip the
     rest of the batch)."""
     from pipeline.ledger_panel import (
-        _packet_section,  # pyright: ignore[reportPrivateUsage]
-        _reconcile_packet_items,  # pyright: ignore[reportPrivateUsage]
+        render_ledger_packet,
         render_reconcile_list,
+        render_reconcile_packet_items,
     )
     from synthesis.reconcile import list_unreconciled
 
@@ -170,11 +159,11 @@ def test_packet_reconcile_copy_drops_duplicate_id(
 
     # The reconcile queue becomes two SEPARATE packet fragments, each carrying
     # its own action hooks and NONE the #ledger-reconcile container id.
-    frags = _reconcile_packet_items(db)
+    frags = render_reconcile_packet_items(db)
     assert len(frags) == 2
     assert all('id="ledger-reconcile"' not in f for f in frags)
 
-    packet = _packet_section(db)
+    packet = render_ledger_packet(db)
     # Two reconcile rows → two pk-items (was one blob before the fix).
     assert packet.count('class="pk-item"') == 2
     assert "2 need you" in packet

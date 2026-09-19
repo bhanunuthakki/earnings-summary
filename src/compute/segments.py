@@ -76,7 +76,7 @@ def segment_sum_exceeds_revenue(
 ) -> tuple[bool, Decimal]:
     """Pure reconciliation predicate: does the segment sum exceed reported revenue?
 
-    Shared by the DB-ingest gate (`_passes_reconciliation`) and the offline cache
+    Shared by the DB-ingest gate (`passes_reconciliation`) and the offline cache
     sanity scanner (execution/check_segment_cache_sanity.py) so both apply the
     identical rule and the same `RECONCILE_TOLERANCE_OVER` threshold. Returns
     ``(exceeds, seg_sum)`` where ``exceeds`` is True iff the sum of non-null
@@ -116,7 +116,7 @@ def _lookup_period_revenue(
     return Decimal(str(row[0]))
 
 
-def _passes_reconciliation(
+def passes_reconciliation(
     conn: sqlite3.Connection,
     record: FmpSegmentRecord,
     metric: str,
@@ -225,7 +225,7 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
     inserted = 0
     for record_index, rec_data in enumerate(records):
         rec = FmpSegmentRecord.model_validate(rec_data)
-        if not _passes_reconciliation(conn, rec, metric, document_id):
+        if not passes_reconciliation(conn, rec, metric, document_id):
             continue
         inserted += _write_record_to_junction(
             conn,

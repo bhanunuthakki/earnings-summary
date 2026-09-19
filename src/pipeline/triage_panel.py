@@ -31,6 +31,7 @@ from __future__ import annotations
 import sqlite3
 from html import escape
 from pathlib import Path
+from typing import cast
 
 from identity import DEFAULT_USER_ID
 from pipeline.operations_styles import TRIAGE_STYLE as _PANEL_STYLE
@@ -41,7 +42,7 @@ from user_state.notes import ROUTABLE_INTENTS, AnalystNoteRow, list_triage_notes
 # Routable-intent → human label for the route picker (keys are the
 # user_state.notes.ROUTABLE_INTENTS vocabulary; an unknown intent falls back to
 # its raw token so the picker never silently drops an option).
-_INTENT_LABELS: dict[str, str] = {
+INTENT_LABELS: dict[str, str] = {
     "ask_question": "Question",
     "edit_thesis": "Thesis edit",
     "edit_structured": "Structured edit",
@@ -63,7 +64,7 @@ def _truncate(text: str, limit: int = 160) -> str:
 
 def _route_select() -> str:
     opts = '<option value="">Route to&hellip;</option>' + "".join(
-        f'<option value="{escape(i)}">{escape(_INTENT_LABELS.get(i, i))}</option>'
+        f'<option value="{escape(i)}">{escape(INTENT_LABELS.get(i, i))}</option>'
         for i in ROUTABLE_INTENTS
     )
     return (
@@ -101,14 +102,15 @@ def _row(n: AnalystNoteRow) -> str:
     sugg = ctx.get("route_suggestion")
     sugg_btn = ""
     if isinstance(sugg, dict):
-        si = str(sugg.get("intent") or "")
-        if si in _INTENT_LABELS:
-            reason = str(sugg.get("reason") or "")
+        suggestion = cast("dict[str, object]", sugg)
+        si = str(suggestion.get("intent") or "")
+        if si in INTENT_LABELS:
+            reason = str(suggestion.get("reason") or "")
             sugg_btn = (
                 '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
                 f'data-act="route-suggested" data-intent="{escape(si, quote=True)}" '
                 f'title="{escape(reason, quote=True)}">'
-                f"Route to {escape(_INTENT_LABELS[si])}</button>"
+                f"Route to {escape(INTENT_LABELS[si])}</button>"
             )
     # The living-grid filter key (data-text); the sort keys reuse the drill-in
     # data-* already on the row (data-created / data-ticker / data-anchor).

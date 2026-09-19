@@ -29,7 +29,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 BRIEFED_LIST_TYPES = BRIEFED_LIST_TYPE_VALUES
 
 
-def dcf_universe(repo_root: Path) -> list[str]:
+def dcf_universe(repo_root: Path, *, db_path: Path | None = None) -> list[str]:
     """Uppercased, de-duplicated, sorted tickers on the briefed lists (portfolio +
     evaluation) in ``<repo_root>/data/portfolio.db``.
 
@@ -37,7 +37,7 @@ def dcf_universe(repo_root: Path) -> list[str]:
     checkout that carries no ``data/``) or unreadable, so callers can union the
     result with a filesystem fallback without special-casing the empty DB.
     """
-    db_path = Path(repo_root) / "data" / "portfolio.db"
+    db_path = db_path if db_path is not None else Path(repo_root) / "data" / "portfolio.db"
     if not db_path.exists():
         return []
     try:

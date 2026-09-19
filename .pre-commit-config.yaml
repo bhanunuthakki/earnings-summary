@@ -2,9 +2,8 @@
 # `pre-commit install --hook-type pre-push` for the heavier pyright stage).
 #
 # pre-commit passes ONLY the changed files to each hook, which is exactly the
-# project's "gate only on YOUR files" norm (the repo carries a large pre-existing
-# ruff/pyright baseline — see directives/regrade_memo_post_wedge.md). New/edited
-# code is kept clean without blocking on legacy debt.
+# retained-file gate. Active code is Ruff-clean; changed files must be wholly
+# clean even while the complete tree retains a descending Pyright ceiling.
 repos:
   - repo: https://github.com/Yelp/detect-secrets
     rev: 68e8b45440415753fff70a312ece8da92ba85b4a # v1.5.0  # pragma: allowlist secret
@@ -40,8 +39,8 @@ repos:
       # (`pip install -e .[dev]`) so imports resolve.
       - id: pyright
         name: pyright (strict, changed files)
-        entry: pyright
+        entry: python -m pyright
         language: system
         types: [python]
-        exclude: ^(alembic/versions/|scratch/)
+        exclude: ^(alembic/versions(_archived)?/|scratch/)
         stages: [pre-push]

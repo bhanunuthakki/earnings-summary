@@ -181,7 +181,7 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    assert len(graph.unknown_edges) == 90
+    assert len(graph.unknown_edges) == 96
     assert residual_source_edges == []
 
 

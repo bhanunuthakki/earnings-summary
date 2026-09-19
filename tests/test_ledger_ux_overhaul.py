@@ -24,55 +24,22 @@ this suite already uses).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from owner_profile.store import append_fact  # noqa: E402
-from pipeline.ledger_panel import (  # noqa: E402
-    _group_expiring_facts,  # pyright: ignore[reportPrivateUsage]
-    _packet_build,  # pyright: ignore[reportPrivateUsage]
+from owner_profile.store import OwnerProfileFactRow, append_fact
+from pipeline.ledger_panel import (
+    build_ledger_packet,
+    group_expiring_profile_facts,
     render_ledger_panel,
 )
-from research.proposals import create_proposal, create_task  # noqa: E402
+from research.proposals import create_proposal, create_task
 
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-_DECISIONS_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'owner',
-    falsifier TEXT,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-CREATE TABLE tracked_companies (
-    ticker TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'bhanu',
-    list_type TEXT NOT NULL,
-    archived_at TEXT
-);
-"""
-
-
-def _add_legacy_tables(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executescript(_DECISIONS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -84,8 +51,7 @@ def ctx(
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     monkeypatch.setenv("LEDGER_WORLDVIEW", "1")
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
-    _add_legacy_tables(db)
+    migrated_db(db)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db, tmp_path
 
@@ -94,7 +60,8 @@ def _seed_gap(db: Path, ticker: str = "NU") -> None:
     conn = sqlite3.connect(str(db))
     try:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker, list_type) VALUES (?, 'portfolio')", (ticker,)
+            "INSERT INTO tracked_companies (ticker, list_type, name) VALUES (?, 'portfolio', 'Test company')",
+            (ticker,),
         )
         conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, "
@@ -294,14 +261,27 @@ def test_packet_class_headers_explain_why_they_matter(
 
 
 def test_group_expiring_facts_below_threshold_stays_ungrouped() -> None:
-    class _Fake:
-        def __init__(self, i: int, category: str) -> None:
-            self.id = i
-            self.category = category
-            self.narrative = f"fact {i}"
-
-    facts = [_Fake(1, "capacity"), _Fake(2, "capacity")]
-    groups, singles = _group_expiring_facts(facts)  # type: ignore[arg-type]
+    facts = [
+        OwnerProfileFactRow(
+            id=i,
+            user_id="bhanu",
+            category="capacity",
+            key=f"fact-{i}",
+            value={},
+            narrative=f"fact {i}",
+            provenance="test",
+            status="affirmed",
+            affirmed_at=None,
+            review_horizon_days=30,
+            source_detail=None,
+            created_at="2026-01-01",
+            is_latest=True,
+            superseded_at=None,
+            superseded_by_id=None,
+        )
+        for i in (1, 2)
+    ]
+    groups, singles = group_expiring_profile_facts(facts)
     assert groups == []
     assert len(singles) == 2
 
@@ -336,7 +316,7 @@ def test_grouped_card_batches_the_same_single_fact_route_no_new_bulk_semantics(
     test_owner_profile_packet.py already exercises per-fact."""
     _client, db, _root = ctx
     _seed_expiring_facts(db, 4, category="appetite")
-    build = _packet_build(db)
+    build = build_ledger_packet(db)
     group_card = next(c for c in build.bulk if "data-pk-group" in c)
     ids_attr = group_card.split('data-fact-ids="')[1].split('"')[0]
     ids = ids_attr.split(",")
@@ -361,11 +341,11 @@ def test_packet_start_band_states_real_counts(ctx: tuple[FlaskClient, Path, Path
 
 def test_payoff_line_empty_when_nothing_quantifiable() -> None:
     from pipeline.ledger_panel import (
-        _packet_payoff_line,  # pyright: ignore[reportPrivateUsage]
-        _PacketBuild,  # pyright: ignore[reportPrivateUsage]
+        LedgerPacketBuild,
+        ledger_packet_payoff_line,
     )
 
-    empty = _PacketBuild(
+    empty = LedgerPacketBuild(
         gaps=[],
         proposals=[],
         bulk=[],
@@ -375,4 +355,4 @@ def test_payoff_line_empty_when_nothing_quantifiable() -> None:
         new_fact_n=0,
         bulk_fact_n=0,
     )
-    assert _packet_payoff_line(empty) == ""
+    assert ledger_packet_payoff_line(empty) == ""

@@ -26,43 +26,44 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import db  # noqa: E402  (must precede report imports — we override paths below)
-import ticker_settings  # noqa: E402
-from compute.key_metrics import (  # noqa: E402
+import db
+import ticker_settings
+from compute.key_metrics import (
     extract_for_ticker as _extract_key_metrics,
 )
-from compute.peer_selection import (  # noqa: E402
+from compute.peer_selection import (
     extract_for_ticker as _extract_peer_selection,
 )
-from compute.segment_definitions import (  # noqa: E402
+from compute.segment_definitions import (
     extract_for_ticker as _extract_segment_definitions,
 )
-from instrument_store import get_instrument_kind  # noqa: E402
-from models.companies import InstrumentType  # noqa: E402
-from report.artifacts import persist_report_artifact  # noqa: E402
-from report.builder import build_report  # noqa: E402
-from report.models import ReportFlavor  # noqa: E402
-from report.renderers.etf_markdown import render as render_etf_markdown  # noqa: E402
-from report.renderers.markdown import render as render_markdown  # noqa: E402
-from report.renderers.sections_json import render as render_sections_json  # noqa: E402
-from report.renderers.workspace_data import (  # noqa: E402
+from db_paths import require_db_path
+from instrument_store import get_instrument_kind
+from models.companies import InstrumentType
+from report.artifacts import persist_report_artifact
+from report.builder import build_report
+from report.models import ReportFlavor
+from report.renderers.etf_markdown import render as render_etf_markdown
+from report.renderers.markdown import render as render_markdown
+from report.renderers.sections_json import render as render_sections_json
+from report.renderers.workspace_data import (
     filter_important_print_vs_guide,
     parse_print_vs_guide,
 )
-from report.renderers.workspace_html import (  # noqa: E402
+from report.renderers.workspace_html import (
     render_report_body,
     render_standalone_report,
 )
-from report.sections import (  # noqa: E402
+from report.sections import (
     appendix,
     bear_case,
     earnings,
@@ -73,11 +74,13 @@ from report.sections import (  # noqa: E402
     thesis,
     valuation,
 )
-from report.sections import financials as financials_section_mod  # noqa: E402
-from report.sections import snapshot as snapshot_section_mod  # noqa: E402
-from report.sections.etf_holdings import build_etf_brief  # noqa: E402
-from runtime.python_process import managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from report.sections import financials as financials_section_mod
+from report.sections import snapshot as snapshot_section_mod
+from report.sections.etf_holdings import build_etf_brief
+from runtime.python_process import managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Ticker-specific extractors that auto-populate data/ticker_specific/<T>/
 # Each entry maps a ticker to a list of (script_name, extra_args) pairs.
@@ -148,7 +151,7 @@ def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
     writes the cache. Failures don't abort the build — they emit a
     diagnostic and leave the tooltips empty for this ticker.
     """
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     if not db_path.exists():
         _emit("segment_defs_skipped", {"ticker": ticker, "reason": "no DB"})
         return
@@ -187,7 +190,7 @@ def _ensure_peer_selection(ticker: str, repo_root: Path) -> None:
     free-tier FMP fetch of each suggestion's fundamentals. Failures don't abort
     the build — the renderer falls back to the FMP sector/cap screen for this
     ticker (directives/peer_selection_llm.md)."""
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     if not db_path.exists():
         _emit("peer_selection_skipped", {"ticker": ticker, "reason": "no DB"})
         return
@@ -221,7 +224,7 @@ def _ensure_key_metrics(ticker: str, repo_root: Path) -> None:
     business over its available extract vocabulary. Failures don't abort the
     build — the DIY picker's preselect row falls back to the deterministic
     tier-graded baseline for this ticker (directives/key_metrics_picker.md)."""
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     if not db_path.exists():
         _emit("key_metrics_skipped", {"ticker": ticker, "reason": "no DB"})
         return
@@ -243,23 +246,22 @@ def _ensure_key_metrics(ticker: str, repo_root: Path) -> None:
         conn.close()
 
 
-def _sync_db_to_repo(repo_root: Path) -> None:
-    """Override db module-level paths so scan_and_sync_artifacts hits the right repo.
-
-    The build CLI runs from this checkout but reads/writes against an arbitrary
-    --repo-root (typically the parent repo with the real data). The db module
-    computes its paths from its own __file__ at import time; we patch them
-    here so coverage syncs land in the right portfolio.db.
-    """
+def configure_artifact_runtime(repo_root: Path) -> None:
+    """Keep artifact roots separate from the explicitly configured database."""
+    database_path = require_db_path()
+    db.set_db_path(database_path)
     db.PROJECT_ROOT = str(repo_root)
     db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
 
 
 def main() -> int:
     args = _parse_args()
     repo_root = args.repo_root.resolve()
+    database_path = require_db_path(args.db_path)
+    db.set_db_path(database_path)
+    os.environ["EARNINGS_SUMMARY_DB_PATH"] = str(database_path)
+    configure_artifact_runtime(repo_root)
     tickers = _resolve_tickers(repo_root, args)
     if not tickers:
         print("[]")
@@ -303,12 +305,12 @@ def _regenerate_native_purpose(
     force_budget_bypass: bool,
 ) -> dict[str, object]:
     """Run exactly one purpose producer without rendering a report."""
-    _sync_db_to_repo(repo_root)
+    configure_artifact_runtime(repo_root)
     effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
         ticker,
-        db_path=repo_root / "data" / "portfolio.db",
+        db_path=require_db_path(),
     )
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     conn = (
         connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) if db_path.exists() else None
     )
@@ -404,6 +406,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--db-path", type=Path, help="Explicit existing portfolio database")
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker to build for")
     g.add_argument(
@@ -519,7 +522,7 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
 
 
 def _is_tracked(repo_root: Path, ticker: str) -> bool:
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     if not db_path.exists():
         return False
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
@@ -531,7 +534,7 @@ def _is_tracked(repo_root: Path, ticker: str) -> bool:
 
 
 def _all_tracked(repo_root: Path) -> list[str]:
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     if not db_path.exists():
         return []
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
@@ -568,7 +571,7 @@ def _build_one(
     # a per-date copy here; the dashboard serves it via the /dcf/<T> route.
     canonical_dcf = repo_root / "dcf" / f"{ticker}.xlsx"
 
-    _sync_db_to_repo(repo_root)
+    configure_artifact_runtime(repo_root)
 
     # Cross-asset dispatch: ETF tickers get the ETF brief shape (no DCF,
     # no segments, no 10-K narrative). See directives/cross_asset_data_model.md.
@@ -609,9 +612,9 @@ def _build_one(
     # Persistent per-ticker override: the dashboard's "always ignore caps" toggle
     # (ticker_settings.bypass_budget) ORs with the one-shot --force-budget-bypass.
     effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
-        ticker, db_path=repo_root / "data" / "portfolio.db"
+        ticker, db_path=require_db_path()
     )
-    report_db_path = repo_root / "data" / "portfolio.db"
+    report_db_path = require_db_path()
     report_conn = (
         connect_sqlite(report_db_path, role=SQLiteConnectionRole.READ_ONLY)
         if report_db_path.exists()
@@ -632,6 +635,7 @@ def _build_one(
             force_budget_bypass=effective_bypass,
             force_refresh=force_refresh,
             conn=report_conn,
+            db_path=report_db_path,
         )
         per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root, conn=report_conn)
     finally:
@@ -667,7 +671,7 @@ def _build_one(
     # Provenance rows always point at the workspace HTML — the only rendered
     # report — so audit consumers can deep-link.
     canonical_artifact = workspace_html_path
-    provenance_ref = _log_brief_provenance(
+    provenance_ref = log_brief_provenance(
         repo_root=repo_root,
         ticker=ticker,
         generation_date=today,
@@ -727,7 +731,7 @@ def _collect_per_metric_provenance(
     return merged
 
 
-def _log_brief_provenance(
+def log_brief_provenance(
     *,
     repo_root: Path,
     ticker: str,
@@ -736,6 +740,7 @@ def _log_brief_provenance(
     trigger: str,
     artifact_path: Path,
     per_metric: dict[str, dict[str, object]] | None = None,
+    db_path: Path | None = None,
 ) -> int | None:
     """Append a `brief_provenance_log` row for the render.
 
@@ -754,7 +759,7 @@ def _log_brief_provenance(
     Silently skips when the table is missing (synthetic environments
     without migrations applied).
     """
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path(db_path)
     if not db_path.exists():
         return None
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
@@ -815,7 +820,7 @@ def _emit(event: str, payload: dict[str, object]) -> None:
 
 def _resolve_kind(repo_root: Path, ticker: str) -> InstrumentType | None:
     """Look up tracked_companies.instrument_type for `ticker`."""
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     if not db_path.exists():
         return None
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)

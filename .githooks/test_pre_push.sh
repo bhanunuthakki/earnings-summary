@@ -58,7 +58,8 @@ FAST_PUSH=1 run_hook
 grep -qx -- 'execution/verify_public_tree.py' "$log"
 grep -qx -- 'execution/validate_directive_manifest.py' "$log"
 grep -qx -- 'execution/validate_folder_contract.py' "$log"
-grep -q -- '-m pytest -q instruction_tests/test_instruction_contracts.py' "$log"
+grep -qx -- '-m quality.check_changed --base base --mode committed --check tests' "$log"
+grep -qx -- '-m quality.check_changed --base base --mode committed --check format --check lint --check suppressions' "$log"
 unset FAST_PUSH
 
 : >"$log"

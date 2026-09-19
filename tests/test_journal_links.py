@@ -23,11 +23,11 @@ before the stamp point), matching test_decision_conditions.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import comments_server
 import pytest
 from alembic.config import Config
 from flask.testing import FlaskClient
@@ -50,59 +50,15 @@ from pipeline.journal_panel import (
 from user_state.notes import create_note, get_note, set_note_links, supersede_note
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
-import comments_server  # noqa: E402
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-# decisions in the post-0086 shape (0046 predates the stamp point) — the
-# columns journal_links reads; mirrors test_decision_conditions._SCHEMA.
-_DECISIONS_SCHEMA = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16) NOT NULL,
-    recommendation_kind VARCHAR(32) NOT NULL,
-    recommendation_value FLOAT,
-    conviction VARCHAR(16),
-    source_artifact_id INTEGER,
-    source_memo_id INTEGER,
-    source_lens VARCHAR(64),
-    rationale_excerpt TEXT,
-    made_at DATETIME NOT NULL,
-    user_acted_at DATETIME,
-    user_action_kind VARCHAR(32),
-    user_notes TEXT,
-    outcome_at DATETIME,
-    outcome_label VARCHAR(16),
-    outcome_pct FLOAT,
-    outcome_notes TEXT,
-    decision_conditions TEXT,
-    conditions_extracted_at DATETIME,
-    created_at DATETIME NOT NULL
-);
-"""
-
-
-def _add_decisions_schema(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executescript(_DECISIONS_SCHEMA)
-        conn.commit()
-    finally:
-        conn.close()
 
 
 @pytest.fixture
 def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(
-        db,
-        stamp=_PRIOR_HEAD,
-        archived=True,
-        reanchor_to_active_head=True,
-    )
-    _add_decisions_schema(db)
+    migrated_db(db)
     return db
 
 

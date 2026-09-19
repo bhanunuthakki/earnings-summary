@@ -1,5 +1,5 @@
 """Tests for the decision-journal panel section (tenet-2 Phase 5 §5.2) --
-``pipeline.allocation_decisions_panel._decision_journal_section``.
+``pipeline.allocation_decisions_panel.render_decision_journal_section``.
 
 Builds the same alembic-migrated DB pattern as ``test_decision_journal_view.py``
 (so the section renders against the real ``v_decision_journal`` view) and
@@ -12,18 +12,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from integrations.portfolio_tracker_client import LivePortfolio  # noqa: E402
-from pipeline.allocation_decisions_panel import (  # noqa: E402
-    _decision_journal_section,
+from integrations.portfolio_tracker_client import LivePortfolio
+from pipeline.allocation_decisions_panel import (
     compose_decisions_page,
+    render_decision_journal_section,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 # Verbatim copy of the three tables db.py's init_db() creates outside alembic
 # (every migration from 0001 on assumes these already exist) — see the
@@ -100,7 +99,7 @@ def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
 
 def test_empty_state_renders_one_line(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
     db_path = _build_db(tmp_path, migrated_db)
-    html = _decision_journal_section(db_path)
+    html = render_decision_journal_section(db_path)
     assert "Owner Decision journal" in html
     assert "No Owner Decisions recorded yet." in html
 
@@ -140,7 +139,7 @@ def test_populated_row_renders_advice_disposition_outcome(
     finally:
         conn.close()
 
-    html = _decision_journal_section(db_path)
+    html = render_decision_journal_section(db_path)
     assert "NU" in html
     assert "owner: hold" in html
     assert "position_review" in html
@@ -168,7 +167,7 @@ def test_bare_decision_with_no_advice_renders_dashes(
         conn.commit()
     finally:
         conn.close()
-    html = _decision_journal_section(db_path)
+    html = render_decision_journal_section(db_path)
     assert "WIX" in html
     assert "owner: sell" in html
     assert "pending" in html  # no outcome yet
@@ -180,7 +179,7 @@ def test_missing_view_degrades_to_empty_state(tmp_path: Path) -> None:
     must render the section's empty state, never raise."""
     db_path = tmp_path / "bare.db"
     sqlite3.connect(str(db_path)).close()
-    html = _decision_journal_section(db_path)
+    html = render_decision_journal_section(db_path)
     assert "No Owner Decisions recorded yet." in html
 
 

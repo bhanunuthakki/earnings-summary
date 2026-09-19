@@ -117,8 +117,8 @@ def _accountability_chip(t: InsightRow) -> str:
     acc = cast("dict[str, object]", acc_raw)
     upheld_raw = acc.get("upheld")
     violated_raw = acc.get("violated")
-    upheld = len(upheld_raw) if isinstance(upheld_raw, list) else 0
-    violated = len(violated_raw) if isinstance(violated_raw, list) else 0
+    upheld = len(cast("list[object]", upheld_raw)) if isinstance(upheld_raw, list) else 0
+    violated = len(cast("list[object]", violated_raw)) if isinstance(violated_raw, list) else 0
     if not upheld and not violated:
         return ""
     tone = "warn" if violated > 0 else "ok"
@@ -149,7 +149,7 @@ def _current_card(t: InsightRow) -> str:
     )
 
 
-def _proposed_card(t: InsightRow) -> str:
+def render_proposed_tenet_card(t: InsightRow) -> str:
     tension = _tenets_in_tension(t)
     tension_badge = '<span class="wv-tension">tension</span>' if tension else ""
     tension_note = (
@@ -248,7 +248,7 @@ def render_worldview_body(db_path: Path | str | None) -> str:
         parts.append("".join(_adopted_card(t) for t in adopted))
     if proposed:
         parts.append('<h4 class="ledger-sec-h">Proposed — approve to adopt</h4>')
-        parts.append("".join(_proposed_card(t) for t in proposed))
+        parts.append("".join(render_proposed_tenet_card(t) for t in proposed))
     if current:
         parts.append('<h4 class="ledger-sec-h">Your Worldview</h4>')
         parts.append("".join(_current_card(t) for t in current))

@@ -15,21 +15,15 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from capture import decision_draft_actions  # noqa: E402
-from tests.ask_stream_support import parse_sse_events  # noqa: E402
+from capture import decision_draft_actions
+from tests.ask_stream_support import parse_sse_events
 
 
 @pytest.fixture
@@ -42,7 +36,7 @@ def app_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(app_repo: Path):
+def client(app_repo: Path) -> FlaskClient:
     app = comments_server.create_app(app_repo)
     return app.test_client()
 
@@ -50,14 +44,14 @@ def client(app_repo: Path):
 # --- CORS ---------------------------------------------------------------
 
 
-def test_cors_null_origin_allowed_for_file_renderer(client):
+def test_cors_null_origin_allowed_for_file_renderer(client: FlaskClient) -> None:
     """The workspace HTML opens via file://, so its browser Origin is the
     literal string "null". That must be echoed back (never `*`)."""
     resp = client.get("/healthz", headers={"Origin": "null"})
     assert resp.headers.get("Access-Control-Allow-Origin") == "null"
 
 
-def test_cors_echoes_loopback_origin(client):
+def test_cors_echoes_loopback_origin(client: FlaskClient) -> None:
     """A page served by the dashboard itself carries a loopback Origin, which
     is echoed back so same-tool fetches keep working."""
     resp = client.get(
@@ -68,7 +62,7 @@ def test_cors_echoes_loopback_origin(client):
     assert resp.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1:7421"
 
 
-def test_cors_blocks_cross_site_origin_even_on_localhost(client):
+def test_cors_blocks_cross_site_origin_even_on_localhost(client: FlaskClient) -> None:
     """CSRF defense: a cross-site Origin gets NO CORS header even though the
     server is bound to localhost — so the browser blocks its preflighted,
     state-changing request. (Previously this path returned `*`.)"""
@@ -80,46 +74,50 @@ def test_cors_blocks_cross_site_origin_even_on_localhost(client):
     assert "Access-Control-Allow-Origin" not in resp.headers
 
 
-def test_cors_no_header_when_no_origin(client):
+def test_cors_no_header_when_no_origin(client: FlaskClient) -> None:
     """A same-origin / non-browser caller sends no Origin; no CORS header is
     needed and none is emitted."""
     resp = client.get("/healthz")
     assert "Access-Control-Allow-Origin" not in resp.headers
 
 
-def test_cors_no_wildcard_for_non_localhost(client):
+def test_cors_no_wildcard_for_non_localhost(client: FlaskClient) -> None:
     """If someone runs --host 0.0.0.0 and a non-localhost client hits the
     server, the wildcard must not leak."""
     resp = client.get("/healthz", base_url="http://example.com")
     assert "Access-Control-Allow-Origin" not in resp.headers
 
 
-def test_cors_echoes_whitelisted_origin(monkeypatch, client):
+def test_cors_echoes_whitelisted_origin(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient
+) -> None:
     monkeypatch.setenv("COMMENTS_SERVER_CORS_WHITELIST", "https://my.app,https://other.app")
     resp = client.get(
         "/healthz",
-        base_url="http://example.com",
+        base_url="http://localhost",
         headers={"Origin": "https://my.app"},
     )
     assert resp.headers.get("Access-Control-Allow-Origin") == "https://my.app"
 
 
-def test_cors_rejects_unlisted_origin(monkeypatch, client):
+def test_cors_rejects_unlisted_origin(monkeypatch: pytest.MonkeyPatch, client: FlaskClient) -> None:
     monkeypatch.setenv("COMMENTS_SERVER_CORS_WHITELIST", "https://my.app")
     resp = client.get(
         "/healthz",
-        base_url="http://example.com",
+        base_url="http://localhost",
         headers={"Origin": "https://bad.app"},
     )
     assert "Access-Control-Allow-Origin" not in resp.headers
 
 
-def test_cors_empty_whitelist_blocks_non_localhost(monkeypatch, client):
+def test_cors_empty_whitelist_blocks_non_localhost(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient
+) -> None:
     """Default env (no whitelist) must not echo any origin for non-localhost."""
     monkeypatch.delenv("COMMENTS_SERVER_CORS_WHITELIST", raising=False)
     resp = client.get(
         "/healthz",
-        base_url="http://example.com",
+        base_url="http://localhost",
         headers={"Origin": "https://my.app"},
     )
     assert "Access-Control-Allow-Origin" not in resp.headers
@@ -152,7 +150,7 @@ def test_cors_service_config_allows_only_exact_private_origin(
     assert "Access-Control-Allow-Origin" not in hostile.headers
 
 
-def test_cors_methods_and_headers_always_set(client):
+def test_cors_methods_and_headers_always_set(client: FlaskClient) -> None:
     """The Allow-Methods/Allow-Headers don't depend on host."""
     for base in ("http://localhost", "http://example.com"):
         resp = client.get("/healthz", base_url=base)
@@ -198,7 +196,7 @@ def test_tracker_group_correction_route_uses_shared_action_core(
 # --- Security hardening (dashboard is network-reachable over Tailscale) ---
 
 
-def test_security_headers_present(client):
+def test_security_headers_present(client: FlaskClient) -> None:
     """Every response carries the baseline security headers. X-Frame-Options is
     SAMEORIGIN (not DENY) because the command center embeds /reports/<T> in a
     same-origin iframe."""
@@ -208,7 +206,7 @@ def test_security_headers_present(client):
     assert resp.headers.get("Referrer-Policy") == "no-referrer"
 
 
-def test_healthz_does_not_leak_repo_root(client):
+def test_healthz_does_not_leak_repo_root(client: FlaskClient) -> None:
     """A network-reachable liveness endpoint must not disclose the server's
     absolute filesystem path."""
     resp = client.get("/healthz")
@@ -260,7 +258,7 @@ def test_handled_internal_failure_redacts_and_drops_unsafe_traceback(
     assert "Traceback" not in caplog.text
 
 
-def test_file_routes_reject_malformed_ticker(client):
+def test_file_routes_reject_malformed_ticker(client: FlaskClient) -> None:
     """The file-serving routes validate the ticker BEFORE it reaches a
     filesystem path — a malformed ticker is a 400, never a traversal. A
     well-shaped ticker passes validation (404 here: no build in the tmp repo)."""

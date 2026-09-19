@@ -52,21 +52,22 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from dcf import assumptions_doc  # noqa: E402
-from dcf import equity_bridge as equity_bridge_mod  # noqa: E402
-from dcf import forecast_series as forecast_series_mod  # noqa: E402
-from dcf import live_price as live_price_mod  # noqa: E402
-from dcf import persist as persist_mod  # noqa: E402
-from dcf import redesign as redesign_mod  # noqa: E402
-from dcf import reverse as reverse_mod  # noqa: E402
-from dcf import universe as universe_mod  # noqa: E402
-from dcf.provenance import DcfInputProvenance  # noqa: E402
-from runtime.python_process import managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from ticker_validation import safe_ticker  # noqa: E402
+from dcf import assumptions_doc
+from dcf import equity_bridge as equity_bridge_mod
+from dcf import forecast_series as forecast_series_mod
+from dcf import live_price as live_price_mod
+from dcf import persist as persist_mod
+from dcf import redesign as redesign_mod
+from dcf import reverse as reverse_mod
+from dcf import universe as universe_mod
+from dcf.provenance import DcfInputProvenance
+from runtime.python_process import managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ticker_validation import safe_ticker
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DCF_DIR_NAME = "dcf"
 CURRENCY_DEFAULT = "USD"
@@ -869,6 +870,7 @@ def _run_builder(
     repo_root: Path,
     dest: Path,
     *,
+    db_path: Path,
     country_risk_override: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the redesigned-DCF builder for one ticker, writing to `dest`.
@@ -881,6 +883,7 @@ def _run_builder(
         DCF_TICKER=ticker.upper(),
         DCF_REPO_ROOT=str(repo_root),
         DCF_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path.resolve()),
     )
     if country_risk_override is not None:
         env["DCF_COUNTRY_RISK_OVERRIDE"] = str(country_risk_override)
@@ -900,7 +903,7 @@ def _unlink(path: Path) -> None:
         path.unlink()
 
 
-def _stage_assumptions(path: Path) -> Path:
+def stage_assumptions(path: Path) -> Path:
     """Copy an existing assumptions mirror so provenance writes are reversible."""
     staged = path.with_name(f"{path.stem}.rebuild{path.suffix}")
     _unlink(staged)
@@ -1406,13 +1409,14 @@ def _refresh_redesign(
     # existing workbook; only a clean build is swapped into place.
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
     assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
-    staged_assumptions = _stage_assumptions(assumptions_path)
+    staged_assumptions = stage_assumptions(assumptions_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         proc = _run_builder(
             ticker,
             repo_root,
             tmp,
+            db_path=db_path,
             country_risk_override=(
                 captured.scalars.get(redesign_mod.COUNTRY_RISK_PREMIUM_ROW)
                 if captured is not None
@@ -1885,7 +1889,7 @@ def apply_edits(
     except OSError as e:
         return {"ticker": ticker, "status": "failed", "reason": f"stage workbook failed: {e}"}
     assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
-    staged_assumptions = _stage_assumptions(assumptions_path)
+    staged_assumptions = stage_assumptions(assumptions_path)
 
     # Write the edited input cells onto the live workbook (no FMP rebuild, no
     # price change), then re-read: WACC re-derives from the saved CAPM drivers.

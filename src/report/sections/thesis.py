@@ -223,7 +223,7 @@ def _build_ledger(
     # from the holdings JSON with empty history and a name-derived definition.
     db_conn = open_repo_db(repo_root, conn)
     try:
-        tier_specs: tuple[tuple[str, str], ...] = (
+        tier_specs: tuple[tuple[str, Literal["tier_1", "tier_2", "tier_3"]], ...] = (
             ("tier_1_kpis", "tier_1"),
             ("tier_2_kpis", "tier_2"),
             ("tier_3_kpis", "tier_3"),
@@ -284,7 +284,7 @@ def _build_ledger(
                 tier_rows.append(
                     KpiLedgerRow(
                         name=name,
-                        tier=tier_label,  # type: ignore[arg-type]
+                        tier=tier_label,
                         kpi_definition_id=def_id,
                         # Backfill the unit from the resolved definition when the
                         # holdings JSON declares none (schema-v2 tickers like NU
@@ -380,30 +380,6 @@ def _derive_definition(name: str, notes: str | None, db_unit: str | None) -> str
     if qualifier:
         return qualifier
     return _UNIT_DESCRIPTOR.get((db_unit or "").strip().lower())
-
-
-def _kpi_definition_meta(
-    conn: sqlite3.Connection, ticker: str, kpi_name: str
-) -> tuple[int | None, str | None, str | None]:
-    """Return ``(id, notes, unit)`` for the kpi_definitions row best matching
-    ``kpi_name``, or ``(None, None, None)``.
-
-    The ``id`` is the metric's stable PK handle — the same row is already being
-    resolved here for its notes/unit, so surfacing the id is free, and it lets
-    the renderer emit a ``fact_ref`` doorway (Instrument Paradigm Law 2)
-    instead of leaning on the fragile display name.
-
-    Resolution is *independent of whether facts exist* — unlike
-    ``_kpi_history_conn``, which goes through the fact-requiring resolver — so a
-    tracked-but-empty tier-2/3 KPI still surfaces its unit (and any curator
-    notes). Prefers the richest fact-bearing definition (the same row the
-    history came from), then an exact name match, then a parenthetical-insensitive
-    normalized match.
-    """
-    if not kpi_name or not has_table(conn, "kpi_definitions"):
-        return None, None, None
-    resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
-    return _kpi_definition_meta_for_resolved(conn, ticker, kpi_name, resolved_name)
 
 
 def _kpi_definition_meta_for_resolved(
@@ -551,7 +527,7 @@ def _parse_soft_evaluation(raw: dict[str, JsonValue]) -> SoftRuleEvaluation:
 def _coerce_status(s: str) -> _BreachStatusLiteral:
     s = s.lower()
     if s in ("ok", "warn", "breach", "unresolved"):
-        return s  # type: ignore[return-value]
+        return s
     return "unknown"
 
 
@@ -581,6 +557,9 @@ def _parse_evaluation(raw: dict[str, JsonValue]) -> BreakRuleEvaluation:
         )
         for o in observation_rows
     ]
+    status = _coerce_status(str(raw.get("status", "unknown")))
+    if status == "unknown":
+        raise ValueError("break-rule evaluation has an unknown status")
     return BreakRuleEvaluation(
         rule_id=str(raw.get("rule_id", "")),
         kpi_name=str(raw.get("kpi_name", "")),
@@ -588,7 +567,7 @@ def _parse_evaluation(raw: dict[str, JsonValue]) -> BreakRuleEvaluation:
         threshold=float(str(raw.get("threshold", "0"))),
         consecutive_periods=int(str(raw.get("consecutive_periods", 1) or 1)),
         tier=_coerce_tier(raw.get("tier")),
-        status=_coerce_status(str(raw.get("status", "unknown"))),  # type: ignore[arg-type]
+        status=status,
         detail=str(raw.get("detail", "")),
         narrative=str(raw.get("narrative", "")),
         observations=observations,

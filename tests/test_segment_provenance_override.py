@@ -274,17 +274,14 @@ def test_dcf_reader_path_via_db_path(tmp_path: Path) -> None:
     assert "Google Inc." not in data
 
 
-def test_no_db_is_passthrough(tmp_path: Path) -> None:
-    # No DB file at the path -> records returned unchanged (raw FMP), never raising.
-    out = segment_cache.apply_overrides(
-        _bad_quarterly_records(),
-        ticker="GOOG",
-        dim_type="product",
-        db_path=str(tmp_path / "absent.db"),
-    )
-    data = out[0]["data"]
-    assert isinstance(data, dict)
-    assert data["Google Cloud"] == 20941000000  # unchanged
+def test_missing_override_database_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        segment_cache.apply_overrides(
+            _bad_quarterly_records(),
+            ticker="GOOG",
+            dim_type="product",
+            db_path=str(tmp_path / "absent.db"),
+        )
 
 
 def test_q4_override_does_not_touch_fy_record(env: tuple[sqlite3.Connection, Path]) -> None:

@@ -53,8 +53,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Windows snapshot path lazily loads the platform msvcrt module.",
-      "fingerprint": "a1b612c48539166cbc558057d1ef7b66b6b58419fe3354460606c2d7c9a62b1f",
-      "line": 811,
+      "fingerprint": "293ae9673bade68a8acfc3c3bb111e4364058a096b1c4390de42fd6987d3fd8d",
+      "line": 793,
       "path": "execution/refresh_cache.py",
       "targets": [
         "msvcrt"

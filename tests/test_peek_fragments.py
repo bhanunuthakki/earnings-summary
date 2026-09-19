@@ -3,22 +3,19 @@
 shell links peek instead of drilling through (data-peek-url / data-peek-ticker
 attributes with their real hrefs preserved).
 
-DB substrate: alembic from the pre-CIO head to head (alerts / queued_actions /
-advisor_memos at their real shapes), plus hand-rolled minimal tables for the
-pre-0059 vintage ones the peeks read (tracked_companies, thesis_evaluations,
-documents), mirroring tests/test_source_viewers.py.
+DB substrate: a private copy of the fully migrated current schema.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
@@ -32,69 +29,12 @@ from pipeline.research_cockpit import CockpitRow, render_research_cockpit
 from pipeline.ticker_command_center import build_ticker_command_center, render_ticker_fragment
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-# Minimal pre-0059-vintage tables the peek readers touch. Created AFTER the
-# alembic upgrade so no migration sees them mid-flight.
-_EXTRA_DDL = """
-CREATE TABLE IF NOT EXISTS tracked_companies (
-    ticker TEXT PRIMARY KEY,
-    name TEXT,
-    list_type TEXT NOT NULL DEFAULT 'portfolio',
-    archived_at TEXT,
-    last_built_at TEXT,
-    instrument_type TEXT
-);
-CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
-    ticker         TEXT    NOT NULL,
-    endpoint       TEXT    NOT NULL,
-    period         TEXT    NOT NULL DEFAULT '',
-    status         TEXT    NOT NULL,
-    last_pulled    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (ticker, endpoint, period)
-);
-CREATE TABLE IF NOT EXISTS thesis_evaluations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    evaluated_at TEXT NOT NULL,
-    overall_status TEXT,
-    rule_evaluations_json TEXT
-);
-CREATE TABLE IF NOT EXISTS documents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    doc_type TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    fetched_at TIMESTAMP NOT NULL,
-    fetch_status TEXT NOT NULL,
-    raw_bytes_size INTEGER NOT NULL DEFAULT 0,
-    source_url TEXT,
-    accession_number TEXT,
-    filing_date TEXT
-);
-"""
-
-
-def _add_legacy_tables(db_path: Path) -> None:
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(_EXTRA_DDL)
-        conn.commit()
-    finally:
-        conn.close()
 
 
 @pytest.fixture
 def repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
-    _add_legacy_tables(db)
+    migrated_db(db)
     return tmp_path
 
 
@@ -301,34 +241,6 @@ def test_peek_memo_review_no_button_for_plain_llm_verdict(
 # /api/peek/review (PR5 — the instant position-review read + escalation button)
 # ----------------------------------------------------------------------------
 
-# decisions predates the 0059 stamp (db.init_db() territory), mirroring
-# tests/test_open_loops.py's _DECISIONS_DDL pattern (hand-built post-upgrade).
-_DECISIONS_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    conviction VARCHAR(16),
-    outcome_label VARCHAR(16) NOT NULL DEFAULT 'pending',
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
-    scope VARCHAR(16) NOT NULL DEFAULT 'ticker',
-    falsifier TEXT,
-    size_usd FLOAT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-"""
-
-
-def _seed_decisions_table(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executescript(_DECISIONS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-
 
 def test_peek_review_renders_deterministic_pre_analysis(client: FlaskClient) -> None:
     # No thesis JSON on file -> the deterministic encode-first degrade, same
@@ -347,7 +259,6 @@ def test_peek_review_renders_deterministic_pre_analysis(client: FlaskClient) -> 
 
 
 def test_peek_review_carries_the_live_graded_base_rate(client: FlaskClient, db_path: Path) -> None:
-    _seed_decisions_table(db_path)
     conn = sqlite3.connect(str(db_path))
     try:
         for t in ("MU", "TSM", "NVDA", "AMZN", "GOOGL"):
@@ -394,9 +305,7 @@ def _seed_doc(
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.execute(
-            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
-            "fetched_at, fetch_status, source_url) "
-            "VALUES ('NU', 'test', ?, ?, 'x', '2026-06-01 10:00:00', 'ok', ?)",
+            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, source_url, raw_bytes_size) VALUES ('NU', 'test', ?, ?, 'x', '2026-06-01 10:00:00', 'ok', ?, 0)",
             (doc_type, file_path, source_url),
         )
         conn.commit()
@@ -500,9 +409,7 @@ def _seed_provenance(db_path: Path, ticker: str = "NU") -> None:
             ],
         )
         conn.execute(
-            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
-            "fetched_at, fetch_status) VALUES (?, 'ir', 'ir_presentation', "
-            "'ir_documents/NU/deck.pdf', 'x', '2026-06-08 01:30:00', 'ok')",
+            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, raw_bytes_size) VALUES (?, 'ir', 'ir_presentation', 'ir_documents/NU/deck.pdf', 'x', '2026-06-08 01:30:00', 'ok', 0)",
             (ticker,),
         )
         conn.execute(
@@ -597,16 +504,12 @@ def _seed_new_docs(db_path: Path, ticker: str = "NU") -> int:
             (ticker,),
         )
         cur = conn.execute(
-            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
-            "fetched_at, fetch_status) VALUES (?, 'sec', 'form_10q', "
-            "'data/historical/fmp/NU_form_10q_2026.json', 'x', '2026-06-10 08:00:00', 'ok')",
+            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, raw_bytes_size) VALUES (?, 'sec', 'form_10q', 'data/historical/fmp/NU_form_10q_2026.json', 'x', '2026-06-10 08:00:00', 'ok', 0)",
             (ticker,),
         )
         new_id = int(cur.lastrowid or 0)
         conn.execute(
-            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
-            "fetched_at, fetch_status) VALUES (?, 'sec', 'form_10k', "
-            "'data/historical/fmp/NU_form_10k_2025.json', 'y', '2026-06-08 08:00:00', 'ok')",
+            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, raw_bytes_size) VALUES (?, 'sec', 'form_10k', 'data/historical/fmp/NU_form_10k_2025.json', 'y', '2026-06-08 08:00:00', 'ok', 0)",
             (ticker,),
         )
         conn.commit()
@@ -633,11 +536,11 @@ def test_peek_documents_lists_docs_since_build(client: FlaskClient, db_path: Pat
 def test_peek_documents_empty_state(client: FlaskClient, db_path: Path) -> None:
     # Tracked but never built (last_built_at NULL) → nothing is "new".
     conn = sqlite3.connect(db_path)
-    conn.execute("INSERT INTO tracked_companies (ticker, name) VALUES ('ABC', 'A')")
     conn.execute(
-        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
-        "fetched_at, fetch_status) VALUES ('ABC', 'sec', 'form_10q', 'x.json', 'z', "
-        "'2026-06-10 08:00:00', 'ok')"
+        "INSERT INTO tracked_companies (ticker, name, list_type) VALUES ('ABC', 'A', 'portfolio')"
+    )
+    conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, raw_bytes_size) VALUES ('ABC', 'sec', 'form_10q', 'x.json', 'z', '2026-06-10 08:00:00', 'ok', 0)"
     )
     conn.commit()
     conn.close()
@@ -1125,7 +1028,7 @@ def _seed_prep_ticker(db_path: Path, ticker: str = "NU") -> None:
             "CREATE TABLE IF NOT EXISTS thesis_state (ticker TEXT, thesis TEXT, breach_status TEXT)"
         )
         conn.execute(
-            "INSERT INTO thesis_state (ticker, thesis, breach_status) VALUES (?, 'T.', 'watch')",
+            "INSERT INTO thesis_state (ticker, thesis, breach_status, raw_json, ingested_at) VALUES (?, 'T.', 'watch', '{}', '2026-07-01')",
             (ticker,),
         )
         conn.execute(
@@ -1134,9 +1037,7 @@ def _seed_prep_ticker(db_path: Path, ticker: str = "NU") -> None:
             "npv_per_share REAL, sanity_flag TEXT)"
         )
         conn.execute(
-            "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, "
-            "live_price, npv_per_share, sanity_flag) VALUES (?, '2026-07-01', NULL, "
-            "0.30, 13.0, 10.0, NULL)",
+            "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, live_price, npv_per_share, sanity_flag, horizon_years, revenue_growths_json, fcf_margin, wacc, terminal_growth, npv) VALUES (?, '2026-07-01', NULL, 0.30, 13.0, 10.0, NULL, 5, '[]', 0.1, 0.1, 0.02, 100)",
             (ticker,),
         )
         conn.commit()
@@ -1372,11 +1273,37 @@ def _seed_readout_ticker(
             "eps_estimate TEXT, eps_actual TEXT, eps_surprise_pct TEXT, "
             "revenue_estimate TEXT, revenue_actual TEXT, revenue_surprise_pct TEXT)"
         )
+        from earnings_surprise_store import EarningsSurpriseRecordV1, append_observation
+
+        record = EarningsSurpriseRecordV1.model_validate(
+            {
+                "ticker": ticker,
+                "release_date": "2026-07-20",
+                "eps_estimate": "0.12",
+                "eps_actual": "0.15",
+                "eps_surprise_pct": "25.0",
+                "revenue_estimate": "3100000000",
+                "revenue_actual": "3000000000",
+                "revenue_surprise_pct": "-3.2",
+                "source_name": "test_fixture",
+                "fetched_at": "2026-07-20T20:00:00+00:00",
+            }
+        )
+        observation_id, _ = append_observation(
+            conn,
+            record=record,
+            raw_payload=record.model_dump(mode="json"),
+            cache_path="fixture-surprises.json",
+            record_ordinal=0,
+        )
         conn.execute(
-            "INSERT INTO earnings_surprises (ticker, release_date, eps_estimate, eps_actual, "
-            "eps_surprise_pct, revenue_estimate, revenue_actual, revenue_surprise_pct) "
-            "VALUES (?, '2026-07-20', '0.12', '0.15', '25.0', '3.1B', '3.0B', '-3.2')",
-            (ticker,),
+            "INSERT INTO earnings_surprises (ticker,release_date,eps_estimate,eps_actual,"
+            "revenue_estimate,revenue_actual,eps_surprise_pct,revenue_surprise_pct,source_name,"
+            "fetched_at,source_observation_id) "
+            "SELECT ticker,release_date,eps_estimate,eps_actual,revenue_estimate,revenue_actual,"
+            "eps_surprise_pct,revenue_surprise_pct,source_name,fetched_at,observation_id "
+            "FROM earnings_surprise_observations WHERE observation_id=?",
+            (observation_id,),
         )
         conn.execute(
             "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256, "

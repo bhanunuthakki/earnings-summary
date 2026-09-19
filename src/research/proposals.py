@@ -303,6 +303,35 @@ def list_tasks(
         conn.close()
 
 
+def list_session_prompt_tasks(
+    *, db_path: Path | str | None = None, limit: int = 10
+) -> list[ResearchTask]:
+    """Read newest tasks with usable session prompts through the metadata owner.
+
+    Filter before limiting so malformed or empty metadata cannot hide older
+    actionable tasks. Database failures propagate for the caller to label them.
+    """
+    if limit <= 0:
+        return []
+    conn = open_read_conn(db_path)
+    try:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(research_tasks)")}
+        if "run_id" not in columns:
+            return []
+        rows = conn.execute(
+            "SELECT * FROM research_tasks "
+            "WHERE CASE WHEN json_valid(run_id) THEN "
+            "json_type(run_id) = 'object' "
+            "AND json_type(run_id, '$.session_prompt') = 'text' "
+            "AND TRIM(json_extract(run_id, '$.session_prompt')) != '' "
+            "ELSE 0 END ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_task(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def set_task_status(task_id: int, status: str, *, db_path: Path | str | None = None) -> None:
     if status not in TASK_STATUSES:
         raise ValueError(f"unknown task status {status!r}; expected one of {TASK_STATUSES}")

@@ -48,16 +48,23 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import TracebackType
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
-sys.path.insert(0, str(SCRIPT_DIR))  # import sibling execution/ modules (refresh_dispatch)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
-    from flask import Flask, Response, abort, g, redirect, request, send_file, stream_with_context
+    from flask import (
+        Flask,
+        Response,
+        abort,
+        g,
+        has_request_context,
+        redirect,
+        request,
+        send_file,
+        stream_with_context,
+    )
 except ImportError:  # pragma: no cover - install hint
     print(
         "Flask not installed. Install with: pip install flask",
@@ -65,79 +72,79 @@ except ImportError:  # pragma: no cover - install hint
     )
     sys.exit(1)
 
-import sqlite3  # noqa: E402
+import sqlite3
 
-from comments_server_alert_routes import AppContext, register_alert_routes  # noqa: E402
-from comments_server_attention_routes import (  # noqa: E402
+from comments_server_alert_routes import AppContext, register_alert_routes
+from comments_server_attention_routes import (
     AttentionRouteContext,
     register_attention_routes,
 )
-from comments_server_content_routes import (  # noqa: E402
+from comments_server_content_routes import (
     ContentRouteContext,
     register_content_routes,
 )
-from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes  # noqa: E402
-from comments_server_evaluation_projection import (  # noqa: E402
+from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes
+from comments_server_evaluation_projection import (
     resolve_work_os_evaluation_item,
 )
-from comments_server_governed_alert_routes import (  # noqa: E402
+from comments_server_governed_alert_routes import (
     GovernedAlertRouteContext,
     register_governed_alert_routes,
 )
-from comments_server_ir_approval_routes import (  # noqa: E402
+from comments_server_ir_approval_routes import (
     IrApprovalRouteContext,
     register_ir_approval_routes,
 )
-from comments_server_journal_routes import (  # noqa: E402
+from comments_server_journal_routes import (
     JournalRouteContext,
     register_journal_routes,
 )
-from comments_server_panel_cache import (  # noqa: E402
+from comments_server_panel_cache import (
     PanelCacheEntry,
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
     resolve_mutation_families,
 )
-from comments_server_profile_routes import (  # noqa: E402
+from comments_server_profile_routes import (
     ProfileRouteContext,
     register_profile_routes,
 )
-from comments_server_proposal_routes import (  # noqa: E402
+from comments_server_proposal_routes import (
     ResearchProposalRouteContext,
     register_research_proposal_routes,
 )
-from comments_server_research_routes import (  # noqa: E402
+from comments_server_research_routes import (
     ResearchTaskRouteContext,
     register_research_task_routes,
 )
-from comments_server_settings_routes import (  # noqa: E402
+from comments_server_settings_routes import (
     SettingsRouteContext,
     register_settings_routes,
 )
-from process_report_comments import (  # noqa: E402
+from process_report_comments import (
     preview_thesis_edits,
     process_comments_for_ticker,
     resolve_latest_report_date,
 )
-from pydantic import ValidationError  # noqa: E402
-from refresh_dispatch import STEP_NAMES  # noqa: E402
-from update_readme import (  # noqa: E402
+from pydantic import ValidationError
+from refresh_dispatch import STEP_NAMES
+from update_readme import (
     collect_repository_evidence,
     current_candidate_violations,
 )
 
-import comments  # noqa: E402
-import ticker_validation  # noqa: E402
-from ask.context import build_portfolio_pack  # noqa: E402
-from ask.engine import (  # noqa: E402
+import comments
+import ticker_validation
+from ask.context import build_portfolio_pack
+from ask.engine import (
     AskTurn,
     ask_retrieval_mode,
     fold_events,
     respond_turn,
     sanitize_history,
 )
-from ask.exchange_store import (  # noqa: E402
+from ask.exchange_store import (
     BeginExchangeResult,
     ExchangeConflictError,
     ExchangeStateError,
@@ -154,10 +161,10 @@ from ask.exchange_store import (  # noqa: E402
     put_session_context,
     replay_exchange_events,
 )
-from ask.store import (  # noqa: E402
+from ask.store import (
     AskSession as _AskSession,
 )
-from ask.store import (  # noqa: E402
+from ask.store import (
     delete_session,
     ensure_session,
     get_session,
@@ -165,87 +172,87 @@ from ask.store import (  # noqa: E402
     load_turns,
     rename_session,
 )
-from dashboard.inbox import (  # noqa: E402
+from dashboard.inbox import (
     collect_inbox,
     render_inbox_stream,
     schema_drift_notice,
 )
-from dashboard.upcoming import render_upcoming_strip  # noqa: E402
-from dcf import persist as dcf_persist  # noqa: E402
-from dcf import redesign as dcf_redesign  # noqa: E402
-from discovery.store import BUILDABLE_STATUSES  # noqa: E402
-from dispatch_registry import Registry, RegistryConflict  # noqa: E402
-from identity import DEFAULT_USER_ID  # noqa: E402
-from integrations.portfolio_allocation import fetch_portfolio_allocation  # noqa: E402
-from integrations.portfolio_offline_snapshot import (  # noqa: E402
+from dashboard.upcoming import render_upcoming_strip
+from dcf import persist as dcf_persist
+from dcf import redesign as dcf_redesign
+from discovery.store import BUILDABLE_STATUSES
+from dispatch_registry import Registry, RegistryConflict
+from identity import DEFAULT_USER_ID
+from integrations.portfolio_allocation import fetch_portfolio_allocation
+from integrations.portfolio_offline_snapshot import (
     read_configured_offline_portfolio_snapshot,
 )
-from integrations.portfolio_tracker_client import fetch_live_portfolio, probe_tracker  # noqa: E402
-from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
-from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
-from llm.postprocess import strip_inline_markdown  # noqa: E402
-from log_redact import redact  # noqa: E402
-from logging_config import (  # noqa: E402
+from integrations.portfolio_tracker_client import fetch_live_portfolio, probe_tracker
+from integrations.portfolio_tracker_v1 import TrackerV1Client
+from llm.cli import LLMBudgetExceeded, is_hard_stop
+from llm.postprocess import strip_inline_markdown
+from log_redact import redact
+from logging_config import (
     configure_logging,
     get_correlation_id,
     new_correlation_id,
     set_correlation_id,
 )
-from operations.attention_projection import build_attention_panel_view  # noqa: E402
-from operations.kpi_semantic_review_export import (  # noqa: E402
+from operations.attention_projection import build_attention_panel_view
+from operations.kpi_semantic_review_export import (
     KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
     KpiSemanticReviewExportError,
     load_current_kpi_semantic_review_partition,
     load_current_kpi_semantic_review_ticker_manifest,
 )
-from operations.models import OperationsRegistry  # noqa: E402
-from operations.paths import (  # noqa: E402
+from operations.models import OperationsRegistry
+from operations.paths import (
     portfolio_tracker_activation_receipt_path,
     portfolio_tracker_receipt_path,
     scheduler_receipt_path,
     service_receipt_path,
 )
-from operations.readme_governance import (  # noqa: E402
+from operations.readme_governance import (
     ReadmeGovernanceStatus,
     collect_readme_governance_status,
 )
-from operations.registry import build_operations_registry  # noqa: E402
-from operations.review_bundle import (  # noqa: E402
+from operations.registry import build_operations_registry
+from operations.review_bundle import (
     build_operations_review_bundle,
     database_lineage_identity,
     load_kpi_repair_review,
     review_code_identity,
 )
-from operations.snapshot import collect_operations_snapshot  # noqa: E402
-from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
-from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
-from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
-from pipeline.operations_panel import (  # noqa: E402
+from operations.snapshot import collect_operations_snapshot
+from pipeline.analytical_dashboard import build_analytical_dashboard
+from pipeline.dashboard_status import build_dashboard_rows
+from pipeline.kpi_semantic_scope import scoped_kpi_definitions
+from pipeline.operations_panel import (
     build_operations_panel_view,
     render_operations_panel,
 )
-from pipeline.research_cockpit import build_cockpit_rows  # noqa: E402
-from pipeline.ticker_command_center import (  # noqa: E402
+from pipeline.research_cockpit import build_cockpit_rows
+from pipeline.ticker_command_center import (
     build_ticker_command_center,
     render_holding_fragment,
     render_holding_picker_band,
     render_notes_drawer_fragment,
 )
-from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
-from pipeline.work_os_earnings import load_latest_earnings_readouts  # noqa: E402
-from pipeline.work_os_evaluation import build_work_os_evaluation  # noqa: E402
-from pipeline.work_os_overview import render_overview_panel  # noqa: E402
-from pipeline.work_os_portfolio import (  # noqa: E402
+from pipeline.tier_runner import tier_coverage_summary
+from pipeline.work_os_earnings import load_latest_earnings_readouts
+from pipeline.work_os_evaluation import build_work_os_evaluation
+from pipeline.work_os_overview import render_overview_panel
+from pipeline.work_os_portfolio import (
     build_work_os_portfolio,
     build_work_os_portfolio_research_links,
     load_work_os_price_action_bands,
 )
-from pipeline.work_os_shell import render_work_os_shell_result  # noqa: E402
-from portfolio_risk_snapshot_store import read_latest_snapshot  # noqa: E402
-from readme_updater import evidence_sha256  # noqa: E402
-from research.proposal_approval import bind_ask_proposal_events  # noqa: E402
-from runtime.job_runtime import portfolio_db_path  # noqa: E402
-from runtime.portfolio_tracker import (  # noqa: E402
+from pipeline.work_os_shell import render_work_os_shell_result
+from portfolio_risk_snapshot_store import read_latest_snapshot
+from readme_updater import evidence_sha256
+from research.proposal_approval import bind_ask_proposal_events
+from runtime.job_runtime import portfolio_db_path
+from runtime.portfolio_tracker import (
     AtomicFileLease,
     ListenerObservation,
     PortfolioTrackerRuntimeManager,
@@ -258,21 +265,30 @@ from runtime.portfolio_tracker import (  # noqa: E402
     start_portfolio_tracker_scheduler_task,
     write_tracker_activation_receipt,
 )
-from runtime.python_process import managed_python_argv  # noqa: E402
-from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
-from schema_compat import SchemaRevisionMismatch  # noqa: E402
-from server_runtime.access import (  # noqa: E402
+from runtime.python_process import managed_python_argv
+from runtime.secrets import load_project_env, secret_read_path
+from schema_compat import SchemaRevisionMismatch
+from server_runtime.access import (
     REPORT_CAPABILITY_HEADER,
     ReportCapabilityStore,
     is_allowed_client_address,
     is_allowed_origin,
+    is_allowed_request_host,
     private_mobile_origin,
     resolve_tailscale_ipv4,
     tailscale_access_enabled,
     validate_bind_host,
 )
-from server_runtime.streaming import drain_events  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from server_runtime.streaming import drain_events
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+if TYPE_CHECKING:
+    from discovery.store import CandidateRow
+    from user_state.saved_views import SavedViewRow
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = SCRIPT_DIR.parent
+SRC_DIR = PROJECT_ROOT / "src"
 
 # Repo-wide maintenance chores exposed on the dashboard, each dispatched as a
 # single-flight job running an existing CLI under execution/. (Onboarding a
@@ -287,6 +303,7 @@ _MAINTENANCE_ACTIONS: dict[str, list[str]] = {
 _MAX_REQUEST_BYTES = 262_144
 _MAX_USER_INPUT_CHARS = 8_000
 _STREAM_QUEUE_MAXSIZE = 64
+_MAX_ADMITTED_CHATS = 8
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 
 # The four work-os hydration GETs join the panel response cache: same 30s TTL,
@@ -343,10 +360,10 @@ def _drain_durable_events(
 def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | None:
     """Return the ``Access-Control-Allow-Origin`` value to echo for ``origin``, or None.
 
-    Allows the file:// workspace renderer (Origin ``"null"``) and any loopback
-    origin so the local dashboard keeps working; a cross-site origin gets no
-    CORS header, so the browser blocks its preflighted state-changing request
-    (CSRF defense). For a non-loopback bind, an explicit comma-separated
+    Allows authenticated file:// reports (Origin ``"null"``), same-port
+    loopback aliases, and exact configured private origins. The request guard
+    separately requires the capability for opaque-origin access. An explicit
+    comma-separated
     ``COMMENTS_SERVER_CORS_WHITELIST`` of allowed origins is honored.
     """
     whitelist = {
@@ -363,6 +380,9 @@ def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | 
         origin,
         allow_tailscale=tailscale_access_enabled(),
         whitelist=frozenset(whitelist),
+        server_origin=request.host_url.rstrip("/")
+        if has_request_context()
+        else "http://localhost:7421",
     )
 
 
@@ -457,7 +477,11 @@ def _note_to_json(note: object) -> dict[str, object]:
     from dataclasses import asdict
     from datetime import datetime as _dt
 
-    payload = asdict(note)  # pyright: ignore[reportArgumentType]  # always an AnalystNoteRow
+    from user_state.notes import AnalystNoteRow
+
+    if not isinstance(note, AnalystNoteRow):
+        raise TypeError("note must be an analyst note")
+    payload = asdict(note)
     return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
 
 
@@ -472,21 +496,21 @@ def _opt_int(raw: object) -> int | None:
         return None
 
 
-def _view_to_json(view: object) -> dict[str, object]:
+def _view_to_json(view: SavedViewRow) -> dict[str, object]:
     """SavedViewRow → JSON-safe dict for the /api/views responses (P5.1)."""
     from dataclasses import asdict
     from datetime import datetime as _dt
 
-    payload = asdict(view)  # pyright: ignore[reportArgumentType]  # always a SavedViewRow
+    payload = asdict(view)
     return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
 
 
-def _candidate_to_json(cand: object) -> dict[str, object]:
+def _candidate_to_json(cand: CandidateRow) -> dict[str, object]:
     """CandidateRow → JSON-safe dict for the /api/discovery responses (P5.4)."""
     from dataclasses import asdict
     from datetime import datetime as _dt
 
-    payload = asdict(cand)  # pyright: ignore[reportArgumentType]  # always a CandidateRow
+    payload = asdict(cand)
     return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
 
 
@@ -601,6 +625,7 @@ def create_app(
     operations_registry: OperationsRegistry | None = None,
     code_root: Path | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
+    server_origin: str | None = None,
 ) -> Flask:
     app = _RedactingFlask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
@@ -639,6 +664,7 @@ def create_app(
         max_workers=4, thread_name_prefix="comments-server-chat"
     )
     app.config["CHAT_EXECUTOR"] = chat_pool
+    chat_slots = threading.BoundedSemaphore(_MAX_ADMITTED_CHATS)
 
     def _start_background_task(task: Callable[[], None], name: str) -> None:
         threading.Thread(target=task, daemon=True, name=name).start()
@@ -672,7 +698,10 @@ def create_app(
         correlation_id: str,
     ) -> None:
         set_correlation_id(correlation_id)
-        drain_events(events, chunks, stop)
+        try:
+            drain_events(events, chunks, stop)
+        finally:
+            chat_slots.release()
 
     def _drain_durable_stream(
         events: Iterator[dict[str, object]],
@@ -681,7 +710,10 @@ def create_app(
         correlation_id: str,
     ) -> None:
         set_correlation_id(correlation_id)
-        _drain_durable_events(events, chunks, stop)
+        try:
+            _drain_durable_events(events, chunks, stop)
+        finally:
+            chat_slots.release()
 
     def _sse_frame(item: dict[str, object], correlation_id: str) -> str:
         if item.get("type") == "error":
@@ -704,6 +736,7 @@ def create_app(
         chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=_STREAM_QUEUE_MAXSIZE)
         stop = threading.Event()
         chat_pool.submit(_drain_stream, events, chunks, stop, correlation_id)
+        g.chat_admission_reserved = False
 
         def generate():
             try:
@@ -740,6 +773,7 @@ def create_app(
         stop = threading.Event()
         drain = _drain_durable_stream if disconnect_safe else _drain_stream
         chat_pool.submit(drain, events, chunks, stop, correlation_id)
+        g.chat_admission_reserved = False
 
         def generate():
             try:
@@ -778,6 +812,12 @@ def create_app(
 
     @app.before_request
     def enforce_network_boundary():
+        configured_origin = private_mobile_origin(
+            config_path=secret_read_path("private_mobile_base_url", repo_root=repo_root)
+        )
+        trusted_origins = tuple(origin for origin in (configured_origin, server_origin) if origin)
+        if not is_allowed_request_host(request.host, trusted_origins=trusted_origins):
+            return ({"error": "request host is not an application host"}, 403)
         remote_address = request.remote_addr or ""
         if not is_allowed_client_address(
             remote_address,
@@ -799,26 +839,28 @@ def create_app(
     @app.before_request
     def start_request_timer() -> None:
         g.request_started_ns = time.perf_counter_ns()
+
+    @app.after_request
+    def invalidate_mutated_panels(response: Response) -> Response:
+        # Writers commit inside their handlers. Invalidate afterwards, including
+        # failures that may have partially written, so racing pre-commit reads
+        # cannot publish a fresh stale entry after the mutation completes.
         if request.method in ("GET", "HEAD", "OPTIONS"):
-            return
-        # A successful mutation can affect several cached surfaces. Instead of
-        # evicting the whole 256-entry panel + work-os response cache, resolve
-        # the exact families that route's writes can staleness from the
-        # mutation-route registry (W6) and invalidate only those prefixes.
-        # Panel timing telemetry (/api/metrics/panel) and the operations
-        # attention routes are registered as declared no-ops (the latter
-        # invalidates at its own precise success moment inside the route). The
-        # registry is total over the non-GET route table — enforced by a test
-        # that walks app.url_map — and an unknown route resolves to None,
-        # which FAILS SAFE to a full clear() so new mutation routes can never
-        # serve a pre-mutation fragment.
+            return response
         route_rule = cast(object, request.url_rule)
         families = resolve_mutation_families(getattr(route_rule, "rule", None))
         if families is None:
             panel_cache.clear()
-            return
-        for prefix in families:
-            panel_cache.invalidate_prefix(prefix)
+        else:
+            for prefix in families:
+                panel_cache.invalidate_prefix(prefix)
+        return response
+
+    @app.errorhandler(comments.CommentStoreReadError)
+    def unavailable_comment_store(_error: comments.CommentStoreReadError):
+        return _client_error(
+            "comment store unavailable; original preserved; repair before retrying", 503
+        )
 
     @app.errorhandler(413)
     def request_too_large(_error: object):
@@ -835,6 +877,8 @@ def create_app(
 
     @app.teardown_request
     def close_request_db(exception: BaseException | None = None) -> None:
+        if g.pop("chat_admission_reserved", False):
+            chat_slots.release()
         for key in ("request_read_db", "request_operations_read_db"):
             db_conn = g.pop(key, None)
             if db_conn is not None:
@@ -873,8 +917,8 @@ def create_app(
         # A site the operator is visiting can drive a cross-origin state-changing
         # request at this server; reject any unsafe-method request whose browser
         # Origin is cross-site (judged by the same loopback / "null" / whitelist
-        # rule as CORS, via _cors_allow_origin). Safe methods and the OPTIONS
-        # preflight are exempt. An absent Origin remains allowed for loopback
+        # rule as CORS, via _cors_allow_origin). Opaque-origin sensitive reads
+        # also need the capability; health checks and OPTIONS remain public. An absent Origin remains allowed for loopback
         # non-browser CLI callers, but a browser with no Origin, Referer, or
         # Fetch Metadata must prove possession of the static-report capability.
         # Remote mutations must come from a same-origin browser surface. This
@@ -882,10 +926,18 @@ def create_app(
         # CORS-withholding in add_cors_headers, which only stops requests the
         # browser bothers to preflight — the Origin check also covers a simple
         # or forged cross-site request that skips preflight.
-        if request.method in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin", "")
+        if request.method == "OPTIONS":
+            return None
+        if request.method in ("GET", "HEAD"):
+            if (
+                origin == "null"
+                and request.path != "/healthz"
+                and not report_capability.matches(request.headers.get(REPORT_CAPABILITY_HEADER, ""))
+            ):
+                return ({"error": "static report capability required"}, 403)
             return None
         remote_address = request.remote_addr or ""
-        origin = request.headers.get("Origin", "")
         capability_matches = report_capability.matches(
             request.headers.get(REPORT_CAPABILITY_HEADER, "")
         )
@@ -922,6 +974,17 @@ def create_app(
             elif fetch_site != "same-origin" and not capability_matches:
                 if _is_browser_user_agent(request.headers.get("User-Agent", "")):
                     return ({"error": "state-changing request capability required"}, 403)
+        return None
+
+    @app.before_request
+    def reserve_chat_admission():
+        if request.method != "POST" or request.path != "/api/ask/stream":
+            return None
+        if not chat_slots.acquire(blocking=False):
+            return ({"error": "chat capacity reached; retry shortly"}, 429, {"Retry-After": "5"})
+        # Admission precedes session creation and durable exchange acceptance.
+        # The worker takes ownership only after successful submission.
+        g.chat_admission_reserved = True
         return None
 
     @app.before_request
@@ -1020,7 +1083,7 @@ def create_app(
             # of re-probing per request. External cron writes are not
             # invalidation events (parity with panel fragments today); HTTP
             # mutations evict only the cache families their route's registry
-            # entry declares in start_request_timer.
+            # entry declares in invalidate_mutated_panels.
             if not getattr(g, "panel_cache_hit", False):
                 reservation = g.pop("panel_cache_reservation", None)
                 if isinstance(reservation, PanelCacheReservation):
@@ -3318,29 +3381,6 @@ def create_app(
             "peers": peers,
         }
 
-    def _parse_ask_turn() -> AskTurn | None:
-        """Legacy helper — body → AskTurn without session management."""
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        query = str(body.get("query") or "").strip()
-        if not query:
-            return None
-        if len(query) > _MAX_USER_INPUT_CHARS:
-            raise ValueError(f"query exceeds the {_MAX_USER_INPUT_CHARS} character limit")
-        raw_tickers = body.get("tickers")
-        tickers = (
-            [str(t) for t in cast("list[object]", raw_tickers)]
-            if isinstance(raw_tickers, list)
-            else []
-        )
-        raw_ctx = body.get("context_spec")
-        context_spec = cast("dict[str, object]", raw_ctx) if isinstance(raw_ctx, dict) else None
-        return AskTurn(
-            text=query,
-            tickers=tickers,
-            context_spec=context_spec,
-            history=sanitize_history(body.get("history")),
-        )
-
     def _parse_ask_turn_with_session() -> tuple[AskTurn | None, _AskSession | None]:
         """Parse the request body and ensure a portfolio session exists.
 
@@ -4458,7 +4498,7 @@ def create_app(
         )
 
     @app.route("/actions/dcf-export", methods=["POST", "OPTIONS"])
-    def start_dcf_export():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+    def start_dcf_export():
         """Push a ticker's dcf/<T>.xlsx to a Google Sheet (execution/dcf_sheets.py
         export). Re-exports the linked Sheet if one exists, else creates one (and,
         for service-account creds, shares it to `share_with`) and links its id in
@@ -4505,7 +4545,7 @@ def create_app(
         )
 
     @app.route("/actions/dcf-import", methods=["POST", "OPTIONS"])
-    def start_dcf_import():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+    def start_dcf_import():
         """Pull the ticker's linked Google Sheet and recompute the DCF
         (execution/dcf_sheets.py import → refresh_dcf.refresh_one → dcf_runs). The
         Sheet id comes from `sheet_id` in the body or holdings dcf_defaults.gsheet_id.
@@ -5285,7 +5325,8 @@ def main() -> int:
         f"comments_server: repo_root={repo_root} host={host} port={args.port}",
         file=sys.stderr,
     )
-    app = create_app(repo_root, db_path=db_path)
+    origin_host = f"[{host}]" if ":" in host else host
+    app = create_app(repo_root, db_path=db_path, server_origin=f"http://{origin_host}:{args.port}")
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
     app.run(host=host, port=args.port, debug=False, threaded=True)

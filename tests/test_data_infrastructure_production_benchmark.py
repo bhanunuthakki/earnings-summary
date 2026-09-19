@@ -9,6 +9,7 @@ from provenance.data_infrastructure_benchmark import (
     run_production_contract_benchmark,
     verify_report_sha256,
 )
+from schema_compat import expected_head
 
 
 def _budgets() -> BenchmarkBudgets:
@@ -40,6 +41,7 @@ def test_production_contract_mode_uses_real_public_apis(
         database_path=database,
     )
 
+    assert report.migration_revision == expected_head()
     assert report.benchmark_mode == "production_contract"
     assert report.scale_interpretation == "measured_only_no_extrapolation_proof"
     assert report.row_counts.source_stream_events == 3
@@ -85,6 +87,12 @@ def test_production_contract_mode_uses_real_public_apis(
 
     conn = sqlite3.connect(database)
     try:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            expected_head(),
+        )
+        assert {"ticker", "line_item", "source_doc_id"} <= {
+            row[1] for row in conn.execute("PRAGMA table_info(financial_facts)")
+        }
         assert conn.execute(
             "SELECT COUNT(*) FROM canonical_fact_projection_entries "
             "WHERE generation_id='production-checkpoint-v1'"

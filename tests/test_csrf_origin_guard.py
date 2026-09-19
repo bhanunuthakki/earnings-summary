@@ -10,19 +10,13 @@ renderer working.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-import db  # noqa: E402
+import db
 
 # A POST route that returns a clean 400 on an empty body — lets a test assert
 # "the guard let it through" (status != 403) without depending on handler internals.
@@ -31,7 +25,8 @@ _POST_ROUTE = "/api/ask/stream"
 
 @pytest.fixture
 def client(tmp_path: Path) -> FlaskClient:
-    app = comments_server.create_app(tmp_path)
+    app = comments_server.create_app(tmp_path, server_origin="http://127.0.0.1:7421")
+    app.config["SERVER_NAME"] = "127.0.0.1:7421"
     return app.test_client()
 
 
@@ -87,7 +82,7 @@ def test_tailnet_client_and_origin_pass_in_tailscale_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("COMMENTS_SERVER_ALLOW_TAILSCALE", "1")
-    app = comments_server.create_app(tmp_path)
+    app = comments_server.create_app(tmp_path, server_origin="http://100.100.1.2:7421")
     r = app.test_client().post(
         _POST_ROUTE,
         json={},
@@ -174,7 +169,7 @@ def test_remote_tailnet_mutation_requires_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("COMMENTS_SERVER_ALLOW_TAILSCALE", "1")
-    app = comments_server.create_app(tmp_path)
+    app = comments_server.create_app(tmp_path, server_origin="http://100.100.1.2:7421")
     r = app.test_client().post(
         _POST_ROUTE,
         json={},

@@ -22,16 +22,13 @@ from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from execution.fetch_etf_data import (  # noqa: E402
+from execution.fetch_etf_data import (
     ingest_from_cache,
     ingest_from_payloads,
     parse_etf_holdings,
     parse_etf_info,
 )
-from instrument_store import (  # noqa: E402
+from instrument_store import (
     get_etf_holdings,
     get_etf_profile,
     get_instrument_kind,
@@ -39,13 +36,13 @@ from instrument_store import (  # noqa: E402
     upsert_etf_holdings,
     upsert_etf_profile,
 )
-from models.companies import InstrumentType  # noqa: E402
-from models.instruments import EtfHolding, EtfProfile  # noqa: E402
-from report.etf_models import EtfBriefSpec  # noqa: E402
-from report.models import SectionStatus  # noqa: E402
-from report.renderers.etf_markdown import render as render_etf_markdown  # noqa: E402
-from report.sections import etf_holdings as etf_sections  # noqa: E402
-from report.sections.etf_holdings import build_etf_brief  # noqa: E402
+from models.companies import InstrumentType
+from models.instruments import EtfHolding, EtfProfile
+from report.etf_models import EtfBriefSpec
+from report.models import SectionStatus
+from report.renderers.etf_markdown import render as render_etf_markdown
+from report.sections import etf_holdings as etf_sections
+from report.sections.etf_holdings import build_etf_brief
 
 # ---------------------------------------------------------------------------
 # Schema fixture — minimum to exercise the ETF tables
@@ -786,9 +783,12 @@ def test_soxx_end_to_end_ingest_then_render(etf_db: sqlite3.Connection, tmp_path
 
 
 def test_build_artifacts_dispatches_to_etf_path(
-    etf_db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    etf_db: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`execution/build_artifacts._build_one` must route ETF tickers to the
+    """`execution/build_artifacts.main` must route ETF tickers to the
     ETF-shaped builder (Markdown only) and equity tickers to the existing
     equity pipeline (unchanged)."""
     _seed_tc(etf_db, "SOXX", "etf", list_type="portfolio")
@@ -801,18 +801,26 @@ def test_build_artifacts_dispatches_to_etf_path(
     ingest_from_cache(etf_db, "SOXX", fmp_dir=fmp_dir, as_of_date=date(2026, 5, 25))
     repo_root = _materialize_db(etf_db, tmp_path)
 
-    # Import here so the conftest's path setup wins.
-    sys.path.insert(0, str(PROJECT_ROOT))
-    from execution.build_artifacts import _build_one  # pyright: ignore[reportPrivateUsage]
+    from execution import build_artifacts
 
-    result = _build_one(
-        "SOXX",
-        repo_root,
-        enable_llm=False,
-        news_days=7,
-        news_cache_ttl_days=7,
-        refresh_news=False,
+    for name in ("DB_PATH", "DATA_DIR", "FMP_DIR", "PROJECT_ROOT"):
+        monkeypatch.setattr(build_artifacts.db, name, getattr(build_artifacts.db, name))
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(repo_root / "data" / "portfolio.db"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_artifacts",
+            "--ticker",
+            "SOXX",
+            "--repo-root",
+            str(repo_root),
+            "--db-path",
+            str(repo_root / "data" / "portfolio.db"),
+        ],
     )
+    assert build_artifacts.main() == 0
+    result = json.loads(capsys.readouterr().out)[0]
     assert result["instrument_kind"] == "etf"
     md_path = Path(cast("str", result["report_md"]))
     assert md_path.exists()
@@ -834,11 +842,13 @@ def test_build_artifacts_dispatches_to_etf_path(
 
 def test_fmp_get_does_not_leak_api_key_on_network_error(
     monkeypatch: pytest.MonkeyPatch,
+    etf_db: sqlite3.Connection,
+    tmp_path: Path,
 ) -> None:
     """A RequestException whose string embeds the resolved ``?apikey=<key>`` URL
     must not surface the key in the RuntimeError ``_fmp_get`` raises, nor in any
     exception chained onto it."""
-    from execution.fetch_etf_data import _fmp_get  # pyright: ignore[reportPrivateUsage]
+    from execution.fetch_etf_data import ingest_live
     from net.client import HttpCallError, HttpErrorKind
 
     secret = "FMPKEY_SUPERSECRET_9f8e7d6c5b4a"
@@ -853,8 +863,9 @@ def test_fmp_get_does_not_leak_api_key_on_network_error(
 
     monkeypatch.setattr("execution.fetch_etf_data.FMP_CLIENT.get_url_json", _leaky_client)
 
+    monkeypatch.setenv("FMP_API_KEY", secret)
     with pytest.raises(RuntimeError) as excinfo:
-        _fmp_get(secret, "SOXX", "etf/info")
+        ingest_live(etf_db, "SOXX", fmp_dir=tmp_path)
 
     raised = excinfo.value
     # The secret must not appear anywhere reachable from the raised exception:

@@ -6,18 +6,16 @@ first-class DCF citizens alongside portfolio names.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
+import build_all_redesigned_dcf
+import refresh_dcf
+
+from db_paths import db_path_context
+from dcf.universe import BRIEFED_LIST_TYPES, dcf_universe
+from pipeline.queries import BRIEFED_LIST_TYPE_VALUES
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import build_all_redesigned_dcf  # noqa: E402
-import refresh_dcf  # noqa: E402
-
-from dcf.universe import BRIEFED_LIST_TYPES, dcf_universe  # noqa: E402
-from pipeline.queries import BRIEFED_LIST_TYPE_VALUES  # noqa: E402
 
 
 def test_dcf_universe_uses_canonical_briefed_list_types() -> None:
@@ -91,7 +89,8 @@ def test_build_all_default_tickers_ignores_orphan_workbooks(tmp_path: Path) -> N
     (repo / "dcf" / "AMZN.xlsx").write_bytes(b"")  # legacy workbook, not tracked in the DB
     (repo / "dcf" / "_helper.xlsx").write_bytes(b"")  # helper file — skipped
     (repo / "dcf" / "META_redesign.xlsx").write_bytes(b"")  # sample file — skipped
-    assert build_all_redesigned_dcf.default_tickers(repo) == ["NU", "UBER"]
+    with db_path_context(repo / "data" / "portfolio.db"):
+        assert build_all_redesigned_dcf.default_tickers(repo) == ["NU", "UBER"]
 
 
 def test_refresh_all_named_includes_eval_without_seeded_wacc(tmp_path: Path) -> None:

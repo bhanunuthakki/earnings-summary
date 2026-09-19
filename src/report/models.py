@@ -9,14 +9,20 @@ section carries an explicit `status` so a downstream renderer can show a clear
 from __future__ import annotations
 
 from datetime import date, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class SectionStatus(str, Enum):  # noqa: UP042 - preserve serialized enum compatibility
+class SectionStatus(StrEnum):
     """Why a section is the shape it is."""
+
+    # Preserve the previous str/format behavior as well as serialized values.
+    __str__ = Enum.__str__
+
+    def __format__(self, format_spec: str) -> str:
+        return format(str(self), format_spec)
 
     OK = "ok"  # populated from real data
     MISSING_DATA = "missing_data"  # upstream pipeline stage hasn't run
@@ -26,7 +32,7 @@ class SectionStatus(str, Enum):  # noqa: UP042 - preserve serialized enum compat
     BUDGET_SKIPPED = "budget_skipped"  # LLM call forgone to stay under a monthly budget cap
 
 
-class ReportFlavor(str, Enum):  # noqa: UP042 - preserve serialized enum compatibility
+class ReportFlavor(StrEnum):
     """Which brief shape to render.
 
     PORTFOLIO renders the full §1 Snapshot (verdict, thesis, KPI strip).
@@ -34,6 +40,11 @@ class ReportFlavor(str, Enum):  # noqa: UP042 - preserve serialized enum compati
     categorization data table for "should I spend more time on this name?"
     screening. The rest of the brief renders identically.
     """
+
+    __str__ = Enum.__str__
+
+    def __format__(self, format_spec: str) -> str:
+        return format(str(self), format_spec)
 
     PORTFOLIO = "portfolio"
     EVALUATION = "evaluation"
@@ -1492,6 +1503,7 @@ class ReportSpec(BaseModel):
     ticker: str
     generation_date: date
     repo_root: str  # absolute path the build read from
+    db_path: str | None = Field(default=None, exclude=True, repr=False)
     run_id: str | None = None  # ingestion_runs.run_id if produced under one
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO
     # True when this build was invoked with --enable-llm. Renderers consult

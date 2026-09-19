@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -237,7 +238,7 @@ class _StatefulLLM:
 
 
 def test_migrated_schema_satisfies_trigger_contract(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Build the schema via the migrations, seed two recent stories, and run
     ``scan()`` with a mocked classifier: exactly the material story lands in
@@ -253,8 +254,7 @@ def test_migrated_schema_satisfies_trigger_contract(
     return None/no-op), so the scan still classifies — and the test stays
     hermetic and free of cross-connection sqlite locking. Cache behavior is
     covered separately by ``test_trigger_material_news.py``."""
-    cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    db_path = migrated_db(tmp_path / "news-trigger.db")
 
     conn = sqlite3.connect(str(db_path))
     try:

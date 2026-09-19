@@ -92,13 +92,7 @@ def test_persist_memo_strips_preamble_before_summary(
     from identity import DEFAULT_USER_ID
 
     db = tmp_path / "memos.db"
-    migrated_db(
-        db,
-        stamp="0059_kpi_facts_restatement",
-        archived=True,
-        target="head",
-        reanchor_to_active_head=True,
-    )
+    migrated_db(db, target="head")
 
     result = persist_memo(
         db_path=db,
@@ -202,13 +196,7 @@ def test_persist_memo_scalars_land_plain_but_body_keeps_markdown(
     from identity import DEFAULT_USER_ID
 
     db = tmp_path / "memos.db"
-    migrated_db(
-        db,
-        stamp="0059_kpi_facts_restatement",
-        archived=True,
-        target="head",
-        reanchor_to_active_head=True,
-    )
+    migrated_db(db, target="head")
 
     body = (
         "## Where the next dollar works hardest\n"

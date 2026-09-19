@@ -31,9 +31,8 @@ def _config(repo_root: Path, db_path: Path) -> Config:
 
 
 def _upgrade_only_recovery_revision(config: Config) -> None:
-    """Run only 0003; spelling this indirectly avoids the full-chain cost scanner."""
-    upgrade = getattr(command, "upgrade")
-    upgrade(config, _RECOVERY_REVISION)
+    """Run only the recovery revision under test."""
+    command.upgrade(config, _RECOVERY_REVISION)
 
 
 def test_fresh_upgrade_restores_migration_owned_defaults(

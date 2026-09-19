@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import atexit
+import importlib
 import os
 import shutil
 import tempfile
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -17,9 +19,11 @@ from execution.sqlite_bootstrap import preload_sqlite
 # Every pytest controller and xdist worker is its own Python process. Load the
 # verified runtime before importing sqlite3 so tests exercise the same writer
 # safety contract as scheduled and interactive production launchers.
-preload_sqlite()
-
-import sqlite3  # noqa: E402
+if TYPE_CHECKING:
+    import sqlite3
+else:
+    preload_sqlite()
+    sqlite3 = importlib.import_module("sqlite3")
 
 # --- Deterministic FMP tier baseline (runs at conftest IMPORT, before pytest
 # collects any test module) ---------------------------------------------------
@@ -98,16 +102,13 @@ atexit.register(_restore_collection_db_override)
 def archived_migration_harness() -> Iterator[None]:
     """Route explicit historical revision tests to the archived Alembic graph.
 
-    Production keeps one simple active graph (0001→0003). Historical migration
+    Production keeps one active graph beginning at its consolidated baseline. Historical migration
     unit tests still exercise their exact old revisions. A relative target or
     ``head`` follows the graph already stamped in that SQLite database; a fresh
     database defaults to the active graph. Explicit ``version_locations`` is
-    always authoritative, including the production upgrade bridge. Completed
-    legacy fixtures expose the schema-equivalent active head to runtime writer
-    guards, while historical downgrade operations restore the archived head.
+    always authoritative, including the production upgrade bridge. Historical fixtures keep their real revision; they never claim the active schema.
     """
     from alembic.config import Config
-    from alembic.script import ScriptDirectory
 
     from alembic import command
 
@@ -116,19 +117,6 @@ def archived_migration_harness() -> Iterator[None]:
     original_stamp = command.stamp
     original_upgrade = command.upgrade
     original_downgrade = command.downgrade
-    reanchored_archive_databases: set[Path] = set()
-
-    def graph_head(directory: Path) -> str:
-        graph_config = Config()
-        graph_config.set_main_option("script_location", str(directory.parent))
-        graph_config.set_main_option("version_locations", str(directory))
-        head = ScriptDirectory.from_config(graph_config).get_current_head()
-        if head is None:
-            raise RuntimeError(f"migration graph has no head: {directory}")
-        return head
-
-    archive_head = graph_head(archive)
-    active_head = graph_head(active)
 
     def database_path(config: Config) -> Path | None:
         from sqlalchemy.engine import make_url
@@ -153,17 +141,6 @@ def archived_migration_harness() -> Iterator[None]:
             return None
         return None if row is None else str(row[0])
 
-    def replace_database_revision(database: Path, old: str, new: str) -> None:
-        with sqlite3.connect(database) as connection:
-            updated = connection.execute(
-                "UPDATE alembic_version SET version_num=? WHERE version_num=?",
-                (new, old),
-            )
-            if updated.rowcount != 1:
-                raise RuntimeError(
-                    f"test migration graph re-anchor failed for {database}: expected revision {old}"
-                )
-
     def configured_graph(config: Config) -> str | None:
         configured_locations = config.get_main_option("version_locations", "").strip()
         if configured_locations:
@@ -180,8 +157,6 @@ def archived_migration_harness() -> Iterator[None]:
         database = database_path(config)
         if database is None:
             return None
-        if database in reanchored_archive_databases:
-            return "archive"
         current = database_revision(database)
         if current is None:
             return None
@@ -238,27 +213,6 @@ def archived_migration_harness() -> Iterator[None]:
         if graph != "configured":
             config.attributes["pytest_last_migration_graph"] = graph
 
-    def restore_archived_revision(config: Config, graph: str) -> None:
-        """Undo a test-only active-head re-anchor before another archive op."""
-        if graph != "archive" or configured_graph(config) is not None:
-            return
-        database = database_path(config)
-        # The squashed active baseline is a schema-equivalent snapshot of the
-        # archived head. Historical downgrade tests therefore re-anchor only
-        # Alembic's metadata before walking the archived graph; they never
-        # replay the active baseline over existing tables.
-        if database is not None and database_revision(database) == active_head:
-            replace_database_revision(database, active_head, archive_head)
-
-    def expose_archive_schema_as_current(config: Config, graph: str) -> None:
-        """Let production writer guards accept a fully upgraded legacy fixture."""
-        if graph != "archive" or configured_graph(config) is not None:
-            return
-        database = database_path(config)
-        if database is not None and database_revision(database) == archive_head:
-            replace_database_revision(database, archive_head, active_head)
-            reanchored_archive_databases.add(database)
-
     def stamp(
         config: Config,
         revision: str | list[str] | tuple[str, ...],
@@ -278,11 +232,8 @@ def archived_migration_harness() -> Iterator[None]:
         tag: str | None = None,
     ) -> None:
         graph = graph_for_operation(config, revision)
-        restore_archived_revision(config, graph)
         with operation_graph(config, graph):
             original_upgrade(config, revision, sql=sql, tag=tag)
-        if not sql:
-            expose_archive_schema_as_current(config, graph)
         record_graph(config, graph)
 
     def downgrade(
@@ -292,7 +243,6 @@ def archived_migration_harness() -> Iterator[None]:
         tag: str | None = None,
     ) -> None:
         graph = graph_for_operation(config, revision)
-        restore_archived_revision(config, graph)
         with operation_graph(config, graph):
             original_downgrade(config, revision, sql=sql, tag=tag)
         record_graph(config, graph)
@@ -436,33 +386,11 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # Migrated-database templates — build the chain ONCE, copy it per test
 # ----------------------------------------------------------------------------
 #
-# The suite's dominant cost is not the number of tests: it is that the scan
-# in tests/test_suite_migration_cost.py — test files whose text still contains
-# a direct ``command.upgrade`` — keeps matching files that build a schema with
-# an UNSCOPED fixture shaped like
-#
-#     @pytest.fixture
-#     def db_path(tmp_path):
-#         command.stamp(cfg, PRIOR_HEAD)
-#         command.upgrade(cfg, "head")
-#
-# Function scope is pytest's default, so a 262-migration chain replays for
-# EVERY test. Measured on this repo: 18-56s per test depending on the stamp
-# point, against 13.5ms to copy the resulting file. That is the difference
-# between a 24-minute CI run behind 8-way sharding and a few minutes.
-#
-# ``migrated_db`` builds each distinct graph/target once per session
-# and hands every test a fresh copy. Correctness is unchanged — each test still
-# gets its own private, writable database file; only the construction is
-# amortised.
-#
-# NOT every fixture can use this. Some do more than stamp+upgrade (the
-# 0215_observation_resolution_ledger recipe, for one, needs predecessor tables
-# created first and fails outright on a bare chain build). Those keep building
-# their own. The helper is for the pure stamp→upgrade case, which is most of
-# them.
+# Build each graph/target once per worker and copy the private template per test.
+# Application tests use the complete active graph. Historical migration tests
+# request an explicit archived graph and keep the revision they actually ran.
 
-_DB_TEMPLATES: dict[tuple[str, str, str, bool], Path] = {}
+_DB_TEMPLATES: dict[tuple[str, str, str], Path] = {}
 
 
 @pytest.fixture(scope="session")
@@ -476,7 +404,7 @@ def migrated_db(
     the squashed graph normally builds directly to ``target``. Migration-only
     downgrade tests may request the archived graph explicitly; they share one
     archived-head template rather than attempting an unsafe cross-graph
-    downgrade from active 0003.
+    downgrade from an active schema.
     """
     from alembic.config import Config
 
@@ -502,14 +430,13 @@ def migrated_db(
         stamp: str = "head",
         target: str = "head",
         archived: bool = False,
-        reanchor_to_active_head: bool = False,
         upgrade_from: str | None = None,
         before_upgrade: Callable[[Path], None] | None = None,
         upgrade_existing: bool = False,
     ) -> Path:
         if (upgrade_from is None) != (before_upgrade is None):
             raise ValueError("upgrade_from and before_upgrade must be provided together")
-        if upgrade_existing and (upgrade_from is not None or archived or reanchor_to_active_head):
+        if upgrade_existing and (upgrade_from is not None or archived):
             raise ValueError("upgrade_existing cannot be combined with migration build options")
         if upgrade_existing:
             command.upgrade(_config(dest, archived=False), target)
@@ -522,31 +449,18 @@ def migrated_db(
             before_upgrade(dest)
             command.upgrade(_config(dest, archived=False), target)
             return dest
-        if reanchor_to_active_head and not archived:
-            raise ValueError("only an archived migration graph can be re-anchored")
         graph = "archived" if archived else "active"
         effective_stamp = stamp if archived else "squashed"
-        key = (graph, effective_stamp, target, reanchor_to_active_head)
+        key = (graph, effective_stamp, target)
         template = _DB_TEMPLATES.get(key)
         if template is None or not template.exists():
             safe = target.replace("/", "_").replace("\\", "_")
             stamp_safe = effective_stamp.replace("/", "_").replace("\\", "_")
-            anchor_kind = "active_anchor" if reanchor_to_active_head else "graph_head"
-            template = cache_dir / f"{graph}_{stamp_safe}_{safe}_{anchor_kind}.db"
+            template = cache_dir / f"{graph}_{stamp_safe}_{safe}.db"
             config = _config(template, archived=archived)
             if archived and stamp not in {"base", "head", "heads"}:
                 command.stamp(config, stamp)
             command.upgrade(config, target)
-            if reanchor_to_active_head:
-                from alembic.script import ScriptDirectory
-
-                active_head = ScriptDirectory.from_config(
-                    _config(template, archived=False)
-                ).get_current_head()
-                if active_head is None:
-                    raise RuntimeError("active migration graph has no head")
-                with sqlite3.connect(template) as connection:
-                    connection.execute("UPDATE alembic_version SET version_num=?", (active_head,))
             _DB_TEMPLATES[key] = template
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(template, dest)
@@ -610,10 +524,9 @@ def archived_chain_db(
 ) -> Callable[..., Path]:
     """Return a builder that replays an archived stamp-to-head chain.
 
-    This is the parity control for ``migrated_db(..., archived=True,
-    reanchor_to_active_head=True)``. The migration harness routes the explicit
-    historical stamp and subsequent ``head`` upgrade through the archived graph,
-    then exposes the completed schema at the active head.
+    This is the parity control for ``migrated_db(..., archived=True)``.
+    The explicit historical stamp and subsequent upgrade use the archived
+    graph, preserving its historical revision.
     """
     from alembic.config import Config
 
@@ -645,3 +558,107 @@ def archived_chain_db(
         return dest
 
     return build
+
+
+@pytest.fixture
+def fact_source_document(tmp_path: Path) -> Callable[[sqlite3.Connection, str], int]:
+    """Create preserved synthetic source bytes and their real evidence lineage."""
+    import hashlib
+    from datetime import datetime
+
+    from provenance.evidence_ledger import (
+        ContentBlob,
+        DocumentVersion,
+        EvidenceLedger,
+        EvidenceNode,
+        ExtractionRun,
+        SourceObservation,
+    )
+
+    def create(conn: sqlite3.Connection, ticker: str) -> int:
+        body = f"Synthetic reported figures for {ticker}."
+        path = tmp_path / f"{ticker}-source.txt"
+        path.write_text(body)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        stamp = datetime(2026, 1, 5, 10)
+        url = f"https://example.test/{ticker}/source"
+        cursor = conn.execute(
+            "INSERT INTO documents(ticker,source_type,doc_type,file_path,sha256,"
+            "fetched_at,fetch_status,raw_bytes_size,source_url) "
+            "VALUES (?,'test','fixture',?,?,'2026-01-05 10:00:00','ok',?,?)",
+            (ticker, str(path), digest, path.stat().st_size, url),
+        )
+        assert cursor.lastrowid is not None
+        document_id = cursor.lastrowid
+        identity = f"fixture-{document_id}"
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            ContentBlob(
+                sha256=digest,
+                byte_size=path.stat().st_size,
+                media_type="text/plain",
+                storage_uri=path.as_uri(),
+                recorded_at=stamp,
+            )
+        )
+        ledger.persist(
+            SourceObservation(
+                observation_id=identity,
+                idempotency_key=identity,
+                source_kind="test_fixture",
+                source_url=url,
+                blob_sha256=digest,
+                source_published_at=stamp,
+                filing_at=None,
+                accepted_at=None,
+                observed_at=stamp,
+                retrieved_at=stamp,
+                retrieval_config_sha256=hashlib.sha256(b"fixture-v1").hexdigest(),
+                collector_code_version="fixture-v1",
+            )
+        )
+        ledger.persist(
+            DocumentVersion(
+                document_version_id=identity,
+                document_key=identity,
+                version_sequence=1,
+                observation_id=identity,
+                blob_sha256=digest,
+                issuer_id=f"fixture:{ticker}",
+                ticker=ticker,
+                document_type="fixture",
+                form_type="fixture",
+                language="en",
+                legacy_document_id=document_id,
+                recorded_at=stamp,
+            )
+        )
+        ledger.persist(
+            ExtractionRun(
+                extraction_run_id=identity,
+                idempotency_key=identity,
+                document_version_id=identity,
+                input_sha256=digest,
+                extractor_name="fixture",
+                extractor_config_sha256=digest,
+                extractor_code_version="fixture-v1",
+                output_sha256=digest,
+                started_at=stamp,
+                completed_at=stamp,
+                outcome="succeeded",
+            )
+        )
+        ledger.persist(
+            EvidenceNode(
+                node_id=identity,
+                evidence_key=identity,
+                revision=1,
+                extraction_run_id=identity,
+                node_kind="document",
+                text=body,
+                recorded_at=stamp,
+            )
+        )
+        return document_id
+
+    return create

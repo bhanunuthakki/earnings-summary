@@ -213,18 +213,18 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
                     f"  - {d.outcome_notes[:200]}{'…' if len(d.outcome_notes) > 200 else ''}\n"
                 )
         out.write("\n")
-    _standing_rules_md(out, spec)
+    render_standing_rules(out, spec)
     out.write("---\n\n")
 
 
-def _standing_rules_md(out: StringIO, spec: ReportSpec) -> None:
+def render_standing_rules(out: StringIO, spec: ReportSpec) -> None:
     """Standing sizing rules (Monthly Red Team PR10 — surface wiring): the
     markdown mirror of the workspace Position tab's Standing-rules block, from
     the same ``load_standing_rules`` loader (one query, one draft parse).
     Silent when no rows are on file — same hide-don't-stub as the HTML."""
-    rules = load_standing_rules(
-        spec.ticker, Path(spec.repo_root) / "data" / "portfolio.db", Path(spec.repo_root)
-    )
+    if spec.db_path is None:
+        return
+    rules = load_standing_rules(spec.ticker, Path(spec.db_path), Path(spec.repo_root))
     if rules is None or not rules.rows:
         return
     out.write("**Standing rules**")

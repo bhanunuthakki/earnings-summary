@@ -29,12 +29,12 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from compute.company_description import (
-    _extract_relevant_text,  # 10-K section-keyed text extractor
-    _load_profile,
-    _locate_form_10k,
-    _profile_str,
-    _segment_names_from_db,
+    extract_relevant_text,  # 10-K section-keyed text extractor
+    load_profile,
+    profile_str,
+    segment_names_from_db,
 )
+from filings.fmp_sections import locate_annual_filing
 from llm_client import DEFAULT_MODEL, JSON_FENCE_RE, LLM_MODELS, generate_platform_diagram
 
 _PURPOSE = "platform_diagram"
@@ -82,11 +82,11 @@ def extract_for_ticker(
     ticker = ticker.upper()
     cache_path = _cache_path(repo_root, ticker)
 
-    source_path, year = _locate_form_10k(repo_root, ticker, fiscal_year)
-    profile = _load_profile(repo_root, ticker)
-    profile_description = _profile_str(profile, "description") or ""
-    sector = _profile_str(profile, "sector")
-    industry = _profile_str(profile, "industry")
+    source_path, year = locate_annual_filing(repo_root, ticker, fiscal_year)
+    profile = load_profile(repo_root, ticker)
+    profile_description = profile_str(profile, "description") or ""
+    sector = profile_str(profile, "sector")
+    industry = profile_str(profile, "industry")
 
     transcripts = _latest_transcripts(repo_root, ticker, _TRANSCRIPTS_TO_USE)
     transcript_excerpts, used_transcript_paths = _build_transcript_excerpts(transcripts)
@@ -110,7 +110,7 @@ def extract_for_ticker(
     if source_path is not None:
         raw_bytes = source_path.read_bytes()
         payload = cast("dict[str, object]", json.loads(raw_bytes.decode("utf-8")))
-        relevant_text = _extract_relevant_text(payload)
+        relevant_text = extract_relevant_text(payload)
         hasher.update(b"10K:")
         hasher.update(raw_bytes)
     else:
@@ -130,7 +130,7 @@ def extract_for_ticker(
         if cached.get("source_sha256") == sha256 and cached.get("fiscal_year") == year:
             return PlatformDiagramResult(**cached)
 
-    segment_names = _segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
+    segment_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
 
     start_dt = datetime.now(UTC)
     t0 = time.perf_counter()

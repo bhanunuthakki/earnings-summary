@@ -215,7 +215,7 @@ def render_you_said_strip(conn: sqlite3.Connection, ticker: str) -> str:
     return render_you_said_line(you_said)
 
 
-def render_you_said_strip_for_path(db_path: Path | str, ticker: str) -> str:
+def render_you_said_strip_for_path(db_path: Path | str | None, ticker: str) -> str:
     """``db_path`` convenience wrapper for callers that don't already hold an
     open connection (the Holding tab header). Best-effort: a DB-open failure
     degrades to the same empty-state line an untracked/no-decision ticker
@@ -223,6 +223,8 @@ def render_you_said_strip_for_path(db_path: Path | str, ticker: str) -> str:
     t = ticker.strip().upper()
     if not t:
         return ""
+    if db_path is None:
+        return k_empty(f"No decision on file for {t}", _capture_chip(t))
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row

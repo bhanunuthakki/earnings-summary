@@ -344,7 +344,11 @@ def render_report_body(spec: ReportSpec) -> RenderedReportBody:
 
     # Resolve navigation before the shell so the persistent Work OS sidebar
     # can own the report's top-level destinations without changing pane ids.
-    p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
+    p3 = (
+        load_workspace_p3_panels(spec.ticker, Path(spec.repo_root), db_path=Path(spec.db_path))
+        if spec.db_path is not None
+        else load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
+    )
     groups = _tab_groups(spec, p3)
     section_refs = tuple(
         ReportSectionRef(section_id=sid, label=slabel, group_id=gid)
@@ -606,8 +610,8 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             or bool(pos.recent_transactions or pos.open_decisions or pos.closed_decisions)
         )
     ) or (standing is not None and standing.rows):
-        db_path = Path(spec.repo_root) / "data" / "portfolio.db"
-        graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path)
+        db_path = Path(spec.db_path) if spec.db_path is not None else None
+        graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path) if db_path else None
         # "You said" strip (owner-ratified design review, 2026-08-02):
         # pre-computed here (not inside _position_tab) so the section stays a
         # pure renderer over already-fetched data, matching graded_sell_line's

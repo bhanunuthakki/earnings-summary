@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for the allocation-decisions record (master build P2.2).
 
 Covers the three layers separately:
@@ -14,25 +13,19 @@ Covers the three layers separately:
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-import pipeline.allocation_decisions_panel as adp  # noqa: E402
-from advisor.position_review import attest_review_changed  # noqa: E402
-from attribution import ConvictionAlphaRow, SkillDecomposition  # noqa: E402
-from decision_calibration import CalibrationStats  # noqa: E402
-from integrations.portfolio_tracker_client import (  # noqa: E402
+import pipeline.allocation_decisions_panel as adp
+from advisor.position_review import attest_review_changed
+from attribution import ConvictionAlphaRow, SkillDecomposition
+from decision_calibration import CalibrationStats
+from integrations.portfolio_tracker_client import (
     BetaStats,
     LivePortfolio,
     LivePosition,
@@ -40,24 +33,27 @@ from integrations.portfolio_tracker_client import (  # noqa: E402
     PositionAlpha,
     PositionAlphaRow,
 )
-from pipeline.allocation_decisions_panel import (  # noqa: E402
+from pipeline.allocation_decisions_panel import (
     COACH_CHANGED_TARGET,
     SizingAuditRow,
     SQLiteConnectionRole,
-    _coach_digest_section,
-    _coach_mutes_section,
-    _coach_pings_section,
-    _coach_pnl_section,
-    _decision_journal_section,
-    _query_coach_pnl,
     build_decisions_timeline,
     build_sizing_audit_rows,
     compose_decisions_page,
+    query_coach_pnl,
+    render_coach_digest_section,
+    render_coach_mutes_section,
+    render_coach_pings_section,
+    render_coach_pnl_section,
+    render_decision_journal_section,
     score_row,
 )
-from user_state.ledger import append_entry  # noqa: E402
-from user_state.notes import create_note  # noqa: E402
-from user_state.sizing import append_intent, list_intents  # noqa: E402
+from user_state.ledger import append_entry
+from user_state.notes import create_note
+from user_state.sizing import append_intent, list_intents
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 # --------------------------------------------------------------------------- #
 # Scorer
@@ -594,16 +590,6 @@ def test_decisions_record_panel_route(client: FlaskClient) -> None:
 # extension is _has_table-guarded, so stamping past 0059 and upgrading to head
 # never creates it; hand-build the modern (post-0130) shape afterward so the
 # heuristic's decided_by / recommendation_kind / made_at columns are present.
-_MEMO_TEST_DECISIONS_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-"""
 
 
 def _memo_db(
@@ -618,19 +604,7 @@ def _memo_db(
     already exists, which an empty file doesn't have. ``decisions`` is hand-
     built post-upgrade (see ``_MEMO_TEST_DECISIONS_DDL``)."""
     db = tmp_path / name
-    migrated_db(
-        db,
-        stamp=_PRIOR_HEAD,
-        target="head",
-        archived=True,
-        reanchor_to_active_head=True,
-    )
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_MEMO_TEST_DECISIONS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
+    migrated_db(db, target="head")
     return db
 
 
@@ -705,12 +679,12 @@ _NOW = datetime(2026, 7, 15)
 
 def test_coach_pnl_all_zero_is_honest(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
     db = _memo_db(tmp_path, migrated_db)
-    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.reviews_run == 0
     assert pnl.guard_fired == 0 and pnl.overridden == 0
     assert pnl.graded_right == 0 and pnl.graded_total == 0
     assert pnl.changed == 0 and pnl.candidate == 0
-    html = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
+    html = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
     assert "Reviews run: <b>0</b> — the guard has never been exercised." in html
 
 
@@ -724,12 +698,12 @@ def test_coach_pnl_counts_reviews_guard_fires_and_grades(
     )
     _insert_stance_score(db, m2, "correct")
 
-    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.reviews_run == 2
     assert pnl.guard_fired == 1 and pnl.overridden == 1
     assert pnl.graded_total == 1 and pnl.graded_right == 1
 
-    html = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
+    html = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
     assert "Reviews run: <b>2</b>" in html
     assert "guard fired: <b>1</b>" in html
     assert "overridden: <b>1</b>" in html
@@ -756,20 +730,20 @@ def test_coach_pnl_candidate_split_and_attestation_promotes_to_changed(
     )
     _insert_owner_decision(db, ticker="META", kind="sell", made_at="2026-06-06T00:00:00")
 
-    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.guard_fired == 2
     assert pnl.changed == 0  # nothing attested yet — the honest target reading is 0
     assert pnl.candidate == 1  # only NU is eligible + unconfirmed
 
-    html = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
+    html = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
     assert "Decisions changed by the coach: <b>0</b>" in html
     assert "Candidates (eligible, unconfirmed): <b>1</b>" in html
 
     # The owner attests NU changed their call -> it promotes to a counted change.
     assert attest_review_changed(db, nu_id) is True
-    pnl2 = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl2 = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl2.changed == 1 and pnl2.candidate == 0
-    html2 = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
+    html2 = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
     assert "Decisions changed by the coach: <b>1</b>" in html2
     assert "Candidates (eligible, unconfirmed)" not in html2
 
@@ -785,13 +759,13 @@ def test_coach_pnl_window_not_elapsed_excludes_candidate(
     _insert_review_memo(
         db, ticker="NU", verdict_source="guard_override", created_at="2026-07-10T00:00:00"
     )
-    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.guard_fired == 1
     assert pnl.changed == 0 and pnl.candidate == 0
 
     # Once the window has elapsed (now well past memo + 30d) it becomes a candidate.
     later = datetime(2026, 8, 20)
-    pnl_later = _query_coach_pnl(db, user_id="bhanu", now=later)
+    pnl_later = query_coach_pnl(db, user_id="bhanu", now=later)
     assert pnl_later.candidate == 1
 
 
@@ -815,7 +789,7 @@ def test_coach_pnl_agent_source_reviews_are_excluded(
         created_at="2026-06-01T00:00:00",
         source="agent",
     )
-    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.reviews_run == 1  # only the owner row
     assert pnl.guard_fired == 1
     assert pnl.candidate == 1 and pnl.changed == 0
@@ -829,7 +803,7 @@ def test_coach_pnl_agent_source_reviews_are_excluded(
         source="agent",
         owner_attested_change=True,
     )
-    pnl2 = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl2 = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl2.reviews_run == 1 and pnl2.changed == 0
 
 
@@ -847,13 +821,13 @@ def test_coach_attest_change_route_marks_memo(client: FlaskClient, tmp_path: Pat
     assert payload["ok"] is True and payload["attested"] is True
 
     # Now the Coach P&L counts it as a changed decision.
-    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.changed == 1 and pnl.candidate == 0
 
     # Idempotent: a repeat attestation does not count twice.
     again = client.post("/api/coach/attest-change", json={"memo_id": memo_id})
     assert again.get_json()["attested"] is False
-    assert _query_coach_pnl(db, user_id="bhanu", now=_NOW).changed == 1
+    assert query_coach_pnl(db, user_id="bhanu", now=_NOW).changed == 1
 
     assert client.post("/api/coach/attest-change", json={}).status_code == 400
 
@@ -877,7 +851,7 @@ def test_coach_pnl_section_never_raises_on_missing_tables(tmp_path: Path) -> Non
     db = tmp_path / "thin.db"
     conn = sqlite3.connect(str(db))
     conn.close()
-    html = _coach_pnl_section(db, user_id="bhanu")
+    html = render_coach_pnl_section(db, user_id="bhanu")
     assert "Reviews run: <b>0</b>" in html
 
 
@@ -939,7 +913,7 @@ def test_coach_pings_section_renders_seeded_rows_this_month(
         status="dismissed",
         created_at="2026-06-01T00:00:00",
     )
-    html = _coach_pings_section(db, now=now)
+    html = render_coach_pings_section(db, now=now)
     assert "falsifier_breach" in html and "NU" in html and "sent" in html
     assert "intent_followup" not in html
 
@@ -948,7 +922,7 @@ def test_coach_pings_section_empty_state_is_one_line(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db = _memo_db(tmp_path, migrated_db)
-    html = _coach_pings_section(db)
+    html = render_coach_pings_section(db)
     assert "No pings this month." in html
 
 
@@ -957,7 +931,7 @@ def test_coach_mutes_section_renders_row_with_unmute_button(
 ) -> None:
     db = _memo_db(tmp_path, migrated_db)
     _insert_mute(db, class_="falsifier_breach", muted_at="2026-07-02T00:00:00")
-    html = _coach_mutes_section(db)
+    html = render_coach_mutes_section(db)
     assert "falsifier_breach" in html
     assert "muted since 2026-07-02" in html
     assert "cpnl-unmute-btn" in html
@@ -968,7 +942,7 @@ def test_coach_mutes_section_empty_state_is_one_line(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db = _memo_db(tmp_path, migrated_db)
-    html = _coach_mutes_section(db)
+    html = render_coach_mutes_section(db)
     assert "No active mutes." in html
 
 
@@ -976,7 +950,7 @@ def test_coach_digest_section_renders_and_empty_state(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db = _memo_db(tmp_path, migrated_db)
-    empty_html = _coach_digest_section(db)
+    empty_html = render_coach_digest_section(db)
     assert "Digest is empty." in empty_html
 
     _insert_ping(
@@ -987,7 +961,7 @@ def test_coach_digest_section_renders_and_empty_state(
         status="digest",
         created_at="2026-07-01T00:00:00",
     )
-    html = _coach_digest_section(db)
+    html = render_coach_digest_section(db)
     assert "intent_followup" in html and "WIX" in html
 
 
@@ -1015,7 +989,7 @@ def test_decision_journal_defaults_to_owner_and_preserves_advisor_count(
     conn.commit()
     conn.close()
 
-    html = _decision_journal_section(db)
+    html = render_decision_journal_section(db)
 
     assert "owner: watch" in html
     assert "advisor: buy" not in html
@@ -1037,7 +1011,7 @@ def test_coach_unmute_route_calls_governor_and_row_disappears(
 
     assert _unmute("falsifier_breach", db_path=db) is False  # already gone
 
-    html = _coach_mutes_section(db)
+    html = render_coach_mutes_section(db)
     assert "No active mutes." in html
     assert "falsifier_breach" not in html
 
@@ -1162,9 +1136,9 @@ def test_skill_verdict_reconciles_dollars_with_luck_test() -> None:
     """The prod symptom: "+$41,774 total alpha" and "not distinguishable from
     zero — could be luck" rendered as adjacent, unreconciled lines. The verdict
     must say both in one sentence, before any KPI."""
-    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+    from pipeline.allocation_decisions_panel import render_skill_decomposition_section
 
-    html = _skill_decomposition_section(_decomp(), _beta(significant=False))
+    html = render_skill_decomposition_section(_decomp(), _beta(significant=False))
     assert 'class="adc-line sk-verdict"' in html
     v_start = html.index("sk-verdict")
     assert "you made" in html[v_start : v_start + 400]
@@ -1176,9 +1150,9 @@ def test_skill_verdict_reconciles_dollars_with_luck_test() -> None:
 
 
 def test_skill_verdict_significant_alpha_reads_as_skill() -> None:
-    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+    from pipeline.allocation_decisions_panel import render_skill_decomposition_section
 
-    html = _skill_decomposition_section(_decomp(), _beta(significant=True, t=2.4))
+    html = render_skill_decomposition_section(_decomp(), _beta(significant=True, t=2.4))
     assert "real skill, not luck" in html
     assert "could be luck" not in html
 
@@ -1186,15 +1160,15 @@ def test_skill_verdict_significant_alpha_reads_as_skill() -> None:
 def test_all_unstated_conviction_join_renders_unlock_line_not_table() -> None:
     """A one-row table whose only cell reads "unstated" is an empty ritual —
     D4 replaces it with the line naming what unlocks the join."""
-    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+    from pipeline.allocation_decisions_panel import render_skill_decomposition_section
 
-    html = _skill_decomposition_section(_decomp(), None)
+    html = render_skill_decomposition_section(_decomp(), None)
     assert "Conviction &rarr; outcome is locked" in html
     assert "<th>Conviction</th>" not in html
 
 
 def test_stated_conviction_join_still_renders_the_table() -> None:
-    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+    from pipeline.allocation_decisions_panel import render_skill_decomposition_section
 
     rows = [
         ConvictionAlphaRow(
@@ -1208,7 +1182,7 @@ def test_stated_conviction_join_still_renders_the_table() -> None:
             mean_conviction=None,
         ),
     ]
-    html = _skill_decomposition_section(_decomp(by_conviction=rows), None)
+    html = render_skill_decomposition_section(_decomp(by_conviction=rows), None)
     assert "<th>Conviction</th>" in html
     assert "Conviction &rarr; outcome is locked" not in html
 
@@ -1276,20 +1250,20 @@ def _assert_closed(con: sqlite3.Connection) -> None:
 def test_pool_owned_supplied_equivalence(tmp_path: Path) -> None:
     db = _make_pool_db(tmp_path / "pool.db")
     now = datetime(2026, 7, 15)
-    exp_q = adp._query_coach_pnl(db, user_id="bhanu", now=now)
-    exp_pnl = adp._coach_pnl_section(db, user_id="bhanu", now=now)
-    exp_pings = adp._coach_pings_section(db, now=datetime(2026, 7, 10))
-    exp_mutes = adp._coach_mutes_section(db)
-    exp_journal = adp._decision_journal_section(db)
+    exp_q = adp.query_coach_pnl(db, user_id="bhanu", now=now)
+    exp_pnl = adp.render_coach_pnl_section(db, user_id="bhanu", now=now)
+    exp_pings = adp.render_coach_pings_section(db, now=datetime(2026, 7, 10))
+    exp_mutes = adp.render_coach_mutes_section(db)
+    exp_journal = adp.render_decision_journal_section(db)
     con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     con.row_factory = sqlite3.Row
     try:
-        assert adp._query_coach_pnl(db, user_id="bhanu", now=now, conn=con) == exp_q
+        assert adp.query_coach_pnl(db, user_id="bhanu", now=now, conn=con) == exp_q
         _assert_usable(con)
-        assert adp._coach_pnl_section(db, user_id="bhanu", now=now, conn=con) == exp_pnl
-        assert adp._coach_pings_section(db, now=datetime(2026, 7, 10), conn=con) == exp_pings
-        assert adp._coach_mutes_section(db, conn=con) == exp_mutes
-        assert adp._decision_journal_section(db, conn=con) == exp_journal
+        assert adp.render_coach_pnl_section(db, user_id="bhanu", now=now, conn=con) == exp_pnl
+        assert adp.render_coach_pings_section(db, now=datetime(2026, 7, 10), conn=con) == exp_pings
+        assert adp.render_coach_mutes_section(db, conn=con) == exp_mutes
+        assert adp.render_decision_journal_section(db, conn=con) == exp_journal
         _assert_usable(con)
     finally:
         con.close()
@@ -1299,15 +1273,19 @@ def test_pool_owned_supplied_equivalence(tmp_path: Path) -> None:
 def test_pool_thin_missing_tables(tmp_path: Path) -> None:
     db = tmp_path / "thin.db"
     sqlite3.connect(str(db)).close()
-    assert adp._query_coach_pnl(db, user_id="bhanu").reviews_run == 0
+    assert adp.query_coach_pnl(db, user_id="bhanu").reviews_run == 0
     con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     con.row_factory = sqlite3.Row
     try:
-        assert adp._query_coach_pnl(db, user_id="bhanu", conn=con).reviews_run == 0
-        assert "Reviews run: <b>0</b>" in adp._coach_pnl_section(db, user_id="bhanu", conn=con)
-        assert "No pings this month." in adp._coach_pings_section(db, conn=con)
-        assert "No active mutes." in adp._coach_mutes_section(db, conn=con)
-        assert "No Owner Decisions recorded yet." in adp._decision_journal_section(db, conn=con)
+        assert adp.query_coach_pnl(db, user_id="bhanu", conn=con).reviews_run == 0
+        assert "Reviews run: <b>0</b>" in adp.render_coach_pnl_section(
+            db, user_id="bhanu", conn=con
+        )
+        assert "No pings this month." in adp.render_coach_pings_section(db, conn=con)
+        assert "No active mutes." in adp.render_coach_mutes_section(db, conn=con)
+        assert "No Owner Decisions recorded yet." in adp.render_decision_journal_section(
+            db, conn=con
+        )
         _assert_usable(con)
     finally:
         con.close()
@@ -1315,9 +1293,9 @@ def test_pool_thin_missing_tables(tmp_path: Path) -> None:
 
 def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = _make_pool_db(tmp_path / "render.db")
-    exp_pnl = adp._coach_pnl_section(db, user_id="bhanu")
-    exp_mutes = adp._coach_mutes_section(db)
-    exp_journal = adp._decision_journal_section(db)
+    exp_pnl = adp.render_coach_pnl_section(db, user_id="bhanu")
+    exp_mutes = adp.render_coach_mutes_section(db)
+    exp_journal = adp.render_decision_journal_section(db)
     conns: list[sqlite3.Connection] = []
     orig = adp.connect_sqlite
 
@@ -1383,7 +1361,7 @@ def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(adp, "_scorecard_html", _fake_scorecard_html)
     monkeypatch.setattr(adp, "_redteam_pnl_html", _fake_redteam_pnl_html)
     monkeypatch.setattr(adp, "_annual_letter_html", _fake_annual_letter_html)
-    monkeypatch.setattr(adp, "_coach_digest_section", _fake_coach_digest_section)
+    monkeypatch.setattr(adp, "render_coach_digest_section", _fake_coach_digest_section)
     html = adp.render_allocation_decisions_panel(db, user_id="bhanu")
     assert len(conns) == 2
     for c in conns:

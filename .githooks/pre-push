@@ -33,57 +33,14 @@ run "$python_bin" execution/validate_directive_manifest.py
 run "$python_bin" execution/validate_folder_contract.py
 
 base=$(git merge-base HEAD origin/main 2>/dev/null || git rev-parse HEAD~1 2>/dev/null || true)
-changed=""
-if [ -n "$base" ]; then
-  changed=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- '*.py' \
-    | grep -vE '^(alembic/versions/|scratch/)' || true)
-fi
+[ -n "$base" ] || { printf 'PRE-PUSH FAILED: no comparison revision.\n' >&2; exit 1; }
+# The committed candidate is the push boundary. Make uses worktree mode instead.
+export PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}"
+run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check format --check lint --check suppressions
 
-if [ -n "$changed" ]; then
-  case "$(uname -s 2>/dev/null || true)" in
-    MINGW*|MSYS*)
-      printf 'format gate: deferred to LF-normalized CI on Windows\n' >&2
-      ;;
-    *)
-      # shellcheck disable=SC2086
-      run "$python_bin" execution/format_changed.py --base "$base" $changed
-      ;;
-  esac
-  status=0
-  while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    head_n=$("$python_bin" -m ruff check "$file" --output-format=concise 2>/dev/null \
-      | grep -cE '^[^:]+:[0-9]+:[0-9]+:' || true)
-    base_n=$(git show "$base:$file" 2>/dev/null \
-      | "$python_bin" -m ruff check --stdin-filename "$file" --output-format=concise - 2>/dev/null \
-      | grep -cE '^[^:]+:[0-9]+:[0-9]+:' || true)
-    head_n=${head_n:-0}
-    base_n=${base_n:-0}
-    if [ "$head_n" -gt "$base_n" ]; then
-      printf 'PRE-PUSH FAILED: %s adds %s ruff violation(s) (%s -> %s)\n' \
-        "$file" "$((head_n - base_n))" "$base_n" "$head_n" >&2
-      "$python_bin" -m ruff check "$file" --output-format=concise >&2 || true
-      status=1
-    fi
-  done <<EOF
-$changed
-EOF
-  [ "$status" -eq 0 ] || exit 1
-fi
-
-# The whole-repo strict Pyright comparison remains a CI ratchet because the
-# checkout carries a reviewed legacy baseline. Full tests are the local default;
-# FAST_PUSH=1 keeps the existing changed-test inner loop.
+# Full Pyright ceilings remain in CI. Both local paths preserve the public guard.
 if [ "${FAST_PUSH:-0}" = "1" ]; then
-  changed_tests=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- \
-    'tests/test_*.py' 'tests/**/test_*.py' 'instruction_tests/test_*.py' \
-    'instruction_tests/**/test_*.py' 2>/dev/null || true)
-  if [ -n "$changed_tests" ]; then
-    # shellcheck disable=SC2086
-    run "$python_bin" -m pytest -q $changed_tests
-  else
-    printf 'FAST_PUSH=1: no changed test files — skipping full pytest suite.\n' >&2
-  fi
+  run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check tests
 else
   run "$python_bin" -m pytest -q
 fi

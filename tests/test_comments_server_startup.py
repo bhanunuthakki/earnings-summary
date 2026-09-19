@@ -6,13 +6,8 @@ import sys
 import threading
 from pathlib import Path
 
+import comments_server
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
 
 
 class _StartupApp:
@@ -33,13 +28,15 @@ def test_main_starts_server_without_internal_requests(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     app = _StartupApp()
-    db_path = tmp_path / "data" / "portfolio.db"
+    expected_db_path = tmp_path / "data" / "portfolio.db"
 
     def _configure_runtime_db(_root: Path) -> Path:
-        return db_path
+        return expected_db_path
 
-    def _create_app(_root: Path, *, db_path: Path) -> _StartupApp:
-        del _root, db_path
+    def _create_app(root: Path, *, db_path: Path, server_origin: str) -> _StartupApp:
+        assert root == tmp_path.resolve()
+        assert db_path == expected_db_path
+        assert server_origin == "http://127.0.0.1:7421"
         return app
 
     monkeypatch.setattr(sys, "argv", ["comments_server.py", "--repo-root", str(tmp_path)])

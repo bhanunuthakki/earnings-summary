@@ -542,10 +542,10 @@ def test_risk_classify_failure_skips_ticker_loudly(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(mod, "call_llm_structured", parse_fail)
     with pytest.raises(StructuredParseError):
-        mod._llm_classify_risks(ticker="NU", fiscal_year=2025, risks=[("h", "b")])
-    assert mod._llm_classify_risks(ticker="NU", fiscal_year=2025, risks=[]) == {}
+        mod.classify_risk_factors(ticker="NU", fiscal_year=2025, risks=[("h", "b")])
+    assert mod.classify_risk_factors(ticker="NU", fiscal_year=2025, risks=[]) == {}
 
     good = {"0": "regulatory"}
     monkeypatch.setattr(mod, "call_llm_structured", _returning(good))
-    out = mod._llm_classify_risks(ticker="NU", fiscal_year=2025, risks=[("h", "b")])
+    out = mod.classify_risk_factors(ticker="NU", fiscal_year=2025, risks=[("h", "b")])
     assert out == {0: "regulatory"}

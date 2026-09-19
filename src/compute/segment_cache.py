@@ -11,19 +11,18 @@ Consumers:
   * ``compute.segments.extract_segment_facts`` — the DB-ingest path (passes its conn).
   * ``pipeline.segment_cache_audit.audit_ticker_cache`` — the offline / refresh-gate
     audit (an overridden record reconciles, so it is no longer flagged).
-  * the three direct-JSON DCF readers (best-effort default-DB open).
+  * the direct-JSON DCF readers (explicit configured database).
 
 See ``directives/provenance_override_2026_06.md``.
 """
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import Iterable
 from typing import cast
 
-from db_paths import resolve_db_path
+from db_paths import require_db_path
 from provenance.overrides import apply_segment_overrides
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -42,12 +41,6 @@ def dim_type_for_suffix(suffix: str) -> str | None:
     return SUFFIX_TO_DIM_TYPE.get(suffix)
 
 
-def _default_db_path() -> str | None:
-    """Resolve the configured portfolio DB through the canonical path authority."""
-    resolved = resolve_db_path(None)
-    return os.fspath(resolved) if resolved is not None else None
-
-
 def apply_overrides(
     records: Iterable[object],
     *,
@@ -56,29 +49,23 @@ def apply_overrides(
     conn: sqlite3.Connection | None = None,
     db_path: str | None = None,
 ) -> list[dict[str, object]]:
-    """Return segment-cache records with active ``fact_overrides`` applied (best-effort).
+    """Apply owner corrections; unavailable override authority fails closed.
 
-    Uses the provided ``conn``; otherwise opens the default portfolio DB. If no DB /
-    no ``fact_overrides`` table / no matching override exists, returns the records
-    unchanged (shallow copies) — so a caller running without a DB (or from a worktree
-    whose ``data/`` lives in the main repo) degrades to raw FMP data exactly as today.
-    Never raises on a DB problem.
+    A missing database or failed query is not evidence that no override exists.
+    Callers using synthetic data must supply their explicit fixture connection.
     """
     recs: list[dict[str, object]] = [
         cast("dict[str, object]", r) for r in records if isinstance(r, dict)
     ]
     if conn is not None:
-        return apply_segment_overrides(conn, ticker=ticker, dim_type=dim_type, records=recs)
-    path = db_path or _default_db_path()
-    if path is None or not os.path.exists(path):
-        return recs
+        return apply_segment_overrides(
+            conn, ticker=ticker, dim_type=dim_type, records=recs, strict=True
+        )
+    path = require_db_path(db_path)
+    own = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        own = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return recs
-    try:
-        return apply_segment_overrides(own, ticker=ticker, dim_type=dim_type, records=recs)
-    except sqlite3.Error:
-        return recs
+        return apply_segment_overrides(
+            own, ticker=ticker, dim_type=dim_type, records=recs, strict=True
+        )
     finally:
         own.close()

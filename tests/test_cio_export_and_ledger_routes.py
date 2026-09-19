@@ -10,31 +10,20 @@ non-trivial.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
+from user_state.ledger import append_entry
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from user_state.ledger import append_entry  # noqa: E402
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> None:
-    migrated_db(
-        db_path,
-        stamp=_PRIOR_HEAD,
-        archived=True,
-        reanchor_to_active_head=True,
-    )
+    migrated_db(db_path)
     append_entry(
         user_id="bhanu",
         ticker="NU",

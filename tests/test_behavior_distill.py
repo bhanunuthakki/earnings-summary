@@ -7,55 +7,26 @@ injected ``call`` (no CLI, no live LLM).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from owner_profile.store import get_current_profile, list_facts  # noqa: E402
-from synthesis.behavior_distill import (  # noqa: E402
+from owner_profile.store import get_current_profile, list_facts
+from synthesis.behavior_distill import (
     ProposedRule,
     graded_decision_corpus,
     run_behavior_distill,
 )
 
-PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-_DECISIONS_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    conviction VARCHAR(16),
-    outcome_label VARCHAR(16) NOT NULL DEFAULT 'pending',
-    process_quality VARCHAR(16),
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
-    scope VARCHAR(16) NOT NULL DEFAULT 'ticker',
-    falsifier TEXT,
-    size_usd FLOAT,
-    rationale_excerpt TEXT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-"""
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
 def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "portfolio.db"
-    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_DECISIONS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
+    migrated_db(db)
     return db
 
 
@@ -70,10 +41,14 @@ def _insert_decision(
 ) -> int:
     conn = sqlite3.connect(str(db_path))
     try:
+        artifact = conn.execute(
+            "INSERT INTO llm_artifacts(purpose,input_sha256,generated_at) "
+            "VALUES ('test_fixture','fixture-input','2026-06-01')"
+        ).lastrowid
         cur = conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, outcome_label, decided_by, "
-            "made_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (ticker, recommendation_kind, outcome_label, decided_by, made_at, made_at),
+            "source_artifact_id, made_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticker, recommendation_kind, outcome_label, decided_by, artifact, made_at, made_at),
         )
         conn.commit()
         return int(cur.lastrowid or 0)

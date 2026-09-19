@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "c21ee9ca449efc072a8490429d94933e505936942853a967175f93e25248a30b",
-      "line": 661,
+      "fingerprint": "4df9394e4e9d61cd01adfe43769a85e751d608b1faeb1c00579b0ce45090432f",
+      "line": 687,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -153,8 +153,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "80a84afe0f43ebb52af5f0906ff422b435d478fb3acf3d0b9d2e4cf0cf300f91",
-      "line": 816,
+      "fingerprint": "fd0ae6cf46ef03a83deaa729857ece8cdd5362bcff095f735925dd8534261a1a",
+      "line": 798,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -163,8 +163,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "f68b668bf903c48560baae18a8de7e45502fbfdc56a47c02ca5edb128770865f",
-      "line": 820,
+      "fingerprint": "3612977885420449b8965ed9a47434e379dfed1d3609db678b13fff77f64b012",
+      "line": 802,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"

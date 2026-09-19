@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """The loud half of the Alembic guard.
 
 ``require_current_for_write`` already refuses a drifted database on every
@@ -148,16 +147,16 @@ def test_transient_contention_retries_before_deferring(
     root = _checkout(tmp_path / "repo", ["0270_a", "0271_b"])
     db = _versioned_db(tmp_path / "data" / "portfolio.db", "0270_a")
 
-    real = schema_compat._db_revisions
     calls = {"n": 0}
 
     def flaky(path: Path) -> tuple[str, ...] | None:
         calls["n"] += 1
         if calls["n"] == 1:
             err = sqlite3.OperationalError("database is locked")
-            err.sqlite_errorname = "SQLITE_BUSY"  # type: ignore[attr-defined]
+            err.sqlite_errorname = "SQLITE_BUSY"
             raise err
-        return real(path)
+        assert path == db
+        return ("0270_a",)
 
     monkeypatch.setattr(schema_compat, "_db_revisions", flaky)
     monkeypatch.setattr(schema_compat, "_TRANSIENT_PROBE_BACKOFF_S", 0.0)
@@ -180,7 +179,7 @@ def test_sustained_contention_defers_open_rather_than_failing_the_job(
 
     def always_locked(path: Path) -> tuple[str, ...] | None:
         err = sqlite3.OperationalError("database is locked")
-        err.sqlite_errorname = "SQLITE_BUSY"  # type: ignore[attr-defined]
+        err.sqlite_errorname = "SQLITE_BUSY"
         raise err
 
     monkeypatch.setattr(schema_compat, "_db_revisions", always_locked)
@@ -561,3 +560,16 @@ def test_db_module_default_is_checkout_local_when_env_unset(tmp_path: Path) -> N
     )
     assert proc.returncode == 0, proc.stderr
     assert Path(proc.stdout.strip()) == (PROJECT_ROOT / "data" / "portfolio.db")
+
+
+def test_archived_revision_requires_guarded_bridge_not_new_checkout(tmp_path: Path) -> None:
+    root = _checkout(tmp_path / "repo", ["0001_active"])
+    archive = root / "alembic" / "versions_archived"
+    archive.mkdir()
+    (archive / "0273_old.py").write_text('revision = "0273_old"\ndown_revision = None\n')
+    db = _versioned_db(tmp_path / "legacy.db", "0273_old")
+    drift = describe_drift(db, project_root=root)
+    assert drift is not None
+    assert drift.reason == "legacy_upgrade_required"
+    assert "upgrade_database.py" in drift.fix_command
+    assert "git pull" not in drift.fix_command

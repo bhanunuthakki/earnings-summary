@@ -44,10 +44,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from filings.fmp_sections import locate_annual_filing
 from llm.structured import call_llm_structured
 from llm_client import FAST_CLASSIFIER_MODEL
 from models.facts import (
@@ -149,7 +150,7 @@ class Crosstab:
     subject_axis: str | None
     subject_name: str | None
     secondary_axis: str
-    cells: list[CrosstabCell] = field(default_factory=list)
+    cells: list[CrosstabCell] = field(default_factory=list[CrosstabCell])
 
 
 class _CrosstabCellWire(BaseModel):
@@ -188,7 +189,7 @@ class SegmentCrosstabsResult:
     extracted_at_end: str | None = None
     elapsed_ms: int = 0
     model: str = FAST_CLASSIFIER_MODEL
-    cross_tabs: list[dict[str, Any]] = field(default_factory=list)
+    cross_tabs: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     periods_inserted: int = 0
     dimensions_inserted: int = 0
     cells_skipped: int = 0
@@ -211,7 +212,7 @@ def extract_for_ticker(
     ticker = ticker.upper()
     cache_path = _cache_path(repo_root, ticker)
 
-    source_path, year = _locate_form_10k(repo_root, ticker, fiscal_year)
+    source_path, year = locate_annual_filing(repo_root, ticker, fiscal_year)
     if source_path is None:
         return SegmentCrosstabsResult(
             ticker=ticker,
@@ -399,31 +400,6 @@ def _cache_path(repo_root: Path, ticker: str) -> Path:
     return out_dir / f"{ticker}.json"
 
 
-def _locate_form_10k(
-    repo_root: Path, ticker: str, fiscal_year: int | None
-) -> tuple[Path | None, int | None]:
-    fmp_dir = repo_root / "data" / "historical" / "fmp"
-    if not fmp_dir.exists():
-        return (None, None)
-    candidates: list[tuple[int, Path]] = []
-    pattern = re.compile(rf"^{re.escape(ticker)}_form_10k_(\d{{4}})\.json$")
-    for p in fmp_dir.iterdir():
-        m = pattern.match(p.name)
-        if not m:
-            continue
-        candidates.append((int(m.group(1)), p))
-    if not candidates:
-        return (None, None)
-    if fiscal_year is not None:
-        for y, p in candidates:
-            if y == fiscal_year:
-                return (p, y)
-        return (None, None)
-    candidates.sort()
-    y, p = candidates[-1]
-    return (p, y)
-
-
 def _lookup_doc_id(
     conn: sqlite3.Connection,
     *,
@@ -592,7 +568,7 @@ def _serialize_section(node: object) -> list[str]:
     """
     if isinstance(node, list):
         out: list[str] = []
-        for item in node:
+        for item in cast("list[object]", node):
             line = _dump_compact(item)
             if line:
                 out.append(line)

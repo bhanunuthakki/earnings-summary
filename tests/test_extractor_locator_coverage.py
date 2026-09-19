@@ -4,14 +4,13 @@ with Phase C's §3.3 anchor-quote-verification fixtures for provenance.edgar_8k)
 from __future__ import annotations
 
 import re
-import sys
+from collections.abc import Callable
 from pathlib import Path
+
+from models.facts import FactLocator, LegacyEscapeHatch, LocatorKind
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_ROOT))
-
-from models.facts import FactLocator, LegacyEscapeHatch, LocatorKind  # noqa: E402
 
 REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "table_extractors.generic_xbrl_capture": 2,
@@ -185,7 +184,6 @@ def test_issuer_fact_manifest_locator_is_v2_on_fixture() -> None:
 
 def test_generic_xbrl_capture_locator_is_v2_on_fixture() -> None:
     from collections import defaultdict
-    from collections.abc import Callable
     from datetime import datetime
     from typing import cast
 
@@ -520,66 +518,9 @@ def test_edgar_8k_rejects_fabricated_anchor_quote_on_fixture() -> None:
     assert proposal.segments["Google Cloud"] == 17664000000
 
 
-def _segments_schema() -> str:
-    return """
-    CREATE TABLE documents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker TEXT NOT NULL,
-        source_type TEXT NOT NULL,
-        doc_type TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        sha256 TEXT NOT NULL,
-        fetched_at TIMESTAMP NOT NULL,
-        fetch_status TEXT NOT NULL,
-        raw_bytes_size INTEGER NOT NULL
-    );
-    CREATE TABLE segment_periods (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker VARCHAR(16) NOT NULL,
-        period_end DATETIME NOT NULL,
-        fiscal_period_type VARCHAR(8) NOT NULL,
-        source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-        currency VARCHAR(8),
-        unit VARCHAR(16) NOT NULL,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        period_basis VARCHAR(16) NOT NULL DEFAULT 'discrete',
-        raw_period_label TEXT,
-        method_version VARCHAR(32),
-        CONSTRAINT uq_segment_periods_provenance UNIQUE
-          (ticker, period_end, fiscal_period_type, source_doc_id)
-    );
-    CREATE TABLE segment_dimensions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        period_id INTEGER NOT NULL REFERENCES segment_periods(id),
-        dim_type VARCHAR(16) NOT NULL,
-        dim_name VARCHAR(128) NOT NULL,
-        value NUMERIC(20, 4) NOT NULL,
-        metric VARCHAR(32) NOT NULL,
-        unit VARCHAR(16),
-        disclosure_status VARCHAR(16) NOT NULL DEFAULT 'reported',
-        method_version VARCHAR(32),
-        confidence REAL NOT NULL DEFAULT 1.0,
-        extracted_by VARCHAR(64),
-        locator TEXT,
-        derived_from TEXT,
-        supersedes_id INTEGER
-    );
-    CREATE TABLE financial_facts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker TEXT NOT NULL,
-        period_end TIMESTAMP NOT NULL,
-        fiscal_period_type TEXT NOT NULL,
-        line_item TEXT NOT NULL,
-        value NUMERIC(24, 6) NOT NULL,
-        currency TEXT,
-        unit TEXT NOT NULL,
-        source_doc_id INTEGER NOT NULL,
-        confidence REAL NOT NULL DEFAULT 1.0
-    );
-    """
-
-
-def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture() -> None:
+def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """compute.segments (REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS) now
     stamps a real v2 `fmp_json_table` locator per segment_dimensions row.
 
@@ -588,17 +529,15 @@ def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture() -> None:
     self-contained CI-guard-file fixture the registration above asks for."""
     import json
     import sqlite3
-    import tempfile
     from datetime import datetime
-    from pathlib import Path
 
     from compute.segments import extract_segment_facts
 
     assert "compute.segments" in REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS
 
-    conn = sqlite3.connect(":memory:")
+    database = migrated_db(tmp_path / "segments.sqlite")
+    conn = sqlite3.connect(database)
     conn.row_factory = sqlite3.Row
-    conn.executescript(_segments_schema())
     conn.execute(
         "INSERT INTO documents "
         "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
@@ -611,23 +550,21 @@ def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture() -> None:
     )
     conn.commit()
 
-    with tempfile.TemporaryDirectory() as tmp:
-        project_root = Path(tmp)
-        fmp_dir = project_root / "data" / "historical" / "fmp"
-        fmp_dir.mkdir(parents=True)
-        record = {
-            "date": "2025-12-31",
-            "symbol": "MELI",
-            "reportedCurrency": "USD",
-            "period": "Q4",
-            "fiscalYear": 2025,
-            "data": {"Commerce": 4_000_000_000},
-        }
-        (fmp_dir / "MELI_product_segments_quarterly.json").write_text(
-            json.dumps([record]), encoding="utf-8"
-        )
-        inserted = extract_segment_facts(conn, 1, project_root)
-
+    project_root = tmp_path
+    fmp_dir = project_root / "data" / "historical" / "fmp"
+    fmp_dir.mkdir(parents=True)
+    record = {
+        "date": "2025-12-31",
+        "symbol": "MELI",
+        "reportedCurrency": "USD",
+        "period": "Q4",
+        "fiscalYear": 2025,
+        "data": {"Commerce": 4_000_000_000},
+    }
+    (fmp_dir / "MELI_product_segments_quarterly.json").write_text(
+        json.dumps([record]), encoding="utf-8"
+    )
+    inserted = extract_segment_facts(conn, 1, project_root)
     assert inserted == 1
     row = conn.execute("SELECT locator FROM segment_dimensions").fetchone()
     loc = FactLocator.from_json(row["locator"])

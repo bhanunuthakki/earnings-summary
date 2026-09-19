@@ -44,6 +44,33 @@ from filings.models import (
 
 log = logging.getLogger(__name__)
 
+
+def locate_annual_filing(
+    state_root: Path, ticker: str, fiscal_year: int | None
+) -> tuple[Path | None, int | None]:
+    """Locate the cached annual payload; legacy filenames say 10k even for 20-Fs."""
+    if not ticker or any(character in ticker for character in ("/", "\\", "\0")):
+        return None, None
+    directory = state_root / "data" / "historical" / "fmp"
+    if fiscal_year is not None:
+        if not 1000 <= fiscal_year <= 9999:
+            return None, None
+        candidate = directory / f"{ticker}_form_10k_{fiscal_year}.json"
+        return (candidate, fiscal_year) if candidate.is_file() else (None, None)
+    if not directory.is_dir():
+        return None, None
+    pattern = re.compile(rf"^{re.escape(ticker)}_form_10k_(\d{{4}})\.json$")
+    candidates = [
+        (int(match.group(1)), path)
+        for path in directory.iterdir()
+        if (match := pattern.match(path.name)) is not None and path.is_file()
+    ]
+    if not candidates:
+        return None, None
+    year, path = max(candidates)
+    return path, year
+
+
 EXTRACTOR_VERSION = "fmp_rfile_v1"
 
 #: Payload keys that are metadata, not sections.

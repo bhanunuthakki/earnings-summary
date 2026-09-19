@@ -17,7 +17,6 @@ import argparse
 import hashlib
 import json
 import logging
-import re
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -27,13 +26,15 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import db  # noqa: E402
-from llm.structured import call_llm_structured  # noqa: E402
-from llm.untrusted import spotlight  # noqa: E402
-from llm_client import DEFAULT_MODEL  # noqa: E402
+import db
+from filings.fmp_sections import locate_annual_filing
+from llm.structured import call_llm_structured
+from llm.untrusted import spotlight
+from llm_client import DEFAULT_MODEL
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 log = logging.getLogger("analyze_filing_intelligence")
 
@@ -93,31 +94,6 @@ class FilingIntelligenceResult:
     model: str = DEFAULT_MODEL
     summary: dict[str, object] | None = None
     skipped_reason: str | None = None
-
-
-def _locate_form_10k(
-    repo_root: Path, ticker: str, fiscal_year: int | None
-) -> tuple[Path | None, int | None]:
-    fmp_dir = repo_root / "data" / "historical" / "fmp"
-    if not fmp_dir.exists():
-        return (None, None)
-    candidates: list[tuple[int, Path]] = []
-    pattern = re.compile(rf"^{re.escape(ticker)}_form_10k_(\d{{4}})\.json$")
-    for p in fmp_dir.iterdir():
-        m = pattern.match(p.name)
-        if not m:
-            continue
-        candidates.append((int(m.group(1)), p))
-    if not candidates:
-        return (None, None)
-    if fiscal_year is not None:
-        for y, p in candidates:
-            if y == fiscal_year:
-                return (p, y)
-        return (None, None)
-    candidates.sort()
-    y, p = candidates[-1]
-    return (p, y)
 
 
 def _flatten(node: object) -> list[str]:
@@ -197,7 +173,7 @@ def analyze_for_ticker(
             ),
         )
 
-    source_path, year = _locate_form_10k(repo_root, ticker, fiscal_year)
+    source_path, year = locate_annual_filing(repo_root, ticker, fiscal_year)
     if source_path is None:
         return FilingIntelligenceResult(
             ticker=ticker,

@@ -10,23 +10,18 @@ a few source_calls rows are seeded so the rollup is non-trivial.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> None:
-    migrated_db(db_path, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    migrated_db(db_path)
     conn = sqlite3.connect(str(db_path))
     try:
         # source_calls is created at migration 0032 (before the _PRIOR_HEAD we

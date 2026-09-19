@@ -9,21 +9,18 @@ schema, not a hand-rolled approximation.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
 import pytest
+from backfill_analyst_notes import backfill
+
+import comments
+from user_state import notes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from backfill_analyst_notes import backfill  # noqa: E402
-
-import comments  # noqa: E402
-from user_state import notes  # noqa: E402
 
 PRIOR_HEAD = "0072_kpi_reporting_cadence"
 RD = date(2026, 6, 1)
@@ -41,15 +38,17 @@ def repo_root(tmp_path: Path) -> Path:
     return tmp_path / "repo"
 
 
-def _anchor(type_: str = "thesis_lede", key: str = "thesis_lede") -> comments.Anchor:
-    return comments.Anchor(type=type_, key=key)  # pyright: ignore[reportArgumentType]
+def _anchor(
+    type_: comments.AnchorType = "thesis_lede", key: str = "thesis_lede"
+) -> comments.Anchor:
+    return comments.Anchor(type=type_, key=key)
 
 
 def _add(
     repo_root: Path,
     text: str,
     *,
-    intent: str | None = None,
+    intent: comments.IntentType | None = None,
     anchor: comments.Anchor | None = None,
 ) -> comments.Comment:
     return comments.append_comment(
@@ -58,7 +57,7 @@ def _add(
         RD,
         anchor=anchor or _anchor(),
         text=text,
-        intent=intent,  # pyright: ignore[reportArgumentType]
+        intent=intent,
     )
 
 
@@ -134,7 +133,7 @@ def test_sync_mirrors_anchor_fact_ref_onto_note(repo_root: Path, db_path: Path) 
         type="kpi_ledger_row",
         key="Risk-adjusted NIM",
         fact_ref="kpi:NU:42",
-    )  # pyright: ignore[reportArgumentType]
+    )
     c = _add(repo_root, "watch NIM vs cost of risk", anchor=anchored)
     plain = _add(repo_root, "broad observation")  # default thesis_lede anchor, no handle
     notes.sync_store_comments(repo_root, ticker="NU", report_date=RD, db_path=db_path)
@@ -316,7 +315,7 @@ def test_write_path_hook_syncs_live(tmp_path: Path, migrated_db: Callable[..., P
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
     db = repo / "data" / "portfolio.db"
-    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    migrated_db(db)
 
     c = comments.append_comment(repo, "NU", RD, anchor=_anchor(), text="auto-sync me", intent=None)
     rows = notes.list_notes(ticker="NU", db_path=db)
@@ -344,7 +343,7 @@ def test_backfill_walks_all_stores_and_is_idempotent(
 ) -> None:
     repo = tmp_path / "repo"
     db = tmp_path / "backfill.db"
-    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    migrated_db(db)
 
     comments.append_comment(repo, "NU", RD, anchor=_anchor(), text="nu thought")
     comments.append_comment(repo, "MELI", date(2026, 5, 20), anchor=_anchor(), text="meli thought")

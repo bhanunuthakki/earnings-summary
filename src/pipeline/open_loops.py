@@ -71,13 +71,13 @@ def _age_suffix(oldest_iso: object) -> str:
         return ""
 
 
-def _reconcile_count(db_path: Path | str | None, *, conn: sqlite3.Connection | None = None) -> int:
+def reconcile_count(db_path: Path | str | None, *, conn: sqlite3.Connection | None = None) -> int:
     from synthesis.reconcile import list_unreconciled
 
     return len(list_unreconciled(db_path, conn=conn))
 
 
-def _proposed_tenet_count(
+def proposed_tenet_count(
     db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
 ) -> int:
     from pipeline.worldview_panel import worldview_enabled
@@ -88,7 +88,7 @@ def _proposed_tenet_count(
     return len(list_tenets(status="proposed", db_path=db_path, conn=conn))
 
 
-def _pending_proposal_count(
+def pending_proposal_count(
     db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
 ) -> int:
     from research.proposals import list_proposals
@@ -406,19 +406,19 @@ def render_open_loops_band(
     except Exception:
         pass
     try:
-        n = _reconcile_count(db_path, conn=conn)
+        n = reconcile_count(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Reconcile", n))
     except Exception:
         pass
     try:
-        n = _proposed_tenet_count(db_path, conn=conn)
+        n = proposed_tenet_count(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Tenets proposed", n))
     except Exception:
         pass
     try:
-        n = _pending_proposal_count(db_path, conn=conn)
+        n = pending_proposal_count(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Research proposals", n))
     except Exception:

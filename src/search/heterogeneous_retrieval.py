@@ -1612,27 +1612,6 @@ def _bundles_from_commitments(
     )
 
 
-def _bundles_from_members(
-    members: list[dict[str, object]],
-) -> tuple[NarrativeBundle, ...]:
-    commitments = [
-        {
-            "reference_id": member["reference_id"],
-            "requested_lane": member["requested_lane"],
-        }
-        for member in members
-        if str(member["requested_lane"]).startswith(
-            (
-                "corpus:",
-                "lexical_projection:",
-                "vector_projection:",
-                "embedding_promotion:",
-            )
-        )
-    ]
-    return _bundles_from_commitments(commitments)
-
-
 def _research_cutoff(conn: sqlite3.Connection, research_snapshot_id: str) -> datetime:
     row = conn.execute(
         "SELECT cutoff_at FROM research_snapshot_headers WHERE research_snapshot_id=?",

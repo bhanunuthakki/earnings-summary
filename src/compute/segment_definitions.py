@@ -18,15 +18,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from pydantic import RootModel, TypeAdapter
 
+from filings.fmp_sections import locate_annual_filing
 from llm.structured import call_llm_structured
 from llm_client import FAST_CLASSIFIER_MODEL
 
@@ -55,8 +56,8 @@ class SegmentDefinitionsResult:
     extracted_at_end: str | None = None
     elapsed_ms: int = 0
     model: str = FAST_CLASSIFIER_MODEL
-    segment_names_requested: list[str] = field(default_factory=list)
-    definitions: dict[str, str | None] = field(default_factory=dict)
+    segment_names_requested: list[str] = field(default_factory=list[str])
+    definitions: dict[str, str | None] = field(default_factory=dict[str, str | None])
     skipped_reason: str | None = None
 
 
@@ -71,7 +72,7 @@ def extract_for_ticker(
     ticker = ticker.upper()
     cache_path = _cache_path(repo_root, ticker)
 
-    source_path, year = _locate_form_10k(repo_root, ticker, fiscal_year)
+    source_path, year = locate_annual_filing(repo_root, ticker, fiscal_year)
     if source_path is None:
         return SegmentDefinitionsResult(
             ticker=ticker,
@@ -142,38 +143,16 @@ def load_definitions(repo_root: Path, ticker: str) -> dict[str, str | None]:
     cache_path = _cache_path(repo_root, ticker)
     if not cache_path.exists():
         return {}
-    cached = json.loads(cache_path.read_text(encoding="utf-8"))
-    defs = cached.get("definitions") or {}
-    return {str(k): (str(v) if v is not None else None) for k, v in defs.items()}
+    cached = TypeAdapter(dict[str, object]).validate_json(cache_path.read_text(encoding="utf-8"))
+    raw_definitions: object = cached.get("definitions") or {}
+    if not isinstance(raw_definitions, dict):
+        raise ValueError("cached segment definitions must be an object")
+    definitions = cast("dict[str, object]", raw_definitions)
+    return {str(k): (str(v) if v is not None else None) for k, v in definitions.items()}
 
 
 def _cache_path(repo_root: Path, ticker: str) -> Path:
     return repo_root / "data" / "segment_definitions" / f"{ticker}.json"
-
-
-def _locate_form_10k(
-    repo_root: Path, ticker: str, fiscal_year: int | None
-) -> tuple[Path | None, int | None]:
-    fmp_dir = repo_root / "data" / "historical" / "fmp"
-    if not fmp_dir.exists():
-        return (None, None)
-    candidates: list[tuple[int, Path]] = []
-    pattern = re.compile(rf"^{re.escape(ticker)}_form_10k_(\d{{4}})\.json$")
-    for p in fmp_dir.iterdir():
-        m = pattern.match(p.name)
-        if not m:
-            continue
-        candidates.append((int(m.group(1)), p))
-    if not candidates:
-        return (None, None)
-    if fiscal_year is not None:
-        for y, p in candidates:
-            if y == fiscal_year:
-                return (p, y)
-        return (None, None)
-    candidates.sort()
-    y, p = candidates[-1]
-    return (p, y)
 
 
 def _segment_names_from_db(conn: sqlite3.Connection, ticker: str) -> list[str]:
@@ -232,9 +211,9 @@ def _flatten(node: object) -> list[str]:
             if len(s) > 80:
                 out.append(s)
         elif isinstance(item, dict):
-            stack.extend(item.values())
+            stack.extend(cast("dict[str, object]", item).values())
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.extend(cast("list[object]", item))
     return out
 
 

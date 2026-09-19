@@ -330,9 +330,10 @@ def get_active_overrides(
     fact_kind: str | None = None,
     period_end: str | None = None,
     user_id: str = DEFAULT_USER_ID,
+    strict: bool = False,
 ) -> list[FactOverride]:
     """All active overrides for a ticker, optionally filtered by kind / period."""
-    if not _has_table(conn):
+    if not strict and not _has_table(conn):
         return []
     sql = (
         f"SELECT {_SELECT_COLS} FROM fact_overrides WHERE user_id = ? AND ticker = ? AND status = ?"
@@ -347,6 +348,8 @@ def get_active_overrides(
     try:
         rows = conn.execute(sql, params).fetchall()
     except sqlite3.Error:
+        if strict:
+            raise
         return []
     return [_row_to_override(r) for r in rows]
 
@@ -413,6 +416,7 @@ def apply_segment_overrides(
     dim_type: str,
     records: Iterable[dict[str, object]],
     user_id: str = DEFAULT_USER_ID,
+    strict: bool = False,
 ) -> list[dict[str, object]]:
     """Return ``records`` with active segment overrides applied in-memory.
 
@@ -437,7 +441,9 @@ def apply_segment_overrides(
     dim = dim_type.lower()
     overrides = [
         ov
-        for ov in get_active_overrides(conn, ticker=ticker, fact_kind=SEGMENT, user_id=user_id)
+        for ov in get_active_overrides(
+            conn, ticker=ticker, fact_kind=SEGMENT, user_id=user_id, strict=strict
+        )
         if ov.fact_key == dim or ov.fact_key.startswith(f"{dim}|")
     ]
     if not overrides:

@@ -1918,21 +1918,6 @@ def _component_clock(
     )
 
 
-def _earliest_clock(
-    clocks: list[tuple[datetime, datetime, datetime]],
-) -> tuple[datetime, datetime, datetime]:
-    if not clocks:
-        raise ValueError("ontology object has no source clock")
-    return min(
-        clocks,
-        key=lambda item: (
-            _utc(item[2]),
-            _utc(item[1]),
-            _utc(item[0]),
-        ),
-    )
-
-
 def _object_clocks(
     cells: Iterable[Mapping[str, object]],
     identity: Callable[[Mapping[str, object]], str],

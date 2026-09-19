@@ -65,23 +65,22 @@ from typing import BinaryIO, Literal, Protocol, Self, TypedDict, cast
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from runtime.python_process import managed_python_prefix  # noqa: E402
+from runtime.python_process import managed_python_prefix
 
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 
-from log_redact import redact  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from pipeline import cadence_policy as _cadence_policy  # noqa: E402
-from pipeline.fmp_doc_index import classify_fmp_filename  # noqa: E402
-from pipeline.fmp_payload_validation import (  # noqa: E402
+from log_redact import redact
+from models.companies import ListType
+from pipeline import cadence_policy as _cadence_policy
+from pipeline.fmp_doc_index import classify_fmp_filename
+from pipeline.fmp_payload_validation import (
     FmpPayloadContractError,
     FmpPayloadCoordinate,
     validate_fmp_prewrite_bytes,
 )
-from pipeline.fmp_recovery import (  # noqa: E402
+from pipeline.fmp_recovery import (
     SCREENING_ENDPOINT_KEYS,
     CircuitConfig,
     CircuitState,
@@ -105,17 +104,19 @@ from pipeline.fmp_recovery import (  # noqa: E402
     record_outcomes,
     recoverable_work,
 )
-from pipeline.source_policy import (  # noqa: E402
+from pipeline.source_policy import (
     POLICY_VERSION,
     ArtifactKind,
     CollectionSource,
     decision_for,
     issuer_policy,
 )
-from provenance.financial_fact_resolution import (  # noqa: E402
+from provenance.financial_fact_resolution import (
     rehydrate_document_fact_observations,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -185,25 +186,6 @@ def load_fmp_auth(
     raise FmpAuthError(
         "FMP_API_KEY is missing from the process environment and project dotenv configuration"
     )
-
-
-def _prepare_fmp_auth() -> bool:
-    """Load validated auth into the environment inherited by the fetcher."""
-    try:
-        config = load_fmp_auth()
-    except FmpAuthError as exc:
-        print(
-            json.dumps(
-                {
-                    "event": "refresh_cache_config_error",
-                    "error": redact(exc),
-                }
-            ),
-            file=sys.stderr,
-        )
-        return False
-    os.environ["FMP_API_KEY"] = config.api_key
-    return True
 
 
 def decide_recovery_credentials(

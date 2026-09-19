@@ -1,70 +1,21 @@
-"""Route-level tests for the consequence-receipts PR: the ratify route's
-receipt (armed vs queued-for-arming), and the Ledger panel's armed-falsifiers
-table. ``decisions`` predates the 0059 stamp (``db.init_db()`` territory) and
-the 0059-fixture upgrade never creates it (the 0086/0130 migrations only
-ALTER it when present) — hand-built here post-upgrade, per the
-tests/test_open_loops.py ``_DECISIONS_DDL`` pattern, extended with the
-0086 falsifiable-conditions columns + 0130's owner-decision columns this PR's
-routes actually read.
-"""
+"""Consequence receipts and falsifier routes against the current database schema."""
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-
-PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-_DECISIONS_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    recommendation_value FLOAT,
-    conviction VARCHAR(16),
-    source_lens VARCHAR(64),
-    outcome_label VARCHAR(16) NOT NULL DEFAULT 'pending',
-    outcome_at DATETIME,
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
-    scope VARCHAR(16) NOT NULL DEFAULT 'ticker',
-    falsifier TEXT,
-    size_usd FLOAT,
-    user_notes TEXT,
-    decision_conditions TEXT,
-    conditions_extracted_at DATETIME,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-CREATE TABLE tracked_companies (
-    ticker TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'bhanu',
-    list_type TEXT NOT NULL,
-    archived_at TEXT
-);
-"""
 
 
 @pytest.fixture
 def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_DECISIONS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
+    migrated_db(db)
     return db
 
 
@@ -93,11 +44,12 @@ def _seed_owner_decision(
             (ticker, falsifier, decision_conditions, conditions_extracted_at),
         )
         conn.execute(
-            "INSERT OR IGNORE INTO tracked_companies (ticker, list_type) VALUES (?, 'portfolio')",
+            "INSERT OR IGNORE INTO tracked_companies (ticker, name, list_type) VALUES (?, 'Test company', 'portfolio')",
             (ticker,),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        assert cur.lastrowid is not None
+        return cur.lastrowid
     finally:
         conn.close()
 

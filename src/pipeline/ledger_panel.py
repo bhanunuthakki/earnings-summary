@@ -54,7 +54,7 @@ _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 
 _PANEL_STYLE = ""
 
-_CAPTURE_JS = """<script>(function(){
+LEDGER_CAPTURE_JS = """<script>(function(){
   var btn=document.getElementById('ledger-cap-btn');
   var ta=document.getElementById('ledger-cap-text');
   var st=document.getElementById('ledger-cap-status');
@@ -187,11 +187,11 @@ _CAPTURE_JS = """<script>(function(){
   ta.addEventListener('keydown', function(e){ if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ send(); } });
 })();</script>"""
 # The receipt link's href is spliced in via .replace() on a plain placeholder
-# token, not an f-string brace hole — _CAPTURE_JS is one big JS block and
+# token, not an f-string brace hole — LEDGER_CAPTURE_JS is one big JS block and
 # f-string-escaping every JS {..} would be fragile. Two ordinary string
 # literals join at import time, same spirit as open_loops.py's interpolated
 # _DECISIONS_HASH (never a single '#dec...' literal for the hex-scan guard).
-_CAPTURE_JS = _CAPTURE_JS.replace("__DECISIONS_HASH__", _DECISIONS_HASH)
+LEDGER_CAPTURE_JS = LEDGER_CAPTURE_JS.replace("__DECISIONS_HASH__", _DECISIONS_HASH)
 
 
 def _capture_box() -> str:
@@ -207,7 +207,7 @@ def _capture_box() -> str:
         # Mounted between the cap row and the list (W2 spec): the entry-coach
         # card (pledge_challenge) or the annotation receipt renders here,
         # empty otherwise.
-        '<div id="ledger-cap-coach"></div>' + _CAPTURE_JS
+        '<div id="ledger-cap-coach"></div>' + LEDGER_CAPTURE_JS
     )
 
 
@@ -246,7 +246,7 @@ def _musing_card(row: AnalystNoteRow) -> str:
         )
         label = f"needs ticker: {names}" if names else "needs ticker"
         ident = f'<span class="ledger-needs">{label}</span>'
-        chips = _ticker_candidate_chips(cands)
+        chips = _ticker_candidate_chips(ctx.get("ticker_candidates"))
     else:
         ident = '<span class="ledger-unattr">unattributed</span>'
     return (
@@ -509,7 +509,7 @@ def _view_words(prop: ResearchProposal) -> tuple[str, str]:
     return prop.title, prop.body_md
 
 
-def _proposal_group_card(group: list[ResearchProposal]) -> str:
+def render_research_proposal_group(group: list[ResearchProposal]) -> str:
     """ONE card per research run (task), however many artifacts it drafted.
 
     The engine emits a memo plus companion artifacts (e.g. a saved-view draft)
@@ -589,7 +589,7 @@ def render_ledger_research_list(db_path: Path | str | None) -> str:
     parts: list[str] = []
     if groups:
         parts.append('<h4 class="ledger-sec-h">Proposals to review</h4>')
-        parts.append("".join(_proposal_group_card(g) for g in groups.values()))
+        parts.append("".join(render_research_proposal_group(g) for g in groups.values()))
     if tasks:
         parts.append('<h4 class="ledger-sec-h">Open wonderings</h4>')
         parts.append("".join(_task_chip(t) for t in tasks))
@@ -805,7 +805,7 @@ def _missing_falsifier_card(gap: ReconcileItem) -> str:
     editable body, so 'Add falsifier' opens the same in-card editor the ratify
     queue uses and Save POSTs ``{action:'edit', text}`` to
     /api/reconcile/falsifier/<decision_id>. Shared by ``_missing_falsifier_line``
-    (the Queues-block list) and ``_reconcile_packet_items`` (one pk-item each).
+    (the Queues-block list) and ``render_reconcile_packet_items`` (one pk-item each).
 
     (Bug fix 2026-07-14: the old dense single line wrapped every 'add' in ONE
     div with no ``data-rec-card``, so ``beginRewrite``'s
@@ -855,7 +855,7 @@ def _reconcile_card(item: ReconcileItem) -> str:
     card, or a note/theme one-tap verdict card. Carries its own
     ``data-rec-card``/``data-rec-id`` + action hooks and NO wrapping div or
     ``id`` — shared by ``render_reconcile_list`` (inside the one
-    ``#ledger-reconcile`` container) and ``_reconcile_packet_items`` (one
+    ``#ledger-reconcile`` container) and ``render_reconcile_packet_items`` (one
     ``pk-item`` per row). ``_RECONCILE_JS``'s document-level click delegation
     fires for these buttons regardless of which container holds them."""
     if item.kind == "falsifier":
@@ -937,7 +937,7 @@ def render_reconcile_list(db_path: Path | str | None) -> str:
     return f'<div id="ledger-reconcile">{"".join(cards)}</div>'
 
 
-def _reconcile_packet_items(db_path: Path | str | None) -> list[str]:
+def render_reconcile_packet_items(db_path: Path | str | None) -> list[str]:
     """The reconcile queue as ONE packet fragment PER ROW — the missing-falsifier
     gap cards then the unreconciled verdict/falsifier cards, each its own
     ``data-rec-card`` and NO ``id="ledger-reconcile"`` (the real container lives
@@ -955,7 +955,7 @@ def _reconcile_packet_items(db_path: Path | str | None) -> list[str]:
 
 
 def _reconcile_packet_items_split(db_path: Path | str | None) -> tuple[list[str], list[str]]:
-    """Same reads as :func:`_reconcile_packet_items`, kept apart so the packet
+    """Same reads as :func:`render_reconcile_packet_items`, kept apart so the packet
     walk can prioritize (requirement C): missing-falsifier GAPS are a live
     coverage hole (class 1), one-tap verdict/falsifier-ratify cards are
     routine housekeeping (class 3) — never the same urgency."""
@@ -1088,7 +1088,7 @@ def _reconcile_section(db_path: Path | str | None) -> str:
 
 _ONMYMIND_STYLE = ""
 
-_ONMYMIND_JS = """<script>(function(){
+ON_MY_MIND_CARD_JS = """<script>(function(){
   if(window.__onMyMindWired){ return; }
   window.__onMyMindWired = true;
   document.addEventListener('click', function(e){
@@ -1126,7 +1126,7 @@ _ONMYMIND_JS = """<script>(function(){
 # send classifies via /api/onmymind/<id>/reply (FAST tier): an action intent
 # executes through the same act_on_feed_item core the old buttons used and
 # paints a receipt bubble; research questions hand off to Work OS Copilot.
-_OM_CHAT_JS = """<script>(function(){
+ON_MY_MIND_CHAT_JS = """<script>(function(){
   if(window.__omChatWired){ return; }
   window.__omChatWired = true;
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -1382,7 +1382,7 @@ def _feed_card(item: FeedItem) -> str:
         )
         label = f"needs ticker: {names}" if names else "needs ticker"
         ident = f'<span class="ledger-needs">{label}</span>'
-        chips = _ticker_candidate_chips(cands)
+        chips = _ticker_candidate_chips(ctx.get("ticker_candidates"))
     else:
         ident = '<span class="ledger-unattr">unattributed</span>'
     if item.item_type == "musing":
@@ -1485,8 +1485,8 @@ def _onmymind_section(db_path: Path | str | None, *, user_id: str = DEFAULT_USER
         + '<div id="onmymind-list">'
         + list_html
         + "</div>"
-        + _ONMYMIND_JS
-        + _OM_CHAT_JS
+        + ON_MY_MIND_CARD_JS
+        + ON_MY_MIND_CHAT_JS
         # Set-ticker chips now render on feed cards too (needs_ticker branch of
         # _feed_card), so the listener must be wired in feed mode as well.
         + _SET_TICKER_JS
@@ -1495,7 +1495,7 @@ def _onmymind_section(db_path: Path | str | None, *, user_id: str = DEFAULT_USER
 
 # One guarded listener for the set-ticker chips (PR9): POSTs the new
 # set_ticker lifecycle action, then re-fetches the list fragment — the
-# existing list-refresh path _CAPTURE_JS already uses after a capture.
+# existing list-refresh path LEDGER_CAPTURE_JS already uses after a capture.
 _SET_TICKER_JS = """<script>(function(){
   if(window.__ledgerSetTickerWired){ return; }
   window.__ledgerSetTickerWired = true;
@@ -1550,22 +1550,22 @@ def _jump_chip_counts(db_path: Path | str | None) -> dict[str, int]:
     guarded queries (never a duplicate SQL string) — each degrades to 0 on any
     read failure so a chip count can never break the panel."""
     from pipeline.open_loops import (
-        _pending_proposal_count,  # pyright: ignore[reportPrivateUsage]
-        _proposed_tenet_count,  # pyright: ignore[reportPrivateUsage]
-        _reconcile_count,  # pyright: ignore[reportPrivateUsage]
+        pending_proposal_count,
+        proposed_tenet_count,
+        reconcile_count,
     )
 
     counts: dict[str, int] = {}
     try:
-        counts["reconcile"] = _reconcile_count(db_path)
+        counts["reconcile"] = reconcile_count(db_path)
     except Exception:
         counts["reconcile"] = 0
     try:
-        counts["research"] = _pending_proposal_count(db_path)
+        counts["research"] = pending_proposal_count(db_path)
     except Exception:
         counts["research"] = 0
     try:
-        counts["worldview"] = _proposed_tenet_count(db_path)
+        counts["worldview"] = proposed_tenet_count(db_path)
     except Exception:
         counts["worldview"] = 0
     return counts
@@ -1924,7 +1924,7 @@ def _expiring_profile_fact_packet_card(fact: OwnerProfileFactRow) -> str:
 _GROUP_THRESHOLD = 3  # below this, individual cards read better than a group
 
 
-def _group_expiring_facts(
+def group_expiring_profile_facts(
     facts: list[OwnerProfileFactRow],
 ) -> tuple[list[list[OwnerProfileFactRow]], list[OwnerProfileFactRow]]:
     """Split expiring facts into (homogeneous groups, ungrouped singles).
@@ -1998,10 +1998,10 @@ def _triage_packet_card(note: AnalystNoteRow) -> str:
     if isinstance(sugg, dict):
         si = str(cast("dict[str, object]", sugg).get("intent") or "")
         if si:
-            from pipeline.triage_panel import _INTENT_LABELS  # pyright: ignore[reportPrivateUsage]
+            from pipeline.triage_panel import INTENT_LABELS
 
-            if si in _INTENT_LABELS:
-                label = _INTENT_LABELS[si]
+            if si in INTENT_LABELS:
+                label = INTENT_LABELS[si]
                 route_btn = (
                     '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
                     f'data-pk-route data-note-id="{note.id}" '
@@ -2026,9 +2026,9 @@ def _triage_packet_card(note: AnalystNoteRow) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class _PacketBuild:
+class LedgerPacketBuild:
     """The packet walk split into the three consequence classes (requirement
-    C) plus the counts :func:`_packet_payoff_line` needs — computed once so
+    C) plus the counts :func:`ledger_packet_payoff_line` needs — computed once so
     the payoff line can never drift from what the walk actually contains."""
 
     gaps: list[str]
@@ -2041,7 +2041,7 @@ class _PacketBuild:
     bulk_fact_n: int
 
 
-def _packet_build(db_path: Path | str | None) -> _PacketBuild:
+def build_ledger_packet(db_path: Path | str | None) -> LedgerPacketBuild:
     """Everything awaiting an owner verdict, one card per item, each reusing
     its home section's builder, split into three consequence classes:
 
@@ -2052,7 +2052,7 @@ def _packet_build(db_path: Path | str | None) -> _PacketBuild:
     3. ``bulk`` — routine, low-stakes housekeeping: one-tap reconcile
        verdicts, parked-comment routing, and expiring (already-affirmed)
        facts due for a re-affirm check-in — homogeneous facts are grouped
-       (:func:`_group_expiring_facts`) so N similar check-ins read as one card.
+       (:func:`group_expiring_profile_facts`) so N similar check-ins read as one card.
 
     Every source degrades independently — a broken read drops its items,
     never the packet."""
@@ -2073,20 +2073,20 @@ def _packet_build(db_path: Path | str | None) -> _PacketBuild:
         research_groups: dict[int, list[ResearchProposal]] = {}
         for p in research_proposals:
             research_groups.setdefault(p.task_id if p.task_id is not None else -p.id, []).append(p)
-        proposals.extend(_proposal_group_card(g) for g in research_groups.values())
+        proposals.extend(render_research_proposal_group(g) for g in research_groups.values())
         research_n = len(research_groups)
     except Exception:
         pass
     try:
         from pipeline.worldview_panel import (
-            _proposed_card,  # pyright: ignore[reportPrivateUsage]
+            render_proposed_tenet_card,
             worldview_enabled,
         )
         from synthesis.tenets import list_tenets
 
         if worldview_enabled():
             proposed_tenets = list_tenets(status="proposed", db_path=db_path)
-            proposals.extend(_proposed_card(t) for t in proposed_tenets)
+            proposals.extend(render_proposed_tenet_card(t) for t in proposed_tenets)
             tenet_n = len(proposed_tenets)
     except Exception:
         pass
@@ -2126,14 +2126,14 @@ def _packet_build(db_path: Path | str | None) -> _PacketBuild:
             expiring_facts = _list_expiring_facts(conn)
         finally:
             conn.close()
-        groups, singles = _group_expiring_facts(expiring_facts)
+        groups, singles = group_expiring_profile_facts(expiring_facts)
         bulk.extend(_expiring_facts_group_card(g) for g in groups)
         bulk.extend(_expiring_profile_fact_packet_card(f) for f in singles)
         bulk_fact_n += len(expiring_facts)
     except Exception:
         pass
 
-    return _PacketBuild(
+    return LedgerPacketBuild(
         gaps=gaps,
         proposals=proposals,
         bulk=bulk,
@@ -2164,7 +2164,7 @@ _PACKET_CLASSES: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _packet_payoff_line(build: _PacketBuild) -> str:
+def ledger_packet_payoff_line(build: LedgerPacketBuild) -> str:
     """What clearing this walk actually unlocks (requirement D) — built from
     the SAME counts the walk contains, never marketing prose."""
     bits: list[str] = []
@@ -2188,7 +2188,7 @@ def _packet_payoff_line(build: _PacketBuild) -> str:
     return "Clearing this walk " + "; ".join(bits) + "."
 
 
-def _packet_section(db_path: Path | str | None) -> str:
+def render_ledger_packet(db_path: Path | str | None) -> str:
     """The bounded "N need you" walk — empty string when nothing needs the
     owner (the packet only exists when it can end in Clear).
 
@@ -2199,7 +2199,7 @@ def _packet_section(db_path: Path | str | None) -> str:
     with that card in the one-at-a-time walk, never a separate counted item).
     Requirement D (payoff): the start band states what clearing the walk
     actually unlocks, in real counts."""
-    build = _packet_build(db_path)
+    build = build_ledger_packet(db_path)
     class_items: dict[str, list[str]] = {
         "gaps": build.gaps,
         "proposals": build.proposals,
@@ -2217,7 +2217,7 @@ def _packet_section(db_path: Path | str | None) -> str:
         return ""
     n = len(ordered)
     noun = "needs" if n == 1 else "need"
-    payoff = _packet_payoff_line(build)
+    payoff = ledger_packet_payoff_line(build)
     payoff_html = f'<p class="pk-payoff">{escape(payoff)}</p>' if payoff else ""
     cards = "".join(f'<div class="pk-item" hidden>{card}</div>' for card in ordered)
     return (
@@ -2301,7 +2301,7 @@ def _jump_chips(counts: dict[str, int], *, onmymind_on: bool) -> str:
     )
 
 
-def _jump_chip_toolbar(counts: dict[str, int], *, onmymind_on: bool) -> str:
+def render_ledger_jump_toolbar(counts: dict[str, int], *, onmymind_on: bool) -> str:
     chips = _jump_chips(counts, onmymind_on=onmymind_on)
     return f'<div class="ledger-jump-toolbar">{chips}</div><script>{_JUMP_NAV_JS}</script>'
 
@@ -2395,7 +2395,7 @@ def render_ledger_panel(
     # second query and no drift from what actually rendered.
     armed_m = re.search(r"Armed falsifiers \((\d+)\)", queues_body)
     armed_n = int(armed_m.group(1)) if armed_m else 0
-    badges = []
+    badges: list[str] = []
     if queue_pending:
         badges.append(f"{queue_pending} pending")
     if armed_n:
@@ -2415,11 +2415,11 @@ def render_ledger_panel(
         + RESEARCH_PANEL_STYLE
         + f'<section class="panel">{h2}'
         + panel_sub
-        + ("" if embedded else _jump_chip_toolbar(counts, onmymind_on=bool(onmymind)))
+        + ("" if embedded else render_ledger_jump_toolbar(counts, onmymind_on=bool(onmymind)))
         + f'<div id="ledger-jump-capture">{_capture_box()}</div>'
         # The bounded packet walk (Phase C) leads the feed: a finite "N need
         # you" session with completion semantics, before the open-ended stream.
-        + _packet_section(db_path)
+        + render_ledger_packet(db_path)
         + f'<div id="ledger-jump-onmymind">{onmymind}</div>'
         + f'<div id="ledger-jump-musings">{musings_block}</div>'
         + queues

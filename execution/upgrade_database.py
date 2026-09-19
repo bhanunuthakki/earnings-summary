@@ -1,6 +1,6 @@
 """Safely upgrade fresh, active, or pre-squash earnings-summary databases.
 
-The active Alembic graph is intentionally small (0001 -> 0002 -> 0003), while
+The active Alembic graph begins at the consolidated baseline, while
 pre-squash databases carry a revision from ``alembic/versions_archived``.  A
 plain ``alembic upgrade head`` cannot resolve those archived revision IDs.
 This command provides the explicit bridge: acquire the shared write lock,
@@ -15,10 +15,9 @@ import argparse
 import ctypes
 import os
 import sqlite3
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal
 
 from _lib import log_event
 from alembic.config import Config
@@ -29,6 +28,7 @@ from pydantic import BaseModel, ConfigDict
 from alembic import command
 from run_lock import hold_run_lock
 from runtime.job_runtime import portfolio_db_path
+from schema_compat import expected_head
 from sqlite_runtime import (
     SQLiteConnectionRole,
     connect_sqlite,
@@ -36,8 +36,7 @@ from sqlite_runtime import (
 )
 
 ACTIVE_BASE = "0001_initial_schema"
-ACTIVE_HEAD = "0039_add_dcf_forecast_series"
-OPERATION_EVENTS_CONTRACT_REVISION = "0012_close_operation_event_detail_reason"
+ACTIVE_HEAD = expected_head()
 _MANAGED_RUNTIME_REPOSITORY = "earnings-summary"
 _WINDOWS_CSIDL_PROFILE = 0x0028
 
@@ -47,13 +46,6 @@ _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "llm_calls": frozenset({"purpose", "called_at"}),
     "llm_budgets": frozenset({"purpose", "on_exceed"}),
 }
-
-_ContractRows = tuple[tuple[object, ...], ...]
-_ContractQuery = Callable[[str, tuple[object, ...]], _ContractRows]
-
-
-class _OperationEventsContractValidator(Protocol):
-    def __call__(self, query: _ContractQuery, *, closed: bool) -> None: ...
 
 
 class UpgradeDatabaseError(RuntimeError):
@@ -278,63 +270,6 @@ def _replace_single_revision(db_path: Path, *, expected: str, target: str) -> No
         conn.close()
 
 
-def _require_exact_closed_operation_events_contract(
-    db_path: Path,
-    *,
-    active: Config,
-) -> None:
-    script = ScriptDirectory.from_config(active)
-    revision = script.get_revision(OPERATION_EVENTS_CONTRACT_REVISION)
-    candidate = getattr(revision.module, "require_operation_events_contract", None)
-    if not callable(candidate):
-        raise UpgradeDatabaseError("active operation-events contract validator is unavailable")
-    validate = cast(_OperationEventsContractValidator, candidate)
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-
-    def query(sql: str, parameters: tuple[object, ...]) -> _ContractRows:
-        return tuple(tuple(row) for row in conn.execute(sql, parameters).fetchall())
-
-    try:
-        validate(query, closed=True)
-    except RuntimeError as exc:
-        raise UpgradeDatabaseError(
-            f"operation_events exact 0012 contract rejected: {exc}"
-        ) from None
-    finally:
-        conn.close()
-
-
-def _reanchor_at_active_baseline(
-    db_path: Path,
-    *,
-    active: Config,
-    expected_archived_head: str,
-) -> None:
-    if "operation_events" in _user_tables(db_path):
-        # Compatibility for an exact-current schema whose revision metadata
-        # was restored/restamped to the archived graph. Migration 0012 owns
-        # the only non-idempotent shape delta, so let its exact contract guard
-        # normalize operation_events back to 0011 before replaying the graph.
-        _require_exact_closed_operation_events_contract(db_path, active=active)
-        _replace_single_revision(
-            db_path,
-            expected=expected_archived_head,
-            target=ACTIVE_HEAD,
-        )
-        command.downgrade(active, "0011_add_operations_journal")
-        _replace_single_revision(
-            db_path,
-            expected="0011_add_operations_journal",
-            target=ACTIVE_BASE,
-        )
-        return
-    _replace_single_revision(
-        db_path,
-        expected=expected_archived_head,
-        target=ACTIVE_BASE,
-    )
-
-
 def upgrade_database(
     db_path: Path,
     *,
@@ -351,6 +286,7 @@ def upgrade_database(
     db_path = db_path.resolve()
     repo_root = repo_root.resolve()
     runtime_root = runtime_root.resolve()
+    active_head = expected_head(repo_root)
     authoritative_runtime = authoritative_managed_runtime_root()
     authoritative_live_databases = authoritative_managed_database_paths(authoritative_runtime)
     live_database = any(
@@ -406,7 +342,7 @@ def upgrade_database(
                 origin_resolver=lambda _root: origin_observation,
             )
             already_current_only = (
-                readiness.db_revision == ACTIVE_HEAD
+                readiness.db_revision == active_head
                 and readiness.blocking_reasons == ("migration_requires_db_behind_code:clear",)
             )
             if not readiness.ready and not already_current_only:
@@ -432,13 +368,13 @@ def upgrade_database(
         active = _config(repo_root, db_path, archived=False)
         active_script = ScriptDirectory.from_config(active)
         active_revisions = {revision.revision for revision in active_script.walk_revisions()}
-        if from_revision == ACTIVE_HEAD:
+        if from_revision == active_head:
             _integrity_check(db_path)
             return UpgradeReceipt(
                 status="already_current",
                 db_path=str(db_path),
                 from_revision=from_revision,
-                to_revision=ACTIVE_HEAD,
+                to_revision=active_head,
                 backup_path=None,
                 completed_at=datetime.now(UTC).isoformat(),
             )
@@ -469,6 +405,12 @@ def upgrade_database(
                 "created" if not existed else "upgraded"
             )
         else:
+            if "operation_events" in _user_tables(db_path):
+                raise UpgradeDatabaseError(
+                    "archived revision conflicts with active schema (operation_events); "
+                    "refusing destructive downgrade: restore consistent revision metadata "
+                    "from a verified backup before retrying"
+                )
             archived = _config(repo_root, db_path, archived=True)
             archived_script = ScriptDirectory.from_config(archived)
             try:
@@ -483,25 +425,21 @@ def upgrade_database(
             archived_head = archived_heads[0]
             command.upgrade(archived, "head")
             _validate_legacy_schema(db_path)
-            _reanchor_at_active_baseline(
-                db_path,
-                active=active,
-                expected_archived_head=archived_head,
-            )
+            _replace_single_revision(db_path, expected=archived_head, target=ACTIVE_BASE)
             command.upgrade(active, "head")
             status = "bridged"
 
         final = _read_revisions(db_path)
-        if final != (ACTIVE_HEAD,):
+        if final != (active_head,):
             raise UpgradeDatabaseError(
-                f"upgrade did not reach active head: expected={ACTIVE_HEAD!r} actual={list(final)!r}"
+                f"upgrade did not reach active head: expected={active_head!r} actual={list(final)!r}"
             )
         _integrity_check(db_path)
         return UpgradeReceipt(
             status=status,
             db_path=str(db_path),
             from_revision=from_revision,
-            to_revision=ACTIVE_HEAD,
+            to_revision=active_head,
             backup_path=str(chosen_backup) if chosen_backup is not None else None,
             completed_at=datetime.now(UTC).isoformat(),
         )
