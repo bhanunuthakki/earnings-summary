@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel, Field
 
@@ -83,17 +84,19 @@ def _read_rules_block(ticker: str, repo_root: Path) -> dict[str, object]:
         return {}
     with open(path, encoding="utf-8") as f:
         holdings = json.load(f)
-    rules = holdings.get("data_rules") or {}
+    if not isinstance(holdings, dict):
+        return {}
+    rules: object = cast("dict[object, object]", holdings).get("data_rules") or {}
     if not isinstance(rules, dict):
         return {}
-    return rules
+    return cast("dict[str, object]", rules)
 
 
 def _coerce_aliases(raw: object) -> dict[str, str | None]:
     if not isinstance(raw, dict):
         return {}
     out: dict[str, str | None] = {}
-    for k, v in raw.items():
+    for k, v in cast("dict[object, object]", raw).items():
         if not isinstance(k, str):
             continue
         if v is None:
@@ -106,4 +109,4 @@ def _coerce_aliases(raw: object) -> dict[str, str | None]:
 def _coerce_str_list(raw: object) -> list[str]:
     if not isinstance(raw, list):
         return []
-    return [s for s in raw if isinstance(s, str)]
+    return [s for s in cast("list[object]", raw) if isinstance(s, str)]
