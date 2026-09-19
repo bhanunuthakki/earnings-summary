@@ -1263,6 +1263,7 @@ def _migrate_production_database(database: Path) -> tuple[str, float]:
     # Build the in-process config explicitly so Alembic does not install its
     # console logger and mix non-JSON migration logs into the CLI's stderr.
     alembic_config = Config()
+    alembic_config.set_main_option("path_separator", "os")
     alembic_config.set_main_option(
         "script_location",
         str(root / "alembic"),

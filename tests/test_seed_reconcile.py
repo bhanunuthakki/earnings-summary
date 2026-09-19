@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from synthesis.reconcile import (
     falsifier_action,
     list_unreconciled,
@@ -21,83 +20,6 @@ from synthesis.reconcile import (
     reconcile_theme,
 )
 from synthesis.seed_decisions import backfill_seed_decisions
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0129_commitment_scan_log"
-HEAD = "0130_owner_decision_extension"
-
-# Deliberately duplicated from test_seed_decisions_backfill (repo taste:
-# duplicate simple shared logic, don't modularize test fixtures).
-_PRE_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16) NOT NULL,
-    recommendation_kind VARCHAR(32) NOT NULL,
-    recommendation_value FLOAT,
-    conviction VARCHAR(16),
-    source_artifact_id INTEGER,
-    source_memo_id INTEGER,
-    source_dismissal_id INTEGER,
-    source_lens VARCHAR(64),
-    rationale_excerpt TEXT,
-    source_prose TEXT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    outcome_at DATETIME,
-    outcome_label VARCHAR(16),
-    created_at DATETIME NOT NULL,
-    CONSTRAINT ck_decisions_source_present CHECK (
-        source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL
-        OR recommendation_kind = 'avoid')
-);
-CREATE TABLE tenants (id TEXT PRIMARY KEY);
-INSERT INTO tenants (id) VALUES ('bhanu');
-CREATE TABLE analyst_notes (
-    id INTEGER NOT NULL,
-    user_id TEXT DEFAULT 'bhanu' NOT NULL,
-    ticker TEXT,
-    kind TEXT NOT NULL,
-    status TEXT DEFAULT 'open' NOT NULL,
-    body TEXT NOT NULL,
-    anchor_type TEXT,
-    anchor_key TEXT,
-    source TEXT NOT NULL,
-    source_ref TEXT,
-    supersedes_id INTEGER,
-    resolution_note TEXT,
-    context_json TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    resolved_at TEXT,
-    decision_id INTEGER,
-    position_entry_id INTEGER,
-    link_auto_resolve INTEGER DEFAULT 0 NOT NULL,
-    fact_ref TEXT,
-    PRIMARY KEY (id),
-    CONSTRAINT ck_analyst_notes_kind CHECK (kind IN
-        ('question','decision','watch','assumption','observation','musing'))
-);
-CREATE UNIQUE INDEX uq_analyst_notes_source_ref ON analyst_notes (user_id, source, source_ref)
-    WHERE source_ref IS NOT NULL;
-CREATE VIRTUAL TABLE analyst_notes_fts USING fts5(
-    body, content='analyst_notes', content_rowid='id');
-CREATE TABLE insight_notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope_key TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    body_md TEXT NOT NULL,
-    source_note_ids TEXT,
-    meta_json TEXT,
-    as_of TEXT,
-    watermark_id INTEGER,
-    supersedes_id INTEGER,
-    status TEXT NOT NULL DEFAULT 'current',
-    esi TEXT,
-    provenance TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-"""
 
 _SEED = {
     "decisions": [
@@ -124,11 +46,9 @@ _SEED = {
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "ledger.db"
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_PRE_DDL)
+def db_path(tmp_path: Path, migrated_db: Callable[[Path], Path]) -> Path:
+    db = migrated_db(tmp_path / "ledger.db")
+    with sqlite3.connect(db) as conn:
         # A seeded musing note + a current theme, as seed_themes would land them
         conn.execute(
             "INSERT INTO analyst_notes (kind, body, source, source_ref, created_at, updated_at) "
@@ -136,25 +56,9 @@ def db_path(tmp_path: Path) -> Path:
             "'2026-07-01','2026-07-01')"
         )
         conn.execute(
-            "INSERT INTO insight_notes (scope_key, kind, body_md, provenance) "
-            "VALUES ('theme:sell-winners-too-early','theme','Sells winners too early','owner')"
+            "INSERT INTO insight_notes (scope_key, kind, body_md, provenance, as_of, created_at, updated_at) "
+            "VALUES ('theme:sell-winners-too-early','theme','Sells winners too early','owner','2026-07-01','2026-07-01','2026-07-01')"
         )
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    conn = sqlite3.connect(str(db))
-    try:
-        # Deliberately minimal 0130 contract fixture, not a production
-        # versioned database.
-        conn.execute("DROP TABLE alembic_version")
-        conn.commit()
-    finally:
-        conn.close()
     return db
 
 

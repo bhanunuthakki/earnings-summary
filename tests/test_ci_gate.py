@@ -89,6 +89,7 @@ def test_code_change_classification(helper: ModuleType, path: str, python: bool)
         "tests/golden/workspace/some_golden.html",
         # Exact design contract sources, tooling, and guard inputs.
         "src/pipeline/work_os_shell.py",
+        "src/pipeline/work_os_runtime.js",
         "src/pipeline/work_os_styles.py",
         "scripts/check_design_sync.py",
         "execution/verify_design_conformance.py",
@@ -97,6 +98,10 @@ def test_code_change_classification(helper: ModuleType, path: str, python: bool)
         "tests/design_conformance_debt.json",
         "tests/design_geometry_baseline.json",
         "requirements-design.lock",
+        # Browser-boundary changes require the Chromium-equipped job.
+        "execution/comments_server.py",
+        "src/server_runtime/access.py",
+        "tests/test_browser_security_canary.py",
         # Design canary/golden/shell tests.
         "tests/test_design_computed_canary.py",
         "tests/test_design_conformance_canonical.py",
@@ -104,6 +109,7 @@ def test_code_change_classification(helper: ModuleType, path: str, python: bool)
         "tests/test_design_sync.py",
         "tests/test_workspace_golden.py",
         "tests/test_work_os_shell.py",
+        "tests/test_extracted_runtime_design.py",
         "tests/test_work_os_style_master.py",
         # Design generator scripts.
         "scripts/gen_design_tokens.py",
@@ -134,7 +140,6 @@ def test_design_content_documentation_requires_design_job_without_code_jobs(
         "src/pipeline/work_os_portfolio.py",
         "src/pipeline/operations_panel.py",
         "src/timeseries/kpi.py",
-        "execution/comments_server.py",
         "cron/backup_db.py",
         "alembic/versions/0033_next.py",
         "tests/test_backup_restore.py",
@@ -690,10 +695,15 @@ def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None
 def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    for step_id in ("pip_audit", "bandit", "detect_secrets", "sbom"):
+    for step_id in ("pip_audit", "npm_audit", "bandit", "detect_secrets", "sbom"):
         assert f"id: {step_id}" in workflow
     assert "Require every security scanner to pass" in workflow
     assert "PIP_AUDIT_OUTCOME" in workflow
+    assert "NPM_AUDIT_OUTCOME" in workflow
+    assert (
+        "npm audit --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org"
+        in workflow
+    )
     assert "BANDIT_OUTCOME" in workflow
     assert "DETECT_SECRETS_OUTCOME" in workflow
     assert "SBOM_OUTCOME" in workflow
@@ -856,3 +866,13 @@ def test_env_cache_miss_falls_back_to_build_and_install() -> None:
         '"$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements-design.lock'
         in workflow
     )
+
+
+def test_security_browser_canary_has_one_mandatory_ci_owner() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "grep -v '^tests/test_browser_security_canary.py$'" in workflow
+    design = workflow.split("\n  design:\n", 1)[1].split("\n  quality:\n", 1)[0]
+    assert "python -m pytest -q -n 0 tests/test_browser_security_canary.py" in design
+    assert "continue-on-error" not in design
+    assert "Ensure data dir exists" not in workflow
+    assert "one migrated template per worker" in workflow

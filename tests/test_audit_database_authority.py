@@ -54,7 +54,7 @@ def test_failed_assumption_refresh_stops_ticker(
         sys, "argv", ["batch", "--tickers", "TEST", "--opus", "--out-dir", str(tmp_path)]
     )
     assert batch.main() == 1
-    assert calls == ["dcf_opus_assumptions.py"]
+    assert calls == ["refresh_dcf_assumptions.py"]
 
 
 def test_failed_builder_cannot_claim_result(
@@ -127,7 +127,7 @@ def test_provider_neutral_assumption_alias(monkeypatch: pytest.MonkeyPatch, tmp_
         ["batch", "--tickers", "TEST", "--refresh-assumptions", "--out-dir", str(tmp_path)],
     )
     assert batch.main() == 0
-    assert calls == ["dcf_opus_assumptions.py", "build_redesigned_dcf.py"]
+    assert calls == ["refresh_dcf_assumptions.py", "build_redesigned_dcf.py"]
 
 
 def test_capture_affordance_survives_missing_report_database() -> None:

@@ -8,14 +8,10 @@ summarize_by_prompt_version to surface "is v3 better than v2".
 from __future__ import annotations
 
 import sqlite3
-import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from llm.calibration import (  # noqa: E402
+from llm.calibration import (
     CalibrationScore,
     record_score,
     summarize_by_prompt_version,
@@ -155,7 +151,7 @@ def test_summarize_filters_by_since_cutoff(tmp_path: Path) -> None:
     )
     # The since cutoff is naive in this codebase; recent inserts have
     # scored_at = utcnow(). A future cutoff should exclude them.
-    future = datetime.utcnow() + timedelta(days=1)
+    future = datetime.now(UTC).replace(tzinfo=None) + timedelta(days=1)
     out = summarize_by_prompt_version(db_path=db, since=future)
     assert out == []
 

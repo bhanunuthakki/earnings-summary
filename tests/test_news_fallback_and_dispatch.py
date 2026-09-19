@@ -56,33 +56,9 @@ def _hermetic_additive_feeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", _no_additive_rows)
 
 
-_LLM_ARTIFACTS_DDL = (
-    "CREATE TABLE llm_artifacts ("
-    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-    "ticker TEXT, scope TEXT NOT NULL DEFAULT 'ticker', purpose TEXT NOT NULL, "
-    "fiscal_period TEXT, content_md TEXT, content_json TEXT, "
-    "input_sha256 TEXT NOT NULL, output_sha256 TEXT, model TEXT, "
-    "prompt_version TEXT NOT NULL DEFAULT 'v1', generated_at TEXT NOT NULL, "
-    "expires_at TEXT, superseded_by_id INTEGER, dirty INTEGER NOT NULL DEFAULT 0, "
-    "dirty_reason TEXT, source_doc_ids TEXT, parent_artifact_ids TEXT, llm_call_id INTEGER)"
-)
-
-
 @pytest.fixture
-def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    """DB with the real `news` table (migration) + llm_artifacts (for the cache)."""
-    db = tmp_path / "news_dispatch.db"
-    migrated_db(db, stamp="0064_queued_actions", archived=True, target="0065_news")
-    conn = sqlite3.connect(str(db))
-    try:
-        _ = conn.execute(_LLM_ARTIFACTS_DDL)
-        # Deliberately minimal 0065 + cache contract fixture, not a production
-        # versioned DB; guarded writers enforce the local tables exercised here.
-        conn.execute("DROP TABLE alembic_version")
-        conn.commit()
-    finally:
-        conn.close()
-    return db
+def news_db(tmp_path: Path, migrated_db: Callable[[Path], Path]) -> Path:
+    return migrated_db(tmp_path / "news.db")
 
 
 def _news_rows(db_path: Path) -> list[tuple[object, ...]]:

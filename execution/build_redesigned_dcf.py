@@ -6,8 +6,8 @@ Excel/Sheets formula; only blue=hardcoded actuals and yellow=assumptions are
 literals (green=cross-sheet link, orange=moved-off-consensus). Default terminal =
 exit multiple with perpetuity as a cross-check; terminal method + exit basis are
 data-validation dropdowns; the Monte Carlo is a live in-sheet simulation. Per-name
-Opus assumptions (data/dcf_assumptions/<T>.json["redesign"], from
-dcf_opus_assumptions.py) override the consensus-anchored defaults; names flagged
+Model assumptions (data/dcf_assumptions/<T>.json["redesign"], from
+refresh_dcf_assumptions.py) override the consensus-anchored defaults; names flagged
 dcf_applicable=false (banks/insurers/asset-managers) are skipped.
 
 Env-driven so a driver can fan out over tickers:
@@ -70,7 +70,7 @@ DATABASE_PATH = require_db_path()
 
 # Global macro DCF assumptions — the editable single default for the inputs that
 # should be the same across every model (risk-free / ERP / tax). Read once here;
-# a per-ticker `_opus` block override still wins at every use site below. Degrades
+# a per-ticker `_redesign_assumptions` block override still wins at every use site below. Degrades
 # to the in-code seed (= the historical literals) when the DB/table is absent, so
 # the build is identical to pre-global-assumptions behaviour on a bare checkout.
 _g = global_dcf.load(db_path=DATABASE_PATH)
@@ -103,10 +103,10 @@ def _read_profile(path: Path) -> dict[str, object]:
     return _OBJECT.validate_python(payload)
 
 
-T = os.environ.get("DCF_TICKER", "AMZN")
-prof = _read_profile(FMP / f"{T}_profile.json")
-NAME = os.environ.get("DCF_NAME") or _text(prof.get("companyName") or T)
-DEST = Path(os.environ.get("DCF_DEST", str(REPO / "dcf" / f"{T}_redesign.xlsx")))
+ticker = os.environ.get("DCF_TICKER", "AMZN")
+company_profile = _read_profile(FMP / f"{ticker}_profile.json")
+NAME = os.environ.get("DCF_NAME") or _text(company_profile.get("companyName") or ticker)
+DEST = Path(os.environ.get("DCF_DEST", str(REPO / "dcf" / f"{ticker}_redesign.xlsx")))
 QUARTERS = 28  # ~7y of quarterly history
 N_ACTUAL_FY = 5  # actual FY columns on the Model
 N_FC = 10  # forecast years
@@ -173,11 +173,15 @@ def ie(expr: str) -> str:
 
 # ----------------------------------------------------------------------------- data
 def load(stmt: str) -> list[dict[str, object]]:
-    p = FMP / f"{T}_{stmt}_quarterly.json"
+    p = FMP / f"{ticker}_{stmt}_quarterly.json"
     return _RECORDS.validate_json(p.read_text(encoding="utf-8")) if p.exists() else []
 
 
-inc, bal, cf = load("income_statement"), load("balance_sheet"), load("cash_flow")
+income_records, balance_records, cashflow_records = (
+    load("income_statement"),
+    load("balance_sheet"),
+    load("cash_flow"),
+)
 
 
 def _apply_primary_fact_overlay(
@@ -199,7 +203,7 @@ def _apply_primary_fact_overlay(
     try:
         with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
             result = primary_fact_overlay.overlay_quarterly_records(
-                conn, ticker=T, statement=statement, records=records
+                conn, ticker=ticker, statement=statement, records=records
             )
     except (OSError, sqlite3.Error) as error:
         detail = {
@@ -221,16 +225,25 @@ def _emit_primary_fact_overlay(
 ) -> None:
     print(
         json.dumps(
-            {"event": "dcf_primary_fact_overlay", "ticker": T, "statement": statement, **detail},
+            {
+                "event": "dcf_primary_fact_overlay",
+                "ticker": ticker,
+                "statement": statement,
+                **detail,
+            },
             sort_keys=True,
         ),
         file=sys.stderr,
     )
 
 
-inc, PRIMARY_FACT_OVERLAY_INCOME = _apply_primary_fact_overlay("income", inc)
-bal, PRIMARY_FACT_OVERLAY_BALANCE = _apply_primary_fact_overlay("balance", bal)
-cf, PRIMARY_FACT_OVERLAY_CASH_FLOW = _apply_primary_fact_overlay("cash_flow", cf)
+income_records, PRIMARY_FACT_OVERLAY_INCOME = _apply_primary_fact_overlay("income", income_records)
+balance_records, PRIMARY_FACT_OVERLAY_BALANCE = _apply_primary_fact_overlay(
+    "balance", balance_records
+)
+cashflow_records, PRIMARY_FACT_OVERLAY_CASH_FLOW = _apply_primary_fact_overlay(
+    "cash_flow", cashflow_records
+)
 PRIMARY_FACT_OVERLAY = {
     "income": PRIMARY_FACT_OVERLAY_INCOME,
     "balance": PRIMARY_FACT_OVERLAY_BALANCE,
@@ -247,22 +260,22 @@ def _loadjson(name: str) -> list[dict[str, object]]:
 # re-fetched contaminated FMP record can't reach the DCF model. Best-effort: no
 # override / no DB -> raw FMP data, exactly as before.
 _OVR_DB = str(DATABASE_PATH)
-prod_seg = apply_overrides(
-    _loadjson(f"{T}_product_segments_quarterly.json"),
-    ticker=T,
+product_segment_records = apply_overrides(
+    _loadjson(f"{ticker}_product_segments_quarterly.json"),
+    ticker=ticker,
     dim_type="product",
     db_path=_OVR_DB,
 )
-geo_seg = apply_overrides(
-    _loadjson(f"{T}_geo_segments_quarterly.json"),
-    ticker=T,
+geographic_segment_records = apply_overrides(
+    _loadjson(f"{ticker}_geo_segments_quarterly.json"),
+    ticker=ticker,
     dim_type="geography",
     db_path=_OVR_DB,
 )
-est = _loadjson(f"{T}_analyst_estimates_annual.json")
+analyst_estimates = _loadjson(f"{ticker}_analyst_estimates_annual.json")
 
 
-def idx(
+def index_fiscal_records(
     records: Sequence[dict[str, object]], segmode: bool = False
 ) -> dict[tuple[int, str], dict[str, object]]:
     out: dict[tuple[int, str], dict[str, object]] = {}
@@ -280,11 +293,20 @@ def idx(
     return out
 
 
-inc_i, bal_i, cf_i = idx(inc), idx(bal), idx(cf)
-pseg_i, gseg_i = idx(prod_seg, True), idx(geo_seg, True)
-PERIODS = detect_fy_periods(inc_i)  # ("Q1".."Q4") quarterly · ("Q2","Q4") semi-annual (BHP)
+income_by_period, balance_by_period, cashflow_by_period = (
+    index_fiscal_records(income_records),
+    index_fiscal_records(balance_records),
+    index_fiscal_records(cashflow_records),
+)
+product_segments_by_period, geographic_segments_by_period = (
+    index_fiscal_records(product_segment_records, True),
+    index_fiscal_records(geographic_segment_records, True),
+)
+PERIODS = detect_fy_periods(
+    income_by_period
+)  # ("Q1".."Q4") quarterly · ("Q2","Q4") semi-annual (BHP)
 NPERIODS = len(PERIODS)
-keys = sorted(inc_i, reverse=True)[:QUARTERS]
+keys = sorted(income_by_period, reverse=True)[:QUARTERS]
 keys.reverse()  # oldest -> newest
 qlabels = [f"{p} {y}" for (y, p) in keys]
 NQ = len(keys)
@@ -299,7 +321,7 @@ if not _full:
     # (FRVO). Emit a clean SKIP like the dcf_applicable=false path below instead
     # of indexing into an empty list.
     _reason = "no quarterly FMP history" if not keys else "no complete fiscal year yet"
-    print(f"SKIP\t{T}\t{_reason}\t(insufficient history for a DCF)")
+    print(f"SKIP\t{ticker}\t{_reason}\t(insufficient history for a DCF)")
     raise SystemExit(0)
 full_fys = [_full[-1]]  # consecutive run ending at the latest full FY (no gap years)
 for _y in reversed(_full[:-1]):
@@ -312,7 +334,7 @@ FC_YEARS = list(range(full_fys[-1] + 1, full_fys[-1] + 1 + N_FC))
 
 # current reporting structure = segments present in the latest quarter (drops
 # AMZN's pre-2019 legacy segment names that only populate old columns).
-_latest_g = gseg_i.get(keys[-1]) or {}
+_latest_g = geographic_segments_by_period.get(keys[-1]) or {}
 GEO = sorted(
     (s for s, v in _latest_g.items() if isinstance(v, (int, float))),
     key=lambda s: -_number(_latest_g[s]),
@@ -338,14 +360,14 @@ try:
 except ValueError:
     _cov_floor = segment_coverage.COVERAGE_FLOOR
 _cov = segment_coverage.resolve_product_segments(
-    pseg_i, inc_i, PERIODS, _base_fy, keys[-1], floor=_cov_floor
+    product_segments_by_period, income_by_period, PERIODS, _base_fy, keys[-1], floor=_cov_floor
 )
 PROD = _cov.prod
 SINGLE_SEG = _cov.single_seg
 if SINGLE_SEG and _cov.reason and _cov.reason.startswith("coverage"):
     # Loud diagnostic: a contaminated name must NEVER be silently downgraded.
     print(
-        f"COVERAGE\t{T}\t{_cov.reason} -> whole-company "
+        f"COVERAGE\t{ticker}\t{_cov.reason} -> whole-company "
         f"(seg-sum {_cov.seg_base_total / 1e6:,.0f}M vs income {_cov.income_base_total / 1e6:,.0f}M)",
         file=sys.stderr,
     )
@@ -356,30 +378,30 @@ if SINGLE_SEG and _cov.reason and _cov.reason.startswith("coverage"):
 # builder defines those segments, splits base-year (income-statement) revenue by
 # base_pct, and drives per-segment growth from the block. An invalid/absent block
 # falls back to the FMP set, logging the reason loudly (never silently half-applied).
-_cache_for_seg = REPO / "data" / "dcf_assumptions" / f"{T}.json"
+_cache_for_seg = REPO / "data" / "dcf_assumptions" / f"{ticker}.json"
 _assumptions = (
     _OBJECT.validate_json(_cache_for_seg.read_text(encoding="utf-8"))
     if _cache_for_seg.exists()
     else {}
 )
-_opus = _OBJECT.validate_python(_assumptions.get("redesign") or {})
-_analyst_raw = _opus.get("analyst_segments")
+_redesign_assumptions = _OBJECT.validate_python(_assumptions.get("redesign") or {})
+_analyst_raw = _redesign_assumptions.get("analyst_segments")
 ANALYST_SEGS = analyst_seg_mod.parse_analyst_segments(_analyst_raw)
 if _analyst_raw is not None and not ANALYST_SEGS.valid:
     print(
-        f"ANALYST_SEGMENTS\t{T}\tinvalid ({ANALYST_SEGS.reason}) -> FMP segments",
+        f"ANALYST_SEGMENTS\t{ticker}\tinvalid ({ANALYST_SEGS.reason}) -> FMP segments",
         file=sys.stderr,
     )
 if ANALYST_SEGS.valid:
     PROD = ANALYST_SEGS.names
     SINGLE_SEG = False
     print(
-        f"ANALYST_SEGMENTS\t{T}\t{len(PROD)} analyst segments override FMP: {', '.join(PROD)}",
+        f"ANALYST_SEGMENTS\t{ticker}\t{len(PROD)} analyst segments override FMP: {', '.join(PROD)}",
         file=sys.stderr,
     )
 
 
-def m(v: object) -> float | None:
+def to_millions(v: object) -> float | None:
     return v / 1e6 if isinstance(v, (int, float)) else None
 
 
@@ -394,25 +416,25 @@ def fy_sum_raw(records_i: Mapping[tuple[int, str], dict[str, object]], field: st
 
 
 ly = full_fys[-1]
-rev_ly = fy_sum_raw(inc_i, "revenue", ly)
+rev_ly = fy_sum_raw(income_by_period, "revenue", ly)
 if rev_ly <= 0:
     # Base-year revenue missing/zero (broken or empty FMP income data): every ratio
     # below divides by it. SKIP cleanly rather than crash through the ratio block.
-    print(f"SKIP\t{T}\tbase-year revenue is zero\t(insufficient data for a DCF)")
+    print(f"SKIP\t{ticker}\tbase-year revenue is zero\t(insufficient data for a DCF)")
     raise SystemExit(0)
 ratios_ly = {
-    "cogs": fy_sum_raw(inc_i, "costOfRevenue", ly) / rev_ly,
-    "rnd": fy_sum_raw(inc_i, "researchAndDevelopmentExpenses", ly) / rev_ly,
-    "sga": fy_sum_raw(inc_i, "sellingGeneralAndAdministrativeExpenses", ly) / rev_ly,
-    "da": fy_sum_raw(cf_i, "depreciationAndAmortization", ly) / rev_ly,
-    "sbc": fy_sum_raw(cf_i, "stockBasedCompensation", ly) / rev_ly,
+    "cogs": fy_sum_raw(income_by_period, "costOfRevenue", ly) / rev_ly,
+    "rnd": fy_sum_raw(income_by_period, "researchAndDevelopmentExpenses", ly) / rev_ly,
+    "sga": fy_sum_raw(income_by_period, "sellingGeneralAndAdministrativeExpenses", ly) / rev_ly,
+    "da": fy_sum_raw(cashflow_by_period, "depreciationAndAmortization", ly) / rev_ly,
+    "sbc": fy_sum_raw(cashflow_by_period, "stockBasedCompensation", ly) / rev_ly,
 }
-oi_ly = fy_sum_raw(inc_i, "operatingIncome", ly)
+oi_ly = fy_sum_raw(income_by_period, "operatingIncome", ly)
 other_ly = (
     rev_ly
-    - fy_sum_raw(inc_i, "costOfRevenue", ly)
-    - fy_sum_raw(inc_i, "researchAndDevelopmentExpenses", ly)
-    - fy_sum_raw(inc_i, "sellingGeneralAndAdministrativeExpenses", ly)
+    - fy_sum_raw(income_by_period, "costOfRevenue", ly)
+    - fy_sum_raw(income_by_period, "researchAndDevelopmentExpenses", ly)
+    - fy_sum_raw(income_by_period, "sellingGeneralAndAdministrativeExpenses", ly)
     - oi_ly
 ) / rev_ly
 
@@ -428,14 +450,14 @@ if ANALYST_SEGS.valid:
     # base_pct. Like whole-company, this rebuilds from the full income statement
     # (never a fraction), and momentum/growth are driven by the block below.
     for y in [full_fys[0] - 1, *full_fys]:
-        _rev_y = fy_sum_raw(inc_i, "revenue", y)
+        _rev_y = fy_sum_raw(income_by_period, "revenue", y)
         for _name, _pct in ((s.name, s.base_pct) for s in ANALYST_SEGS.segments):
             seg_ann[y][_name] = _pct * _rev_y
 elif SINGLE_SEG:
     for y in [full_fys[0] - 1, *full_fys]:
-        seg_ann[y]["Total company"] = fy_sum_raw(inc_i, "revenue", y)
+        seg_ann[y]["Total company"] = fy_sum_raw(income_by_period, "revenue", y)
 else:
-    for (y, p), d in pseg_i.items():
+    for (y, p), d in product_segments_by_period.items():
         for k, v in (d or {}).items():
             if isinstance(v, (int, float)):
                 seg_ann[y][k] += v / 1e6
@@ -446,7 +468,7 @@ TAX, EXIT_MULT, TG = _g.tax_rate, 12.0, 0.045
 # estimate is unreliable for AMZN: it reports NI > EBIT). Beyond the consensus
 # horizon, fade growth to a terminal rate and hold the margin.
 est_by_year: dict[int, dict[str, object]] = {}
-for e in est:
+for e in analyst_estimates:
     try:
         est_by_year[int(str(e.get("date"))[:4])] = e
     except (TypeError, ValueError):
@@ -459,9 +481,9 @@ def consensus_values(field: str) -> dict[int, float]:
         raw = est_by_year.get(year, {}).get(field)
         if not raw:
             continue
-        value = m(raw)
+        value = to_millions(raw)
         if value is None:
-            raise ValueError(f"nonnumeric consensus {field} for {T} fiscal {year}")
+            raise ValueError(f"nonnumeric consensus {field} for {ticker} fiscal {year}")
         values[year] = value
     return values
 
@@ -478,7 +500,7 @@ cons_ni = consensus_values("netIncomeAvg")
 # tagged source=yfinance in cons_src and logged as a JSON event — never
 # silently blended. Disable with DCF_YF_EXTEND=0.
 cons_src = {y: "fmp" for y in set(cons_rev) | set(cons_ni)}
-_yf_est_path = REPO / "data" / "historical" / "yfinance" / f"{T}_yf_estimates.json"
+_yf_est_path = REPO / "data" / "historical" / "yfinance" / f"{ticker}_yf_estimates.json"
 if os.environ.get("DCF_YF_EXTEND", "1") != "0" and _yf_est_path.exists():
     from dcf import consensus_extension as _consx
 
@@ -488,7 +510,7 @@ if os.environ.get("DCF_YF_EXTEND", "1") != "0" and _yf_est_path.exists():
             cons_rev, cons_ni, list(FC_YEARS), _yf_growth
         )
         print(
-            json.dumps(_consx.extension_event(T, cons_src, _yf_growth)),
+            json.dumps(_consx.extension_event(ticker, cons_src, _yf_growth)),
             file=sys.stderr,
         )
 cons_years = sorted(cons_rev)
@@ -547,37 +569,37 @@ sbc_pct = fade(ratios_ly["sbc"], ratios_ly["sbc"] * 0.6)
 # Dashboard SBC % inputs (near-term + terminal), defaulting from the actuals-based
 # fade above. Charged as an explicit after-tax expense by the engine (op margins are
 # NON-GAAP / SBC-excluded), and the terminal exit-multiple EBITDA is burdened by SBC.
-# A per-name _opus override (near/terminal, or a floor for an FMP data gap) is applied
-# in the _opus block below.
+# A per-name assumption override (near/terminal, or a floor for an FMP data gap) is applied
+# in the assumption block below.
 SBC_NEAR = sbc_pct[0]
 SBC_TERM = sbc_pct[-1]
 # Capex anchored to Amazon's announced ~$200B 2026 capex (Jassy, Q4'25 call —
 # vs Street's ~$147B), then the capex/D&A ratio converges to ~1.05x as the AI
 # build-out matures (Damodaran reinvestment normalization).
 # 2026 capex: AMZN guided ~$200B; everyone else defaults to last-year capex +10%.
-_capex_ly_M = abs(fy_sum_raw(cf_i, "capitalExpenditure", ly)) or (rev_ly * 0.05)
-CAPEX_2026_M = 200_000.0 if T == "AMZN" else _capex_ly_M * 1.10
+_capex_ly_M = abs(fy_sum_raw(cashflow_by_period, "capitalExpenditure", ly)) or (rev_ly * 0.05)
+CAPEX_2026_M = 200_000.0 if ticker == "AMZN" else _capex_ly_M * 1.10
 _da_2026 = (cons_rev.get(FC_YEARS[0], rev_ly) * ratios_ly["da"]) or 1.0
 cda0 = CAPEX_2026_M / _da_2026
 capex_da = fade(cda0, 1.05)
 nwc_pct = [0.005] * N_FC
 
-cache = REPO / "data" / "dcf_assumptions" / f"{T}.json"
+cache = REPO / "data" / "dcf_assumptions" / f"{ticker}.json"
 narr = _text(_assumptions.get("narrative", ""))
 try:
     con = connect_sqlite(str(DATABASE_PATH), role=SQLiteConnectionRole.READ_ONLY)
-    row = con.execute("SELECT live_price FROM dcf_runs WHERE ticker=?", (T,)).fetchone()
-    price = _number((row[0] if row and row[0] else None) or prof.get("price") or 255.0)
+    row = con.execute("SELECT live_price FROM dcf_runs WHERE ticker=?", (ticker,)).fetchone()
+    price = _number((row[0] if row and row[0] else None) or company_profile.get("price") or 255.0)
     con.close()
 except Exception:
-    price = _number(prof.get("price") or 255.0)
+    price = _number(company_profile.get("price") or 255.0)
 
-# Opus/user per-name assumption block, read once. The dcf_applicable skip + the
+# Model/user per-name assumption block, read once. The dcf_applicable skip + the
 # segment/margin/terminal overrides apply further below (after PROD is known); the
 # WACC drivers are resolved here because the Monte Carlo base WACC needs them too.
-_debt_scope_raw = _opus.get("dcf_debt_scope", "interest_bearing_debt_only")
+_debt_scope_raw = _redesign_assumptions.get("dcf_debt_scope", "interest_bearing_debt_only")
 if _debt_scope_raw not in {"interest_bearing_debt_only", "debt_and_lease_obligations"}:
-    raise RuntimeError(f"invalid redesign.dcf_debt_scope for {T}: {_debt_scope_raw!r}")
+    raise RuntimeError(f"invalid redesign.dcf_debt_scope for {ticker}: {_debt_scope_raw!r}")
 DCF_DEBT_SCOPE = cast("equity_bridge.DebtScope", _debt_scope_raw)
 # The immutable Opus baseline (seeded once for passes predating provenance
 # tracking) — feeds the Cover "Assumptions by" line and the Assumptions sheet.
@@ -586,11 +608,13 @@ _baseline = assumptions_doc.ensure_opus_baseline(cache)
 # Resolved once and fed to BOTH the Monte Carlo base WACC and the Dashboard yellow
 # cells, so an edited beta/ERP survives a from-scratch rebuild (the round-trip is
 # closed by refresh_dcf.sync_assumptions_json writing these back to the block).
-_beta_override = _opus.get("beta")
-BETA = _number(_beta_override if _beta_override is not None else (prof.get("beta") or 1.3))
-RF = _number(_opus.get("risk_free_rate", _g.risk_free_rate))
-ERP = _number(_opus.get("equity_risk_premium", _g.equity_risk_premium))
-KD = _number(_opus.get("cost_of_debt", 0.045))
+_beta_override = _redesign_assumptions.get("beta")
+BETA = _number(
+    _beta_override if _beta_override is not None else (company_profile.get("beta") or 1.3)
+)
+RF = _number(_redesign_assumptions.get("risk_free_rate", _g.risk_free_rate))
+ERP = _number(_redesign_assumptions.get("equity_risk_premium", _g.equity_risk_premium))
+KD = _number(_redesign_assumptions.get("cost_of_debt", 0.045))
 # Country risk premium: Damodaran's country premiums weighted by where this name
 # earns revenue (FMP geo segments). A US/mature name resolves to 0.0 and is left
 # exactly where it was; a LatAm/EM name carries the sovereign-risk layer the US
@@ -602,28 +626,28 @@ if _preserved_crp is not None:
     _country_risk_context = {
         "event": "dcf_country_risk_context",
         "schema_version": "dcf_country_risk_context.v1",
-        "ticker": T,
+        "ticker": ticker,
         "premium": CRP,
         "authority": "preserved_dashboard_override",
         "source_record": None,
     }
-elif "country_risk_premium" in _opus:
-    CRP = _number(_opus["country_risk_premium"])
+elif "country_risk_premium" in _redesign_assumptions:
+    CRP = _number(_redesign_assumptions["country_risk_premium"])
     _country_risk_context = {
         "event": "dcf_country_risk_context",
         "schema_version": "dcf_country_risk_context.v1",
-        "ticker": T,
+        "ticker": ticker,
         "premium": CRP,
         "authority": "owner_override",
         "source_record": None,
     }
 else:
-    _country_risk_observation = country_risk.country_risk_observation(REPO, T)
+    _country_risk_observation = country_risk.country_risk_observation(REPO, ticker)
     CRP = _country_risk_observation.premium
     _country_risk_context = {
         "event": "dcf_country_risk_context",
         "schema_version": "dcf_country_risk_context.v1",
-        "ticker": T,
+        "ticker": ticker,
         "premium": CRP,
         "authority": (
             "systematic_geo"
@@ -636,11 +660,11 @@ print(json.dumps(_country_risk_context, sort_keys=True), file=sys.stderr)
 
 # ----------------------------------------------------------------------------- Monte Carlo
 # A reduced-form model (single revenue CAGR, linear margin ramp) calibrated so the
-# base case reproduces the full workbook value, then perturbed over Opus-set driver
+# base case reproduces the full workbook value, then perturbed over model-set driver
 # distributions. Static snapshot — recomputed each build.
 
 latest = keys[-1]
-_bal_latest = bal_i[latest]
+_bal_latest = balance_by_period[latest]
 # Debt is a governed valuation input, not a normalized-data convenience.  The
 # builder may publish only when cash and the approved debt scope resolve from
 # exact primary aggregates and every signed lease component. Missing evidence
@@ -679,7 +703,7 @@ if _cash_resolution is None or _verified_debt_resolution is None:
         json.dumps(
             {
                 "event": "dcf_equity_bridge_unavailable",
-                "ticker": T,
+                "ticker": ticker,
                 "period": f"{latest[1]} {latest[0]}",
                 "missing": [
                     name
@@ -697,13 +721,13 @@ if _cash_resolution is None or _verified_debt_resolution is None:
     raise RuntimeError("latest balance sheet lacks a verified DCF equity bridge")
 cash_now = _cash_resolution.value / 1e6
 debt_now = _verified_debt_resolution.value / 1e6
-_shares = m(inc_i[latest].get("weightedAverageShsOutDil"))
+_shares = to_millions(income_by_period[latest].get("weightedAverageShsOutDil"))
 if _shares is None or _shares <= 0:
     print(
         json.dumps(
             {
                 "event": "dcf_equity_bridge_unavailable",
-                "ticker": T,
+                "ticker": ticker,
                 "period": f"{latest[1]} {latest[0]}",
                 "missing": ["positive_diluted_shares"],
             },
@@ -726,7 +750,7 @@ print(
         {
             "event": "dcf_equity_bridge_context",
             "schema_version": "dcf_equity_bridge_context.v2",
-            "ticker": T,
+            "ticker": ticker,
             "period_end": _bridge_period_end,
             "fiscal_period_type": latest[1],
             "reporting_currency": _bridge_currency,
@@ -765,14 +789,14 @@ margin_near_def, margin_term_def = oim_list[0], oim_list[-1]
 # the whole point of the override — a split FMP does not report, growing on the
 # analyst's own path rather than a consensus-reconciled FMP momentum). The engine
 # reads these two Dashboard points per segment and fades between them; the margins,
-# terminal method and the rest still come from the _opus block below.
+# terminal method and the rest still come from the assumption block below.
 if ANALYST_SEGS.valid:
     g1_def = ANALYST_SEGS.near_growth()
     gT_def = ANALYST_SEGS.terminal_growth()
 
-# --- Opus per-name override (if the Opus assumption pass has run for this name) ---
+# --- Per-name override (if the assumption refresh has run for this name) ---
 OPUS_BASIS, OPUS_METHOD = "EV/EBITDA", "Exit multiple"
-CURRENCY = _text((inc[0].get("reportedCurrency") if inc else None) or "USD")
+CURRENCY = _text((income_records[0].get("reportedCurrency") if income_records else None) or "USD")
 _FX_TO_USD = {
     "USD": 1.0,
     "DKK": 0.145,
@@ -793,46 +817,50 @@ _FX_TO_USD = {
 # (the single FX source of truth read back by dcf.redesign._read_fx) honest.
 if CURRENCY not in _FX_TO_USD:
     print(
-        f"FAIL\t{T}\tunknown reported currency {CURRENCY!r} — add its USD rate to "
+        f"FAIL\t{ticker}\tunknown reported currency {CURRENCY!r} — add its USD rate to "
         "_FX_TO_USD in execution/build_redesigned_dcf.py before building this name",
         file=sys.stderr,
     )
     raise SystemExit(1)
 FX = _FX_TO_USD[CURRENCY]
-if _opus.get("dcf_applicable") is False:
-    print(f"SKIP\t{T}\t{_opus.get('business_model')}\t(FCFF DCF not the right tool)")
+if _redesign_assumptions.get("dcf_applicable") is False:
+    print(
+        f"SKIP\t{ticker}\t{_redesign_assumptions.get('business_model')}\t(FCFF DCF not the right tool)"
+    )
     raise SystemExit(0)
-if _opus.get("segments"):
-    _sg = TypeAdapter(dict[str, dict[str, object]]).validate_python(_opus["segments"])
+if _redesign_assumptions.get("segments"):
+    _sg = TypeAdapter(dict[str, dict[str, object]]).validate_python(
+        _redesign_assumptions["segments"]
+    )
     # analyst_segments (parsed above) already pinned g1_def/gT_def to the analyst's
-    # own per-segment growth; the FMP-named _opus["segments"] growth override does
+    # own per-segment growth; the FMP-named assumption segment growth override does
     # not apply to those analyst names, so only re-growth when NOT analyst-driven.
     if not ANALYST_SEGS.valid:
         g1_def = {s: _number(_sg.get(s, {}).get("near_term_growth", g1_def[s])) for s in PROD}
         gT_def = {s: _number(_sg.get(s, {}).get("terminal_growth", gT_def[s])) for s in PROD}
-    margin_near_def = _number(_opus.get("near_term_op_margin", margin_near_def))
-    margin_term_def = _number(_opus.get("terminal_op_margin", margin_term_def))
+    margin_near_def = _number(_redesign_assumptions.get("near_term_op_margin", margin_near_def))
+    margin_term_def = _number(_redesign_assumptions.get("terminal_op_margin", margin_term_def))
     # SBC %: an explicit near/terminal override wins; a floor guards an FMP data gap
     # (some names — WIX — report 0 SBC for recent quarters, understating the fade).
-    SBC_NEAR = _number(_opus.get("sbc_pct_near", SBC_NEAR))
-    SBC_TERM = _number(_opus.get("sbc_pct_terminal", SBC_TERM))
-    _sbc_floor = _opus.get("sbc_pct_floor")
+    SBC_NEAR = _number(_redesign_assumptions.get("sbc_pct_near", SBC_NEAR))
+    SBC_TERM = _number(_redesign_assumptions.get("sbc_pct_terminal", SBC_TERM))
+    _sbc_floor = _redesign_assumptions.get("sbc_pct_floor")
     if _sbc_floor is not None:
         SBC_NEAR = max(SBC_NEAR, _number(_sbc_floor))
         SBC_TERM = max(SBC_TERM, _number(_sbc_floor) * 0.6)
-    TAX = _number(_opus.get("tax_rate", _g.tax_rate))
-    EXIT_MULT = _number(_opus.get("exit_multiple", EXIT_MULT))
-    TG = _number(_opus.get("terminal_growth_g", TG))
-    OPUS_BASIS = _text(_opus.get("exit_basis", OPUS_BASIS))
+    TAX = _number(_redesign_assumptions.get("tax_rate", _g.tax_rate))
+    EXIT_MULT = _number(_redesign_assumptions.get("exit_multiple", EXIT_MULT))
+    TG = _number(_redesign_assumptions.get("terminal_growth_g", TG))
+    OPUS_BASIS = _text(_redesign_assumptions.get("exit_basis", OPUS_BASIS))
     # Keep exit-multiple as the default method (user preference); Opus's perpetuity
     # pick stays available as the cross-check, not the headline.
-    narr = _text(_opus.get("narrative") or narr)
-    if _opus.get("capex_pct_revenue_2026"):
-        CAPEX_2026_M = _number(_opus["capex_pct_revenue_2026"]) * (
+    narr = _text(_redesign_assumptions.get("narrative") or narr)
+    if _redesign_assumptions.get("capex_pct_revenue_2026"):
+        CAPEX_2026_M = _number(_redesign_assumptions["capex_pct_revenue_2026"]) * (
             cons_rev.get(FC_YEARS[0], rev_ly) or rev_ly
         )
     cda0 = CAPEX_2026_M / _da_2026
-    capex_da = fade(cda0, _number(_opus.get("terminal_capex_da", 1.05)))
+    capex_da = fade(cda0, _number(_redesign_assumptions.get("terminal_capex_da", 1.05)))
 
 # Scalar terminal assumptions (exit multiple, operating margins, SBC %) are
 # independent of the segment set, so a bare block override applies even without a
@@ -841,22 +869,22 @@ if _opus.get("segments"):
 # (#838) without fabricating a segments block. A name whose block already set these
 # inside the guard is unchanged (same value re-read here); a name with no block keeps
 # the code/consensus default.
-if isinstance(_opus.get("exit_multiple"), (int, float)):
-    EXIT_MULT = _number(_opus["exit_multiple"])
-if isinstance(_opus.get("near_term_op_margin"), (int, float)):
-    margin_near_def = _number(_opus["near_term_op_margin"])
-if isinstance(_opus.get("terminal_op_margin"), (int, float)):
-    margin_term_def = _number(_opus["terminal_op_margin"])
+if isinstance(_redesign_assumptions.get("exit_multiple"), (int, float)):
+    EXIT_MULT = _number(_redesign_assumptions["exit_multiple"])
+if isinstance(_redesign_assumptions.get("near_term_op_margin"), (int, float)):
+    margin_near_def = _number(_redesign_assumptions["near_term_op_margin"])
+if isinstance(_redesign_assumptions.get("terminal_op_margin"), (int, float)):
+    margin_term_def = _number(_redesign_assumptions["terminal_op_margin"])
 # #838 mature SBC normalization: explicit near/terminal SBC % (a mature large-software
 # floor, more disciplined than the actuals 0.6x fade that leaves a hyper-grower's SBC
 # at ~terminal-margin levels). Applies with or without a segments block.
-if isinstance(_opus.get("sbc_pct_near"), (int, float)):
-    SBC_NEAR = _number(_opus["sbc_pct_near"])
-if isinstance(_opus.get("sbc_pct_terminal"), (int, float)):
-    SBC_TERM = _number(_opus["sbc_pct_terminal"])
-if isinstance(_opus.get("sbc_pct_floor"), (int, float)):
-    SBC_NEAR = max(SBC_NEAR, _number(_opus["sbc_pct_floor"]))
-    SBC_TERM = max(SBC_TERM, _number(_opus["sbc_pct_floor"]) * 0.6)
+if isinstance(_redesign_assumptions.get("sbc_pct_near"), (int, float)):
+    SBC_NEAR = _number(_redesign_assumptions["sbc_pct_near"])
+if isinstance(_redesign_assumptions.get("sbc_pct_terminal"), (int, float)):
+    SBC_TERM = _number(_redesign_assumptions["sbc_pct_terminal"])
+if isinstance(_redesign_assumptions.get("sbc_pct_floor"), (int, float)):
+    SBC_NEAR = max(SBC_NEAR, _number(_redesign_assumptions["sbc_pct_floor"]))
+    SBC_TERM = max(SBC_TERM, _number(_redesign_assumptions["sbc_pct_floor"]) * 0.6)
 
 
 # Per-name growth-fade curvature: the convex shape whose revenue path best fits
@@ -871,7 +899,7 @@ if isinstance(_opus.get("sbc_pct_floor"), (int, float)):
 # decelerators fade front-loaded, while steady names keep their consensus fit.
 _cons_by_offset = {y - FC_YEARS[0]: cons_rev[y] for y in cons_rev}
 CURV = _number(
-    _opus.get("growth_fade_curvature")
+    _redesign_assumptions.get("growth_fade_curvature")
     or fade_calibration.calibrate_curvature_with_floor(
         {s: seg_ann[ly][s] for s in PROD}, g1_def, gT_def, _cons_by_offset, N_FC
     )
@@ -902,7 +930,7 @@ def _scen_deltas(raw: object, seed: redesign_mod.ScenarioDeltas) -> redesign_mod
 # ``sync_assumptions_json`` wrote back, not an owner edit. A seed-differing
 # mirror (a real owner edit) still wins unconditionally
 # (``redesign.resolve_mirrored_bear``).
-_holdings_path = REPO / "micro_thesis" / "holdings" / f"{T.upper()}.json"
+_holdings_path = REPO / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
 _holdings_raw: dict[str, object] | None = None
 if _holdings_path.exists():
     try:
@@ -910,9 +938,9 @@ if _holdings_path.exists():
     except (OSError, ValueError):
         _holdings_raw = None
 
-BULL_D = _scen_deltas(_opus.get("scenario_bull"), redesign_mod.BULL_SEED)
+BULL_D = _scen_deltas(_redesign_assumptions.get("scenario_bull"), redesign_mod.BULL_SEED)
 BEAR_D = redesign_mod.resolve_mirrored_bear(
-    _scen_deltas(_opus.get("scenario_bear"), redesign_mod.BEAR_SEED), _holdings_raw
+    _scen_deltas(_redesign_assumptions.get("scenario_bear"), redesign_mod.BEAR_SEED), _holdings_raw
 )
 
 
@@ -926,16 +954,16 @@ def _weights(raw: object, default: tuple[float, float, float]) -> tuple[float, f
         return d_bull, d_base, d_bear
     values = _OBJECT.validate_python(raw)
     b = _number(values.get("bull_weight", d_bull))
-    m = _number(values.get("base_weight", d_base))
+    base_weight = _number(values.get("base_weight", d_base))
     r = _number(values.get("bear_weight", d_bear))
-    s = b + m + r
-    if s <= 0 or b < 0 or m < 0 or r < 0:
+    s = b + base_weight + r
+    if s <= 0 or b < 0 or base_weight < 0 or r < 0:
         return d_bull, d_base, d_bear
-    return b / s, m / s, r / s
+    return b / s, base_weight / s, r / s
 
 
 WEIGHTS = _weights(
-    _opus.get("scenario_prior"),
+    _redesign_assumptions.get("scenario_prior"),
     (
         redesign_mod.DEFAULT_SCENARIO_WEIGHTS["bull"],
         redesign_mod.DEFAULT_SCENARIO_WEIGHTS["base"],
@@ -1006,13 +1034,13 @@ full_value = (
     * FX
 )
 
-ann_rev = [fy_sum_raw(inc_i, "revenue", y) for y in full_fys]
+ann_rev = [fy_sum_raw(income_by_period, "revenue", y) for y in full_fys]
 ann_g = [ann_rev[i] / ann_rev[i - 1] - 1 for i in range(1, len(ann_rev)) if ann_rev[i - 1]]
 ann_oim: list[float] = []
 for _y in full_fys:
-    _rev = fy_sum_raw(inc_i, "revenue", _y)
+    _rev = fy_sum_raw(income_by_period, "revenue", _y)
     if _rev:
-        ann_oim.append(fy_sum_raw(inc_i, "operatingIncome", _y) / _rev)
+        ann_oim.append(fy_sum_raw(income_by_period, "operatingIncome", _y) / _rev)
 cagr0 = (rev_p[-1] / rev_ly) ** (1 / N_FC) - 1
 mT0 = oi_p[-1] / rev_p[-1] if rev_p[-1] else margin_term_def
 SIG = {
@@ -1054,7 +1082,7 @@ base_red = float(
 # is meaningless. SKIP cleanly like the insufficient-history paths above rather
 # than emit a "nan" RESULT.
 if not (np.isfinite(base_red) and np.isfinite(full_value)):
-    print(f"SKIP\t{T}\tnon-finite base valuation\t(insufficient data for a reliable DCF)")
+    print(f"SKIP\t{ticker}\tnon-finite base valuation\t(insufficient data for a reliable DCF)")
     raise SystemExit(0)
 kcal = full_value / base_red if base_red else 1.0
 # Monte Carlo draws are calculated by workbook formulas; no unused Python simulation.
@@ -1158,7 +1186,7 @@ def write_pct(target_row: int, base_row: int, label: str = "    % of revenue") -
 
 band(fs, frow, "INCOME STATEMENT", NQ + 1)
 frow += 1
-rev_r = write_qrow("Revenue", lambda i, k: m(inc_i.get(k, {}).get("revenue")))
+rev_r = write_qrow("Revenue", lambda i, k: to_millions(income_by_period.get(k, {}).get("revenue")))
 fin_row["Revenue"] = rev_r
 write_yoy(rev_r)
 for lab, fld in [
@@ -1166,19 +1194,26 @@ for lab, fld in [
     ("R&D Expense", "researchAndDevelopmentExpenses"),
     ("SG&A Expense", "sellingGeneralAndAdministrativeExpenses"),
 ]:
-    rr = write_qrow(lab, lambda i, k, f=fld: m(inc_i.get(k, {}).get(f)))
+    rr = write_qrow(lab, lambda i, k, f=fld: to_millions(income_by_period.get(k, {}).get(f)))
     fin_row[lab] = rr
     write_pct(rr, rev_r)
-gp_r = write_qrow("Gross Profit", lambda i, k: m(inc_i.get(k, {}).get("grossProfit")))
+gp_r = write_qrow(
+    "Gross Profit", lambda i, k: to_millions(income_by_period.get(k, {}).get("grossProfit"))
+)
 write_pct(gp_r, rev_r, "    gross margin")
-oi_r = write_qrow("Operating Income", lambda i, k: m(inc_i.get(k, {}).get("operatingIncome")))
+oi_r = write_qrow(
+    "Operating Income", lambda i, k: to_millions(income_by_period.get(k, {}).get("operatingIncome"))
+)
 fin_row["Operating Income"] = oi_r
 write_pct(oi_r, rev_r, "    operating margin")
-ni_r = write_qrow("Net Income", lambda i, k: m(inc_i.get(k, {}).get("netIncome")))
+ni_r = write_qrow(
+    "Net Income", lambda i, k: to_millions(income_by_period.get(k, {}).get("netIncome"))
+)
 fin_row["Net Income"] = ni_r
 write_pct(ni_r, rev_r, "    net margin")
 fin_row["Diluted Shares (M)"] = write_qrow(
-    "Diluted Shares (M)", lambda i, k: m(inc_i.get(k, {}).get("weightedAverageShsOutDil"))
+    "Diluted Shares (M)",
+    lambda i, k: to_millions(income_by_period.get(k, {}).get("weightedAverageShsOutDil")),
 )
 
 if ANALYST_SEGS.valid:
@@ -1193,7 +1228,10 @@ if ANALYST_SEGS.valid:
     for s in PROD:
         pct = _pct_by_name[s]
         rr = write_qrow(
-            s, lambda i, k, p=pct: rv * p if (rv := m(inc_i.get(k, {}).get("revenue"))) else None
+            s,
+            lambda i, k, p=pct: (
+                rv * p if (rv := to_millions(income_by_period.get(k, {}).get("revenue"))) else None
+            ),
         )
         pseg_row[s] = rr
         write_yoy(rr)
@@ -1202,7 +1240,9 @@ elif not SINGLE_SEG:
     band(fs, frow, "REVENUE BY SEGMENT — PRODUCT (% YoY, % of revenue)", NQ + 1)
     frow += 1
     for s in PROD:
-        rr = write_qrow(s, lambda i, k, seg=s: m((pseg_i.get(k) or {}).get(seg)))
+        rr = write_qrow(
+            s, lambda i, k, seg=s: to_millions((product_segments_by_period.get(k) or {}).get(seg))
+        )
         pseg_row[s] = rr
         write_yoy(rr)
         write_pct(rr, rev_r)
@@ -1211,7 +1251,10 @@ if GEO:
     band(fs, frow, "REVENUE BY SEGMENT — GEOGRAPHY (% YoY, % of revenue)", NQ + 1)
     frow += 1
     for s in GEO:
-        rr = write_qrow(s, lambda i, k, seg=s: m((gseg_i.get(k) or {}).get(seg)))
+        rr = write_qrow(
+            s,
+            lambda i, k, seg=s: to_millions((geographic_segments_by_period.get(k) or {}).get(seg)),
+        )
         write_yoy(rr)
         write_pct(rr, rev_r)
 
@@ -1227,16 +1270,16 @@ def _bs_getter(field: str) -> Callable[[int, tuple[int, str]], float | None]:
     }
     component_fields = aggregate_components.get(field)
     if component_fields is None:
-        return lambda i, k, f=field: m(bal_i.get(k, {}).get(f))
+        return lambda i, k, f=field: to_millions(balance_by_period.get(k, {}).get(f))
 
     def _aggregate(i: int, k: tuple[int, str]) -> float | None:
-        b = bal_i.get(k, {})
+        b = balance_by_period.get(k, {})
         resolved = equity_bridge.resolve_complete_aggregate(
             b,
             aggregate_field=field,
             component_fields=component_fields,
         )
-        return m(resolved.value) if resolved is not None else None
+        return to_millions(resolved.value) if resolved is not None else None
 
     return _aggregate
 
@@ -1265,7 +1308,9 @@ for lab, fld in [
     ("Capex", "capitalExpenditure"),
     ("Free Cash Flow", "freeCashFlow"),
 ]:
-    fin_row[lab] = write_qrow(lab, lambda i, k, f=fld: m(cf_i.get(k, {}).get(f)))
+    fin_row[lab] = write_qrow(
+        lab, lambda i, k, f=fld: to_millions(cashflow_by_period.get(k, {}).get(f))
+    )
 put(
     fs, frow + 1, 1, "Blue = hardcoded actuals from FMP filings. Same-sheet ratios are formulas."
 ).font = SUB
@@ -1617,7 +1662,7 @@ cs = wb.create_sheet("Consensus")
 cs.sheet_view.showGridLines = False
 cs.column_dimensions["A"].width = 34
 est_by_year: dict[int, dict[str, object]] = {}
-for e in est:
+for e in analyst_estimates:
     try:
         est_by_year[int(str(e.get("date"))[:4])] = e
     except (TypeError, ValueError):
@@ -1644,7 +1689,7 @@ r = 4
 for lab, fld, mexpr, fmt in metrics:
     put(cs, r, 1, f"{lab} — consensus", bold=True)
     for j, y in enumerate(CYEARS):
-        v = m(est_by_year[y].get(fld)) if fmt != PXS else est_by_year[y].get(fld)
+        v = to_millions(est_by_year[y].get(fld)) if fmt != PXS else est_by_year[y].get(fld)
         if isinstance(v, (int, float)):
             put(cs, r, 2 + j, v, fmt=fmt, kind="act")
     crow = r
@@ -1810,7 +1855,7 @@ put(
     f"{NTRIAL:,} trials, recomputed in-sheet on every edit. Edit the yellow driver distributions to re-roll. Engine grid is to the right (cols H+).",
 ).font = SUB
 
-band(mcs, 4, "DRIVER DISTRIBUTIONS (yellow = edit; Opus-set defaults)", 4)
+band(mcs, 4, "DRIVER DISTRIBUTIONS (yellow = edit; assumption defaults)", 4)
 for j, h in enumerate(["Driver", "Dist", "Mean", "Std dev"]):
     put(mcs, 5, 1 + j, h, bold=True)
 _cagr_link = f"=(Model!{mc(FC_YEARS[-1])}{rev_row}/Model!{mc(full_fys[-1])}{rev_row})^(1/{N_FC})-1"
@@ -1949,7 +1994,7 @@ dsh = wb.create_sheet("Dashboard")
 dsh.sheet_view.showGridLines = False
 for ltr, w in [("A", 30), ("B", 13), ("C", 13), ("D", 14), ("E", 46)]:
     dsh.column_dimensions[ltr].width = w
-put(dsh, 1, 1, f"{NAME} ({T}) — Control Dashboard", bold=True).font = TITLE
+put(dsh, 1, 1, f"{NAME} ({ticker}) — Control Dashboard", bold=True).font = TITLE
 put(
     dsh,
     2,
@@ -2054,7 +2099,7 @@ put(
     34,
     5,
     "Amazon guided ~$200B (AI/datacenters)"
-    if T == "AMZN"
+    if ticker == "AMZN"
     else "~last-year capex +10%; set to guidance",
 ).font = SUB
 put(dsh, 35, 1, "Terminal capex / D&A")
@@ -2266,12 +2311,12 @@ cv = wb.create_sheet("Cover")
 cv.sheet_view.showGridLines = False
 cv.column_dimensions["A"].width = 28
 cv.column_dimensions["B"].width = 48
-put(cv, 1, 1, f"{NAME} ({T})").font = TITLE
+put(cv, 1, 1, f"{NAME} ({ticker})").font = TITLE
 put(cv, 2, 1, "DCF valuation — exit-multiple terminal · defaults anchored to consensus").font = SUB
 _assumptions_by = (
-    "builder defaults (consensus-anchored; no Opus pass)"
+    "builder defaults (consensus-anchored; no assumption refresh)"
     if _baseline is None
-    else f"Opus 4.8 — values as of {_baseline.as_of}"
+    else f"{'Opus 4.8' if _baseline.set_by == 'opus-4.8' else _baseline.author_label} — values as of {_baseline.as_of}"
     + (" (provenance seeded)" if _baseline.seeded else "")
 )
 for i, (k, v) in enumerate(
@@ -2308,8 +2353,8 @@ for i, (k, v, fmt) in enumerate(
 ):
     put(cv, 17 + i, 1, k)
     put(cv, 17 + i, 2, v, fmt=fmt)
-band(cv, 25, "THE STORY (Opus)", 2)
-put(cv, 27, 1, narr or "(Opus narrative)").alignment = WRAP
+band(cv, 25, "THE STORY (assumption narrative)", 2)
+put(cv, 27, 1, narr or "(assumption narrative)").alignment = WRAP
 cv.merge_cells("A27:B43")
 
 # ===== Scenarios + Sensitivity (Python-computed static cells) =====
@@ -2377,7 +2422,7 @@ for pos, name in enumerate(order):
 # yellow-cell comments, classified against the Opus baseline. No ledger update
 # here — a from-scratch build's inputs come from the same JSON the ledger
 # compares against, so divergence is already recorded by the refresher.
-assumptions_doc.write_provenance_into(wb, _inp, cache, ticker=T, update_ledger=False)
+assumptions_doc.write_provenance_into(wb, _inp, cache, ticker=ticker, update_ledger=False)
 
 DEST.parent.mkdir(parents=True, exist_ok=True)
 wb.save(str(DEST))
@@ -2388,9 +2433,9 @@ _seg = "single" if SINGLE_SEG else str(len(PROD))
 # for the loud warning when the floor forced whole-company).
 _cov_str = f"{_cov.coverage:.2f}" if _cov.coverage is not None else "n/a"
 print(
-    f"RESULT\t{T}\t{full_value:.2f}\t{price:.2f}\t{_up:+.3f}\t{_seg}\tcov={_cov_str}\tcurv={CURV:.2f}\t{DEST}"
+    f"RESULT\t{ticker}\t{full_value:.2f}\t{price:.2f}\t{_up:+.3f}\t{_seg}\tcov={_cov_str}\tcurv={CURV:.2f}\t{DEST}"
 )
 _b = f"{_sv.bull:.2f}" if _sv.bull is not None else "n/a"
 _r = f"{_sv.bear:.2f}" if _sv.bear is not None else "n/a"
-print(f"SCENARIOS\t{T}\tbase={_sv.base:.2f}\tbull={_b}\tbear={_r}")
+print(f"SCENARIOS\t{ticker}\tbase={_sv.base:.2f}\tbull={_b}\tbear={_r}")
 print("consensus years:", CYEARS)

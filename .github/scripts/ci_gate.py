@@ -54,7 +54,12 @@ DESIGN_PREFIXES = (
 DESIGN_FILES = {
     # Work OS shell/style contract sources.
     "src/pipeline/work_os_shell.py",
+    "src/pipeline/work_os_runtime.js",
     "src/pipeline/work_os_styles.py",
+    # Browser security shares the Chromium-equipped Design job.
+    "execution/comments_server.py",
+    "src/server_runtime/access.py",
+    "tests/test_browser_security_canary.py",
     # Design guard tooling.
     "scripts/check_design_sync.py",
     "execution/verify_design_conformance.py",
@@ -69,6 +74,7 @@ DESIGN_FILES = {
     # are covered by DESIGN_FILE_PATTERNS below.
     "tests/test_workspace_golden.py",
     "tests/test_work_os_shell.py",
+    "tests/test_extracted_runtime_design.py",
     "tests/test_work_os_style_master.py",
 }
 DESIGN_FILE_PATTERNS = ("scripts/gen_design_*.py", "tests/test_design_*.py")

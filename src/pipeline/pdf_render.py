@@ -24,119 +24,111 @@ break a write path or a peek (the peek's §2.7 legacy floor is the fallback).
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 import re
+import subprocess
+import sys
+import tempfile
+import threading
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, cast
 
 log = logging.getLogger(__name__)
-
-# 150 DPI: legible for a deck slide, small enough to cache (§2.3's default).
 DEFAULT_PDF_RENDER_DPI = 150
-MAX_PDF_RENDER_PIXELS = 16_000_000
-MAX_PDF_RENDER_DIMENSION = 8192
-
-# Cache directory for rendered page PNGs, relative to repo root.
+PDF_OPERATION_TIMEOUT_SECONDS = 15.0
+PDF_WORKER_PATH = Path(__file__).with_name("pdf_worker.py")
+MAX_PDF_RESULT_BYTES = 24_000_000
+_WORKER_SLOTS = threading.BoundedSemaphore(4)
 _PDF_PAGES_CACHE_DIR = Path(".tmp") / "pdf_pages"
-
 _WS_RX = re.compile(r"\s+")
-
-
-# --- Minimal typed view over the untyped fitz API surface we use. The single
-# cast in _open_pdf is the validated external-library boundary (repo typing
-# convention) — everything downstream stays fully typed.
-
-
-class _PdfRect(Protocol):
-    x0: float
-    y0: float
-    x1: float
-    y1: float
-    width: float
-    height: float
-
-
-class _PdfPixmap(Protocol):
-    def save(self, filename: str) -> None: ...
-
-
-class _PdfPage(Protocol):
-    @property
-    def rect(self) -> _PdfRect: ...
-
-    def get_text(self) -> str: ...
-
-    def get_pixmap(self, *, dpi: int) -> _PdfPixmap: ...
-
-    def search_for(self, needle: str) -> list[_PdfRect]: ...
-
-
-class _PdfDocument(Protocol):
-    page_count: int
-
-    def load_page(self, page_id: int) -> _PdfPage: ...
-
-    def close(self) -> None: ...
+Operation = Literal["count", "dimensions", "render", "texts", "bbox"]
 
 
 def _normalize(text: str) -> str:
     return _WS_RX.sub(" ", text).strip().casefold()
 
 
-def _open_pdf(pdf_path: Path) -> _PdfDocument | None:
-    """Open ``pdf_path`` with PyMuPDF; None when fitz is unavailable, the
-    file is missing, or the document can't be parsed. Caller must close."""
-    if not pdf_path.exists():
+def _run_pdf(operation: Operation, pdf_path: Path, directory: Path, **arguments: object) -> object:
+    result_path = directory / "result.json"
+    request = {
+        "operation": operation,
+        "pdf_path": str(pdf_path.resolve()),
+        "result_path": str(result_path),
+        **arguments,
+    }
+    # The native parser needs interpreter/system paths, not application secrets.
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() in {"SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "TMPDIR"}
+    }
+    if not _WORKER_SLOTS.acquire(blocking=False):
+        log.warning({"event": "pdf_operation_busy", "operation": operation})
         return None
     try:
-        import fitz  # PyMuPDF — soft dependency, same pattern as ir_uploads
-    except ImportError:
-        log.warning({"event": "pdf_render_fitz_unavailable", "path": str(pdf_path)})
-        return None
+        completed = subprocess.run(
+            [sys.executable, "-I", str(PDF_WORKER_PATH)],
+            input=json.dumps(request),
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+            timeout=PDF_OPERATION_TIMEOUT_SECONDS,
+            check=False,
+        )
+        # subprocess.run kills and waits for the child before raising on timeout.
+        if completed.returncode != 0 or result_path.stat().st_size > MAX_PDF_RESULT_BYTES:
+            return None
+        return json.loads(result_path.read_text(encoding="utf-8"))
+    except subprocess.TimeoutExpired:
+        log.warning({"event": "pdf_operation_timeout", "operation": operation})
+    except (OSError, ValueError):
+        log.warning({"event": "pdf_operation_failed", "operation": operation})
+    finally:
+        _WORKER_SLOTS.release()
+    return None
+
+
+def _read_pdf(operation: Operation, pdf_path: Path, **arguments: object) -> object:
     try:
-        return cast("_PdfDocument", fitz.open(str(pdf_path)))
-    except Exception:  # PyMuPDF's error tree is wide; degrade, never crash
-        log.warning({"event": "pdf_render_open_failed", "path": str(pdf_path)})
+        if not pdf_path.is_file():
+            return None
+        with tempfile.TemporaryDirectory(prefix=".pdf-worker-") as temporary:
+            return _run_pdf(operation, pdf_path, Path(temporary), **arguments)
+    except OSError:
+        log.warning({"event": "pdf_operation_failed", "operation": operation})
         return None
 
 
 def rendered_page_path(
     repo_root: Path, *, sha256: str, page: int, dpi: int = DEFAULT_PDF_RENDER_DPI
 ) -> Path:
-    """Deterministic cache path for one rendered page — sha256 + page + dpi
-    keyed, so re-requesting the same page is a filesystem check, not a
-    re-render."""
+    """Content-addressed preview cache; a cache hit never launches a process."""
     return repo_root / _PDF_PAGES_CACHE_DIR / sha256[:16] / f"p{page}_dpi{dpi}.png"
 
 
 def page_count(pdf_path: Path) -> int | None:
-    """Number of pages in the PDF, or None when unreadable/fitz-less."""
-    doc = _open_pdf(pdf_path)
-    if doc is None:
+    value = _read_pdf("count", pdf_path)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _coordinates(value: object, count: int) -> list[float] | None:
+    if not isinstance(value, list):
         return None
-    try:
-        return doc.page_count
-    finally:
-        doc.close()
+    values = cast("list[object]", value)
+    if len(values) != count or any(not isinstance(item, (int, float)) for item in values):
+        return None
+    coordinates = [float(item) for item in values if isinstance(item, (int, float))]
+    return coordinates if all(math.isfinite(item) for item in coordinates) else None
 
 
 def page_dimensions(pdf_path: Path, page: int) -> tuple[float, float] | None:
-    """(width, height) of a 1-based ``page`` in PDF points — the coordinate
-    space ``FactLocator.pdf_bbox`` is expressed in, needed to convert a bbox
-    into percentage offsets over the rendered image."""
-    doc = _open_pdf(pdf_path)
-    if doc is None:
-        return None
-    try:
-        if not 1 <= page <= doc.page_count:
-            return None
-        rect = doc.load_page(page - 1).rect
-        return (float(rect.width), float(rect.height))
-    except Exception:
-        return None
-    finally:
-        doc.close()
+    """Width/height in PDF points; None on parser failure or deadline."""
+    value = _coordinates(_read_pdf("dimensions", pdf_path, page=page), 2)
+    return (value[0], value[1]) if value is not None else None
 
 
 def render_page_image(
@@ -147,98 +139,53 @@ def render_page_image(
     page: int,
     dpi: int = DEFAULT_PDF_RENDER_DPI,
 ) -> Path | None:
-    """Rasterize 1-based ``page`` of ``pdf_path`` to a cached PNG.
-
-    Returns the cache path (rendering only on a cache miss), or None when the
-    page can't be rendered (missing file, fitz unavailable, page out of
-    range). The cache key is (sha256, page, dpi) so the same request never
-    re-renders.
-    """
+    """Rasterize within a deadline and atomically publish only a complete PNG."""
     out_path = rendered_page_path(repo_root, sha256=sha256, page=page, dpi=dpi)
-    if out_path.exists():
+    if out_path.is_file():
         return out_path
-    doc = _open_pdf(pdf_path)
-    if doc is None:
+    if not pdf_path.is_file():
         return None
     try:
-        if not 1 <= page <= doc.page_count:
-            return None
-        pdf_page = doc.load_page(page - 1)
-        width = pdf_page.rect.width * dpi / 72
-        height = pdf_page.rect.height * dpi / 72
-        if (
-            not all(math.isfinite(value) and value > 0 for value in (width, height))
-            or max(width, height) > MAX_PDF_RENDER_DIMENSION
-            or math.ceil(width) * math.ceil(height) > MAX_PDF_RENDER_PIXELS
-        ):
-            log.warning({"event": "pdf_preview_pixel_limit", "page": page})
-            return None
-        pixmap = pdf_page.get_pixmap(dpi=dpi)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # Write via a temp name + replace so a concurrent request never reads
-        # a half-written PNG (renders are idempotent, so last-write-wins).
-        # The temp name keeps a .png suffix — pixmap.save infers the image
-        # format from the filename extension.
-        tmp_path = out_path.parent / f"{out_path.stem}.tmp.png"
-        pixmap.save(str(tmp_path))
-        tmp_path.replace(out_path)
+        with tempfile.TemporaryDirectory(prefix=".pdf-worker-", dir=out_path.parent) as temporary:
+            directory = Path(temporary)
+            staged = directory / "page.png"
+            result = _run_pdf(
+                "render", pdf_path, directory, page=page, dpi=dpi, output_path=str(staged.resolve())
+            )
+            if result is not True or not staged.is_file():
+                return None
+            with staged.open("rb") as image:
+                if image.read(8) != b"\x89PNG\r\n\x1a\n":
+                    return None
+            staged.replace(out_path)
         return out_path
-    except Exception:
-        log.warning(
-            {"event": "pdf_render_page_failed", "path": str(pdf_path), "page": page, "dpi": dpi}
-        )
+    except OSError:
+        log.warning({"event": "pdf_render_page_failed", "page": page, "dpi": dpi})
         return None
-    finally:
-        doc.close()
 
 
 def extract_page_texts(pdf_path: Path) -> list[str] | None:
-    """Per-page plain text for the whole PDF (index 0 = page 1), or None when
-    unreadable. The page-attribution substrate for :func:`find_page_for_quote`."""
-    doc = _open_pdf(pdf_path)
-    if doc is None:
+    """Extract page text within one document-wide deadline and output limit."""
+    value = _read_pdf("texts", pdf_path)
+    if not isinstance(value, list):
         return None
-    try:
-        return [doc.load_page(i).get_text() or "" for i in range(doc.page_count)]
-    except Exception:
-        return None
-    finally:
-        doc.close()
+    values = cast("list[object]", value)
+    return (
+        [item for item in values if isinstance(item, str)]
+        if all(isinstance(item, str) for item in values)
+        else None
+    )
 
 
 def find_quote_bbox(
     pdf_path: Path, page: int, quote: str
 ) -> tuple[float, float, float, float] | None:
-    """Bounding box (x0, y0, x1, y1, page coords) of ``quote`` on 1-based
-    ``page`` via ``page.search_for`` — the §1.2 fallback path for extractors
-    that don't get bboxes for free. A multi-line hit returns the first line's
-    rect (a stable anchor beats a page-spanning union). None when not found."""
+    """Locate a verbatim quote; a timeout never creates a fabricated anchor."""
     if not quote.strip():
         return None
-    doc = _open_pdf(pdf_path)
-    if doc is None:
-        return None
-    try:
-        if not 1 <= page <= doc.page_count:
-            return None
-        pg = doc.load_page(page - 1)
-        # search_for is whitespace-tolerant but not case-folding; try the
-        # verbatim quote first, then a shorter head (long quotes fail when the
-        # extractor's whitespace normalization diverged from the PDF's).
-        candidates = [quote.strip()]
-        head = " ".join(quote.split()[:6])
-        if head and head != candidates[0]:
-            candidates.append(head)
-        for needle in candidates:
-            rects = pg.search_for(needle)
-            if rects:
-                r = rects[0]
-                return (float(r.x0), float(r.y0), float(r.x1), float(r.y1))
-        return None
-    except Exception:
-        return None
-    finally:
-        doc.close()
+    value = _coordinates(_read_pdf("bbox", pdf_path, page=page, quote=quote), 4)
+    return (value[0], value[1], value[2], value[3]) if value is not None else None
 
 
 def find_page_for_quote(

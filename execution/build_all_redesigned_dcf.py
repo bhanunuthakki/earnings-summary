@@ -97,7 +97,7 @@ def main() -> int:
     for ticker in tickers:
         if args.refresh_assumptions:
             assumption_out, _assumption_err, assumption_status = _run(
-                "dcf_opus_assumptions.py", ticker
+                "refresh_dcf_assumptions.py", ticker
             )
             if assumption_status != 0:
                 failed += 1

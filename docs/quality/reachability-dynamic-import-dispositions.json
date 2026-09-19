@@ -240,16 +240,16 @@
     }
   ],
   "graph_provenance": {
+    "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "0b43e823a55c206707e71a4da0173b1e9085e6618e39ca49508acf120248e45a",
-      "version": "1.2.1"
+      "source_sha256": "4d4a1095597b6b6b01e10206d1b30843ce482fc5e16a61bc4c9c081db99fe38d",
+      "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
-    "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "58cf5e1e9b927469cecbe9b992490f133091912a55e4960779ce8aa492a2b852"
+    "schema_version": "operational-reachability-raw/v1"
   },
-  "schema_version": "reachability-dynamic-import-dispositions/v1"
+  "schema_version": "reachability-dynamic-import-dispositions/v2"
 }

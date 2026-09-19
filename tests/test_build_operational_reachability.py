@@ -181,7 +181,7 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    assert len(graph.unknown_edges) == 96
+    assert len(graph.unknown_edges) == 98
     assert residual_source_edges == []
 
 
@@ -560,7 +560,7 @@ def _provenance(root: Path) -> dict[str, object]:
             "python": graph.parser["python"],
             "source_sha256": graph.parser["source_sha256"],
         },
-        "source_manifest_sha256": graph.source_manifest_sha256,
+        "input_scope": "scanner-consumed-inputs/v1",
         "scanner_sha256": graph.scanner_sha256,
     }
 
@@ -575,15 +575,15 @@ def _write_manifest(
     prov = provenance if provenance is not None else _provenance(root)
     manifests: dict[str, tuple[str, list[dict[str, object]]]] = {
         "reachability-dynamic-import-dispositions.json": (
-            "reachability-dynamic-import-dispositions/v1",
+            "reachability-dynamic-import-dispositions/v2",
             [],
         ),
         "reachability-getattr-dispositions.json": (
-            "reachability-getattr-dispositions/v1",
+            "reachability-getattr-dispositions/v2",
             [],
         ),
         "reachability-process-dispositions.json": (
-            "reachability-process-dispositions/v1",
+            "reachability-process-dispositions/v2",
             [],
         ),
     }
@@ -607,21 +607,21 @@ def _write_manifest(
     [
         (
             "reachability-dynamic-import-dispositions.json",
-            "reachability-dynamic-import-dispositions/v1",
+            "reachability-dynamic-import-dispositions/v2",
             "import importlib\nimportlib.import_module(name)\n",
             2,
             "external_optional_dependency",
         ),
         (
             "reachability-getattr-dispositions.json",
-            "reachability-getattr-dispositions/v1",
+            "reachability-getattr-dispositions/v2",
             "getattr(mod, name)\n",
             1,
             "closed_literal_set",
         ),
         (
             "reachability-process-dispositions.json",
-            "reachability-process-dispositions/v1",
+            "reachability-process-dispositions/v2",
             "import subprocess\nsubprocess.run(command)\n",
             2,
             "external_process",
@@ -673,7 +673,7 @@ def test_exact_provenance_required(tmp_path: Path) -> None:
     bad_provenance = [
         {**prov, "path": "wrong.json"},
         {**prov, "schema_version": "operational-reachability/v1"},
-        {**prov, "source_manifest_sha256": "0" * 64},
+        {**prov, "input_scope": "all-tracked-inputs/v1"},
         {**prov, "scanner_sha256": "0" * 64},
     ]
     wrong_parser = dict(cast(dict[str, str], prov["parser"]))
@@ -683,7 +683,7 @@ def test_exact_provenance_required(tmp_path: Path) -> None:
         _write_manifest(
             root,
             "reachability-getattr-dispositions.json",
-            "reachability-getattr-dispositions/v1",
+            "reachability-getattr-dispositions/v2",
             [entry],
             bad,
         )
@@ -697,6 +697,79 @@ def test_exact_provenance_required(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("new_file", [False, True])
+def test_prose_changes_preserve_reviewed_edges_but_change_raw_graph_provenance(
+    tmp_path: Path, new_file: bool
+) -> None:
+    root = _repo(tmp_path)
+    _write(root, "execution/main.py", "getattr(mod, name)\n")
+    _write(root, "docs/audits/notes.md", "Initial audit observations.\n")
+    _track(root, ".")
+    _write_manifest(
+        root,
+        "reachability-getattr-dispositions.json",
+        "reachability-getattr-dispositions/v2",
+        [
+            {
+                "path": "execution/main.py",
+                "line": 1,
+                "fingerprint": _fingerprint("execution/main.py", 1, "getattr(mod, name)"),
+                "disposition": "closed_literal_set",
+                "evidence": "Reviewed constant dispatch set.",
+            }
+        ],
+    )
+    before = build_graph(root)
+    assert before.closure_status == "PASS"
+    name = "docs/audits/new.md" if new_file else "docs/audits/notes.md"
+    _write(root, name, "Updated audit observations.\n")
+    _track(root, name)
+    after = build_graph(root)
+    assert after.source_manifest_sha256 != before.source_manifest_sha256
+    assert after.parser["source_sha256"] == before.parser["source_sha256"]
+    assert after.closure_status == "PASS"
+    assert not after.unknown_edges
+
+
+@pytest.mark.parametrize(
+    "path,content",
+    [
+        ("src/dispatch_constants.py", "TARGET = 'changed'\n"),
+        ("src/new_module.py", "VALUE = 2\n"),
+        ("config/registry.json", '{"target": "execution/main.py"}\n'),
+        (".github/workflows/task.yml", "run: python execution/main.py\n"),
+        ("cron/task.xml", "<Task><Command>python execution/main.py</Command></Task>"),
+    ],
+)
+def test_consumed_input_changes_invalidate_reviewed_edges(
+    tmp_path: Path, path: str, content: str
+) -> None:
+    root = _repo(tmp_path)
+    _write(root, "execution/main.py", "getattr(mod, name)\n")
+    _write(root, "src/dispatch_constants.py", "TARGET = 'original'\n")
+    _track(root, ".")
+    _write_manifest(
+        root,
+        "reachability-getattr-dispositions.json",
+        "reachability-getattr-dispositions/v2",
+        [
+            {
+                "path": "execution/main.py",
+                "line": 1,
+                "fingerprint": _fingerprint("execution/main.py", 1, "getattr(mod, name)"),
+                "disposition": "closed_literal_set",
+                "evidence": "Reviewed constant dispatch set.",
+            }
+        ],
+    )
+    assert build_graph(root).closure_status == "PASS"
+    _write(root, path, content)
+    _track(root, path)
+    after = build_graph(root)
+    assert after.closure_status == "HOLD"
+    assert production_unknown_edges(after)
+
+
 def test_parser_source_scanner_mismatch(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _write(root, "execution/main.py", "getattr(mod, name)\n")
@@ -707,7 +780,7 @@ def test_parser_source_scanner_mismatch(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -732,7 +805,7 @@ def test_wrong_manifest_path_and_schema(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-dynamic-import-dispositions/v1",
+        "reachability-dynamic-import-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -794,7 +867,7 @@ def test_malformed_and_extra_fields(tmp_path: Path) -> None:
         "docs/quality/reachability-getattr-dispositions.json",
         json.dumps(
             {
-                "schema_version": "reachability-getattr-dispositions/v1",
+                "schema_version": "reachability-getattr-dispositions/v2",
                 "graph_provenance": prov,
                 "edges": [
                     {
@@ -881,7 +954,7 @@ def test_stale_fingerprint(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -906,7 +979,7 @@ def test_duplicate_key_wrong_kind_unmatched(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -934,7 +1007,7 @@ def test_duplicate_key_wrong_kind_unmatched(tmp_path: Path) -> None:
     _write_manifest(
         root2,
         "reachability-dynamic-import-dispositions.json",
-        "reachability-dynamic-import-dispositions/v1",
+        "reachability-dynamic-import-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -957,7 +1030,7 @@ def test_unresolved_remains_unknown(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -993,7 +1066,7 @@ def test_internal_target_rejects_bad_targets(tmp_path: Path, target: str) -> Non
     _write_manifest(
         root,
         "reachability-process-dispositions.json",
-        "reachability-process-dispositions/v1",
+        "reachability-process-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -1037,7 +1110,7 @@ def test_internal_symlink_target_rejected(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-process-dispositions.json",
-        "reachability-process-dispositions/v1",
+        "reachability-process-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -1063,7 +1136,7 @@ def test_multi_target_expands_exactly(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-process-dispositions.json",
-        "reachability-process-dispositions/v1",
+        "reachability-process-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -1093,7 +1166,7 @@ def test_internal_dynamic_target_is_traversed_into_production_closure(tmp_path: 
     _write_manifest(
         root,
         "reachability-dynamic-import-dispositions.json",
-        "reachability-dynamic-import-dispositions/v1",
+        "reachability-dynamic-import-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -1125,7 +1198,7 @@ def test_production_unresolved_diagnostic_forces_hold(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [],
     )
     graph = build_graph(root)
@@ -1143,13 +1216,13 @@ def test_duplicate_json_object_keys_are_rejected(tmp_path: Path, duplicate_scope
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [],
     )
     path = root / "docs/quality/reachability-getattr-dispositions.json"
     raw = path.read_text(encoding="utf-8").strip()
     if duplicate_scope == "top":
-        raw = raw[:-1] + ', "schema_version": "reachability-getattr-dispositions/v1"}'
+        raw = raw[:-1] + ', "schema_version": "reachability-getattr-dispositions/v2"}'
     else:
         marker = '"path": ".tmp/quality/reachability-check.json"'
         raw = raw.replace(marker, f"{marker}, {marker}", 1)
@@ -1180,7 +1253,7 @@ def test_production_unknown_forces_hold_orphan_passes(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "src/service.py",
@@ -1205,7 +1278,7 @@ def test_disposition_hash_changes_with_bytes(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -1220,7 +1293,7 @@ def test_disposition_hash_changes_with_bytes(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "execution/main.py",
@@ -1243,7 +1316,7 @@ def test_disposition_files_excluded_from_population(tmp_path: Path) -> None:
     _write_manifest(
         root,
         "reachability-getattr-dispositions.json",
-        "reachability-getattr-dispositions/v1",
+        "reachability-getattr-dispositions/v2",
         [
             {
                 "path": "execution/main.py",

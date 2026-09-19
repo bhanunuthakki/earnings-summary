@@ -174,7 +174,7 @@ def test_tracked_peer_gets_relevance_boost(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp("NU", repo_root=repo, db_path=db)
     tickers = [r.peer_ticker for r in rows]
     bigb = next(r for r in rows if r.peer_ticker == "BIGB")
     assert "tracked" in bigb.match_reasons

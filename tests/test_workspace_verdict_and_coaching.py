@@ -10,6 +10,7 @@ render as no-ops there by design (see ``tests/test_workspace_golden.py``).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from io import StringIO
 from pathlib import Path
@@ -26,11 +27,11 @@ from report.models import (
 )
 from report.renderers.workspace_data import KpiStripTile, select_kpi_strip
 from report.renderers.workspace_html import (
-    _kpi_tile,  # pyright: ignore[reportPrivateUsage]
-    _newest_quarter_ingested_at,  # pyright: ignore[reportPrivateUsage]
-    _position_coaching,  # pyright: ignore[reportPrivateUsage]
-    _reread_strip,  # pyright: ignore[reportPrivateUsage]
-    _verdict_badge,  # pyright: ignore[reportPrivateUsage]
+    _kpi_tile,
+    _newest_quarter_ingested_at,
+    _position_coaching,
+    _reread_strip,
+    _verdict_badge,
 )
 from report.renderers.workspace_script import JS
 
@@ -177,19 +178,17 @@ def test_kpi_strip_tile_carries_definition_id_passthrough() -> None:
     assert tiles[0].kpi_definition_id == 42
 
 
-def _tile(**overrides: object) -> KpiStripTile:
-    base: dict[str, object] = {
-        "name": "Net revenue retention",
-        "values": [117.5, 117.0],
-        "labels": ["2025-12-31", "2026-03-31"],
-        "latest_label": "2026-03-31",
-        "latest_display": "117%",
-        "delta_display": "↓ 0.5pp",
-        "delta_sign": "neg",
-        "kpi_definition_id": None,
-    }
-    base.update(overrides)
-    return KpiStripTile(**base)  # type: ignore[arg-type]
+def _tile(*, kpi_definition_id: int | None = None) -> KpiStripTile:
+    return KpiStripTile(
+        name="Net revenue retention",
+        values=[117.5, 117.0],
+        labels=["2025-12-31", "2026-03-31"],
+        latest_label="2026-03-31",
+        latest_display="117%",
+        delta_display="↓ 0.5pp",
+        delta_sign="neg",
+        kpi_definition_id=kpi_definition_id,
+    )
 
 
 def test_kpi_tile_is_a_fact_doorway_button_when_def_id_present() -> None:
@@ -328,34 +327,14 @@ def test_load_graded_sell_base_rate_absent_module_degrades_to_none(tmp_path: Pat
     assert load_graded_sell_base_rate("TEST", db_path) is None
 
 
-def _raw_advisor_memos_db(tmp_path: Path) -> Path:
+def _raw_advisor_memos_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """A minimal ``advisor_memos`` table built with raw sqlite3 (no alembic) --
     just the columns ``advisor.store.list_memos`` selects, so the count
     loader can be exercised without the full migration chain."""
     import sqlite3
 
-    db_path = tmp_path / "portfolio.db"
+    db_path = migrated_db(tmp_path / "portfolio.db")
     conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        """
-        CREATE TABLE advisor_memos (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            ticker TEXT,
-            counter_ticker TEXT,
-            title TEXT NOT NULL,
-            body_md TEXT NOT NULL,
-            context_json TEXT,
-            stance TEXT,
-            horizon_days INTEGER,
-            score_status TEXT NOT NULL,
-            note_id INTEGER,
-            ledger_entry_id INTEGER,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
     rows = [
         ("bhanu", "position_review", "TEST", "First review"),
         ("bhanu", "position_review", "TEST", "Second review"),
@@ -374,24 +353,24 @@ def _raw_advisor_memos_db(tmp_path: Path) -> Path:
     return db_path
 
 
-def test_position_review_count_loader_counts_only_this_tickers_kind(tmp_path: Path) -> None:
-    from report.renderers.workspace_data import (
-        _load_position_review_count_safe,  # pyright: ignore[reportPrivateUsage]
-    )
+def test_position_review_count_loader_counts_only_this_tickers_kind(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    from advisor.store import count_memos
 
-    db_path = _raw_advisor_memos_db(tmp_path)
-    assert _load_position_review_count_safe("TEST", db_path) == 2
-    assert _load_position_review_count_safe("OTHER", db_path) == 1
-    assert _load_position_review_count_safe("NOTHELD", db_path) == 0
+    db_path = _raw_advisor_memos_db(tmp_path, migrated_db)
+    assert count_memos(ticker="TEST", kind="position_review", db_path=db_path) == 2
+    assert count_memos(ticker="OTHER", kind="position_review", db_path=db_path) == 1
+    assert count_memos(ticker="NOTHELD", kind="position_review", db_path=db_path) == 0
 
 
-def test_position_review_count_loader_degrades_to_zero_without_db(tmp_path: Path) -> None:
-    from report.renderers.workspace_data import (
-        _load_position_review_count_safe,  # pyright: ignore[reportPrivateUsage]
-    )
+def test_position_review_count_loader_reports_unavailable_without_db(tmp_path: Path) -> None:
+    from report.renderers.workspace_data import PanelAvailability, load_workspace_p3_panels
 
     missing = tmp_path / "does_not_exist.db"
-    assert _load_position_review_count_safe("TEST", missing) == 0
+    panels = load_workspace_p3_panels("TEST", tmp_path, db_path=missing)
+    assert panels.position_review_count is None
+    assert panels.availability["position_review_count"] is PanelAvailability.UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------

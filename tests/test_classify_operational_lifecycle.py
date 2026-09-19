@@ -88,15 +88,15 @@ def _refresh(repo: Path) -> None:
     for rel, schema in (
         (
             "docs/quality/reachability-dynamic-import-dispositions.json",
-            "reachability-dynamic-import-dispositions/v1",
+            "reachability-dynamic-import-dispositions/v2",
         ),
         (
             "docs/quality/reachability-getattr-dispositions.json",
-            "reachability-getattr-dispositions/v1",
+            "reachability-getattr-dispositions/v2",
         ),
         (
             "docs/quality/reachability-process-dispositions.json",
-            "reachability-process-dispositions/v1",
+            "reachability-process-dispositions/v2",
         ),
     ):
         target = repo / rel
@@ -114,7 +114,7 @@ def _refresh(repo: Path) -> None:
                 "python": prov["python"],
                 "source_sha256": prov["source_sha256"],
             },
-            "source_manifest_sha256": first.source_manifest_sha256,
+            "input_scope": "scanner-consumed-inputs/v1",
             "scanner_sha256": first.scanner_sha256,
         }
         _w(
@@ -660,7 +660,7 @@ def test_multi_target_process_edges(tmp_path: Path) -> None:
         repo / "docs/quality/reachability-process-dispositions.json",
         json.dumps(
             {
-                "schema_version": "reachability-process-dispositions/v1",
+                "schema_version": "reachability-process-dispositions/v2",
                 "graph_provenance": {
                     "path": ".tmp/quality/reachability-check.json",
                     "schema_version": "operational-reachability-raw/v1",
@@ -670,7 +670,7 @@ def test_multi_target_process_edges(tmp_path: Path) -> None:
                         "python": prov["python"],
                         "source_sha256": prov["source_sha256"],
                     },
-                    "source_manifest_sha256": g2.source_manifest_sha256,
+                    "input_scope": "scanner-consumed-inputs/v1",
                     "scanner_sha256": g2.scanner_sha256,
                 },
                 "edges": [

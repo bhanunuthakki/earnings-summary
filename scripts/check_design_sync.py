@@ -29,6 +29,7 @@ from ui.tokens import CHROME_TOKENS, PALETTE_DARK, SPACING_SCALE, TYPE_SCALE  # 
 
 WORK_OS_PROTOTYPE = PROJECT_ROOT / "mockups" / "harvey_sidebar_flow.html"
 WORK_OS_RENDERER = SRC / "pipeline" / "work_os_shell.py"
+WORK_OS_RUNTIME = SRC / "pipeline" / "work_os_runtime.js"
 WORK_OS_STYLE_MASTER = SRC / "pipeline" / "work_os_styles.py"
 _ROOT_RULE = re.compile(r":root(?:\[[^\]]+\])?\s*\{[^{}]*\}", re.DOTALL)
 _RAW_FONT_SIZE = re.compile(r"font-size\s*:\s*[0-9.]+px")
@@ -112,6 +113,8 @@ def work_os_contract_failures(
     mockup = WORK_OS_PROTOTYPE.read_text(encoding="utf-8") if mockup_text is None else mockup_text
     renderer = (
         WORK_OS_RENDERER.read_text(encoding="utf-8")
+        + "\n"
+        + WORK_OS_RUNTIME.read_text(encoding="utf-8")
         + "\n"
         + WORK_OS_STYLE_MASTER.read_text(encoding="utf-8")
         if renderer_source is None

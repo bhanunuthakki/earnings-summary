@@ -8,18 +8,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from synthesis.seed_decisions import backfill_seed_decisions
 from user_state import notes
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0129_commitment_scan_log"
-HEAD = "0130_owner_decision_extension"
 
 _SEED = {
     "decisions": [
@@ -52,100 +47,9 @@ _SEED = {
 }
 
 
-# Pre-0130 shapes, verbatim from prod DDL (the 0114-test pattern: hand-build
-# the prior state, stamp the prior head, upgrade ONE migration).
-_PRE_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16) NOT NULL,
-    recommendation_kind VARCHAR(32) NOT NULL,
-    recommendation_value FLOAT,
-    conviction VARCHAR(16),
-    source_artifact_id INTEGER,
-    source_memo_id INTEGER,
-    source_dismissal_id INTEGER,
-    source_lens VARCHAR(64),
-    rationale_excerpt TEXT,
-    source_prose TEXT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    outcome_at DATETIME,
-    outcome_label VARCHAR(16),
-    created_at DATETIME NOT NULL,
-    CONSTRAINT ck_decisions_source_present CHECK (
-        source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL
-        OR recommendation_kind = 'avoid')
-);
-CREATE UNIQUE INDEX uq_decisions_source_memo ON decisions (source_memo_id)
-    WHERE source_memo_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_decisions_source_dismissal ON decisions (source_dismissal_id)
-    WHERE source_dismissal_id IS NOT NULL;
-CREATE TABLE tenants (id TEXT PRIMARY KEY);
-INSERT INTO tenants (id) VALUES ('bhanu');
-CREATE TABLE analyst_notes (
-    id INTEGER NOT NULL,
-    user_id TEXT DEFAULT 'bhanu' NOT NULL,
-    ticker TEXT,
-    kind TEXT NOT NULL,
-    status TEXT DEFAULT 'open' NOT NULL,
-    body TEXT NOT NULL,
-    anchor_type TEXT,
-    anchor_key TEXT,
-    source TEXT NOT NULL,
-    source_ref TEXT,
-    supersedes_id INTEGER,
-    resolution_note TEXT,
-    context_json TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    resolved_at TEXT,
-    decision_id INTEGER,
-    position_entry_id INTEGER,
-    link_auto_resolve INTEGER DEFAULT 0 NOT NULL,
-    fact_ref TEXT,
-    PRIMARY KEY (id),
-    CONSTRAINT ck_analyst_notes_source CHECK (source IN
-        ('comment', 'chat', 'alert', 'manual', 'advisor', 'capture')),
-    CONSTRAINT fk_analyst_notes_user_id_tenants FOREIGN KEY(user_id) REFERENCES tenants (id),
-    CONSTRAINT ck_analyst_notes_status CHECK (status IN
-        ('open', 'resolved', 'superseded', 'archived')),
-    CONSTRAINT fk_analyst_notes_supersedes FOREIGN KEY(supersedes_id)
-        REFERENCES analyst_notes (id),
-    CONSTRAINT ck_analyst_notes_kind CHECK (kind IN
-        ('question', 'decision', 'watch', 'assumption', 'observation', 'musing'))
-);
-CREATE UNIQUE INDEX uq_analyst_notes_source_ref ON analyst_notes (user_id, source, source_ref)
-    WHERE source_ref IS NOT NULL;
-CREATE VIRTUAL TABLE analyst_notes_fts USING fts5(
-    body, content='analyst_notes', content_rowid='id');
-CREATE TRIGGER analyst_notes_fts_ai AFTER INSERT ON analyst_notes BEGIN
-    INSERT INTO analyst_notes_fts(rowid, body) VALUES (new.id, new.body); END;
-"""
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "ledger.db"
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_PRE_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    conn = sqlite3.connect(str(db))
-    try:
-        # Deliberately minimal 0130 contract fixture, not a production
-        # versioned database; guarded writers enforce the local tables here.
-        conn.execute("DROP TABLE alembic_version")
-        conn.commit()
-    finally:
-        conn.close()
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[[Path], Path]) -> Path:
+    return migrated_db(tmp_path / "ledger.db")
 
 
 @pytest.fixture

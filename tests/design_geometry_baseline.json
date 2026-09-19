@@ -25,7 +25,6 @@
   "src/pipeline/ir_coverage_panel.py": 5,
   "src/pipeline/journal_panel.py": 41,
   "src/pipeline/ledger_panel.py": 10,
-  "src/pipeline/mobile_inbox_panel.py": 2,
   "src/pipeline/model_eval_panel.py": 2,
   "src/pipeline/open_loops.py": 4,
   "src/pipeline/peeks.py": 44,

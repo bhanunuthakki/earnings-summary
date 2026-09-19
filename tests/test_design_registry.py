@@ -15,12 +15,13 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from ui import design_registry as registry
+from ui.controls import controls_css
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC))
-
-from ui import design_registry as registry  # noqa: E402
-from ui.controls import controls_css  # noqa: E402
 
 
 def _rule_bodies(css: str, selector: str) -> tuple[str, ...]:
@@ -159,7 +160,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert len(registry.BESPOKE_BUTTON_APPROVALS) == 17
     assert len(registry.MONO_TABLE_APPROVALS) == 1
     assert registry.SURFACE_SANCTIONS == ()
-    assert len(registry.CCACTION_REGRESSION_FLOOR) == 27
+    assert len(registry.CCACTION_REGRESSION_FLOOR) == 26
     for name in (
         "CHROME_TOKENS",
         "INDENT_TOKENS",

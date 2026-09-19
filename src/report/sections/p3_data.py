@@ -15,8 +15,9 @@ typed rows. The renderer (workspace_html.py) consumes them in a follow-on
 PR — keeping the data + render concerns separate so the accessors can
 be unit-tested without spinning up the full report pipeline.
 
-All accessors are best-effort: missing table -> []. Synthetic test
-environments without the matching migration applied keep working.
+Standalone accessors preserve their optional-data contract: missing table -> [].
+The composite loader separately records unavailable sources. Supplied connections
+remain caller-owned, including their row factory and transaction state.
 """
 
 from __future__ import annotations
@@ -135,7 +136,9 @@ class SayDoVerdictRow:
 # ---------------------------------------------------------------------------
 
 
-def _open(db_path: Path | str) -> sqlite3.Connection | None:
+def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+    if db_path is None:
+        return None
     p = Path(db_path)
     if not p.exists():
         return None
@@ -182,13 +185,19 @@ def _parse_date(raw: object) -> date | None:
 # ---------------------------------------------------------------------------
 
 
-def load_macro_sensitivities(ticker: str, *, db_path: Path | str) -> list[MacroSensitivityRow]:
+def load_macro_sensitivities(
+    ticker: str, *, db_path: Path | str | None = None, conn: sqlite3.Connection | None = None
+) -> list[MacroSensitivityRow]:
     """All macro_sensitivities rows for `ticker`, ordered by |beta| desc."""
-    conn = _open(db_path)
-    if conn is None or not _table_exists(conn, "macro_sensitivities"):
+    db_conn = conn if conn is not None else _open(db_path)
+    if db_conn is None:
         return []
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
+        if not _table_exists(db_conn, "macro_sensitivities"):
+            return []
+        rows = db_conn.execute(
             """
             SELECT series_id, beta, r_squared, lookback_window_days, computed_at
             FROM macro_sensitivities
@@ -198,7 +207,10 @@ def load_macro_sensitivities(ticker: str, *, db_path: Path | str) -> list[MacroS
             (ticker.upper(),),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
     out: list[MacroSensitivityRow] = []
     for r in rows:
         computed = _parse_dt(r["computed_at"])
@@ -216,13 +228,19 @@ def load_macro_sensitivities(ticker: str, *, db_path: Path | str) -> list[MacroS
     return out
 
 
-def load_strategic_targets(ticker: str, *, db_path: Path | str) -> list[StrategicTargetRow]:
+def load_strategic_targets(
+    ticker: str, *, db_path: Path | str | None = None, conn: sqlite3.Connection | None = None
+) -> list[StrategicTargetRow]:
     """All strategic_targets rows for `ticker`, newest extraction first."""
-    conn = _open(db_path)
-    if conn is None or not _table_exists(conn, "strategic_targets"):
+    db_conn = conn if conn is not None else _open(db_path)
+    if db_conn is None:
         return []
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
+        if not _table_exists(db_conn, "strategic_targets"):
+            return []
+        rows = db_conn.execute(
             """
             SELECT target_kind, target_value, target_unit, target_period,
                    target_currency, narrative_excerpt, confidence, extracted_at
@@ -233,7 +251,10 @@ def load_strategic_targets(ticker: str, *, db_path: Path | str) -> list[Strategi
             (ticker.upper(),),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
     return [
         StrategicTargetRow(
             target_kind=str(r["target_kind"]),
@@ -249,7 +270,7 @@ def load_strategic_targets(ticker: str, *, db_path: Path | str) -> list[Strategi
 
 
 def load_customer_concentrations(
-    ticker: str, *, db_path: Path | str
+    ticker: str, *, db_path: Path | str | None = None, conn: sqlite3.Connection | None = None
 ) -> list[CustomerConcentrationRow]:
     """All customer_concentrations rows for `ticker`, newest period first.
 
@@ -257,11 +278,15 @@ def load_customer_concentrations(
     threshold for "material concentration risk". Adjust at call site if
     you want the full table.
     """
-    conn = _open(db_path)
-    if conn is None or not _table_exists(conn, "customer_concentrations"):
+    db_conn = conn if conn is not None else _open(db_path)
+    if db_conn is None:
         return []
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
+        if not _table_exists(db_conn, "customer_concentrations"):
+            return []
+        rows = db_conn.execute(
             """
             SELECT fiscal_period, fiscal_period_type, customer_label,
                    pct_of_revenue, revenue_amount, revenue_currency
@@ -273,7 +298,10 @@ def load_customer_concentrations(
             (ticker.upper(),),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
     return [
         CustomerConcentrationRow(
             fiscal_period=str(r["fiscal_period"]),
@@ -290,7 +318,11 @@ def load_customer_concentrations(
 
 
 def load_lease_ladder(
-    ticker: str, *, db_path: Path | str, lease_type: str = "operating"
+    ticker: str,
+    *,
+    db_path: Path | str | None = None,
+    lease_type: str = "operating",
+    conn: sqlite3.Connection | None = None,
 ) -> list[LeaseLadderRow]:
     """The most recent lease maturity ladder for `ticker`.
 
@@ -298,11 +330,15 @@ def load_lease_ladder(
     ladder_year row for that vintage so the renderer can sort them
     Y1..Y5..Thereafter without juggling vintages.
     """
-    conn = _open(db_path)
-    if conn is None or not _table_exists(conn, "lease_commitments"):
+    db_conn = conn if conn is not None else _open(db_path)
+    if db_conn is None:
         return []
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
-        latest_year_row = conn.execute(
+        if not _table_exists(db_conn, "lease_commitments"):
+            return []
+        latest_year_row = db_conn.execute(
             """
             SELECT MAX(fiscal_year) AS fy FROM lease_commitments
             WHERE ticker = ? AND lease_type = ?
@@ -312,7 +348,7 @@ def load_lease_ladder(
         if latest_year_row is None or latest_year_row["fy"] is None:
             return []
         latest_fy = int(latest_year_row["fy"])
-        rows = conn.execute(
+        rows = db_conn.execute(
             """
             SELECT fiscal_year, as_of_date, lease_type, ladder_year,
                    ladder_calendar_year, amount, currency, unit
@@ -332,7 +368,10 @@ def load_lease_ladder(
             (ticker.upper(), lease_type, latest_fy),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
     out: list[LeaseLadderRow] = []
     for r in rows:
         as_of = _parse_date(r["as_of_date"])
@@ -358,7 +397,11 @@ def load_lease_ladder(
 
 
 def load_decision_history(
-    ticker: str, *, db_path: Path | str, limit: int = 50
+    ticker: str,
+    *,
+    db_path: Path | str | None = None,
+    limit: int = 50,
+    conn: sqlite3.Connection | None = None,
 ) -> DecisionHistorySummary:
     """Aggregate decision audit rows for `ticker`.
 
@@ -366,8 +409,8 @@ def load_decision_history(
     (fraction of decisions where outcome_pct > 0 OR outcome_status=='correct'),
     and the last `limit` raw rows for the time-series chart.
     """
-    conn = _open(db_path)
-    if conn is None or not _table_exists(conn, "decisions"):
+    db_conn = conn if conn is not None else _open(db_path)
+    if db_conn is None:
         return DecisionHistorySummary(
             total=0,
             by_kind={},
@@ -375,8 +418,18 @@ def load_decision_history(
             win_rate_overall=None,
             rows=[],
         )
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
+        if not _table_exists(db_conn, "decisions"):
+            return DecisionHistorySummary(
+                total=0,
+                by_kind={},
+                by_conviction={},
+                win_rate_overall=None,
+                rows=[],
+            )
+        rows = db_conn.execute(
             f"""
             SELECT recommendation_kind, recommendation_value, conviction,
                    made_at, outcome_pct, outcome_at, rationale_excerpt
@@ -388,7 +441,10 @@ def load_decision_history(
             (ticker.upper(),),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
     by_kind: dict[str, int] = {}
     by_conviction: dict[str, int] = {}
     decisions: list[DecisionRow] = []
@@ -691,7 +747,14 @@ def _is_named_rival(company_name: str | None, watchlist: list[str]) -> bool:
     return False
 
 
-def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[PeerCompRow]:
+def load_peer_comp(
+    ticker: str,
+    *,
+    repo_root: Path,
+    max_peers: int = 6,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[PeerCompRow]:
     """Scored comparable selection for the eval snapshot (P4.2; tightened PR7).
 
     The raw FMP peer list is a sector/market-cap screen whose alphabetical
@@ -739,7 +802,7 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
     _, target_sector, target_industry, target_cap = _profile_fields(fmp_dir, ticker)
     watchlist = _watchlist_names(ticker, repo_root)
     peer_exclude, override = _peer_curation(ticker, repo_root)
-    tracked = _tracked_tickers(repo_root)
+    tracked = _tracked_tickers(db_path, conn=conn)
 
     # Inject pinned tickers the FMP screen omitted (resolve cached metrics if we
     # have them). Only ticker-shaped, already-uppercase watchlist entries are
@@ -855,27 +918,26 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
     return out
 
 
-def _tracked_tickers(repo_root: Path) -> set[str]:
-    """Active tracked symbols (portfolio + evaluation) — best-effort, {} on
-    any miss. A tracked peer is both a relevance signal and one whose data
-    we already cache locally."""
-    db = Path(repo_root) / "data" / "portfolio.db"
-    if not db.exists():
+def _tracked_tickers(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> set[str]:
+    """Tracked peers from explicit database authority; no checkout fallback."""
+    db_conn = conn if conn is not None else (_open(db_path) if db_path is not None else None)
+    if db_conn is None:
         return set()
     try:
-        conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return set()
-    try:
-        rows = conn.execute(
+        rows = db_conn.execute(
             "SELECT ticker FROM tracked_companies "
             "WHERE archived_at IS NULL AND list_type IN ('portfolio', 'evaluation')"
         ).fetchall()
         return {str(r[0]).upper() for r in rows}
     except sqlite3.Error:
+        if conn is not None:
+            raise
         return set()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def _first_record(path: Path) -> dict[str, object] | None:
@@ -936,18 +998,26 @@ def _peer_roic_ttm(fmp_dir: Path, peer: str) -> float | None:
 
 
 def load_saydo_verdicts(
-    ticker: str, *, db_path: Path | str, limit: int = 30
+    ticker: str,
+    *,
+    db_path: Path | str | None = None,
+    limit: int = 30,
+    conn: sqlite3.Connection | None = None,
 ) -> list[SayDoVerdictRow]:
     """All management_commitments rows for `ticker` with their outcomes.
 
     The renderer can group by period_made to produce the per-quarter
     say-vs-do grading overlay that P3-21 calls for.
     """
-    conn = _open(db_path)
-    if conn is None or not _table_exists(conn, "management_commitments"):
+    db_conn = conn if conn is not None else _open(db_path)
+    if db_conn is None:
         return []
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
+        if not _table_exists(db_conn, "management_commitments"):
+            return []
+        rows = db_conn.execute(
             f"""
             SELECT period_made, period_target, kpi_name, comparator,
                    target_value, unit, narrative,
@@ -960,7 +1030,10 @@ def load_saydo_verdicts(
             (ticker.upper(),),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
     out: list[SayDoVerdictRow] = []
     for r in rows:
         period_made = _parse_dt(r["period_made"])

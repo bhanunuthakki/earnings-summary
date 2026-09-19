@@ -200,7 +200,7 @@ def test_chat_admission_is_bounded_before_session_creation(
 def test_extreme_pdf_dimensions_rejected_before_allocation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    from pipeline import pdf_render
+    from pipeline import pdf_worker
 
     class Rect:
         width = 100_000
@@ -224,10 +224,10 @@ def test_extreme_pdf_dimensions_rejected_before_allocation(
     def open_doc(path: Path) -> Doc:
         return Doc()
 
-    monkeypatch.setattr(pdf_render, "_open_pdf", open_doc)
+    monkeypatch.setattr("pymupdf.open", open_doc)
     assert (
-        pdf_render.render_page_image(
-            tmp_path, pdf_path=tmp_path / "fake.pdf", sha256="a" * 64, page=1
+        pdf_worker.perform(
+            "render", tmp_path / "fake.pdf", output_path=tmp_path / "preview.png", page=1
         )
         is None
     )

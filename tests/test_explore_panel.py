@@ -299,21 +299,19 @@ def test_workbench_preserves_answer_context_peers_and_saved_views(db_path: Path)
     assert 'data-act="del"' in html_out
 
 
-def test_explore_remount_retires_stale_palette_and_async_owners(db_path: Path) -> None:
+def test_explore_remount_retires_stale_async_owners(db_path: Path) -> None:
     html_out = render_explore_panel(db_path)
 
     assert "function isCurrent()" in html_out
-    assert "window.removeEventListener('cc-ask-q', window.__explorePaletteHandler)" in html_out
-    assert "window.__explorePaletteHandler = consumePaletteQuery" in html_out
     assert "if (!isCurrent())" in html_out
 
 
-def test_workbench_rails_are_adjustable_accessible_and_persistent(db_path: Path) -> None:
+def test_workbench_rails_are_adjustable_and_accessible(db_path: Path) -> None:
     html_out = render_explore_panel(db_path)
     assert html_out.count('role="separator"') == 2
     assert 'aria-valuemin="240"' in html_out
     assert 'aria-valuemax="560"' in html_out
-    assert "exploreWorkbenchRails" in html_out
+    assert "CCState" not in html_out
     assert "localStorage" not in html_out
     assert "handle.addEventListener('keydown'" in html_out
 
@@ -684,12 +682,9 @@ def test_ask_stream_endpoint_requires_query(client: FlaskClient) -> None:
     assert client.open("/api/ask/stream", method="OPTIONS").status_code == 204
 
 
-def test_explore_panel_uses_governed_stream_inline_and_consumes_palette_query(
+def test_explore_panel_uses_governed_stream_inline(
     db_path: Path,
 ) -> None:
     html_out = render_explore_panel(db_path)
     assert "openWorkOsCopilot" not in html_out
     assert "/api/ask/stream" in html_out
-    assert "CCState.get('askQ')" in html_out
-    assert "'cc-ask-q'" in html_out  # the event registration
-    assert "consumePaletteQuery" in html_out

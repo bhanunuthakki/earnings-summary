@@ -1103,7 +1103,8 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
     candidates: set[Path] = set()
     for root in (project_root / "src", project_root / "execution"):
         if root.exists():
-            candidates.update(root.rglob("*.py"))
+            for suffix in ("*.py", "*.js", "*.mjs"):
+                candidates.update(root.rglob(suffix))
     design_root = project_root / "design-system" / "src"
     if design_root.exists():
         for suffix in ("*.css", "*.html", "*.js", "*.mjs", "*.ts", "*.tsx", "*.svg"):

@@ -1313,14 +1313,14 @@ def test_refresh_provenance_end_to_end(refresh_repo: Path, monkeypatch: pytest.M
     try:
         comment = wb["Dashboard"]["B45"].comment
         assert comment is not None
-        assert "overridden from Opus 11.0x" in comment.text
+        assert "overridden from unattributed baseline 11.0x" in comment.text
         text = "\n".join(
             str(c.value)
             for row in wb["Assumptions"].iter_rows()
             for c in row
             if c.value is not None
         )
-        assert "overridden from Opus 11.0x" in text
+        assert "overridden from unattributed baseline 11.0x" in text
     finally:
         wb.close()
 

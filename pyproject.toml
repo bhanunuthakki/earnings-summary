@@ -45,6 +45,9 @@ gsheets = [
     "google-auth-oauthlib>=1.2",
 ]
 
+[tool.setuptools.package-data]
+"src.pipeline" = ["*.js"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
@@ -95,7 +98,6 @@ ignore = [
 "execution/build_fintech_sotp.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF001", "RUF002", "RUF003"]
 "execution/build_nu_platform_dcf.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF003"]
 "execution/build_meli_platform_dcf.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF001", "RUF002", "RUF003"]
-"execution/dcf_opus_assumptions.py" = ["N816", "N806", "N803", "B007", "T201", "SIM105", "SIM222"]
 
 [tool.pyright]
 include = [
