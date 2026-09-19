@@ -2,6 +2,26 @@
   "schema_version": "test-db-conversions/v1",
   "records": [
     {
+      "path": "tests/test_auto_reconcile.py",
+      "source_sha256": "ff5bd0849ae94c70cf5ff4751b68ce5c2ba93ec96e9adf12bb1d85f8389eb5c2",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "8f963574294f4784d8ce96c730a5484f9353a1642b08bb00780cf8b396ef3995",
+        "path": "tests/test_auto_reconcile.py",
+        "locator": {
+          "start_line": 23,
+          "start_col": 11,
+          "end_line": 23,
+          "end_col": 44
+        },
+        "source_sha256": "ff5bd0849ae94c70cf5ff4751b68ce5c2ba93ec96e9adf12bb1d85f8389eb5c2"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
       "path": "tests/test_canonical_fact_projection.py",
       "source_sha256": "f009bc28a53ea0d9d2aa5dea676c2126efffd455859322ab71a2dd3481c75716",
       "parity_receipt": {
@@ -18,7 +38,7 @@
         "source_sha256": "f009bc28a53ea0d9d2aa5dea676c2126efffd455859322ab71a2dd3481c75716"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -38,7 +58,7 @@
         "source_sha256": "0478595585ef6c0fd4af349b7c938448ed91cb742385aacca2229e5ec40e70c7"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -58,7 +78,7 @@
         "source_sha256": "9b50352461b10f0c1bbf0384381e9c799e637196fc139683c2cc95219c618468"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -78,7 +98,27 @@
         "source_sha256": "4a35ce7256d9b3d9df777327bad876605a6b22cdbbe9b86e0e43329612725021"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_dcf_live_write.py",
+      "source_sha256": "2db6b2bbf3b24ec83f71b3a2eb3d5e8c51036a2b2164e8ac5dc0b196051f18ee",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "1279c4b004ad06a14355d7a8ad136cfc45c918baedd49a38f4a077cbffe38795",
+        "path": "tests/test_dcf_live_write.py",
+        "locator": {
+          "start_line": 38,
+          "start_col": 14,
+          "end_line": 38,
+          "end_col": 49
+        },
+        "source_sha256": "2db6b2bbf3b24ec83f71b3a2eb3d5e8c51036a2b2164e8ac5dc0b196051f18ee"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -98,7 +138,27 @@
         "source_sha256": "533490ac9be92f1fdea7f4bf7751ddb9ba3bf8eb27bfaf2c430a24e01b33de95"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_decision_feed.py",
+      "source_sha256": "7eb5f2c4484f62c498c392c7c8de45012630c0ea045fe8cd20839fb8a8b168a5",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "dcf83125a895874f48f26cdd1787b2f22552c06255a7e9eb6b222e416923e653",
+        "path": "tests/test_decision_feed.py",
+        "locator": {
+          "start_line": 29,
+          "start_col": 11,
+          "end_line": 29,
+          "end_col": 44
+        },
+        "source_sha256": "7eb5f2c4484f62c498c392c7c8de45012630c0ea045fe8cd20839fb8a8b168a5"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -118,7 +178,7 @@
         "source_sha256": "7cda6eb69fdd864297ad4de4eb287290b2b02c62ef4f467ca855f355bdf6a638"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -138,7 +198,7 @@
         "source_sha256": "4f714925c8c0b023236e046b5e74137744385724bdbe7103dfe76e2bcaf58235"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -158,7 +218,7 @@
         "source_sha256": "01690a67d815d4c16b764ddfde55c9a19221873f8f7217bbe23b762e94785b6e"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -178,7 +238,7 @@
         "source_sha256": "f1dfb440e2e225f777a7c960f4871b33a9f803fcf4ab2d19d390be9eb27f8022"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -198,7 +258,7 @@
         "source_sha256": "b3d3af2d6ace7ab1e2ae73a6b8399a612baa04f6b80e1b99bf80c35852ae6a02"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -218,7 +278,7 @@
         "source_sha256": "6380d41ebcb06ba64bab067ab743665a109bad8689c4c0252f32a34761eee15c"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -238,7 +298,7 @@
         "source_sha256": "3844dc542381f6acf70e5c8e70c8daa4ae4110a2536f6c29d7d26207b7b35e21"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -258,7 +318,7 @@
         "source_sha256": "886b43c5f53fe68b0e1c3d6399463bdcc7af77ab0d90d6323f353713df7be3a4"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -278,7 +338,7 @@
         "source_sha256": "a246a6d80aae8c3d3226acf1a18ec823d8b756df68ca0f52e78a72db554b70b3"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -298,7 +358,7 @@
         "source_sha256": "e07c3b6a92fde2347edfeb56fbd72c0db6ba1ed4aebbaf61df310fef645062f2"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -318,7 +378,7 @@
         "source_sha256": "9e1564f736ca5cc500dacd0425657aeea67e538d1e1ef269680128bc8f7a2bd8"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -338,7 +398,7 @@
         "source_sha256": "186825bac6153387e1d4e272fe9166f0ca8b56014c2f1147bda8442672163fff"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -358,7 +418,7 @@
         "source_sha256": "47650cc901a13b9cfc1f088d60bf31599f9b82d639209ffac037eefd4778e64e"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -378,7 +438,7 @@
         "source_sha256": "b752771d812960c4078c8a46edd92a76908a7774d7b41d2bb7cb77b68e54c676"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -398,7 +458,7 @@
         "source_sha256": "49613e224d248ddac75aee0ab657c13847985e94f382047646a5769f46bc022c"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -418,7 +478,7 @@
         "source_sha256": "c23bc5f27c632dd2131d852a4eb6cc6e72846a4236d455c5f92058d79144ed6a"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -438,7 +498,7 @@
         "source_sha256": "5a43fb5eb6ac59ad96e42c30a9874754b08c274490162844c518dc294060efdb"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -458,7 +518,7 @@
         "source_sha256": "895c77bc94c5665957a3b9e9a5a981db5bcc45f1cc35a19f412ca8de81c814ba"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -478,7 +538,67 @@
         "source_sha256": "ed6a35cb2a13740dc09f2e770922874626a42c0cddf434ddf9edd91d782cf547"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_owner_falsifier_conditions.py",
+      "source_sha256": "fa7675c4b05f834a0f11835596a54acc8628c1b377e1cc53bd4ce6eb5007f3cc",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "a0172be96352f5fa236871c4e612ac3cb541027bd445e6bc8e3f0f9bf072a7bd",
+        "path": "tests/test_owner_falsifier_conditions.py",
+        "locator": {
+          "start_line": 32,
+          "start_col": 11,
+          "end_line": 32,
+          "end_col": 49
+        },
+        "source_sha256": "fa7675c4b05f834a0f11835596a54acc8628c1b377e1cc53bd4ce6eb5007f3cc"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_owner_profile_packet.py",
+      "source_sha256": "03e0b6bf1a7609069538e0568e6ea88ade61aa81a95b38e5a1decd2d7c97b047",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "f30601a7200a8e2475adec9160e09b248892e69bb85ad83339e38fed6f06be05",
+        "path": "tests/test_owner_profile_packet.py",
+        "locator": {
+          "start_line": 38,
+          "start_col": 9,
+          "end_line": 38,
+          "end_col": 75
+        },
+        "source_sha256": "03e0b6bf1a7609069538e0568e6ea88ade61aa81a95b38e5a1decd2d7c97b047"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_pledge.py",
+      "source_sha256": "95d184340a847d646cd4e191c1dfd24f51994e06bdaf1d9815754c274e628dca",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "bad0d4747ed3b98866652d0fcaba810af22768093377ebb5f6cfea85750708d9",
+        "path": "tests/test_pledge.py",
+        "locator": {
+          "start_line": 22,
+          "start_col": 11,
+          "end_line": 22,
+          "end_col": 46
+        },
+        "source_sha256": "95d184340a847d646cd4e191c1dfd24f51994e06bdaf1d9815754c274e628dca"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -498,7 +618,7 @@
         "source_sha256": "6f5a66d193799c135e3374867b317f397ef95d411ebeabb68ab376bb7509fe19"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -518,7 +638,7 @@
         "source_sha256": "dba62006e9f67c679419d16946e3614b2177f28bce4c0e11159bf45cf280eebf"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -538,7 +658,7 @@
         "source_sha256": "4dc62b9feeed4900bf2ba8859ef9e0e79cc9e4c2fbf02657b3a8decf1a1181ef"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -558,7 +678,27 @@
         "source_sha256": "bb0d10dc7552848da47193afedcb056e77f986441973a629e48f4d57923ecb12"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_risk_snapshot_history.py",
+      "source_sha256": "1fa88ca25bab05facaf1a07f9eb0012e6d5445fab708eb0ea7dac6741e8a5c57",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "38911f3d65e5f357fc53d1c6df1ac884547895a563150cf1841c30d126083135",
+        "path": "tests/test_risk_snapshot_history.py",
+        "locator": {
+          "start_line": 42,
+          "start_col": 11,
+          "end_line": 42,
+          "end_col": 49
+        },
+        "source_sha256": "1fa88ca25bab05facaf1a07f9eb0012e6d5445fab708eb0ea7dac6741e8a5c57"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -578,7 +718,7 @@
         "source_sha256": "d563b76a6da1044aa6940c8ec2cd86acbebff165cde48e3144a274f88175c83e"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -598,7 +738,7 @@
         "source_sha256": "666b8670a4128708ef73a12e34b5aef0220eb40930628ff34136a3a062b2e105"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -618,7 +758,7 @@
         "source_sha256": "f576fe359ba6e49d95297fe4e9bc6d0ca73fda41629747b99db665c080297743"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -638,7 +778,7 @@
         "source_sha256": "211b3ea48848624e34bb4238cf2ffd172f05de9c99b1123eece1bbc09d6f7682"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -658,7 +798,7 @@
         "source_sha256": "c3c7f5de0bc6acb1045358bfb516c29aac52009a52a2eabe3be2cd92786fcfc8"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -678,7 +818,27 @@
         "source_sha256": "cb08d2293ba0e3b22bdfd72572cf4562acd6c0d2684c2f858dcca289ff67a311"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_session_context_pack.py",
+      "source_sha256": "1781aae516e97c4d4f6760a14df79a0f1b871ace56cbe9ed8a64cf3e5d42d4ce",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "6cce36e0cc44d7afac59d4318045a83be4763981ac70b6c3ed568a03905e07e6",
+        "path": "tests/test_session_context_pack.py",
+        "locator": {
+          "start_line": 37,
+          "start_col": 11,
+          "end_line": 37,
+          "end_col": 26
+        },
+        "source_sha256": "1781aae516e97c4d4f6760a14df79a0f1b871ace56cbe9ed8a64cf3e5d42d4ce"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -698,7 +858,27 @@
         "source_sha256": "1ceb6d41aeacad3736cdd980ec50fab2c74bcb6ff4c8c6a73ace948dbe6e686b"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_signals_quality.py",
+      "source_sha256": "b15285f85f390e6117ccea669345ec2964f5640c4fb83be14bf00f4738175e64",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "d28886a76eb898d3297dfb37ee1e75f861f264e91d9d837d36aa5181b79bcd88",
+        "path": "tests/test_signals_quality.py",
+        "locator": {
+          "start_line": 121,
+          "start_col": 9,
+          "end_line": 121,
+          "end_col": 77
+        },
+        "source_sha256": "b15285f85f390e6117ccea669345ec2964f5640c4fb83be14bf00f4738175e64"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -718,7 +898,7 @@
         "source_sha256": "fb286dfda433166643c9b8071a2cdf6df37d3cdfd10777d9b1ea3c37764b1a2c"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -738,7 +918,7 @@
         "source_sha256": "27ca2b899e1689cdf01f06e10fb245c811257d8338103d3312aa15d7525fd0c2"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -758,7 +938,7 @@
         "source_sha256": "8030a27728ccabfa2050307bcf2fc580f7618efce8dce5af6c7921138eaf6eef"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -778,7 +958,27 @@
         "source_sha256": "bfe7fe50e90c083814eaaf1a30d8b1e47d7f0d8e2769443890e3b26d0fa10660"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_thesis_status_view.py",
+      "source_sha256": "938a1b46eef39a74a45a659febbc4acf2f7a79a17c71409a915213a37f1f72ee",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "8255102c2be572b91fec8cf855d43527e11b1e06e7bf0d21243a298eda522355",
+        "path": "tests/test_thesis_status_view.py",
+        "locator": {
+          "start_line": 68,
+          "start_col": 4,
+          "end_line": 68,
+          "end_col": 18
+        },
+        "source_sha256": "938a1b46eef39a74a45a659febbc4acf2f7a79a17c71409a915213a37f1f72ee"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -798,7 +998,7 @@
         "source_sha256": "f79737bb4fa91c0314253bfa52b6d6029c56b74a53fd58ba63c2f4838d7d408c"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
@@ -818,7 +1018,7 @@
         "source_sha256": "e4d06511342a0d2f5ae5014ebe7588df0922b454b0cba03c5bb0a114ba4524b9"
       },
       "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the session-cached migrated_db template (archived route for historical targets, squashed active-head for full-baseline fixtures); seeds applied on the copy; transition-verifying tests retain direct chains by design; fidelity proven by tests/test_migrated_db_parity.py.",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
       "expires_at": "2027-01-01T00:00:00Z"
     }
   ]

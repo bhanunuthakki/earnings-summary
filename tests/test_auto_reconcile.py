@@ -7,90 +7,30 @@ residual queue holds ONLY inferred falsifiers on held positions."""
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from synthesis.auto_reconcile import auto_reconcile, auto_reconciled_summary
 from synthesis.reconcile import list_unreconciled
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0129_commitment_scan_log"
-HEAD = "0131_coach_pings"
-
-_PRE_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16) NOT NULL,
-    recommendation_kind VARCHAR(32) NOT NULL,
-    conviction VARCHAR(16),
-    source_artifact_id INTEGER,
-    source_memo_id INTEGER,
-    source_dismissal_id INTEGER,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL,
-    CONSTRAINT ck_decisions_source_present CHECK (
-        source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL
-        OR recommendation_kind = 'avoid')
-);
-CREATE TABLE tenants (id TEXT PRIMARY KEY);
-INSERT INTO tenants (id) VALUES ('bhanu');
-CREATE TABLE analyst_notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT DEFAULT 'bhanu' NOT NULL,
-    ticker TEXT,
-    kind TEXT NOT NULL,
-    status TEXT DEFAULT 'open' NOT NULL,
-    body TEXT NOT NULL,
-    source TEXT NOT NULL,
-    source_ref TEXT,
-    context_json TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CONSTRAINT ck_analyst_notes_kind CHECK (kind IN
-        ('question','decision','watch','assumption','observation','musing'))
-);
-CREATE VIRTUAL TABLE analyst_notes_fts USING fts5(
-    body, content='analyst_notes', content_rowid='id');
-CREATE TABLE insight_notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope_key TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    body_md TEXT NOT NULL,
-    meta_json TEXT,
-    status TEXT NOT NULL DEFAULT 'current',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE tracked_companies (ticker TEXT PRIMARY KEY, list_type TEXT NOT NULL);
-INSERT INTO tracked_companies VALUES ('VEEV','portfolio');
-INSERT INTO tracked_companies VALUES ('MU','watchlist');
-"""
 
 
 @pytest.fixture
-def db(tmp_path: Path) -> Path:
-    path = tmp_path / "auto.db"
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    path = migrated_db(tmp_path / "auto.db")
     conn = sqlite3.connect(str(path))
     try:
-        conn.executescript(_PRE_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    # Post-0130 seed shapes: a decision note, a musing, a theme, and two
-    # inferred falsifiers — one held (VEEV), one not (MU).
-    conn = sqlite3.connect(str(path))
-    try:
-        # Deliberately minimal 0131 contract fixture, not a production
-        # versioned database; guarded stores may enforce their local tables.
-        conn.execute("DROP TABLE alembic_version")
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, name, list_type) "
+            "VALUES ('VEEV', 'Veeva', 'portfolio')"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, name, list_type) "
+            "VALUES ('MU', 'Micron', 'watchlist')"
+        )
         conn.execute(
             "INSERT INTO analyst_notes (kind, body, source, source_ref, created_at, "
             "updated_at) VALUES ('decision','sold MU','capture','seed:decision:1',"
@@ -102,8 +42,8 @@ def db(tmp_path: Path) -> Path:
             "'seed:musing:1','2026-07-01','2026-07-01')"
         )
         conn.execute(
-            "INSERT INTO insight_notes (scope_key, kind, body_md) VALUES "
-            "('theme:x','theme','Sells winners too early')"
+            "INSERT INTO insight_notes (scope_key, kind, body_md, as_of, created_at, updated_at) VALUES "
+            "('theme:x','theme','Sells winners too early','2026-07-01','2026-07-01','2026-07-01')"
         )
         conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, "
@@ -162,7 +102,10 @@ def test_missing_falsifier_on_held_position_surfaces(db: Path) -> None:
 
     conn = sqlite3.connect(str(db))
     try:
-        conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio')")
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, name, list_type) "
+            "VALUES ('NU', 'Nu', 'portfolio')"
+        )
         # held + empty falsifier → the ask MUST surface
         conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, "
@@ -196,7 +139,10 @@ def test_missing_falsifier_ask_renders_on_reconcile_card(db: Path) -> None:
 
     conn = sqlite3.connect(str(db))
     try:
-        conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio')")
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, name, list_type) "
+            "VALUES ('NU', 'Nu', 'portfolio')"
+        )
         conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, "
             "made_at, created_at) VALUES ('NU','initiate','owner','','2026-06-01','2026-06-01')"

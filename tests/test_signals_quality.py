@@ -13,12 +13,11 @@ All LLM transport is monkeypatched at the module seam
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from llm.structured import StructuredParseError
 from signals import quality as q
 from signals.quality import score_unscored_signals
@@ -114,15 +113,12 @@ def _batch_size_of(prompt: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def test_migration_adds_quality_score_column(tmp_path: Path) -> None:
+def test_migration_adds_quality_score_column(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """Full-chain upgrade (same launch point as the diet guard) leaves
     ``signals.quality_score`` present and nullable."""
-    db = tmp_path / "mig.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0059_kpi_facts_restatement")
-    command.upgrade(cfg, "head")
+    db = migrated_db(tmp_path / "mig.db", stamp="0059_kpi_facts_restatement")
 
     conn = sqlite3.connect(str(db))
     cols = {r[1]: r for r in conn.execute("PRAGMA table_info(signals)").fetchall()}

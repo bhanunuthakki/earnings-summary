@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from alembic.config import Config
-
-from alembic import command
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -26,25 +25,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from user_state.ledger import append_entry  # noqa: E402
 from user_state.notes import create_note  # noqa: E402
 from user_state.thesis_status import read_thesis_status  # noqa: E402
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-
-# thesis_state is created by migration 0008; the test stamps at 0059, so it's
-# marked-applied-but-not-run. Create it here to match the 0008 schema (prod's
-# shape) so the lazily-bound view resolves it. raw_json is NOT NULL by schema.
-_THESIS_STATE_DDL = """
-CREATE TABLE thesis_state (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR NOT NULL,
-    thesis TEXT,
-    last_updated DATETIME,
-    breach_status VARCHAR,
-    raw_json TEXT NOT NULL,
-    ingested_at DATETIME NOT NULL,
-    CONSTRAINT uq_thesis_state_ticker UNIQUE (ticker)
-)
-"""
 
 
 def _seed_thesis_state(db_path: Path, ticker: str, thesis: str, breach: str) -> None:
@@ -60,25 +40,7 @@ def _seed_thesis_state(db_path: Path, ticker: str, thesis: str, breach: str) -> 
         conn.close()
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-
-    # thesis_state must exist BEFORE the chain runs (as it does on prod, where
-    # 0008 ran for real): 0143 now creates the view only when all its source
-    # tables are present — a dangling view breaks every later batch-migration
-    # rename (the 2026-07-16 CI incident).
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(_THESIS_STATE_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-
-    command.upgrade(cfg, "head")
-
+def _seed_db(db_path: Path) -> None:
     # NU: a real thesis + one ledger entry + one open question + one open musing.
     _seed_thesis_state(db_path, "NU", "NIM holds despite mix shift.", "ok")
     append_entry(ticker="NU", entry_kind="thesis_update", body="entry 1", db_path=db_path)
@@ -100,11 +62,15 @@ def _build_db(db_path: Path) -> None:
     _seed_thesis_state(db_path, "STB", "STUB: needs user-authored thesis", "ok")
 
 
-def test_read_thesis_status_rich_ticker(tmp_path: Path) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+@pytest.fixture
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    p = tmp_path / "data" / "portfolio.db"
+    migrated_db(p)
+    _seed_db(p)
+    return p
 
+
+def test_read_thesis_status_rich_ticker(db: Path) -> None:
     out = read_thesis_status(["NU", "WIX", "EMPT", "FLKR"], db_path=db)
 
     nu = out["NU"]
@@ -116,11 +82,7 @@ def test_read_thesis_status_rich_ticker(tmp_path: Path) -> None:
     assert nu.open_questions_count == 1
 
 
-def test_thesis_only_ticker_reads_has_thesis(tmp_path: Path) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
-
+def test_thesis_only_ticker_reads_has_thesis(db: Path) -> None:
     wix = read_thesis_status(["WIX"], db_path=db)["WIX"]
     assert wix.has_written_thesis is True
     assert wix.breach_status == "warn"
@@ -129,25 +91,17 @@ def test_thesis_only_ticker_reads_has_thesis(tmp_path: Path) -> None:
     assert wix.open_notes_count == 0
 
 
-def test_empty_thesis_reads_false_but_present(tmp_path: Path) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
-
+def test_empty_thesis_reads_false_but_present(db: Path) -> None:
     out = read_thesis_status(["EMPT"], db_path=db)
     assert "EMPT" in out
     assert out["EMPT"].has_written_thesis is False
 
 
-def test_stub_thesis_reads_false_but_present(tmp_path: Path) -> None:
+def test_stub_thesis_reads_false_but_present(db: Path) -> None:
     """Red-team wave A: the literal "STUB: needs user-authored thesis"
     placeholder defeated every has-a-thesis predicate. It must read
     has_written_thesis=0 (while staying visible in the view — the row has a
     footprint), exactly like an empty thesis."""
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
-
     out = read_thesis_status(["STB", "NU"], db_path=db)
     assert "STB" in out
     assert out["STB"].has_written_thesis is False
@@ -155,16 +109,13 @@ def test_stub_thesis_reads_false_but_present(tmp_path: Path) -> None:
     assert out["NU"].has_written_thesis is True
 
 
-def test_embedded_stub_marker_reads_false_innocent_words_do_not(tmp_path: Path) -> None:
+def test_embedded_stub_marker_reads_false_innocent_words_do_not(db: Path) -> None:
     """Red-team wave B: prod carries stub rows with the marker EMBEDDED
     mid-text (live example, ROP: "Roper Technologies — diversified industrial
     software. STUB: needs user-authored thesis…"). 0151's prefix predicate
     missed them; 0152 matches the literal ``STUB:`` token as a substring.
     Prose that merely contains stub-ish words (stubborn, STUBHUB — no colon)
     must NOT be excluded."""
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
     _seed_thesis_state(db, "EMB", "Real sentence. STUB: needs user-authored thesis", "ok")
     _seed_thesis_state(
         db, "SBRN", "A stubbornly durable moat; the STUBHUB comp is irrelevant.", "ok"
@@ -175,20 +126,13 @@ def test_embedded_stub_marker_reads_false_innocent_words_do_not(tmp_path: Path) 
     assert out["SBRN"].has_written_thesis is True  # innocent words survive
 
 
-def test_unknown_ticker_absent_and_case_insensitive(tmp_path: Path) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
-
+def test_unknown_ticker_absent_and_case_insensitive(db: Path) -> None:
     out = read_thesis_status(["nu", "ZZZZ"], db_path=db)
     assert "NU" in out  # lowercase input resolves to the canonical upper key
     assert "ZZZZ" not in out  # no footprint → absent, not a zero-row
 
 
-def test_empty_tickers_short_circuits(tmp_path: Path) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+def test_empty_tickers_short_circuits(db: Path) -> None:
     assert read_thesis_status([], db_path=db) == {}
 
 

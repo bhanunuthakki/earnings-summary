@@ -14,109 +14,32 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 import decision_conditions as dc
-from alembic import command
 from decision_conditions import attach_conditions, load_open_decisions
 from research.decision_feed import persist_owner_decision
 from synthesis.reconcile import close_intent
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0129_commitment_scan_log"
-HEAD = "0130_owner_decision_extension"
-
-_PRE_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16) NOT NULL,
-    recommendation_kind VARCHAR(32) NOT NULL,
-    recommendation_value FLOAT,
-    conviction VARCHAR(16),
-    source_artifact_id INTEGER,
-    source_memo_id INTEGER,
-    source_dismissal_id INTEGER,
-    source_lens VARCHAR(64),
-    rationale_excerpt TEXT,
-    source_prose TEXT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    outcome_at DATETIME,
-    outcome_label VARCHAR(16),
-    decision_conditions TEXT,
-    conditions_extracted_at DATETIME,
-    created_at DATETIME NOT NULL,
-    CONSTRAINT ck_decisions_source_present CHECK (
-        source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL
-        OR recommendation_kind = 'avoid')
-);
-CREATE TABLE tenants (id TEXT PRIMARY KEY);
-INSERT INTO tenants (id) VALUES ('bhanu');
-CREATE TABLE analyst_notes (
-    id INTEGER NOT NULL,
-    user_id TEXT DEFAULT 'bhanu' NOT NULL,
-    ticker TEXT,
-    kind TEXT NOT NULL,
-    status TEXT DEFAULT 'open' NOT NULL,
-    body TEXT NOT NULL,
-    source TEXT NOT NULL,
-    source_ref TEXT,
-    context_json TEXT,
-    resolved_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (id),
-    CONSTRAINT ck_analyst_notes_kind CHECK (kind IN
-        ('question','decision','watch','assumption','observation','musing'))
-);
-CREATE VIRTUAL TABLE analyst_notes_fts USING fts5(
-    body, content='analyst_notes', content_rowid='id');
-CREATE TABLE llm_artifacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT,
-    purpose TEXT NOT NULL,
-    content_md TEXT,
-    generated_at TEXT NOT NULL,
-    superseded_by_id INTEGER
-);
-CREATE TABLE advisor_memos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,
-    ticker TEXT,
-    body_md TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-CREATE TABLE tracked_companies (
-    ticker TEXT PRIMARY KEY,
-    list_type TEXT NOT NULL
-);
-INSERT INTO tracked_companies (ticker, list_type) VALUES ('NU','portfolio');
-INSERT INTO tracked_companies (ticker, list_type) VALUES ('MU','index_member');
-"""
 
 
 @pytest.fixture
-def db(tmp_path: Path) -> Path:
-    path = tmp_path / "portfolio.db"
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    path = migrated_db(tmp_path / "portfolio.db")
     conn = sqlite3.connect(str(path))
     try:
-        conn.executescript(_PRE_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    conn = sqlite3.connect(str(path))
-    try:
-        # Deliberately minimal 0130 contract fixture, not a production
-        # versioned database; guarded writers enforce the local tables here.
-        conn.execute("DROP TABLE alembic_version")
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, name, list_type) "
+            "VALUES ('NU', 'Nu', 'portfolio')"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, name, list_type) "
+            "VALUES ('MU', 'Micron', 'index_member')"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -233,8 +156,8 @@ def test_owner_falsifier_outlives_grading_while_held(db: Path) -> None:
         )
         # Graded ADVISOR decision → retired on grading, as before
         conn.execute(
-            "INSERT INTO llm_artifacts (ticker, purpose, content_md, generated_at) "
-            "VALUES ('NU','lens:five_min_reread','x','2026-05-01')"
+            "INSERT INTO llm_artifacts (ticker, purpose, content_md, generated_at, input_sha256) "
+            "VALUES ('NU','lens:five_min_reread','x','2026-05-01','sha_nu_lens')"
         )
         conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, "

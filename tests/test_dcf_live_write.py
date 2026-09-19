@@ -17,13 +17,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from research.apply import apply_approved_proposal
 from research.dcf_artifact import apply_dcf_proposal
 from research.proposals import create_proposal
@@ -31,38 +29,17 @@ from research.proposals import create_proposal
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _cfg(db_file: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Iterator[Path]:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[Path]:
     """A real ledger DB at head: ``research_proposals`` (with the 0126
     ``artifact_json`` column) AND ``dcf_runs`` (with the 0076 over_under CHECK
     and ``uq_dcf_runs_ticker``) in one file.
-
-    Mirrors ``test_migration_0076``: ``init_db()`` lays the partial legacy base
-    via ``CREATE TABLE IF NOT EXISTS``, then ``stamp(baseline)`` + ``upgrade
-    (head)`` runs every migration (0013 creates ``dcf_runs``; 0121 creates
-    ``research_proposals``) on top of it.
     """
-    db_file = tmp_path / "ledger.db"
+    db_file = migrated_db(tmp_path / "ledger.db")
     import db as dbmod
 
-    # init_db() writes to the module's global DB_PATH; set it, but SAVE + RESTORE
-    # the three data globals set_db_path mutates (DB_PATH/DATA_DIR/FMP_DIR) so a
-    # stale tmp path never leaks into a later test -- some writers resolve their
-    # DB from db.DB_PATH rather than an explicit db_path (see set_db_path's note),
-    # so a leaked path silently empties e.g. the ledger-insights FTS search.
     saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
     dbmod.set_db_path(str(db_file))
-    dbmod.init_db()
-    cfg = _cfg(db_file)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
     try:
         yield db_file
     finally:

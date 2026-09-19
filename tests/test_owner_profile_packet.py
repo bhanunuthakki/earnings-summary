@@ -19,10 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -34,14 +31,6 @@ from owner_profile.store import append_fact, list_facts  # noqa: E402
 from pipeline.ledger_panel import render_ledger_panel  # noqa: E402
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"  # matches tests/test_ledger_packet.py's baseline
-
-
-def _build_db(db_path: Path, *, target: str = "head") -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, target)
 
 
 @pytest.fixture
@@ -148,12 +137,16 @@ def test_affirm_stale_id_is_404(ctx: tuple[FlaskClient, Path, Path]) -> None:
     assert resp.status_code == 404
 
 
-def test_packet_degrades_on_pre_0159_db(tmp_path: Path) -> None:
+def test_packet_degrades_on_pre_0159_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
     """A DB migrated only to the prior head (no owner_profile_facts table)
     must not break the packet — the source degrades to zero items, same as
     every other _packet_items source."""
-    db = tmp_path / "old.db"
-    _build_db(db, target="0152_v_thesis_status_stub_substring")
+    db = migrated_db(
+        tmp_path / "old.db",
+        stamp=_PRIOR_HEAD,
+        target="0152_v_thesis_status_stub_substring",
+        archived=True,
+    )
     html = render_ledger_panel(db)
     assert 'id="ledger-packet"' not in html
 
