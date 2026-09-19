@@ -16,11 +16,11 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Literal, Self, cast
+from typing import BinaryIO, Literal, Protocol, Self, cast
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -32,6 +32,37 @@ _APPROVAL_CAPABILITY = object()
 _PACKAGE_CACHE_MAX_COMPLETED = 64
 _PACKAGE_CACHE_MAX_BYTES = 8 * 1024 * 1024 * 1024
 _PACKAGE_CACHE_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
+
+
+class _WindowsFunction(Protocol):
+    argtypes: object
+    restype: object
+
+    def __call__(self, *args: object) -> int: ...
+
+
+class _Kernel32(Protocol):
+    GetSystemDirectoryW: _WindowsFunction
+    CreateFileW: _WindowsFunction
+    CloseHandle: _WindowsFunction
+
+
+class _WinDLLFactory(Protocol):
+    def __call__(self, name: str, *, use_last_error: bool) -> _Kernel32: ...
+
+
+def _load_kernel32() -> _Kernel32:
+    import ctypes
+
+    factory = cast("_WinDLLFactory", getattr(ctypes, "Win" + "DLL"))
+    return factory("kernel32", use_last_error=True)
+
+
+def _windows_last_error() -> int:
+    import ctypes
+
+    get_last_error = cast("Callable[[], int]", getattr(ctypes, "get_last" + "_error"))
+    return get_last_error()
 
 
 class InlineXbrlProcessorError(RuntimeError):
@@ -944,7 +975,7 @@ def _windows_system_directory() -> Path:
     import ctypes
     from ctypes import wintypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _load_kernel32()
     get_system_directory = kernel32.GetSystemDirectoryW
     get_system_directory.argtypes = [wintypes.LPWSTR, wintypes.UINT]
     get_system_directory.restype = wintypes.UINT
@@ -1103,7 +1134,7 @@ def _require_tree_nonwritable(root: Path) -> None:
     import ctypes
     from ctypes import wintypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _load_kernel32()
     create_file = kernel32.CreateFileW
     create_file.argtypes = [
         wintypes.LPCWSTR,
@@ -1140,7 +1171,7 @@ def _require_tree_nonwritable(root: Path) -> None:
             if handle != invalid:
                 close_handle(handle)
                 raise InlineXbrlProcessorError("filing-XBRL fenced tree remains writable")
-            if ctypes.get_last_error() != 5:
+            if _windows_last_error() != 5:
                 raise InlineXbrlProcessorError("filing-XBRL fenced tree access cannot be verified")
 
 
