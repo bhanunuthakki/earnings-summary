@@ -98,9 +98,18 @@ ignore = [
 "execution/dcf_opus_assumptions.py" = ["N816", "N806", "N803", "B007", "T201", "SIM105", "SIM222"]
 
 [tool.pyright]
-include = ["."]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
-           "alembic/versions_archived"]
+include = [
+    ".github/scripts",
+    "alembic",
+    "cron",
+    "evals",
+    "execution",
+    "instruction_tests",
+    "scripts",
+    "src",
+    "tests",
+]
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
@@ -127,9 +136,18 @@ reportUnusedFunction = false
 reportConstantRedefinition = false
 
 [tool.basedpyright]
-include = ["."]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
-           "alembic/versions_archived"]
+include = [
+    ".github/scripts",
+    "alembic",
+    "cron",
+    "evals",
+    "execution",
+    "instruction_tests",
+    "scripts",
+    "src",
+    "tests",
+]
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
 extraPaths = ["src", "execution", "scratch", "cron"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"
