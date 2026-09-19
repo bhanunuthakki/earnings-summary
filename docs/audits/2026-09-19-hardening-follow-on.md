@@ -81,7 +81,8 @@ compatible. New refreshes identify their known producing purpose instead of clai
 a fixed model; prompt, routing, fallback and model selection are unchanged.
 
 The native PDF worker bounds elapsed time, concurrency, returned text and image
-dimensions. It is not an operating-system sandbox or a hard address-space quota.
+dimensions. Uncached operations pay process-startup cost for that containment;
+preview cache hits still avoid parsing. It is not an operating-system sandbox or a hard address-space quota.
 [PyMuPDF issue 5082](https://github.com/pymupdf/PyMuPDF/issues/5082) informed the
 process boundary; no hostile real-world sample was executed. Locked dependency versions were not speculatively
 upgraded. Browser tests distinguish application rejection from browser network

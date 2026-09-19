@@ -54,7 +54,7 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 2040
+    "tests": 2039
   },
   "suppressions": {
     ".github": 0,
@@ -63,7 +63,7 @@
     "evals": 1,
     "execution": 1301,
     "instruction_tests": 0,
-    "scripts": 7,
+    "scripts": 4,
     "src": 26,
     "src/advisor": 0,
     "src/alerts": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1256
+    "tests": 1243
   }
 }
