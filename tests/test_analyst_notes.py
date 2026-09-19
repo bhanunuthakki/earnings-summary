@@ -15,9 +15,6 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -30,14 +27,6 @@ from user_state import notes  # noqa: E402
 
 PRIOR_HEAD = "0072_kpi_reporting_cadence"
 RD = date(2026, 6, 1)
-
-
-def _migrate(db: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
 
 
 @pytest.fixture
@@ -323,11 +312,11 @@ def test_clear_addressed_keeps_resolved_note(repo_root: Path, db_path: Path) -> 
 # ----------------------------------------------------------------------------
 
 
-def test_write_path_hook_syncs_live(tmp_path: Path) -> None:
+def test_write_path_hook_syncs_live(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
     db = repo / "data" / "portfolio.db"
-    _migrate(db)
+    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
 
     c = comments.append_comment(repo, "NU", RD, anchor=_anchor(), text="auto-sync me", intent=None)
     rows = notes.list_notes(ticker="NU", db_path=db)
@@ -350,10 +339,12 @@ def test_hook_noops_without_db(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_backfill_walks_all_stores_and_is_idempotent(tmp_path: Path) -> None:
+def test_backfill_walks_all_stores_and_is_idempotent(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     repo = tmp_path / "repo"
     db = tmp_path / "backfill.db"
-    _migrate(db)
+    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
 
     comments.append_comment(repo, "NU", RD, anchor=_anchor(), text="nu thought")
     comments.append_comment(repo, "MELI", date(2026, 5, 20), anchor=_anchor(), text="meli thought")

@@ -115,7 +115,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert isinstance(registry.REGISTERED, frozenset)
     assert isinstance(registry.GOVERNED, frozenset)
     assert len(registry.REGISTERED) == 111
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 155
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 156
     assert len(registry.GOVERNED) == 132
     assert (
         frozenset(

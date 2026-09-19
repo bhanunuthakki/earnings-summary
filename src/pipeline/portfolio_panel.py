@@ -1269,7 +1269,9 @@ def _offline_reason(error: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = None) -> str:
+def render_portfolio_synthesis_panel(
+    db_path: Path, *, api_url: str | None = None, conn: sqlite3.Connection | None = None
+) -> str:
     """The Portfolio → Synthesis tab fragment. Fetches the live book once (the
     exposure weighting prefers live position weights and falls back to
     equal-weight when the tracker is down) plus the cached
@@ -1296,7 +1298,7 @@ def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = Non
     memo = _synthesis_memo_doorway(dash.portfolio_synthesis_md) or (
         render_panel_fragment(dash, "portfolio") or ""
     )
-    return compose_synthesis_page(db_path, live, memo)
+    return compose_synthesis_page(db_path, live, memo, conn=conn)
 
 
 def _synthesis_memo_headline(content_md: str, cap: int = 220) -> str:
@@ -1335,13 +1337,22 @@ def compose_synthesis_page(
     db_path: Path,
     live: LivePortfolio,
     synthesis: str,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """Page assembly over an already-fetched live book + lens-memo fragment
     (testable without network; the insight panels read the DB themselves):
     the tracker-offline banner when the live book is unavailable (landing-tab
     honesty — the exposure panel below is equal-weighted then), the
     rollup/exposure grid, and the memo."""
-    grid = "".join(p for p in (_thesis_rollup_panel(db_path), _exposure_panel(db_path, live)) if p)
+    grid = "".join(
+        p
+        for p in (
+            _thesis_rollup_panel(db_path, conn=conn),
+            _exposure_panel(db_path, live, conn=conn),
+        )
+        if p
+    )
     parts: list[str] = [_INSIGHTS_CSS]
     if not live.available:
         parts.append(_TRACKER_BANNER_CSS)
@@ -1365,15 +1376,17 @@ def _portfolio_tickers(conn: sqlite3.Connection) -> list[str]:
     return [str(r[0]).upper() for r in rows]
 
 
-def _thesis_rollup_panel(db_path: Path) -> str:
+def _thesis_rollup_panel(db_path: Path, *, conn: sqlite3.Connection | None = None) -> str:
     """One line of portfolio-level thesis health: OK / WARN / BREACH counts,
     with the non-OK names as chips deep-linking into their Holding tab."""
     if not db_path.exists():
         return ""
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return ""
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return ""
     try:
         tickers = _portfolio_tickers(conn)
         if not tickers:
@@ -1392,7 +1405,8 @@ def _thesis_rollup_panel(db_path: Path) -> str:
             if t in tickers and t not in latest and r[1]:
                 latest[t] = str(r[1]).lower()
     finally:
-        conn.close()
+        if own:
+            conn.close()
     if not latest:
         return ""
     # Tone via the shared kit resolver: the local map here defaulted every
@@ -1418,19 +1432,24 @@ def _thesis_rollup_panel(db_path: Path) -> str:
     )
 
 
-def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
+def _exposure_panel(
+    db_path: Path, live: LivePortfolio, *, conn: sqlite3.Connection | None = None
+) -> str:
     """Sector exposure across the book: position-weighted when the tracker is
     up, name counts otherwise. Sectors come from the cached FMP profiles."""
     if not db_path.exists():
         return ""
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return ""
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return ""
     try:
         tickers = _portfolio_tickers(conn)
     finally:
-        conn.close()
+        if own:
+            conn.close()
     if not tickers:
         return ""
     repo_root = db_path.parent.parent
@@ -1579,6 +1598,7 @@ def render_portfolio_risk_panel(
     *,
     api_url: str | None = None,
     db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """The Portfolio → Risk tab fragment: book drawdown + factor/style exposure
     (from the live tracker) and the whole-book macro-stress lens (from the local
@@ -1616,7 +1636,7 @@ def render_portfolio_risk_panel(
     collision = _read_thesis_collision(analytics.positioning, db_path)
     factors = _read_business_factor_vector(db_path)
     scenarios = _scenario_options()
-    digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
+    digest = _cached_macro_digest_html(db_path, conn=conn) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
     # down, fall back to it so the surface degrades to stamped cached values.
     snapshot: RiskSnapshot | None = None
@@ -1944,7 +1964,9 @@ def _quiet_note(text: str) -> str:
     return f'<section class="panel"><p class="muted">{escape(text)}</p></section>'
 
 
-def render_health_fragment(db_path: Path, fragment: str) -> str:
+def render_health_fragment(
+    db_path: Path, fragment: str, *, conn: sqlite3.Connection | None = None
+) -> str:
     """One Health-console chip pane as a standalone HTML fragment. Each pane
     carries the CSS block its sections need (the same block the standalone
     builder emits), so a directly-fetched fragment styles itself."""
@@ -1956,7 +1978,7 @@ def render_health_fragment(db_path: Path, fragment: str) -> str:
         memo = _synthesis_memo_doorway(dash.portfolio_synthesis_md) or (
             render_panel_fragment(dash, "portfolio") or ""
         )
-        rollup = _thesis_rollup_panel(db_path) or _quiet_note("No evaluated theses yet.")
+        rollup = _thesis_rollup_panel(db_path, conn=conn) or _quiet_note("No evaluated theses yet.")
         return _INSIGHTS_CSS + rollup + memo
     if fragment == "exposure":
         alive, base = probe_tracker(None)
@@ -1965,7 +1987,9 @@ def render_health_fragment(db_path: Path, fragment: str) -> str:
             if alive
             else LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
         )
-        exposure = _exposure_panel(db_path, live) or _quiet_note("No holdings to weight yet.")
+        exposure = _exposure_panel(db_path, live, conn=conn) or _quiet_note(
+            "No holdings to weight yet."
+        )
         return _INSIGHTS_CSS + exposure
     if fragment == "collisions":
         return _RISK_CSS + _thesis_collision_section(_read_thesis_collision(None, db_path))
@@ -2262,15 +2286,17 @@ def _scenario_options() -> list[tuple[str, str]]:
     return [(sid, SCENARIOS[sid].title) for sid in all_scenario_ids()]
 
 
-def _cached_macro_digest_html(db_path: Path) -> str:
+def _cached_macro_digest_html(db_path: Path, *, conn: sqlite3.Connection | None = None) -> str:
     """The most recent cached portfolio macro-stress digest as rendered HTML
     (heading + scenario title + 'as of' stamp + prose), or '' when none exists."""
-    if not db_path.exists():
+    if not db_path.exists() and conn is None:
         return ""
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return ""
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return ""
     try:
         row = conn.execute(
             "SELECT purpose, content_md, generated_at FROM llm_artifacts "
@@ -2281,7 +2307,8 @@ def _cached_macro_digest_html(db_path: Path) -> str:
     except sqlite3.Error:
         return ""
     finally:
-        conn.close()
+        if own:
+            conn.close()
     if row is None:
         return ""
     purpose, content_md, generated_at = str(row[0]), str(row[1]), str(row[2])

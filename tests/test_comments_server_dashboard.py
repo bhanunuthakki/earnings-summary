@@ -6,12 +6,14 @@ client, and exercises `GET /`, `GET /api/dashboard`, `GET /reports/<T>`.
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import sys
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from bs4 import BeautifulSoup
@@ -199,7 +201,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # manifest plus exact current-index-referenced partitions.
     # -3 Explore-to-DCF mutation side channels: direct injection, reference-sheet
     # injection, and reference-fact listing. Modeling remains DCF-owned.
-    assert len(rules) == 173
+    # +1 self-hosted webfont route serving the Work OS shell's vendored
+    # Google Fonts binaries (see src/ui/vendor/fonts/README.md).
+    assert len(rules) == 174
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "allocation_recommendation_get" not in rules
     assert "allocation_recommendation_post" not in rules
@@ -225,6 +229,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         for endpoint in (
             "source_viewer",
             "source_pdf_page_image",
+            "vendored_font_file",
             "peek_alert",
             "peek_alerts",
             "peek_ticker",
@@ -269,6 +274,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     } == {
         "source_viewer": "/source/<int:doc_id>",
         "source_pdf_page_image": "/source/<int:doc_id>/page/<int:page>.png",
+        "vendored_font_file": "/src/ui/vendor/fonts/<filename>",
         "peek_alert": "/api/peek/alert/<int:alert_id>",
         "peek_alerts": "/api/peek/alerts",
         "peek_ticker": "/api/peek/ticker/<ticker>",
@@ -467,6 +473,111 @@ def test_work_os_evaluation_api_returns_complete_versioned_projection(
     assert payload["count"] == len(payload["items"])
     assert {item["instrument_type"] for item in payload["items"]} <= {"company", "etf"}
     assert "stock" not in response.get_data(as_text=True).lower()
+
+
+def test_dashboard_page_revalidates_on_the_memo_bucket_etag(client: FlaskClient) -> None:
+    """GET / carries a memo-key ETag; a repeat load revalidates to a 304."""
+    first = client.get("/")
+
+    assert first.status_code == 200
+    assert first.mimetype == "text/html"
+    assert first.headers["Cache-Control"] == "no-cache"
+    etag = first.headers["ETag"]
+
+    second = client.get("/")
+    assert second.status_code == 200
+    assert second.get_data() == first.get_data()
+    assert second.headers["ETag"] == etag
+    assert second.headers["X-Panel-Cache"] == "hit"
+
+    again = client.get("/", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.get_data() == b""
+    assert again.headers["ETag"] == etag
+    assert again.headers["X-Panel-Cache"] == "hit"
+
+    stale = client.get("/", headers={"If-None-Match": '"deadbeef"'})
+    assert stale.status_code == 200
+    assert stale.get_data() == first.get_data()
+
+
+def test_work_os_evaluation_api_is_server_cached_with_a_no_store_client_contract(
+    client: FlaskClient,
+) -> None:
+    first = client.get("/api/work-os/evaluation")
+    second = client.get("/api/work-os/evaluation")
+
+    assert first.status_code == 200
+    assert first.headers["Cache-Control"] == "no-store"
+    assert first.headers["X-Panel-Cache"] == "miss"
+    assert second.status_code == 200
+    assert second.headers["Cache-Control"] == "no-store"
+    assert second.headers["X-Panel-Cache"] == "hit"
+    assert second.get_data() == first.get_data()
+    assert second.get_json()["schema_version"] == "evaluation_surface.v2"
+
+
+def test_work_os_portfolio_api_caches_its_degraded_tracker_payload(
+    app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A down tracker keeps serving its honest degraded snapshot — never a
+    success projection, never a re-probe per request — inside the cache TTL."""
+    tracker_calls = {"count": 0}
+
+    def down_tracker() -> LivePortfolio:
+        tracker_calls["count"] += 1
+        return LivePortfolio(available=False, api_url="http://tracker.test", error="tracker down")
+
+    monkeypatch.setattr(comments_server, "fetch_live_portfolio", down_tracker)
+    local_client = comments_server.create_app(app_repo).test_client()
+
+    first = local_client.get("/api/work-os/portfolio")
+    second = local_client.get("/api/work-os/portfolio")
+
+    assert first.status_code == 200
+    assert first.headers["Cache-Control"] == "no-store"
+    assert first.headers["X-Panel-Cache"] == "miss"
+    assert first.get_json()["status"] == "degraded"
+    assert tracker_calls["count"] == 1
+    assert second.status_code == 200
+    assert second.headers["Cache-Control"] == "no-store"
+    assert second.headers["X-Panel-Cache"] == "hit"
+    assert second.get_data() == first.get_data()
+    assert second.get_json()["status"] == "degraded"
+    # The hit serves the degraded snapshot; the tracker is not re-probed.
+    assert tracker_calls["count"] == 1
+
+
+def test_single_ticker_evaluation_projection_matches_the_full_build(app_repo: Path) -> None:
+    """The peek/label-review single-item projection is the Evaluation surface's
+    own item for the same ticker (same resolver, smaller input)."""
+    from comments_server_evaluation_projection import resolve_work_os_evaluation_item
+
+    import ticker_validation
+    from pipeline.research_cockpit import build_cockpit_rows
+    from pipeline.work_os_evaluation import build_work_os_evaluation
+
+    conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        full = build_work_os_evaluation(
+            build_cockpit_rows(conn, app_repo).get("evaluation", []),
+            app_repo,
+            conn,
+        )
+        single = resolve_work_os_evaluation_item(
+            conn,
+            app_repo,
+            "MELI",
+            safe_ticker=ticker_validation.safe_ticker,
+        )
+        expected = next((item for item in full.items if item.ticker == "MELI"), None)
+    finally:
+        conn.close()
+
+    assert expected is not None
+    assert single is not None
+    assert single == expected
 
 
 def test_investment_profile_review_is_fingerprint_bound_and_append_only(
@@ -827,6 +938,92 @@ def test_reports_route_serves_latest_workspace_html(client: FlaskClient, app_rep
     assert "newer build" in body
 
 
+def test_reports_route_conditional_serving_emits_etag_and_304(client: Any, app_repo: Path) -> None:
+    """W6: Flask's send_file already serves /reports/<ticker> conditionally —
+    ETag (mtime+size+path derived, no 330KB hashing) + Last-Modified + 304 on
+    If-None-Match — so repeat opens revalidate instead of re-transferring."""
+    import time
+
+    research_dir = app_repo / "output" / "research" / "NU"
+    research_dir.mkdir(parents=True)
+    report = research_dir / "2026-05-18_workspace.html"
+    report.write_text("<html>newer build</html>", encoding="utf-8")
+
+    first: Any = client.get("/reports/NU")
+    assert first.status_code == 200
+    etag_value = first.headers.get("ETag")
+    assert etag_value is not None
+    etag: str = etag_value
+    assert etag
+    assert first.headers.get("Last-Modified")
+    assert first.headers.get("Cache-Control") == "no-cache"
+    body = first.data
+
+    again: Any = client.get("/reports/NU", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.data == b""
+
+    stale: Any = client.get("/reports/NU", headers={"If-None-Match": '"deadbeef"'})
+    assert stale.status_code == 200
+    assert stale.data == body
+
+    # A rebuild must change the validator (mtime moves): never a perpetual 304.
+    report.write_text("<html>rebuilt with a materially different body</html>", encoding="utf-8")
+    os.utime(report, (time.time() + 5, time.time() + 5))
+    rebuilt: Any = client.get("/reports/NU", headers={"If-None-Match": etag})
+    assert rebuilt.status_code == 200
+    assert rebuilt.data != body
+    assert rebuilt.headers.get("ETag") != etag
+
+
+def test_reports_route_artifact_id_branch_is_conditional(client: Any, app_repo: Path) -> None:
+    """The explicit artifact_id branch of /reports/<ticker> serves the same
+    conditional headers as the latest-build branch."""
+    research_dir = app_repo / "output" / "research" / "NU"
+    research_dir.mkdir(parents=True)
+    (research_dir / "2026-05-18_workspace.html").write_text(
+        "<html>artifact branch</html>", encoding="utf-8"
+    )
+    index_path = app_repo / "output" / "research" / "report_artifacts.v1.json"
+    index_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "report_artifact_index.v1",
+                "generated_at": "2026-05-18T10:00:00+00:00",
+                "items": [
+                    {
+                        "schema_version": "report_artifact.v1",
+                        "artifact_id": "abc123",
+                        "ticker": "NU",
+                        "title": "NU brief",
+                        "artifact_kind": "full_brief",
+                        "coverage_role": "portfolio",
+                        "report_date": "2026-05-18",
+                        "generated_at": "2026-05-18T10:00:00+00:00",
+                        "reader_mode": "legacy_standalone",
+                        "standalone_path": "output/research/NU/2026-05-18_workspace.html",
+                        "manifest_path": "output/research/NU/2026-05-18_workspace.manifest.json",
+                        "workspace_sha256": "deadbeef",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    first: Any = client.get("/reports/NU?artifact_id=abc123")
+    assert first.status_code == 200
+    etag_value = first.headers.get("ETag")
+    assert etag_value is not None
+    etag: str = etag_value
+    assert etag
+    assert first.headers.get("Last-Modified")
+
+    again: Any = client.get("/reports/NU?artifact_id=abc123", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.data == b""
+
+
 def test_reports_route_404_when_no_build(client: FlaskClient) -> None:
     resp = client.get("/reports/NOTHING")
     assert resp.status_code == 404
@@ -853,3 +1050,26 @@ def test_healthz_still_works(client: FlaskClient) -> None:
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "ok"
+
+
+def test_vendored_font_route_serves_immutable_binaries(client: Any) -> None:
+    """Self-hosted shell webfonts: exact bytes, immutable caching, no traversal."""
+    vendored = PROJECT_ROOT / "src" / "ui" / "vendor" / "fonts" / "inter-latin.woff2"
+    assert vendored.is_file()
+
+    response: Any = client.get("/src/ui/vendor/fonts/inter-latin.woff2")
+    assert response.status_code == 200
+    assert response.mimetype == "font/woff2"
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert response.data == vendored.read_bytes()
+
+    # The validator from the first response must keep repeat loads on a 304.
+    validator: str = response.headers["ETag"]
+    revalidated: Any = client.get(
+        "/src/ui/vendor/fonts/inter-latin.woff2", headers={"If-None-Match": validator}
+    )
+    assert revalidated.status_code == 304
+
+    assert client.get("/src/ui/vendor/fonts/missing-latin.woff2").status_code == 404
+    assert client.get("/src/ui/vendor/fonts/inter-latin.css").status_code == 404
+    assert client.get("/src/ui/vendor/fonts/../../tokens.py").status_code == 404

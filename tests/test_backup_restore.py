@@ -9,10 +9,13 @@ the full backup_db -> restore_db path end-to-end.
 from __future__ import annotations
 
 import gzip
+import json
 import shutil
 import sqlite3
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -305,8 +308,9 @@ def test_backup_then_restore_end_to_end(tmp_path: Path, monkeypatch: pytest.Monk
         *,
         success: bool,
         error_msg: str | None = None,
+        skipped_unchanged: bool = False,
     ) -> None:
-        del success, error_msg
+        del success, error_msg, skipped_unchanged
         active_accounting[0].close()
 
     monkeypatch.setattr(backup_db, "_start_accounting", fake_start_accounting)
@@ -548,8 +552,13 @@ def _prime_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
         return accounting
 
     def _finish(
-        acc: tuple[sqlite3.Connection, str], *, success: bool, error_msg: str | None = None
+        acc: tuple[sqlite3.Connection, str],
+        *,
+        success: bool,
+        error_msg: str | None = None,
+        skipped_unchanged: bool = False,
     ) -> None:
+        del success, skipped_unchanged
         acc[0].close()
 
     monkeypatch.setattr(backup_db, "_start_accounting", _start)
@@ -621,3 +630,127 @@ def test_archive_backup_failure_does_not_fail_primary(
     # Primary DB backup succeeds; the archive leg swallows its error.
     assert backup_db.main() == 0
     assert not list(backup_dir.glob(f"{backup_db.ARCHIVE_PREFIX}.*.gz.enc"))
+
+
+# --- Content-skipped backup (workstream C3) --------------------------------
+
+
+def _receipt_path(live: Path) -> Path:
+    return live.parent / f"{live.name}.backup_receipt.json"
+
+
+def test_backup_writes_local_upload_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    snapshot = sorted(backup_dir.glob("portfolio.db.*.gz.enc"))[-1]
+    receipt: object = json.loads(_receipt_path(live).read_text(encoding="utf-8"))
+    assert isinstance(receipt, Mapping)
+    record = cast(Mapping[object, object], receipt)
+    snapshot_name = record.get("snapshot_name")
+    snapshot_sha256 = record.get("snapshot_sha256")
+    assert isinstance(snapshot_name, str) and snapshot_name == snapshot.name
+    assert isinstance(snapshot_sha256, str) and len(snapshot_sha256) == 64
+    uploaded_at = record.get("uploaded_at_utc")
+    assert isinstance(uploaded_at, str) and uploaded_at
+
+
+def test_unchanged_backup_skips_upload_and_marks_run_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    outcomes: list[tuple[StageStatus, str | None]] = []
+
+    def _finish(
+        acc: tuple[sqlite3.Connection, str],
+        *,
+        success: bool,
+        error_msg: str | None = None,
+        skipped_unchanged: bool = False,
+    ) -> None:
+        if skipped_unchanged:
+            status = StageStatus.SKIPPED
+        elif success:
+            status = StageStatus.OK
+        else:
+            status = StageStatus.FAILED
+        outcomes.append((status, error_msg))
+        acc[0].close()
+
+    monkeypatch.setattr(backup_db, "_finish_accounting", _finish)
+
+    assert backup_db.main() == 0
+    first = sorted(backup_dir.glob("portfolio.db.*.gz.enc"))
+    assert len(first) == 1
+
+    assert backup_db.main() == 0  # unchanged DB: the second run must skip
+    second = sorted(backup_dir.glob("portfolio.db.*.gz.enc"))
+    assert second == first, "unchanged content must not upload a second snapshot"
+    assert outcomes[0][0] is StageStatus.OK
+    assert outcomes[1][0] is StageStatus.SKIPPED
+    assert outcomes[1][1] is not None and "skipped_unchanged" in outcomes[1][1]
+    captured = capsys.readouterr().out
+    assert "skipped_unchanged" in captured
+    # The stable CLI/scheduler marker (suppression_payload precedent).
+    assert '"status": "skipped_unchanged"' in captured
+
+
+def test_changed_content_uploads_fresh_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    conn = sqlite3.connect(str(live))
+    try:
+        conn.execute("UPDATE t SET v = 'changed' WHERE k = 'key'")
+        conn.commit()
+    finally:
+        conn.close()
+    assert backup_db.main() == 0
+    snapshots = sorted(backup_dir.glob("portfolio.db.*.gz.enc"))
+    assert len(snapshots) == 2, "changed content must upload despite a present receipt"
+    target = tmp_path / "recovered.db"
+    restore_db.restore_snapshot(
+        snapshots[-1],
+        target,
+        force=False,
+        schema_policy=restore_db.SchemaCompatibilityPolicy.VERSIONED,
+    )
+    assert _read_value(target) == "changed"
+
+
+@pytest.mark.parametrize("damage", ["delete", "corrupt", "missing_sha"])
+def test_unusable_receipt_fails_toward_uploading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    assert len(list(backup_dir.glob("portfolio.db.*.gz.enc"))) == 1
+    receipt = _receipt_path(live)
+    if damage == "delete":
+        receipt.unlink()
+    elif damage == "corrupt":
+        receipt.write_text("{not json", encoding="utf-8")
+    else:
+        receipt.write_text('{"snapshot_name": "portfolio.db.x.gz.enc"}', encoding="utf-8")
+    assert backup_db.main() == 0
+    assert len(list(backup_dir.glob("portfolio.db.*.gz.enc"))) == 2, (
+        "an absent or unusable receipt must fail toward performing the upload"
+    )
+
+
+def test_skip_never_engages_when_the_uploaded_snapshot_is_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A moved/wiped backup dir must re-upload even though the local receipt
+    still claims the content was uploaded — skipping would leave zero
+    restorable snapshots."""
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    for snapshot in backup_dir.glob("portfolio.db.*.gz.enc"):
+        snapshot.unlink()
+    assert backup_db.main() == 0
+    assert len(list(backup_dir.glob("portfolio.db.*.gz.enc"))) == 1, (
+        "a missing uploaded snapshot must force a fresh upload"
+    )

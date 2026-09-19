@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.issuer_registry_bootstrap import (
     SecCompanyTickerContractError,
     SecFundBootstrapRequest,
@@ -20,24 +19,14 @@ from provenance.issuer_registry_bootstrap import (
 )
 from provenance.reporting_entity_registry import ReportingEntityRegistry
 
-ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 7, 27, 23, 0, tzinfo=UTC)
 SOURCE_URL = "https://www.sec.gov/files/company_tickers_mf.json"
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _database(tmp_path: Path) -> sqlite3.Connection:
+def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "fund-registry.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(
@@ -124,8 +113,9 @@ def test_fund_registry_contract_is_closed() -> None:
 
 def test_bootstrap_keeps_two_series_under_one_legal_trust_and_replays_exactly(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     raw_body = _fund_body()
 
     dry_run = bootstrap_sec_fund_registry(
@@ -201,8 +191,9 @@ def test_bootstrap_keeps_two_series_under_one_legal_trust_and_replays_exactly(
 
 def test_new_fund_registry_observation_reuses_immutable_identity_records(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     first = bootstrap_sec_fund_registry(
         conn,
         raw_body=_fund_body(),

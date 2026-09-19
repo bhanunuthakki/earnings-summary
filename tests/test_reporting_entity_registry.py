@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from alembic.config import Config
-
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -38,24 +36,14 @@ from provenance.reporting_entity_registry import (
     security_identifier_candidate_digest,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 7, 27, 21, 0, tzinfo=UTC)
 SHA = "a" * 64
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "reporting-entity-registry.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     payload = b'{"registrant":"American Century ETF Trust"}'
@@ -116,8 +104,9 @@ def _resolution(
 
 def test_fund_series_do_not_collapse_when_they_share_one_legal_registrant(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     issuer_registry = IssuerRegistry(conn)
     issuer_registry.persist(
         IssuerEntity(
@@ -432,8 +421,9 @@ def test_fund_series_do_not_collapse_when_they_share_one_legal_registrant(
 
 def test_audit_blocks_active_scope_without_reporting_identity_or_obligations(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path)
+    conn = _conn(tmp_path, migrated_db)
     registry = IssuerRegistry(conn)
     registry.persist(
         IssuerEntity(

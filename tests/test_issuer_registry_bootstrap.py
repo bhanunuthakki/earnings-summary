@@ -5,13 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -27,24 +26,14 @@ from provenance.issuer_registry_bootstrap import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 7, 27, 21, 0, tzinfo=UTC)
 SOURCE_URL = "https://www.sec.gov/files/company_tickers.json"
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _database(tmp_path: Path) -> Path:
+def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     path = tmp_path / "bootstrap.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
     conn = sqlite3.connect(path)
     conn.execute(
         """
@@ -85,8 +74,10 @@ def _request(
     )
 
 
-def test_dry_run_is_read_only_and_excludes_index_members(tmp_path: Path) -> None:
-    db_path = _database(tmp_path)
+def test_dry_run_is_read_only_and_excludes_index_members(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _database(tmp_path, migrated_db)
     writer = sqlite3.connect(db_path)
     writer.executemany(
         "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
@@ -132,8 +123,9 @@ def test_dry_run_is_read_only_and_excludes_index_members(tmp_path: Path) -> None
 
 def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = _database(tmp_path)
+    db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
@@ -210,8 +202,9 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
 
 def test_new_source_observation_reuses_immutable_reporting_entity(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = _database(tmp_path)
+    db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
@@ -255,8 +248,9 @@ def test_new_source_observation_reuses_immutable_reporting_entity(
 
 def test_document_persistence_auto_binds_resolved_sec_cik_subject(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = _database(tmp_path)
+    db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
@@ -333,8 +327,9 @@ def test_document_persistence_auto_binds_resolved_sec_cik_subject(
 
 def test_bootstrap_reconciles_existing_sec_cik_evidence_subject(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = _database(tmp_path)
+    db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
@@ -366,8 +361,9 @@ def test_bootstrap_reconciles_existing_sec_cik_evidence_subject(
 
 def test_duplicate_and_missing_sec_tickers_remain_explicitly_unresolved(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = _database(tmp_path)
+    db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.executemany(
         "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
@@ -406,8 +402,9 @@ def test_duplicate_and_missing_sec_tickers_remain_explicitly_unresolved(
 
 def test_evidence_only_ticker_is_bound_without_entering_research_scope(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = _database(tmp_path)
+    db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.executemany(
         "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",

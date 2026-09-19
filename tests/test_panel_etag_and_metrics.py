@@ -16,7 +16,7 @@ import sqlite3
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -28,6 +28,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
+from comments_server_panel_cache import (  # noqa: E402
+    CLEAR_ALL,
+    MUTATION_ROUTE_CACHE_REGISTRY,
+)
 
 
 @pytest.fixture
@@ -146,6 +150,221 @@ def test_state_change_invalidates_panel_response_cache(
     assert second.status_code == 200
     assert calls == 2
     assert b"render 2" in second.data
+
+
+# ---------------------------------------------------------------------------
+# W6 mutation-route → cache-family registry
+# ---------------------------------------------------------------------------
+
+
+def test_mutation_route_registry_is_total_over_the_route_table(
+    client: Any,
+) -> None:
+    """Every non-GET rule in the app is registered with explicit cache
+    families (possibly an empty no-op) or deliberately marked CLEAR_ALL. An
+    unregistered mutation route fails safe to a full clear(), so it must be
+    impossible to add one without this test noticing."""
+    rules: list[Any] = list(client.application.url_map.iter_rules())
+    mutation_rules: set[str] = {
+        route.rule
+        for route in rules
+        if {method for method in route.methods if method not in ("GET", "HEAD", "OPTIONS")}
+    }
+    all_rules: set[str] = {route.rule for route in rules}
+    for rule in sorted(mutation_rules):
+        families = MUTATION_ROUTE_CACHE_REGISTRY.get(rule)
+        assert families is not None, (
+            f"mutation route {rule!r} is not in MUTATION_ROUTE_CACHE_REGISTRY; "
+            "register its cache families or mark it CLEAR_ALL"
+        )
+        assert isinstance(families, (tuple, type(CLEAR_ALL))), rule
+    # No dead registry entries: a route removed from the app must drop its row.
+    stale = sorted(set(MUTATION_ROUTE_CACHE_REGISTRY) - all_rules)
+    assert stale == [], f"registry rows for routes no longer in the app: {stale}"
+
+
+def test_decision_write_keeps_unrelated_panel_hot(client: Any, monkeypatch: Any) -> None:
+    """A decision write invalidates the evaluation/decision families only — an
+    unrelated hot panel fragment must stay cached (X-Panel-Cache: hit)."""
+    from pipeline import dashboard_html
+
+    calls = 0
+
+    def _render() -> str:
+        nonlocal calls
+        calls += 1
+        return f"<section>actions render {calls}</section>"
+
+    monkeypatch.setattr(dashboard_html, "render_actions_panel", _render)
+    assert client.get("/api/panel/actions").status_code == 200
+    assert client.get("/api/panel/actions").headers["X-Panel-Cache"] == "hit"
+    assert calls == 1
+
+    # Manual pass/avoid decision write (→ Work OS evaluation + decision family).
+    resp = client.post(
+        "/api/decisions/pass",
+        json={"ticker": "NU", "reason": "missed the setup"},
+    )
+    assert resp.status_code == 200
+
+    assert client.get("/api/panel/actions").headers["X-Panel-Cache"] == "hit"
+    assert calls == 1
+    assert b"render 1" in client.get("/api/panel/actions").data
+
+
+def _warm_panel(client: Any, path: str) -> None:
+    """One 200 miss (store) followed by a guaranteed hit — returns nothing."""
+    first: Any = client.get(path)
+    assert first.status_code == 200
+    assert first.headers["X-Panel-Cache"] == "miss"
+    second: Any = client.get(path)
+    assert second.status_code == 200
+    assert second.headers["X-Panel-Cache"] == "hit"
+
+
+def test_ticker_settings_write_evicts_diet_panel(client: Any) -> None:
+    _warm_panel(client, "/api/panel/diet")
+
+    response: Any = client.post(
+        "/api/ticker-settings/NU",
+        json={"auto_pre_earnings_brief": True},
+    )
+    assert response.status_code == 200
+
+    rebuilt: Any = client.get("/api/panel/diet")
+    assert rebuilt.status_code == 200
+    assert rebuilt.headers["X-Panel-Cache"] == "miss"
+
+
+def test_decision_write_evicts_overview_panel(client: Any) -> None:
+    _warm_panel(client, "/api/panel/overview")
+
+    response: Any = client.post(
+        "/api/decisions/pass",
+        json={"ticker": "NU", "reason": "overview invalidation probe"},
+    )
+    assert response.status_code == 200
+
+    rebuilt: Any = client.get("/api/panel/overview")
+    assert rebuilt.status_code == 200
+    assert rebuilt.headers["X-Panel-Cache"] == "miss"
+
+
+def test_sizing_intent_write_evicts_work_os_portfolio(client: Any) -> None:
+    _warm_work_os(client, "/api/work-os/portfolio")
+
+    response: Any = client.post(
+        "/api/sizing-intents",
+        json={"ticker": "NU", "conviction": 4},
+    )
+    assert response.status_code == 200
+
+    rebuilt: Any = client.get("/api/work-os/portfolio")
+    assert rebuilt.status_code == 200
+    assert rebuilt.headers["X-Panel-Cache"] == "miss"
+
+
+def test_earnings_readout_generation_evicts_work_os_portfolio(
+    client: Any, monkeypatch: Any
+) -> None:
+    from earnings_readout import GENERATED, GenerateOutcome
+
+    def _generate_readout(_db_path: Path, _repo_root: Path, _ticker: str) -> GenerateOutcome:
+        return GenerateOutcome(GENERATED, "NU", "2026-06-30", None)
+
+    monkeypatch.setattr(
+        "earnings_readout.generate_for_ticker",
+        _generate_readout,
+    )
+    _warm_work_os(client, "/api/work-os/portfolio")
+
+    response: Any = client.post(
+        "/api/earnings-readout/generate",
+        json={"ticker": "NU"},
+    )
+    assert response.status_code == 200
+
+    rebuilt: Any = client.get("/api/work-os/portfolio")
+    assert rebuilt.status_code == 200
+    assert rebuilt.headers["X-Panel-Cache"] == "miss"
+
+
+def _warm_work_os(client: Any, path: str) -> None:
+    """One 200 miss (store) followed by a guaranteed hit — returns nothing."""
+    first: Any = client.get(path)
+    assert first.status_code == 200
+    assert first.headers["X-Panel-Cache"] == "miss"
+    second: Any = client.get(path)
+    assert second.status_code == 200
+    assert second.headers["X-Panel-Cache"] == "hit"
+
+
+def test_comment_write_evicts_exactly_its_mapped_family(
+    client: Any,
+) -> None:
+    """A comment write evicts the Work OS desk + brief library families while
+    leaving the unrelated Work OS evaluation surface cached (W6 task contract:
+    'a comment write affects desk/briefs')."""
+    _warm_work_os(client, "/api/work-os/evaluation")
+    _warm_work_os(client, "/api/work-os/briefs")
+
+    created: Any = client.post(
+        "/comments",
+        json={
+            "ticker": "NU",
+            "report_date": "2026-05-18",
+            "anchor": {"type": "free_text", "key": "working capital heading"},
+            "comment": "check the working-capital line",
+        },
+    )
+    assert created.status_code == 201
+
+    # Evaluation is untouched (still hot); briefs must rebuild (fresh miss).
+    again: Any = client.get("/api/work-os/evaluation")
+    assert again.status_code == 200
+    assert again.headers["X-Panel-Cache"] == "hit"
+    rebuilt: Any = client.get("/api/work-os/briefs")
+    assert rebuilt.status_code == 200
+    assert rebuilt.headers["X-Panel-Cache"] == "miss"
+
+
+def test_unknown_mutation_clears_work_os_cache_too(
+    client: Any,
+) -> None:
+    """The old fail-safe survives: an unregistered mutation route still evicts
+    every cached surface, including the Phase-1 work-os families."""
+    client.application.add_url_rule(
+        "/test/unregistered-mutation",
+        "test_unregistered_mutation",
+        lambda: ("", 204),
+        methods=["POST"],
+    )
+    _warm_work_os(client, "/api/work-os/evaluation")
+
+    assert client.post("/test/unregistered-mutation").status_code == 204
+
+    after: Any = client.get("/api/work-os/evaluation")
+    assert after.status_code == 200
+    assert after.headers["X-Panel-Cache"] == "miss"
+
+
+def test_declared_noop_mutation_does_not_evict_work_os_cache(
+    client: Any,
+) -> None:
+    """Observational telemetry (a registered no-op) must never evict anything."""
+    _warm_work_os(client, "/api/work-os/evaluation")
+
+    assert (
+        client.post(
+            "/api/metrics/panel",
+            json={"panel": "evaluation", "cache": "cold", "total_ms": 1},
+        ).status_code
+        == 204
+    )
+
+    after: Any = client.get("/api/work-os/evaluation")
+    assert after.status_code == 200
+    assert after.headers["X-Panel-Cache"] == "hit"
 
 
 def test_etag_scope_is_panel_gets_only(client: FlaskClient) -> None:
