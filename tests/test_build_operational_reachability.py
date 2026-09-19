@@ -181,7 +181,12 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    assert len(graph.unknown_edges) == 98
+    assert len(graph.unknown_edges) == 99
+    assert any(
+        edge.source == "tests/test_release_retained_boundaries.py"
+        and edge.target == "<dynamic process entrypoint>"
+        for edge in graph.unknown_edges
+    )
     assert residual_source_edges == []
 
 
