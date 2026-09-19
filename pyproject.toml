@@ -98,7 +98,17 @@ ignore = [
 "execution/dcf_opus_assumptions.py" = ["N816", "N806", "N803", "B007", "T201", "SIM105", "SIM222"]
 
 [tool.pyright]
-include = ["src", "execution", "tests"]
+include = [
+    ".github/scripts",
+    "alembic",
+    "cron",
+    "evals",
+    "execution",
+    "instruction_tests",
+    "scripts",
+    "src",
+    "tests",
+]
 # The two redesigned-DCF CLI tools are dynamic openpyxl/LLM scripts (cell objects,
 # JSON dicts) where strict typing yields ~500 unknown-type errors with no real
 # bugs caught — excluded like scratch/, the same way other dynamic scripts are.
@@ -114,7 +124,7 @@ include = ["src", "execution", "tests"]
 # boundary, not an importer, but the wealthplan.* symbols cascade to Unknown
 # the same way. Its OWN types (WealthplanCashNeedSummary, the band Literal)
 # are fully typed and covered normally.
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived",
            "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
            "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/build_meli_platform_dcf.py", "execution/dcf_opus_assumptions.py",
            "execution/import_owner_capacity.py", "src/integrations/wealthplan_capacity.py"]
@@ -144,8 +154,18 @@ reportUnusedFunction = false
 reportConstantRedefinition = false
 
 [tool.basedpyright]
-include = ["src", "execution", "tests"]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
+include = [
+    ".github/scripts",
+    "alembic",
+    "cron",
+    "evals",
+    "execution",
+    "instruction_tests",
+    "scripts",
+    "src",
+    "tests",
+]
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived",
            "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
            "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/build_meli_platform_dcf.py", "execution/dcf_opus_assumptions.py",
            "execution/import_owner_capacity.py", "src/integrations/wealthplan_capacity.py"]

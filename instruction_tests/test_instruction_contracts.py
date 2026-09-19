@@ -75,8 +75,9 @@ def test_manifest_is_the_complete_non_overlapping_authority_graph() -> None:
     for path, entry in entries.items():
         classification = entry["class"]
         if classification == "canonical":
-            domains = entry.get("authority_domains")
-            assert isinstance(domains, list) and domains, path
+            domains_raw = entry.get("authority_domains")
+            assert isinstance(domains_raw, list) and domains_raw, path
+            domains = cast(list[object], domains_raw)
             assert "governed_by" not in entry, path
             for domain in domains:
                 assert isinstance(domain, str) and re.fullmatch(
@@ -89,8 +90,9 @@ def test_manifest_is_the_complete_non_overlapping_authority_graph() -> None:
                 )
                 owners_by_domain[domain] = path
         elif classification == "runbook":
-            governed_by = entry.get("governed_by")
-            assert isinstance(governed_by, list) and governed_by, path
+            governed_by_raw = entry.get("governed_by")
+            assert isinstance(governed_by_raw, list) and governed_by_raw, path
+            governed_by = cast(list[object], governed_by_raw)
             assert "authority_domains" not in entry, path
             for owner in governed_by:
                 assert isinstance(owner, str), (path, owner)
