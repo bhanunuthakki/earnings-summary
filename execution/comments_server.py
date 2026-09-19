@@ -657,7 +657,7 @@ def create_app(
         return _client_error(f"{message}; retry the request", status)
 
     def _log_redacted_failure(message: str, exc: object, *, level: str = "error") -> None:
-        logger = cast(logging.Logger, app.logger)
+        logger = app.logger
         log = getattr(logger, level)
         log(
             "%s: %s",
