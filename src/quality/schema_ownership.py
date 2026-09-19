@@ -359,44 +359,29 @@ def _record_upgrade_evidence(
     evidence: dict[str, list[tuple[int, str, str]]],
 ) -> None:
     dynamic_namespace_names = {"eval", "exec", "globals", "locals", "vars"}
-
-    def is_dynamic_namespace_literal(node: ast.expr) -> bool:
-        return (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value in dynamic_namespace_names
-        )
+    reflection_names = {"__dict__", "__getattribute__", "attrgetter", "getattr"}
+    unsafe_namespace_names = dynamic_namespace_names | reflection_names
 
     if any(
         (
             isinstance(child, ast.Name)
             and isinstance(child.ctx, ast.Load)
-            and child.id in dynamic_namespace_names
+            and child.id in unsafe_namespace_names
         )
         or (
             isinstance(child, ast.Attribute)
             and isinstance(child.ctx, ast.Load)
-            and child.attr in dynamic_namespace_names
+            and child.attr in unsafe_namespace_names
         )
         or (
             isinstance(child, ast.ImportFrom)
             and child.module == "builtins"
-            and any(alias.name in dynamic_namespace_names for alias in child.names)
+            and any(alias.name in unsafe_namespace_names for alias in child.names)
         )
         or (
-            isinstance(child, ast.Call)
-            and len(child.args) >= 2
-            and (
-                (isinstance(child.func, ast.Name) and child.func.id == "getattr")
-                or (isinstance(child.func, ast.Attribute) and child.func.attr == "getattr")
-            )
-            and is_dynamic_namespace_literal(child.args[1])
-        )
-        or (
-            isinstance(child, ast.Subscript)
-            and isinstance(child.value, ast.Attribute)
-            and child.value.attr == "__dict__"
-            and is_dynamic_namespace_literal(child.slice)
+            isinstance(child, ast.Constant)
+            and isinstance(child.value, str)
+            and child.value in dynamic_namespace_names
         )
         for child in ast.walk(tree)
     ):
