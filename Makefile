@@ -1,12 +1,10 @@
 # Developer task runner — encodes the GEMINI.md pre-push checklist as targets so
 # CI (.github/workflows/ci.yml) and humans run the same commands.
 #
-# NOTE on baselines: the repo carries a large pre-existing ruff (~332) and
-# pyright-strict (~3070) baseline (tooling drift — see
-# directives/regrade_memo_post_wedge.md). So `lint`/`typecheck` over the whole
-# tree are INFORMATIONAL; the enforceable gate is "your changed files are
-# clean" (lint-changed / typecheck-changed) plus a green test suite. `make
-# check` runs exactly what is expected to be green.
+# NOTE on baselines: active Python is Ruff-clean; immutable historical
+# migrations retain approved format debt. Pyright still carries a large
+# pre-existing baseline. The enforceable gate is that changed retained files
+# are wholly format/lint/type/suppression clean plus a green test suite.
 
 .DEFAULT_GOAL := help
 
@@ -28,9 +26,9 @@ BASE ?= origin/main
 PYTEST_WORKERS ?= 2
 PYTEST_XDIST_ARGS := $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS) --dist=loadfile)
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
-CHANGED := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
+CHANGED := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions(_archived)?/|scratch/)')
 
-.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed architecture-check instruction-check public-boundary-check public-ref-check check check-fast ci-local
+.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed suppressions-changed test test-serial test-changed architecture-check instruction-check public-boundary-check public-ref-check check check-fast ci-local
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -47,8 +45,8 @@ format:  ## Auto-format the tree
 format-check:  ## Fail if anything is unformatted (whole tree — informational; ~247-file drift baseline)
 	ruff format --check .
 
-format-changed:  ## Format-check only the lines changed vs BASE (the enforceable gate)
-	@$(PY) execution/format_changed.py --base $(BASE) $(CHANGED)
+format-changed:  ## Require changed retained files to be wholly formatted
+	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs ruff format --check; else echo "no changed .py files"; fi
 
 lint:  ## Lint the whole tree (informational — has a pre-existing baseline)
 	ruff check .
@@ -57,10 +55,13 @@ lint-changed:  ## Lint only files changed vs BASE (the enforceable gate)
 	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs ruff check; else echo "no changed .py files"; fi
 
 typecheck:  ## pyright strict over the tree (informational — has a baseline)
-	pyright
+	pyright --pythonpath $(PY)
 
 typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable gate)
-	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs pyright; else echo "no changed .py files"; fi
+	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs pyright --pythonpath $(PY); else echo "no changed .py files"; fi
+
+suppressions-changed:  ## Reject inline static-analysis suppressions in changed retained files
+	PYTHONPATH=src $(PY) -m quality.changed_suppressions --base $(BASE)
 
 test:  ## Run the full test suite
 	$(PY) -m pytest -q $(PYTEST_XDIST_ARGS)
@@ -87,9 +88,9 @@ public-boundary-check:  ## Reject private material in the current tracked tree
 public-ref-check:  ## Audit fetched origin branches by private path category
 	$(PY) execution/verify_public_tree.py --all-refs
 
-check: architecture-check format-changed lint-changed typecheck-changed test  ## Pre-push gate: architecture + your-lines format/lint/types + tests
+check: architecture-check format-changed lint-changed typecheck-changed suppressions-changed test  ## Pre-push gate: architecture + format/lint/types/suppressions + tests
 
-check-fast: architecture-check format-changed lint-changed typecheck-changed test-changed  ## Fast inner-loop gate: architecture + format/lint/typecheck + changed-tests
+check-fast: architecture-check format-changed lint-changed typecheck-changed suppressions-changed test-changed  ## Fast inner-loop gate: architecture + format/lint/types/suppressions + changed-tests
 
 manifest-check:  ## Validate 11-project reconstruction inventory
 	$(PY) execution/verify_reconstruction_inventory.py
