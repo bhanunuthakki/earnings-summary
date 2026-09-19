@@ -8,11 +8,12 @@ import re
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import cast
 
+from pipeline.data_coverage_dispositions import fiscal_quarter_period_end
 from provenance.selection import selected_transcripts_relation
 
 _TRANSCRIPT_NAME = re.compile(r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})$")
@@ -28,6 +29,20 @@ class TranscriptScanBinding:
     document_id: int
     transcript_acquisition_receipt_id: str
     transcript_sha256: str
+
+
+@dataclass(frozen=True)
+class _AcquisitionReceiptIdentity:
+    receipt_id: str
+    document_id: int | None
+    canonical_ticker: str
+    fiscal_year: int
+    fiscal_quarter: int
+    fiscal_year_end_month: int
+    canonical_document_path: PurePosixPath
+    artifact_sha256: str
+    artifact_size_bytes: int
+    source_url: str | None
 
 
 @dataclass(frozen=True)
@@ -411,6 +426,143 @@ def _observed_source_sha256(observed: Sequence[ObservedTranscriptSegment]) -> st
     return _sha256(source_json)
 
 
+def _validated_acquisition_receipt(
+    conn: sqlite3.Connection, receipt_id: str
+) -> _AcquisitionReceiptIdentity | None:
+    """Validate one immutable acquisition receipt without consulting current bytes."""
+
+    try:
+        row = conn.execute(
+            "SELECT receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,"
+            "fiscal_quarter,canonical_document_path,artifact_sha256,artifact_size_bytes,"
+            "source_url,provider,source_type,document_type,source_regime,"
+            "source_regime_contract_sha256,authorization_json,artifact_json "
+            "FROM transcript_acquisition_receipts WHERE receipt_id=?",
+            (receipt_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        artifact_json = str(row["artifact_json"])
+        authorization_json = str(row["authorization_json"])
+        artifact_value = cast(object, json.loads(artifact_json))
+        authorization_value = cast(object, json.loads(authorization_json))
+        if not isinstance(artifact_value, dict) or not isinstance(authorization_value, dict):
+            return None
+        artifact = cast(dict[str, object], artifact_value)
+        authorization = cast(dict[str, object], authorization_value)
+        request_value = authorization.get("request")
+        stored_target_value = authorization.get("stored_target")
+        staged_value = artifact.get("staged")
+        if (
+            not isinstance(request_value, dict)
+            or not isinstance(stored_target_value, dict)
+            or not isinstance(staged_value, dict)
+        ):
+            return None
+        request = cast(dict[str, object], request_value)
+        stored_target = cast(dict[str, object], stored_target_value)
+        staged = cast(dict[str, object], staged_value)
+        source_regime_value = request.get("source_regime_identity")
+        if not isinstance(source_regime_value, dict):
+            return None
+        source_regime = cast(dict[str, object], source_regime_value)
+        document_id_value = row["document_id"]
+        document_id = (
+            None if document_id_value is None else _strict_int(document_id_value, positive=True)
+        )
+        canonical_ticker = str(row["canonical_ticker"])
+        fiscal_year = _strict_int(row["fiscal_year"], positive=True)
+        fiscal_quarter = _strict_int(row["fiscal_quarter"], positive=True)
+        fiscal_year_end_month = _strict_int(
+            stored_target.get("fiscal_year_end_month"), positive=True
+        )
+        canonical_document_path = PurePosixPath(str(row["canonical_document_path"]))
+        artifact_sha256 = str(row["artifact_sha256"])
+        artifact_size_bytes = _strict_int(row["artifact_size_bytes"], positive=False)
+        source_url = None if row["source_url"] is None else str(row["source_url"])
+        if (
+            str(row["receipt_id"]) != _sha256(artifact_json)
+            or not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256)
+            or str(row["provider"]) != "issuer_ir"
+            or str(row["source_type"]) != "ir_doc"
+            or str(row["document_type"]) != "earnings_call_transcript"
+            or str(row["source_regime"]) != "combined"
+            or artifact.get("schema_version") != "authorized-transcript-artifact@1"
+            or artifact.get("document_id") != document_id
+            or artifact.get("canonical_document_path") != canonical_document_path.as_posix()
+            or artifact.get("source_url") != source_url
+            or artifact.get("authorization") != authorization
+            or staged.get("sha256") != artifact_sha256
+            or staged.get("size_bytes") != artifact_size_bytes
+            or authorization.get("schema_version") != "transcript-acquisition-authorization@1"
+            or authorization.get("status") != "authorized"
+            or authorization.get("idempotency_key") != str(row["idempotency_key"])
+            or not 1 <= fiscal_year_end_month <= 12
+            or request.get("canonical_ticker") != canonical_ticker
+            or request.get("fiscal_year") != fiscal_year
+            or request.get("fiscal_quarter") != fiscal_quarter
+            or request.get("provider") != "issuer_ir"
+            or request.get("source_type") != "ir_doc"
+            or request.get("document_type") != "earnings_call_transcript"
+            or source_regime.get("regime") != "combined"
+            or source_regime.get("contract_sha256") != str(row["source_regime_contract_sha256"])
+        ):
+            return None
+        return _AcquisitionReceiptIdentity(
+            receipt_id=str(row["receipt_id"]),
+            document_id=document_id,
+            canonical_ticker=canonical_ticker,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            fiscal_year_end_month=fiscal_year_end_month,
+            canonical_document_path=canonical_document_path,
+            artifact_sha256=artifact_sha256,
+            artifact_size_bytes=artifact_size_bytes,
+            source_url=source_url,
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, sqlite3.Error):
+        return None
+
+
+def _acquisition_matches_transcript_coordinate(
+    conn: sqlite3.Connection,
+    *,
+    acquisition: _AcquisitionReceiptIdentity,
+    binding: TranscriptScanBinding,
+) -> bool:
+    """Bind a sealed acquisition to its historical transcript coordinate."""
+
+    row = conn.execute(
+        "SELECT UPPER(t.ticker) AS ticker,t.fiscal_period_type,t.period_end "
+        "FROM transcripts AS t WHERE t.id=? AND t.document_id=?",
+        (binding.transcript_id, binding.document_id),
+    ).fetchone()
+    if row is None:
+        return False
+    match = _TRANSCRIPT_NAME.fullmatch(acquisition.canonical_document_path.stem)
+    try:
+        period_end = date.fromisoformat(str(row["period_end"])[:10])
+        expected_period_end = fiscal_quarter_period_end(
+            acquisition.fiscal_year,
+            acquisition.fiscal_quarter,
+            acquisition.fiscal_year_end_month,
+        )
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        (acquisition.document_id is None or acquisition.document_id == binding.document_id)
+        and acquisition.artifact_sha256 == binding.transcript_sha256
+        and acquisition.canonical_document_path.parent == PurePosixPath("transcripts/raw")
+        and match is not None
+        and match.group("ticker") == acquisition.canonical_ticker
+        and int(match.group("year")) == acquisition.fiscal_year
+        and int(match.group("quarter")) == acquisition.fiscal_quarter
+        and str(row["ticker"]) == acquisition.canonical_ticker
+        and str(row["fiscal_period_type"]) == f"Q{acquisition.fiscal_quarter}"
+        and period_end == expected_period_end
+    )
+
+
 def _outputs_match_observed(
     output_json: str, observed: Sequence[ObservedTranscriptSegment]
 ) -> bool:
@@ -462,8 +614,8 @@ def current_transcript_scan_binding(
         return None
     relation = selected_transcripts_relation(conn).sql
     rows = conn.execute(
-        "SELECT t.id AS transcript_id,t.document_id,d.file_path,d.sha256,r.receipt_id,"
-        "r.fiscal_year,r.fiscal_quarter,r.canonical_document_path,r.artifact_json "
+        "SELECT t.id AS transcript_id,t.document_id,d.file_path,d.sha256,d.raw_bytes_size,"
+        "d.source_type,d.source_url,r.receipt_id "
         f"FROM {relation} AS t "  # nosec B608 -- repository-owned selection relation
         "JOIN documents AS d ON d.id=t.document_id "
         "JOIN transcript_acquisition_receipts AS r "
@@ -478,27 +630,38 @@ def current_transcript_scan_binding(
     ).fetchall()
     for row in rows:
         file_path = PurePosixPath(str(row["file_path"]))
-        if file_path.parent != PurePosixPath("transcripts/processed"):
+        transcript_sha256 = str(row["sha256"])
+        processed_parent = PurePosixPath("transcripts/processed")
+        evidence_parent = PurePosixPath("transcripts/raw/.evidence") / transcript_sha256
+        if file_path.parent not in {processed_parent, evidence_parent}:
             continue
         match = _TRANSCRIPT_NAME.fullmatch(file_path.stem)
         if match is None:
             continue
-        if int(match.group("year")) != int(row["fiscal_year"]):
-            continue
-        if int(match.group("quarter")) != int(row["fiscal_quarter"]):
-            continue
-        expected_raw = PurePosixPath("transcripts/raw") / file_path.name
-        if str(row["canonical_document_path"]) != expected_raw.as_posix():
-            continue
-        artifact_json = str(row["artifact_json"])
-        if _sha256(artifact_json) != str(row["receipt_id"]):
-            continue
-        return TranscriptScanBinding(
+        binding = TranscriptScanBinding(
             transcript_id=int(row["transcript_id"]),
             document_id=int(row["document_id"]),
             transcript_acquisition_receipt_id=str(row["receipt_id"]),
-            transcript_sha256=str(row["sha256"]),
+            transcript_sha256=transcript_sha256,
         )
+        acquisition = _validated_acquisition_receipt(
+            conn, binding.transcript_acquisition_receipt_id
+        )
+        if acquisition is None or not _acquisition_matches_transcript_coordinate(
+            conn, acquisition=acquisition, binding=binding
+        ):
+            continue
+        document_source_url = None if row["source_url"] is None else str(row["source_url"])
+        source_metadata_matches = (
+            str(row["source_type"]) == "ir_doc" and acquisition.source_url == document_source_url
+        ) or (str(row["source_type"]) == "transcript_audio" and document_source_url is None)
+        if (
+            acquisition.canonical_document_path.name != file_path.name
+            or acquisition.artifact_size_bytes != int(row["raw_bytes_size"])
+            or not source_metadata_matches
+        ):
+            continue
+        return binding
     return None
 
 
@@ -769,21 +932,11 @@ def _sealed_receipt_binding(
         )
         if not re.fullmatch(r"[0-9a-f]{64}", binding.transcript_sha256):
             return None
-        acquisition = conn.execute(
-            "SELECT receipt_id,document_id,artifact_sha256,artifact_json,provider,source_type,"
-            "document_type FROM transcript_acquisition_receipts WHERE receipt_id=?",
-            (binding.transcript_acquisition_receipt_id,),
-        ).fetchone()
-        if acquisition is None:
-            return None
-        artifact_json = str(acquisition["artifact_json"])
-        if (
-            str(acquisition["receipt_id"]) != _sha256(artifact_json)
-            or acquisition["document_id"] != binding.document_id
-            or str(acquisition["artifact_sha256"]) != binding.transcript_sha256
-            or str(acquisition["provider"]) != "issuer_ir"
-            or str(acquisition["source_type"]) != "ir_doc"
-            or str(acquisition["document_type"]) != "earnings_call_transcript"
+        acquisition = _validated_acquisition_receipt(
+            conn, binding.transcript_acquisition_receipt_id
+        )
+        if acquisition is None or not _acquisition_matches_transcript_coordinate(
+            conn, acquisition=acquisition, binding=binding
         ):
             return None
         return binding

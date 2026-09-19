@@ -71,7 +71,7 @@
     "src/ask": 0,
     "src/capture": 0,
     "src/competitive": 0,
-    "src/compute": 4,
+    "src/compute": 3,
     "src/credibility": 0,
     "src/dashboard": 5,
     "src/dcf": 1,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1195
+    "tests": 1194
   }
 }

@@ -129,7 +129,6 @@
     "execution/export_book_cma.py",
     "execution/export_cio_xlsx.py",
     "execution/extract_8k_overrides.py",
-    "execution/extract_commitments_from_transcript.py",
     "execution/extract_company_description.py",
     "execution/extract_competitive_mentions.py",
     "execution/extract_document_tables.py",

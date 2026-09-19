@@ -384,7 +384,8 @@ def test_canonical_processed_collision_compares_db_and_live_bytes(
 
     monkeypatch.setattr(mod.db, "get_connection", connection)
     monkeypatch.setattr(mod.db, "PROJECT_ROOT", str(repo_root))
-    assert mod._canonical_processed_path_conflicts(
+    conflicts = getattr(mod, "_canonical_processed_path_conflicts")
+    assert conflicts(
         mod.FetchedTranscriptIdentity(
             label="Q1_2026",
             receipt_id="a" * 64,
@@ -393,7 +394,7 @@ def test_canonical_processed_collision_compares_db_and_live_bytes(
             size_bytes=1,
         )
     )
-    assert not mod._canonical_processed_path_conflicts(
+    assert not conflicts(
         mod.FetchedTranscriptIdentity(
             label="Q1_2026",
             receipt_id="a" * 64,
@@ -870,13 +871,45 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
     processed.parent.mkdir(parents=True)
     processed.write_text("authorized bound transcript", encoding="utf-8")
     digest = hashlib.sha256(processed.read_bytes()).hexdigest()
-    artifact_json = '{"artifact":"nu-q1-2026"}'
+    contract_sha = "c" * 64
+    idempotency_key = "transcript:" + "1" * 64
+    authorization = {
+        "idempotency_key": idempotency_key,
+        "request": {
+            "canonical_ticker": "NU",
+            "document_type": "earnings_call_transcript",
+            "fiscal_quarter": 1,
+            "fiscal_year": 2026,
+            "provider": "issuer_ir",
+            "source_regime_identity": {
+                "contract_sha256": contract_sha,
+                "regime": "combined",
+            },
+            "source_type": "ir_doc",
+        },
+        "schema_version": "transcript-acquisition-authorization@1",
+        "status": "authorized",
+        "stored_target": {"coverage_role": "holdings", "fiscal_year_end_month": 12},
+    }
+    artifact = {
+        "authorization": authorization,
+        "canonical_document_path": "transcripts/raw/NU_Q1_2026.txt",
+        "document_id": None,
+        "schema_version": "authorized-transcript-artifact@1",
+        "source_url": None,
+        "staged": {"sha256": digest, "size_bytes": len(processed.read_bytes())},
+    }
+    authorization_json = json.dumps(authorization, sort_keys=True, separators=(",", ":"))
+    artifact_json = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
     receipt_id = hashlib.sha256(artifact_json.encode()).hexdigest()
     db_path = tmp_path / "portfolio.db"
     conn = sqlite3.connect(db_path)
     conn.executescript(
         """
-        CREATE TABLE documents (id INTEGER PRIMARY KEY,ticker TEXT,file_path TEXT,sha256 TEXT);
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY,ticker TEXT,file_path TEXT,sha256 TEXT,
+            raw_bytes_size INTEGER,source_type TEXT,source_url TEXT
+        );
         CREATE TABLE transcripts (
             id INTEGER PRIMARY KEY,document_id INTEGER,ticker TEXT,
             fiscal_period_type TEXT,period_end TEXT,is_current INTEGER
@@ -885,21 +918,30 @@ def test_backfill_stop_requires_processed_current_segments_and_authorized_receip
         CREATE TABLE transcript_acquisition_receipts (
             receipt_id TEXT,document_id INTEGER,canonical_ticker TEXT,fiscal_year INTEGER,
             fiscal_quarter INTEGER,canonical_document_path TEXT,artifact_sha256 TEXT,
-            provider TEXT,source_type TEXT,document_type TEXT,artifact_json TEXT,recorded_at TEXT
+            artifact_size_bytes INTEGER,source_url TEXT,provider TEXT,source_type TEXT,
+            document_type TEXT,source_regime TEXT,source_regime_contract_sha256 TEXT,
+            idempotency_key TEXT,authorization_json TEXT,artifact_json TEXT,recorded_at TEXT
         );
-        INSERT INTO documents VALUES (
-            1,'NU','transcripts/processed/NU_Q1_2026.txt','DIGEST'
-        );
+        INSERT INTO documents VALUES (1,'NU','transcripts/processed/NU_Q1_2026.txt',
+            'DIGEST',SIZE,'ir_doc',NULL);
         INSERT INTO transcripts VALUES (2,1,'NU','Q1','2026-03-31',1);
         INSERT INTO transcript_segments VALUES (3,2);
-        INSERT INTO transcript_acquisition_receipts VALUES (
-            'RECEIPT',NULL,'NU',2026,1,'transcripts/raw/NU_Q1_2026.txt','DIGEST',
-            'issuer_ir','ir_doc','earnings_call_transcript','ARTIFACT',
-            '2026-09-05T01:00:00Z'
-        );
-        """.replace("DIGEST", digest)
-        .replace("RECEIPT", receipt_id)
-        .replace("ARTIFACT", artifact_json)
+        """.replace("DIGEST", digest).replace("SIZE", str(len(processed.read_bytes())))
+    )
+    conn.execute(
+        "INSERT INTO transcript_acquisition_receipts VALUES "
+        "(?,NULL,'NU',2026,1,'transcripts/raw/NU_Q1_2026.txt',?,?,NULL,"
+        "'issuer_ir','ir_doc','earnings_call_transcript','combined',?,?,?,?,?)",
+        (
+            receipt_id,
+            digest,
+            len(processed.read_bytes()),
+            contract_sha,
+            idempotency_key,
+            authorization_json,
+            artifact_json,
+            "2026-09-05T01:00:00Z",
+        ),
     )
     conn.commit()
     conn.close()
@@ -947,6 +989,7 @@ def test_ingested_and_scan_evidence_share_latest_valid_receipt_binding(
         },
         "schema_version": "transcript-acquisition-authorization@1",
         "status": "authorized",
+        "stored_target": {"coverage_role": "holdings", "fiscal_year_end_month": 12},
     }
     valid_artifact_json = json.dumps(
         {

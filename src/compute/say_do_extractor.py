@@ -61,6 +61,7 @@ from pipeline.commitment_scan_receipts import (
     TranscriptSegmentVersion,
     append_commitment_scan_receipt,
     commitment_scan_coverage,
+    current_transcript_scan_binding,
     observe_transcript_segment,
     scan_receipt_schema_available,
 )
@@ -390,6 +391,48 @@ def transcripts_without_scan_receipt(
         else:
             already_scanned = False
         if already_scanned:
+            continue
+        period_end = row["period_end"]
+        pending.append(
+            (
+                transcript_id,
+                str(row["ticker"]),
+                datetime.fromisoformat(period_end) if isinstance(period_end, str) else period_end,
+            )
+        )
+    return pending
+
+
+def transcripts_requiring_explicit_reaudit(
+    conn: sqlite3.Connection, ticker: str
+) -> list[tuple[int, str, datetime]]:
+    """Return exact-bound invalid/legacy scans for a deliberate ticker repair."""
+
+    if not scan_receipt_schema_available(conn):
+        return []
+    from llm.prompt_versions import prompt_version_for
+
+    version = prompt_version_for("saydo_commitment_extract")
+    transcripts = selected_transcripts_relation(conn)
+    rows = conn.execute(
+        f"SELECT t.id,t.ticker,t.period_end FROM {transcripts} t "  # nosec B608
+        "WHERE UPPER(t.ticker)=? ORDER BY t.period_end DESC,t.id",
+        (ticker.upper(),),
+    ).fetchall()
+    pending: list[tuple[int, str, datetime]] = []
+    for row in rows:
+        transcript_id = int(row["id"])
+        coverage = commitment_scan_coverage(
+            conn,
+            transcript_id=transcript_id,
+            prompt_version=version,
+        )
+        if coverage.state not in {
+            CommitmentScanCoverageState.LEGACY_UNOBSERVED_REAUDIT_REQUIRED,
+            CommitmentScanCoverageState.INVALID_REAUDIT_REQUIRED,
+        }:
+            continue
+        if current_transcript_scan_binding(conn, transcript_id) is None:
             continue
         period_end = row["period_end"]
         pending.append(

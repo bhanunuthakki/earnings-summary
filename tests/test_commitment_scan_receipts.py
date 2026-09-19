@@ -1,5 +1,3 @@
-# pyright: reportPrivateUsage=false
-
 from __future__ import annotations
 
 import hashlib
@@ -25,9 +23,9 @@ from compute.say_do_extractor import (
 )
 from llm.prompt_versions import prompt_version_for
 from llm_client import LLMBudgetExceeded, LLMSetupError
+from pipeline import commitment_scan_receipts as scan_receipts_module
 from pipeline.commitment_scan_receipts import (
     CommitmentScanCoverageState,
-    _parse_observed_segments,
     append_commitment_scan_receipt,
     commitment_scan_coverage,
     current_commitment_scan_receipt,
@@ -74,7 +72,12 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _seed_transcript(path: Path, *, segments: list[str]) -> tuple[int, tuple[int, ...]]:
+def _seed_transcript(
+    path: Path,
+    *,
+    segments: list[str],
+    pre_ingest_receipt: bool = False,
+) -> tuple[int, tuple[int, ...]]:
     with sqlite3.connect(path) as conn:
         conn.row_factory = sqlite3.Row
         transcript_sha = hashlib.sha256("\n".join(segments).encode()).hexdigest()
@@ -141,7 +144,7 @@ def _seed_transcript(path: Path, *, segments: list[str]) -> tuple[int, tuple[int
         artifact = {
             "authorization": authorization,
             "canonical_document_path": "transcripts/raw/ACME_Q2_2026.txt",
-            "document_id": document_id,
+            "document_id": None if pre_ingest_receipt else document_id,
             "schema_version": "authorized-transcript-artifact@1",
             "source_url": None,
             "staged": {
@@ -165,7 +168,7 @@ def _seed_transcript(path: Path, *, segments: list[str]) -> tuple[int, tuple[int
             (
                 _sha(artifact_json),
                 key,
-                document_id,
+                None if pre_ingest_receipt else document_id,
                 "ACME",
                 2026,
                 2,
@@ -218,6 +221,7 @@ def _add_changed_acquisition(
         },
         "schema_version": "transcript-acquisition-authorization@1",
         "status": "authorized",
+        "stored_target": {"coverage_role": "holdings", "fiscal_year_end_month": 12},
     }
     artifact = {
         "authorization": authorization,
@@ -271,6 +275,18 @@ def _load_script() -> Any:
         Path(__file__).resolve().parents[1] / "execution" / "extract_commitments_from_transcript.py"
     )
     spec = importlib.util.spec_from_file_location("bha140_extract_commitments", source)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_audit_script() -> Any:
+    import importlib.util
+
+    source = Path(__file__).resolve().parents[1] / "execution" / "audit_commitment_scan_evidence.py"
+    spec = importlib.util.spec_from_file_location("bha140_audit_commitment_scan", source)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -469,7 +485,7 @@ def test_observed_manifest_rejects_coercible_integer_tampering(field: str, value
     }
     source[field] = value
     with pytest.raises(ValueError):
-        _parse_observed_segments(
+        getattr(scan_receipts_module, "_parse_observed_segments")(
             {
                 "schema_version": "commitment-segment-observations@1",
                 "segments": [
@@ -769,7 +785,11 @@ def test_valid_legacy_receipt_requires_reaudit_and_is_not_automatically_queued(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = migrated_db(tmp_path / "valid-legacy.db", target="0036_add_data_coverage_dispositions")
-    transcript_id, _ = _seed_transcript(path, segments=["text"])
+    transcript_id, _ = _seed_transcript(
+        path,
+        segments=["text"],
+        pre_ingest_receipt=True,
+    )
     prompt_version = prompt_version_for("saydo_commitment_extract")
     with sqlite3.connect(path) as conn:
         conn.execute(
@@ -782,10 +802,18 @@ def test_valid_legacy_receipt_requires_reaudit_and_is_not_automatically_queued(
         )
         binding = conn.execute(
             "SELECT t.document_id,d.sha256,r.receipt_id FROM transcripts t JOIN documents d "
-            "ON d.id=t.document_id JOIN transcript_acquisition_receipts r ON r.document_id=d.id "
+            "ON d.id=t.document_id JOIN transcript_acquisition_receipts r ON r.artifact_sha256=d.sha256 "
             "WHERE t.id=?",
             (transcript_id,),
         ).fetchone()
+        assert binding is not None
+        assert (
+            conn.execute(
+                "SELECT document_id FROM transcript_acquisition_receipts WHERE receipt_id=?",
+                (str(binding[2]),),
+            ).fetchone()[0]
+            is None
+        )
         receipt_id = _legacy_zero_receipt_id(
             transcript_id=transcript_id,
             document_id=int(binding[0]),
@@ -837,6 +865,14 @@ def test_valid_legacy_receipt_requires_reaudit_and_is_not_automatically_queued(
         )
         assert extract_module._resolve_auto_targets(
             conn,
+            ticker="ACME",
+            transcript_id=None,
+            max_n=0,
+            rescan_unreceipted=False,
+            reaudit_invalid_evidence=True,
+        ) == [(transcript_id, "ACME")]
+        assert extract_module._resolve_auto_targets(
+            conn,
             ticker=None,
             transcript_id=transcript_id,
             max_n=0,
@@ -847,6 +883,14 @@ def test_valid_legacy_receipt_requires_reaudit_and_is_not_automatically_queued(
     processed = tmp_path / "transcripts" / "processed" / "ACME_Q2_2026.txt"
     processed.parent.mkdir(parents=True)
     processed.write_text("text", encoding="utf-8")
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        audit = _load_audit_script().audit_commitment_scan_evidence(
+            conn,
+            project_root=tmp_path,
+            ticker="ACME",
+        )
+        assert audit["reason_counts"] == {"legacy_unobserved_reaudit_required": 1}
     module = _load_backfill_script()
 
     def connect() -> sqlite3.Connection:
@@ -902,6 +946,7 @@ def test_valid_legacy_receipt_requires_reaudit_and_is_not_automatically_queued(
         },
         "schema_version": "transcript-acquisition-authorization@1",
         "status": "authorized",
+        "stored_target": {"coverage_role": "holdings", "fiscal_year_end_month": 12},
     }
     artifact = {
         "authorization": authorization,
@@ -1134,6 +1179,7 @@ def test_valid_prior_v2_receipt_with_new_acquisition_is_pending_for_auto_and_bac
             },
             "schema_version": "transcript-acquisition-authorization@1",
             "status": "authorized",
+            "stored_target": {"coverage_role": "holdings", "fiscal_year_end_month": 12},
         }
         artifact = {
             "authorization": authorization,

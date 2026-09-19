@@ -53,36 +53,39 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-from compute.management_indicators import (  # noqa: E402
+import db
+from compute.management_indicators import (
     ManagementIndicatorExtractionManifest,
     persist_indicators,
 )
-from compute.say_do import (  # noqa: E402
+from compute.say_do import (
     CommitmentExtractionManifest,
     CommitmentInput,
     persist_commitment,
     persist_manifest,
 )
-from compute.say_do_extractor import (  # noqa: E402
+from compute.say_do_extractor import (
     TranscriptExtractionManifest,
     extract_for_transcript,
     record_scan,
     scan_log_schema_available,
     transcripts_pending_extraction,
+    transcripts_requiring_explicit_reaudit,
     transcripts_without_scan_receipt,
 )
-from llm.prompt_versions import prompt_version_for  # noqa: E402
-from llm_client import call_llm, is_hard_stop  # noqa: E402
-from pipeline.commitment_scan_receipts import (  # noqa: E402
+from llm.prompt_versions import prompt_version_for
+from llm_client import call_llm, is_hard_stop
+from pipeline.commitment_scan_receipts import (
     current_transcript_scan_binding,
     scan_receipt_schema_available,
 )
-from pipeline.queries import open_db  # noqa: E402
-from provenance.selection import selected_transcripts_relation  # noqa: E402
+from pipeline.queries import open_db
+from provenance.selection import selected_transcripts_relation
 
 log = logging.getLogger("extract_commitments")
 
@@ -165,6 +168,7 @@ def _resolve_auto_targets(
     transcript_id: int | None,
     max_n: int,
     rescan_unreceipted: bool = False,
+    reaudit_invalid_evidence: bool = False,
 ) -> list[tuple[int, str]]:
     """Pick which transcripts to auto-extract from.
 
@@ -185,7 +189,11 @@ def _resolve_auto_targets(
     # ``rescan_unreceipted`` remains a CLI compatibility spelling; deliberate
     # historical work is selected with an explicit transcript identity.
     _ = rescan_unreceipted
-    pending = transcripts_without_scan_receipt(conn, ticker=ticker)
+    pending = (
+        transcripts_requiring_explicit_reaudit(conn, ticker)
+        if reaudit_invalid_evidence and ticker is not None
+        else transcripts_without_scan_receipt(conn, ticker=ticker)
+    )
     targets = [(tid, tk) for tid, tk, _ in pending]
     if max_n > 0:
         targets = targets[:max_n]
@@ -200,6 +208,7 @@ def _run_auto(
     max_n: int,
     dry_run: bool,
     rescan_unreceipted: bool = False,
+    reaudit_invalid_evidence: bool = False,
 ) -> dict[str, object]:
     """Auto-extract for each target. Returns a structured run report."""
     targets = _resolve_auto_targets(
@@ -208,6 +217,7 @@ def _run_auto(
         transcript_id=transcript_id,
         max_n=max_n,
         rescan_unreceipted=rescan_unreceipted,
+        reaudit_invalid_evidence=reaudit_invalid_evidence,
     )
     results: list[dict[str, object]] = []
     total_inserted = 0
@@ -322,6 +332,14 @@ def main(argv: list[str] | None = None) -> int:
         help="--auto compatibility alias; eligibility always uses typed scan coverage",
     )
     parser.add_argument(
+        "--reaudit-invalid-evidence",
+        action="store_true",
+        help=(
+            "--auto only: deliberately re-audit exact-bound legacy or invalid scans "
+            "for the required --ticker"
+        ),
+    )
+    parser.add_argument(
         "--transcript-id",
         type=int,
         help="--auto only: extract for one specific transcript (overrides --ticker)",
@@ -359,6 +377,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.auto:
+            if args.reaudit_invalid_evidence and not args.ticker and args.transcript_id is None:
+                parser.error("--reaudit-invalid-evidence requires --ticker or --transcript-id")
             report = _run_auto(
                 conn,
                 ticker=args.ticker,
@@ -366,6 +386,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_n=args.max,
                 dry_run=args.dry_run,
                 rescan_unreceipted=args.rescan_unreceipted,
+                reaudit_invalid_evidence=args.reaudit_invalid_evidence,
             )
             print(json.dumps(report, indent=2))
             failed_targets = report.get("failed_targets")
