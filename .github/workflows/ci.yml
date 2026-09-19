@@ -484,6 +484,9 @@ jobs:
             echo "No new ruff violations in changed files."
           fi
           exit "$status"
+      - name: changed retained files contain no inline suppressions
+        if: steps.changed.outputs.files != ''
+        run: PYTHONPATH=src python -m quality.changed_suppressions --base "${{ steps.changed.outputs.base }}"
 
   typecheck:
     needs: [changes]
