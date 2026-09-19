@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from importlib import import_module
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, cast
 
 _DEFAULT_WEALTHPLAN_ROOT = Path(
     os.environ.get("WEALTHPLAN_ROOT")
@@ -41,6 +43,25 @@ _DEFAULT_WEALTHPLAN_ROOT = Path(
 DEFAULT_LOOKAHEAD_DAYS = 730
 
 CashNeedBand = Literal["normal", "elevated"]
+
+
+class _Baseline(Protocol):
+    events: Iterable[object]
+
+
+class _WealthplanModels(Protocol):
+    BabyEvent: type[object]
+    BuyHouseEvent: type[object]
+    ExitPayoutEvent: type[object]
+    MoveCityEvent: type[object]
+    ParentCareEvent: type[object]
+    StartupEvent: type[object]
+    WorkBreakEvent: type[object]
+
+
+class _WealthplanPersistence(Protocol):
+    load_plan: Callable[[], tuple[object, _Baseline] | None]
+
 
 # Label-only reasons an "elevated" band cites — no amounts, ever. Keyed by the
 # wealthplan event class name (checked via isinstance, not this dict) so a
@@ -96,16 +117,8 @@ def read_cash_need_summary(
     if src not in sys.path:
         sys.path.insert(0, src)
     try:
-        from wealthplan.models import (
-            BabyEvent,
-            BuyHouseEvent,
-            ExitPayoutEvent,
-            MoveCityEvent,
-            ParentCareEvent,
-            StartupEvent,
-            WorkBreakEvent,
-        )
-        from wealthplan.persistence import load_plan
+        models = cast("_WealthplanModels", import_module("wealthplan.models"))
+        persistence = cast("_WealthplanPersistence", import_module("wealthplan.persistence"))
     except ImportError as exc:
         return WealthplanCashNeedSummary(
             available=False, reason=f"wealthplan import failed: {type(exc).__name__}"
@@ -127,7 +140,7 @@ def read_cash_need_summary(
             )
 
     try:
-        plan = load_plan()
+        plan = persistence.load_plan()
     except Exception as exc:  # never raises across this federation boundary
         return WealthplanCashNeedSummary(
             available=False, reason=f"load_plan failed: {type(exc).__name__}"
@@ -140,26 +153,26 @@ def read_cash_need_summary(
     horizon = today + timedelta(days=lookahead_days)
 
     _kind_to_label = {
-        BabyEvent: _EVENT_LABELS["BabyEvent"],
-        BuyHouseEvent: _EVENT_LABELS["BuyHouseEvent"],
-        MoveCityEvent: _EVENT_LABELS["MoveCityEvent"],
-        WorkBreakEvent: _EVENT_LABELS["WorkBreakEvent"],
-        StartupEvent: _EVENT_LABELS["StartupEvent"],
-        ExitPayoutEvent: _EVENT_LABELS["ExitPayoutEvent"],
+        models.BabyEvent: _EVENT_LABELS["BabyEvent"],
+        models.BuyHouseEvent: _EVENT_LABELS["BuyHouseEvent"],
+        models.MoveCityEvent: _EVENT_LABELS["MoveCityEvent"],
+        models.WorkBreakEvent: _EVENT_LABELS["WorkBreakEvent"],
+        models.StartupEvent: _EVENT_LABELS["StartupEvent"],
+        models.ExitPayoutEvent: _EVENT_LABELS["ExitPayoutEvent"],
     }
     _kind_to_date_attr = {
-        BabyEvent: _EVENT_DATE_ATTR["BabyEvent"],
-        BuyHouseEvent: _EVENT_DATE_ATTR["BuyHouseEvent"],
-        MoveCityEvent: _EVENT_DATE_ATTR["MoveCityEvent"],
-        WorkBreakEvent: _EVENT_DATE_ATTR["WorkBreakEvent"],
-        StartupEvent: _EVENT_DATE_ATTR["StartupEvent"],
-        ExitPayoutEvent: _EVENT_DATE_ATTR["ExitPayoutEvent"],
+        models.BabyEvent: _EVENT_DATE_ATTR["BabyEvent"],
+        models.BuyHouseEvent: _EVENT_DATE_ATTR["BuyHouseEvent"],
+        models.MoveCityEvent: _EVENT_DATE_ATTR["MoveCityEvent"],
+        models.WorkBreakEvent: _EVENT_DATE_ATTR["WorkBreakEvent"],
+        models.StartupEvent: _EVENT_DATE_ATTR["StartupEvent"],
+        models.ExitPayoutEvent: _EVENT_DATE_ATTR["ExitPayoutEvent"],
     }
 
     reasons: list[str] = []
     try:
         for event in baseline.events:
-            if isinstance(event, ParentCareEvent):
+            if isinstance(event, models.ParentCareEvent):
                 continue  # age-keyed, not date-keyed — no calendar horizon to compare
             kind = type(event)
             label = _kind_to_label.get(kind)

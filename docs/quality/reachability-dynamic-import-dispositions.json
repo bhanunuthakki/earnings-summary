@@ -117,6 +117,36 @@
     },
     {
       "disposition": "external_optional_dependency",
+      "evidence": "The aggregates-only Wealthplan reader loads the optional sibling checkout through a typed, fail-closed adapter.",
+      "fingerprint": "3bdf1fbe107c494b4b0d5f91c6d0c24f30438f663cc7c09f84b7ba295a367ae4",
+      "line": 138,
+      "path": "src/integrations/wealth_context.py",
+      "targets": [
+        "wealthplan.persistence"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "The cash-need reader loads Wealthplan event classes from the optional sibling checkout through a typed, fail-closed adapter.",
+      "fingerprint": "af4fdc9045ac5658dd8497e820d913750219ff6ebfdf074cc23449ea9dff2a70",
+      "line": 120,
+      "path": "src/integrations/wealthplan_capacity.py",
+      "targets": [
+        "wealthplan.models"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "The cash-need reader loads the optional Wealthplan persistence adapter and degrades unavailable on import or load failure.",
+      "fingerprint": "f757901bedff3696c102e74b91ec949cf1f8bf2d731892a454a558721c998a64",
+      "line": 121,
+      "path": "src/integrations/wealthplan_capacity.py",
+      "targets": [
+        "wealthplan.persistence"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
       "evidence": "Browser capture lazily loads the optional playwright.sync_api runtime.",
       "fingerprint": "1191fb8b611d83b0e49f77c316b2c25da45826824ba600be7f9a48d10ef240fd",
       "line": 340,
@@ -213,13 +243,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "30ea5289efcb0d5dfa07f459c7f8c8ad57215b7d4f682927a42cf7f9c1962c7c",
+      "source_sha256": "0b43e823a55c206707e71a4da0173b1e9085e6618e39ca49508acf120248e45a",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "a948807b3de034962a4e33a66f4f8d5da32c75bd783116a53d43e01441588954"
+    "source_manifest_sha256": "58cf5e1e9b927469cecbe9b992490f133091912a55e4960779ce8aa492a2b852"
   },
   "schema_version": "reachability-dynamic-import-dispositions/v1"
 }

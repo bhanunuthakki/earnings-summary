@@ -26,9 +26,11 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Callable
 from datetime import date, datetime
+from importlib import import_module
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +42,11 @@ DEFAULT_WEALTHPLAN_ROOT = Path(
     os.environ.get("WEALTHPLAN_ROOT")
     or Path.home() / ".gemini" / "antigravity" / "scratch" / "wealthplan"
 )
+
+
+class _WealthplanPersistence(Protocol):
+    load_plan: Callable[[], tuple[object, object] | None]
+
 
 # wealthplan buckets the tracker owns live (auto-filled into the plan at save
 # time, stale afterwards). CASH / ILLIQUID / home_equity stay wealthplan-manual.
@@ -128,9 +135,7 @@ def load_wealthplan_starting(
     if src not in sys.path:
         sys.path.insert(0, src)
     try:
-        from wealthplan.persistence import (  # pyright: ignore[reportMissingImports]
-            load_plan,  # pyright: ignore[reportUnknownVariableType]
-        )
+        persistence = cast("_WealthplanPersistence", import_module("wealthplan.persistence"))
     except ImportError:
         return None
     if not _module_matches_root(wealthplan_root):
@@ -141,7 +146,7 @@ def load_wealthplan_starting(
         # full-suite failure, 2026-07-24.
         return None
     try:
-        plan = cast("tuple[object, object] | None", load_plan())
+        plan = persistence.load_plan()
     except Exception:
         return None
     if plan is None:

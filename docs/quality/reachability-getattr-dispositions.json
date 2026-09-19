@@ -318,8 +318,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr checks only the four core wealth total fields.",
-      "fingerprint": "c07ab04df6b76d19830de120fb4e5c1e24829e85a40796df6bbd15f9795f3b27",
-      "line": 95,
+      "fingerprint": "bdd48cee993ecae3ff299f51ac59310a04da993e0b277ac2f587d8b68e178790",
+      "line": 102,
       "path": "src/integrations/wealth_context.py",
       "targets": [
         "net_worth_total",
@@ -331,8 +331,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _kind_to_date_attr event date attributes.",
-      "fingerprint": "d24609b4bd74a372d5ddaa6778d3a00fa5e26723b57dbfefee02961f221a15bd",
-      "line": 169,
+      "fingerprint": "4bb59fd628fd7cc87cd7521e352acf0aa2c47582c50bcd91588fddd48e201511",
+      "line": 182,
       "path": "src/integrations/wealthplan_capacity.py",
       "targets": [
         "_kind_to_date_attr"
@@ -598,13 +598,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "30ea5289efcb0d5dfa07f459c7f8c8ad57215b7d4f682927a42cf7f9c1962c7c",
+      "source_sha256": "0b43e823a55c206707e71a4da0173b1e9085e6618e39ca49508acf120248e45a",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "a948807b3de034962a4e33a66f4f8d5da32c75bd783116a53d43e01441588954"
+    "source_manifest_sha256": "58cf5e1e9b927469cecbe9b992490f133091912a55e4960779ce8aa492a2b852"
   },
   "schema_version": "reachability-getattr-dispositions/v1"
 }
