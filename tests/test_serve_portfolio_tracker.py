@@ -45,8 +45,11 @@ def test_scheduler_supervisor_writes_receipt_to_product_state_root(
     code_root = tmp_path / "runtime-code"
     state_root = tmp_path / "product-state"
     tracker_root = tmp_path / "portfolio-tracker"
-    (tracker_root / ".venv" / "bin").mkdir(parents=True)
-    (tracker_root / ".venv" / "bin" / "python").touch()
+    managed_python = tracker_root / (
+        ".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python"
+    )
+    managed_python.parent.mkdir(parents=True)
+    managed_python.touch()
     (state_root / "data").mkdir(parents=True)
     monkeypatch.setattr(server, "PROJECT_ROOT", code_root)
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(state_root / "data" / "portfolio.db"))
