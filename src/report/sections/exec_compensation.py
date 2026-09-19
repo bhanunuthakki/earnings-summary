@@ -66,11 +66,17 @@ def build(
             ),
         )
 
-    fiscal_year_latest = max((p["fiscal_year"] for p in packages), default=None)
+    fiscal_year_latest = max(
+        (year for p in packages if (year := _year(p.get("fiscal_year"))) is not None),
+        default=None,
+    )
 
     rows: list[ExecCompRowModel] = []
     for p in packages:
-        if fiscal_year_latest is not None and p["fiscal_year"] != fiscal_year_latest:
+        fiscal_year = _year(p.get("fiscal_year"))
+        if fiscal_year is None or (
+            fiscal_year_latest is not None and fiscal_year != fiscal_year_latest
+        ):
             continue
         granted = _f(p.get("total_comp_granted"))
         realized = _f(p.get("total_comp_realized"))
@@ -80,13 +86,14 @@ def build(
         metrics, has_kpi_match = _summarize_metrics(
             p.get("performance_metrics_json"), holdings_kpis
         )
+        role = p.get("role")
         rows.append(
             ExecCompRowModel(
-                executive_name=p["executive_name"],
-                role=p["role"],
+                executive_name=str(p.get("executive_name") or ""),
+                role=role if isinstance(role, str) else None,
                 is_ceo=bool(p["is_ceo"]),
-                fiscal_year=int(p["fiscal_year"]),
-                currency=p["currency"],
+                fiscal_year=fiscal_year,
+                currency=str(p.get("currency") or ""),
                 base_salary=_f(p.get("base_salary")),
                 cash_bonus_actual=_f(p.get("cash_bonus_actual")),
                 cash_bonus_target=_f(p.get("cash_bonus_target")),
@@ -198,7 +205,7 @@ def _load_insider_signals(
     # Late import so this section module can be imported without sys.path being set
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
     try:
-        from insider_transactions import conviction_signals  # type: ignore[import-not-found]
+        from insider_transactions import conviction_signals
     except ImportError:
         return []
 
@@ -229,16 +236,19 @@ def _load_thesis_kpis(ticker: str, repo_root: Path) -> list[str]:
     if not holdings.exists():
         return []
     try:
-        data = cast("dict[str, object]", json.loads(holdings.read_text(encoding="utf-8")))
+        raw_data = json.loads(holdings.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
+    if not isinstance(raw_data, dict):
+        return []
+    data = cast("dict[str, object]", raw_data)
     raw = data.get("tier_1_kpis")
     if not isinstance(raw, list):
         return []
     out: list[str] = []
-    for entry in raw:
+    for entry in cast("list[object]", raw):
         if isinstance(entry, dict):
-            name = entry.get("name")
+            name = cast("dict[str, object]", entry).get("name")
             if isinstance(name, str) and name.strip():
                 out.append(name.strip())
     return out
@@ -259,11 +269,12 @@ def _summarize_metrics(metrics_raw: object, thesis_kpis: list[str]) -> tuple[str
     parts: list[str] = []
     has_match = False
     kpi_lower = {k.lower() for k in thesis_kpis}
-    for entry in decoded:
+    for entry in cast("list[object]", decoded):
         if not isinstance(entry, dict):
             continue
-        metric = str(entry.get("metric") or "").strip()
-        weight = entry.get("weight")
+        metric_entry = cast("dict[str, object]", entry)
+        metric = str(metric_entry.get("metric") or "").strip()
+        weight = metric_entry.get("weight")
         if not metric:
             continue
         weight_str = f"{int(float(weight) * 100)}%" if isinstance(weight, (int, float)) else "?%"
@@ -357,13 +368,13 @@ def _generate_alignment_narrative(
     Cached in llm_artifacts under purpose='exec_comp_alignment'."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
     try:
-        from llm_artifact_store import (  # type: ignore[import-not-found]
+        from llm_artifact_store import (
             UpsertRequest,
             artifact_is_reusable,
             read_current,
             upsert,
         )
-        from llm_client import LLM_MODELS, call_llm  # type: ignore[import-not-found]
+        from llm_client import LLM_MODELS, call_llm
     except ImportError:
         return None
 
@@ -409,7 +420,7 @@ def _generate_alignment_narrative(
     )
     if existing is not None:
         # Compare input_sha256
-        from llm_artifact_store import compute_input_sha256  # type: ignore[import-not-found]
+        from llm_artifact_store import compute_input_sha256
 
         new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=cache_inputs)
         if artifact_is_reusable(existing, input_sha256=new_sha) and existing.content_md:
@@ -444,7 +455,7 @@ def _alignment_prompt(
     # Late import to match the lazy-load pattern of _generate_alignment_narrative —
     # this module is loaded with src/ on sys.path but the explicit late binding
     # keeps any future src-path reordering from breaking import.
-    from llm.style import NUMBER_FORMATTING_BLOCK  # type: ignore[import-not-found]
+    from llm.style import NUMBER_FORMATTING_BLOCK
 
     pkg_lines: list[str] = []
     for r in rows:
@@ -508,7 +519,18 @@ Return ONLY the memo markdown — no preamble, no JSON wrapper."""
 def _f(v: object) -> float | None:
     if v is None or v == "":
         return None
+    if not isinstance(v, str | int | float):
+        return None
     try:
-        return float(v)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
+        return float(v)
+    except ValueError:
+        return None
+
+
+def _year(value: object) -> int | None:
+    if not isinstance(value, str | int):
+        return None
+    try:
+        return int(value)
+    except ValueError:
         return None
