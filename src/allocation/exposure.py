@@ -110,8 +110,8 @@ class BookExposure:
 
     dim_type: str
     shares: dict[str, float]  # dim_name -> fraction of the BOOK
-    by_name: dict[str, NameMix] = field(default_factory=dict)
-    unattributed: dict[str, str] = field(default_factory=dict)  # ticker -> why
+    by_name: dict[str, NameMix] = field(default_factory=dict[str, NameMix])
+    unattributed: dict[str, str] = field(default_factory=dict[str, str])  # ticker -> why
     unattributed_weight: float = 0.0
 
 
