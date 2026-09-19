@@ -12,6 +12,14 @@ Run through the shared lock wrapper (cron/run_backup_db.bat schedules it daily):
 Backup dir is `ES_DB_BACKUP_DIR` (default: a Google Drive folder so the snapshot
 is cloud-backed). Keeps the most recent ES_DB_BACKUP_RETAIN snapshots.
 
+Content-skip (workstream C3): after the integrity gate the snapshot's sha256 is
+compared with the last successfully uploaded backup recorded in a LOCAL receipt
+beside the DB (`<db-name>.backup_receipt.json`); when the bytes are unchanged AND
+that uploaded snapshot is still present, gzip/encrypt/upload are skipped and the
+accounting row records StageStatus.SKIPPED with a `skipped_unchanged` marker
+(same change-skip philosophy as the db_gc archive sidecar below). RPO is
+therefore 24h of *changes* — see cron/restore_db.py.
+
 Restore is the tested counterpart `cron/restore_db.py` (integrity-checked
 gunzip + move), which also documents the RPO/RTO targets (sre-3).
 """
@@ -19,15 +27,19 @@ gunzip + move), which also documents the RPO/RTO targets (sre-3).
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
 import shutil
 import sqlite3
 import sys
 import tempfile
+from collections.abc import Mapping
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -76,6 +88,99 @@ DEFAULT_RETAIN = 14
 # last prune, not daily — keep fewer, and skip re-encrypting an unchanged file.
 ARCHIVE_PREFIX = "portfolio_gc_archive.db"
 DEFAULT_ARCHIVE_RETAIN = 6
+
+
+@dataclass(frozen=True)
+class UploadReceipt:
+    """The last successfully uploaded backup, as recorded in the local receipt."""
+
+    snapshot_name: str
+    snapshot_sha256: str
+    uploaded_at_utc: str
+
+
+def _upload_receipt_path() -> Path:
+    """Local receipt beside the DB (NOT in the synced backup dir, which must
+    receive only authenticated ciphertext). Losing it merely re-uploads."""
+    return SRC_DB.parent / f"{SRC_DB.name}.backup_receipt.json"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_upload_receipt() -> UploadReceipt | None:
+    """Return the last-upload receipt, or None when absent or unusable.
+
+    Absent, unreadable, malformed, or incomplete receipts return None, which
+    fails toward performing a real upload — the skip must never engage on
+    ambiguous evidence.
+    """
+    try:
+        payload: object = json.loads(_upload_receipt_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    record = cast(Mapping[object, object], payload)
+    snapshot_sha256 = record.get("snapshot_sha256")
+    snapshot_name = record.get("snapshot_name")
+    uploaded_at_utc = record.get("uploaded_at_utc")
+    if not isinstance(snapshot_sha256, str) or not snapshot_sha256.strip():
+        return None
+    if not isinstance(snapshot_name, str) or not snapshot_name.strip():
+        return None
+    if not isinstance(uploaded_at_utc, str) or not uploaded_at_utc.strip():
+        return None
+    return UploadReceipt(
+        snapshot_sha256=snapshot_sha256.strip(),
+        snapshot_name=snapshot_name.strip(),
+        uploaded_at_utc=uploaded_at_utc.strip(),
+    )
+
+
+def _write_upload_receipt(snapshot_name: str, snapshot_sha256: str) -> None:
+    """Record the last successfully uploaded backup (atomic replace).
+
+    Never fatal: a missing/unwritable receipt cannot lose data — it only means
+    the next unchanged day uploads again instead of skipping.
+    """
+    receipt_path = _upload_receipt_path()
+    payload = {
+        "snapshot_name": snapshot_name,
+        "snapshot_sha256": snapshot_sha256,
+        "uploaded_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        staged = receipt_path.with_name(f"{receipt_path.name}.staged")
+        staged.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(staged, receipt_path)
+    except OSError as exc:
+        print(
+            f"WARN: backup upload receipt not recorded (next unchanged run will "
+            f"re-upload): {redact(exc)}",
+            file=sys.stderr,
+        )
+
+
+def _skipped_unchanged_payload(receipt: UploadReceipt) -> dict[str, str]:
+    """Stable CLI/scheduler response for the intentional unchanged no-op.
+
+    Mirrors pipeline.run_accounting.suppression_payload — the accounting row
+    carries StageStatus.SKIPPED plus the `skipped_unchanged` marker, and this
+    JSON line is the machine-readable stdout record.
+    """
+    return {
+        "status": "skipped_unchanged",
+        "last_uploaded_snapshot": receipt.snapshot_name,
+        "snapshot_sha256": receipt.snapshot_sha256,
+        "uploaded_at_utc": receipt.uploaded_at_utc,
+    }
 
 
 def _consistent_snapshot(src_db: Path, tmp_path: Path) -> None:
@@ -162,18 +267,20 @@ def _finish_accounting(
     *,
     success: bool,
     error_msg: str | None = None,
+    skipped_unchanged: bool = False,
 ) -> None:
     if accounting is None:
         return
     conn, run_id = accounting
     try:
         try:
-            end_run(
-                conn,
-                run_id,
-                StageStatus.OK if success else StageStatus.FAILED,
-                error_msg,
-            )
+            if skipped_unchanged:
+                status = StageStatus.SKIPPED
+            elif success:
+                status = StageStatus.OK
+            else:
+                status = StageStatus.FAILED
+            end_run(conn, run_id, status, error_msg)
         except Exception as exc:
             print(
                 f"WARN: backup accounting completion unavailable: {redact(exc)}",
@@ -233,6 +340,34 @@ def _run_backup() -> int:
             _consistent_snapshot(SRC_DB, tmp_path)
             if not _integrity_ok(tmp_path):
                 raise RuntimeError("consistent snapshot failed SQLite integrity_check")
+            snapshot_sha256 = _file_sha256(tmp_path)
+            last_upload = _load_upload_receipt()
+            if (
+                last_upload is not None
+                and last_upload.snapshot_sha256 == snapshot_sha256
+                and (dest_dir / last_upload.snapshot_name).exists()
+            ):
+                # Content-skip (C3): the consistent snapshot is byte-identical
+                # to the last successfully uploaded backup AND that upload is
+                # still present, so gzip/encrypt/upload would only produce
+                # fresh ciphertext for unchanged content. The run is recorded
+                # as a healthy no-op: StageStatus.SKIPPED + the marker in the
+                # accounting row, the stable JSON line on stdout, and the
+                # receipt left untouched (no upload happened). A moved/wiped
+                # backup dir re-uploads because the named snapshot is gone.
+                print(
+                    "OK backup skipped (skipped_unchanged) — snapshot matches "
+                    f"last uploaded backup {last_upload.snapshot_name}"
+                )
+                print(json.dumps(_skipped_unchanged_payload(last_upload)))
+                _backup_archive_sidecar(dest_dir)
+                _finish_accounting(
+                    accounting,
+                    success=True,
+                    skipped_unchanged=True,
+                    error_msg="skipped_unchanged: snapshot sha256 matches last uploaded backup",
+                )
+                return 0
             with open(tmp_path, "rb") as raw, gzip.open(tmp_gz, "wb") as gz:
                 shutil.copyfileobj(raw, gz)
             encrypt_file(tmp_gz, final_path, key=load_or_create_key())
@@ -252,6 +387,7 @@ def _run_backup() -> int:
         _finish_accounting(accounting, success=False, error_msg=str(exc))
         print(f"ERROR: backup failed: {exc}", file=sys.stderr)
         return 1
+    _write_upload_receipt(final_path.name, snapshot_sha256)
     _backup_archive_sidecar(dest_dir)
     _finish_accounting(accounting, success=True)
     return 0

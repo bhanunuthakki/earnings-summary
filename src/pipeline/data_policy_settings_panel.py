@@ -774,6 +774,7 @@ def render_data_policy_settings_panel(
     view: DataPolicySettingsView | None = None,
     *,
     db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """Render policy plus a read-only runtime projection when a DB is supplied."""
 
@@ -796,7 +797,7 @@ def render_data_policy_settings_panel(
         + _render_sec_coverage(resolved.sec_coverage)
         + '<h3 class="k-card-title">Owner-approved issuer adapters</h3>'
         + _render_issuers(resolved)
-        + render_ir_approval_panel(read_ir_approval_review(db_path))
+        + render_ir_approval_panel(read_ir_approval_review(db_path, conn=conn))
         + '<h3 class="k-card-title">Current FMP operating state</h3>'
         + _render_fmp_state(resolved.fmp_state)
         + "</section>"

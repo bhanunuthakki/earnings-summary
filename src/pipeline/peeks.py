@@ -178,7 +178,13 @@ def _alert_cards_html(alerts: list[AlertRow], db_path: Path) -> str:
 # ----------------------------------------------------------------------------
 
 
-def render_new_docs_peek(db_path: Path, *, ticker: str, limit: int = 12) -> str:
+def render_new_docs_peek(
+    db_path: Path,
+    *,
+    ticker: str,
+    limit: int = 12,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """The documents fetched for ``ticker`` since its last report build — the
     click-through behind the cockpit's "N new docs" pill. Mirrors
     :func:`render_alerts_list_peek`: it renders the very rows the count was
@@ -191,7 +197,7 @@ def render_new_docs_peek(db_path: Path, *, ticker: str, limit: int = 12) -> str:
     t = (ticker or "").strip().upper()
     if not t:
         return '<div class="cc-empty">No ticker.</div>'
-    rows = _new_doc_rows(db_path, t, limit)
+    rows = _new_doc_rows(db_path, t, limit, conn=conn)
     if not rows:
         return '<div class="cc-empty">No documents fetched since the last build.</div>'
     body = "".join(_doc_row_html(r) for r in rows)
@@ -209,18 +215,27 @@ class _DocRow(NamedTuple):
     fetched_at: str | None
 
 
-def _new_doc_rows(db_path: Path, t: str, limit: int) -> list[_DocRow]:
+def _new_doc_rows(
+    db_path: Path,
+    t: str,
+    limit: int,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[_DocRow]:
     """Documents whose ``fetched_at`` is after the ticker's ``last_built_at`` —
     the same "new since the build" window :func:`_new_doc_counts` counts. The
     ``ticker = ?`` predicate rides ``ix_documents_ticker_doctype_period``; the
     threshold is a scalar subquery (NULL last_built_at → no rows, matching the
-    count's ``last_built_at IS NOT NULL`` guard)."""
-    if not db_path.exists():
-        return []
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return []
+    count's ``last_built_at IS NOT NULL`` guard). A request-scoped ``conn`` is
+    reused when supplied; otherwise one is opened and closed here."""
+    own = conn is None
+    if own:
+        if not db_path.exists():
+            return []
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return []
     try:
         cur = conn.execute(
             "SELECT d.id, d.doc_type, d.file_path, d.source_url, d.fetched_at "
@@ -235,7 +250,8 @@ def _new_doc_rows(db_path: Path, t: str, limit: int) -> list[_DocRow]:
     except sqlite3.Error:
         return []
     finally:
-        conn.close()
+        if own:
+            conn.close()
     out: list[_DocRow] = []
     for doc_id, doc_type, file_path, source_url, fetched_at in fetched:
         kind = str(doc_type or "").replace("_", " ").strip().title() or "Document"
@@ -1032,7 +1048,9 @@ def render_what_if_peek(
 # ----------------------------------------------------------------------------
 
 
-def render_memo_peek(db_path: Path, kind: str) -> str | None:
+def render_memo_peek(
+    db_path: Path, kind: str, *, conn: sqlite3.Connection | None = None
+) -> str | None:
     """The latest advisor memo of ``kind``, markdown-rendered, for the
     portfolio insights' "full memo →" peek. None on an unknown kind or when
     no memo of that kind exists yet.
@@ -1043,10 +1061,12 @@ def render_memo_peek(db_path: Path, kind: str) -> str | None:
     reached from that panel's "reviews →" doorway."""
     if kind not in _MEMO_KINDS or not db_path.exists():
         return None
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return None
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return None
     try:
         row = conn.execute(
             "SELECT id, title, body_md, created_at, context_json FROM advisor_memos "
@@ -1056,7 +1076,8 @@ def render_memo_peek(db_path: Path, kind: str) -> str | None:
     except sqlite3.Error:
         return None
     finally:
-        conn.close()
+        if own:
+            conn.close()
     if row is None:
         return None
     memo_id, title, body_md, created_at = int(row[0]), str(row[1]), str(row[2]), str(row[3])
@@ -1266,7 +1287,9 @@ class _ProvRow(NamedTuple):
     cron_hint: str | None  # no on-demand action — name the cron that owns it
 
 
-def render_provenance_peek(db_path: Path, ticker: str | None) -> str:
+def render_provenance_peek(
+    db_path: Path, ticker: str | None, *, conn: sqlite3.Connection | None = None
+) -> str:
     """Per-source data freshness with in-place refresh — the click-through
     behind the freshness dots (cockpit rows, the holding-header dot) and the
     Home tier strip.
@@ -1282,11 +1305,12 @@ def render_provenance_peek(db_path: Path, ticker: str | None) -> str:
     Actions console stays the deep path (the peek footer links it).
 
     Always renders: a missing DB / table / column / row degrades that row to
-    an em-dash age, never an error.
+    an em-dash age, never an error. A request-scoped ``conn`` is reused when
+    supplied; otherwise one is opened and closed for the peek.
     """
     t = (ticker or "").strip().upper() or None
-    conn: sqlite3.Connection | None = None
-    if db_path.exists():
+    own = conn is None and db_path.exists()
+    if own:
         try:
             conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         except sqlite3.Error:
@@ -1294,7 +1318,7 @@ def render_provenance_peek(db_path: Path, ticker: str | None) -> str:
     try:
         rows = _prov_ticker_rows(conn, t) if t else _prov_portfolio_rows(conn)
     finally:
-        if conn is not None:
+        if own and conn is not None:
             conn.close()
     scope = escape(t or "portfolio", quote=True)
     return (
@@ -1678,13 +1702,21 @@ class _FactRow(NamedTuple):
     formula_id: int | None = None
 
 
-def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
-    if not db_path.exists():
+def _load_fact_row(
+    db_path: Path,
+    table: str,
+    fact_id: int,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> _FactRow | None:
+    if not db_path.exists() and conn is None:
         return None
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return None
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return None
     try:
         if table == "financial_facts":
             row = conn.execute(
@@ -1727,7 +1759,8 @@ def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
     except sqlite3.Error:
         return None
     finally:
-        conn.close()
+        if own:
+            conn.close()
     if row is None:
         return None
     return _FactRow(
@@ -1742,18 +1775,24 @@ def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
     )
 
 
-def render_fact_provenance_peek(db_path: Path, repo_root: Path, fact_ref: str) -> str | None:
+def render_fact_provenance_peek(
+    db_path: Path,
+    repo_root: Path,
+    fact_ref: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str | None:
     """Click-through behind a source chip's fmp_json_table / vendor_field /
     transcript_span / derived locator kinds. fact_ref is <table>:<id>."""
     table, _, raw_id = fact_ref.partition(":")
     if table not in _PROVENANCE_TABLES or not raw_id.isdigit():
         return None
-    row = _load_fact_row(db_path, table, int(raw_id))
+    row = _load_fact_row(db_path, table, int(raw_id), conn=conn)
     if row is None:
         return None
     normalized_ref = f"{table}:{raw_id}"
     return _dispatch_fact_provenance_peek(
-        db_path, repo_root, row, visited=frozenset({normalized_ref})
+        db_path, repo_root, row, conn=conn, visited=frozenset({normalized_ref})
     )
 
 
@@ -1762,6 +1801,7 @@ def _dispatch_fact_provenance_peek(
     repo_root: Path,
     row: _FactRow,
     *,
+    conn: sqlite3.Connection | None = None,
     depth: int = 0,
     visited: frozenset[str] = frozenset(),
 ) -> str:
@@ -1782,7 +1822,7 @@ def _dispatch_fact_provenance_peek(
 
     if kind == LocatorKind.DERIVED and locator is not None and locator.derived is not None:
         return render_derived_peek(
-            db_path, repo_root, locator.derived, depth=depth, visited=visited
+            db_path, repo_root, locator.derived, conn=conn, depth=depth, visited=visited
         )
 
     if kind == LocatorKind.FMP_JSON_TABLE and locator is not None and doc is not None:
@@ -1820,7 +1860,9 @@ def _dispatch_fact_provenance_peek(
         and locator is not None
         and locator.vendor_field is not None
     ):
-        return _render_vendor_field_peek(db_path, repo_root, row.ticker, locator.vendor_field)
+        return _render_vendor_field_peek(
+            db_path, repo_root, row.ticker, locator.vendor_field, conn=conn
+        )
     return _render_legacy_provenance_peek(doc, row, locator)
 
 
@@ -1835,6 +1877,7 @@ def render_derived_peek(
     repo_root: Path,
     derived: DerivedRef,
     *,
+    conn: sqlite3.Connection | None = None,
     depth: int = 0,
     visited: frozenset[str] = frozenset(),
 ) -> str:
@@ -1868,7 +1911,9 @@ def render_derived_peek(
     rows_html: list[str] = []
     for inp in inputs:
         rows_html.append(
-            _render_derived_input_row(db_path, repo_root, inp, depth=depth, visited=visited)
+            _render_derived_input_row(
+                db_path, repo_root, inp, conn=conn, depth=depth, visited=visited
+            )
         )
     footer = ""
     if len(derived.inputs) > _MAX_DERIVED_INPUT_ROWS:
@@ -1891,6 +1936,7 @@ def _render_derived_input_row(
     *,
     depth: int,
     visited: frozenset[str],
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """One ``DerivedInputRef`` row: a doorway link for a deeper derived input,
     an inline-rendered evidence blob for a leaf, or a plain (non-clickable)
@@ -1912,7 +1958,7 @@ def _render_derived_input_row(
             '<span class="k-chip k-chip-warn">cycle detected</span></div>'
         )
 
-    input_row = _load_fact_row(db_path, table, inp.fact_id)
+    input_row = _load_fact_row(db_path, table, inp.fact_id, conn=conn)
     if input_row is None:
         return f'<div class="cc-prov-row cc-prov-input">{label}{_tier_suffix(tier_str)}</div>'
 
@@ -1941,7 +1987,12 @@ def _render_derived_input_row(
 
     # A leaf: render its own evidence inline, terminating the recursion here.
     inline = _dispatch_fact_provenance_peek(
-        db_path, repo_root, input_row, depth=depth + 1, visited=visited | {fact_ref}
+        db_path,
+        repo_root,
+        input_row,
+        conn=conn,
+        depth=depth + 1,
+        visited=visited | {fact_ref},
     )
     return (
         f'<div class="cc-prov-row cc-prov-input">{label}{_tier_suffix(tier_str)}</div>'
@@ -1992,7 +2043,12 @@ def _render_fmp_json_table_peek(
 
 
 def _render_vendor_field_peek(
-    db_path: Path, repo_root: Path, ticker: str, vendor_field: VendorFieldRef
+    db_path: Path,
+    repo_root: Path,
+    ticker: str,
+    vendor_field: VendorFieldRef,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """The honest floor for a vendor_field locator (section 2.6): endpoint +
     field + period, the fetched-at timestamp (fmp_endpoint_status), and the
@@ -2000,38 +2056,39 @@ def _render_vendor_field_peek(
     findable -- never a bare tier chip with nothing behind it."""
     fetched_at: str | None = None
     raw_value: object = None
-    if db_path.exists():
-        conn: sqlite3.Connection | None
+    own = conn is None and db_path.exists()
+    if own:
         try:
             conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         except sqlite3.Error:
             conn = None
-        if conn is not None:
-            try:
-                status_row = conn.execute(
-                    "SELECT file_path, last_pulled FROM fmp_endpoint_status "
-                    "WHERE UPPER(ticker) = ? AND endpoint = ? "
-                    "ORDER BY last_pulled DESC LIMIT 1",
-                    (ticker.upper(), vendor_field.endpoint),
-                ).fetchone()
-            except sqlite3.Error:
-                status_row = None
-            finally:
+    if conn is not None:
+        try:
+            status_row = conn.execute(
+                "SELECT file_path, last_pulled FROM fmp_endpoint_status "
+                "WHERE UPPER(ticker) = ? AND endpoint = ? "
+                "ORDER BY last_pulled DESC LIMIT 1",
+                (ticker.upper(), vendor_field.endpoint),
+            ).fetchone()
+        except sqlite3.Error:
+            status_row = None
+        finally:
+            if own:
                 conn.close()
-            if status_row is not None:
-                file_path, fetched_at_raw = status_row[0], status_row[1]
-                fetched_at = str(fetched_at_raw) if fetched_at_raw else None
-                if file_path:
-                    try:
-                        payload: object = json.loads(
-                            (repo_root / str(file_path)).read_text(encoding="utf-8")
-                        )
-                    except (OSError, ValueError):
-                        payload = None
-                    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-                        raw_value = cast("dict[str, object]", payload[0]).get(vendor_field.field)
-                    elif isinstance(payload, dict):
-                        raw_value = cast("dict[str, object]", payload).get(vendor_field.field)
+        if status_row is not None:
+            file_path, fetched_at_raw = status_row[0], status_row[1]
+            fetched_at = str(fetched_at_raw) if fetched_at_raw else None
+            if file_path:
+                try:
+                    payload: object = json.loads(
+                        (repo_root / str(file_path)).read_text(encoding="utf-8")
+                    )
+                except (OSError, ValueError):
+                    payload = None
+                if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+                    raw_value = cast("dict[str, object]", payload[0]).get(vendor_field.field)
+                elif isinstance(payload, dict):
+                    raw_value = cast("dict[str, object]", payload).get(vendor_field.field)
     rows = [
         f'<div class="cc-prov-row"><span class="cc-prov-src">Endpoint</span>'
         f'<span class="cc-prov-when">{escape(vendor_field.endpoint)}</span></div>',
@@ -2216,6 +2273,7 @@ def render_earnings_prep_peek(
     ticker: str,
     *,
     artifact_id: int | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str | None:
     """The on-demand earnings-prep memo for one upcoming name.
 
@@ -2227,10 +2285,12 @@ def render_earnings_prep_peek(
     t = (ticker or "").strip().upper()
     if not t:
         return None
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return None
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return None
     try:
         try:
             tracked = conn.execute(
@@ -2250,7 +2310,8 @@ def render_earnings_prep_peek(
         except Exception:
             next_er = None
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
     brief = _prep_brief_block(
         db_path,
@@ -2260,7 +2321,9 @@ def render_earnings_prep_peek(
     )
     if brief is None:
         return None
-    events = _prep_events_block(db_path, t)
+    events = (
+        _prep_events_block(db_path, t, conn=conn) if not own else _prep_events_block(db_path, t)
+    )
     watch = _prep_watch_items(db_path, t)
 
     ask_q = (
@@ -2375,17 +2438,25 @@ class _NewsEventRow(NamedTuple):
     why: str
 
 
-def _news_events_since(db_path: Path, t: str, *, limit: int = 12) -> list[_NewsEventRow]:
+def _news_events_since(
+    db_path: Path,
+    t: str,
+    *,
+    limit: int = 12,
+    conn: sqlite3.Connection | None = None,
+) -> list[_NewsEventRow]:
     """Material events noted for ``t`` since its last reported ER (fallback:
     120 days), newest first, one row per real-world event (latest per
     event_key — the write path already suppresses most duplicates; this
     read-side pass keeps the list one-per-event even across guard windows).
     Empty on a pre-0262 DB or any sqlite error — the section simply drops.
     """
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return []
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return []
     try:
         since: str | None = None
         try:
@@ -2407,7 +2478,8 @@ def _news_events_since(db_path: Path, t: str, *, limit: int = 12) -> list[_NewsE
         except sqlite3.Error:
             return []
     finally:
-        conn.close()
+        if own:
+            conn.close()
     out: list[_NewsEventRow] = []
     seen_keys: set[str] = set()
     for published_at, headline, url, why, event_key in rows:
@@ -2444,12 +2516,12 @@ def _news_events_list_html(events: list[_NewsEventRow]) -> str:
     return f"<ul>{''.join(items)}</ul>"
 
 
-def _prep_events_block(db_path: Path, t: str) -> str:
+def _prep_events_block(db_path: Path, t: str, *, conn: sqlite3.Connection | None = None) -> str:
     """ "Since last call" — the material primary events noted between the last
     reported ER and now (the news_events store; owner ruling 2026-07-31: news
     never alerts, the catch-up happens HERE). Renders nothing when the store
     is empty for the window — a quiet quarter is one line less, not a stub."""
-    events = _news_events_since(db_path, t)
+    events = _news_events_since(db_path, t, conn=conn)
     if not events:
         return ""
     return (
@@ -2458,13 +2530,15 @@ def _prep_events_block(db_path: Path, t: str) -> str:
     )
 
 
-def render_news_events_peek(db_path: Path, ticker: str) -> str:
+def render_news_events_peek(
+    db_path: Path, ticker: str, *, conn: sqlite3.Connection | None = None
+) -> str:
     """The ticker peek's events doorway: the same since-last-call list as the
     prep memo, standalone. Always renders — an empty window is a valid answer."""
     t = (ticker or "").strip().upper()
     if not t:
         return '<div class="cc-empty">No ticker.</div>'
-    events = _news_events_since(db_path, t)
+    events = _news_events_since(db_path, t, conn=conn)
     if not events:
         return '<div class="cc-empty">No material events noted since the last call.</div>'
     foot = (
@@ -2554,6 +2628,7 @@ def render_earnings_readout_peek(
     ticker: str,
     *,
     artifact_id: int | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str | None:
     """The persisted POST-earnings readout plus its deterministic source template.
 
@@ -2573,10 +2648,12 @@ def render_earnings_readout_peek(
     t = (ticker or "").strip().upper()
     if not t:
         return None
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return None
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return None
     try:
         try:
             tracked = conn.execute(
@@ -2623,7 +2700,8 @@ def render_earnings_readout_peek(
         transcript = _readout_transcript_link(conn, t)
         valuation = _prep_valuation(conn, t)
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
     tone = _readout_tone(db_path, t)
     watch = _prep_watch_items(db_path, t, heading="What you said to watch — did they answer it?")
@@ -2770,11 +2848,12 @@ def _readout_surprise(conn: sqlite3.Connection, t: str) -> str:
     try:
         from compute.earnings_surprise import surprise_scorecard_for
 
+        previous_row_factory = conn.row_factory
         conn.row_factory = sqlite3.Row
         try:
             sc = surprise_scorecard_for(conn, t, lookback_quarters=8)
         finally:
-            conn.row_factory = None
+            conn.row_factory = previous_row_factory
         if sc.total_quarters and sc.eps.beat_rate_pct is not None:
             rate = (
                 f'<p class="muted">EPS beat rate {sc.eps.beat_rate_pct}% '

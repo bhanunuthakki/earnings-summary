@@ -10,7 +10,15 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pipeline.work_os_shell import COCKPIT_STAT_SPECS, SCREEN_SPECS, render_work_os_shell
+import pytest
+
+from pipeline.work_os_shell import (
+    COCKPIT_STAT_SPECS,
+    SCREEN_SPECS,
+    clear_work_os_shell_render_cache,
+    render_work_os_shell,
+    render_work_os_shell_result,
+)
 from pipeline.work_os_styles import WORK_OS_CSS
 from ui.conformance_scan import scan_surface_evidence
 
@@ -1695,3 +1703,131 @@ def test_company_context_playground_change_updates_url_and_history_restores_it()
     assert "context.screen === 'analytics-playground'" in history
     assert "window.switchCompanyWorkspace(context.ticker, { fromHistory: true })" in history
     assert "window.switchFactPlayground(context.ticker, { fromHistory: true })" in history
+
+
+# ---------------------------------------------------------------------------
+# Render memoization: GET / pays ~30 substitution passes only once per 30s
+# bucket. The shell JS never parses data-generated-at (it only rewrites the
+# live-status element's textContent), so a served shell may carry a stamp up
+# to one bucket (<=30s) old.
+# ---------------------------------------------------------------------------
+
+_STAMP_RX = re.compile(r'data-generated-at="([^"]+)"')
+
+
+def test_shell_render_is_memoized_within_the_thirty_second_bucket() -> None:
+    clear_work_os_shell_render_cache()
+    try:
+        first = render_work_os_shell_result()
+        assert first.cache_state == "miss"
+        second = render_work_os_shell_result()
+        assert second.cache_state == "hit"
+        assert second.html == first.html
+        # A pinned stamp is its own memo entry, never a bucket reuse.
+        pinned = render_work_os_shell_result(generated_at=datetime(2026, 8, 7, tzinfo=UTC))
+        assert pinned.cache_state == "miss"
+        assert pinned.html != first.html
+        pinned_again = render_work_os_shell_result(generated_at=datetime(2026, 8, 7, tzinfo=UTC))
+        assert pinned_again.cache_state == "hit"
+        assert pinned_again.html == pinned.html
+    finally:
+        clear_work_os_shell_render_cache()
+
+
+def test_implicit_renders_share_one_stamped_render_per_bucket() -> None:
+    clear_work_os_shell_render_cache()
+    try:
+        first = render_work_os_shell()
+        second = render_work_os_shell()
+        assert first == second
+        stamp = _STAMP_RX.search(first)
+        second_stamp = _STAMP_RX.search(second)
+        assert stamp is not None
+        assert second_stamp is not None
+        # Accepted staleness: the second render reports the first render's
+        # clock rather than a per-request stamp.
+        assert second_stamp.group(1) == stamp.group(1)
+    finally:
+        clear_work_os_shell_render_cache()
+
+
+def test_pinned_stamps_render_their_exact_bytes_inside_one_bucket() -> None:
+    pinned_first = render_work_os_shell(generated_at=datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC))
+    pinned_second = render_work_os_shell(generated_at=datetime(2026, 8, 7, 12, 0, 20, tzinfo=UTC))
+
+    first_match = _STAMP_RX.search(pinned_first)
+    second_match = _STAMP_RX.search(pinned_second)
+    assert first_match is not None
+    assert second_match is not None
+    # Both stamps share a 30s bucket, yet each caller still gets its own bytes.
+    assert first_match.group(1) == "2026-08-07T12:00:05Z"
+    assert second_match.group(1) == "2026-08-07T12:00:20Z"
+
+
+def test_shell_render_result_reports_hit_state_and_key_derived_etag() -> None:
+    clear_work_os_shell_render_cache()
+    generated_at = datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)
+    try:
+        first = render_work_os_shell_result(generated_at=generated_at)
+        second = render_work_os_shell_result(generated_at=generated_at)
+        assert first.cache_state == "miss"
+        assert second.cache_state == "hit"
+        assert second.html == first.html
+        assert second.etag == first.etag
+        assert first.etag.startswith('"') and first.etag.endswith('"')
+    finally:
+        clear_work_os_shell_render_cache()
+
+
+def test_shell_render_memo_follows_a_changed_prototype(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A changed mockup must not be answered from a memo entry keyed on the
+    old prototype bytes: the prototype fingerprint is part of the memo key."""
+    from pipeline import work_os_shell
+
+    clear_work_os_shell_render_cache()
+    stamped = datetime(2026, 8, 7, tzinfo=UTC)
+    prototype = (
+        Path(__file__).resolve().parents[1] / "mockups" / "harvey_sidebar_flow.html"
+    ).read_text(encoding="utf-8")
+    try:
+        before = render_work_os_shell(generated_at=stamped)
+        monkeypatch.setattr(
+            work_os_shell,
+            "_prototype_html",
+            lambda: prototype + "\n<!-- late prototype edit -->\n",
+        )
+        after = render_work_os_shell(generated_at=stamped)
+        assert after != before
+        assert "late prototype edit" in after
+    finally:
+        clear_work_os_shell_render_cache()
+
+
+def test_shell_self_hosts_its_webfonts_from_the_vendored_binaries() -> None:
+    """The shell's first paint depends on no external font origin, and every
+    @font-face src resolves to a vendored binary in the repository."""
+    html = render_work_os_shell()
+    repo_root = Path(__file__).resolve().parents[1]
+
+    assert "fonts.googleapis.com" not in html
+    assert "fonts.gstatic.com" not in html
+    assert '<style id="work-os-fonts">' in html
+    face_rules = re.findall(r"@font-face \{(.*?)\}", html, re.DOTALL)
+    assert len(face_rules) == 39
+
+    declared: set[tuple[str, str]] = set()
+    for rule in face_rules:
+        family = re.search(r"font-family: '([^']+)'", rule)
+        weight = re.search(r"font-weight: (\d+)", rule)
+        local = re.search(r"url\(\.\./src/ui/vendor/fonts/([^)]+\.woff2)\)", rule)
+        assert family is not None and weight is not None and local is not None
+        assert (repo_root / "src" / "ui" / "vendor" / "fonts" / local.group(1)).is_file()
+        declared.add((family.group(1), weight.group(1)))
+
+    assert declared == {
+        (family, str(weight))
+        for family in ("Inter", "JetBrains Mono")
+        for weight in (400, 500, 600)
+    }

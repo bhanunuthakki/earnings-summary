@@ -31,7 +31,6 @@ from provenance.image_ocr_extraction import (
     parse_tesseract_tsv,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, 0)
 SHA_B = "b" * 64
 MODEL_MANIFEST = hashlib.sha256(('{"eng":"' + SHA_B + '"}').encode("utf-8")).hexdigest()

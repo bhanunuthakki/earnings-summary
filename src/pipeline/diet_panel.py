@@ -63,14 +63,16 @@ _BOOK_MARKER: dict[str, tuple[str, str]] = {
 }
 
 
-def _load_list_types(db_path: Path) -> dict[str, str]:
+def _load_list_types(db_path: Path, *, conn: sqlite3.Connection | None = None) -> dict[str, str]:
     """``ticker -> list_type`` for active tracked names — used only to float the
     owner's book to the top of the reading lane and mark it. Degrades to ``{}``
     on any read error (the panel then renders in plain recency order)."""
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return {}
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return {}
     try:
         rows = conn.execute(
             "SELECT ticker, list_type FROM tracked_companies WHERE archived_at IS NULL"
@@ -78,7 +80,8 @@ def _load_list_types(db_path: Path) -> dict[str, str]:
     except sqlite3.Error:
         return {}
     finally:
-        conn.close()
+        if own:
+            conn.close()
     return {str(t): str(lt) for t, lt in rows if t and lt}
 
 
@@ -102,14 +105,16 @@ def _drop_headline_news(rows: list[SignalRow]) -> list[SignalRow]:
     ]
 
 
-def render_diet_panel(db_path: Path, *, today: date | None = None) -> str:
+def render_diet_panel(
+    db_path: Path, *, today: date | None = None, conn: sqlite3.Connection | None = None
+) -> str:
     """The Diet tab fragment: the ingest stream + the forward agenda + the
     disclosed fast-follow note. Pure read over the `signals` substrate; a
     missing or pre-0095 store renders an explicit unavailable state."""
     today = today or calendar_today()
     stream = _drop_headline_news(load_diet_signals(db_path, types=_STREAM_TYPES, limit=80))
     agenda = load_forward_agenda_result(db_path, on_or_after=today, limit=40)
-    list_types = _load_list_types(db_path)
+    list_types = _load_list_types(db_path, conn=conn)
     # Stable sort (recency preserved within tier): book names float to the top.
     stream.sort(key=lambda r: _BOOK_PRIORITY.get(list_types.get(r.ticker, ""), 9))
     return "".join(
@@ -120,7 +125,7 @@ def render_diet_panel(db_path: Path, *, today: date | None = None) -> str:
             "or fires an alert; a thesis breach still reaches the inbox. General-news "
             'headlines are deliberately excluded — the readouts are the reading lane.">'
             "Information diet</h2>",
-            _readouts_section(db_path, list_types, today),
+            _readouts_section(db_path, list_types, today, conn=conn),
             _stream_section(stream, list_types),
             _agenda_section(list(agenda.rows), today, unavailable=agenda.unavailable),
             _scaffold_note(),
@@ -141,14 +146,18 @@ def render_diet_panel(db_path: Path, *, today: date | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _load_auto_brief_flags(db_path: Path) -> dict[str, bool]:
+def _load_auto_brief_flags(
+    db_path: Path, *, conn: sqlite3.Connection | None = None
+) -> dict[str, bool]:
     """``ticker -> auto_pre_earnings_brief`` (0260) for the toggle chips.
     Degrades to ``{}`` on a pre-0260 DB — every evaluation row then renders
     the off-state toggle, which is the true state."""
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return {}
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return {}
     try:
         rows = conn.execute(
             "SELECT ticker, auto_pre_earnings_brief FROM ticker_settings"
@@ -156,11 +165,18 @@ def _load_auto_brief_flags(db_path: Path) -> dict[str, bool]:
     except sqlite3.Error:
         return {}
     finally:
-        conn.close()
+        if own:
+            conn.close()
     return {str(t).upper(): bool(v) for t, v in rows if t}
 
 
-def _readouts_section(db_path: Path, list_types: dict[str, str], today: date) -> str:
+def _readouts_section(
+    db_path: Path,
+    list_types: dict[str, str],
+    today: date,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     head = (
         '<div class="diet-sec first"><h3 class="diet-sec-h" title="The reading lane: '
         "pre-ER prep and post-ER readouts on your book. Pre-ER briefs pre-generate in "
@@ -175,16 +191,19 @@ def _readouts_section(db_path: Path, list_types: dict[str, str], today: date) ->
         )
     upcoming: dict[str, date] = {}
     reported: dict[str, date] = {}
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        conn = None
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            conn = None
     if conn is not None:
         try:
             upcoming = upcoming_by_ticker(conn, today)
             reported = last_reported_by_ticker(conn, today)
         finally:
-            conn.close()
+            if own:
+                conn.close()
 
     def _order(t: str) -> tuple[int, int, str]:
         # Soonest next ER first; names with no calendar row sink, most
@@ -198,7 +217,7 @@ def _readouts_section(db_path: Path, list_types: dict[str, str], today: date) ->
         return (2, 0, t)
 
     book.sort(key=_order)
-    auto_flags = _load_auto_brief_flags(db_path)
+    auto_flags = _load_auto_brief_flags(db_path, conn=conn if not own else None)
     body = "".join(
         _readout_row(t, list_types, upcoming.get(t), reported.get(t), today, auto_flags)
         for t in book

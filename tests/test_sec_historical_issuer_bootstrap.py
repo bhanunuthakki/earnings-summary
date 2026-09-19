@@ -18,7 +18,6 @@ from provenance.issuer_registry_bootstrap import (
     parse_sec_historical_issuer_identity,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 7, 27, 23, 30, tzinfo=UTC)
 CIK = "0001699838"
@@ -53,12 +52,7 @@ def _body(*, current_tickers: list[str] | None = None) -> bytes:
 
 def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "historical-issuer.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        archived=True,
-        target=HEAD,
-    )
+    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

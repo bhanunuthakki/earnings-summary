@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -24,6 +25,7 @@ from pipeline.ir_approval_panel import read_ir_approval_review, render_ir_approv
 class IrApprovalRouteContext:
     db_path: Path
     owner_actor: str
+    get_read_db: Callable[[], sqlite3.Connection]
 
 
 def register_ir_approval_routes(app: Flask, context: IrApprovalRouteContext) -> None:
@@ -103,7 +105,9 @@ def register_ir_approval_routes(app: Flask, context: IrApprovalRouteContext) -> 
                 503,
             )
 
-        panel_html = render_ir_approval_panel(read_ir_approval_review(context.db_path))
+        panel_html = render_ir_approval_panel(
+            read_ir_approval_review(context.db_path, conn=context.get_read_db())
+        )
         return (
             {
                 "ok": True,

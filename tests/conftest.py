@@ -436,8 +436,10 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # Migrated-database templates — build the chain ONCE, copy it per test
 # ----------------------------------------------------------------------------
 #
-# The suite's dominant cost is not the number of tests: it is that ~228 test
-# files build a schema with an UNSCOPED fixture shaped like
+# The suite's dominant cost is not the number of tests: it is that the scan
+# in tests/test_suite_migration_cost.py — test files whose text still contains
+# a direct ``command.upgrade`` — keeps matching files that build a schema with
+# an UNSCOPED fixture shaped like
 #
 #     @pytest.fixture
 #     def db_path(tmp_path):

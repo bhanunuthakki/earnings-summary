@@ -47,13 +47,7 @@ _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    return migrated_db(db, stamp=_PRIOR_HEAD)
-
-
-@pytest.fixture
-def scoring_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    return _build_db(tmp_path, migrated_db)
+    return migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
 
 
 def _write_price_cache(repo_root: Path, ticker: str, rows: list[tuple[str, float]]) -> None:
@@ -152,9 +146,9 @@ def _memo(
 
 
 def test_socratic_scores_tracker_spy_basis(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     # NU +20% over the horizon; SPY +5% -> excess +15pp -> 'add' correct.
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 12.0)])
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(5.0))
@@ -167,9 +161,11 @@ def test_socratic_scores_tracker_spy_basis(
 
 
 def test_socratic_falls_back_to_absolute_when_tracker_down(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 9.0)])  # -10%
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(None))
     outcome = score_memo(tmp_path, _memo(stance="trim"), now=_NOW, db_path=db)
@@ -179,9 +175,11 @@ def test_socratic_falls_back_to_absolute_when_tracker_down(
 
 
 def test_socratic_defers_until_mature_and_covered(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(None))
     # Immature horizon -> defer.
     early = datetime(2026, 7, 1, tzinfo=UTC)
@@ -194,15 +192,19 @@ def test_socratic_defers_until_mature_and_covered(
     assert list_scores_for_memos([1], db_path=db) == {}
 
 
-def test_socratic_without_stance_is_unscoreable(tmp_path: Path, scoring_db: Path) -> None:
-    db = scoring_db
+def test_socratic_without_stance_is_unscoreable(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _build_db(tmp_path, migrated_db)
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 12.0)])
     outcome = score_memo(tmp_path, _memo(stance=None), now=_NOW, db_path=db)
     assert outcome.scored and outcome.verdict == "unscoreable"
 
 
-def test_swap_check_grades_realized_margin(tmp_path: Path, scoring_db: Path) -> None:
-    db = scoring_db
+def test_swap_check_grades_realized_margin(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _build_db(tmp_path, migrated_db)
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 11.0)])  # +10%
     _write_price_cache(tmp_path, "BKNG", [("2026-06-01", 100.0), ("2026-08-30", 125.0)])  # +25%
     outcome = score_memo(
@@ -219,8 +221,10 @@ def test_swap_check_grades_realized_margin(tmp_path: Path, scoring_db: Path) -> 
     assert score.benchmark_basis == "none"
 
 
-def test_next_dollar_marks_unscoreable_immediately(tmp_path: Path, scoring_db: Path) -> None:
-    db = scoring_db
+def test_next_dollar_marks_unscoreable_immediately(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = _build_db(tmp_path, migrated_db)
     outcome = score_memo(
         tmp_path,
         _memo(kind="next_dollar", ticker=None, stance=None),
@@ -233,12 +237,14 @@ def test_next_dollar_marks_unscoreable_immediately(tmp_path: Path, scoring_db: P
     assert "legacy" in str(score.detail["reason"])
 
 
-def test_next_dollar_with_model_rows_defers_until_mature(tmp_path: Path, scoring_db: Path) -> None:
+def test_next_dollar_with_model_rows_defers_until_mature(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """A next_dollar memo persisted WITH model_rows now waits for its horizon
     (like every other gradeable kind) instead of being marked unscoreable
     immediately — the whole point of persisting model_rows is that it CAN
     eventually be graded."""
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     memo = _memo(
         kind="next_dollar",
         ticker=None,
@@ -251,9 +257,11 @@ def test_next_dollar_with_model_rows_defers_until_mature(tmp_path: Path, scoring
 
 
 def test_next_dollar_with_model_rows_grades_top_pick_mechanically(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     # NU (the top-ranked pick) +20%; SPY +5% -> beats the basis -> validated.
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 12.0)])
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(5.0))
@@ -278,9 +286,11 @@ def test_next_dollar_with_model_rows_grades_top_pick_mechanically(
 
 
 def test_next_dollar_top_pick_below_basis_is_refuted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 10.2)])  # +2%
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(5.0))
     memo = _memo(
@@ -294,9 +304,9 @@ def test_next_dollar_top_pick_below_basis_is_refuted(
 
 
 def test_next_dollar_top_row_missing_ticker_is_unscoreable(
-    tmp_path: Path, scoring_db: Path
+    tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     memo = _memo(
         kind="next_dollar", ticker=None, stance=None, context={"model_rows": [{"upside_pct": 20.0}]}
     )
@@ -308,14 +318,16 @@ def test_next_dollar_top_row_missing_ticker_is_unscoreable(
 
 
 def test_guard_override_position_review_scored_as_hold_with_track_record_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """§5.3b: a guard_override review is graded as an explicit hold at its
     horizon, with a distinguishing ``detail.guard_override`` marker so its
     track record is separately queryable (the decision journal / calibration
     scorecard partition on it) rather than folded, unmarked, into the generic
     Socratic path."""
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 9.0)])  # -10%
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(None))
     memo = _memo(
@@ -333,9 +345,11 @@ def test_guard_override_position_review_scored_as_hold_with_track_record_marker(
 
 
 def test_guard_override_position_review_correct_when_hold_paid_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 11.0)])  # +10%
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(None))
     memo = _memo(
@@ -348,12 +362,14 @@ def test_guard_override_position_review_correct_when_hold_paid_off(
 
 
 def test_non_guard_position_review_unaffected_by_new_branch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """A position_review memo with no verdict_source (or an 'llm' one) still
     falls through to the ordinary Socratic grading path — the new
     guard_override branch must not swallow genuine LLM-authored reviews."""
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 12.0)])  # +20%
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(5.0))
     memo = _memo(kind="position_review", stance="add", context={"verdict_source": "llm"})
@@ -370,9 +386,11 @@ def test_non_guard_position_review_unaffected_by_new_branch(
 
 
 def test_run_scoring_flips_status_and_is_idempotent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scoring_db: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db = scoring_db
+    db = _build_db(tmp_path, migrated_db)
     monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(0.0))
     memo = insert_memo(
         user_id="bhanu",

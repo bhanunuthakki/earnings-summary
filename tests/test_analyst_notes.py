@@ -316,7 +316,7 @@ def test_write_path_hook_syncs_live(tmp_path: Path, migrated_db: Callable[..., P
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
     db = repo / "data" / "portfolio.db"
-    migrated_db(db, stamp=PRIOR_HEAD)
+    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
 
     c = comments.append_comment(repo, "NU", RD, anchor=_anchor(), text="auto-sync me", intent=None)
     rows = notes.list_notes(ticker="NU", db_path=db)
@@ -344,7 +344,7 @@ def test_backfill_walks_all_stores_and_is_idempotent(
 ) -> None:
     repo = tmp_path / "repo"
     db = tmp_path / "backfill.db"
-    migrated_db(db, stamp=PRIOR_HEAD)
+    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
 
     comments.append_comment(repo, "NU", RD, anchor=_anchor(), text="nu thought")
     comments.append_comment(repo, "MELI", date(2026, 5, 20), anchor=_anchor(), text="meli thought")

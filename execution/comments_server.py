@@ -77,6 +77,9 @@ from comments_server_content_routes import (  # noqa: E402
     register_content_routes,
 )
 from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes  # noqa: E402
+from comments_server_evaluation_projection import (  # noqa: E402
+    resolve_work_os_evaluation_item,
+)
 from comments_server_governed_alert_routes import (  # noqa: E402
     GovernedAlertRouteContext,
     register_governed_alert_routes,
@@ -94,6 +97,7 @@ from comments_server_panel_cache import (  # noqa: E402
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
+    resolve_mutation_families,
 )
 from comments_server_profile_routes import (  # noqa: E402
     ProfileRouteContext,
@@ -236,7 +240,7 @@ from pipeline.work_os_portfolio import (  # noqa: E402
     build_work_os_portfolio_research_links,
     load_work_os_price_action_bands,
 )
-from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
+from pipeline.work_os_shell import render_work_os_shell_result  # noqa: E402
 from portfolio_risk_snapshot_store import read_latest_snapshot  # noqa: E402
 from readme_updater import evidence_sha256  # noqa: E402
 from research.proposal_approval import bind_ask_proposal_events  # noqa: E402
@@ -284,6 +288,26 @@ _MAX_REQUEST_BYTES = 262_144
 _MAX_USER_INPUT_CHARS = 8_000
 _STREAM_QUEUE_MAXSIZE = 64
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+
+# The four work-os hydration GETs join the panel response cache: same 30s TTL,
+# same single-flight, same mutation-clear. Server-side only — the client keeps
+# its strict no-store contract on every one of these routes.
+_WORK_OS_CACHE_ROUTE_PATHS = frozenset(
+    {
+        "/api/work-os/portfolio",
+        "/api/work-os/evaluation",
+        "/api/work-os/briefs",
+    }
+)
+
+
+def _is_work_os_cached_route(path: str) -> bool:
+    """Match exactly the cached work-os surfaces (never the brief-body subroute)."""
+    if path in _WORK_OS_CACHE_ROUTE_PATHS:
+        return True
+    return path.startswith("/api/work-os/companies/") and path.endswith("/desk")
+
+
 _BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
 _README_RUN_ID_RX = re.compile(r"[0-9a-f]{32}\Z")
 _LOGGER = logging.getLogger(__name__)
@@ -633,7 +657,8 @@ def create_app(
         return _client_error(f"{message}; retry the request", status)
 
     def _log_redacted_failure(message: str, exc: object, *, level: str = "error") -> None:
-        log = getattr(app.logger, level)
+        logger = app.logger
+        log = getattr(logger, level)
         log(
             "%s: %s",
             message,
@@ -774,17 +799,26 @@ def create_app(
     @app.before_request
     def start_request_timer() -> None:
         g.request_started_ns = time.perf_counter_ns()
-        if (
-            request.method not in ("GET", "HEAD", "OPTIONS")
-            and request.path != "/api/metrics/panel"
-            and not request.path.startswith("/api/operations/attention/")
-        ):
-            # A successful mutation can affect several panels. Clear before it
-            # runs so the next read cannot reuse a pre-mutation fragment; a
-            # rejected mutation merely causes a harmless extra rebuild. Panel
-            # timing telemetry is observational and must not evict the fragment
-            # whose latency it just measured.
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return
+        # A successful mutation can affect several cached surfaces. Instead of
+        # evicting the whole 256-entry panel + work-os response cache, resolve
+        # the exact families that route's writes can staleness from the
+        # mutation-route registry (W6) and invalidate only those prefixes.
+        # Panel timing telemetry (/api/metrics/panel) and the operations
+        # attention routes are registered as declared no-ops (the latter
+        # invalidates at its own precise success moment inside the route). The
+        # registry is total over the non-GET route table — enforced by a test
+        # that walks app.url_map — and an unknown route resolves to None,
+        # which FAILS SAFE to a full clear() so new mutation routes can never
+        # serve a pre-mutation fragment.
+        route_rule = cast(object, request.url_rule)
+        families = resolve_mutation_families(getattr(route_rule, "rule", None))
+        if families is None:
             panel_cache.clear()
+            return
+        for prefix in families:
+            panel_cache.invalidate_prefix(prefix)
 
     @app.errorhandler(413)
     def request_too_large(_error: object):
@@ -892,7 +926,10 @@ def create_app(
 
     @app.before_request
     def serve_fresh_panel_cache() -> Response | None:
-        if request.method != "GET" or not request.path.startswith("/api/panel/"):
+        if request.method != "GET":
+            return None
+        work_os_cached = _is_work_os_cached_route(request.path)
+        if not work_os_cached and not request.path.startswith("/api/panel/"):
             return None
         if request.path == "/api/panel/cron_health" and request.args.get("fragment") == "live":
             g.panel_cache_bypass = True
@@ -905,8 +942,17 @@ def create_app(
         assert isinstance(lookup, PanelCacheHit)
         body = lookup.entry.body
         content_type = lookup.entry.content_type
-        etag = lookup.entry.etag
         g.panel_cache_hit = True
+        if work_os_cached:
+            # Work-os hydration is server-side only: the client contract stays
+            # Cache-Control no-store (the browser never caches these payloads),
+            # so the hit carries no ETag and no 304 — just the observation
+            # header and the untouched route semantics.
+            response = Response(body, content_type=content_type)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Panel-Cache"] = "hit"
+            return response
+        etag = lookup.entry.etag
         if request.if_none_match.contains(etag.strip('"')):
             response = Response(status=304)
         else:
@@ -962,6 +1008,37 @@ def create_app(
             return response
         if (
             request.method == "GET"
+            and response.status_code == 200
+            and not response.direct_passthrough
+            and _is_work_os_cached_route(request.path)
+        ):
+            # Work-os hydration joins the same 30s single-flight cache. The
+            # client contract is unchanged — no-store, no ETag, no 304 — only
+            # the X-Panel-Cache observation header is added. Degraded
+            # 200-with-degraded tracker payloads are cached under the same TTL
+            # so a down tracker keeps serving its honest degraded state instead
+            # of re-probing per request. External cron writes are not
+            # invalidation events (parity with panel fragments today); HTTP
+            # mutations evict only the cache families their route's registry
+            # entry declares in start_request_timer.
+            if not getattr(g, "panel_cache_hit", False):
+                reservation = g.pop("panel_cache_reservation", None)
+                if isinstance(reservation, PanelCacheReservation):
+                    body = response.get_data()
+                    panel_cache.store(
+                        reservation,
+                        PanelCacheEntry(
+                            body=body,
+                            content_type=response.content_type or "application/octet-stream",
+                            # Internal freshness validator only; work-os
+                            # responses never emit it (no-store).
+                            etag=hashlib.sha256(body).hexdigest(),
+                        ),
+                    )
+                response.headers["X-Panel-Cache"] = "miss"
+            return response
+        if (
+            request.method == "GET"
             and request.path.startswith("/api/panel/")
             and response.status_code == 200
             and not response.direct_passthrough
@@ -979,6 +1056,7 @@ def create_app(
                             etag=response.headers["ETag"],
                         ),
                     )
+                response.headers["X-Panel-Cache"] = "miss"
             # make_conditional mutates + returns self; the cast restores the
             # Flask subclass the werkzeug stub erases.
             return cast("Response", response.make_conditional(request))
@@ -1297,7 +1375,21 @@ def create_app(
     @app.route("/", methods=["GET"])
     def dashboard_page():
         """Eight-screen Work OS; legacy panel endpoints remain drill-throughs."""
-        return Response(render_work_os_shell(db_path=db_path), mimetype="text/html")
+        render = render_work_os_shell_result(db_path=db_path)
+        response = Response(render.html, mimetype="text/html")
+        # no-cache = store but always revalidate. The ETag is derived from the
+        # render memo key (30s bucket, pinned stamp if any, prototype
+        # fingerprint), so a repeat load inside the bucket revalidates to a 304
+        # with no body transfer and even a full revalidation render is a memo
+        # hit. Staleness contract: the shell's data-generated-at stamp may
+        # trail wall-clock time by up to one 30s bucket; the shell JS never
+        # parses the stamp (it only rewrites the element's textContent).
+        response.headers["ETag"] = render.etag
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Panel-Cache"] = render.cache_state
+        # make_conditional mutates + returns self; the cast restores the
+        # Flask subclass the werkzeug stub erases.
+        return cast("Response", response.make_conditional(request))
 
     @app.route("/api/work-os/portfolio", methods=["GET"])
     def work_os_portfolio_api():
@@ -1381,9 +1473,16 @@ def create_app(
         fingerprint = str(review_body.get("suggestion_fingerprint") or "").strip()
 
         read_conn = get_read_db()
-        rows = build_cockpit_rows(read_conn, repo_root).get("evaluation", [])
-        payload = build_work_os_evaluation(rows, repo_root, read_conn)
-        item = next((candidate for candidate in payload.items if candidate.ticker == symbol), None)
+        item = resolve_work_os_evaluation_item(
+            read_conn,
+            repo_root,
+            symbol,
+            safe_ticker=ticker_validation.safe_ticker,
+            # The route keeps its own projection bindings so tests (and any
+            # future seam) patch the comments_server names exactly as before.
+            build_cockpit_rows=build_cockpit_rows,
+            build_work_os_evaluation=build_work_os_evaluation,
+        )
         if item is None or item.profile is None:
             return _client_error("not_found: current investment profile is unavailable", 404)
         try:
@@ -1854,7 +1953,10 @@ def create_app(
 
             fragment = request.args.get("fragment")
             if fragment:
-                return Response(render_health_fragment(db_path, fragment), mimetype="text/html")
+                return Response(
+                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    mimetype="text/html",
+                )
             return Response(
                 render_performance_risk_panel(
                     db_path,
@@ -1874,7 +1976,10 @@ def create_app(
             # card stays on Performance).
             from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
-            return Response(render_portfolio_synthesis_panel(db_path), mimetype="text/html")
+            return Response(
+                render_portfolio_synthesis_panel(db_path, conn=get_read_db()),
+                mimetype="text/html",
+            )
 
         if name == "positioning":
             # Portfolio → Positioning: the owner's durable target book
@@ -1894,7 +1999,10 @@ def create_app(
             # to an offline note; macro stress reads the local cache regardless.
             from pipeline.portfolio_panel import render_portfolio_risk_panel
 
-            return Response(render_portfolio_risk_panel(db_path=db_path), mimetype="text/html")
+            return Response(
+                render_portfolio_risk_panel(db_path=db_path, conn=get_read_db()),
+                mimetype="text/html",
+            )
 
         if name == "red_team":
             # Portfolio -> Red Team (PR5): the monthly First-Saturday
@@ -1916,7 +2024,10 @@ def create_app(
 
             fragment = request.args.get("fragment")
             if fragment:
-                return Response(render_health_fragment(db_path, fragment), mimetype="text/html")
+                return Response(
+                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    mimetype="text/html",
+                )
             user_id = DEFAULT_USER_ID
             return Response(
                 render_portfolio_health_panel(db_path, user_id=user_id), mimetype="text/html"
@@ -1969,8 +2080,13 @@ def create_app(
             )
 
             if request.args.get("fragment") == "live":
-                return Response(render_cron_health_live_body(db_path), mimetype="text/html")
-            return Response(render_cron_health_panel(db_path), mimetype="text/html")
+                return Response(
+                    render_cron_health_live_body(db_path, conn=get_read_db()),
+                    mimetype="text/html",
+                )
+            return Response(
+                render_cron_health_panel(db_path, conn=get_read_db()), mimetype="text/html"
+            )
 
         if name == "dcf_coverage":
             # Which of the ~90 DCF workbooks are live / stale / skipped /
@@ -2092,7 +2208,7 @@ def create_app(
             # investor-day agenda. Pure read; never feeds the inbox scorer.
             from pipeline.diet_panel import render_diet_panel
 
-            return Response(render_diet_panel(db_path), mimetype="text/html")
+            return Response(render_diet_panel(db_path, conn=get_read_db()), mimetype="text/html")
 
         if name == "musings":
             # Review → Ledger (Phase-5 IA): the `musings` panel id now serves the
@@ -2273,7 +2389,11 @@ def create_app(
             from pipeline.data_policy_settings_panel import render_data_policy_settings_panel
 
             return Response(
-                render_data_policy_settings_panel(db_path=db_path), mimetype="text/html"
+                render_data_policy_settings_panel(
+                    db_path=db_path,
+                    conn=get_read_db() if db_path.is_file() else None,
+                ),
+                mimetype="text/html",
             )
 
         if name == "restatements":
@@ -2593,7 +2713,11 @@ def create_app(
     )
     register_ir_approval_routes(
         app,
-        IrApprovalRouteContext(db_path=db_path, owner_actor=DEFAULT_USER_ID),
+        IrApprovalRouteContext(
+            db_path=db_path,
+            owner_actor=DEFAULT_USER_ID,
+            get_read_db=get_read_db,
+        ),
     )
     register_research_task_routes(
         app,

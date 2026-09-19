@@ -32,8 +32,6 @@ from execution.fetch_fmp_news import fetch_news_for_ticker, to_utc
 from models.fmp_payloads import FmpStockNewsRecord
 from net.client import HttpCallError, HttpErrorKind, HttpJsonResponse, JsonValue
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 # One article in FMP's stable stock-news shape. publishedDate is US/Eastern.
 _SAMPLE: dict[str, str] = {
     "symbol": "AAPL",
@@ -225,12 +223,8 @@ def test_fetch_schema_drift_dumps_and_halts(
 
 @pytest.fixture
 def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    db = tmp_path / "fmp_news.db"
     return migrated_db(
-        db,
-        stamp="0064_queued_actions",
-        archived=True,
-        target="0065_news",
+        tmp_path / "fmp_news.db", stamp="0064_queued_actions", archived=True, target="0065_news"
     )
 
 

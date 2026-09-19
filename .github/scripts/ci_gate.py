@@ -8,6 +8,7 @@ import json
 import sys
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import cast
 
@@ -38,9 +39,42 @@ CODE_ROOT_FILES = {
 }
 PYTHON_ROOT_FILES = {"pyproject.toml", "requirements.lock"}
 DOCUMENTATION_SUFFIXES = {".md", ".rst"}
+# Design-impacting paths (workstream C1). Anything that owns rendered-surface
+# truth must run the Design Sync job, so a doubtful path is classified as
+# design (fail toward running the gate). A PR that touches no design path
+# skips Design Sync; pushes to main and the nightly schedule trigger run it
+# regardless of this classification (see the design job's `if:` in ci.yml).
+DESIGN_PREFIXES = (
+    "design-system/",
+    "mockups/",
+    "src/ui/",
+    "src/report/renderers/",
+    "tests/golden/",
+)
+DESIGN_FILES = {
+    # Work OS shell/style contract sources.
+    "src/pipeline/work_os_shell.py",
+    "src/pipeline/work_os_styles.py",
+    # Design guard tooling.
+    "scripts/check_design_sync.py",
+    "execution/verify_design_conformance.py",
+    "execution/design_route_canaries.py",
+    # Contract document and machine-readable design baselines.
+    "directives/design_language.md",
+    "tests/design_conformance_debt.json",
+    "tests/design_geometry_baseline.json",
+    # Design guard inputs.
+    "requirements-design.lock",
+    # Design golden/shell tests. The canary and the other design-tool tests
+    # are covered by DESIGN_FILE_PATTERNS below.
+    "tests/test_workspace_golden.py",
+    "tests/test_work_os_shell.py",
+    "tests/test_work_os_style_master.py",
+}
+DESIGN_FILE_PATTERNS = ("scripts/gen_design_*.py", "tests/test_design_*.py")
 CONDITIONAL_JOBS = {
     "tests": "code",
-    "design": "code",
+    "design": "design",
     "quality": "python",
     "typecheck": "python",
     "security": "code",
@@ -48,9 +82,65 @@ CONDITIONAL_JOBS = {
 TERMINAL_SUCCESS_RESULTS = {"success", "skipped"}
 DiagnosticFingerprint = tuple[str, str, str]
 
+# Canonical test-shard label order. The `tests` matrix `include` list in
+# ci.yml and `.github/test-durations.json`'s `labels` must both match this
+# exactly (enforced by tests), so the aggregate gate's `needs.tests` contract
+# and the `tests (shard <label>/8)` job names never drift.
+SHARD_LABELS = (
+    "1",
+    "1 overflow",
+    "2",
+    "2 overflow",
+    "3",
+    "3 overflow",
+    "4",
+    "5",
+    "6",
+    "6 overflow",
+    "7",
+    "8",
+    "8 overflow",
+)
+DURATIONS_FILE = ".github/test-durations.json"
+
+
+class TestDurations:
+    """Validated checked-in per-file durations plus the pinned shard assignment.
+
+    `shard_by_file` pins every known test file to its canonical shard label so a
+    file whose measured cost did not change never moves shards (the stable
+    assignment property). `seconds_by_file` feeds the deterministic
+    duration-aware packing used to regenerate the table and to place new files.
+    """
+
+    __slots__ = ("default_seconds", "labels", "seconds_by_file", "shard_by_file")
+
+    def __init__(
+        self,
+        *,
+        labels: tuple[str, ...],
+        default_seconds: float,
+        seconds_by_file: dict[str, float],
+        shard_by_file: dict[str, str],
+    ) -> None:
+        self.labels = labels
+        self.default_seconds = default_seconds
+        self.seconds_by_file = seconds_by_file
+        self.shard_by_file = shard_by_file
+
+    def duration_seconds(self, path: str) -> float:
+        return self.seconds_by_file.get(path, self.default_seconds)
+
 
 def _normalize(path: str) -> str:
     return path.replace("\\", "/").removeprefix("./")
+
+
+def _is_design_path(path: str) -> bool:
+    """Design classification fails toward running the Design Sync job."""
+    if path in DESIGN_FILES or path.startswith(DESIGN_PREFIXES):
+        return True
+    return any(fnmatchcase(path, pattern) for pattern in DESIGN_FILE_PATTERNS)
 
 
 def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
@@ -58,6 +148,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
 
     code = False
     python = False
+    design = False
     for raw_path in paths:
         path = _normalize(raw_path)
         if not path:
@@ -67,34 +158,130 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         is_python = path in PYTHON_ROOT_FILES or path.endswith(".py")
         code = code or is_code
         python = python or is_python
-    return {"code": code, "python": python}
+        design = design or _is_design_path(path)
+    return {"code": code, "python": python, "design": design}
+
+
+def _positive_float(value: object, *, what: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(f"{what} must be a positive number")
+    return float(value)
+
+
+def load_test_durations(path: Path) -> TestDurations:
+    """Load and validate the checked-in durations table (fail closed)."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid durations file {path}: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("durations payload must be a JSON object")
+    payload_map = cast(Mapping[object, object], payload)
+
+    schema = payload_map.get("schema")
+    if isinstance(schema, bool) or schema != 1:
+        raise ValueError("durations file schema must be 1")
+
+    labels_raw = payload_map.get("labels")
+    if not isinstance(labels_raw, Sequence) or isinstance(labels_raw, (str, bytes)):
+        raise ValueError("durations labels must be a JSON array")
+    labels_seq = cast(Sequence[object], labels_raw)
+    labels: list[str] = []
+    for raw_label in labels_seq:
+        if not isinstance(raw_label, str) or not raw_label:
+            raise ValueError("durations labels must be non-empty strings")
+        labels.append(raw_label)
+    if labels != list(SHARD_LABELS):
+        raise ValueError("durations labels must match the CI shard labels exactly")
+    label_tuple = tuple(labels)
+
+    if "default_seconds" not in payload_map:
+        raise ValueError("durations file is missing default_seconds")
+    default_seconds = _positive_float(payload_map.get("default_seconds"), what="default_seconds")
+
+    files_raw = payload_map.get("files")
+    if not isinstance(files_raw, Mapping):
+        raise ValueError("durations files must be a JSON object")
+    files_map = cast(Mapping[object, object], files_raw)
+    seconds_by_file: dict[str, float] = {}
+    shard_by_file: dict[str, str] = {}
+    for raw_path, raw_record in files_map.items():
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError("durations file keys must be non-empty strings")
+        if not isinstance(raw_record, Mapping):
+            raise ValueError(f"durations record for {raw_path} must be a JSON object")
+        record = cast(Mapping[object, object], raw_record)
+        seconds = _positive_float(record.get("seconds"), what=f"seconds for {raw_path}")
+        shard = record.get("shard")
+        if not isinstance(shard, str) or shard not in label_tuple:
+            raise ValueError(f"shard for {raw_path} must be one of the shard labels")
+        seconds_by_file[raw_path] = seconds
+        shard_by_file[raw_path] = shard
+    return TestDurations(
+        labels=label_tuple,
+        default_seconds=default_seconds,
+        seconds_by_file=seconds_by_file,
+        shard_by_file=shard_by_file,
+    )
+
+
+def pack_test_shards(files: Sequence[str], durations: TestDurations) -> dict[str, list[str]]:
+    """Deterministic duration-aware bin packing over the canonical labels.
+
+    Longest-processing-time packing: files are processed highest-seconds-first
+    (path tie-break) and each goes to the least-loaded bin (earliest-label
+    tie-break), so the result is a pure function of (files, durations) — never
+    of run order or machine. This is the *generator* the checked-in table's
+    `shard` fields are produced with; runtime selection in `select_test_files`
+    does not re-pack known files, which is exactly what keeps an unchanged file
+    in its shard when unrelated files change.
+    """
+    labels = durations.labels
+    totals = {label: 0.0 for label in labels}
+    bins: dict[str, list[str]] = {label: [] for label in labels}
+    for path in sorted(files, key=lambda p: (-durations.duration_seconds(p), p)):
+        label = min(labels, key=lambda cand: (totals[cand], labels.index(cand)))
+        totals[label] += durations.duration_seconds(path)
+        bins[label].append(path)
+    return bins
 
 
 def select_test_files(
-    files: Sequence[str],
-    *,
-    source_shard: int,
-    source_shards: int,
-    split_count: int,
-    split_part: int,
+    files: Sequence[str], *, shard_label: str, durations: TestDurations
 ) -> list[str]:
-    """Select one stable, disjoint CI partition from sorted test files."""
-    if source_shards < 1 or not 1 <= source_shard <= source_shards:
-        raise ValueError("source shard is outside configured shard count")
-    if split_count < 1 or not 0 <= split_part < split_count:
-        raise ValueError("split part is outside configured split count")
+    """Return one job's test files from the stable, duration-aware assignment.
+
+    Files recorded in the durations table keep their pinned shard (unchanged
+    cost -> unchanged shard). Files not in the table get a deterministic default
+    shard: the least-loaded label at their position in the sorted list, with the
+    earliest label breaking ties, at `default_seconds` each. The file list is
+    sorted internally so the assignment never depends on caller input order.
+    """
+    if shard_label not in durations.labels:
+        raise ValueError(
+            f"unknown shard label {shard_label!r}; expected one of {list(durations.labels)}"
+        )
+    totals = {label: 0.0 for label in durations.labels}
     selected: list[str] = []
-    source_position = 0
-    for index, path in enumerate(files):
-        if index % source_shards != source_shard - 1:
-            continue
-        if source_position % split_count == split_part:
+    for path in sorted(files):
+        known_shard = durations.shard_by_file.get(path)
+        if known_shard is None:
+            seconds = durations.default_seconds
+            known_shard = min(
+                durations.labels,
+                key=lambda cand: (totals[cand], durations.labels.index(cand)),
+            )
+        else:
+            seconds = durations.duration_seconds(path)
+        totals[known_shard] += seconds
+        if known_shard == shard_label:
             selected.append(path)
-        source_position += 1
     return selected
 
 
-def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> list[str]:
+def gate_failures(
+    *, code: bool, python: bool, design: bool, results: Mapping[str, str]
+) -> list[str]:
     """Explain every terminal result that makes the aggregate gate unsafe."""
 
     failures: list[str] = []
@@ -108,7 +295,7 @@ def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> li
         if result not in TERMINAL_SUCCESS_RESULTS:
             failures.append(f"{job_name} finished with {result or 'missing result'}")
 
-    required_groups = {"code": code, "python": python}
+    required_groups = {"code": code, "python": python, "design": design}
     for job_name, group in CONDITIONAL_JOBS.items():
         result = results.get(job_name, "")
         if required_groups[group] and result in TERMINAL_SUCCESS_RESULTS and result != "success":
@@ -253,13 +440,8 @@ def _pyright_diff_command(args: argparse.Namespace) -> int:
 def _select_tests_command(args: argparse.Namespace) -> int:
     files = [line for raw in sys.stdin for line in [raw.strip()] if line]
     try:
-        selected = select_test_files(
-            files,
-            source_shard=args.source_shard,
-            source_shards=args.source_shards,
-            split_count=args.split_count,
-            split_part=args.split_part,
-        )
+        durations = load_test_durations(args.durations_file)
+        selected = select_test_files(files, shard_label=args.shard_label, durations=durations)
     except ValueError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
@@ -268,14 +450,45 @@ def _select_tests_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _durations_report_command(args: argparse.Namespace) -> int:
+    """Print the predicted per-label file counts and serial seconds."""
+    files = [line for raw in sys.stdin for line in [raw.strip()] if line]
+    try:
+        durations = load_test_durations(args.durations_file)
+    except ValueError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+    totals = {label: 0.0 for label in durations.labels}
+    counts = {label: 0 for label in durations.labels}
+    for path in sorted(files):
+        known_shard = durations.shard_by_file.get(path)
+        if known_shard is None:
+            seconds = durations.default_seconds
+            known_shard = min(
+                durations.labels,
+                key=lambda cand: (totals[cand], durations.labels.index(cand)),
+            )
+        else:
+            seconds = durations.duration_seconds(path)
+        totals[known_shard] += seconds
+        counts[known_shard] += 1
+    for label in durations.labels:
+        print(f"{label}\t{counts[label]}\t{totals[label]:.1f}")
+    print(f"files={len(files)} default_seconds={durations.default_seconds}")
+    return 0
+
+
 def _classify_command(github_output: Path) -> int:
     raw_paths = sys.stdin.buffer.read().split(b"\0")
     paths = [path.decode("utf-8", errors="surrogateescape") for path in raw_paths if path]
     groups = classify_paths(paths)
     with github_output.open("a", encoding="utf-8", newline="\n") as output:
-        for name in ("code", "python"):
+        for name in ("code", "python", "design"):
             print(f"{name}={str(groups[name]).lower()}", file=output)
-    print(f"Changed paths: {len(paths)}; code={groups['code']}; python={groups['python']}")
+    print(
+        f"Changed paths: {len(paths)}; code={groups['code']}; "
+        f"python={groups['python']}; design={groups['design']}"
+    )
     return 0
 
 
@@ -289,7 +502,9 @@ def _verify_command(args: argparse.Namespace) -> int:
         "typecheck": args.typecheck_result,
         "security": args.security_result,
     }
-    failures = gate_failures(code=args.code, python=args.python, results=results)
+    failures = gate_failures(
+        code=args.code, python=args.python, design=args.design, results=results
+    )
     for failure in failures:
         print(f"::error::{failure}")
     if failures:
@@ -308,6 +523,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
+    verify.add_argument("--design", type=_parse_bool, required=True)
     for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     subparsers.add_parser("pyright-count")
@@ -317,10 +533,10 @@ def _build_parser() -> argparse.ArgumentParser:
     pyright_diff.add_argument("--base-root", type=Path, required=True)
     pyright_diff.add_argument("--head-root", type=Path, required=True)
     select_tests = subparsers.add_parser("select-tests")
-    select_tests.add_argument("--source-shard", type=int, required=True)
-    select_tests.add_argument("--source-shards", type=int, default=8)
-    select_tests.add_argument("--split-count", type=int, required=True)
-    select_tests.add_argument("--split-part", type=int, required=True)
+    select_tests.add_argument("--shard-label", required=True)
+    select_tests.add_argument("--durations-file", type=Path, default=Path(DURATIONS_FILE))
+    durations_report = subparsers.add_parser("durations-report")
+    durations_report.add_argument("--durations-file", type=Path, default=Path(DURATIONS_FILE))
     return parser
 
 
@@ -334,6 +550,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _pyright_diff_command(args)
     if args.command == "select-tests":
         return _select_tests_command(args)
+    if args.command == "durations-report":
+        return _durations_report_command(args)
     return _verify_command(args)
 
 

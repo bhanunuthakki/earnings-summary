@@ -35,7 +35,6 @@ from search.corpus_builder import (
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.local_vector import LocalVectorCapabilityError
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 6, 0, 0)
 A, B, C = "a" * 64, "b" * 64, "c" * 64
 
