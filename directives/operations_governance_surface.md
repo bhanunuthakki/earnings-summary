@@ -108,3 +108,24 @@ button. Its current supported state is `hold`: deterministic resolver readiness 
 receipt, while reader activation requires separately approved portfolio evidence and an explicit owner
 decision. The CLI is the primary operator surface for this rehearsal; no current-health projection is
 claimed from an old receipt.
+
+### Transcript commitment-scan evidence repair
+
+`execution/audit_commitment_scan_evidence.py` is the supported manual, read-only inventory for
+selected active-portfolio transcript evidence. It requires an explicit database and project root,
+uses a query-only connection, and emits stable reason codes for missing artifacts, hash mismatches,
+missing or invalid acquisition binding, typed scan coverage, and complete scans. Its receipt is an
+observation only; it never creates acquisition lineage or authorizes a repair.
+
+`execution/extract_commitments_from_transcript.py --auto --reaudit-invalid-evidence --ticker TICKER`
+is the explicit bounded repair surface for legacy-unobserved or invalid scan evidence that still has
+an exact authorized acquisition binding. Ordinary automatic extraction continues to exclude those
+states. The repair uses the governed `saydo_commitment_extract` route and appends immutable segment
+observations and output receipts; it does not overwrite historical receipts, admit unreceipted bytes,
+or clear missing/hash-mismatched artifacts. A single `--transcript-id` remains the narrower explicit
+target.
+
+Neither command adds a scheduled job, managed service, current-health claim, or Operations-workspace
+button. Their primary operator surface is the CLI because the re-audit requires a deliberate bounded
+scope and the audit can be expensive over large retained artifacts. Any future UI control requires a
+separate activation review under the Operator-action boundary.

@@ -291,7 +291,7 @@ _QA_HEADER_RE = re.compile(r"(?:^|\n)\s*QUESTION\s+AND\s+ANSWER\s+SECTION\b")
 # Real PDFs use em-dash (U+2014), en-dash (U+2013), or ASCII hyphen as the
 # separator after `Q`. The Unicode dashes inside the character class below
 # are deliberate; they are part of what we match against.
-_QA_ANALYST_TAG_RE = re.compile("<Q[\\s–—\\-]")  # noqa: RUF001
+_QA_ANALYST_TAG_RE = re.compile("<Q[\\s\\u2013\\u2014\\-]")
 
 # Operator analyst-introduction patterns. Multiple occurrences = multi-question
 # Q&A section. Single occurrence may be the boilerplate "after speaker
@@ -580,6 +580,8 @@ def _insert_document(
     sha256: str,
     period_end: datetime,
     project_root: Path,
+    source_type: SourceType = SourceType.TRANSCRIPT_AUDIO,
+    source_url: str | None = None,
 ) -> int:
     """Insert one documents row; returns documents.id."""
     rel_path = str(file_path.relative_to(project_root)).replace("\\", "/")
@@ -589,10 +591,10 @@ def _insert_document(
         "(ticker, source_type, doc_type, period_start, period_end, file_path, "
         " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
         " parent_document_id) "
-        "VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)",
+        "VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)",
         (
             ticker,
-            SourceType.TRANSCRIPT_AUDIO.value,
+            source_type.value,
             DocType.EARNINGS_CALL_TRANSCRIPT.value,
             _sqlite_datetime(period_end),
             rel_path,
@@ -600,6 +602,7 @@ def _insert_document(
             _sqlite_datetime(datetime.now()),
             FetchStatus.OK.value,
             raw_size,
+            source_url,
         ),
     )
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
@@ -719,6 +722,7 @@ def _ingest_one(
     tracked_tickers: frozenset[str],
     commit: bool = True,
     snapshot_bytes: bytes | None = None,
+    authorized_artifact: AuthorizedTranscriptArtifact | None = None,
 ) -> IngestResult | None:
     """Process one transcript file. Returns None for filename mismatches / out-of-scope tickers.
 
@@ -739,6 +743,22 @@ def _ingest_one(
     )
     existing = find_existing_document_id(conn, sha)
     period = map_to_period(parsed)
+    document_source_type = SourceType.TRANSCRIPT_AUDIO
+    document_source_url: str | None = None
+    if authorized_artifact is not None:
+        request = authorized_artifact.authorization.request
+        if (
+            request.canonical_ticker != parsed.ticker
+            or request.fiscal_year != parsed.fiscal_year_label
+            or request.fiscal_quarter != parsed.quarter_idx
+            or authorized_artifact.sha256 != sha
+            or authorized_artifact.size_bytes
+            != len(snapshot_bytes if snapshot_bytes is not None else file_path.read_bytes())
+            or authorized_artifact.canonical_document_path.name != file_path.name
+        ):
+            raise ValueError("authorized transcript artifact does not match parsed evidence")
+        document_source_type = request.source_type
+        document_source_url = authorized_artifact.source_url
 
     if existing is not None:
         existing_transcript_id = find_existing_transcript_id(conn, existing)
@@ -843,6 +863,8 @@ def _ingest_one(
             sha256=sha,
             period_end=period.period_end,
             project_root=project_root,
+            source_type=document_source_type,
+            source_url=document_source_url,
         )
         losing_transcript_id = _insert_transcript(
             conn,
@@ -881,6 +903,8 @@ def _ingest_one(
         sha256=sha,
         period_end=period.period_end,
         project_root=project_root,
+        source_type=document_source_type,
+        source_url=document_source_url,
     )
     transcript_id = _insert_transcript(
         conn,
@@ -981,6 +1005,7 @@ def ingest_evidence_file(
                 project_root=project_root,
                 tracked_tickers=tracked_tickers,
                 snapshot_bytes=snapshot_payload,
+                authorized_artifact=authorized_artifact,
                 commit=False,
             )
         verified_payload = read_authorized_transcript(

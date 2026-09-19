@@ -206,7 +206,7 @@ def _read_only_uri(path: str, *, immutable: bool = False) -> str:
     if path == ":memory:":
         raise ValueError("read-only connections require an on-disk database")
     immutable_query = "&immutable=1" if immutable else ""
-    return f"{Path(path).resolve().as_uri()}?mode=ro{immutable_query}"
+    return f"{Path(path).absolute().as_uri()}?mode=ro{immutable_query}"
 
 
 def _apply_connection_policy(conn: sqlite3.Connection) -> None:
