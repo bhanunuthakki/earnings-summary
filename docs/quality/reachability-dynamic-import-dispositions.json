@@ -180,6 +180,16 @@
     },
     {
       "disposition": "external_optional_dependency",
+      "evidence": "Earnings-calendar fallback lazily loads yfinance and reports a source error when the optional provider is unavailable.",
+      "fingerprint": "793245b95c676e462a53a5bb8c98854c293a9ae5090671abc04e21f8b0d3deff",
+      "line": 238,
+      "path": "src/sources/earnings_calendar.py",
+      "targets": [
+        "yfinance"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
       "evidence": "Inflection detection lazily loads the optional ruptures backend and falls back to rolling-window regression when it is unavailable.",
       "fingerprint": "7c2c22ab1dbd6ee10c4823b535e11119363e832354fb338a7a7ecc385af0fbbf",
       "line": 241,
@@ -203,13 +213,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "bb28c5b551a35508ce1d9a7cd2383083d8bda7945a3aa6e351cc7c2d2e576b62",
+      "source_sha256": "5eb1892de1f07a1ae7907904d935ae91fc99bd6b0a648f2d544f472c1cc29c3c",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "f131cda7950578af15a1b9b19f2222e53524c5a53c846d7f2613e90c8480b83e"
+    "source_manifest_sha256": "61217834e86b29b95a38d25a44a12c179f438df1d4e229982630503b4079f121"
   },
   "schema_version": "reachability-dynamic-import-dispositions/v1"
 }
