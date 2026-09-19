@@ -25,12 +25,10 @@ import shutil
 import sqlite3
 import sys
 import typing
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -117,23 +115,15 @@ def test_user_scoped_function_defaults_are_canonical_str() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def head_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
+) -> Path:
     """One fully-migrated DB (init_db + alembic head), shared across the module."""
     db = tmp_path_factory.mktemp("tenant_consistency_tmpl") / "head.db"
     dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    return db
+    return migrated_db(db)
 
 
 @pytest.fixture
