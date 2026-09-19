@@ -710,7 +710,6 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "operations/backup_observer.py",  # Named regex groups parse backup logs; no markup is emitted.
     "redteam/telegram_cmd.py",
     "report/sections/qa_roster.py",
-    "research/dcf_tweak.py",
     "report/renderers/workspace_data.py",
     "scheduler_manifest.py",
     "transcript_qa.py",

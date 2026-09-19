@@ -1,10 +1,3 @@
-# pyright: reportPrivateUsage=false
-#
-# This module intentionally reads + writes `_setup_verified` and
-# `_claude_cli_path` on the llm_client module via late `import llm_client`
-# (see the docstring below + commit history for why). Pyright flags every
-# such access as cross-module private-usage; the module-level directive
-# above silences only that rule, preserving every other strict check.
 """
 src/llm/cli.py
 --------------
@@ -81,6 +74,7 @@ from llm.transport import (
 
 if TYPE_CHECKING:
     from llm.resolver import CapabilityProfile
+
 
 # Backoff base for transient-class retries (llm.transport.retry_budget owns the
 # per-class attempt counts). attempt 1 → ~3s, attempt 2 → ~6s, + up to 1s jitter.
@@ -258,12 +252,9 @@ LLM_MODELS: dict[str, str] = {
     "research_fetch": DEFAULT_MODEL,
     "research_adversarial_assess": DEFAULT_MODEL,
     "research_narrate": DEFAULT_MODEL,
-    # The Ledger Phase-2 generation seams (opt-in, web-less). musing_decision_extract
-    # structures a free-text owner musing into a decision; drift_narrate rewords a
-    # PRE-COMPUTED drift signal (wording only). Both short + closed → the cheap FAST
-    # tier.
+    # The Ledger decision extractor structures a free-text owner musing into a
+    # decision. Short, closed extraction uses the cheap FAST tier.
     "musing_decision_extract": FAST_CLASSIFIER_MODEL,
-    "drift_narrate": FAST_CLASSIFIER_MODEL,
     # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2) — the
     # async tap that turns a landed free-text/voice capture into a confirmable
     # Owner Decision draft. Pinned to Opus (not the FAST tier): the input is
@@ -320,11 +311,6 @@ LLM_MODELS: dict[str, str] = {
     # DEFAULT (Sonnet); the code spec is rare and never auto-applies.
     "thesis_entry_draft": DEFAULT_MODEL,
     "research_code_spec": DEFAULT_MODEL,
-    # The Ledger DCF assumption-tweak extractor: a short, closed extraction of ONE
-    # {param, new_value} edit from a what-if wondering (bounds-validated; the LLM emits
-    # NO valuation number — the deterministic engine recompute is the oracle) → the
-    # cheap FAST tier, like the sibling extractors.
-    "dcf_assumption_extract": FAST_CLASSIFIER_MODEL,
     # Position-review verdict (src/advisor/position_review.py, the /review service).
     # Judgment over the grounded pre-analysis + the owner's convictions, calibrated
     # to his behavioral patterns → Sonnet-tier reasoning (latency unimportant, one
@@ -875,6 +861,9 @@ def _model_for(purpose: str) -> str:
     return LLM_MODELS[purpose]
 
 
+model_for = _model_for
+
+
 # Default per-call timeout (seconds). Long-context thesis prompts can take
 # a few minutes on Sonnet; the cap protects against runaway hangs. 20 min
 # leaves headroom for the heaviest cases (4-quarter ticker x dense schema)
@@ -902,7 +891,7 @@ CLAUDE_WEB_TIMEOUT_SECONDS = 1800  # web fetches add round-trips; bigger cap
 CLAUDE_WEB_MAX_BUDGET_USD = float(os.environ.get("CLAUDE_WEB_MAX_BUDGET_USD", "2.0"))
 
 
-class LLMBudgetExceeded(RuntimeError):  # noqa: N818
+class LLMBudgetExceededError(RuntimeError):
     """Raised by `_call_claude` when the per-purpose monthly cap is at/over
     AND the budget row has hard_block=True. Callers can catch this to
     degrade gracefully (skip the section, write a stub, queue for next
@@ -916,6 +905,10 @@ class LLMBudgetExceeded(RuntimeError):  # noqa: N818
     def __init__(self, message: str, *, check: object | None = None) -> None:
         super().__init__(message)
         self.check = check
+
+
+# Preserve the historical exception import and catch identity.
+LLMBudgetExceeded = LLMBudgetExceededError
 
 
 class LLMSetupError(RuntimeError):
@@ -1046,9 +1039,9 @@ def _verify_setup_once() -> None:
     ``llm_client`` module so the existing test monkeypatch surface keeps
     working without test changes; see this module's docstring.
     """
-    import llm_client  # late import — breaks circular at import time
+    import llm_client  # late import preserves the circular compatibility facade
 
-    if llm_client._setup_verified:
+    if llm_client.is_claude_setup_verified():
         return
     resolved = shutil.which("claude")
     if resolved is None:
@@ -1057,8 +1050,10 @@ def _verify_setup_once() -> None:
             "https://code.claude.com/docs/en/setup, then either set "
             "ANTHROPIC_API_KEY in your shell / .env or run `claude auth login`."
         )
-    llm_client._claude_cli_path = resolved
-    llm_client._setup_verified = True
+    llm_client.cache_claude_setup(resolved)
+
+
+verify_setup_once = _verify_setup_once
 
 
 def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) -> None:
@@ -1141,6 +1136,9 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
                 {"event": "llm_budget_alert_record_failed", "purpose": purpose, "level": "warn"},
                 exc_info=True,
             )
+
+
+enforce_budget_pre_call = _enforce_budget_pre_call
 
 
 def _authorize_metered_openrouter_fallback(
@@ -1243,10 +1241,10 @@ def _call_claude(
     require_model_capabilities(model, effective_profile)
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()  # setup errors propagate; do NOT route to fallback
-    import llm_client  # late import — state lives on llm_client for test compat
+    import llm_client  # late import preserves the circular compatibility facade
 
     assert (
-        llm_client._claude_cli_path is not None
+        llm_client.resolved_claude_cli_path() is not None
     )  # set by _verify_setup_once when it returns successfully
     log.info(
         {
@@ -1312,7 +1310,7 @@ def _call_claude(
                 # that's safe under subscription billing — `--bare` would force
                 # ANTHROPIC_API_KEY billing and was rejected.)
                 [
-                    llm_client._claude_cli_path,
+                    llm_client.resolved_claude_cli_path(),
                     "-p",
                     "--model",
                     model,
@@ -1517,11 +1515,14 @@ def _call_claude(
             backend="openrouter",
         )
         return text
-        # Typed so eval/judge callers can abort instead of scoring the outage;
-        # production callers defer per-item (is_hard_stop → False).
-    # Operational failure — try Gemini fallback. fallback_call_logged raises
-    # if the fallback is disabled/unconfigured, surfacing both errors together;
-    # an actual Gemini attempt writes its own ledger row (fallback_used='gemini').
+
+
+call_claude = _call_claude
+# Typed so eval/judge callers can abort instead of scoring the outage;
+# production callers defer per-item (is_hard_stop → False).
+# Operational failure — try Gemini fallback. fallback_call_logged raises
+# if the fallback is disabled/unconfigured, surfacing both errors together;
+# an actual Gemini attempt writes its own ledger row (fallback_used='gemini').
 
 
 def call_llm(
@@ -2464,9 +2465,9 @@ def call_llm_with_web(
 
     fallback_used = "claude" if fallback_from_provider is not None else None
     _verify_setup_once()
-    import llm_client  # late import — state lives on llm_client for test compat
+    import llm_client  # late import preserves the circular compatibility facade
 
-    assert llm_client._claude_cli_path is not None
+    assert llm_client.resolved_claude_cli_path() is not None
     log.info(
         {
             "event": "llm_web_call_start",
@@ -2520,7 +2521,7 @@ def call_llm_with_web(
     if max_budget_usd is not None:
         effective_budget_usd = min(max(max_budget_usd, 0.01), CLAUDE_WEB_MAX_BUDGET_USD)
     cmd = [
-        llm_client._claude_cli_path,
+        llm_client.resolved_claude_cli_path(),
         "-p",
         "--model",
         resolved_model,

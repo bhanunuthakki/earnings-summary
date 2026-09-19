@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import IO
 
 import pytest
 
 from evals.capture_quality import (
-    _capture_paths,
     load_capture_quality_corpus,
     run_capture_quality_eval,
 )
 from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES, CAPTURE_QUALITY_SPECS
 from evals.coverage import GRANDFATHERED_UNCOVERED_PURPOSES, eval_coverage, eval_coverage_gate
-from evals.harness import persist_summary
+from evals.harness import EvalRunSummary, persist_summary
 from llm.capture import capture_purpose_suffix
 
 
@@ -62,9 +62,8 @@ def test_registered_eval_mode_debt_is_fully_paid_down(tmp_path: Path) -> None:
 
 
 def test_specs_are_prioritized_and_performance_bounded() -> None:
-    # 74 legacy purposes + lens:* + pre/post earnings + disclosure thesis materiality
-    # + the fail-closed manual KPI proposal purpose.
-    assert len(CAPTURE_QUALITY_SPECS) == 79
+    # 79 registered specs minus the two retired, unwired feature purposes.
+    assert len(CAPTURE_QUALITY_SPECS) == 77
     assert CAPTURE_QUALITY_SPECS[CAPTURE_QUALITY_PURPOSES[0]].priority == "P0"
     assert CAPTURE_QUALITY_SPECS[CAPTURE_QUALITY_PURPOSES[0]].traffic_tier == "hot"
     assert CAPTURE_QUALITY_SPECS["saydo_commitment_extract"].priority == "P0"
@@ -119,18 +118,45 @@ def test_capture_loader_merges_pid_shards_by_timestamp(tmp_path: Path) -> None:
     assert "newer" in items[0].content
 
 
-def test_capture_path_scan_is_partitioned_for_exact_purpose(tmp_path: Path) -> None:
-    target = tmp_path / (f"capture_2026-07-26_1_p{capture_purpose_suffix('annual_letter')}.jsonl")
-    unrelated = tmp_path / (
+def test_capture_path_scan_is_partitioned_for_exact_purpose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture_dir = tmp_path / "data" / "llm_capture"
+    capture_dir.mkdir(parents=True)
+    target = capture_dir / f"capture_2026-07-26_1_p{capture_purpose_suffix('annual_letter')}.jsonl"
+    unrelated = capture_dir / (
         f"capture_2026-07-26_1_p{capture_purpose_suffix('valuation_basis')}.jsonl"
     )
-    legacy = tmp_path / "capture_2026-07-25_1.jsonl"
-    for path in (target, unrelated, legacy):
-        path.write_text("", encoding="utf-8")
+    legacy = capture_dir / "capture_2026-07-25_1.jsonl"
+    for path, purpose in (
+        (target, "annual_letter"),
+        (unrelated, "valuation_basis"),
+        (legacy, "annual_letter"),
+    ):
+        path.write_text(json.dumps(_capture(purpose, prompt=path.name)) + "\n", encoding="utf-8")
 
-    paths = set(_capture_paths(tmp_path, "annual_letter"))
+    opened: set[Path] = set()
+    original_open = Path.open
 
-    assert paths == {target, legacy}
+    def observe_open(
+        path: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> IO[str] | IO[bytes]:
+        if path.parent == capture_dir:
+            assert path != unrelated, "unrelated purpose shard must be pruned before file I/O"
+            opened.add(path)
+        return original_open(path, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(Path, "open", observe_open)
+    items = load_capture_quality_corpus(tmp_path, "annual_letter")
+
+    assert opened == {target, legacy}
+    assert len(items) == 2
+    assert all(any(path.name in item.content for item in items) for path in (target, legacy))
     assert capture_purpose_suffix("lens:five_min_reread") == capture_purpose_suffix("lens:*")
 
 
@@ -285,7 +311,7 @@ def test_capture_persistence_strips_private_exchange_defense_in_depth(
 
     from evals import harness, store
 
-    def fake_write_run(observed, *, db_path: Path) -> int:
+    def fake_write_run(observed: EvalRunSummary, *, db_path: Path) -> int:
         assert db_path == tmp_path / "portfolio.db"
         assert observed.cases[0].prompt_text is None
         assert observed.cases[0].response_text is None
@@ -294,6 +320,10 @@ def test_capture_persistence_strips_private_exchange_defense_in_depth(
         return 7
 
     monkeypatch.setattr(store, "write_run", fake_write_run)
-    monkeypatch.setattr(harness, "record_score", lambda *_args, **_kwargs: None)
+
+    def skip_record_score(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(harness, "record_score", skip_record_score)
 
     assert persist_summary(summary, db_path=tmp_path / "portfolio.db") == 7

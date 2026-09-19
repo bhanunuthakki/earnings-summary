@@ -36,10 +36,11 @@ import re
 # module after the split) because the existing budget integration test
 # monkeypatches `llm_client.subprocess.run`. Removing the import breaks that
 # patch surface; keep the import bound to the module attribute.
-import subprocess  # noqa: F401  # pyright: ignore[reportUnusedImport]
+import subprocess as subprocess
+from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
 
@@ -56,8 +57,8 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field
 # ruff nor pyright flags these as unused imports. For the four legacy private
 # names that have been intentionally aliased (the `_gemini_fallback_disabled`,
 # `_try_gemini_fallback`, `_try_gemini_fallback_logged`, `_record_to_ledger`
-# names that pre-split callers may import) the rename forces an explicit
-# unused-import suppression.
+# names that pre-split callers may import), explicit assignments preserve their
+# original callable identities without unused-import suppressions.
 #
 # Note: `_setup_verified` and `_claude_cli_path` are NOT re-exports — they
 # stay defined as live module-level globals below because the existing
@@ -118,16 +119,7 @@ from llm.cli import (
     LLMSetupError as LLMSetupError,
 )
 from llm.cli import (
-    _call_claude as _call_claude,  # pyright: ignore[reportPrivateUsage]
-)
-from llm.cli import (
-    _enforce_budget_pre_call as _enforce_budget_pre_call,  # pyright: ignore[reportPrivateUsage]
-)
-from llm.cli import (
-    _model_for as _model_for,  # pyright: ignore[reportPrivateUsage]
-)
-from llm.cli import (
-    _verify_setup_once as _verify_setup_once,  # pyright: ignore[reportPrivateUsage]
+    call_claude as call_claude,
 )
 from llm.cli import (
     call_llm as call_llm,
@@ -136,7 +128,16 @@ from llm.cli import (
     call_llm_with_web as call_llm_with_web,
 )
 from llm.cli import (
+    enforce_budget_pre_call as enforce_budget_pre_call,
+)
+from llm.cli import (
     is_hard_stop as is_hard_stop,
+)
+from llm.cli import (
+    model_for as model_for,
+)
+from llm.cli import (
+    verify_setup_once as verify_setup_once,
 )
 from llm.contracts import (
     TRANSCRIPT_METADATA_SCHEMA as TRANSCRIPT_METADATA_SCHEMA,
@@ -148,16 +149,16 @@ from llm.fallback import (
     GEMINI_FALLBACK_MODEL as GEMINI_FALLBACK_MODEL,
 )
 from llm.fallback import (
-    is_fallback_disabled as _gemini_fallback_disabled,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    is_fallback_disabled as is_fallback_disabled,
 )
 from llm.fallback import (
-    try_gemini_fallback as _try_gemini_fallback,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    try_gemini_fallback as try_gemini_fallback,
 )
 from llm.ledger import (
-    fallback_call_logged as _try_gemini_fallback_logged,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    fallback_call_logged as fallback_call_logged,
 )
 from llm.ledger import (
-    record_llm_call as _record_to_ledger,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    record_llm_call as record_llm_call,
 )
 from llm.prompt_registry import (
     PromptTemplate as PromptTemplate,
@@ -181,6 +182,15 @@ from llm.untrusted import (
     spotlight as spotlight,
 )
 from runtime.secrets import load_project_env
+
+_call_claude = call_claude
+_enforce_budget_pre_call = enforce_budget_pre_call
+_model_for = model_for
+_verify_setup_once = verify_setup_once
+_gemini_fallback_disabled = is_fallback_disabled
+_try_gemini_fallback = try_gemini_fallback
+_try_gemini_fallback_logged = fallback_call_logged
+_record_to_ledger = record_llm_call
 
 # Load .env at module init so GEMINI_API_KEY is available without callers having
 # to import dotenv themselves. Silent no-op if .env doesn't exist. Every existing
@@ -422,12 +432,38 @@ _setup_verified: bool = False
 _claude_cli_path: str | None = None
 
 
+def is_claude_setup_verified() -> bool:
+    """Read the legacy setup cache, including existing monkeypatch overrides."""
+    return _setup_verified
+
+
+def resolved_claude_cli_path() -> str:
+    """Read the shared path after setup has succeeded."""
+    assert _claude_cli_path is not None
+    return _claude_cli_path
+
+
+def cache_claude_setup(resolved_path: str) -> None:
+    """Publish successful setup to the legacy globals used by every caller."""
+    global _claude_cli_path, _setup_verified
+    _claude_cli_path = resolved_path
+    _setup_verified = True
+
+
+class QuarterContext(TypedDict):
+    quarter: str
+    year: str | int
+    summaries: dict[str, str]
+
+
 # ---------------------------------------------------------------------------
 # Prompt-bearing functions (signatures preserved — callers unchanged)
 # ---------------------------------------------------------------------------
 
 
-def _build_pairwise_analysis_prompt(prev_summary, curr_summary, anchor_block: str = "") -> str:
+def _build_pairwise_analysis_prompt(
+    prev_summary: Mapping[str, object], curr_summary: Mapping[str, object], anchor_block: str = ""
+) -> str:
     """Compose the SayDo pairwise prompt without issuing the LLM call.
 
     Extracted so the synchronous (`generate_pairwise_analysis`) and batch
@@ -485,8 +521,11 @@ def _build_pairwise_analysis_prompt(prev_summary, curr_summary, anchor_block: st
 
 
 def generate_pairwise_analysis(
-    prev_summary, curr_summary, anchor_block: str = "", ticker: str | None = None
-):
+    prev_summary: Mapping[str, object],
+    curr_summary: Mapping[str, object],
+    anchor_block: str = "",
+    ticker: str | None = None,
+) -> str:
     """
     Generates a specific "Say-Do" analysis comparing two sequential quarters.
 
@@ -819,7 +858,7 @@ def _compute_staleness(
     return staleness_days, is_stale, line, directive
 
 
-def _serialize_schema_for_llm(schema: dict) -> str:
+def _serialize_schema_for_llm(schema: Mapping[str, object]) -> str:
     """
     Render the holdings schema as JSON for inclusion in an LLM prompt, with
     audit-trail fields (per SCHEMA_LLM_REDACT_FIELDS) removed. Those fields
@@ -831,9 +870,9 @@ def _serialize_schema_for_llm(schema: dict) -> str:
     return json.dumps(redacted, indent=2)
 
 
-def _format_quarter_context(quarters: list[dict]) -> str:
+def _format_quarter_context(quarters: Sequence[QuarterContext]) -> str:
     """Render the chronological quarter blocks consumed by both passes."""
-    blocks = []
+    blocks: list[str] = []
     for q in quarters:
         block = f"\n### {q['quarter']} {q['year']}\n"
         for doc_type, text in q["summaries"].items():
@@ -849,8 +888,8 @@ def _format_quarter_context(quarters: list[dict]) -> str:
 
 def _build_pass_a_prompt(
     ticker: str,
-    schema: dict,
-    quarters: list[dict],
+    schema: Mapping[str, object],
+    quarters: Sequence[QuarterContext],
     report_date: str,
     staleness_line: str,
     is_stale: bool,
@@ -922,8 +961,8 @@ If all schema KPIs match disclosure cleanly, write "No mismatches detected." and
 
 def _build_pass_b_prompt(
     ticker: str,
-    schema: dict,
-    quarters: list[dict],
+    schema: Mapping[str, object],
+    quarters: Sequence[QuarterContext],
     report_date: str,
     staleness_line: str,
     staleness_directive: str,
@@ -1067,8 +1106,8 @@ def _assemble_tracker(
 
 def generate_thesis_update(
     ticker: str,
-    schema: dict,
-    quarters: list[dict],
+    schema: Mapping[str, object],
+    quarters: Sequence[QuarterContext],
     report_date: str,
     corpus_latest_date: str | None = None,
 ) -> str:
@@ -1162,7 +1201,9 @@ def generate_thesis_update(
     )
 
 
-def generate_strategic_analysis(summaries_list, ticker: str | None = None):
+def generate_strategic_analysis(
+    summaries_list: Sequence[Mapping[str, object]], ticker: str | None = None
+) -> str:
     """
     Generates a strategic analysis comparing performance vs expectations across quarters.
     summaries_list: List of dicts {'quarter': 'Q1', 'year': '2024', 'text': '...'}
@@ -1717,9 +1758,9 @@ def generate_bear_case(
     stats_lines: list[str] = []
     if repo_root is not None:
         try:
-            from llm.anchors import _statistical_patterns_block
+            from llm.anchors import statistical_patterns_block
 
-            stats_lines = _statistical_patterns_block(repo_root, ticker, {})
+            stats_lines = statistical_patterns_block(repo_root, ticker, {})
         except Exception as exc:  # never block the bear-case build
             log.debug(f"bear_case stats block skipped for {ticker}: {type(exc).__name__}: {exc}")
             stats_lines = []
@@ -2216,7 +2257,9 @@ Return strictly the JSON object — no prose before or after, no markdown fence 
         raise
 
 
-def classify_intake_document(filename: str, text: str, hint: dict) -> dict | None:
+def classify_intake_document(
+    filename: str, text: str, hint: Mapping[str, object]
+) -> dict[str, object] | None:
     """
     Classify a user-dropped IR document.
 
