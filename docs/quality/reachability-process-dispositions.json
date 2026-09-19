@@ -54,8 +54,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run invokes only the checked-in HERE/script names via managed_python_prefix.",
-      "fingerprint": "5bca6b727d29bc41a8b442aa625360b6c1d5fe67d84c35f0333da0ee10873d2a",
-      "line": 58,
+      "fingerprint": "26eace15ab44707d05140cba68923176df379854169e2a2eb00096eca00e2935",
+      "line": 64,
       "path": "execution/build_all_redesigned_dcf.py",
       "targets": [
         "execution/dcf_opus_assumptions.py",
@@ -65,8 +65,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_ticker_specific_extractors runs the _TICKER_SPECIFIC_EXTRACTORS fixed script via managed_python_prefix.",
-      "fingerprint": "91d736633d876d837f92502f4c17cd34481f09d23521072b0c2500127facadb1",
-      "line": 116,
+      "fingerprint": "09053a3981106ed14c5f9719aa492c96548389e26dde4e2fa92ea1c17967495e",
+      "line": 119,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -159,17 +159,6 @@
       "path": "execution/fmp_backpop.py",
       "targets": [
         "execution/extract_facts.py"
-      ]
-    },
-    {
-      "disposition": "closed_command_set",
-      "evidence": "_run executes only the fixed git diff and ruff format --diff commands.",
-      "fingerprint": "85f955bc4bf2735fe0e42d15a35ce812812509b1178d5fa5cf7749d8508c5578",
-      "line": 95,
-      "path": "execution/format_changed.py",
-      "targets": [
-        "git",
-        "ruff"
       ]
     },
     {
@@ -281,8 +270,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Hints refresh runs the fixed execution/schedule_pre_earnings_refresh.py script.",
-      "fingerprint": "269121a247c0556de673897b8d49e0468f8b4c0796915365541aee02c36bcf19",
-      "line": 2098,
+      "fingerprint": "0b1816a5abd8807eb118f6c7324dcef09ecd3dd342dd1c64dc2e0ba400bf4ea5",
+      "line": 2080,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/schedule_pre_earnings_refresh.py"
@@ -291,8 +280,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_dispatch_one runs the fixed execution/save_fmp_data.py manifest command.",
-      "fingerprint": "ba546aa3bf714e55535e97a79c18f29256552f8d855ff1c3eaaaf6810c7e0487",
-      "line": 2428,
+      "fingerprint": "9abfebf8059ee768e00b268c5f28eb30e5c38ee5842849420809009cab116e03",
+      "line": 2410,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -301,8 +290,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_spawn_background re-executes the fixed execution/refresh_cache.py run command.",
-      "fingerprint": "4b50a55ffc06baad7b38075aa4a58d3a4ac9573bf117a7e8b1e2c7398c90e3ee",
-      "line": 2699,
+      "fingerprint": "0d364fa67c863df4953471e2e58989a075018b2ec2358c9839a935f1465f8076",
+      "line": 2681,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/refresh_cache.py"
@@ -311,8 +300,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "2e7eabc4c085500ba2b48a227c79117093731b1791248f438a6208bf69d18bb8",
-      "line": 666,
+      "fingerprint": "e617ab926ea0497f18b7a72a48f7a4fa4ad72817bee0c860417e2c1c7469008d",
+      "line": 667,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -321,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "398e9b976c5ccdfb78f92db671f157a8879ab919e4006f7fe1750cba467fe31c",
-      "line": 703,
+      "fingerprint": "886f843e1e1073b110f43b7ae7da3af1cb77546e3b6a2abea2acd18ef5382e86",
+      "line": 704,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -331,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "1eaa04f690c3d5f78b68810e3f1ce71d7bed38b868d205e61f0f4af71c4e05e0",
-      "line": 748,
+      "fingerprint": "e5fb13336817beb3de81965eca3a913be40105c47c6852c7317f9d7883dd60bd",
+      "line": 749,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -341,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "0c6ac311c4a32d52b53e7a66051a7654b56ba39fa221ae475a8ca3370d5bb014",
-      "line": 793,
+      "fingerprint": "86affac02c41ca4bd720c132ac1842d667b1398f01ebb9621b914cb8e62f3d02",
+      "line": 794,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -351,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "779a102e0df1cf651eee8c085c851b22756865651f3cff74d1b98f9a9dbb8f23",
-      "line": 840,
+      "fingerprint": "8342c13523a8aa40e98d449836a632ce831a483692299bc18fe5522f6de1d54d",
+      "line": 841,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -361,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "847b0653d41edb6861fbb729ea2cbd27d0134012f793277d04778e0b4d22de21",
-      "line": 887,
+      "fingerprint": "af6b781010242012ef6b6b68e53cb9c67f437ab507f07e49c64c3b3e1c173f64",
+      "line": 890,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -690,8 +679,8 @@
     {
       "disposition": "closed_command_set",
       "evidence": "_run executes only the fixed git diff command assembled by changed_retained_python_files; the base revision is validated and paths are constrained to tracked Python files.",
-      "fingerprint": "f2d3dc57a2e5beb06b68e7ba32c995a1b84904ade7c12b8c48cd83cda0b05daf",
-      "line": 43,
+      "fingerprint": "0c7bda9c340a0f0e6acc780aa3af81a37d1d283eceb9d55c70113605d40f0e4e",
+      "line": 44,
       "path": "src/quality/changed_suppressions.py",
       "targets": [
         "git"
@@ -864,19 +853,31 @@
       "fingerprint": "65f67f50bbc9c1244ddf5dad81b269cb35803c6b892709b8beb25a3b6ac9e097",
       "line": 1020,
       "path": "tests/test_reconcile_quality_baseline.py"
+    },
+    {
+      "disposition": "closed_command_set",
+      "evidence": "run_checks invokes this Python interpreter with -m and only the fixed ruff, pyright, or pytest module choices; selected retained paths are separate argv entries and no shell is used.",
+      "fingerprint": "dc5eb0382df532053ed604cc8b92697e554401f92ae386453fdb4df5350ea7a3",
+      "line": 58,
+      "path": "src/quality/check_changed.py",
+      "targets": [
+        "ruff",
+        "pyright",
+        "pytest"
+      ]
     }
   ],
   "graph_provenance": {
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "1f080690bc38cc832b676f3c08a6902b12a890ad93a9f93118486c10253f1590",
+      "source_sha256": "30ea5289efcb0d5dfa07f459c7f8c8ad57215b7d4f682927a42cf7f9c1962c7c",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "2c5546a978eda36177551259cfdeba5862c9e68fb1f40a390069a5cd7f3c2d9b"
+    "source_manifest_sha256": "a948807b3de034962a4e33a66f4f8d5da32c75bd783116a53d43e01441588954"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }

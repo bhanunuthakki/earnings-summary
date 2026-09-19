@@ -145,9 +145,9 @@ DEFAULT_SCENARIO_WEIGHTS: dict[str, float] = {"bull": 0.25, "base": 0.50, "bear"
 # terminal EBITDA is burdened by SBC before the exit multiple applies. Optional: a
 # pre-SBC workbook has no rows 65/66, so both read back as 0.0 — i.e. exactly the
 # old "SBC never charged" behaviour, keeping legacy workbooks/fixtures unchanged.
-_DB_SBC_BAND = 64
-_DB_SBC_NEAR = 65
-_DB_SBC_TERM = 66
+DASHBOARD_SBC_BAND = 64
+DASHBOARD_SBC_NEAR = 65
+DASHBOARD_SBC_TERM = 66
 
 SENSITIVITY_SHEET = "Sensitivity"
 
@@ -167,8 +167,8 @@ _PRESERVED_SCALAR_ROWS: tuple[int, ...] = (
     _DB_CRP,
     _DB_MULT,
     _DB_TG,
-    _DB_SBC_NEAR,
-    _DB_SBC_TERM,
+    DASHBOARD_SBC_NEAR,
+    DASHBOARD_SBC_TERM,
 )
 
 PERPETUITY = "Perpetuity"
@@ -855,8 +855,8 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         curv = _num(dsh, _DB_CURV, 2) or GROWTH_FADE_CURVATURE
         # SBC % inputs are optional: a pre-SBC workbook has no rows 65/66, so both
         # read back as 0.0 (the old "SBC never charged" behaviour).
-        sbc_near = _num(dsh, _DB_SBC_NEAR, 2) or 0.0
-        sbc_term = _num(dsh, _DB_SBC_TERM, 2) or 0.0
+        sbc_near = _num(dsh, DASHBOARD_SBC_NEAR, 2) or 0.0
+        sbc_term = _num(dsh, DASHBOARD_SBC_TERM, 2) or 0.0
         exit_mult = _num(dsh, _DB_MULT, 2)
         tg = _num(dsh, _DB_TG, 2)
         price = _num(dsh, _DB_PRICE, 2)
@@ -1439,8 +1439,8 @@ _SCALAR_ROW_ATTR: tuple[tuple[int, str], ...] = (
     (_DB_CRP, "country_risk_premium"),
     (_DB_MULT, "exit_multiple"),
     (_DB_TG, "terminal_growth_g"),
-    (_DB_SBC_NEAR, "near_sbc_pct"),
-    (_DB_SBC_TERM, "terminal_sbc_pct"),
+    (DASHBOARD_SBC_NEAR, "near_sbc_pct"),
+    (DASHBOARD_SBC_TERM, "terminal_sbc_pct"),
 )
 
 

@@ -31,6 +31,7 @@ import sqlite3
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 from models.facts import FiscalPeriodType, SegmentFact, Unit
 from pipeline.segment_junction_writer import write_segment_facts_via_junction
@@ -111,20 +112,24 @@ def _resolve_periods(
     """
     if not section or not isinstance(section[0], dict):
         return []
-    title_vals = next(iter(section[0].values()))
+    title_row = cast("dict[str, object]", section[0])
+    title_vals = next(iter(title_row.values()))
     if not isinstance(title_vals, list):
         return []
     items_row: list[object] | None = None
     for row in section[:5]:
         if isinstance(row, dict) and "items" in row:
-            v = row["items"]
+            v = cast("dict[str, object]", row)["items"]
             if isinstance(v, list):
-                items_row = v
+                items_row = cast("list[object]", v)
             break
     if items_row is None:
         return []
 
-    descriptors = [d for d in title_vals if d is not None]
+    title_descriptors = cast("list[object]", title_vals)
+    if any(value is not None and not isinstance(value, str) for value in title_descriptors):
+        return []
+    descriptors = [value for value in title_descriptors if isinstance(value, str)]
     n_cols = len(items_row)
     if not descriptors:
         per_col_descriptor: list[str | None] = [None] * n_cols
@@ -192,10 +197,10 @@ def _find_segment_oi_sections(record: dict[str, object]) -> list[str]:
     for key, section in record.items():
         if not isinstance(section, list) or not section:
             continue
-        first = section[0]
+        first = cast("list[object]", section)[0]
         if not isinstance(first, dict):
             continue
-        title = next(iter(first.keys()), "")
+        title = next(iter(cast("dict[str, object]", first)), "")
         title_lower = title.lower()
         if "segment" not in title_lower:
             continue
@@ -203,26 +208,6 @@ def _find_segment_oi_sections(record: dict[str, object]) -> list[str]:
             continue
         matches.append(key)
     return matches
-
-
-def _parse_period_ends(section: list[object]) -> list[datetime] | None:
-    """Find the 'items' row and parse its column headers as fiscal-year-end dates."""
-    for row in section[:5]:
-        if not isinstance(row, dict):
-            continue
-        items = row.get("items")
-        if not isinstance(items, list):
-            continue
-        out: list[datetime] = []
-        for s in items:
-            if not isinstance(s, str):
-                return None
-            d = _parse_date(s)
-            if d is None:
-                return None
-            out.append(d)
-        return out
-    return None
 
 
 # Each label-matcher returns True if the row is a candidate for that
@@ -327,7 +312,7 @@ def _normalize_segment_name(label: str) -> str:
 def _emit_metric(
     segment: str,
     metric: str,
-    values_per_period: list[float | int],
+    values_per_period: list[object],
     periods: list[tuple[FiscalPeriodType | None, datetime | None]],
     ticker: str,
     source_doc_id: int,
@@ -365,7 +350,7 @@ def _emit_metric(
 
 def _emit_oi(
     segment: str,
-    oi_per_period: list[float | int],
+    oi_per_period: list[object],
     periods: list[tuple[FiscalPeriodType | None, datetime | None]],
     ticker: str,
     source_doc_id: int,
@@ -401,8 +386,8 @@ def _emit_oi(
 
 def _emit_oi_from_rev_costs(
     segment: str,
-    revenue_per_period: list[float | int],
-    costs_per_period: list[float | int],
+    revenue_per_period: list[object],
+    costs_per_period: list[object],
     periods: list[tuple[FiscalPeriodType | None, datetime | None]],
     ticker: str,
     source_doc_id: int,
@@ -452,11 +437,11 @@ def _walk_section(
     """
     facts: list[SegmentFact] = []
     current_segment: str | None = None
-    pending_revenue: list[float | int] | None = None
-    pending_costs: list[float | int] | None = None
-    pending_oi: list[float | int] | None = None
-    pending_capex: list[float | int] | None = None
-    pending_headcount: list[float | int] | None = None
+    pending_revenue: list[object] | None = None
+    pending_costs: list[object] | None = None
+    pending_oi: list[object] | None = None
+    pending_capex: list[object] | None = None
+    pending_headcount: list[object] | None = None
 
     def flush() -> None:
         nonlocal pending_revenue, pending_costs, pending_oi
@@ -513,11 +498,15 @@ def _walk_section(
         pending_headcount = None
 
     for row in section[2:]:
-        if not isinstance(row, dict) or len(row) != 1:
+        if not isinstance(row, dict):
             continue
-        label, values = next(iter(row.items()))
-        if not isinstance(values, list):
+        row_dict = cast("dict[str, object]", row)
+        if len(row_dict) != 1:
             continue
+        label, raw_values = next(iter(row_dict.items()))
+        if not isinstance(raw_values, list):
+            continue
+        values = cast("list[object]", raw_values)
         if _is_blank_row(values):
             if _is_xbrl_filler_label(label):
                 continue
@@ -525,15 +514,15 @@ def _walk_section(
             current_segment = label
             continue
         if _is_revenue_label(label):
-            pending_revenue = values  # type: ignore[assignment]
+            pending_revenue = values
         elif _is_costs_label(label):
-            pending_costs = values  # type: ignore[assignment]
+            pending_costs = values
         elif _is_oi_label(label):
-            pending_oi = values  # type: ignore[assignment]
+            pending_oi = values
         elif _is_capex_label(label):
-            pending_capex = values  # type: ignore[assignment]
+            pending_capex = values
         elif _is_headcount_label(label):
-            pending_headcount = values  # type: ignore[assignment]
+            pending_headcount = values
     flush()
     return facts
 
@@ -545,13 +534,19 @@ def extract_segment_oi_from_record(
     section_keys = _find_segment_oi_sections(record)
     out: list[SegmentFact] = []
     for key in section_keys:
-        section = record[key]
-        if not isinstance(section, list):
+        raw_section = record[key]
+        if not isinstance(raw_section, list):
             continue
+        section = cast("list[object]", raw_section)
         periods = _resolve_periods(section)
         if not periods:
             continue
-        title = next(iter(section[0].keys()), "") if isinstance(section[0], dict) else ""
+        title_row = section[0]
+        title = (
+            next(iter(cast("dict[str, object]", title_row)), "")
+            if isinstance(title_row, dict)
+            else ""
+        )
         scale = _detect_scale(title)
         out.extend(_walk_section(section, periods, ticker, source_doc_id, scale))
     return out
@@ -597,7 +592,9 @@ def extract_segment_oi_facts(conn: sqlite3.Connection, document_id: int, project
     if not isinstance(record, dict):
         raise ValueError(f"Expected dict in {abs_path}, got {type(record).__name__}")
 
-    facts = extract_segment_oi_from_record(record, source_doc_id=document_id, ticker=ticker)
+    facts = extract_segment_oi_from_record(
+        cast("dict[str, object]", record), source_doc_id=document_id, ticker=ticker
+    )
     inserted = _insert_segment_facts(conn, facts)
     conn.commit()
     return inserted

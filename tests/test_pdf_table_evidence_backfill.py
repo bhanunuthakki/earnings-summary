@@ -2,17 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import fitz
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from execution.backfill_pdf_table_evidence import main
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -26,48 +23,13 @@ from provenance.pdf_table_backfill import (
     backfill_pdf_table_evidence,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 T0 = datetime(2026, 7, 27, 12, tzinfo=UTC)
 T1 = datetime(2026, 7, 27, 13, tzinfo=UTC)
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-@pytest.fixture(scope="session")
-def pdf_table_backfill_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("pdf-table-backfill-schema") / "template.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    conn.close()
-    base_revision = "0213_decision_draft_provider_id"
-    config = _config(path)
-    command.stamp(config, base_revision)
-    command.upgrade(config, "head")
-    return path
-
-
 @pytest.fixture
-def db_path(
-    tmp_path: Path,
-    pdf_table_backfill_template: Path,
-) -> Iterator[Path]:
-    path = tmp_path / "case.db"
-    shutil.copy2(pdf_table_backfill_template, path)
-    yield path
+def db_path(tmp_path: Path, migrated_db: Callable[[Path], Path]) -> Path:
+    return migrated_db(tmp_path / "case.db")
 
 
 def _pdf(*, image_only: bool = False) -> bytes:

@@ -39,7 +39,7 @@ import secrets
 import sqlite3
 import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -207,7 +207,7 @@ class Comment(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     addressed_at: datetime | None = None
     resolution_note: str | None = None
-    follow_up_thread: list[ThreadEntry] = Field(default_factory=list)
+    follow_up_thread: list[ThreadEntry] = Field(default_factory=list[ThreadEntry])
 
 
 class CommentStore(BaseModel):
@@ -215,7 +215,7 @@ class CommentStore(BaseModel):
 
     ticker: str
     report_date: date
-    comments: list[Comment] = Field(default_factory=list)
+    comments: list[Comment] = Field(default_factory=list[Comment])
 
 
 # ---------------------------------------------------------------------------
@@ -236,16 +236,23 @@ def _store_path(repo_root: Path, ticker: str, report_date: date) -> Path:
     )
 
 
+class CommentStoreReadError(RuntimeError):
+    """An existing comment store is unavailable; mutation must preserve its bytes."""
+
+
 def load_store(repo_root: Path, ticker: str, report_date: date) -> CommentStore:
     """Read the on-disk comment store; return an empty store when missing."""
     path = _store_path(repo_root, ticker, report_date)
-    if not path.exists():
-        return CommentStore(ticker=ticker.upper(), report_date=report_date)
     try:
-        return CommentStore.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # Corrupt store — return empty rather than crash the report.
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return CommentStore(ticker=ticker.upper(), report_date=report_date)
+    except (OSError, UnicodeError):
+        raise CommentStoreReadError("comment store is unreadable; original preserved") from None
+    try:
+        return CommentStore.model_validate_json(raw)
+    except ValueError:
+        raise CommentStoreReadError("comment store is invalid; original preserved") from None
 
 
 def save_store(repo_root: Path, store: CommentStore) -> None:
@@ -326,8 +333,8 @@ def _path_lock(path: Path) -> threading.Lock:
         return lock
 
 
-@contextmanager  # pyright: ignore[reportDeprecated]  # false-positive in pyright 1.1.409
-def store_lock(repo_root: Path, ticker: str, report_date: date) -> Iterator[None]:
+@contextmanager
+def store_lock(repo_root: Path, ticker: str, report_date: date) -> Generator[None]:
     """Serialise read-modify-write on a single comments file.
 
     Use around every mutating sequence: ``load_store → mutate → save_store``.

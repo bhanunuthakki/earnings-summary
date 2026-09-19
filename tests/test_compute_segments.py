@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -11,10 +12,10 @@ from pathlib import Path
 import pytest
 
 from compute.segments import (
-    _passes_reconciliation,
     extract_facts_from_record,
     extract_segment_facts,
     insert_segment_facts,
+    passes_reconciliation,
 )
 from models.facts import (
     Currency,
@@ -188,7 +189,7 @@ def test_reconciliation_accepts_well_formed_record(conn: sqlite3.Connection) -> 
         value=350_018_000_000,
     )
     record = FmpSegmentRecord.model_validate(_PRODUCT_SAMPLE)  # sum ≈ 325B; ratio ≈ 0.93
-    assert _passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=42) is True
+    assert passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=42) is True
 
 
 def test_reconciliation_rejects_contaminated_record(
@@ -216,7 +217,7 @@ def test_reconciliation_rejects_contaminated_record(
         },
     }
     record = FmpSegmentRecord.model_validate(contaminated)
-    assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=99) is False
+    assert passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=99) is False
     err = capsys.readouterr().err
     log = json.loads(err.strip().splitlines()[-1])
     assert log["event"] == "segment_record_rejected"
@@ -240,13 +241,13 @@ def test_reconciliation_accepts_under_revenue(conn: sqlite3.Connection) -> None:
             "data": {"North America": 30_000_000_000, "EMEA": 18_000_000_000},  # ratio 0.74
         }
     )
-    assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=7) is True
+    assert passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=7) is True
 
 
 def test_reconciliation_no_revenue_accepts(conn: sqlite3.Connection) -> None:
     """If income_statement hasn't been ingested yet, can't disprove — accept."""
     record = FmpSegmentRecord.model_validate(_GEO_SAMPLE)
-    assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1) is True
+    assert passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1) is True
 
 
 def test_insert_segment_facts_writes_to_junction(conn: sqlite3.Connection) -> None:
@@ -300,7 +301,7 @@ def test_reconciliation_at_tolerance_boundary(conn: sqlite3.Connection) -> None:
             "data": {"A": 60_000_000, "B": 50_000_000},  # sum=110M; ratio=1.10 (==cap)
         }
     )
-    assert _passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=1) is True
+    assert passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=1) is True
 
     record_over = FmpSegmentRecord.model_validate(
         {
@@ -312,7 +313,7 @@ def test_reconciliation_at_tolerance_boundary(conn: sqlite3.Connection) -> None:
             "data": {"A": 60_000_000, "B": 51_000_000},  # sum=111M; ratio=1.11 (>cap)
         }
     )
-    assert _passes_reconciliation(conn, record_over, "revenue_by_product", source_doc_id=1) is False
+    assert passes_reconciliation(conn, record_over, "revenue_by_product", source_doc_id=1) is False
 
 
 # ---------------------------------------------------------------------------
@@ -328,76 +329,17 @@ def test_reconciliation_at_tolerance_boundary(conn: sqlite3.Connection) -> None:
 # shape for segments" and its segment_dimensions.locator gap.
 # ---------------------------------------------------------------------------
 
-_PROVENANCE_SCHEMA = """
-CREATE TABLE documents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    doc_type TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    fetched_at TIMESTAMP NOT NULL,
-    fetch_status TEXT NOT NULL,
-    raw_bytes_size INTEGER NOT NULL
-);
-CREATE TABLE segment_periods (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16) NOT NULL,
-    period_end DATETIME NOT NULL,
-    fiscal_period_type VARCHAR(8) NOT NULL,
-    source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-    currency VARCHAR(8),
-    unit VARCHAR(16) NOT NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    period_basis VARCHAR(16) NOT NULL DEFAULT 'discrete',
-    raw_period_label TEXT,
-    method_version VARCHAR(32),
-    CONSTRAINT uq_segment_periods_provenance UNIQUE
-      (ticker, period_end, fiscal_period_type, source_doc_id)
-);
-CREATE TABLE segment_dimensions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    period_id INTEGER NOT NULL REFERENCES segment_periods(id),
-    dim_type VARCHAR(16) NOT NULL,
-    dim_name VARCHAR(128) NOT NULL,
-    value NUMERIC(20, 4) NOT NULL,
-    metric VARCHAR(32) NOT NULL,
-    unit VARCHAR(16),
-    disclosure_status VARCHAR(16) NOT NULL DEFAULT 'reported',
-    method_version VARCHAR(32),
-    confidence REAL NOT NULL DEFAULT 1.0,
-    extracted_by VARCHAR(64),
-    locator TEXT,
-    derived_from TEXT,
-    supersedes_id INTEGER
-);
-CREATE TABLE financial_facts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    period_end TIMESTAMP NOT NULL,
-    fiscal_period_type TEXT NOT NULL,
-    line_item TEXT NOT NULL,
-    value NUMERIC(24, 6) NOT NULL,
-    currency TEXT,
-    unit TEXT NOT NULL,
-    source_doc_id INTEGER NOT NULL,
-    confidence REAL NOT NULL DEFAULT 1.0
-);
-"""
-
 
 @pytest.fixture
-def prov_conn() -> sqlite3.Connection:
-    """A post-0165/0166 schema (segment_periods + segment_dimensions carry
-    the full provenance column set) — distinct from the module-level `conn`
-    fixture, whose schema predates those migrations and is kept as-is so the
-    existing pre-provenance-column tests above keep exercising the writer's
-    graceful-degrade path."""
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    c.executescript(_PROVENANCE_SCHEMA)
-    c.commit()
-    return c
+def prov_conn(migrated_db: Callable[..., Path], tmp_path: Path) -> Iterator[sqlite3.Connection]:
+    """Use the current migrated contract for provenance and owner overrides."""
+    path = migrated_db(tmp_path / "segments.sqlite")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _write_meli_cache(project_root: Path, record: dict[str, object]) -> None:

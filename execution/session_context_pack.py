@@ -43,14 +43,15 @@ import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from clock import now_naive_utc  # noqa: E402
-from synthesis.insights import InsightRow, list_insights  # noqa: E402
-from synthesis.tenets import list_tenets  # noqa: E402
-from user_state._db import open_conn  # noqa: E402
-from user_state.notes import AnalystNoteRow, list_notes  # noqa: E402
+from clock import now_naive_utc
+from synthesis.insights import InsightRow, list_insights
+from synthesis.tenets import list_tenets
+from user_state._db import open_conn
+from user_state.notes import AnalystNoteRow, list_notes
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Caps keep the pack scannable at session-start — a wall of history is worse
 # than a capped, newest-first slice (mirrors the anchor loaders' char caps).
@@ -272,53 +273,27 @@ def _render_open_decisions(db_path: Path) -> list[str]:
 
 
 def _render_research_prompts(db_path: Path) -> list[str]:
+    from research.proposals import list_session_prompt_tasks
+
     lines = ["## Research Tasks -> Claude Session", ""]
     try:
-        conn = open_conn(db_path)
+        tasks = list_session_prompt_tasks(db_path=db_path, limit=_RESEARCH_TASK_CAP)
     except (FileNotFoundError, RuntimeError) as exc:
         _log({"event": "research_tasks_db_unavailable", "error": str(exc)})
-        lines.append("_Unavailable — DB not found._")
-        lines.append("")
-        return lines
-    try:
-        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(research_tasks)")}
-        if "run_id" not in cols:
-            # Older DB: the metadata column doesn't exist yet. Render an
-            # empty section with a note rather than crashing — the pack must
-            # always render against a partially migrated DB.
-            lines.append(
-                "_None — this DB has no `run_id` metadata column; "
-                "no research-task prompts to show yet._"
-            )
-            lines.append("")
-            return lines
-        rows = conn.execute(
-            "SELECT id, ticker, claim, "
-            "json_extract(run_id, '$.session_prompt') AS session_prompt, status "
-            "FROM research_tasks "
-            "WHERE CASE WHEN json_valid(run_id) THEN "
-            "json_type(run_id) = 'object' "
-            "AND json_type(run_id, '$.session_prompt') = 'text' "
-            "AND TRIM(json_extract(run_id, '$.session_prompt')) != '' "
-            "ELSE 0 END "
-            "ORDER BY id DESC LIMIT ?",
-            (_RESEARCH_TASK_CAP,),
-        ).fetchall()
+        return [*lines, "_Unavailable — DB not found._", ""]
     except sqlite3.Error as exc:
         _log({"event": "research_tasks_query_failed", "error": str(exc)})
         lines.append("_Unavailable — query failed against this DB._")
         lines.append("")
         return lines
-    finally:
-        conn.close()
-    for r in rows:
-        ticker = f" ({r['ticker']})" if r["ticker"] else ""
-        lines.append(f"### Task #{r['id']}{ticker} — {r['status']}")
-        lines.append(f"_Claim:_ {_flatten(str(r['claim']))}")
+    for task in tasks:
+        ticker = f" ({task.ticker})" if task.ticker else ""
+        lines.append(f"### Task #{task.id}{ticker} — {task.status}")
+        lines.append(f"_Claim:_ {_flatten(task.claim)}")
         lines.append("")
-        lines.append(str(r["session_prompt"]).strip())
+        lines.append(str(task.metadata["session_prompt"]).strip())
         lines.append("")
-    if not rows:
+    if not tasks:
         lines.append("_None pending._")
         lines.append("")
     return lines

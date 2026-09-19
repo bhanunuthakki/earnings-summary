@@ -31,13 +31,14 @@ from io import StringIO
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import db  # noqa: E402
-from llm.contracts import PRESSURE_TEST_SCHEMA, PressureTestPayload  # noqa: E402
-from llm.structured import call_llm_structured  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+import db
+from llm.contracts import PRESSURE_TEST_SCHEMA, PressureTestPayload
+from llm.structured import call_llm_structured
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,10 +69,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     context_md = _assemble_corpus_md(ticker, repo_root, db_path)
-    result = _call_pressure_test(ticker, thesis, context_md)
+    result = generate_pressure_test(ticker, thesis, context_md)
 
     audit_path = _write_audit(repo_root, ticker, thesis, result)
-    diligence_path = _append_to_diligence(repo_root, ticker, thesis, result)
+    diligence_path = append_pressure_test_to_diligence(repo_root, ticker, thesis, result)
 
     print(
         json.dumps(
@@ -288,7 +289,7 @@ def _load_recent_transcripts(repo_root: Path, ticker: str, n: int) -> list[tuple
     return out
 
 
-def _call_pressure_test(ticker: str, thesis: str, context_md: str) -> PressureTestPayload:
+def generate_pressure_test(ticker: str, thesis: str, context_md: str) -> PressureTestPayload:
     """Return a validated pressure-test; provider/repair failures remain exceptions."""
     prompt = f"""You are a senior buy-side analyst stress-testing an investment thesis BEFORE
 a portfolio initiation. Your job is to find the weak points, not to agree.
@@ -356,7 +357,7 @@ def _write_audit(repo_root: Path, ticker: str, thesis: str, result: PressureTest
     return path
 
 
-def _append_to_diligence(
+def append_pressure_test_to_diligence(
     repo_root: Path, ticker: str, thesis: str, result: PressureTestPayload
 ) -> Path | None:
     """Append a §7 Thesis pressure-test section to the diligence markdown.

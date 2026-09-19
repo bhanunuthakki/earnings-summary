@@ -15,39 +15,34 @@ Layers:
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import advisor.scoring as scoring_mod  # noqa: E402
-from advisor.scoring import (  # noqa: E402
+import advisor.scoring as scoring_mod
+from advisor.scoring import (
     grade_directional,
     price_return_from_cache,
     run_scoring,
     score_memo,
 )
-from advisor.store import (  # noqa: E402
+from advisor.store import (
     AdvisorMemoRow,
     StanceScoreRow,
     get_memo,
     insert_memo,
     list_scores_for_memos,
 )
-from pipeline.advisor_memos_panel import compose_memos_page  # noqa: E402
+from pipeline.advisor_memos_panel import compose_memos_page
 
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    return migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    return migrated_db(db)
 
 
 def _write_price_cache(repo_root: Path, ticker: str, rows: list[tuple[str, float]]) -> None:

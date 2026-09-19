@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -151,30 +152,30 @@ def test_capture_box_has_coach_mount_between_cap_row_and_list(db_path: Path) -> 
 
 def test_capture_js_renders_pledge_challenge_and_receipt(db_path: Path) -> None:
     from pipeline.ledger_panel import (
-        _CAPTURE_JS,  # pyright: ignore[reportPrivateUsage]  # coaching-render contract under test
+        LEDGER_CAPTURE_JS,
     )
 
     # The renderer branches on both fields the server returns and never on
     # ticker/needs_ticker alone (that stays the plain 4s status fallback).
-    assert "res.pledge_challenge" in _CAPTURE_JS
-    assert "res.annotated_decision_id" in _CAPTURE_JS
-    assert "res.wondering_task_id" not in _CAPTURE_JS or "ledger-list" in _CAPTURE_JS
+    assert "res.pledge_challenge" in LEDGER_CAPTURE_JS
+    assert "res.annotated_decision_id" in LEDGER_CAPTURE_JS
+    assert "res.wondering_task_id" not in LEDGER_CAPTURE_JS or "ledger-list" in LEDGER_CAPTURE_JS
     # Escaped before injection (challenge text carries ** and tickers).
-    assert "function esc(" in _CAPTURE_JS
-    assert "replace(/&/g" in _CAPTURE_JS
+    assert "function esc(" in LEDGER_CAPTURE_JS
+    assert "replace(/&/g" in LEDGER_CAPTURE_JS
     # Newlines become <br>, not raw markdown bold rendering.
-    assert "<br>" in _CAPTURE_JS
+    assert "<br>" in LEDGER_CAPTURE_JS
     # The annotation tap re-POSTs the SAME endpoint (fills the newest pending
     # stub) rather than a separate annotate route.
-    assert _CAPTURE_JS.count("/api/capture/text") == 2
+    assert LEDGER_CAPTURE_JS.count("/api/capture/text") == 2
     # The receipt doorway is a real decisions_record panel hash, built by
     # interpolation (not a literal '#dec...' — see the guard note at the top
     # of the module).
-    assert "/#decisions_record" in _CAPTURE_JS
-    assert "__DECISIONS_HASH__" not in _CAPTURE_JS
+    assert "/#decisions_record" in LEDGER_CAPTURE_JS
+    assert "__DECISIONS_HASH__" not in LEDGER_CAPTURE_JS
     # Dismiss is plain element removal, no CCOverlay (inline content).
-    assert "data-coach-dismiss" in _CAPTURE_JS
-    assert "CCOverlay" not in _CAPTURE_JS
+    assert "data-coach-dismiss" in LEDGER_CAPTURE_JS
+    assert "CCOverlay" not in LEDGER_CAPTURE_JS
 
 
 def test_owner_utterances_never_use_window_prompt() -> None:
@@ -200,15 +201,15 @@ def test_jump_toolbar_has_no_dead_onmymind_chip_when_flag_off() -> None:
     doesn't render is the broken doorway the audit fought. Off, the front feed
     is the plain Musings list, so the chip reads 'Musings' instead."""
     from pipeline.ledger_panel import (
-        _jump_chip_toolbar,  # pyright: ignore[reportPrivateUsage]  # toolbar contract under test
+        render_ledger_jump_toolbar,
     )
 
-    off = _jump_chip_toolbar({}, onmymind_on=False)
+    off = render_ledger_jump_toolbar({}, onmymind_on=False)
     assert "On My Mind" not in off
     assert "ledger-jump-onmymind" not in off
     assert "ledger-jump-musings" in off
 
-    on = _jump_chip_toolbar({}, onmymind_on=True)
+    on = render_ledger_jump_toolbar({}, onmymind_on=True)
     assert "ledger-jump-onmymind" in on
     assert "ledger-jump-musings" not in on
 
@@ -289,7 +290,7 @@ def test_proposal_group_card_is_div_balanced() -> None:
     screen of wasted space"). A body with a markdown table exercises the inner
     table-scroll <div> that made the miscount easy to miss."""
     from pipeline.ledger_panel import (
-        _proposal_group_card,  # pyright: ignore[reportPrivateUsage]
+        render_research_proposal_group,
     )
     from research.proposals import ResearchProposal
 
@@ -307,7 +308,7 @@ def test_proposal_group_card_is_div_balanced() -> None:
         provenance="engine",
         tainted_by_proposal_id=None,
     )
-    html = _proposal_group_card([prop])
+    html = render_research_proposal_group([prop])
     assert html.count("<div") == html.count("</div>"), (
         f"unbalanced <div>s: {html.count('<div')} open vs {html.count('</div>')} close"
     )
@@ -319,11 +320,11 @@ def test_onmymind_js_has_no_dead_discuss_popup_branch() -> None:
     window.open(thread_url) branch was unreachable from the web. The
     server-side discuss verb stays — Telegram uses it."""
     from pipeline.ledger_panel import (
-        _ONMYMIND_JS,  # pyright: ignore[reportPrivateUsage]  # dead-branch regression guard
+        ON_MY_MIND_CARD_JS,
     )
 
-    assert "thread_url" not in _ONMYMIND_JS
-    assert "window.open" not in _ONMYMIND_JS
+    assert "thread_url" not in ON_MY_MIND_CARD_JS
+    assert "window.open" not in ON_MY_MIND_CARD_JS
 
 
 def test_incorporated_ladder_badge_is_a_research_doorway(db_path: Path) -> None:
@@ -368,9 +369,11 @@ def test_queues_summary_reflects_armed_falsifiers(
     monkeypatch.setattr(
         lp,
         "render_armed_falsifiers_table",
-        lambda _db: (
-            '<h4 class="ledger-armed-h">Armed falsifiers (184)</h4>'
-            '<table class="ledger-armed-table"></table>'
+        Mock(
+            return_value=(
+                '<h4 class="ledger-armed-h">Armed falsifiers (184)</h4>'
+                '<table class="ledger-armed-table"></table>'
+            )
         ),
     )
     html = lp.render_ledger_panel(db_path)

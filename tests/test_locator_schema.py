@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -22,34 +22,28 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from pydantic import ValidationError
-
-from alembic import command
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from backfill_document_accessions import (  # noqa: E402
+from backfill_document_accessions import (
     accession_filed_map,
     backfill,
     derive_accession,
     normalize_accession,
 )
+from pydantic import ValidationError
 
-from compute._common import insert_financial_facts  # noqa: E402
-from models.facts import (  # noqa: E402
+from alembic import command
+from compute._common import insert_financial_facts
+from models.facts import (
     Currency,
     FactLocator,
     FinancialFact,
     FiscalPeriodType,
     Unit,
 )
-from pipeline.restatement_detector import (  # noqa: E402
+from pipeline.restatement_detector import (
     insert_kpi_with_restatement_detection,
     insert_with_restatement_detection,
 )
-from provenance.evidence_ledger import (  # noqa: E402
+from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
     EvidenceLedger,
@@ -57,6 +51,9 @@ from provenance.evidence_ledger import (  # noqa: E402
     ExtractionRun,
     SourceObservation,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 PERIOD_END = datetime(2025, 12, 31)
 
@@ -116,6 +113,7 @@ CREATE TABLE kpi_facts (
 def _alembic_cfg(db: Path) -> Config:
     cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    cfg.set_main_option("version_locations", str(PROJECT_ROOT / "alembic" / "versions_archived"))
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
     return cfg
 
@@ -323,7 +321,7 @@ def test_upgrade_noops_when_fact_tables_absent(tmp_path: Path) -> None:
         conn.close()
     assert "documents" not in tables
     assert "financial_facts" not in tables
-    # The chain must run through to the CURRENT head — not a hardcoded
+    # The historical chain must run through to its archived head — not a hardcoded
     # revision, which broke on the first migration added after 0075.
     assert version == ScriptDirectory.from_config(_alembic_cfg(db)).get_current_head()
 
@@ -494,11 +492,12 @@ def test_accession_filed_map(tmp_path: Path) -> None:
     assert accession_filed_map(junk) == {}
 
 
-def test_backfill_derives_and_is_idempotent(tmp_path: Path) -> None:
+def test_backfill_derives_and_is_idempotent(
+    tmp_path: Path, migrated_db: Callable[[Path], Path]
+) -> None:
     repo = tmp_path / "repo"
     db = tmp_path / "backfill.db"
-    _create_pre0075_db(db)
-    _migrate_to_head(db)
+    migrated_db(db)
     _write_companyfacts(repo, "TST")
 
     conn = _connect(db)
@@ -556,11 +555,12 @@ def test_backfill_derives_and_is_idempotent(tmp_path: Path) -> None:
     assert (again.accession_set, again.filing_date_set) == (0, 0)
 
 
-def test_backfill_dry_run_and_ticker_filter(tmp_path: Path) -> None:
+def test_backfill_dry_run_and_ticker_filter(
+    tmp_path: Path, migrated_db: Callable[[Path], Path]
+) -> None:
     repo = tmp_path / "repo"
     db = tmp_path / "dry.db"
-    _create_pre0075_db(db)
-    _migrate_to_head(db)
+    migrated_db(db)
     _write_companyfacts(repo, "TST")
 
     conn = _connect(db)

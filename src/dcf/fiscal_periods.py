@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 
 DEFAULT_PERIODS: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4")
 
 
 def detect_fy_periods(
-    records_i: dict[tuple[int, str], object],
+    records_i: Mapping[tuple[int, str], object],
     default: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4"),
 ) -> tuple[str, ...]:
     """Canonical period labels that make up ONE fiscal year for this issuer.

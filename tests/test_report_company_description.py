@@ -9,31 +9,56 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from io import StringIO
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from compute.company_description import (
-    _coerce_named_rows,
-    _extract_relevant_text,
-    _flatten,
-    load_description,
-)
+from compute import company_description
+from compute.company_description import extract_for_ticker, extract_relevant_text, load_description
 from report.models import (
     CompanyDescriptionSection,
+    ReportSpec,
     SectionStatus,
     SegmentWeighting,
 )
-from report.renderers.markdown import _company_description as _company_description_md
+from report.renderers.markdown import render as render_markdown
 from report.sections.company_description import build as build_company_description
+
+
+def _render_company_description(section: CompanyDescriptionSection) -> str:
+    """Exercise the public renderer with an otherwise empty validated report."""
+    payload: dict[str, object] = {
+        name: {"status": SectionStatus.MISSING_DATA}
+        for name in (
+            "thesis",
+            "financials",
+            "segments",
+            "earnings",
+            "saydo",
+            "ir_docs",
+            "recent_developments",
+            "bear_case",
+            "provenance",
+            "appendix",
+        )
+    }
+    payload.update(
+        ticker="TEST",
+        generation_date=date(2026, 9, 19),
+        repo_root="/synthetic",
+        snapshot={"status": SectionStatus.MISSING_DATA, "ticker": "TEST", "valuation": {}},
+        company_description=section,
+    )
+    return render_markdown(ReportSpec.model_validate(payload))
+
 
 # ---------------------------------------------------------------------------
 # Test fixtures: minimal-but-real on-disk layout
 # ---------------------------------------------------------------------------
 
 
-_CACHED_RESULT = {
+_CACHED_RESULT: dict[str, object] = {
     "ticker": "TEST",
     "fiscal_year": 2024,
     "source_path": "/fake/path",
@@ -293,9 +318,7 @@ def test_markdown_renderer_emits_pipe_tables(tmp_path: Path) -> None:
         [("2024-12-31", "United States", 1.0)],
     )
     section = build_company_description("TEST", repo)
-    out = StringIO()
-    _company_description_md(out, section)
-    md = out.getvalue()
+    md = _render_company_description(section)
     assert "## §2 Company description" in md
     assert "> TestCo provides cloud + internet services." in md
     assert "### Segment weighting (latest quarter)" in md
@@ -360,9 +383,7 @@ def test_markdown_renderer_emits_platform_overview_when_diagram_present(
     _write_cache(repo, "TEST", _CACHED_RESULT)
     _write_diagram_cache(repo, "TEST", _DIAGRAM_PAYLOAD)
     section = build_company_description("TEST", repo)
-    out = StringIO()
-    _company_description_md(out, section)
-    md = out.getvalue()
+    md = _render_company_description(section)
     assert "### Platform overview" in md
     # Fenced code block carries the box-drawing chars verbatim
     assert "```\n┌──────┐" in md
@@ -382,9 +403,7 @@ def test_markdown_renderer_omits_platform_block_when_diagram_absent(
     repo = _create_repo(tmp_path)
     _write_cache(repo, "TEST", _CACHED_RESULT)
     section = build_company_description("TEST", repo)
-    out = StringIO()
-    _company_description_md(out, section)
-    md = out.getvalue()
+    md = _render_company_description(section)
     assert "### Platform overview" not in md
 
 
@@ -398,25 +417,28 @@ def test_flatten_collects_strings_longer_than_80_chars() -> None:
         "short": "skip me",
         "nested": [{"a": "b" * 100}, ["c" * 200, {"d": "skip"}]],
     }
-    out = sorted(_flatten(payload), key=len)
+    text = extract_relevant_text({"Description of Business": payload})
+    out = sorted(text.splitlines()[1:], key=len)
     assert out == ["b" * 100, "c" * 200]
 
 
 def test_extract_relevant_text_only_keyword_sections() -> None:
     """Only sections whose key matches a business-description keyword are included."""
-    payload = {
+    payload: dict[str, object] = {
         "Cover": ["unrelated table"],
         "Description of Business": [{"text": "z" * 200}],
         "NATURE OF BUSINESS": [{"text": "y" * 200}],
         "Income Taxes": [{"text": "tax stuff " * 50}],
     }
-    text = _extract_relevant_text(payload)
+    text = extract_relevant_text(payload)
     assert "Description of Business" in text
     assert "NATURE OF BUSINESS" in text
     assert "Income Taxes" not in text
 
 
-def test_coerce_named_rows_filters_to_allowed_set() -> None:
+def test_coerce_named_rows_filters_to_allowed_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """LLM cannot smuggle in segment names not in the allowed list."""
     raw = [
         {"name": "Cloud", "description": "ok"},
@@ -424,7 +446,28 @@ def test_coerce_named_rows_filters_to_allowed_set() -> None:
         {"name": "Services", "description": "  "},  # empty desc → None
         "junk",
     ]
-    coerced = _coerce_named_rows(raw, allowed={"Cloud", "Services"})
+    repo = _create_repo(tmp_path)
+    (repo / "data/historical/fmp/TEST_form_10k_2025.json").write_text(
+        json.dumps({"Description of Business": ["synthetic filing text " * 10]})
+    )
+    _seed_segment_rows(
+        repo,
+        "TEST",
+        "revenue_by_product",
+        [
+            ("2025-12-31", "Cloud", 2.0),
+            ("2025-12-31", "Services", 1.0),
+        ],
+    )
+
+    def generated(**kwargs: object) -> str:
+        return json.dumps({"segments": raw})
+
+    monkeypatch.setattr(company_description, "generate_company_description", generated)
+    with sqlite3.connect(repo / "data/portfolio.db") as conn:
+        conn.row_factory = sqlite3.Row
+        result = extract_for_ticker("TEST", repo, conn)
+    coerced = result.segments
     assert coerced == [
         {"name": "Cloud", "description": "ok"},
         {"name": "Services", "description": None},
@@ -471,4 +514,5 @@ def test_segment_weighting_clamps_share_pct_range() -> None:
     """`share_pct` is a decimal fraction in [0,1]; we don't enforce in the model but
     the section builder is the only producer — sanity-check the type."""
     r = SegmentWeighting(name="X", revenue_usd_m=100.0, share_pct=0.42, description=None)
+    assert r.share_pct is not None
     assert 0.0 <= r.share_pct <= 1.0

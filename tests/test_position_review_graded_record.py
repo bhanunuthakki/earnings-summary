@@ -12,54 +12,25 @@ migration sees it mid-flight).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from advisor.position_review import (  # noqa: E402
+from advisor.position_review import (
     PreAnalysis,
     VerdictOutput,
     apply_behavioral_guard,
     graded_sell_record,
 )
 
-PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-# Mirrors tests/test_open_loops.py's _DECISIONS_DDL verbatim (the modern
-# hand-DDL shape the band/guard/prompt all read).
-_DECISIONS_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    conviction VARCHAR(16),
-    outcome_label VARCHAR(16) NOT NULL DEFAULT 'pending',
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
-    scope VARCHAR(16) NOT NULL DEFAULT 'ticker',
-    falsifier TEXT,
-    size_usd FLOAT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-"""
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
 def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "portfolio.db"
-    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_DECISIONS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
+    migrated_db(db)
     return db
 
 
@@ -73,10 +44,14 @@ def _insert_decision(
 ) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
+        artifact = conn.execute(
+            "INSERT INTO llm_artifacts(purpose,input_sha256,generated_at) "
+            "VALUES ('test_fixture','fixture-input','2026-06-01')"
+        ).lastrowid
         conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, outcome_label, decided_by, "
-            "made_at, created_at) VALUES (?, ?, ?, ?, '2026-06-01', '2026-06-01')",
-            (ticker, recommendation_kind, outcome_label, decided_by),
+            "source_artifact_id, made_at, created_at) VALUES (?, ?, ?, ?, ?, '2026-06-01', '2026-06-01')",
+            (ticker, recommendation_kind, outcome_label, decided_by, artifact),
         )
         conn.commit()
     finally:

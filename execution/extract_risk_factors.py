@@ -32,24 +32,25 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import db  # noqa: E402
-from filing_text_fetcher import (  # noqa: E402
+import db
+from filing_text_fetcher import (
     fetch_latest_10k_text,
     load_canonical_narrative,
     split_risk_factors,
 )
-from llm.cli import is_hard_stop  # noqa: E402
-from llm.contracts import (  # noqa: E402
+from llm.cli import is_hard_stop
+from llm.contracts import (
     RISK_FACTOR_CATEGORIES_SCHEMA,
     RISK_FACTOR_DIFF_SCHEMA,
     RiskFactorCategory,
     RiskFactorDiffPayload,
 )
-from llm.structured import call_llm_structured  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from llm.structured import call_llm_structured
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 log = logging.getLogger("extract_risk_factors")
 
@@ -112,7 +113,7 @@ def _categorize_deterministic(heading: str, body: str) -> str | None:
     return None
 
 
-def _llm_classify_risks(
+def classify_risk_factors(
     *, ticker: str, fiscal_year: int, risks: list[tuple[str, str]]
 ) -> dict[int, str]:
     """Batch LLM call: send all uncategorized risks at once and get back
@@ -191,7 +192,7 @@ def _prior_year_index(
     return out
 
 
-def _llm_diff_one(*, ticker: str, heading: str, old: str, new: str) -> str | None:
+def summarize_risk_change(*, ticker: str, heading: str, old: str, new: str) -> str | None:
     """Return a validated material-change summary or a legitimate no-change."""
     prompt = f"""You are summarizing how a single risk factor was reworded between
 two fiscal years of {ticker}'s 10-K.
@@ -279,7 +280,7 @@ def extract_for_ticker(
         # (llm_evals_plan §5.4). Hard stops (budget cap / missing CLI) still
         # propagate — they fail the whole run loudly per is_hard_stop.
         try:
-            llm_map = _llm_classify_risks(
+            llm_map = classify_risk_factors(
                 ticker=ticker, fiscal_year=result.fiscal_year, risks=uncategorized
             )
         except Exception as exc:
@@ -328,7 +329,7 @@ def extract_for_ticker(
                     vs_prior = "reworded"
                     if do_diff:
                         try:
-                            reword_diff = _llm_diff_one(
+                            reword_diff = summarize_risk_change(
                                 ticker=ticker,
                                 heading=heading,
                                 old=str(prior[heading_key].get("body_md") or ""),

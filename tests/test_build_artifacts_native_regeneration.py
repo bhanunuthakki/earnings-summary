@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from db_paths import db_path_context
 from report.models import SectionStatus
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,8 +29,14 @@ def _load_module() -> Any:
 
 
 @pytest.fixture
-def builder() -> Any:
-    return _load_module()
+def builder(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Any:
+    module = _load_module()
+    for name in ("PROJECT_ROOT", "DB_PATH", "DATA_DIR", "FMP_DIR"):
+        monkeypatch.setattr(module.db, name, getattr(module.db, name))
+    with db_path_context(migrated_db(tmp_path / "authority.sqlite")):
+        yield module
 
 
 @pytest.mark.parametrize("purpose", ["bear_case", "qa_topics", "valuation_basis"])
@@ -189,4 +198,7 @@ def test_exec_comp_regeneration_calls_only_alignment_section(
         "purpose": "exec_comp_alignment",
         "status": "ok",
     }
-    assert calls == [{"enable_llm": True, "force_budget_bypass": False, "conn": None}]
+    assert len(calls) == 1
+    assert calls[0]["enable_llm"] is True
+    assert calls[0]["force_budget_bypass"] is False
+    assert isinstance(calls[0]["conn"], sqlite3.Connection)

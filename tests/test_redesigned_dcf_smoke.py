@@ -13,6 +13,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -22,6 +23,31 @@ import pytest
 from dcf import redesign
 
 BUILDER = Path(__file__).resolve().parents[1] / "execution" / "build_redesigned_dcf.py"
+_OVERRIDE_TABLE_SQL = ""
+
+
+@pytest.fixture(scope="module", autouse=True)
+def canonical_override_schema(
+    migrated_db: Callable[..., Path], tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Use the migrated override contract rather than duplicating its schema."""
+    global _OVERRIDE_TABLE_SQL
+    template = migrated_db(tmp_path_factory.mktemp("dcf_smoke_schema") / "template.sqlite")
+    with sqlite3.connect(template) as conn:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='fact_overrides'"
+        ).fetchone()
+    assert row is not None
+    _OVERRIDE_TABLE_SQL = str(row[0]).replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+
+
+def _builder_database(repo: Path) -> Path:
+    database = repo / "data" / "portfolio.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute(_OVERRIDE_TABLE_SQL)
+    return database
+
+
 SHEETS = [
     "Cover",
     "Dashboard",
@@ -200,7 +226,13 @@ def test_builder_produces_valid_nine_sheet_workbook(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture(repo, "TESTCO")
     dest = tmp_path / "TESTCO.xlsx"
-    env = dict(os.environ, DCF_TICKER="TESTCO", DCF_REPO_ROOT=str(repo), DCF_DEST=str(dest))
+    env = dict(
+        os.environ,
+        DCF_TICKER="TESTCO",
+        DCF_REPO_ROOT=str(repo),
+        DCF_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(_builder_database(repo)),
+    )
     proc = subprocess.run(
         [sys.executable, str(BUILDER)],
         env=env,
@@ -449,7 +481,13 @@ def _write_quarters(
 
 
 def _run_builder(repo: Path, ticker: str, dest: Path) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ, DCF_TICKER=ticker, DCF_REPO_ROOT=str(repo), DCF_DEST=str(dest))
+    env = dict(
+        os.environ,
+        DCF_TICKER=ticker,
+        DCF_REPO_ROOT=str(repo),
+        DCF_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(_builder_database(repo)),
+    )
     return subprocess.run(
         [sys.executable, str(BUILDER)],
         env=env,
@@ -547,3 +585,56 @@ def test_builder_handles_semiannual_filer(tmp_path: Path) -> None:
     md = wb["Model"]
     fy_headers = [md.cell(1, c).value for c in range(2, md.max_column + 1)]
     assert "FY2025A" in fy_headers and "FY2026E" in fy_headers, fy_headers
+
+
+@pytest.mark.parametrize("field", ["revenueAvg", "netIncomeAvg"])
+def test_builder_refuses_malformed_consensus(tmp_path: Path, field: str) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture(repo, "TESTCO")
+    estimates = repo / "data/historical/fmp/TESTCO_analyst_estimates_annual.json"
+    estimates.write_text(json.dumps([{"date": "2026-12-31", field: "invalid"}]), encoding="utf-8")
+    destination = tmp_path / "invalid.xlsx"
+    result = subprocess.run(
+        [sys.executable, str(BUILDER)],
+        env=dict(
+            os.environ,
+            DCF_TICKER="TESTCO",
+            DCF_REPO_ROOT=str(repo),
+            DCF_DEST=str(destination),
+            EARNINGS_SUMMARY_DB_PATH=str(_builder_database(repo)),
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "nonnumeric consensus" in result.stderr
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("missing_file", [True, False])
+def test_builder_refuses_missing_profile(tmp_path: Path, missing_file: bool) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture(repo, "TESTCO")
+    profile = repo / "data/historical/fmp/TESTCO_profile.json"
+    if missing_file:
+        profile.unlink()
+    else:
+        profile.write_text("[]", encoding="utf-8")
+    destination = tmp_path / "missing-profile.xlsx"
+    result = subprocess.run(
+        [sys.executable, str(BUILDER)],
+        env=dict(
+            os.environ,
+            DCF_TICKER="TESTCO",
+            DCF_REPO_ROOT=str(repo),
+            DCF_DEST=str(destination),
+            EARNINGS_SUMMARY_DB_PATH=str(_builder_database(repo)),
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "DCF profile is missing or empty" in result.stderr
+    assert not destination.exists()

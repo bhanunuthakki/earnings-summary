@@ -13,53 +13,42 @@ Layers:
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-import advisor.memos as memos_mod  # noqa: E402
-from advisor.context import (  # noqa: E402
+import advisor.memos as memos_mod
+from advisor.context import (
     AdvisorContext,
     SwapCandidate,
     TickerValuation,
     screen_swap_candidates,
 )
-from advisor.memos import generate_next_dollar_memo, run_swap_checks  # noqa: E402
-from advisor.store import AdvisorMemoRow, get_memo, insert_memo, list_memos  # noqa: E402
-from dispatch_registry import Job, Registry  # noqa: E402
-from integrations.portfolio_tracker_client import (  # noqa: E402
+from advisor.memos import generate_next_dollar_memo, run_swap_checks
+from advisor.store import AdvisorMemoRow, get_memo, insert_memo, list_memos
+from dispatch_registry import Job, Registry
+from integrations.portfolio_tracker_client import (
     LivePortfolio,
     PortfolioAnalytics,
 )
-from llm.cli import LLMSetupError  # noqa: E402
-from pipeline.advisor_memos_panel import compose_memos_page  # noqa: E402
-from pipeline.allocation_decisions_panel import SizingAuditRow  # noqa: E402
-from user_state.ledger import list_entries  # noqa: E402
-from user_state.notes import create_note, list_notes  # noqa: E402
+from llm.cli import LLMSetupError
+from pipeline.advisor_memos_panel import compose_memos_page
+from pipeline.allocation_decisions_panel import SizingAuditRow
+from user_state.ledger import list_entries
+from user_state.notes import create_note, list_notes
 
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
 def advisor_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    return migrated_db(
-        db,
-        stamp=_PRIOR_HEAD,
-        archived=True,
-        reanchor_to_active_head=True,
-    )
+    return migrated_db(db)
 
 
 def _memo_summary_line(body: str) -> str:

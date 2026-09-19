@@ -43,14 +43,10 @@ class SchemaRevisionMismatch(sqlite3.OperationalError):
 def expected_head(project_root: Path | None = None) -> str:
     """Return the one Alembic leaf in this checkout, or fail loudly on forks.
 
-    Memoized per resolved root for the life of the process: the parse walks
-    every ``alembic/versions/*.py`` (253 files, ~0.5s on this machine), and
-    ``require_current_for_write`` runs on EVERY guarded writer connection â€”
-    uncached, one Home render's ~75 ``open_conn`` calls took ~42s and read as
-    "the page never loads" (2026-07-31). A checkout's migration set cannot
-    change under a running process, so caching preserves the guard exactly;
-    the mismatch/fork failures still raise on every call (exceptions are
-    never cached by ``lru_cache``)."""
+    Memoized per checkout for the process lifetime because guarded writers
+    consult this on every connection. Running services must restart after a
+    checkout changes. Fork errors are not cached.
+    """
     root = (project_root or Path(__file__).resolve().parents[1]).resolve()
     return _expected_head_cached(root)[0]
 
@@ -58,10 +54,8 @@ def expected_head(project_root: Path | None = None) -> str:
 def known_revisions(project_root: Path | None = None) -> frozenset[str]:
     """Every revision id this checkout's ``alembic/versions`` defines.
 
-    Membership is what separates the two drift directions: a database revision
-    this checkout KNOWS is simply un-applied (``alembic upgrade head`` fixes
-    it), while one it has never heard of means the CHECKOUT is behind the
-    database and upgrading would be the wrong move.
+    Active predecessors can advance normally. Archived revisions require
+    the guarded bridge; revisions in neither graph require checkout repair.
     """
     root = (project_root or Path(__file__).resolve().parents[1]).resolve()
     return _expected_head_cached(root)[1]
@@ -101,6 +95,23 @@ def _expected_head_cached(root: Path) -> tuple[str, frozenset[str]]:
             f"checkout has {len(heads)} Alembic heads ({sorted(heads)}); merge revisions before writes"
         )
     return heads.pop(), frozenset(revisions)
+
+
+@lru_cache(maxsize=8)
+def archived_revisions(project_root: Path) -> frozenset[str]:
+    """Known pre-squash revisions require the guarded upgrade bridge."""
+    revisions: set[str] = set()
+    for path in (project_root / "alembic" / "versions_archived").glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "revision" for target in node.targets
+            ):
+                with suppress(ValueError):
+                    revision = ast.literal_eval(node.value)
+                    if isinstance(revision, str):
+                        revisions.add(revision)
+    return frozenset(revisions)
 
 
 def require_current_for_write(conn: sqlite3.Connection) -> None:
@@ -143,8 +154,13 @@ DRIFT_DB_BEHIND_CODE = "db_behind_code"
 DRIFT_CHECKOUT_BEHIND_DB = "checkout_behind_db"
 DRIFT_CHECKOUT_FORKED = "checkout_forked"
 DRIFT_DB_UNREADABLE = "db_unreadable"
+DRIFT_LEGACY_UPGRADE_REQUIRED = "legacy_upgrade_required"
 
 _FIX_COMMANDS: dict[str, str] = {
+    DRIFT_LEGACY_UPGRADE_REQUIRED: (
+        "run the guarded execution/upgrade_database.py bridge with an explicit database "
+        "and the required backup/restore receipt"
+    ),
     DRIFT_DB_BEHIND_CODE: "alembic upgrade head",
     DRIFT_CHECKOUT_BEHIND_DB: "git pull (this checkout is older than the database)",
     DRIFT_CHECKOUT_FORKED: "merge the Alembic heads in alembic/versions",
@@ -266,6 +282,14 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
     if actual is None or actual == (expected,):
         return None
     unknown = [rev for rev in actual if rev not in checkout_revisions]
+    if unknown and len(actual) == 1 and unknown[0] in archived_revisions(versions.parent.parent):
+        return SchemaDrift(
+            db_path=str(path),
+            db_revisions=actual,
+            expected_revision=expected,
+            reason=DRIFT_LEGACY_UPGRADE_REQUIRED,
+            detail="database carries a supported pre-squash revision and requires the guarded bridge",
+        )
     if unknown:
         return SchemaDrift(
             db_path=str(path),

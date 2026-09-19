@@ -4,8 +4,6 @@ All provider calls are replaced. These tests exercise the typed boundary,
 closed decisions, and failure/no-change distinction without spending quota.
 """
 
-# pyright: reportPrivateUsage=false
-
 from __future__ import annotations
 
 import importlib.util
@@ -22,6 +20,7 @@ import execution.extract_risk_factors as risk_factors
 import execution.pressure_test_thesis as pressure_test_thesis
 import llm.structured as structured
 import llm_client
+from db_paths import db_path_context
 from llm.contracts import (
     DCF_ASSUMPTIONS_SCHEMA,
     PRESSURE_TEST_SCHEMA,
@@ -101,7 +100,7 @@ def test_pressure_test_routes_through_structured_schema(
         return expected
 
     monkeypatch.setattr(pressure_test_thesis, "call_llm_structured", fake)
-    assert pressure_test_thesis._call_pressure_test("NU", "thesis", "corpus") == expected
+    assert pressure_test_thesis.generate_pressure_test("NU", "thesis", "corpus") == expected
 
 
 def test_pressure_prompt_contains_schema_valid_strict_json_example(
@@ -125,7 +124,7 @@ def test_pressure_prompt_contains_schema_valid_strict_json_example(
         return expected
 
     monkeypatch.setattr(pressure_test_thesis, "call_llm_structured", fake)
-    pressure_test_thesis._call_pressure_test("NU", "thesis", "corpus")
+    pressure_test_thesis.generate_pressure_test("NU", "thesis", "corpus")
 
 
 def test_transcript_metadata_repairs_once_without_cascade(
@@ -188,7 +187,7 @@ def test_risk_classification_requires_closed_categories_and_every_id(
         return {"0": "technology", "1": "competition"}
 
     monkeypatch.setattr(risk_factors, "call_llm_structured", fake)
-    result = risk_factors._llm_classify_risks(
+    result = risk_factors.classify_risk_factors(
         ticker="TEST",
         fiscal_year=2025,
         risks=[("Cyber", "breach"), ("Rivals", "competition")],
@@ -205,7 +204,10 @@ def test_risk_diff_no_change_is_enum_driven_not_substring(
         return RiskFactorDiffPayload(outcome="no_material_change", summary=None)
 
     monkeypatch.setattr(risk_factors, "call_llm_structured", no_change)
-    assert risk_factors._llm_diff_one(ticker="TEST", heading="Risk", old="old", new="new") is None
+    assert (
+        risk_factors.summarize_risk_change(ticker="TEST", heading="Risk", old="old", new="new")
+        is None
+    )
 
     def material(_prompt: str, **_kwargs: object) -> object:
         return RiskFactorDiffPayload(
@@ -216,7 +218,8 @@ def test_risk_diff_no_change_is_enum_driven_not_substring(
 
     monkeypatch.setattr(risk_factors, "call_llm_structured", material)
     assert "new quantified exposure" in cast(
-        "str", risk_factors._llm_diff_one(ticker="TEST", heading="Risk", old="old", new="new")
+        "str",
+        risk_factors.summarize_risk_change(ticker="TEST", heading="Risk", old="old", new="new"),
     )
 
 
@@ -228,7 +231,7 @@ def test_risk_diff_provider_failure_does_not_become_no_change(
 
     monkeypatch.setattr(risk_factors, "call_llm_structured", failed)
     with pytest.raises(RuntimeError, match="provider unavailable"):
-        risk_factors._llm_diff_one(ticker="TEST", heading="Risk", old="old", new="new")
+        risk_factors.summarize_risk_change(ticker="TEST", heading="Risk", old="old", new="new")
 
 
 def _write_dcf_fixture(repo_root: Path) -> None:
@@ -266,7 +269,9 @@ def _write_dcf_fixture(repo_root: Path) -> None:
     )
 
 
-def _load_dcf_module(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+def _load_dcf_module(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> ModuleType:
     _write_dcf_fixture(repo_root)
     monkeypatch.setenv("DCF_REPO_ROOT", str(repo_root))
     monkeypatch.setenv("DCF_TICKER", "TEST")
@@ -274,7 +279,9 @@ def _load_dcf_module(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> Module
     spec = importlib.util.spec_from_file_location("dcf_opus_assumptions_audit_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    database = migrated_db(repo_root / "fixture.sqlite")
+    with db_path_context(database):
+        spec.loader.exec_module(module)
     return module
 
 
@@ -300,9 +307,9 @@ def _valid_dcf_payload() -> DcfAssumptionsPayload:
 
 
 def test_dcf_assumptions_use_structured_schema_and_exact_segments(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    module = _load_dcf_module(tmp_path, monkeypatch)
+    module = _load_dcf_module(tmp_path, monkeypatch, migrated_db)
     expected = _valid_dcf_payload()
 
     def fake(_prompt: str, **kwargs: object) -> object:
@@ -324,9 +331,9 @@ def test_dcf_assumptions_use_structured_schema_and_exact_segments(
 
 
 def test_dcf_assumptions_cannot_rewrite_owner_debt_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    module = _load_dcf_module(tmp_path, monkeypatch)
+    module = _load_dcf_module(tmp_path, monkeypatch, migrated_db)
     cache = tmp_path / "data" / "dcf_assumptions" / "TEST.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(
@@ -360,7 +367,7 @@ def test_empty_pressure_evidence_renders_gap_without_empty_section(tmp_path: Pat
         conviction_reasoning="The central premise cannot yet be tested.",
     )
 
-    pressure_test_thesis._append_to_diligence(tmp_path, "NU", "thesis", payload)
+    pressure_test_thesis.append_pressure_test_to_diligence(tmp_path, "NU", "thesis", payload)
     rendered = diligence.read_text(encoding="utf-8")
     assert "**Contradicting evidence:**" not in rendered
     assert "**Evidence gap:** No historical cohort data was available." in rendered
@@ -380,7 +387,7 @@ def test_pressure_evidence_and_gap_both_render(tmp_path: Path) -> None:
         conviction_reasoning="Observed weakness is material but the comparison set is incomplete.",
     )
 
-    pressure_test_thesis._append_to_diligence(tmp_path, "NU", "thesis", payload)
+    pressure_test_thesis.append_pressure_test_to_diligence(tmp_path, "NU", "thesis", payload)
     rendered = diligence.read_text(encoding="utf-8")
     assert "**Contradicting evidence:**" in rendered
     assert "- FY2025 cohort retention fell five points." in rendered

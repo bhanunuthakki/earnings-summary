@@ -25,6 +25,7 @@ break a write path or a peek (the peek's §2.7 legacy floor is the fallback).
 from __future__ import annotations
 
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Protocol, cast
@@ -33,6 +34,8 @@ log = logging.getLogger(__name__)
 
 # 150 DPI: legible for a deck slide, small enough to cache (§2.3's default).
 DEFAULT_PDF_RENDER_DPI = 150
+MAX_PDF_RENDER_PIXELS = 16_000_000
+MAX_PDF_RENDER_DIMENSION = 8192
 
 # Cache directory for rendered page PNGs, relative to repo root.
 _PDF_PAGES_CACHE_DIR = Path(".tmp") / "pdf_pages"
@@ -160,7 +163,17 @@ def render_page_image(
     try:
         if not 1 <= page <= doc.page_count:
             return None
-        pixmap = doc.load_page(page - 1).get_pixmap(dpi=dpi)
+        pdf_page = doc.load_page(page - 1)
+        width = pdf_page.rect.width * dpi / 72
+        height = pdf_page.rect.height * dpi / 72
+        if (
+            not all(math.isfinite(value) and value > 0 for value in (width, height))
+            or max(width, height) > MAX_PDF_RENDER_DIMENSION
+            or math.ceil(width) * math.ceil(height) > MAX_PDF_RENDER_PIXELS
+        ):
+            log.warning({"event": "pdf_preview_pixel_limit", "page": page})
+            return None
+        pixmap = pdf_page.get_pixmap(dpi=dpi)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # Write via a temp name + replace so a concurrent request never reads
         # a half-written PNG (renders are idempotent, so last-write-wins).

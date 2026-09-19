@@ -652,7 +652,10 @@ def test_typecheck_enforces_changed_files_and_exact_population_ceilings() -> Non
         "\n  security:\n", maxsplit=1
     )[0]
     assert "actions/cache@" not in typecheck_job
-    assert 'xargs pyright --pythonpath "$(command -v python)"' in typecheck_job
+    assert (
+        'python -m quality.check_changed --base "$CHECK_BASE" --mode committed --check types'
+        in typecheck_job
+    )
     assert "execution/enforce_static_quality.py" in typecheck_job
     assert '"pyright==1.1.414"' in typecheck_job
     assert '"playwright>=1.48"' in typecheck_job

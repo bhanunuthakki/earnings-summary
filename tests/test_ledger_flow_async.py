@@ -13,25 +13,20 @@
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import Mock
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
+from onmymind.feed import load_feed_item
+from user_state.notes import create_note, get_note, patch_note_context
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from onmymind.feed import load_feed_item  # noqa: E402
-from user_state.notes import create_note, get_note, patch_note_context  # noqa: E402
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 @pytest.fixture
@@ -46,7 +41,7 @@ def ctx(
     monkeypatch.delenv("LEDGER_ANSWER_SYNC", raising=False)
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    migrated_db(db)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db
 
@@ -111,13 +106,14 @@ def test_capture_non_question_pends_then_triage_clears(
     monkeypatch.setattr(
         respond_mod,
         "classify_capture_triage",
-        lambda body, **kw: TriageVerdict(route="plain"),
+        Mock(return_value=TriageVerdict(route="plain")),
     )
     resp = client.post("/api/capture/text", json={"text": "NU keeps compounding quietly."})
     body = resp.get_json()
     assert body["answering"] is True  # thread spawned; triage decides, not a regex
     note_id = body["note_id"]
     deadline = time.time() + 5
+    note = None
     while time.time() < deadline:
         note = get_note(note_id, db_path=db)
         assert note is not None
@@ -136,7 +132,7 @@ def test_capture_sync_env_restores_inline_answer(
     monkeypatch.setenv("LEDGER_ANSWER_SYNC", "1")
     import onmymind.respond as respond_mod
 
-    monkeypatch.setattr(respond_mod, "answer_capture", lambda nid, **kw: "inline answer")
+    monkeypatch.setattr(respond_mod, "answer_capture", Mock(return_value="inline answer"))
     resp = client.post("/api/capture/text", json={"text": "What is my cost basis?"})
     body = resp.get_json()
     assert body["answer"] == "inline answer"
@@ -160,7 +156,7 @@ def test_answer_capture_clears_pending_on_empty_answer(
 
     monkeypatch.setattr(respond, "classify_capture_triage", _answer_now)
     monkeypatch.setattr(
-        respond, "respond_turn", lambda *a, **kw: iter([{"type": "error", "error": "nope"}])
+        respond, "respond_turn", Mock(return_value=iter([{"type": "error", "error": "nope"}]))
     )
     out = respond.answer_capture(note_id, repo_root=db.parents[1], db_path=db)
     assert out is None
@@ -330,23 +326,23 @@ def test_expire_stale_research_dry_run_and_apply(ctx: tuple[FlaskClient, Path]) 
 
 
 def test_om_chat_hands_research_questions_to_work_os_copilot() -> None:
-    from pipeline.ledger_panel import _OM_CHAT_JS  # pyright: ignore[reportPrivateUsage]
+    from pipeline.ledger_panel import ON_MY_MIND_CHAT_JS
 
-    assert "openWorkOsCopilot" in _OM_CHAT_JS
-    assert "/api/ask/stream" not in _OM_CHAT_JS
-    assert "about:blank" not in _OM_CHAT_JS
-    assert "getReader()" not in _OM_CHAT_JS
-    assert "cardState" not in _OM_CHAT_JS
-    assert "session_id" not in _OM_CHAT_JS
+    assert "openWorkOsCopilot" in ON_MY_MIND_CHAT_JS
+    assert "/api/ask/stream" not in ON_MY_MIND_CHAT_JS
+    assert "about:blank" not in ON_MY_MIND_CHAT_JS
+    assert "getReader()" not in ON_MY_MIND_CHAT_JS
+    assert "cardState" not in ON_MY_MIND_CHAT_JS
+    assert "session_id" not in ON_MY_MIND_CHAT_JS
 
 
 def test_onmymind_js_dropped_popup_branch() -> None:
-    from pipeline.ledger_panel import _ONMYMIND_JS  # pyright: ignore[reportPrivateUsage]
+    from pipeline.ledger_panel import ON_MY_MIND_CARD_JS
 
-    assert "window.open" not in _ONMYMIND_JS
+    assert "window.open" not in ON_MY_MIND_CARD_JS
 
 
-def _wait_for(predicate, timeout: float = 5.0) -> bool:
+def _wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -371,12 +367,12 @@ def test_background_answer_lands_on_the_note(
     monkeypatch.setattr(
         respond,
         "classify_capture_triage",
-        lambda body, **kw: TriageVerdict(route="answer_now"),
+        Mock(return_value=TriageVerdict(route="answer_now")),
     )
     monkeypatch.setattr(
         respond,
         "respond_turn",
-        lambda *a, **kw: iter([{"type": "final", "text": "your basis is $18.20"}]),
+        Mock(return_value=iter([{"type": "final", "text": "your basis is $18.20"}])),
     )
     resp = client.post("/api/capture/text", json={"text": "What is my cost basis?"})
     body = resp.get_json()

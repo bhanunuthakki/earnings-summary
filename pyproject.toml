@@ -158,7 +158,7 @@ reportAny = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-pythonpath = ["src", "scratch"]
+pythonpath = ["src", "scratch", "execution"]
 markers = [
     "unit: Fast unit tests with no DB or network dependency",
     "integration: Subsystem integration tests using SQLite or disk",

@@ -44,40 +44,77 @@ def is_allowed_client_address(value: str, *, allow_tailscale: bool) -> bool:
     return address.is_loopback or (allow_tailscale and is_tailscale_address(value))
 
 
-def is_allowed_origin(
-    origin: str,
-    *,
-    allow_tailscale: bool,
-    whitelist: Collection[str],
-) -> str | None:
-    """Return the origin to echo when it belongs to an approved browser surface."""
-    if not origin:
-        return None
-    if origin == "null":
-        return origin
+def _origin_parts(origin: str) -> tuple[str, str, int] | None:
     try:
         parsed = urlparse(origin)
         hostname = parsed.hostname or ""
+        port = parsed.port
     except ValueError:
         return None
     if (
         parsed.scheme not in {"http", "https"}
+        or not hostname
+        or any(char.isspace() for char in origin)
+        or "\\" in origin
         or parsed.username is not None
         or parsed.password is not None
         or parsed.path not in {"", "/"}
         or parsed.params
         or parsed.query
         or parsed.fragment
+        or (port is not None and not 1 <= port <= 65535)
     ):
+        return None
+    return parsed.scheme, hostname, port or (443 if parsed.scheme == "https" else 80)
+
+
+def is_allowed_request_host(host: str, *, trusted_origins: Collection[str]) -> bool:
+    """Reject rebinding hostnames before serving any private application data."""
+    candidate = _origin_parts(f"http://{host}")
+    if candidate is None:
+        return False
+    _, hostname, port = candidate
+    if hostname in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    for origin in trusted_origins:
+        parts = _origin_parts(origin)
+        if parts is not None and (
+            host.lower() == urlparse(origin).netloc.lower() or (hostname, port) == parts[1:]
+        ):
+            return True
+    return False
+
+
+def is_allowed_origin(
+    origin: str,
+    *,
+    allow_tailscale: bool,
+    whitelist: Collection[str],
+    server_origin: str = "http://localhost:7421",
+) -> str | None:
+    """Allow exact configured origins or same-port loopback aliases.
+
+    Null identifies both local files and hostile opaque documents. The request
+    guard must authenticate it with the report capability before sensitive reads
+    or any writes; CORS alone is not authorization.
+    """
+    if origin == "null":
+        return origin
+    parts = _origin_parts(origin)
+    if parts is None:
         return None
     if origin in whitelist:
         return origin
-    if hostname in {"localhost", "127.0.0.1", "::1"}:
-        return origin
-    if not allow_tailscale:
+    server = _origin_parts(server_origin)
+    if server is None:
         return None
-    if is_tailscale_address(hostname):
-        return origin
+    scheme, hostname, port = parts
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    if scheme == server[0] and port == server[2]:
+        if hostname in local_hosts and server[1] in local_hosts:
+            return origin
+        if allow_tailscale and parts == server and is_tailscale_address(hostname):
+            return origin
     return None
 
 

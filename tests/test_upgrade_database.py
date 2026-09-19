@@ -13,23 +13,21 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "execution"))
-
-import upgrade_database as upgrade_database_module  # noqa: E402
-from upgrade_database import (  # noqa: E402
+import upgrade_database as upgrade_database_module
+from upgrade_database import (
     ACTIVE_HEAD,
     UpgradeDatabaseError,
     upgrade_database,
 )
 
-from execution import portfolio_readiness_receipt as readiness_module  # noqa: E402
-from execution.backup_restore_readiness_receipt import (  # noqa: E402
+from execution import portfolio_readiness_receipt as readiness_module
+from execution.backup_restore_readiness_receipt import (
     collect_backup_restore_receipt,
 )
-from execution.create_sqlite_snapshot import create_snapshot  # noqa: E402
-from sqlite_snapshot import SnapshotRequest  # noqa: E402
+from execution.create_sqlite_snapshot import create_snapshot
+from sqlite_snapshot import SnapshotRequest
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _authoritative_runtime(
@@ -171,7 +169,7 @@ def test_live_upgrade_requires_phase0_receipt_inside_shared_lock(
         return db_path
 
     def prior_revision(_path: Path) -> tuple[str, ...]:
-        return (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,)
+        return ("0012_close_operation_event_detail_reason",)
 
     monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", canonical_db)
     monkeypatch.setattr(
@@ -508,51 +506,28 @@ def test_documented_phase0_sequence_is_repeatable_across_source_changes(tmp_path
                 conn.commit()
 
 
-def test_upgrade_database_bridges_archived_revision_with_verified_backup(
-    tmp_path: Path,
+def test_archived_bridge_rejects_current_schema_without_losing_retained_rows(
+    tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    db_path = tmp_path / "legacy.db"
-    upgrade_database(
-        db_path,
-        repo_root=ROOT,
-        runtime_root=ROOT,
-        allow_isolated_db=True,
-    )
-    conn = sqlite3.connect(str(db_path))
-    try:
+    db_path = migrated_db(tmp_path / "restamped-current.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO ask_grounding_traces VALUES "
+            "('trace','key',NULL,'data',?,'[]','sql_viewspec','no_evidence',0,'[]',?,'2026-09-19')",
+            ("a" * 64, "b" * 64),
+        )
         conn.execute("UPDATE alembic_version SET version_num='0273_post_earnings_readout_budget'")
-        conn.commit()
-    finally:
-        conn.close()
-    backup_path = tmp_path / "before.db"
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "execution" / "sqlite_bootstrap.py"),
-            str(ROOT / "execution" / "upgrade_database.py"),
-            "--db-path",
-            str(db_path),
-            "--repo-root",
-            str(ROOT),
-            "--runtime-root",
-            str(ROOT),
-            "--allow-isolated-db",
-            "--backup-path",
-            str(backup_path),
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    receipt = json.loads(result.stdout)
-
-    assert receipt["status"] == "bridged"
-    assert receipt["backup_path"] == str(backup_path.resolve())
-    assert _revision(db_path) == ACTIVE_HEAD
-    assert _revision(backup_path) == "0273_post_earnings_readout_budget"
+    with pytest.raises(UpgradeDatabaseError, match=r"schema.*revision|revision.*schema"):
+        upgrade_database(
+            db_path,
+            repo_root=ROOT,
+            runtime_root=ROOT,
+            allow_isolated_db=True,
+            backup_path=tmp_path / "before.db",
+        )
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT trace_id FROM ask_grounding_traces").fetchall() == [("trace",)]
+    assert _revision(db_path) == "0273_post_earnings_readout_budget"
 
 
 def test_archived_bridge_rejects_closed_detail_lookalike_before_revision_mutation(
@@ -845,3 +820,41 @@ def test_upgrade_database_path_entrypoint_uses_execution_import_root() -> None:
     assert "from execution import portfolio_readiness_receipt" not in source
     assert source.count("import portfolio_readiness_receipt as readiness_module") == 2
     assert importlib.import_module("portfolio_readiness_receipt") is readiness_module
+
+
+def test_upgrade_uses_configured_graph_head(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    import shutil
+
+    db_path = migrated_db(tmp_path / "older-active.db")
+    checkout = tmp_path / "new-checkout"
+    shutil.copytree(ROOT / "alembic", checkout / "alembic")
+    shutil.copyfile(ROOT / "alembic.ini", checkout / "alembic.ini")
+    revision = "0040_test_next_head"
+    (checkout / "alembic" / "versions" / f"{revision}.py").write_text(
+        f"revision = {revision!r}\ndown_revision = {ACTIVE_HEAD!r}\n"
+        "def upgrade():\n    pass\ndef downgrade():\n    pass\n"
+    )
+    receipt = upgrade_database(
+        db_path, repo_root=checkout, runtime_root=ROOT, allow_isolated_db=True
+    )
+    assert receipt.status == "upgraded"
+    assert receipt.to_revision == revision
+    assert _revision(db_path) == revision
+
+
+def test_supported_archived_schema_bridges_with_preserved_payload(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "legacy.db", target="0001_initial_schema")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE retained_payload (value TEXT)")
+        conn.execute("INSERT INTO retained_payload VALUES ('owner state')")
+        conn.execute("UPDATE alembic_version SET version_num='0273_post_earnings_readout_budget'")
+    receipt = upgrade_database(db_path, repo_root=ROOT, runtime_root=ROOT, allow_isolated_db=True)
+    assert receipt.status == "bridged"
+    assert receipt.to_revision == ACTIVE_HEAD
+    assert receipt.backup_path is not None
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT value FROM retained_payload").fetchall() == [("owner state",)]

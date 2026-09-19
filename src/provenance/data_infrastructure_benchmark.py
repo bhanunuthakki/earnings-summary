@@ -1259,28 +1259,7 @@ def _production_budget_results(
 
 def _migrate_production_database(database: Path) -> tuple[str, float]:
     started = time.perf_counter()
-    conn = connect_sqlite(
-        database,
-        role=SQLiteConnectionRole.SNAPSHOT_DESTINATION,
-    )
-    try:
-        conn.executescript(
-            """
-            CREATE TABLE financial_facts (
-                id INTEGER PRIMARY KEY,
-                source_doc_id INTEGER NOT NULL
-            );
-            CREATE TABLE kpi_facts (
-                id INTEGER PRIMARY KEY,
-                source_doc_id INTEGER NOT NULL
-            );
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
     root = Path(__file__).resolve().parents[2]
-    base_revision = "0213_decision_draft_provider_id"
     # Build the in-process config explicitly so Alembic does not install its
     # console logger and mix non-JSON migration logs into the CLI's stderr.
     alembic_config = Config()
@@ -1292,7 +1271,6 @@ def _migrate_production_database(database: Path) -> tuple[str, float]:
         "sqlalchemy.url",
         f"sqlite:///{database}",
     )
-    command.stamp(alembic_config, base_revision)
     command.upgrade(alembic_config, "head")
     conn = connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY)
     try:

@@ -46,7 +46,28 @@ from report.models import (
     SayDoCard,
 )
 from report.renderers.charts_v2 import fmt_compact
+from report.sections.comp_set_context import (
+    CompSetContextSection,
+    load_comp_set_context,
+)
+from report.sections.p3_data import (
+    CustomerConcentrationRow,
+    DecisionHistorySummary,
+    LeaseLadderRow,
+    MacroSensitivityRow,
+    PeerCompRow,
+    SayDoVerdictRow,
+    StrategicTargetRow,
+    load_customer_concentrations,
+    load_decision_history,
+    load_lease_ladder,
+    load_macro_sensitivities,
+    load_peer_comp,
+    load_saydo_verdicts,
+    load_strategic_targets,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from user_state.notes import AnalystNoteRow, list_notes
 
 # Editorial-typography characters hoisted to module constants so the call
 # sites don't trip ruff's RUF001 (ambiguous unicode in code). Built via chr()
@@ -263,7 +284,7 @@ def _parse_saydo_filter_response(raw: str) -> list[str]:
         parsed = json.loads(m.group(0))
     if not isinstance(parsed, list):
         raise ValueError("saydo_filter response was not a JSON array")
-    return [str(x) for x in parsed]  # type: ignore[arg-type]
+    return [str(value) for value in cast("list[object]", parsed)]
 
 
 def _direction_to_verdict(direction: str) -> str:
@@ -791,29 +812,6 @@ def quarter_short(label: str) -> str:
 # data movement.
 
 
-from report.sections.comp_set_context import (  # noqa: E402  (kept near use site)
-    CompSetContextSection,
-    load_comp_set_context,
-)
-from report.sections.p3_data import (  # noqa: E402  (kept near use site)
-    CustomerConcentrationRow,
-    DecisionHistorySummary,
-    LeaseLadderRow,
-    MacroSensitivityRow,
-    PeerCompRow,
-    SayDoVerdictRow,
-    StrategicTargetRow,
-    load_customer_concentrations,
-    load_decision_history,
-    load_lease_ladder,
-    load_macro_sensitivities,
-    load_peer_comp,
-    load_saydo_verdicts,
-    load_strategic_targets,
-)
-from user_state.notes import AnalystNoteRow, list_notes  # noqa: E402
-
-
 def _load_comp_set_context_safe(
     ticker: str, db_path: Path, repo_root: Path
 ) -> CompSetContextSection | None:
@@ -1091,13 +1089,16 @@ def load_standing_rules(ticker: str, db_path: Path, repo_root: Path) -> Standing
     )
 
 
-def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
+def load_workspace_p3_panels(
+    ticker: str, repo_root: Path, *, db_path: Path | None = None
+) -> WorkspaceP3Panels:
     """Call every P3 accessor once and return the bundle.
 
-    Best-effort: missing portfolio.db / missing tables / cold ticker all
-    funnel through the accessors' empty-list contract.
+    No database is inferred from the artifact root. An explicit database
+    supplies the optional panels; missing tables retain the empty-list contract.
     """
-    db_path = repo_root / "data" / "portfolio.db"
+    if db_path is None:
+        return WorkspaceP3Panels.empty()
     return WorkspaceP3Panels(
         macro_sensitivities=load_macro_sensitivities(ticker, db_path=db_path),
         strategic_targets=load_strategic_targets(ticker, db_path=db_path),

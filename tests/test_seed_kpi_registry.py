@@ -21,21 +21,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 import yaml
-
-# scratch/ lives at <repo_root>/scratch/. Tests live at <repo_root>/tests/.
-# Insert scratch/ on sys.path so the import below resolves at runtime; pyright
-# resolves it via extraPaths in pyproject.toml.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "scratch"))
-
-from seed_kpi_registry import (  # noqa: E402
+from seed_kpi_registry import (
     Proposal,
     SeederLLMError,
     WriteSummary,
@@ -44,50 +36,17 @@ from seed_kpi_registry import (  # noqa: E402
     write_from_yaml,
 )
 
-from user_state import registry  # noqa: E402
+from user_state import registry
 
-PRIOR_HEAD = "0059_kpi_facts_restatement"
+# scratch/ lives at <repo_root>/scratch/. Tests live at <repo_root>/tests/.
+# Insert scratch/ on sys.path so the import below resolves at runtime; pyright
+# resolves it via extraPaths in pyproject.toml.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 # ---------------------------------------------------------------------------
 # Schema setup
 # ---------------------------------------------------------------------------
-
-
-def _add_inputs_schema(db_path: Path) -> None:
-    """Add the kpi_facts / kpi_definitions / tracked_companies tables the
-    seeder reads from. Alembic stamped at 0059 doesn't create them
-    deterministically (kpi_facts predates the stamp), so we add a minimal
-    schema by hand."""
-    conn = sqlite3.connect(str(db_path))
-    try:
-        _ = conn.execute(
-            "CREATE TABLE IF NOT EXISTS kpi_definitions ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "ticker TEXT, "
-            "name TEXT NOT NULL"
-            ")"
-        )
-        _ = conn.execute(
-            "CREATE TABLE IF NOT EXISTS kpi_facts ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "ticker TEXT NOT NULL, "
-            "period_end TEXT NOT NULL, "
-            "fiscal_period_type TEXT NOT NULL, "
-            "kpi_definition_id INTEGER NOT NULL, "
-            "value REAL NOT NULL, "
-            "unit TEXT"
-            ")"
-        )
-        _ = conn.execute(
-            "CREATE TABLE IF NOT EXISTS tracked_companies ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "ticker TEXT NOT NULL, "
-            "list_type TEXT"
-            ")"
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _seed_kpi_facts(
@@ -103,14 +62,18 @@ def _seed_kpi_facts(
     conn = sqlite3.connect(str(db_path))
     try:
         for name, period_end, fpt, value, unit in rows:
-            cur = conn.execute(
-                "INSERT INTO kpi_definitions (ticker, name) VALUES (?, ?)",
+            conn.execute(
+                "INSERT OR IGNORE INTO kpi_definitions (ticker, name, primary_source) VALUES (?, ?, 'manual_csv')",
                 (ticker, name),
             )
-            kdef_id = int(cur.lastrowid or 0)
+            kdef_id = int(
+                conn.execute(
+                    "SELECT id FROM kpi_definitions WHERE ticker=? AND name=?", (ticker, name)
+                ).fetchone()[0]
+            )
             _ = conn.execute(
                 "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
-                "kpi_definition_id, value, unit) VALUES (?, ?, ?, ?, ?, ?)",
+                "kpi_definition_id, value, unit, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, 1)",
                 (ticker, period_end, fpt, kdef_id, value, unit),
             )
         conn.commit()
@@ -123,8 +86,8 @@ def _seed_portfolio(db_path: Path, tickers: list[str]) -> None:
     try:
         for t in tickers:
             _ = conn.execute(
-                "INSERT INTO tracked_companies (ticker, list_type) VALUES (?, ?)",
-                (t, "portfolio"),
+                "INSERT INTO tracked_companies (ticker, name, list_type) VALUES (?, ?, ?)",
+                (t, t, "portfolio"),
             )
         conn.commit()
     finally:
@@ -194,16 +157,16 @@ def _write_10k_json(
 
 
 @pytest.fixture
-def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    """Private archived-head database plus the seeder's input tables."""
+def db_path(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    fact_source_document: Callable[[sqlite3.Connection, str], int],
+) -> Path:
+    """Private current-schema database."""
     path = tmp_path / "portfolio.db"
-    migrated_db(
-        path,
-        stamp=PRIOR_HEAD,
-        archived=True,
-        reanchor_to_active_head=True,
-    )
-    _add_inputs_schema(path)
+    migrated_db(path)
+    with sqlite3.connect(path) as conn:
+        assert fact_source_document(conn, "NU") == 1
     return path
 
 

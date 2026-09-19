@@ -52,6 +52,7 @@ def build_report(
     force_refresh: bool = False,
     conn: sqlite3.Connection | None = None,
     generation_date: date | None = None,
+    db_path: Path | None = None,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -78,6 +79,14 @@ def build_report(
     build (the "run anyway, ignore caps" path), so analyses that a `skip`-mode
     cap would forgo are run regardless. See report.sections._common.budget_gate.
     """
+    # Preserve the same authority when render-time panels open their readers.
+    if conn is not None:
+        connected = next(
+            (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
+        )
+        if db_path is not None and connected and Path(connected).resolve() != db_path.resolve():
+            raise ValueError("Report connection and database path disagree")
+        db_path = Path(connected) if connected else None
     ticker = ticker.upper()
     portfolio_position_section = portfolio_position.build(ticker, repo_root)
     snapshot_section = snapshot.build(
@@ -173,6 +182,7 @@ def build_report(
     suppressed_sections = sorted(suppressed_sections_for_ticker(ticker, repo_root))
     return ReportSpec(
         ticker=ticker,
+        db_path=str(db_path) if db_path is not None else None,
         generation_date=generation_date or render_today(),
         repo_root=str(repo_root),
         flavor=flavor,

@@ -19,23 +19,17 @@ Layers:
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-import advisor.socratic as socratic_mod  # noqa: E402
-from advisor.context import AdvisorContext, TickerValuation, calibration_block  # noqa: E402
-from advisor.socratic import (  # noqa: E402
+import advisor.socratic as socratic_mod
+from advisor.context import AdvisorContext, TickerValuation, calibration_block
+from advisor.socratic import (
     SocraticPrelude,
     generate_decision_memo,
     generate_questions,
@@ -44,17 +38,19 @@ from advisor.socratic import (  # noqa: E402
     persist_prelude,
     read_current_prelude,
 )
-from advisor.store import AdvisorMemoRow, get_memo  # noqa: E402
-from decision_calibration import CalibrationStats, ConvictionBucket  # noqa: E402
-from dispatch_registry import Job, Registry  # noqa: E402
-from integrations.portfolio_tracker_client import (  # noqa: E402
+from advisor.store import AdvisorMemoRow, get_memo
+from decision_calibration import CalibrationStats, ConvictionBucket
+from dispatch_registry import Job, Registry
+from integrations.portfolio_tracker_client import (
     LivePortfolio,
     PortfolioAnalytics,
 )
-from llm.cli import LLMSetupError  # noqa: E402
-from pipeline.advisor_memos_panel import compose_memos_page, render_socratic_page  # noqa: E402
-from pipeline.allocation_decisions_panel import SizingAuditRow  # noqa: E402
-from user_state.ledger import list_entries  # noqa: E402
+from llm.cli import LLMSetupError
+from pipeline.advisor_memos_panel import compose_memos_page, render_socratic_page
+from pipeline.allocation_decisions_panel import SizingAuditRow
+from user_state.ledger import list_entries
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _NonSpawningRegistry(Registry):
@@ -84,8 +80,6 @@ class _NonSpawningRegistry(Registry):
             code_root=code_root,
         )
 
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 # ``command.stamp(_PRIOR_HEAD)`` marks that revision current WITHOUT running
 # 0001..0059 — so ``llm_artifacts`` (created in 0035, well before the stamp)
@@ -122,13 +116,7 @@ CREATE TABLE IF NOT EXISTS llm_artifacts (
 
 def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(
-        db,
-        stamp=_PRIOR_HEAD,
-        target="head",
-        archived=True,
-        reanchor_to_active_head=True,
-    )
+    migrated_db(db, target="head")
     conn = sqlite3.connect(str(db))
     try:
         conn.execute(_LLM_ARTIFACTS_DDL)

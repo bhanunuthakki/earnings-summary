@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for the redesigned 9-sheet DCF: the reader/projection/value engine
 (``src/dcf/redesign.py``) and the redesign refresh path in
 ``execution/refresh_dcf.py`` (rebuild-from-FMP with Dashboard edit-preservation).
@@ -25,24 +24,39 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+import dcf_sheets
 import openpyxl
 import pytest
+import refresh_dcf
 from openpyxl.cell.cell import Cell
 
+from dcf import redesign
+from tests.kpi_semantic_support import admit_all_kpi_facts
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import dcf_sheets  # noqa: E402
-import refresh_dcf  # noqa: E402
-
-from dcf import redesign  # noqa: E402
-from tests.kpi_semantic_support import admit_all_kpi_facts  # noqa: E402
 
 BUILDER = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
+_OVERRIDE_TABLE_SQL = ""
+
+
+@pytest.fixture(scope="module", autouse=True)
+def canonical_override_schema(
+    migrated_db: Callable[..., Path], tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Reuse the migrated override contract in the specialized bridge fixture."""
+    global _OVERRIDE_TABLE_SQL
+    template = migrated_db(tmp_path_factory.mktemp("dcf_schema") / "template.sqlite")
+    with sqlite3.connect(template) as conn:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='fact_overrides'"
+        ).fetchone()
+    assert row is not None
+    _OVERRIDE_TABLE_SQL = str(row[0]).replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+
 
 REDESIGN_SHEETS = [
     "Cover",
@@ -209,16 +223,26 @@ def test_sbc_charged_after_tax() -> None:
 
 
 def test_terminal_ebitda_burdened_by_sbc() -> None:
-    """``_terminal_metrics`` burdens the exit-multiple EBITDA by terminal-year SBC
-    (ebitda = ebit - sbc + da), so the terminal metric drops when SBC is charged."""
-    no_sbc = redesign._terminal_metrics(redesign._project(_BASE), _BASE)
-    heavy_inp = dataclasses.replace(_BASE, near_sbc_pct=0.12, terminal_sbc_pct=0.10)
-    heavy = redesign._terminal_metrics(redesign._project(heavy_inp), heavy_inp)
-    assert heavy.ebitda < no_sbc.ebitda
-    # The burden equals terminal_sbc_pct * terminal revenue.
-    streams = redesign._project(heavy_inp)
-    burden = heavy_inp.terminal_sbc_pct * streams.revenue[-1]
-    assert no_sbc.ebitda - heavy.ebitda == pytest.approx(burden)
+    """A one-turn EBITDA multiple change isolates the public terminal value."""
+    base = dataclasses.replace(_BASE, terminal_basis="EV/EBITDA")
+    heavy = dataclasses.replace(base, near_sbc_pct=0.12, terminal_sbc_pct=0.10)
+
+    def terminal_ebitda(inputs: redesign.RedesignInputs) -> float:
+        original = redesign.value(inputs)
+        extra_turn = redesign.value(
+            dataclasses.replace(inputs, exit_multiple=inputs.exit_multiple + 1)
+        )
+        return (
+            (extra_turn.operating_value_usd_m - original.operating_value_usd_m)
+            * (1 + inputs.wacc) ** len(original.forecast_revenue_m)
+            / inputs.fx_to_usd
+        )
+
+    unburdened = terminal_ebitda(base)
+    burdened = terminal_ebitda(heavy)
+    assert burdened < unburdened
+    terminal_revenue = redesign.value(heavy).forecast_revenue_m[-1]
+    assert unburdened - burdened == pytest.approx(heavy.terminal_sbc_pct * terminal_revenue)
 
 
 def test_sbc_round_trips_through_dict() -> None:
@@ -361,6 +385,7 @@ def _write_primary_bridge_facts(
     repo: Path, ticker: str, latest: dict[str, object], *, currency: str
 ) -> None:
     conn = sqlite3.connect(repo / "data" / "portfolio.db")
+    conn.execute(_OVERRIDE_TABLE_SQL)
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS documents (
@@ -619,7 +644,13 @@ def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
 
 def _build(repo: Path, ticker: str, dest: Path) -> float:
     """Run the builder as a subprocess; return its value-of-record (RESULT line)."""
-    env = dict(os.environ, DCF_TICKER=ticker, DCF_REPO_ROOT=str(repo), DCF_DEST=str(dest))
+    env = dict(
+        os.environ,
+        DCF_TICKER=ticker,
+        DCF_REPO_ROOT=str(repo),
+        DCF_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(repo / "data" / "portfolio.db"),
+    )
     proc = subprocess.run(
         [sys.executable, str(BUILDER)],
         env=env,
@@ -1154,7 +1185,7 @@ def test_sync_fails_loud_on_unreadable_json(tmp_path: Path) -> None:
 
 def test_refresh_stages_missing_assumptions_without_live_path(tmp_path: Path) -> None:
     assumptions = tmp_path / "data" / "dcf_assumptions" / "MISSING.json"
-    staged = refresh_dcf._stage_assumptions(assumptions)
+    staged = refresh_dcf.stage_assumptions(assumptions)
     assert staged != assumptions
     assert staged.name == "MISSING.rebuild.json"
     assert not assumptions.exists()
@@ -1977,7 +2008,12 @@ def test_holdco_refresh_threads_live_owner_inputs_and_atomic_promotion(
 
     monkeypatch.setattr(refresh_dcf.subprocess, "run", fake_run)
 
-    result = refresh_dcf._refresh_holdco("BN", tmp_path)
+    holdings = tmp_path / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True)
+    (holdings / "BN.json").write_text(json.dumps({"valuation_model": "holdco_sotp"}))
+    result = refresh_dcf.refresh_one(
+        "BN", tmp_path, tmp_path / "unused.sqlite", valuation_year=2026
+    )
 
     assert result["status"] == "ok"
     assert captured_env["DCF_OWNER_INPUTS_DEST"] == str(live)
@@ -2005,7 +2041,12 @@ def test_specialized_refresh_rejects_skip_without_replacing_live_workbook(
 
     monkeypatch.setattr(refresh_dcf.subprocess, "run", fake_run)
 
-    result = refresh_dcf._refresh_platform("NU", tmp_path)
+    holdings = tmp_path / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True)
+    (holdings / "NU.json").write_text(json.dumps({"valuation_model": "platform_dcf"}))
+    result = refresh_dcf.refresh_one(
+        "NU", tmp_path, tmp_path / "unused.sqlite", valuation_year=2026
+    )
 
     assert result["status"] == "failed"
     assert live.read_bytes() == b"current workbook"

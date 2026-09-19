@@ -230,7 +230,6 @@ def test_an_archived_template_matches_an_archived_chain_replay(
         tmp_path / "cached-archived.db",
         stamp=ARCHIVED_PARITY_STAMP,
         archived=True,
-        reanchor_to_active_head=True,
     )
     direct = archived_chain_db(
         tmp_path / "direct-archived.db",
@@ -252,7 +251,6 @@ def test_an_archived_template_carries_the_same_seed_row_counts(
         tmp_path / "cached-archived.db",
         stamp=ARCHIVED_PARITY_STAMP,
         archived=True,
-        reanchor_to_active_head=True,
     )
     direct = archived_chain_db(
         tmp_path / "direct-archived.db",
@@ -264,7 +262,7 @@ def test_an_archived_template_carries_the_same_seed_row_counts(
     assert cached_counts == _row_counts(direct)
 
 
-def test_an_archived_template_reports_the_active_head_after_reanchoring(
+def test_an_archived_template_retains_its_historical_revision(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     archived_chain_db: Callable[..., Path],
@@ -273,7 +271,6 @@ def test_an_archived_template_reports_the_active_head_after_reanchoring(
         tmp_path / "cached-archived.db",
         stamp=ARCHIVED_PARITY_STAMP,
         archived=True,
-        reanchor_to_active_head=True,
     )
     direct = archived_chain_db(
         tmp_path / "direct-archived.db",
@@ -281,4 +278,4 @@ def test_an_archived_template_reports_the_active_head_after_reanchoring(
     )
 
     assert _revisions(cached) == _revisions(direct)
-    assert _revisions(cached) == ["0039_add_dcf_forecast_series"]
+    assert _revisions(cached) == ["0273_post_earnings_readout_budget"]

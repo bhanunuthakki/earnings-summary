@@ -5,7 +5,7 @@ view itself stays untouched; owner-first behavior belongs in this renderer's
 DEFAULT, not in the view). This is deliberately a SEPARATE module from
 pipeline.journal_panel (the analyst_notes lifecycle UI -- a different
 table entirely) and from
-pipeline.allocation_decisions_panel._decision_journal_section (an
+pipeline.allocation_decisions_panel.render_decision_journal_section (an
 existing compact "recent decisions" teaser on the Allocation page, unfiltered
 and un-chipped) -- this fragment is the Ledger console's own full, filtered
 decision journal.

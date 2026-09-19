@@ -7,80 +7,26 @@ good one)."""
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import comments_server
 import pytest
+
+from pipeline.since_last import build_since_last, render_since_last_band
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.since_last import build_since_last, render_since_last_band  # noqa: E402
-
-PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-# ``decisions`` predates the 0059 stamp (db.init_db() territory) — same gap
-# test_open_loops.py documents — so a stamp+upgrade fixture never creates it;
-# hand-build the modern (0130-extended) shape, PLUS ``outcome_at`` (which that
-# fixture's DDL omits — it never needed grading) since this module reads it.
-_DECISIONS_DDL = """
-CREATE TABLE decisions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(16),
-    recommendation_kind VARCHAR(32) NOT NULL,
-    conviction VARCHAR(16),
-    outcome_label VARCHAR(16) NOT NULL DEFAULT 'pending',
-    outcome_at DATETIME,
-    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
-    scope VARCHAR(16) NOT NULL DEFAULT 'ticker',
-    falsifier TEXT,
-    size_usd FLOAT,
-    user_notes TEXT,
-    made_at DATETIME NOT NULL,
-    created_at DATETIME NOT NULL
-);
-"""
-
-# ``documents`` (0002) predates the 0059 stamp too — same gap, hand-built
-# verbatim from its migration. ``expected_earnings`` does NOT need the same
-# treatment: 0031 drops it and 0082 (after the 0059 stamp) unconditionally
-# recreates it, so the stamp+upgrade fixture already has the real table.
-_DOCUMENTS_DDL = """
-CREATE TABLE documents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR NOT NULL,
-    source_type VARCHAR NOT NULL,
-    doc_type VARCHAR NOT NULL,
-    period_start DATETIME,
-    period_end DATETIME,
-    file_path VARCHAR NOT NULL,
-    sha256 VARCHAR(64) NOT NULL UNIQUE,
-    fetched_at DATETIME NOT NULL,
-    fetch_status VARCHAR NOT NULL,
-    http_code INTEGER,
-    raw_bytes_size INTEGER NOT NULL,
-    source_url VARCHAR,
-    parent_document_id INTEGER
-);
-"""
 
 
 @pytest.fixture
 def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "since_last.db"
-    migrated_db(db, stamp=PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_DECISIONS_DDL + _DOCUMENTS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
+    migrated_db(db)
     return db
 
 
@@ -263,9 +209,6 @@ def test_every_nonzero_item_is_a_doorway(db_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Route: GET /api/panel/since_last
 # ---------------------------------------------------------------------------
-
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-import comments_server  # noqa: E402
 
 
 @pytest.fixture

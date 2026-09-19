@@ -31,7 +31,11 @@ def test_network_policy_allows_tailnet_but_not_lan_when_enabled() -> None:
 
 def test_origin_policy_accepts_tailnet_ip_origins_only_in_tailnet_mode() -> None:
     origin = "http://100.100.1.2:7421"
-    assert is_allowed_origin(origin, allow_tailscale=True, whitelist=frozenset()) == origin
+    assert (
+        is_allowed_origin(origin, allow_tailscale=True, whitelist=frozenset(), server_origin=origin)
+        == origin
+    )
+    assert is_allowed_origin(origin, allow_tailscale=True, whitelist=frozenset()) is None
     assert is_allowed_origin(origin, allow_tailscale=False, whitelist=frozenset()) is None
     assert (
         is_allowed_origin(

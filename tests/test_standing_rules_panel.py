@@ -23,23 +23,19 @@ Ask but invisible in the brief. These tests pin:
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from report.models import PortfolioPositionSection, SectionStatus  # noqa: E402
-from report.renderers.workspace_data import (  # noqa: E402
+from report.models import PortfolioPositionSection, ReportSpec, SectionStatus
+from report.renderers.workspace_data import (
     StandingRuleRow,
     StandingRulesPanel,
     load_standing_rules,
 )
-from report.renderers.workspace_sections.position import (  # noqa: E402
-    _position_tab,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
-    _standing_rules_block,  # pyright: ignore[reportPrivateUsage]
+from report.renderers.workspace_sections.position import (
+    _position_tab,
+    _standing_rules_block,
 )
 
 _TS = "2026-07-10T08:07:05.021439"
@@ -184,12 +180,18 @@ def test_loader_degrades_to_none(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _panel(rows: list[StandingRuleRow], **kw: object) -> StandingRulesPanel:
+def _panel(
+    rows: list[StandingRuleRow],
+    *,
+    downside_passed: bool | None = True,
+    add_passed: bool | None = True,
+    add_is_draft: bool = False,
+) -> StandingRulesPanel:
     return StandingRulesPanel(
         rows=rows,
-        downside_passed=kw.get("downside_passed", True),  # type: ignore[arg-type]
-        add_passed=kw.get("add_passed", True),  # type: ignore[arg-type]
-        add_is_draft=bool(kw.get("add_is_draft", False)),
+        downside_passed=downside_passed,
+        add_passed=add_passed,
+        add_is_draft=add_is_draft,
     )
 
 
@@ -282,12 +284,8 @@ def test_position_tab_held_appends_block_after_decisions() -> None:
 
 
 def test_markdown_mirror_renders_rules_from_same_loader(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-    from typing import cast
-
-    from report.models import ReportSpec
     from report.renderers.markdown import (
-        _standing_rules_md,  # pyright: ignore[reportPrivateUsage]
+        render_standing_rules,
     )
 
     data_dir = tmp_path / "data"
@@ -301,8 +299,8 @@ def test_markdown_mirror_renders_rules_from_same_loader(tmp_path: Path) -> None:
         "[draft, pending owner review] Add-rung: add <$10.32 -> +1% of book.",
     )
     out = StringIO()
-    spec = cast("ReportSpec", SimpleNamespace(ticker="TEST", repo_root=str(tmp_path)))
-    _standing_rules_md(out, spec)
+    spec = ReportSpec.model_construct(ticker="TEST", repo_root=str(tmp_path), db_path=str(db))
+    render_standing_rules(out, spec)
     s = out.getvalue()
     assert "**Standing rules**" in s
     assert "`[DRAFT]`" in s
@@ -311,15 +309,11 @@ def test_markdown_mirror_renders_rules_from_same_loader(tmp_path: Path) -> None:
 
 
 def test_markdown_mirror_silent_without_rules(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-    from typing import cast
-
-    from report.models import ReportSpec
     from report.renderers.markdown import (
-        _standing_rules_md,  # pyright: ignore[reportPrivateUsage]
+        render_standing_rules,
     )
 
     out = StringIO()
-    spec = cast("ReportSpec", SimpleNamespace(ticker="TEST", repo_root=str(tmp_path)))
-    _standing_rules_md(out, spec)
+    spec = ReportSpec.model_construct(ticker="TEST", repo_root=str(tmp_path), db_path=None)
+    render_standing_rules(out, spec)
     assert out.getvalue() == ""

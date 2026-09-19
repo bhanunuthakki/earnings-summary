@@ -11,6 +11,7 @@ import tokenize
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from quality.git_env import clean_local_git_env
 
@@ -56,6 +57,7 @@ def changed_retained_python_files(
     repo_root: Path,
     base: str,
     *,
+    mode: Literal["committed", "worktree"] = "committed",
     exception_paths: Sequence[str] = (),
     runner: CommandRunner = _run,
 ) -> list[str]:
@@ -63,16 +65,42 @@ def changed_retained_python_files(
     if not base.strip() or base.startswith("-"):
         raise ChangedSuppressionError("base revision is invalid")
     root = repo_root.resolve()
+    if mode == "worktree":
+        ancestor = runner(["git", "merge-base", base, "HEAD"], root)
+        if ancestor.returncode or not re.fullmatch(r"[0-9a-f]{40,64}", ancestor.stdout.strip()):
+            raise ChangedSuppressionError("git merge-base failed")
+        comparison = ancestor.stdout.strip()
+    else:
+        # The push candidate is HEAD. A dirty imported module or test fixture can
+        # hide committed failures just as a dirty selected file can.
+        for command in (
+            ["git", "diff", "--name-only", "-z", "HEAD", "--", "*.py"],
+            ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", "*.py"],
+        ):
+            current = runner(command, root)
+            if current.returncode:
+                raise ChangedSuppressionError("committed candidate isolation check failed")
+            if current.stdout.strip("\0\n"):
+                raise ChangedSuppressionError(
+                    "committed checks require a clean Python worktree; commit or isolate local changes"
+                )
+        comparison = f"{base}...HEAD"
     result = runner(
-        ["git", "diff", "--name-only", "--diff-filter=ACMR", "-z", f"{base}...HEAD", "--", "*.py"],
-        root,
+        ["git", "diff", "--name-only", "--diff-filter=ACMR", "-z", comparison, "--", "*.py"], root
     )
     if result.returncode:
         raise ChangedSuppressionError(f"git diff failed ({result.returncode})")
     exceptions = {path.replace("\\", "/") for path in exception_paths}
-    paths = sorted({path for path in result.stdout.split("\0") if path})
+    paths = {path for path in result.stdout.split("\0") if path}
+    if mode == "worktree":
+        untracked = runner(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", "*.py"], root
+        )
+        if untracked.returncode:
+            raise ChangedSuppressionError("git untracked-file discovery failed")
+        paths.update(path for path in untracked.stdout.split("\0") if path)
     retained: list[str] = []
-    for path in paths:
+    for path in sorted(paths):
         candidate = PurePosixPath(path)
         if candidate.is_absolute() or ".." in candidate.parts or re.match(r"^[A-Za-z]:/", path):
             raise ChangedSuppressionError("changed Python path escapes the repository")
@@ -121,11 +149,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--base", default="origin/main")
+    parser.add_argument("--mode", choices=("committed", "worktree"), default="committed")
     parser.add_argument("--exception-path", action="append", default=[])
     args = parser.parse_args(argv)
     try:
         paths = changed_retained_python_files(
-            args.repo_root, args.base, exception_paths=args.exception_path
+            args.repo_root, args.base, mode=args.mode, exception_paths=args.exception_path
         )
         findings = suppression_findings(args.repo_root, paths)
     except ChangedSuppressionError as exc:

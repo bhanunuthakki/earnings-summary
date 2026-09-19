@@ -1,8 +1,8 @@
 """Fan the redesigned-DCF builder out over a set of tickers.
 
-For each ticker: optionally refresh its Opus assumption pass first (``--opus``),
+For each ticker: optionally refresh assumptions first (``--refresh-assumptions``),
 then build ``<out-dir>/<T>.xlsx`` via ``build_redesigned_dcf.py``. Financials that
-Opus flagged ``dcf_applicable=false`` (banks/insurers/asset-managers) print SKIP.
+The configured model flagged ``dcf_applicable=false`` (banks/insurers/asset-managers) print SKIP.
 Prints a summary table (value/share, price, upside, segments, status).
 
 ``--out-dir`` defaults to the CANONICAL workbook location ``dcf/`` (S11): the
@@ -21,7 +21,7 @@ Usage::
 
     python execution/build_all_redesigned_dcf.py                  # maintained DCF names
     python execution/build_all_redesigned_dcf.py --tickers AMZN GOOG V
-    python execution/build_all_redesigned_dcf.py --opus           # refresh Opus first
+    python execution/build_all_redesigned_dcf.py --refresh-assumptions
 """
 
 from __future__ import annotations
@@ -32,27 +32,33 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
-HERE = Path(__file__).resolve().parent
-
 # Resolve the shared universe helper from THIS checkout's src (not DCF_REPO_ROOT),
 # so the maintained set is computed from the code we're running while data is read
 # from DCF_REPO_ROOT.
-sys.path.insert(0, str(HERE.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from dcf.universe import dcf_universe  # noqa: E402
-from runtime.python_process import managed_python_prefix  # noqa: E402
+from db_paths import require_db_path
+from dcf.universe import dcf_universe
+from runtime.python_process import managed_python_prefix
+
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
+HERE = Path(__file__).resolve().parent
 
 
 def default_tickers(repo: Path = REPO) -> list[str]:
     """The maintained DCF universe: every briefed-list ticker (portfolio +
     evaluation) from active DB membership only. An existing workbook is an output,
     never membership authority, so stale files cannot resurrect archived names."""
-    return dcf_universe(repo)
+    return dcf_universe(repo, db_path=require_db_path())
 
 
 def _run(script: str, ticker: str, dest: Path | None = None) -> tuple[str, str, int]:
-    env = dict(os.environ, DCF_TICKER=ticker, DCF_REPO_ROOT=str(REPO))
+    env = dict(
+        os.environ,
+        DCF_TICKER=ticker,
+        DCF_REPO_ROOT=str(REPO),
+        EARNINGS_SUMMARY_DB_PATH=str(require_db_path()),
+    )
     if dest is not None:
         env["DCF_DEST"] = str(dest)
     proc = subprocess.run(
@@ -69,7 +75,13 @@ def _run(script: str, ticker: str, dest: Path | None = None) -> tuple[str, str, 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tickers", nargs="*", help="tickers to build (default: maintained DCF set)")
-    ap.add_argument("--opus", action="store_true", help="refresh Opus assumptions before building")
+    ap.add_argument(
+        "--refresh-assumptions",
+        "--opus",
+        dest="refresh_assumptions",
+        action="store_true",
+        help="refresh DCF assumptions before building (--opus is an alias)",
+    )
     ap.add_argument(
         "--out-dir",
         default=str(REPO / "dcf"),
@@ -83,13 +95,19 @@ def main() -> int:
 
     built = skipped = failed = 0
     for ticker in tickers:
-        if args.opus:
-            o_out, _o_err, _rc = _run("dcf_opus_assumptions.py", ticker)
-            tail = (o_out.strip().splitlines() or [f"opus {ticker}: no output"])[-1]
-            print(f"  opus: {tail}")
-        out, err, _rc = _run("build_redesigned_dcf.py", ticker, out_dir / f"{ticker}.xlsx")
+        if args.refresh_assumptions:
+            assumption_out, _assumption_err, assumption_status = _run(
+                "dcf_opus_assumptions.py", ticker
+            )
+            if assumption_status != 0:
+                failed += 1
+                print(f"FAIL\t{ticker}\tassumption refresh failed (exit {assumption_status})")
+                continue
+            tail = (assumption_out.strip().splitlines() or [f"assumptions {ticker}: no output"])[-1]
+            print(f"  assumptions: {tail}")
+        out, err, returncode = _run("build_redesigned_dcf.py", ticker, out_dir / f"{ticker}.xlsx")
         line = next((ln for ln in out.splitlines() if ln.startswith(("RESULT", "SKIP"))), None)
-        if line is None:
+        if returncode != 0 or line is None:
             failed += 1
             print(f"FAIL\t{ticker}\t{(err.strip().splitlines() or [''])[-1][:90]}")
         else:

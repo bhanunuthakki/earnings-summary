@@ -4,32 +4,23 @@ Ledger → Research inbox lane fragment."""
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
+from research.proposals import create_proposal, create_task, get_proposal
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import comments_server  # noqa: E402
 
-from research.proposals import create_proposal, create_task, get_proposal  # noqa: E402
-
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
 ResearchContext = tuple[FlaskClient, Path, int, int]
 
 
 def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> tuple[int, int]:
-    migrated_db(
-        db_path,
-        stamp=_PRIOR_HEAD,
-        archived=True,
-        reanchor_to_active_head=True,
-    )
+    migrated_db(db_path)
     task_id = create_task(
         note_id=None, claim="do NU's margins still hold?", ticker="NU", db_path=db_path
     )

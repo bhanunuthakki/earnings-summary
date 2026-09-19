@@ -8,6 +8,7 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
+import json
 import os
 from io import StringIO
 from pathlib import Path
@@ -23,6 +24,11 @@ __all__ = [
 ]
 
 
+def _script_json(payload: object) -> str:
+    """Keep JSON data inside its HTML raw-text element without changing its value."""
+    return json.dumps(payload).replace("<", "\\u003c")
+
+
 def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
     """Embed `<script type="application/json">` blocks the JS modules pick up:
     - workspace-boot: ticker, report_date, server URL (default localhost:7421)
@@ -32,8 +38,6 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
     No server connection required for read-only display (pins + side panel).
     POSTing new comments and opening Copilot needs the managed server
     (`start_comments_server.bat`)."""
-    import json as _json
-
     from comments import load_store, to_json_payload
 
     capability_store = ReportCapabilityStore(Path(spec.repo_root))
@@ -48,7 +52,7 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
         "server_url": "http://localhost:7421",
         "report_capability": report_capability or "",
     }
-    body.write(f'<script id="workspace-boot" type="application/json">{_json.dumps(boot)}</script>')
+    body.write(f'<script id="workspace-boot" type="application/json">{_script_json(boot)}</script>')
     payload: dict[str, object]
     try:
         store = load_store(Path(spec.repo_root), spec.ticker, spec.generation_date)
@@ -58,9 +62,10 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
             "ticker": spec.ticker,
             "report_date": spec.generation_date.isoformat(),
             "comments": [],
+            "status": "unavailable",
         }
     body.write(
-        f'<script id="workspace-comments" type="application/json">{_json.dumps(payload)}</script>'
+        f'<script id="workspace-comments" type="application/json">{_script_json(payload)}</script>'
     )
 
 

@@ -16,22 +16,19 @@ real pipeline does.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import date, datetime
 from io import StringIO
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from industry_classifier import suppressed_sections_for_ticker  # noqa: E402
-from report.models import (  # noqa: E402
+from industry_classifier import suppressed_sections_for_ticker
+from report.models import (
     BearCaseSection,
     CompanyDescriptionSection,
     EvaluationSnapshotSection,
     IrDocsSection,
     KpiLedgerRow,
     QuickCategorizationRow,
+    ReportSpec,
     SayDoCard,
     SayDoSection,
     SectionStatus,
@@ -39,11 +36,11 @@ from report.models import (  # noqa: E402
     ThesisSection,
     ValuationSnapshot,
 )
-from report.renderers.workspace_data import (  # noqa: E402
+from report.renderers.workspace_data import (
     WorkspaceP3Panels,
     load_workspace_p3_panels,
 )
-from report.renderers.workspace_html import (  # noqa: E402
+from report.renderers.workspace_html import (
     _company_tab,
     _customer_concentration_panel,
     _decisions_tab,
@@ -55,11 +52,11 @@ from report.renderers.workspace_html import (  # noqa: E402
     _saydo_tab,
     _saydo_verdicts_panel,
     _strategic_targets_panel,
-    _thesis_hygiene_panels,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+    _thesis_hygiene_panels,
     _thesis_tab,
     _valuation_summary_panel,
 )
-from report.sections.p3_data import (  # noqa: E402
+from report.sections.p3_data import (
     CustomerConcentrationRow,
     DecisionHistorySummary,
     DecisionRow,
@@ -69,7 +66,9 @@ from report.sections.p3_data import (  # noqa: E402
     SayDoVerdictRow,
     StrategicTargetRow,
 )
-from user_state.notes import AnalystNoteRow  # noqa: E402
+from user_state.notes import AnalystNoteRow
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
 # Macro sensitivity panel
@@ -1136,7 +1135,7 @@ def test_load_workspace_p3_panels_with_seeded_db(tmp_path: Path) -> None:
     )
     conn.commit()
     conn.close()
-    p3 = load_workspace_p3_panels("TEST", tmp_path)
+    p3 = load_workspace_p3_panels("TEST", tmp_path, db_path=db)
     assert len(p3.macro_sensitivities) == 1
     assert p3.macro_sensitivities[0].series_id == "vix"
     # Other accessors return empty because their tables are absent.
@@ -1149,20 +1148,14 @@ def test_load_workspace_p3_panels_with_seeded_db(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _spec_for_saydo():
+def _spec_for_saydo() -> ReportSpec:
     """Minimal stand-in for ``ReportSpec`` carrying just the attrs ``_saydo_tab``
     needs (``repo_root``, ``ticker``, ``llm_enabled``).
 
-    Using a plain object rather than a full ReportSpec to keep the test
-    setup local to this file.
+    Construct only the fields read by this isolated renderer seam.
     """
 
-    class _Spec:
-        repo_root = "."
-        ticker = "TEST"
-        llm_enabled = False
-
-    return _Spec()
+    return ReportSpec.model_construct(repo_root="/tmp/synthetic", ticker="TEST", llm_enabled=False)
 
 
 def test_workspace_p3_panels_empty_factory() -> None:

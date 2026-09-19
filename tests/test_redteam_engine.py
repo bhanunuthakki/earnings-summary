@@ -8,19 +8,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from llm.cli import LLMBudgetExceeded
+from llm.structured import StructuredParseError
+from redteam import cross_book, engine, lenses, store
+from redteam.models import RedTeamLLMItem
 
-from llm.cli import LLMBudgetExceeded  # noqa: E402
-from llm.structured import StructuredParseError  # noqa: E402
-from redteam import cross_book, engine, lenses, store  # noqa: E402
-from redteam.models import RedTeamLLMItem  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 _HOLDING_JSON: dict[str, object] = {
     "ticker": "NU",
@@ -221,7 +220,7 @@ def test_profile_drift_evidence_reads_affirmed_and_expiring_facts(
     from owner_profile.store import append_fact
 
     db = tmp_path / "portfolio.db"
-    migrated_db(db, stamp="0059_kpi_facts_restatement", archived=True, reanchor_to_active_head=True)
+    migrated_db(db)
 
     conn = sqlite3.connect(str(db))
     try:

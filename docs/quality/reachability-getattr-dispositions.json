@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "c21ee9ca449efc072a8490429d94933e505936942853a967175f93e25248a30b",
-      "line": 661,
+      "fingerprint": "4df9394e4e9d61cd01adfe43769a85e751d608b1faeb1c00579b0ce45090432f",
+      "line": 687,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -153,8 +153,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "80a84afe0f43ebb52af5f0906ff422b435d478fb3acf3d0b9d2e4cf0cf300f91",
-      "line": 816,
+      "fingerprint": "fd0ae6cf46ef03a83deaa729857ece8cdd5362bcff095f735925dd8534261a1a",
+      "line": 798,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -163,8 +163,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "f68b668bf903c48560baae18a8de7e45502fbfdc56a47c02ca5edb128770865f",
-      "line": 820,
+      "fingerprint": "3612977885420449b8965ed9a47434e379dfed1d3609db678b13fff77f64b012",
+      "line": 802,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -598,13 +598,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "1f080690bc38cc832b676f3c08a6902b12a890ad93a9f93118486c10253f1590",
+      "source_sha256": "30ea5289efcb0d5dfa07f459c7f8c8ad57215b7d4f682927a42cf7f9c1962c7c",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "2c5546a978eda36177551259cfdeba5862c9e68fb1f40a390069a5cd7f3c2d9b"
+    "source_manifest_sha256": "a948807b3de034962a4e33a66f4f8d5da32c75bd783116a53d43e01441588954"
   },
   "schema_version": "reachability-getattr-dispositions/v1"
 }

@@ -6,11 +6,9 @@ dependency loading light and avoiding unnecessary initialization work.
 
 Roughly a dozen modules each used to define a private ``_resolve_db_path`` with
 this exact body. This centralizes the logic while preserving lazy loading.
-Modules with a *different* resolution contract
-(e.g. ``timeseries.loaders`` which takes ``repo_root`` + ``db_path``, or
-``compute.segment_cache`` which derives the path from ``__file__`` to stay
-db-import-free) keep their own resolvers — this helper covers only the
-``override-or-db.DB_PATH`` shape.
+``resolve_db_path`` preserves compatibility for optional readers. Entry points
+that require retained state use ``require_db_path`` to reject a
+checkout database or an unavailable configured database.
 
 :func:`db_path_context` adds a scoped, thread-safe middle layer between the
 explicit override and the ``db.DB_PATH`` global. A library entry point that
@@ -96,3 +94,17 @@ def resolve_db_path(override: Path | str | None) -> Path | None:
     except ImportError:
         return None
     return Path(DB_PATH)
+
+
+def require_db_path(override: Path | str | None = None) -> Path:
+    """Resolve an existing explicit/configured DB; never invent checkout state."""
+    resolved = resolve_db_path(override)
+    checkout_default = Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
+    if resolved is None:
+        raise RuntimeError("An explicit or configured portfolio database is required")
+    resolved = resolved.expanduser().resolve()
+    if resolved == checkout_default.resolve():
+        raise RuntimeError("The checkout-default portfolio database is prohibited")
+    if not resolved.is_file():
+        raise FileNotFoundError("The configured portfolio database is unavailable")
+    return resolved

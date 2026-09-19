@@ -533,10 +533,10 @@ def render_allocation_decisions_panel(
     pooled = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     pooled.row_factory = sqlite3.Row
     try:
-        coach_pnl_html = _coach_pnl_section(db_path, user_id=user_id, conn=pooled)
-        coach_pings_html = _coach_pings_section(db_path, conn=pooled)
-        coach_mutes_html = _coach_mutes_section(db_path, conn=pooled)
-        decision_journal_html = _decision_journal_section(db_path, conn=pooled)
+        coach_pnl_html = render_coach_pnl_section(db_path, user_id=user_id, conn=pooled)
+        coach_pings_html = render_coach_pings_section(db_path, conn=pooled)
+        coach_mutes_html = render_coach_mutes_section(db_path, conn=pooled)
+        decision_journal_html = render_decision_journal_section(db_path, conn=pooled)
     finally:
         pooled.close()
     return compose_decisions_page(
@@ -551,7 +551,7 @@ def render_allocation_decisions_panel(
         coach_pnl_html=coach_pnl_html,
         coach_pings_html=coach_pings_html,
         coach_mutes_html=coach_mutes_html,
-        coach_digest_html=_coach_digest_section(db_path),
+        coach_digest_html=render_coach_digest_section(db_path),
         redteam_pnl_html=_redteam_pnl_html(db_path, user_id=user_id),
         annual_letter_html=_annual_letter_html(db_path),
         decision_journal_html=decision_journal_html,
@@ -684,7 +684,7 @@ def _memo_context(raw: object) -> dict[str, object]:
     return cast("dict[str, object]", parsed) if isinstance(parsed, dict) else {}
 
 
-def _query_coach_pnl(
+def query_coach_pnl(
     db_path: Path,
     *,
     user_id: str,
@@ -830,7 +830,7 @@ def _coach_change_tally(
     return changed, candidate
 
 
-def _coach_pnl_section(
+def render_coach_pnl_section(
     db_path: Path,
     *,
     user_id: str = DEFAULT_USER_ID,
@@ -842,7 +842,7 @@ def _coach_pnl_section(
     hand-DDL test fixture, or a DB stamped pre-0077) degrades every count to
     zero, which IS the honest all-zero line, not a swallowed error."""
     try:
-        pnl = _query_coach_pnl(db_path, user_id=user_id, now=now, conn=conn)
+        pnl = query_coach_pnl(db_path, user_id=user_id, now=now, conn=conn)
     except sqlite3.OperationalError:
         pnl = CoachPnl(
             reviews_run=0,
@@ -932,7 +932,7 @@ def _month_bounds_iso(now: datetime | None = None) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def _coach_pings_section(
+def render_coach_pings_section(
     db_path: Path,
     *,
     now: datetime | None = None,
@@ -980,7 +980,7 @@ def _ping_line(r: sqlite3.Row) -> str:
     )
 
 
-def _coach_mutes_section(db_path: Path, *, conn: sqlite3.Connection | None = None) -> str:
+def render_coach_mutes_section(db_path: Path, *, conn: sqlite3.Connection | None = None) -> str:
     """ "Active mutes" — coach_mutes rows with an inline Unmute button (REQ-12:
     visible AND reversible). Empty state is one muted line, not absent."""
     owned = conn is None
@@ -1015,7 +1015,7 @@ def _coach_mutes_section(db_path: Path, *, conn: sqlite3.Connection | None = Non
     return f'{head}<div class="cpnl-list">{lines}</div>{_UNMUTE_JS}</section>'
 
 
-def _coach_digest_section(db_path: Path) -> str:
+def render_coach_digest_section(db_path: Path) -> str:
     """ "Digest queue" — research.governor.digest_pings() rows, the capped-out
     / send-failed nudges the audit found vanishing silently. One line each
     with class + ticker + age (days since the ping was created)."""
@@ -1090,7 +1090,7 @@ _OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn
 _DECISION_JOURNAL_LIMIT = 30
 
 
-def _decision_journal_section(
+def render_decision_journal_section(
     db_path: Path,
     *,
     limit: int = _DECISION_JOURNAL_LIMIT,
@@ -1269,7 +1269,9 @@ def compose_decisions_page(
             kpi_strip,
             _audit_section(audit, live, alpha),
             _calibration_section(calibration) if calibration is not None else "",
-            _skill_decomposition_section(attribution, beta) if attribution is not None else "",
+            render_skill_decomposition_section(attribution, beta)
+            if attribution is not None
+            else "",
             scorecard_html,
             coach_pnl_html,
             redteam_pnl_html,
@@ -1795,7 +1797,7 @@ def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str
     return badge
 
 
-def _skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | None = None) -> str:
+def render_skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | None = None) -> str:
     """The shared selection/sizing/timing decomposition (L8 §6).
 
     Wave 1 (surface_density_jit_redesign.md D4/D7): the HONEST VERDICT leads —

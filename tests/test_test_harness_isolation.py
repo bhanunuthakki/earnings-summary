@@ -77,7 +77,7 @@ def test_graph_selection_follows_stamped_database_and_explicit_locations(tmp_pat
     assert historical.get_main_option("version_locations", "") == ""
     with sqlite3.connect(historical_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0039_add_dcf_forecast_series",
+            "0273_post_earnings_readout_budget",
         )
 
     active_db = tmp_path / "active.db"

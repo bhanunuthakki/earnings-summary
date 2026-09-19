@@ -13,7 +13,7 @@ Tests cover three layers:
     `load_financial_series`.
   * `snapshot.build_per_metric` / `financials.build_per_metric` — the
     section-level builders that translate facts into per_metric entries.
-  * `_log_brief_provenance` — the writer that lands per_metric into
+  * `log_brief_provenance` — the writer that lands per_metric into
     `brief_provenance_log.sources_used`, with the `sections` key
     unchanged for backward compatibility.
 """
@@ -22,16 +22,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from execution.build_artifacts import log_brief_provenance
+from report.sections import financials as financials_section
+from report.sections import snapshot as snapshot_section
+from timeseries.loaders import load_financial_fact_provenance
 
-from execution.build_artifacts import _log_brief_provenance  # noqa: E402
-from report.sections import financials as financials_section  # noqa: E402
-from report.sections import snapshot as snapshot_section  # noqa: E402
-from timeseries.loaders import load_financial_fact_provenance  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
 # Fixture builders
@@ -468,8 +466,9 @@ def test_log_brief_provenance_writes_per_metric(tmp_path: Path) -> None:
         },
     }
 
-    _log_brief_provenance(
+    log_brief_provenance(
         repo_root=repo,
+        db_path=db,
         ticker="GOOG",
         generation_date="2026-05-27",
         sections_status=sections_status,
@@ -511,8 +510,9 @@ def test_log_brief_provenance_omits_per_metric_when_none(tmp_path: Path) -> None
     artifact = repo / "out.html"
     artifact.write_text("<html/>", encoding="utf-8")
 
-    _log_brief_provenance(
+    log_brief_provenance(
         repo_root=repo,
+        db_path=db,
         ticker="AMZN",
         generation_date="2026-05-27",
         sections_status={"snapshot": "ok"},
@@ -543,8 +543,9 @@ def test_log_brief_provenance_omits_per_metric_when_empty_dict(tmp_path: Path) -
     artifact = repo / "out.html"
     artifact.write_text("<html/>", encoding="utf-8")
 
-    _log_brief_provenance(
+    log_brief_provenance(
         repo_root=repo,
+        db_path=db,
         ticker="META",
         generation_date="2026-05-27",
         sections_status={"snapshot": "ok"},

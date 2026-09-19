@@ -11,30 +11,25 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import Mock
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from onmymind.reply import ReplyVerdict, classify_reply, handle_reply  # noqa: E402
-from user_state.notes import (  # noqa: E402
+from onmymind.reply import ReplyVerdict, classify_reply, handle_reply
+from user_state.notes import (
     TRIAGE_INTENT,
     create_note,
     get_note,
     list_triage_notes,
     patch_note_context,
 )
-from user_state.triage_suggest import suggest_route, sweep_unsuggested  # noqa: E402
+from user_state.triage_suggest import suggest_route, sweep_unsuggested
 
-_PRIOR_HEAD = "0059_kpi_facts_restatement"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -47,7 +42,7 @@ def ctx(
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     monkeypatch.delenv("TRIAGE_SUGGEST", raising=False)
     db = tmp_path / "data" / "portfolio.db"
-    migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    migrated_db(db)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db
 
@@ -114,7 +109,7 @@ def test_classify_reply_action_property() -> None:
 def _stub_verdict(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
     import onmymind.reply as reply_mod
 
-    monkeypatch.setattr(reply_mod, "classify_reply", lambda c, r, **kw: ReplyVerdict(intent=intent))
+    monkeypatch.setattr(reply_mod, "classify_reply", Mock(return_value=ReplyVerdict(intent=intent)))
 
 
 def test_handle_reply_action_routes_through_core(
@@ -189,7 +184,7 @@ def test_handle_reply_missing_note_degrades_to_chat(ctx: tuple[FlaskClient, Path
 def _patch_verdict(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
     import onmymind.reply as reply_mod
 
-    monkeypatch.setattr(reply_mod, "classify_reply", lambda c, r, **kw: ReplyVerdict(intent=intent))
+    monkeypatch.setattr(reply_mod, "classify_reply", Mock(return_value=ReplyVerdict(intent=intent)))
 
 
 def test_reply_research_routes_through_action_core(

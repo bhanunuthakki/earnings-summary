@@ -11,11 +11,11 @@ the stamp point).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
@@ -36,58 +36,16 @@ from viewspec.workbench import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-
-_PRIOR_HEAD = "0078_stance_scores"
-
-_FACTS_DDL = """
-CREATE TABLE documents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    doc_type TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    fetched_at TIMESTAMP NOT NULL,
-    fetch_status TEXT NOT NULL,
-    raw_bytes_size INTEGER NOT NULL DEFAULT 0,
-    source_url TEXT,
-    source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
-);
-CREATE TABLE financial_facts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    period_end TIMESTAMP NOT NULL,
-    fiscal_period_type TEXT NOT NULL,
-    line_item TEXT NOT NULL,
-    value TEXT NOT NULL,
-    unit TEXT NOT NULL DEFAULT 'actual',
-    source_doc_id INTEGER NOT NULL,
-    locator TEXT
-);
-CREATE TABLE tracked_companies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL DEFAULT 'bhanu',
-    ticker TEXT NOT NULL,
-    name TEXT NOT NULL,
-    list_type TEXT NOT NULL,
-    archived_at TIMESTAMP
-);
-"""
 
 
-def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> None:
-    migrated_db(db_path, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+def _build_db(
+    db_path: Path,
+    migrated_db: Callable[..., Path],
+    fact_source_document: Callable[[sqlite3.Connection, str], int],
+) -> None:
+    migrated_db(db_path)
     conn = sqlite3.connect(db_path)
-    conn.executescript(_FACTS_DDL)
-    conn.execute(
-        "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256,"
-        " fetched_at, fetch_status, source_url) VALUES (1, 'TST', 'fmp',"
-        " 'fmp_income_statement', 'f.json', 'a', '2026-01-05 10:00:00', 'ok',"
-        " 'https://fmp.example/f.json')"
-    )
+    document_id = fact_source_document(conn, "TST")
     for pe, fpt, v in [
         ("2024-12-31 00:00:00", "Q4", 130.0),
         ("2025-03-31 00:00:00", "Q1", 120.0),
@@ -96,9 +54,8 @@ def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> None:
         ("2025-12-31 00:00:00", "Q4", 160.0),
     ]:
         conn.execute(
-            "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type,"
-            " line_item, value, source_doc_id) VALUES ('TST', ?, ?, 'revenue', ?, 1)",
-            (pe, fpt, v),
+            "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, value, source_doc_id, unit) VALUES ('TST', ?, ?, 'revenue', ?, ?, 'actual')",
+            (pe, fpt, v, document_id),
         )
     conn.execute(
         "INSERT INTO tracked_companies (user_id, ticker, name, list_type)"
@@ -109,9 +66,13 @@ def _build_db(db_path: Path, migrated_db: Callable[..., Path]) -> None:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+def db_path(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    fact_source_document: Callable[[sqlite3.Connection, str], int],
+) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    _build_db(db, migrated_db)
+    _build_db(db, migrated_db, fact_source_document)
     return db
 
 
@@ -238,7 +199,7 @@ def test_ranked_workbench_projects_governed_db_facts_with_current_provenance(
     assert row.as_of == "Q4'25"
     assert row.source is not None
     assert row.source.doc_id == 1
-    assert row.source.source_url == "https://fmp.example/f.json"
+    assert row.source.source_url == "https://example.test/TST/source"
 
     html_out = render_ranked_workbench(workbench)
     assert "160" in html_out

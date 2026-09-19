@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+import pytest
 
-from execution.build_artifacts import _log_brief_provenance  # noqa: E402
+from execution.build_artifacts import log_brief_provenance
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_db(db_path: Path, *, with_table: bool) -> None:
@@ -52,8 +52,9 @@ def test_writer_inserts_one_row_per_call(tmp_path: Path) -> None:
     artifact.parent.mkdir(parents=True)
     artifact.write_text("<html/>", encoding="utf-8")
 
-    _log_brief_provenance(
+    log_brief_provenance(
         repo_root=repo_root,
+        db_path=repo_root / "data" / "portfolio.db",
         ticker="GOOG",
         generation_date="2026-05-26",
         sections_status={"snapshot": "LIVE", "thesis": "LIVE", "bear_case": "STUB"},
@@ -95,8 +96,9 @@ def test_writer_silently_skips_when_table_missing(tmp_path: Path) -> None:
     artifact.write_text("<html/>", encoding="utf-8")
 
     # Should not raise.
-    _log_brief_provenance(
+    log_brief_provenance(
         repo_root=repo_root,
+        db_path=repo_root / "data" / "portfolio.db",
         ticker="META",
         generation_date="2026-05-26",
         sections_status={"snapshot": "LIVE"},
@@ -105,21 +107,23 @@ def test_writer_silently_skips_when_table_missing(tmp_path: Path) -> None:
     )
 
 
-def test_writer_skips_when_db_missing(tmp_path: Path) -> None:
-    """No DB file at all (cold-start) — silently no-op."""
+def test_writer_rejects_missing_database(tmp_path: Path) -> None:
+    """A missing explicit authority cannot produce an unlogged report."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     artifact = repo_root / "out.html"
     artifact.write_text("<html/>", encoding="utf-8")
 
-    _log_brief_provenance(
-        repo_root=repo_root,
-        ticker="NU",
-        generation_date="2026-05-26",
-        sections_status={},
-        trigger="manual",
-        artifact_path=artifact,
-    )
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        log_brief_provenance(
+            repo_root=repo_root,
+            db_path=repo_root / "data" / "portfolio.db",
+            ticker="NU",
+            generation_date="2026-05-26",
+            sections_status={},
+            trigger="manual",
+            artifact_path=artifact,
+        )
 
 
 def test_multiple_renders_append_separate_rows(tmp_path: Path) -> None:
@@ -133,8 +137,9 @@ def test_multiple_renders_append_separate_rows(tmp_path: Path) -> None:
     artifact.write_text("<html/>", encoding="utf-8")
 
     for trig in ("manual", "earnings", "news_refresh"):
-        _log_brief_provenance(
+        log_brief_provenance(
             repo_root=repo_root,
+            db_path=repo_root / "data" / "portfolio.db",
             ticker="AMZN",
             generation_date="2026-05-26",
             sections_status={"snapshot": "LIVE"},

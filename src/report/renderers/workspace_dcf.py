@@ -456,7 +456,9 @@ JS = r"""
 
   function load() {
     setStatus('Loading model…');
-    fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER))
+    fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
+      headers: window.__workspaceMutationHeaders ? window.__workspaceMutationHeaders() : {}
+    })
       .then(function (r) {
         if (r.status === 404) { setStatus('No editable DCF model for this ticker.', ''); return null; }
         return r.json().then(function (j) { return {ok: r.ok, body: j}; });
