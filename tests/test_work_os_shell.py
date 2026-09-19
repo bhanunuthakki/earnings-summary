@@ -77,14 +77,19 @@ def test_portfolio_copilot_home_composes_live_sortable_holdings_and_bounded_dial
     for label in ("Company", "Weight", "Price/Target", "Status", "Key Links"):
         assert f">{label}</span>" in cockpit
     assert "workOsSortPortfolioRows" in html
-    assert "fetch('/api/work-os/evaluation-dialogues?limit=3'" in html
+    assert (
+        "const url = '/api/work-os/evaluation-dialogues?limit=' + encodeURIComponent(workOsEvalLimit)"
+        in html
+    )
+    assert "await fetch(url" in html
+    assert "workOsBindEvaluationControls" in html
     assert "workOsRenderEvaluationDialogues" in html
     assert "workOsOpenEvaluationDialogue" in html
     assert "workOsOpenEvaluationWorkup" in html
     assert "workOsCompareEvaluation" in html
     assert "data-work-os-evaluation-session" in html
     assert "data-work-os-evaluation-instrument" in html
-    assert "escapeWorkOsHtml(linked ? sessionId : '')" in html
+    assert "data-work-os-evaluation-session=\"' + escapeWorkOsHtml(sessionId)" in html
     dialogue_runtime = html.split("function workOsOpenEvaluationDialogue(button)", 1)[1].split(
         "function workOsOpenEvaluationWorkup", 1
     )[0]
