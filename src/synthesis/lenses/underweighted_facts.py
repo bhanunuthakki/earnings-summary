@@ -13,6 +13,7 @@ from ._shared import (
     LensContext,
     load_latest_financials_snapshot,
     load_recent_summaries,
+    number_or_zero,
     sha8,
     thesis_block,
 )
@@ -55,7 +56,7 @@ def _ctx_underweighted(ticker: str | None, repo_root: Path) -> LensContext | Non
     financials = load_latest_financials_snapshot(ticker, repo_root)
     fin_summary = (
         "\n".join(
-            f"- {r['period_end'][:10]} · {r['line_item']}: {float(r['value'] or 0):,.0f}"
+            f"- {str(r['period_end'])[:10]} · {r['line_item']}: {number_or_zero(r['value']):,.0f}"
             for r in financials[:40]
         )
         if financials

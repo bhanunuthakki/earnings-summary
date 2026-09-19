@@ -14,6 +14,7 @@ from ._shared import (
     LensContext,
     load_dcf,
     load_recent_summaries,
+    number_or_zero,
     sha8,
     thesis_block,
 )
@@ -68,9 +69,9 @@ def _ctx_bull_case(ticker: str | None, repo_root: Path) -> LensContext | None:
     elif dcf:
         npv = dcf.get("npv_per_share")
         live = dcf.get("live_price")
-        ou = (float(dcf.get("over_under_pct") or 0)) * 100 if dcf.get("over_under_pct") else 0.0
+        ou = number_or_zero(dcf.get("over_under_pct")) * 100
         dcf_summary = (
-            f"NPV/share: ${float(npv or 0):.0f} · Live: ${float(live or 0):.0f} · "
+            f"NPV/share: ${number_or_zero(npv):.0f} · Live: ${number_or_zero(live):.0f} · "
             f"Over/Under: {ou:+.1f}%"
         )
     if not summaries and not dcf:

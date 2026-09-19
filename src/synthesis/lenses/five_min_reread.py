@@ -16,6 +16,7 @@ from ._shared import (
     load_predictions,
     load_recent_insider_transactions,
     load_recent_summaries,
+    number_or_zero,
     sha8,
     summarize_insiders,
     summarize_predictions,
@@ -80,13 +81,13 @@ def _ctx_five_min_reread(ticker: str | None, repo_root: Path) -> LensContext | N
     if dcf and dcf.get("sanity_flag"):
         dcf_summary = DCF_FLAGGED_NOTE
     elif dcf:
-        ou = float(dcf.get("over_under_pct") or 0) * 100 if dcf.get("over_under_pct") else 0.0
+        ou = number_or_zero(dcf.get("over_under_pct")) * 100
         npv = dcf.get("npv_per_share")
         live = dcf.get("live_price")
         mos = dcf.get("mos_bar_used")
         dcf_summary = (
-            f"NPV/share: ${float(npv or 0):.0f} · Live: ${float(live or 0):.0f} · "
-            f"Over/Under: {ou:+.1f}% · MoS bar: {float(mos or 0) * 100:.0f}% · "
+            f"NPV/share: ${number_or_zero(npv):.0f} · Live: ${number_or_zero(live):.0f} · "
+            f"Over/Under: {ou:+.1f}% · MoS bar: {number_or_zero(mos) * 100:.0f}% · "
             f"As of: {dcf.get('valuation_date')}"
         )
     latest_summary = summaries[0][1][:4000] if summaries else "(no recent earnings summary)"

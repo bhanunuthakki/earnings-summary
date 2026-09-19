@@ -23,6 +23,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -293,7 +294,7 @@ def read_holdings_json(ticker: str, repo_root: Path) -> dict[str, object]:
         return {}
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
+        return cast("dict[str, object]", d) if isinstance(d, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -465,12 +466,12 @@ def summarize_insiders(rows: list[dict[str, object]], max_items: int = 25) -> st
         name = str(r.get("insider_name") or "")
         title = str(r.get("insider_title") or "")
         kind = str(r.get("transaction_type") or "")
-        sh = float(r.get("shares") or 0)
+        sh = number_or_zero(r.get("shares"))
         val = r.get("transaction_value")
         val_str = (
-            f"${float(val) / 1e6:.1f}M"
-            if val is not None and float(val) >= 1e6
-            else f"${float(val) / 1e3:.0f}K"
+            f"${number_or_zero(val) / 1e6:.1f}M"
+            if val is not None and number_or_zero(val) >= 1e6
+            else f"${number_or_zero(val) / 1e3:.0f}K"
             if val is not None
             else "?"
         )
@@ -498,13 +499,14 @@ def summarize_predictions(rows: list[dict[str, object]], max_items: int = 20) ->
 def thesis_block(ticker: str, repo_root: Path) -> str:
     h = read_holdings_json(ticker, repo_root)
     thesis = str(h.get("thesis") or "")
-    kpis = h.get("tier_1_kpis") or []
+    kpis: object = h.get("tier_1_kpis") or []
     kpi_lines: list[str] = []
     if isinstance(kpis, list):
-        for k in kpis:
+        for k in cast("list[object]", kpis):
             if isinstance(k, dict):
-                name = k.get("name")
-                bc = k.get("break_condition")
+                kpi = cast("dict[str, object]", k)
+                name = kpi.get("name")
+                bc = kpi.get("break_condition")
                 if isinstance(name, str):
                     kpi_lines.append(f"- **{name}** — breaks if {bc or '?'}")
     parts: list[str] = []
@@ -513,6 +515,16 @@ def thesis_block(ticker: str, repo_root: Path) -> str:
     if kpi_lines:
         parts.append("**Tier-1 KPIs:**\n" + "\n".join(kpi_lines))
     return "\n\n".join(parts) if parts else "(no holdings JSON for this ticker)"
+
+
+def number_or_zero(value: object) -> float:
+    """Convert a JSON/SQLite scalar to float, returning zero for non-numeric shapes."""
+    if not isinstance(value, str | int | float | Decimal):
+        return 0.0
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
 
 
 def sha8(s: str) -> str:

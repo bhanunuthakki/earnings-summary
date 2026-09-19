@@ -14,6 +14,7 @@ from ._shared import (
     LensContext,
     load_dcf,
     load_recent_summaries,
+    number_or_zero,
     sha8,
     thesis_block,
 )
@@ -84,10 +85,10 @@ def _ctx_reverse_dcf(ticker: str | None, repo_root: Path) -> LensContext | None:
         default=str,
         indent=2,
     )
-    ou = (float(dcf.get("over_under_pct") or 0)) * 100 if dcf.get("over_under_pct") else 0.0
+    ou = number_or_zero(dcf.get("over_under_pct")) * 100
     dcf_summary = (
-        f"NPV/share: ${float(dcf.get('npv_per_share') or 0):.0f} · "
-        f"Live: ${float(dcf.get('live_price') or 0):.0f} · "
+        f"NPV/share: ${number_or_zero(dcf.get('npv_per_share')):.0f} · "
+        f"Live: ${number_or_zero(dcf.get('live_price')):.0f} · "
         f"Over/Under: {ou:+.1f}%"
     )
     latest = summaries[0][1][:2500] if summaries else "(none)"
