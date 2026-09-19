@@ -91,7 +91,7 @@ def test_evaluation_dialogues_api_valid_parameter_matrix(
     assert len(data["items"]) <= limit
 
 
-@pytest.mark.parametrize("bad_limit", ["1", "2", "4", "99", "0", "-1", "abc", "3.0", ""])
+@pytest.mark.parametrize("bad_limit", ["2", "4", "99", "0", "-1", "abc", "3.0", ""])
 def test_evaluation_dialogues_api_rejects_invalid_limit(
     client: FlaskClient, bad_limit: str
 ) -> None:

@@ -33,7 +33,7 @@ __all__ = [
     "load_evaluation_dialogues",
 ]
 
-ALLOWED_LIMITS: tuple[int, ...] = (3, 5, 10)
+ALLOWED_LIMITS: tuple[int, ...] = (1, 3, 5, 10)
 ALLOWED_SORTS: tuple[str, ...] = ("relevance", "ticker_asc")
 ALLOWED_FILTERS: tuple[str, ...] = ("all", "has_dialogue", "has_notes", "ready")
 
