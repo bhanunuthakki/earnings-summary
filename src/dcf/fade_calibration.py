@@ -148,9 +148,7 @@ def calibrate_curvature(
     Otherwise grid-searches ``[bounds]`` and returns the ``p`` minimising the
     near-term-weighted relative squared error, rounded to 2dp.
     """
-    points = [
-        (j, c) for j, c in consensus_by_offset.items() if isinstance(c, (int, float)) and c > 0
-    ]
+    points = [(j, c) for j, c in consensus_by_offset.items() if c > 0]
     if len(points) < 2:
         return default
     max_offset = max(j for j, _ in points)
