@@ -360,12 +360,20 @@ def _record_upgrade_evidence(
 ) -> None:
     dynamic_namespace_names = {"eval", "exec", "globals", "locals", "vars"}
     if any(
-        isinstance(child, ast.Call)
-        and (
-            (isinstance(child.func, ast.Name) and child.func.id in dynamic_namespace_names)
-            or (
-                isinstance(child.func, ast.Attribute) and child.func.attr in dynamic_namespace_names
-            )
+        (
+            isinstance(child, ast.Name)
+            and isinstance(child.ctx, ast.Load)
+            and child.id in dynamic_namespace_names
+        )
+        or (
+            isinstance(child, ast.Attribute)
+            and isinstance(child.ctx, ast.Load)
+            and child.attr in dynamic_namespace_names
+        )
+        or (
+            isinstance(child, ast.ImportFrom)
+            and child.module == "builtins"
+            and any(alias.name in dynamic_namespace_names for alias in child.names)
         )
         for child in ast.walk(tree)
     ):

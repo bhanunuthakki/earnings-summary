@@ -423,6 +423,42 @@ def upgrade():
     op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
     op.execute("CREATE TABLE orphaned (id INTEGER)")
 """,
+        """revision = "0001"
+down_revision = None
+class Noop:
+    def execute(self, sql):
+        return None
+namespace = globals
+namespace()["op"] = Noop()
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """from builtins import globals as namespace
+revision = "0001"
+down_revision = None
+class Noop:
+    def execute(self, sql):
+        return None
+namespace()["op"] = Noop()
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
+        """revision = "0001"
+down_revision = None
+class Noop:
+    def execute(self, sql):
+        return None
+run = exec
+run("op = Noop()")
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute("CREATE TABLE orphaned (id INTEGER)")
+""",
         """SQL = "CREATE TABLE orphaned (id INTEGER)"
 revision = "0001"
 down_revision = None
