@@ -27,16 +27,49 @@ JSON-serializable values are plain Python (float/int/str/list/dict/None).
 
 from __future__ import annotations
 
+import importlib
 import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import numpy as np
 
 log = logging.getLogger(__name__)
+
+
+class _RupturesAlgorithm(Protocol):
+    def fit(self, signal: np.ndarray) -> _RupturesAlgorithm: ...
+
+    def predict(self, *, pen: float) -> list[int]: ...
+
+
+class _PeltFactory(Protocol):
+    def __call__(self, *, model: str, min_size: int, jump: int) -> _RupturesAlgorithm: ...
+
+
+class _RupturesModule(Protocol):
+    Pelt: _PeltFactory
+
+
+class _DecompositionResult(Protocol):
+    trend: np.ndarray
+    seasonal: np.ndarray
+    resid: np.ndarray
+
+
+class _STLFit(Protocol):
+    def fit(self) -> _DecompositionResult: ...
+
+
+class _STLFactory(Protocol):
+    def __call__(self, y: np.ndarray, *, period: int, robust: bool) -> _STLFit: ...
+
+
+class _SeasonalModule(Protocol):
+    STL: _STLFactory
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +136,8 @@ def _mann_kendall_p(y: np.ndarray) -> float:
         return 1.0
     s = 0
     for i in range(n - 1):
-        s += int(np.sum(np.sign(y[i + 1 :] - y[i])))
+        delta = y[i + 1 :] - y[i]
+        s += int(np.count_nonzero(delta > 0) - np.count_nonzero(delta < 0))
     # Variance under the null; tie correction omitted (negligible on continuous data)
     var = (n * (n - 1) * (2 * n + 5)) / 18.0
     if var <= 0:
@@ -204,14 +238,13 @@ def detect_trend(series: list[Observation]) -> dict[str, object]:
 def _ruptures_inflection(y: np.ndarray) -> int | None:
     """Try ruptures PELT — fast, robust changepoint detection. None if unavailable."""
     try:
-        import ruptures as rpt  # local import so missing dep doesn't sink the module
+        rpt = cast("_RupturesModule", importlib.import_module("ruptures"))
     except ImportError:
         return None
     try:
         # rbf cost handles level + variance shifts; pen=3.0 is a calibrated default
         algo = rpt.Pelt(model="rbf", min_size=3, jump=1).fit(y.reshape(-1, 1))
-        # ruptures is untyped; predict returns list[int] but pyright sees Unknown
-        cps = cast("list[int]", algo.predict(pen=3.0))
+        cps = algo.predict(pen=3.0)
         # ruptures appends n as the final endpoint; strip it
         interior: list[int] = [int(c) for c in cps if 0 < int(c) < y.size]
         if not interior:
@@ -445,15 +478,13 @@ def seasonal_decompose(series: list[Observation], period: int = 4) -> dict[str, 
     trend = seasonal = residual = None
     if n >= 2 * period + 2:
         try:
-            from statsmodels.tsa.seasonal import STL  # type: ignore[import-not-found]
-
-            # statsmodels is untyped; STL().fit() returns DecomposeResult with
-            # trend/seasonal/resid attributes — cast to object so pyright
-            # accepts the attribute access without unknown-type errors
-            stl = cast("object", STL(y, period=period, robust=True).fit())
-            trend = np.asarray(getattr(stl, "trend"), dtype=float)  # noqa: B009
-            seasonal = np.asarray(getattr(stl, "seasonal"), dtype=float)  # noqa: B009
-            residual = np.asarray(getattr(stl, "resid"), dtype=float)  # noqa: B009
+            seasonal_module = cast(
+                "_SeasonalModule", importlib.import_module("statsmodels.tsa.seasonal")
+            )
+            stl = seasonal_module.STL(y, period=period, robust=True).fit()
+            trend = np.asarray(stl.trend, dtype=float)
+            seasonal = np.asarray(stl.seasonal, dtype=float)
+            residual = np.asarray(stl.resid, dtype=float)
             method = "stl"
         except Exception as exc:  # broad except: fall through to classical decomposition
             log.debug({"event": "stl_failed", "error": str(exc)})
