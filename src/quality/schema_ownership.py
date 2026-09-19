@@ -359,13 +359,29 @@ def _record_upgrade_evidence(
     evidence: dict[str, list[tuple[int, str, str]]],
 ) -> None:
     dynamic_namespace_names = {"eval", "exec", "globals", "locals", "vars"}
+    reflection_names = {"__dict__", "__getattribute__", "attrgetter", "getattr"}
+    unsafe_namespace_names = dynamic_namespace_names | reflection_names
+
     if any(
-        isinstance(child, ast.Call)
-        and (
-            (isinstance(child.func, ast.Name) and child.func.id in dynamic_namespace_names)
-            or (
-                isinstance(child.func, ast.Attribute) and child.func.attr in dynamic_namespace_names
-            )
+        (
+            isinstance(child, ast.Name)
+            and isinstance(child.ctx, ast.Load)
+            and child.id in unsafe_namespace_names
+        )
+        or (
+            isinstance(child, ast.Attribute)
+            and isinstance(child.ctx, ast.Load)
+            and child.attr in unsafe_namespace_names
+        )
+        or (
+            isinstance(child, ast.ImportFrom)
+            and child.module == "builtins"
+            and any(alias.name in unsafe_namespace_names for alias in child.names)
+        )
+        or (
+            isinstance(child, ast.Constant)
+            and isinstance(child.value, str)
+            and child.value in dynamic_namespace_names
         )
         for child in ast.walk(tree)
     ):
