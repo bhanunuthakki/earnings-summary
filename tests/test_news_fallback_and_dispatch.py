@@ -23,22 +23,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 import execution.fetch_fmp_news as fmpnews
 import execution.fetch_news as fetch_news
 import execution.fetch_news_websearch as websearch
 import llm_client
-from alembic import command
 from execution.fetch_news import fmp_refused
 from llm_client import structure_recent_news_json
 from news.store import NewsRow
 from pipeline.row_validation import RowValidationDriftError
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _no_additive_rows(*_a: object, **_k: object) -> list[NewsRow]:
@@ -71,20 +68,11 @@ _LLM_ARTIFACTS_DDL = (
 )
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def news_db(tmp_path: Path) -> Path:
+def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """DB with the real `news` table (migration) + llm_artifacts (for the cache)."""
     db = tmp_path / "news_dispatch.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, "0064_queued_actions")
-    command.upgrade(cfg, "0065_news")
+    migrated_db(db, stamp="0064_queued_actions", archived=True, target="0065_news")
     conn = sqlite3.connect(str(db))
     try:
         _ = conn.execute(_LLM_ARTIFACTS_DDL)

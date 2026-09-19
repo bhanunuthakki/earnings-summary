@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "9e663f3f1146f5287b7005a517838455c364b01c45e16a498dfca7f942e73a62",
-      "line": 659,
+      "fingerprint": "c21ee9ca449efc072a8490429d94933e505936942853a967175f93e25248a30b",
+      "line": 661,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -365,8 +365,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "83e45d41bccca12e2a3c419d5f568a790dc32444cf6a22aff3459a26b45e6ae4",
-      "line": 2126,
+      "fingerprint": "0fec1b17df87ec7901c8bc0c5ff29b40f5d9b9a084750f47aedba926958b0316",
+      "line": 2183,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -548,13 +548,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "718d1bf95af30051e6edc6e9e1ca98a0e93b91ba27e06a3b162b24680ca206e7",
+      "source_sha256": "8aeca2c1b12549636334958cdbe323046b73b8ee3d74602b96bc133dc975a526",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "ab1002c26b16372560b0fa8227748347917203a00d5a6232f7804829d9d97de7"
+    "source_manifest_sha256": "4cd00944a293afaa85b64781809cb62a635a4c8d09b827870ebbd8f887ec24e8"
   },
   "schema_version": "reachability-getattr-dispositions/v1"
 }

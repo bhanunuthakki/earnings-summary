@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -450,34 +452,147 @@ def test_cached_base_scan_yields_identical_pyright_diff_verdict(helper: ModuleTy
         )
 
 
+def _test_durations(
+    helper: ModuleType,
+    seconds: dict[str, float],
+    *,
+    default_seconds: float = 2.0,
+    shard_by_file: dict[str, str] | None = None,
+):
+    """Build a TestDurations from per-file seconds, pinning via the generator.
+
+    Mirrors the checked-in table's production flow: `pack_test_shards` derives
+    the pinned `shard` field from the durations, exactly like the seed script.
+    """
+    if shard_by_file is None:
+        base = helper.TestDurations(
+            labels=helper.SHARD_LABELS,
+            default_seconds=default_seconds,
+            seconds_by_file=seconds,
+            shard_by_file={},
+        )
+        packed = helper.pack_test_shards(list(seconds), base)
+        shard_by_file = {path: label for label, paths in packed.items() for path in paths}
+    return helper.TestDurations(
+        labels=helper.SHARD_LABELS,
+        default_seconds=default_seconds,
+        seconds_by_file=seconds,
+        shard_by_file=shard_by_file,
+    )
+
+
 def test_ci_test_partitions_are_exhaustive_disjoint_and_nonempty(helper: ModuleType) -> None:
     files = [f"tests/test_{index:04d}.py" for index in range(257)]
-    partitions = (
-        (1, 2, 0),
-        (1, 2, 1),
-        (2, 2, 0),
-        (2, 2, 1),
-        (3, 1, 0),
-        (4, 1, 0),
-        (5, 1, 0),
-        (6, 2, 0),
-        (6, 2, 1),
-        (7, 1, 0),
-        (8, 1, 0),
-    )
-    selected = [
-        helper.select_test_files(
-            files,
-            source_shard=source_shard,
-            source_shards=8,
-            split_count=split_count,
-            split_part=split_part,
-        )
-        for source_shard, split_count, split_part in partitions
-    ]
+    seconds = {path: 3.0 for path in files}
+    durations = _test_durations(helper, seconds)
+    partitions: dict[str, list[str]] = {}
+    for label in helper.SHARD_LABELS:
+        partitions[label] = helper.select_test_files(files, shard_label=label, durations=durations)
 
-    assert all(selected)
-    assert Counter(path for partition in selected for path in partition) == Counter(files)
+    assert all(partitions[label] for label in helper.SHARD_LABELS)
+    assert Counter(path for partition in partitions.values() for path in partition) == Counter(
+        files
+    )
+    assert sum(len(v) for v in partitions.values()) == len(files)
+
+
+def test_shard_assignment_is_deterministic_and_pins_known_files(helper: ModuleType) -> None:
+    files = [f"tests/test_{index:04d}.py" for index in range(40)]
+    seconds = {path: float((index % 7) + 1) for index, path in enumerate(files)}
+    durations = _test_durations(helper, seconds)
+
+    first = {
+        label: helper.select_test_files(files, shard_label=label, durations=durations)
+        for label in helper.SHARD_LABELS
+    }
+    second = {
+        label: helper.select_test_files(files, shard_label=label, durations=durations)
+        for label in helper.SHARD_LABELS
+    }
+    assert first == second
+
+    # A known file whose cost did not change stays in its pinned shard even
+    # when an unrelated new file is added.
+    extended = [*files, "tests/test_new_file_smoke.py"]
+    after = {
+        label: helper.select_test_files(extended, shard_label=label, durations=durations)
+        for label in helper.SHARD_LABELS
+    }
+    for path in files:
+        assert path in after[durations.shard_by_file[path]]
+
+
+def test_new_files_get_a_deterministic_default_shard(helper: ModuleType) -> None:
+    files = [f"tests/test_{index:04d}.py" for index in range(40)]
+    seconds = {path: float((index % 7) + 1) for index, path in enumerate(files)}
+    durations = _test_durations(helper, seconds, default_seconds=1.5)
+    extended = [*files, "tests/test_brand_new_smoke.py", "tests/test_other_new_smoke.py"]
+
+    forward = {
+        label: helper.select_test_files(extended, shard_label=label, durations=durations)
+        for label in helper.SHARD_LABELS
+    }
+    backward = {
+        label: helper.select_test_files(
+            list(reversed(extended)), shard_label=label, durations=durations
+        )
+        for label in helper.SHARD_LABELS
+    }
+    # Independent of caller input order, and the two new files land somewhere
+    # while every known file keeps its pin.
+    assert {k: set(v) for k, v in forward.items()} == {k: set(v) for k, v in backward.items()}
+    assert all(path in forward[durations.shard_by_file[path]] for path in files)
+
+
+def test_pack_test_shards_is_duration_aware_and_deterministic(helper: ModuleType) -> None:
+    files = [f"tests/test_{index:04d}.py" for index in range(20)]
+    seconds = {path: float((index % 5) + 1) * 3 for index, path in enumerate(files)}
+    durations = _test_durations(helper, seconds, shard_by_file={})
+
+    forward = helper.pack_test_shards(files, durations)
+    backward = helper.pack_test_shards(list(reversed(files)), durations)
+    assert forward == backward
+    total = sum(seconds.values())
+    assert sum(sum(seconds[path] for path in paths) for paths in forward.values()) == total
+
+    heavy = sorted(seconds.items(), key=lambda item: (-item[1], item[0]))[:2]
+    shard_of = {path: label for label, paths in forward.items() for path in paths}
+    assert shard_of[heavy[0][0]] != shard_of[heavy[1][0]]
+    assert shard_of[heavy[0][0]] in helper.SHARD_LABELS
+
+
+def test_pack_reproduces_the_checked_in_pinned_assignment(helper: ModuleType) -> None:
+    """The checked-in table is the output of the generator: re-packing the
+    table's own durations must reproduce every pinned file's shard."""
+    durations = helper.load_test_durations(REPO_ROOT / ".github" / "test-durations.json")
+    files = sorted(durations.seconds_by_file)
+    repacked = helper.pack_test_shards(files, durations)
+    repacked_label = {path: label for label, paths in repacked.items() for path in paths}
+    assert {path: durations.shard_by_file[path] for path in files} == repacked_label
+
+
+def test_checked_in_durations_file_is_valid_and_current(helper: ModuleType) -> None:
+    durations_path = REPO_ROOT / ".github" / "test-durations.json"
+    assert durations_path.is_file()
+    durations = helper.load_test_durations(durations_path)
+    assert durations.labels == helper.SHARD_LABELS
+    assert durations.default_seconds > 0
+
+    files = sorted(
+        "tests/" + path.name
+        for path in (REPO_ROOT / "tests").glob("test_*.py")
+        if path.name != "test_design_computed_canary.py"
+    )
+    assert files
+    covered = sum(1 for path in files if path in durations.seconds_by_file)
+    assert covered / len(files) >= 0.9
+
+    partitions = [
+        helper.select_test_files(files, shard_label=label, durations=durations)
+        for label in helper.SHARD_LABELS
+    ]
+    assert all(partitions)
+    assert Counter(path for partition in partitions for path in partition) == Counter(files)
 
 
 def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
@@ -622,3 +737,140 @@ def test_security_job_runs_every_scanner_before_failing_closed() -> None:
         assert re.fullmatch(exclude_pattern, f"docs/quality/{receipt}")
     assert not re.fullmatch(exclude_pattern, "docs/quality/policy-enforcement.json")
     assert r"docs[\\/]quality[\\/].*\.json" not in exclude_pattern
+
+
+def test_test_job_labels_count_and_picker_are_stable() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    # The job-name template, the 13 matrix labels, and the picker are the CI
+    # surface the aggregate gate keys on; they must not drift from the helper's
+    # canonical labels. The old modulo-8 source-shard/split interface is gone.
+    assert "name: tests (shard ${{ matrix.label }}/8)" in workflow
+    labels_in_workflow = re.findall(r'- \{ label: "([^"]+)" \}', workflow)
+    assert len(labels_in_workflow) == 13
+    assert labels_in_workflow == list(_load_helper().SHARD_LABELS)
+    assert "ci_gate.py select-tests" in workflow
+    assert "--shard-label '${{ matrix.label }}'" in workflow
+    assert "--durations-file .github/test-durations.json" in workflow
+    assert "--source-shard" not in workflow
+    assert "--split-count" not in workflow
+    assert (
+        "needs: [changes, public-boundary, tests, design, quality, typecheck, security]" in workflow
+    )
+
+
+def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    cache = "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4"
+    assert cache in workflow
+    assert "id: sqlite_cache" in workflow
+    assert "path: ${{ runner.temp }}/sqlite-3.53.4" in workflow
+    assert (
+        "key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}"
+        in workflow
+    )
+    # Both the tests matrix and Design Sync gate the build on a miss and keep
+    # the preload/verify step unconditional.
+    assert "if: steps.sqlite_cache.outputs.cache-hit != 'true'" in workflow
+    assert "Preload verified SQLite writer runtime" in workflow
+    assert 'assert sqlite3.sqlite_version == "3.53.4"' in workflow
+    assert "restore-keys:" not in workflow
+
+
+def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "id: venv_cache" in workflow
+    assert "path: ${{ runner.temp }}/ci-venv" in workflow
+    assert "id: pyver" in workflow
+    assert "steps.pyver.outputs.version" in workflow
+    assert (
+        "key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}"
+        "-lock${{ hashFiles('requirements.lock') }}-pyproject${{ hashFiles('pyproject.toml') }}"
+        in workflow
+    )
+    assert (
+        "key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}"
+        "-lock${{ hashFiles('requirements.lock') }}-design${{ hashFiles('requirements-design.lock') }}"
+        "-pyproject${{ hashFiles('pyproject.toml') }}" in workflow
+    )
+    # Install is skipped on a hit; the venv bin dir is prepended to PATH so
+    # every later step runs inside the cached environment.
+    assert "if: steps.venv_cache.outputs.cache-hit != 'true'" in workflow
+    assert 'python -m venv "$RUNNER_TEMP/ci-venv"' in workflow
+    assert 'echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"' in workflow
+    # The Playwright browser is a separate artifact and must install on every
+    # run (it is not venv-cached) — the canary matrix needs Chromium.
+    assert "python -m playwright install --with-deps --only-shell chromium" in workflow
+    assert "restore-keys:" not in workflow
+
+
+def test_durations_report_is_available_on_the_real_table(
+    helper: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import sys
+
+    files = sorted(
+        "tests/" + path.name
+        for path in (REPO_ROOT / "tests").glob("test_*.py")
+        if path.name != "test_design_computed_canary.py"
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(files) + "\n"))
+    code = helper.main(
+        [
+            "durations-report",
+            "--durations-file",
+            os.fspath(REPO_ROOT / ".github" / "test-durations.json"),
+        ]
+    )
+    assert code == 0
+
+
+def test_durations_loader_fails_closed_on_malformed_input(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"schema": 1, "labels": ["nope"], "default_seconds": 1}', encoding="utf-8")
+    with pytest.raises(ValueError, match="shard labels"):
+        helper.load_test_durations(bad)
+
+    bad.write_text("not json", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid durations file"):
+        helper.load_test_durations(bad)
+
+    unknown_label = tmp_path / "unknown.json"
+    payload = {
+        "schema": 1,
+        "labels": list(helper.SHARD_LABELS),
+        "default_seconds": 2.0,
+        "files": {"tests/test_x.py": {"seconds": 1.0, "shard": helper.SHARD_LABELS[0]}},
+    }
+    unknown_label.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown shard label"):
+        helper.select_test_files(
+            ["tests/test_x.py", "tests/test_y.py"],
+            shard_label="not-a-shard",
+            durations=helper.load_test_durations(unknown_label),
+        )
+
+
+def test_env_cache_miss_falls_back_to_build_and_install() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    # SQLite build remains in the workflow on the miss path: archive URL,
+    # hash verification, FTS5 compile, hash check, and version assert.
+    assert "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip" in workflow
+    assert (
+        "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"  # pragma: allowlist secret
+        in workflow
+    )
+    assert "-DSQLITE_ENABLE_FTS5" in workflow
+    assert "gcc -O2 -fPIC -shared -pthread" in workflow
+    # pip install falls back to the full hash-pinned install into the venv.
+    assert (
+        '"$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock' in workflow
+    )
+    assert '"$RUNNER_TEMP/ci-venv/bin/pip" install -e .[dev]' in workflow
+    assert (
+        '"$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements-design.lock'
+        in workflow
+    )

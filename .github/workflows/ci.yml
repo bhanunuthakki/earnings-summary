@@ -116,28 +116,33 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `split_count` subdivides a source shard WITHOUT changing which shard
-        # a file lands in (that stays `index % 8`), so adding a split keeps
-        # assignments stable (b93ead99). Shards 1 and 6 were the consistently
-        # heaviest at the last rebalance (886-929s and 674-851s vs 211-365s for
-        # shard 2's halves); the 2026-09-16 re-baseline window (15 main runs
-        # through 3d284d6b) shows shard 8 as the median-slowest (5.88m, 4/7
-        # runs under 6m) with shard 3 the spikiest (12.48m on run 35187203222,
-        # 5/7 under 6m), so shards 3 and 8 now carry the split alongside 1 and 6.
+        # Test files are assigned to these 13 shards by deterministic
+        # duration-aware packing (not hand-maintained modulo splits): the
+        # checked-in .github/test-durations.json pins every known file to a
+        # shard and supplies its measured duration, so a file whose cost did
+        # not change never moves shards. Only new (unpinned) files receive a
+        # deterministic least-loaded default shard. The labels are the CI
+        # surface — the job count and names are stable, and the aggregate gate
+        # keys on the whole `tests` job, so the packer can rebalance freely
+        # without touching this list (the helper refuses a table whose labels
+        # drift from it). Setup is env-cached: the hash-verified SQLite runtime
+        # and the pip dependency environment are exact-key cached per runner OS
+        # / tool version / lock hash; any miss falls back to the full build and
+        # install below.
         include:
-          - { label: "1", source_shard: 1, split_count: 2, split_part: 0 }
-          - { label: "1 overflow", source_shard: 1, split_count: 2, split_part: 1 }
-          - { label: "2", source_shard: 2, split_count: 2, split_part: 0 }
-          - { label: "2 overflow", source_shard: 2, split_count: 2, split_part: 1 }
-          - { label: "3", source_shard: 3, split_count: 2, split_part: 0 }
-          - { label: "3 overflow", source_shard: 3, split_count: 2, split_part: 1 }
-          - { label: "4", source_shard: 4, split_count: 1, split_part: 0 }
-          - { label: "5", source_shard: 5, split_count: 1, split_part: 0 }
-          - { label: "6", source_shard: 6, split_count: 2, split_part: 0 }
-          - { label: "6 overflow", source_shard: 6, split_count: 2, split_part: 1 }
-          - { label: "7", source_shard: 7, split_count: 1, split_part: 0 }
-          - { label: "8", source_shard: 8, split_count: 2, split_part: 0 }
-          - { label: "8 overflow", source_shard: 8, split_count: 2, split_part: 1 }
+          - { label: "1" }
+          - { label: "1 overflow" }
+          - { label: "2" }
+          - { label: "2 overflow" }
+          - { label: "3" }
+          - { label: "3 overflow" }
+          - { label: "4" }
+          - { label: "5" }
+          - { label: "6" }
+          - { label: "6 overflow" }
+          - { label: "7" }
+          - { label: "8" }
+          - { label: "8 overflow" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -150,7 +155,23 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements.lock
+      - name: Resolve python version for dependency cache key
+        id: pyver
+        shell: bash
+        run: echo "version=$(python -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
+      - name: Restore verified SQLite 3.53.4 writer runtime
+        id: sqlite_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/sqlite-3.53.4
+          # Exact key ONLY — deliberately no restore-keys. The key is the
+          # runner OS, the SQLite version, and the hash of the build recipe
+          # (which lives in this workflow), so a fuzzy restore can never pair
+          # a stale binary with a fresh workflow. On a miss the build step
+          # below runs exactly as before; on a hit this shard skips it.
+          key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Build verified SQLite writer runtime
+        if: steps.sqlite_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -174,17 +195,40 @@ jobs:
           gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
             "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
             -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
+      - name: Preload verified SQLite writer runtime
+        # Runs on both paths: the built artifact and the cached one must prove
+        # they load as SQLite 3.53.4 before any shard touches the database.
+        shell: bash
+        run: |
+          set -euo pipefail
+          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
+          test -f "$sqlite_dir/libsqlite3.so.0"
           echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
           LD_PRELOAD="$sqlite_dir/libsqlite3.so.0" python - <<'PY'
           import sqlite3
 
           assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
           PY
+      - name: Restore pip dependency environment
+        id: venv_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/ci-venv
+          # Exact key ONLY — no restore-keys. The resolved interpreter version
+          # plus the pinned lock hash and pyproject extras fully determine the
+          # install, so a mismatch is a plain miss and falls back to the full
+          # install below (never a silently older dependency set).
+          key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}-lock${{ hashFiles('requirements.lock') }}-pyproject${{ hashFiles('pyproject.toml') }}
       - name: Install dependencies
+        if: steps.venv_cache.outputs.cache-hit != 'true'
         run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements.lock
-          pip install -e .[dev]
+          python -m venv "$RUNNER_TEMP/ci-venv"
+          "$RUNNER_TEMP/ci-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock
+          "$RUNNER_TEMP/ci-venv/bin/pip" install -e .[dev]
+      - name: Activate dependency environment
+        shell: bash
+        run: echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"
       - name: Ensure data dir exists
         # The suite is hermetic (tmp_path everywhere); the few tests that touch
         # the gitignored data/portfolio.db degrade gracefully when it is absent
@@ -208,10 +252,8 @@ jobs:
           mapfile -t selected < <(
             printf '%s\n' "${all_files[@]}" |
               python .github/scripts/ci_gate.py select-tests \
-                --source-shard '${{ matrix.source_shard }}' \
-                --source-shards 8 \
-                --split-count '${{ matrix.split_count }}' \
-                --split-part '${{ matrix.split_part }}'
+                --shard-label '${{ matrix.label }}' \
+                --durations-file .github/test-durations.json
           )
           if (( ${#selected[@]} == 0 )); then
             echo "::error::test shard ${{ matrix.label }} selected no files"
@@ -251,7 +293,21 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: design-system/package-lock.json
+      - name: Resolve python version for dependency cache key
+        id: pyver
+        shell: bash
+        run: echo "version=$(python -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
+      - name: Restore verified SQLite 3.53.4 writer runtime
+        id: sqlite_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/sqlite-3.53.4
+          # Same exact-key contract as the tests job: runner OS + SQLite
+          # version + build recipe hash, no restore-keys. On a hit the build
+          # step below is skipped; the preload step still proves the runtime.
+          key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Build verified SQLite writer runtime
+        if: steps.sqlite_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -275,18 +331,43 @@ jobs:
           gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
             "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
             -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
+      - name: Preload verified SQLite writer runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
+          test -f "$sqlite_dir/libsqlite3.so.0"
           echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
           LD_PRELOAD="$sqlite_dir/libsqlite3.so.0" python - <<'PY'
           import sqlite3
 
           assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
           PY
+      - name: Restore pip dependency environment
+        id: venv_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/ci-venv
+          # Exact key only: resolved interpreter, both pinned lock hashes, and
+          # the pyproject extras fully determine the install. Playwright's
+          # Chromium download is deliberately NOT part of this cache — the
+          # browser lives in ~/.cache/ms-playwright, so it is installed by its
+          # own always-run step below on every run.
+          key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}-lock${{ hashFiles('requirements.lock') }}-design${{ hashFiles('requirements-design.lock') }}-pyproject${{ hashFiles('pyproject.toml') }}
       - name: Install runtime dependencies
+        if: steps.venv_cache.outputs.cache-hit != 'true'
         run: |
-          pip install --require-hashes -r requirements.lock
-          pip install --require-hashes -r requirements-design.lock
-          pip install -e .[dev]
-          python -m playwright install --with-deps --only-shell chromium
+          python -m venv "$RUNNER_TEMP/ci-venv"
+          "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock
+          "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements-design.lock
+          "$RUNNER_TEMP/ci-venv/bin/pip" install -e .[dev]
+      - name: Activate dependency environment
+        shell: bash
+        run: echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"
+      - name: Install Playwright chromium shell
+        # Always runs: the browser is cached separately (or absent on a fresh
+        # runner), independent of the venv cache above.
+        run: python -m playwright install --with-deps --only-shell chromium
       - name: Verify canonical design tokens and production Work OS contract
         env:
           # gen_design_conformance_debt.py REFUSES --allow-missing-base with an

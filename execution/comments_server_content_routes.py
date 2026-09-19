@@ -12,10 +12,17 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from comments_server_evaluation_projection import resolve_work_os_evaluation_item
-from flask import Flask, Response, abort, redirect, request, send_file
+from flask import (
+    Flask,
+    Response,
+    abort,
+    redirect,
+    request,
+    send_file,
+)
 
 from integrations.portfolio_tracker_client import LivePortfolio
 from pipeline.work_os_briefs import (
@@ -29,6 +36,12 @@ from pipeline.work_os_decisions import build_decision_projection
 
 class _TickerCommandCenter(Protocol):
     def to_dict(self) -> dict[str, object]: ...
+
+
+# Self-hosted webfonts vendored under src/ui/vendor/fonts/, beside the inlined
+# Alpine asset. The Work OS shell's @font-face rules reference these exact
+# files, so first paint never depends on an external font origin.
+_VENDOR_FONTS_DIR = Path(__file__).resolve().parents[1] / "src" / "ui" / "vendor" / "fonts"
 
 
 @dataclass(frozen=True)
@@ -82,6 +95,37 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             )
         except (OSError, ValueError, sqlite3.Error):
             return None
+
+    def vendored_font_file(filename: str) -> Any:
+        """Serve one self-hosted, content-stable webfont binary."""
+        # The vendored font directory is flat: the default converter already
+        # refuses slashes, the suffix check refuses non-woff2 names, and
+        # send_file receives a path below the fixed vendor directory.
+        if not filename.endswith(".woff2") or "\\" in filename:
+            abort(404)
+        font_path = _VENDOR_FONTS_DIR / filename
+        if not font_path.is_file():
+            abort(404)
+        response = cast(
+            Any,
+            send_file(
+                font_path,
+                mimetype="font/woff2",
+                conditional=True,
+            ),
+        )
+        # Vendored font files are content-stable (see src/ui/vendor/fonts/
+        # README.md): bytes change only on a deliberate re-vendor, so the
+        # immutable directive keeps repeat shell loads off the network path.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+    app.add_url_rule(
+        "/src/ui/vendor/fonts/<filename>",
+        "vendored_font_file",
+        vendored_font_file,
+        methods=["GET"],
+    )
 
     @app.route("/source/<int:doc_id>", methods=["GET"])
     def source_viewer(doc_id: int):
@@ -189,7 +233,9 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         from pipeline.peeks import render_news_events_peek
 
         return Response(
-            render_news_events_peek(db_path, request.args.get("ticker") or ""),
+            render_news_events_peek(
+                db_path, request.args.get("ticker") or "", conn=context.get_read_db()
+            ),
             mimetype="text/html",
         )
 
@@ -197,11 +243,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     def peek_ticker(ticker: str):
         from pipeline.peeks import render_ticker_peek
 
-        conn = context.open_db()
-        try:
-            html = render_ticker_peek(conn, repo_root, ticker)
-        finally:
-            conn.close()
+        html = render_ticker_peek(context.get_read_db(), repo_root, ticker)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
@@ -210,7 +252,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     def peek_memo(kind: str):
         from pipeline.peeks import render_memo_peek
 
-        html = render_memo_peek(db_path, kind)
+        html = render_memo_peek(db_path, kind, conn=context.get_read_db())
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
@@ -229,7 +271,9 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         from pipeline.peeks import render_provenance_peek
 
         return Response(
-            render_provenance_peek(db_path, request.args.get("ticker") or None),
+            render_provenance_peek(
+                db_path, request.args.get("ticker") or None, conn=context.get_read_db()
+            ),
             mimetype="text/html",
         )
 
@@ -241,6 +285,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             render_new_docs_peek(
                 db_path,
                 ticker=request.args.get("ticker") or "",
+                conn=context.get_read_db(),
             ),
             mimetype="text/html",
         )
@@ -249,15 +294,11 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     def peek_score():
         from pipeline.peeks import render_score_peek
 
-        conn = context.open_db()
-        try:
-            html = render_score_peek(
-                conn,
-                repo_root,
-                request.args.get("ticker") or "",
-            )
-        finally:
-            conn.close()
+        html = render_score_peek(
+            context.get_read_db(),
+            repo_root,
+            request.args.get("ticker") or "",
+        )
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
@@ -280,6 +321,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             repo_root,
             request.args.get("ticker") or "",
             artifact_id=artifact_id,
+            conn=context.get_read_db(),
         )
         if html is None:
             abort(404)
@@ -303,6 +345,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             repo_root,
             request.args.get("ticker") or "",
             artifact_id=artifact_id,
+            conn=context.get_read_db(),
         )
         if html is None:
             abort(404)
@@ -384,11 +427,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             ticker = context.safe_ticker(request.args.get("ticker") or "")
         except ValueError:
             abort(404)
-        conn = context.open_db()
-        try:
-            html = render_etf_workup(conn, repo_root, db_path, ticker)
-        finally:
-            conn.close()
+        html = render_etf_workup(context.get_read_db(), repo_root, db_path, ticker)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
@@ -412,7 +451,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     def peek_fact_provenance(fact_ref: str):
         from pipeline.peeks import render_fact_provenance_peek
 
-        html = render_fact_provenance_peek(db_path, repo_root, fact_ref)
+        html = render_fact_provenance_peek(db_path, repo_root, fact_ref, conn=context.get_read_db())
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
