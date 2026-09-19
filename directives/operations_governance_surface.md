@@ -71,6 +71,16 @@ A tested `no surface change` disposition must state which canonical owner and vi
 
 ### Current no-surface-change dispositions
 
+`execution/sync_list_type_from_holdings.py --apply --onboard-untracked` is the
+primary operator surface for approving reviewed tracker holdings into the
+research roster. It reuses `db.track_company` for SEC validation, issuer
+registration, and onboarding, and requires the existing explicit `--apply`
+mutation boundary. The scheduled morning job does not pass the opt-in flag.
+There is no Operations-workspace control: the capability has no standalone
+durable approval receipt or interactive confirmation state, so adding a button
+would violate the Operator-action boundary. The existing Jobs projection and
+portfolio-health views remain unchanged.
+
 `issuer_fact_manifest.v2` extends the existing internal, explicit offline-produce/apply batch CLI.
 It adds no scheduled job, managed service, runtime-health claim, or operator control. The canonical
 Operations registry and its visible Jobs, Sources, Data, and Actions contracts therefore remain

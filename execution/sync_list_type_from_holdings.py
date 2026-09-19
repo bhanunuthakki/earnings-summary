@@ -11,6 +11,11 @@ write, after which it re-syncs the issuer registry (the documented reconcile
 behind raw ``list_type`` flips). Idempotent: a second ``--apply`` against the
 same world is a no-op.
 
+Untracked held equities remain review-gated. After inspecting the dry-run,
+``--apply --onboard-untracked`` adds them through ``db.track_company`` so SEC
+validation, issuer-registry sync, and the normal onboarding chain are preserved.
+The scheduled morning run never passes this flag.
+
 The portfolio DB lives in MAIN (``data/`` is gitignored), so when running from a
 worktree pass ``--repo-root <MAIN>`` (or ``--db-path``). The companion tracker DB
 is found at ``<repo-root>/../portfolio-tracker/portfolio.db`` unless
@@ -19,6 +24,7 @@ is found at ``<repo-root>/../portfolio-tracker/portfolio.db`` unless
 Usage:
     python execution/sync_list_type_from_holdings.py                 # dry-run
     python execution/sync_list_type_from_holdings.py --apply
+    python execution/sync_list_type_from_holdings.py --apply --onboard-untracked
     python execution/sync_list_type_from_holdings.py --repo-root <MAIN> --apply
     python execution/sync_list_type_from_holdings.py --min-value 100 --apply
 """
@@ -26,29 +32,38 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from execution._lib import PROJECT_ROOT
+except ModuleNotFoundError:  # managed script launch adds execution/ as the import root
+    from _lib import PROJECT_ROOT
 
-from identity import DEFAULT_USER_ID  # noqa: E402
-from list_type_reconcile import (  # noqa: E402
+from identity import DEFAULT_USER_ID
+from list_type_reconcile import (
     Reclassification,
     apply_reclassification,
     compute_reclassification,
     load_pins,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _money(v: float) -> str:
     return f"${v:,.0f}"
 
 
-def _print_plan(plan: Reclassification, pins: dict[str, str], applied: bool) -> None:
+def print_plan(
+    plan: Reclassification,
+    pins: dict[str, str],
+    applied: bool,
+    *,
+    onboarded_untracked: bool,
+) -> None:
     # ASCII-only output — Windows consoles default to cp1252 and choke on glyphs.
     verb = "APPLIED" if applied else "DRY-RUN (no writes -- pass --apply)"
     print(f"\n=== list_type reconcile :: {verb} ===")
@@ -69,12 +84,14 @@ def _print_plan(plan: Reclassification, pins: dict[str, str], applied: bool) -> 
             held = _money(mv) if mv > 0 else "not held"
             print(f"      {ticker:8}  ({held})  {reason}")
     if plan.untracked_held:
-        print(
-            f"\n  [WARN] held > threshold but UNTRACKED ({len(plan.untracked_held)}) "
-            "-- onboard manually:"
-        )
+        if onboarded_untracked:
+            print(f"\n  [+] onboard -> portfolio ({len(plan.untracked_held)})")
+        else:
+            print(f"\n  [WARN] held > threshold but UNTRACKED ({len(plan.untracked_held)})")
         for ticker, sec_type, mv in plan.untracked_held:
             print(f"      {ticker:8}  {sec_type:8} held {_money(mv)}")
+        if not onboarded_untracked:
+            print("      Review, then rerun with --apply --onboard-untracked to add them.")
     if plan.unchanged_portfolio:
         print(
             f"\n  [OK] portfolio, correctly held ({len(plan.unchanged_portfolio)}): "
@@ -87,13 +104,34 @@ def _print_plan(plan: Reclassification, pins: dict[str, str], applied: bool) -> 
             "refusing to reclassify on no data. No changes."
         )
         return
-    if not plan.has_changes:
+    if not plan.has_changes and not onboarded_untracked:
         print("\n  No changes -- list_type already matches holdings.")
+
+
+def onboard_untracked(plan: Reclassification, *, db_path: Path, user_id: str) -> int:
+    """Add reviewed tracker holdings through the governed tracking entrypoint."""
+    import db
+
+    resolved_db_path = db_path.resolve()
+    # db.track_company launches the onboarder as a child process. Keep the
+    # explicit authority visible to both this process and that child.
+    os.environ["EARNINGS_SUMMARY_DB_PATH"] = str(resolved_db_path)
+    db.set_db_path(resolved_db_path)
+    for ticker, _sec_type, _market_value in plan.untracked_held:
+        # SEC validation replaces this ticker fallback with the official issuer
+        # name when available; a failed lookup remains visibly unvalidated.
+        db.track_company(ticker, ticker, "portfolio", user_id)
+    return len(plan.untracked_held)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Write changes (default: dry-run).")
+    parser.add_argument(
+        "--onboard-untracked",
+        action="store_true",
+        help="With --apply, add reviewed held-but-untracked equities through db.track_company.",
+    )
     parser.add_argument(
         "--min-value",
         type=float,
@@ -117,6 +155,8 @@ def main() -> int:
         "--tracker-db", type=Path, default=None, help="Override companion tracker DB path."
     )
     args = parser.parse_args()
+    if args.onboard_untracked and not args.apply:
+        parser.error("--onboard-untracked requires --apply after reviewing the dry-run")
 
     repo_root: Path = args.repo_root.resolve()
     db_path: Path = (
@@ -169,7 +209,16 @@ def main() -> int:
         es_conn.close()
         tracker_conn.close()
 
-    _print_plan(plan, pins, applied=args.apply and plan.has_changes)
+    onboarded_count = 0
+    if args.apply and args.onboard_untracked and plan.untracked_held:
+        onboarded_count = onboard_untracked(plan, db_path=db_path, user_id=args.user_id)
+
+    print_plan(
+        plan,
+        pins,
+        applied=args.apply and (plan.has_changes or onboarded_count > 0),
+        onboarded_untracked=onboarded_count > 0,
+    )
 
     # Re-sync the issuer registry after raw list_type flips (its docstring names
     # this as the reconcile that catches non-trigger list_type writes).
