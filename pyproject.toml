@@ -16,7 +16,7 @@ dev = [
     "alembic>=1.13",
     "sqlalchemy>=2.0",
     "ruff>=0.5",
-    "pyright>=1.1.380",
+    "pyright==1.1.414",
     "basedpyright>=1.10",
 ]
 # IR-document discovery (execution/refresh_ir_kpis.py --discover): a headless
@@ -109,25 +109,7 @@ include = [
     "src",
     "tests",
 ]
-# The two redesigned-DCF CLI tools are dynamic openpyxl/LLM scripts (cell objects,
-# JSON dicts) where strict typing yields ~500 unknown-type errors with no real
-# bugs caught — excluded like scratch/, the same way other dynamic scripts are.
-# import_owner_capacity.py joins them for the same reason: it imports
-# wealthplan's OWN Pydantic models (owner decision 2026-07-17) via a runtime
-# sys.path.insert into a SIBLING repo outside this project — pyright has no
-# static resolution path to it (extraPaths only covers this repo's own
-# subtrees), so every wealthplan.* symbol cascades to Unknown with no real bug
-# behind it. The importer's OWN types (owner_profile.models/.store) are fully
-# typed and covered by the pyright run over that package.
-# src/integrations/wealthplan_capacity.py (tenet-2 Phase 2) joins them for the
-# IDENTICAL reason — it's a runtime reader over the same sibling-repo sys.path
-# boundary, not an importer, but the wealthplan.* symbols cascade to Unknown
-# the same way. Its OWN types (WealthplanCashNeedSummary, the band Literal)
-# are fully typed and covered normally.
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived",
-           "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
-           "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/build_meli_platform_dcf.py", "execution/dcf_opus_assumptions.py",
-           "execution/import_owner_capacity.py", "src/integrations/wealthplan_capacity.py"]
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
@@ -165,10 +147,7 @@ include = [
     "src",
     "tests",
 ]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived",
-           "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
-           "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/build_meli_platform_dcf.py", "execution/dcf_opus_assumptions.py",
-           "execution/import_owner_capacity.py", "src/integrations/wealthplan_capacity.py"]
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
 extraPaths = ["src", "execution", "scratch", "cron"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"

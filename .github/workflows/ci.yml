@@ -1,10 +1,8 @@
 name: CI
 
-# Quality-enforcement machinery for a repo with a large pre-existing lint/type
-# baseline (ruff ~332, pyright strict ~3070 — tooling drift, see
-# directives/regrade_memo_post_wedge.md). A whole-repo "must be clean" gate is
-# therefore impossible without a months-long cleanup, so this workflow encodes
-# the project's actual norm — "gate only on YOUR files" — as machinery:
+# Quality-enforcement machinery for a repo with large pre-existing static debt.
+# The debt is admitted explicitly through exact descending subsystem ceilings;
+# every changed retained file must already be wholly clean:
 #
 #   * tests   — the FULL pytest suite must pass (the strong, whole-repo gate).
 #   * quality — changed retained files must be wholly Ruff/format/suppression clean
@@ -12,11 +10,9 @@ name: CI
 #               legacy baseline is paid down incrementally rather than blocking
 #               every PR.
 #
-# pyright (the strict type gate) runs as the `typecheck` job below — a RATCHET:
-# it compares normalized whole-repo diagnostics in the PR against the base
-# branch and fails on any genuinely NEW error. The legacy baseline is tolerated
-# (never blocking) and paid down incrementally, exactly like the ruff diff gate.
-# pyright also still runs locally via pre-commit / `make typecheck`.
+# The `typecheck` job scans every retained Python file and requires exact counts
+# for Pyright diagnostics and inline suppressions. Improvements must lower their
+# checked-in ceiling in the same PR, making each reduction durable.
 
 on:
   pull_request:
@@ -458,10 +454,9 @@ jobs:
   typecheck:
     needs: [changes]
     if: ${{ needs.changes.outputs.python == 'true' }}
-    # Diff-aware pyright (strict) ratchet. The repo carries a large pre-existing
-    # strict baseline, so a whole-repo "must be clean" gate is impossible. Compare
-    # normalized diagnostics in identical import context and block genuinely new
-    # errors while the legacy baseline is paid down incrementally.
+    # Every changed retained file must be clean. The complete active population
+    # also has exact, checked-in subsystem ceilings that must move downward with
+    # each debt cleanup; hidden files and diagnostic substitution cannot pass.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -474,14 +469,15 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Install dependencies
-        # Runtime deps (so third-party imports resolve) + pyright. Deliberately
-        # NOT `pip install -e .` — an editable install would point pyright at the
-        # HEAD checkout's src even while analysing the base worktree, corrupting
-        # the base count. First-party modules resolve via [tool.pyright].extraPaths.
+        # Runtime deps make third-party imports resolve. First-party modules
+        # resolve through [tool.pyright].extraPaths.
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
+          # Install the IR typing extra as well as the runtime lock. The static
+          # ceiling must not change according to whether an optional package
+          # happens to be present on the machine running the gate.
+          pip install "pyright==1.1.414" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0" "playwright>=1.48"
       - name: Resolve base ref
         id: base
         run: |
@@ -496,17 +492,6 @@ jobs:
             fi
           fi
           echo "ref=$base" >> "$GITHUB_OUTPUT"
-          # The RESOLVED base tip sha keys the base-scan cache: for a PR this
-          # is the fetched origin/<base_ref> tip (not the recorded PR base),
-          # so every run on the same base tip — e.g. each new commit pushed to
-          # one PR — shares a single base scan.
-          echo "sha=$(git rev-parse "$base")" >> "$GITHUB_OUTPUT"
-      - name: Resolve tool versions for the base-scan cache key
-        id: tools
-        run: |
-          set -euo pipefail
-          echo "pyright=$(pyright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
-          echo "python=$(python -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
       - name: pyright strict — changed retained files are wholly clean
         shell: bash
         run: |
@@ -518,95 +503,8 @@ jobs:
           else
             echo "$changed" | xargs pyright --pythonpath "$(command -v python)"
           fi
-      - name: Cache base pyright scan
-        # Exact key ONLY — deliberately no restore-keys. A fuzzy restore keyed
-        # to a different base tip would silently compare HEAD against a stale
-        # ratchet. (base tip sha, resolved pyright version, python version,
-        # installed lock hash) fully determines the base scan's diagnostics:
-        # the base tree — including its pyright config — comes from the base
-        # sha's checkout.
-        id: base_cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ runner.temp }}/pyright-base-cache
-          key: pyright-base-${{ steps.base.outputs.sha }}-pw${{ steps.tools.outputs.pyright }}-py${{ steps.tools.outputs.python }}-lock${{ hashFiles('requirements.lock') }}
-      - name: pyright strict — no NEW errors vs base (ratchet)
-        shell: bash
-        env:
-          BASE_CACHE_HIT: ${{ steps.base_cache.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          head_json="$RUNNER_TEMP/pyright-head.json"
-          base_json="$RUNNER_TEMP/pyright-base.json"
-
-          # pyright exits non-zero merely because this repo carries a large
-          # pre-existing strict baseline, so its exit status cannot tell
-          # "reported diagnostics" apart from "crashed before writing anything".
-          # Judge the JSON instead. An unparseable payload means the pyright RUN
-          # failed, and that must block naming its own reason rather than
-          # reaching the comparison below as an opaque "invalid pyright
-          # comparison: Expecting value: line 1 column 1" — which it did on two
-          # consecutive PRs, each time costing a manual re-run to diagnose.
-          # stderr is kept for the same reason: 2>/dev/null discarded the only
-          # evidence of why pyright died.
-          run_pyright() {
-            local out="$1" label="$2" dir="$3"
-            local log="$RUNNER_TEMP/pyright-$label.stderr"
-            ( cd "$dir" && pyright --outputjson ) > "$out" 2>"$log" || true
-            if ! python -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
-              echo "::error::pyright produced no parseable JSON for the $label side of the ratchet. This is a pyright or runner failure, not a new type error; re-running the job usually clears it. Its stderr follows."
-              tail -n 40 "$log" || true
-              exit 1
-            fi
-          }
-
-          run_pyright "$head_json" head "$GITHUB_WORKSPACE"
-          cache_dir="$RUNNER_TEMP/pyright-base-cache"
-          base_root=""
-          if [ "$BASE_CACHE_HIT" = "true" ] \
-              && [ -s "$cache_dir/pyright-base.json" ] \
-              && [ -s "$cache_dir/base-root.txt" ]; then
-            # Cache hit: skip the base worktree scan. The gate reads ONLY the
-            # two JSONs, and the cached JSON's diagnostics carry absolute paths
-            # from the run that produced them, so the stored base-root prefix
-            # string must be passed to --base-root verbatim (ci_gate.py strips
-            # it from every diagnostic path and message).
-            cp "$cache_dir/pyright-base.json" "$base_json"
-            base_root="$(cat "$cache_dir/base-root.txt")"
-            echo "base pyright scan restored from cache (base sha ${{ steps.base.outputs.sha }})"
-          else
-            base="${{ steps.base.outputs.ref }}"
-            wt="$RUNNER_TEMP/base-pyright"
-            # Clear any stale worktree path from a retried job, then REQUIRE the
-            # base checkout to succeed. A broken ratchet must BLOCK (exit 1), never
-            # silently pass: the previous `exit 0` here was an escape hatch that
-            # disabled the type gate on a transient infra hiccup (v6 re-grade,
-            # Quality enforcement). fetch-depth:0 + the base fetch above make a
-            # genuine failure exceptional, so failing closed is safe.
-            rm -rf "$wt" 2>/dev/null || true
-            if ! git worktree add --quiet --detach "$wt" "$base" 2>/dev/null; then
-              echo "::error::could not check out base ($base) for the pyright ratchet — failing the type gate (a broken ratchet must block, not silently pass)."
-              exit 1
-            fi
-            cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
-            trap cleanup EXIT
-            run_pyright "$base_json" base "$wt"
-            git worktree remove --force "$wt" 2>/dev/null || true
-            trap - EXIT
-            base_root="$wt"
-            # Persist the base JSON together with the root prefix it was
-            # produced under; this action's post-run saves them on an
-            # exact-key miss. (A hit with missing/empty files falls through
-            # to here and re-scans — fail toward running the scan.)
-            mkdir -p "$cache_dir"
-            cp "$base_json" "$cache_dir/pyright-base.json"
-            echo "$wt" > "$cache_dir/base-root.txt"
-          fi
-          python .github/scripts/ci_gate.py pyright-diff \
-            --base-json "$base_json" \
-            --head-json "$head_json" \
-            --base-root "$base_root" \
-            --head-root "$GITHUB_WORKSPACE"
+      - name: pyright and suppression ceilings — complete active population is exact
+        run: PYTHONPATH=src python execution/enforce_static_quality.py --pythonpath "$(command -v python)"
 
   security:
     needs: [changes]

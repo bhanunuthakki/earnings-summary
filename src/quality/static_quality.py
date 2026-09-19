@@ -245,6 +245,8 @@ def _matches_config_path(path: str, pattern: str) -> bool:
     while normalized.startswith("./"):
         normalized = normalized[2:]
     normalized = normalized.lstrip("/")
+    if normalized == ".":
+        return True
     return bool(
         normalized
         and (

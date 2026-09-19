@@ -600,19 +600,14 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "dorny/paths-filter" not in workflow
     assert 'git diff --name-only --no-renames -z "$base...$head"' in workflow
     assert 'git diff --name-only --no-renames -z "$PUSH_BEFORE_SHA" "$CURRENT_SHA"' in workflow
-    # Both ratchet sides run through one helper. pyright's non-zero exit from the
-    # tolerated baseline must stay non-fatal, but an unparseable payload has to
-    # block on its own terms rather than reach the comparison as a parse error.
+    # Static debt is enforced against exhaustive checked-in subsystem ceilings;
+    # the retired base-vs-head scanner and its fail-open `|| true` wrapper must
+    # not return.
     assert 'pyright --outputjson > "$head_json" 2>/dev/null || true' not in workflow
-    assert '( cd "$dir" && pyright --outputjson ) > "$out" 2>"$log" || true' in workflow
-    assert 'run_pyright "$head_json" head "$GITHUB_WORKSPACE"' in workflow
-    assert 'run_pyright "$base_json" base "$wt"' in workflow
-    assert "json.load(open(sys.argv[1]))" in workflow
-    assert 'tail -n 40 "$log"' in workflow
-    assert "ci_gate.py pyright-diff" in workflow
-    assert (
-        'pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"' in workflow
-    )
+    assert 'pyright --outputjson ) > "$out" 2>"$log" || true' not in workflow
+    assert "ci_gate.py pyright-diff" not in workflow
+    assert "execution/enforce_static_quality.py" in workflow
+    assert 'pip install "pyright==1.1.414"' in workflow
     assert "ci_gate.py select-tests" in workflow
     assert "errcount || echo 0" not in workflow
     assert "python .github/scripts/ci_gate.py classify" in workflow
@@ -651,33 +646,17 @@ def test_design_job_gating_consumes_classifier_design_output() -> None:
     assert '--design "$DESIGN_CHANGED"' in workflow
 
 
-def test_typecheck_caches_base_pyright_scan() -> None:
+def test_typecheck_enforces_changed_files_and_exact_population_ceilings() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     typecheck_job = workflow.split("\n  typecheck:\n", maxsplit=1)[1].split(
         "\n  security:\n", maxsplit=1
     )[0]
-    # Exact-key cache over (resolved base tip sha, pyright version, python
-    # version, installed lock hash) — deliberately no restore-keys, so a fuzzy
-    # restore can never compare HEAD against a stale ratchet.
-    assert "actions/cache@" in typecheck_job
-    assert "key: pyright-base-${{ steps.base.outputs.sha }}" in typecheck_job
-    assert "pw${{ steps.tools.outputs.pyright }}" in typecheck_job
-    assert "py${{ steps.tools.outputs.python }}" in typecheck_job
-    assert "hashFiles('requirements.lock')" in typecheck_job
-    assert "restore-keys:" not in typecheck_job
-    # The stored base-root prefix is passed to --base-root on a hit (the gate
-    # reads only the two JSONs and strips the root from every diagnostic).
-    assert 'base_root="$(cat "$cache_dir/base-root.txt")"' in typecheck_job
-    assert '--base-root "$base_root"' in typecheck_job
-    assert 'echo "$wt" > "$cache_dir/base-root.txt"' in typecheck_job
-    # A miss runs the same fail-closed worktree scan as before; head and base
-    # scans both go through the hardened run_pyright wrapper (blocks on
-    # unparseable JSON instead of misreading a pyright crash), and the
-    # pyright-diff invocation is unchanged.
-    assert "could not check out base" in typecheck_job
-    assert 'run_pyright "$head_json" head "$GITHUB_WORKSPACE"' in typecheck_job
-    assert 'run_pyright "$base_json" base "$wt"' in typecheck_job
-    assert "ci_gate.py pyright-diff" in typecheck_job
+    assert "actions/cache@" not in typecheck_job
+    assert 'xargs pyright --pythonpath "$(command -v python)"' in typecheck_job
+    assert "execution/enforce_static_quality.py" in typecheck_job
+    assert '"pyright==1.1.414"' in typecheck_job
+    assert '"playwright>=1.48"' in typecheck_job
+    assert "ci_gate.py pyright-diff" not in typecheck_job
 
 
 def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:

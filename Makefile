@@ -2,9 +2,9 @@
 # CI (.github/workflows/ci.yml) and humans run the same commands.
 #
 # NOTE on baselines: active Python is Ruff-clean; immutable historical
-# migrations retain approved format debt. Pyright still carries a large
-# pre-existing baseline. The enforceable gate is that changed retained files
-# are wholly format/lint/type/suppression clean plus a green test suite.
+# migrations retain approved format debt. Pyright and inline suppressions carry
+# exact descending subsystem ceilings, while every changed retained file must
+# already be wholly clean.
 
 .DEFAULT_GOAL := help
 
@@ -54,8 +54,8 @@ lint:  ## Lint the whole tree (informational — has a pre-existing baseline)
 lint-changed:  ## Lint only files changed vs BASE (the enforceable gate)
 	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs ruff check; else echo "no changed .py files"; fi
 
-typecheck:  ## pyright strict over the tree (informational — has a baseline)
-	pyright --pythonpath $(PY)
+typecheck:  ## Enforce exact descending whole-tree Pyright and suppression ceilings
+	PYTHONPATH=src $(PY) execution/enforce_static_quality.py --pythonpath $(PY)
 
 typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable gate)
 	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs pyright --pythonpath $(PY); else echo "no changed .py files"; fi
@@ -88,7 +88,7 @@ public-boundary-check:  ## Reject private material in the current tracked tree
 public-ref-check:  ## Audit fetched origin branches by private path category
 	$(PY) execution/verify_public_tree.py --all-refs
 
-check: architecture-check format-changed lint-changed typecheck-changed suppressions-changed test  ## Pre-push gate: architecture + format/lint/types/suppressions + tests
+check: architecture-check format-changed lint-changed typecheck-changed typecheck suppressions-changed test  ## Pre-push gate: architecture + format/lint/types/suppressions + tests
 
 check-fast: architecture-check format-changed lint-changed typecheck-changed suppressions-changed test-changed  ## Fast inner-loop gate: architecture + format/lint/types/suppressions + changed-tests
 

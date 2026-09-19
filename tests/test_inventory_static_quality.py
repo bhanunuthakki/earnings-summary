@@ -259,6 +259,21 @@ def test_active_file_outside_pyright_include_is_hold_and_identity_is_stable(
     assert first.suppressions_by_file["scripts/tool.py"]["# pyright: ignore"] == 1
 
 
+def test_repository_root_include_matches_every_active_path(tmp_path: Path) -> None:
+    paths = ["src/app.py", "scripts/tool.py", ".github/scripts/ci_gate.py"]
+    for name in paths:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pyright]\ninclude = ["."]\nexclude = []\n', encoding="utf-8"
+    )
+
+    result = inventory(tmp_path, _successful_runner(paths))
+
+    assert result.status == "PASS"
+
+
 def test_suppression_inventory_ignores_string_literals(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src/app.py").write_text(
