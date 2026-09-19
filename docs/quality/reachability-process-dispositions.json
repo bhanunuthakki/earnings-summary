@@ -689,6 +689,16 @@
     },
     {
       "disposition": "closed_command_set",
+      "evidence": "_run executes only the fixed git diff command assembled by changed_retained_python_files; the base revision is validated and paths are constrained to tracked Python files.",
+      "fingerprint": "f2d3dc57a2e5beb06b68e7ba32c995a1b84904ade7c12b8c48cd83cda0b05daf",
+      "line": 43,
+      "path": "src/quality/changed_suppressions.py",
+      "targets": [
+        "git"
+      ]
+    },
+    {
+      "disposition": "closed_command_set",
       "evidence": "_default_runner executes the immutable argv declared by the typed evidence artifact registry and fixed git metadata probes used to bind dependency context to the subject.",
       "fingerprint": "a5ac9e4a92282feba248c54d2e4898f2fe0468b3b7ba029de396ca0ca2f1d7f8",
       "line": 59,
@@ -840,13 +850,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "ca637aa45ed0dac1e5f1f896c0d3c7584b35232f67cf844fe8f23c833a632101",
+      "source_sha256": "e7e30dcb138da51d5f49345969f4d069cf4e466164c7e441250890470f67fcc9",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "c703935aee740a90282d8d5e841109766230395c88c4b390fa9cfcbf9ebeb0cd"
+    "source_manifest_sha256": "4b5b302a63e774e4c1ac150d53e415c44fe991b83ac021f0c7b2543b55955f70"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }
