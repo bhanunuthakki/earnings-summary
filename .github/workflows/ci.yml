@@ -474,7 +474,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install "pyright==1.1.414" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
+          # Install the IR typing extra as well as the runtime lock. The static
+          # ceiling must not change according to whether an optional package
+          # happens to be present on the machine running the gate.
+          pip install "pyright==1.1.414" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0" "playwright>=1.48"
       - name: Resolve base ref
         id: base
         run: |
