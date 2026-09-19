@@ -22,6 +22,37 @@ onboard pipeline against them.
 | Cron wrapper | `cron/run_onboard_pending.bat` |
 | Scheduled-task definition | `cron/onboard_pending_tickers.task.xml` |
 
+## Portfolio membership handoff
+
+`execution/sync_list_type_from_holdings.py` owns the boundary between the
+portfolio tracker's latest holdings snapshots and the research roster. The
+04:00 morning pipeline runs it with `--apply` before portfolio consumers:
+
+- a tracked operating company held above $100 is promoted to `portfolio`;
+- a `portfolio` company no longer held above $100 is demoted to `evaluation`,
+  preserving its thesis, briefs, KPIs, decisions, and research history;
+- the following lifecycle stage closes or opens `position_entries`, using
+  tracker transactions only to enrich entry/exit dates and prices;
+- funds, ETFs, options, cash, and explicitly pinned names retain their existing
+  exceptions.
+
+A first purchase of an **untracked** operating company is review-gated because
+adding it starts SEC validation, issuer registration, and data acquisition. Run
+the reconciler without mutation, review the `UNTRACKED` rows, then approve them:
+
+```text
+python execution/sync_list_type_from_holdings.py
+python execution/sync_list_type_from_holdings.py --apply --onboard-untracked
+```
+
+The approval path calls `db.track_company` for each still-untracked holding, so
+it uses the same validation and onboarding behavior as any other tracked-company
+addition. It is idempotent: a rerun sees successfully added names as tracked.
+The scheduled morning command intentionally omits `--onboard-untracked`; a
+tracker observation alone does not authorize new network and roster side
+effects. Membership is decided from current holdings snapshots, not inferred
+from an isolated buy or sell transaction.
+
 ## "Pending" definition (immutable)
 
 A row in `tracked_companies` is pending when ALL of:

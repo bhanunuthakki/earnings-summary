@@ -352,7 +352,6 @@
     "execution/sync_competitive_kpis.py",
     "execution/sync_ir_source_inventory.py",
     "execution/sync_issuer_registry.py",
-    "execution/sync_list_type_from_holdings.py",
     "execution/sync_position_lifecycle.py",
     "execution/sync_sec_filing_inventory.py",
     "execution/sync_thesis_state.py",
