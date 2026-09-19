@@ -206,6 +206,7 @@
     "execution/ingest_transcripts.py",
     "execution/initialize_semantic_review.py",
     "execution/inventory_function_candidates.py",
+    "execution/inventory_schema_ownership.py",
     "execution/inventory_static_quality.py",
     "execution/intake_documents.py",
     "execution/judge_disclosure_materiality.py",
