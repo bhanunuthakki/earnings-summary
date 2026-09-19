@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -115,7 +115,7 @@ def record_score(score: CalibrationScore, *, db_path: Path | str) -> int | None:
                 score.ticker,
                 float(score.score),
                 score.reason,
-                datetime.utcnow().isoformat(),
+                datetime.now(UTC).replace(tzinfo=None).isoformat(),
                 score.scored_by,
                 score.artifact_id,
             ),
