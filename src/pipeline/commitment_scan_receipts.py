@@ -478,7 +478,10 @@ def current_transcript_scan_binding(
     ).fetchall()
     for row in rows:
         file_path = PurePosixPath(str(row["file_path"]))
-        if file_path.parent != PurePosixPath("transcripts/processed"):
+        transcript_sha256 = str(row["sha256"])
+        processed_parent = PurePosixPath("transcripts/processed")
+        evidence_parent = PurePosixPath("transcripts/raw/.evidence") / transcript_sha256
+        if file_path.parent not in {processed_parent, evidence_parent}:
             continue
         match = _TRANSCRIPT_NAME.fullmatch(file_path.stem)
         if match is None:
@@ -497,7 +500,7 @@ def current_transcript_scan_binding(
             transcript_id=int(row["transcript_id"]),
             document_id=int(row["document_id"]),
             transcript_acquisition_receipt_id=str(row["receipt_id"]),
-            transcript_sha256=str(row["sha256"]),
+            transcript_sha256=transcript_sha256,
         )
     return None
 
