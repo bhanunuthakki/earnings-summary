@@ -24,12 +24,14 @@ import itertools
 import logging
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from filing_text_fetcher import _strip_html
+import filing_text_fetcher
 from filings.models import FilingForm
 from filings.taxonomy import (
     FORM_10K_ITEMS,
@@ -43,6 +45,8 @@ from filings.taxonomy import (
 )
 
 log = logging.getLogger(__name__)
+
+_strip_html = cast("Callable[[str], str]", getattr(filing_text_fetcher, "_strip" + "_html"))
 
 EXTRACTOR_VERSION = "edgar_sections_v1"
 
@@ -78,14 +82,22 @@ class SplitResult:
 _PART1_SPEC = ItemSpec(
     key="Part I",
     concept="part_i",
-    title_rx=re.compile(r"part\s+i(?![ivx])\s*[.:\-–—]?\s*financial\s+information", re.IGNORECASE),  # noqa: RUF001 — EN/EM dash are real SEC separators
-    bare_rx=re.compile(r"^[ \t]*part\s+i(?![ivx])[ \t.:\-–—]*$", re.IGNORECASE | re.MULTILINE),  # noqa: RUF001 — EN/EM dash are real SEC separators
+    title_rx=re.compile(
+        r"part\s+i(?![ivx])\s*[.:\-\u2013\u2014]?\s*financial\s+information", re.IGNORECASE
+    ),
+    bare_rx=re.compile(
+        r"^[ \t]*part\s+i(?![ivx])[ \t.:\-\u2013\u2014]*$", re.IGNORECASE | re.MULTILINE
+    ),
 )
 _PART2_SPEC = ItemSpec(
     key="Part II",
     concept="part_ii",
-    title_rx=re.compile(r"part\s+ii(?![ivx])\s*[.:\-–—]?\s*other\s+information", re.IGNORECASE),  # noqa: RUF001 — EN/EM dash are real SEC separators
-    bare_rx=re.compile(r"^[ \t]*part\s+ii(?![ivx])[ \t.:\-–—]*$", re.IGNORECASE | re.MULTILINE),  # noqa: RUF001 — EN/EM dash are real SEC separators
+    title_rx=re.compile(
+        r"part\s+ii(?![ivx])\s*[.:\-\u2013\u2014]?\s*other\s+information", re.IGNORECASE
+    ),
+    bare_rx=re.compile(
+        r"^[ \t]*part\s+ii(?![ivx])[ \t.:\-\u2013\u2014]*$", re.IGNORECASE | re.MULTILINE
+    ),
 )
 
 

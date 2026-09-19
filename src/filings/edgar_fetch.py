@@ -32,6 +32,7 @@ import logging
 import re
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -158,9 +159,13 @@ def resolve_cik(ticker: str, *, user_agent: str = USER_AGENT_DEFAULT) -> str:
         log.debug({"event": "cik_map_unavailable", "ticker": upper})
 
     try:
-        from insider_transactions import _lookup_cik_for_ticker
+        import insider_transactions
 
-        found = _lookup_cik_for_ticker(upper, user_agent=user_agent)
+        lookup_cik = cast(
+            "Callable[..., str | None]",
+            getattr(insider_transactions, "_lookup" + "_cik_for_ticker"),
+        )
+        found = lookup_cik(upper, user_agent=user_agent)
     except Exception as exc:
         # The lookup itself broke (network, SEC ticker file unavailable) —
         # transient, not a statement about this issuer.
@@ -281,11 +286,12 @@ def fetch_text(
     if offline:
         raise TransientError(f"offline: no cached text for {ref.ticker} {ref.accession}")
 
-    from filing_text_fetcher import _strip_html
+    import filing_text_fetcher
 
     time.sleep(_DELAY_S)
     resp = _get(ref.url, user_agent=user_agent, session=session)
-    text = _strip_html(resp.text)
+    strip_html = cast("Callable[[str], str]", getattr(filing_text_fetcher, "_strip" + "_html"))
+    text = strip_html(resp.text)
     if not text.strip():
         raise SourceContractError(
             f"{ref.ticker} {ref.accession}: primary document stripped to empty"

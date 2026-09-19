@@ -542,19 +542,49 @@
       "targets": [
         "EmbeddingRuntimeRegistration.model_fields"
       ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "EDGAR CIK fallback resolves the fixed legacy _lookup_cik_for_ticker helper through a typed compatibility boundary.",
+      "fingerprint": "085409f1b512f0f77ec639e31f196ab8200066c3ef9455cbb9c0608189d1df53",
+      "line": 166,
+      "path": "src/filings/edgar_fetch.py",
+      "targets": [
+        "src/insider_transactions.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "EDGAR document fetch resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
+      "fingerprint": "4cdc82625eebc2836ef6f6d8b7fdb1cf2a7b1b693aaf64061dc1cfdfe23594d2",
+      "line": 293,
+      "path": "src/filings/edgar_fetch.py",
+      "targets": [
+        "src/filing_text_fetcher.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "EDGAR section splitting resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
+      "fingerprint": "56b7c5d0b5c8c5dccd085c787b98ed5eb791c2200561e33c80d76d614e2123dd",
+      "line": 49,
+      "path": "src/filings/edgar_sections.py",
+      "targets": [
+        "src/filing_text_fetcher.py"
+      ]
     }
   ],
   "graph_provenance": {
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "4d48ccc609c23e76898b68ca3f5247fe5215cccc2dd2d4b022cd2ab2e39667f3",
+      "source_sha256": "bfc6eecf52d46cd6b2e2f7e5fb7128457744ed3a46d061708010701f6ab4850a",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "58719110cded65a9ff516f085eab1171cb9d82f01615b75617835aa5312a23dd"
+    "source_manifest_sha256": "c77b60f86e1fcd3167772a1a3c6429581f50e1acad09e7f2160387d6421eea5f"
   },
   "schema_version": "reachability-getattr-dispositions/v1"
 }
