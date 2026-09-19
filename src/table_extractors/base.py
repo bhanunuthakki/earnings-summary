@@ -191,7 +191,7 @@ def iter_xbrl_table(section: list[dict[str, object]]) -> Iterator[XbrlRow]:
     if len(section) >= 1:
         head_v = next(iter(section[0].values()))
         if isinstance(head_v, list):
-            period_labels = [str(x) for x in head_v]
+            period_labels = [str(x) for x in cast("list[object]", head_v)]
         body_start = 1
     if len(section) >= 2:
         second = section[1]
@@ -201,7 +201,7 @@ def iter_xbrl_table(section: list[dict[str, object]]) -> Iterator[XbrlRow]:
 
     axis_path: list[str] = []
     for entry in section[body_start:]:
-        if not isinstance(entry, dict) or not entry:
+        if not entry:
             continue
         label = next(iter(entry.keys()))
         raw_values = entry[label]

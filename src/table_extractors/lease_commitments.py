@@ -189,7 +189,7 @@ def extract(
 def _inner_section_title(section: list[dict[str, object]]) -> str | None:
     """The first dict's first key is the inner section title FMP emits.
     Returns None when the section is empty or shaped unexpectedly."""
-    if not section or not isinstance(section[0], dict):
+    if not section:
         return None
     keys = list(section[0].keys())
     return keys[0] if keys else None
@@ -201,8 +201,6 @@ def _find_ladder_section(
     """Find the lease-ladder section by key keywords. Returns
     (section_key, section_body) or (None, None)."""
     for key, value in payload.items():
-        if not isinstance(key, str):
-            continue
         lk = key.lower()
         if "lease" not in lk:
             continue
