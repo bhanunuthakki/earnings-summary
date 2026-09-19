@@ -609,8 +609,8 @@ _UNSET: object = object()  # sentinel: "leave this link column alone"
 def set_note_links(
     note_id: int,
     *,
-    decision_id: int | None | object = _UNSET,
-    position_entry_id: int | None | object = _UNSET,
+    decision_id: int | object | None = _UNSET,
+    position_entry_id: int | object | None = _UNSET,
     link_auto_resolve: bool | object = _UNSET,
     db_path: Path | str | None = None,
 ) -> AnalystNoteRow | None:

@@ -476,6 +476,7 @@ class _PerfRouter:
                 "policy_equivalent_value": None,
             },
         ]
+
         def price_inputs(ticker: str) -> list[dict[str, str]]:
             return [
                 {
@@ -487,6 +488,7 @@ class _PerfRouter:
                 }
                 for target_date in (effective, end)
             ]
+
         series["equation_receipt"] = {
             "calculation_id": "calc-router",
             "external_flow_ledger_id": "ledger-router",
