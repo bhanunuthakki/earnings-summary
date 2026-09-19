@@ -11,9 +11,29 @@ import pytest
 from pipeline.commitment_scan_receipts import current_transcript_scan_binding
 
 
-@pytest.mark.parametrize(("matching_digest", "expected"), [(True, True), (False, False)])
+@pytest.mark.parametrize(
+    (
+        "ticker",
+        "fiscal_year_end_month",
+        "period_end",
+        "matching_digest",
+        "legacy_metadata",
+        "expected",
+    ),
+    [
+        ("ACME", 12, "2026-06-30", True, False, True),
+        ("ACME", 12, "2026-06-30", False, False, False),
+        ("ACME", 12, "2026-06-30", True, True, True),
+        ("ACME", 12, "2025-06-30", True, False, False),
+        ("VEEV", 1, "2025-07-31", True, False, True),
+    ],
+)
 def test_content_addressed_conflict_evidence_binding(
+    ticker: str,
+    fiscal_year_end_month: int,
+    period_end: str,
     matching_digest: bool,
+    legacy_metadata: bool,
     expected: bool,
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -26,7 +46,7 @@ def test_content_addressed_conflict_evidence_binding(
         "authorization": {
             "idempotency_key": "transcript:" + "1" * 64,
             "request": {
-                "canonical_ticker": "ACME",
+                "canonical_ticker": ticker,
                 "document_type": "earnings_call_transcript",
                 "fiscal_quarter": 2,
                 "fiscal_year": 2026,
@@ -39,12 +59,15 @@ def test_content_addressed_conflict_evidence_binding(
             },
             "schema_version": "transcript-acquisition-authorization@1",
             "status": "authorized",
-            "stored_target": {"coverage_role": "holdings", "fiscal_year_end_month": 12},
+            "stored_target": {
+                "coverage_role": "holdings",
+                "fiscal_year_end_month": fiscal_year_end_month,
+            },
         },
-        "canonical_document_path": "transcripts/raw/ACME_Q2_2026.txt",
-        "document_id": 1,
+        "canonical_document_path": f"transcripts/raw/{ticker}_Q2_2026.txt",
+        "document_id": None if legacy_metadata else 1,
         "schema_version": "authorized-transcript-artifact@1",
-        "source_url": None,
+        "source_url": ("https://issuer.example.invalid/transcript" if legacy_metadata else None),
         "staged": {"sha256": digest, "size_bytes": len(transcript_text)},
     }
     artifact_json = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
@@ -56,10 +79,12 @@ def test_content_addressed_conflict_evidence_binding(
         conn.row_factory = sqlite3.Row
         conn.execute(
             "INSERT INTO documents "
-            "(id,ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
-            "VALUES (1,'ACME','ir_doc','ir_transcript',?,?,?,'ok',?)",
+            "(id,ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,"
+            "raw_bytes_size,source_url) VALUES (1,?,?,'ir_transcript',?,?,?,'ok',?,NULL)",
             (
-                f"transcripts/raw/.evidence/{path_digest}/ACME_Q2_2026.txt",
+                ticker,
+                "transcript_audio" if legacy_metadata else "ir_doc",
+                f"transcripts/raw/.evidence/{path_digest}/{ticker}_Q2_2026.txt",
                 digest,
                 "2026-07-01",
                 len(transcript_text),
@@ -69,7 +94,8 @@ def test_content_addressed_conflict_evidence_binding(
             "INSERT INTO transcripts "
             "(id,document_id,ticker,call_date,fiscal_period_type,period_end,source,is_active,"
             "is_current,recorded_at) VALUES "
-            "(1,1,'ACME','2026-07-01','Q2','2026-06-30','issuer_ir',1,1,'2026-07-01')"
+            "(1,1,?,'2026-07-01','Q2',?,'issuer_ir',1,1,'2026-07-01')",
+            (ticker, period_end),
         )
         conn.execute(
             "INSERT INTO transcript_segments "
@@ -92,14 +118,14 @@ def test_content_addressed_conflict_evidence_binding(
             (
                 receipt_id,
                 "transcript:" + "1" * 64,
-                1,
-                "ACME",
+                artifact["document_id"],
+                ticker,
                 2026,
                 2,
-                "transcripts/raw/ACME_Q2_2026.txt",
+                f"transcripts/raw/{ticker}_Q2_2026.txt",
                 digest,
                 len(transcript_text),
-                None,
+                artifact["source_url"],
                 "issuer_ir",
                 "ir_doc",
                 "earnings_call_transcript",

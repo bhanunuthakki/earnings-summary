@@ -175,6 +175,7 @@ def _active_conn(
         },
         "schema_version": "transcript-acquisition-authorization@1",
         "status": "authorized",
+        "stored_target": {"coverage_role": "holdings", "fiscal_year_end_month": 12},
     }
     artifact = {
         "authorization": authorization,
