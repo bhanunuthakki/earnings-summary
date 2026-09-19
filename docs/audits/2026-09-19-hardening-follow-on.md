@@ -43,7 +43,8 @@ local measurements, not statistically established production gains. The migratio
 builder inventory decreases from 116 to 114: three ordinary builders disappear,
 and one genuine historical bridge test is added.
 
-Archived and fresh schema definitions match. The retired `senior_partner_brief`
+Compared archived and fresh schema signatures, ordered columns, grouped foreign
+keys, index semantics and ordered non-table SQL definitions match. The retired `senior_partner_brief`
 budget retains its historical `hard_block=0`, while a fresh database seeds 1;
 both retain `on_exceed=block`. Tests explicitly preserve the historical value
 instead of changing an existing owner's configuration to manufacture seed parity.
@@ -100,5 +101,27 @@ current mobile redirect, action preservation and explicit degraded reads; the PD
 worker is an internal execution boundary, not a new operator command.
 
 No maturity certification, formal Judge approval, Windows live verification or
-production deployment is claimed. Final integrated gate and publication results
-are recorded below when available.
+production deployment is claimed. The pull request carries the full CI result and merged commit.
+
+
+## Integrated local evidence
+
+The candidate includes the separately owned Wealthplan typing slice. Its exact
+whole-tree ceilings are 2,510 retained Python files, 3,095 existing Pyright
+diagnostics and 2,678 existing suppressions. All 60 Python files changed by this
+follow-on are wholly Ruff/format/strict-Pyright clean with no lexical suppressions.
+The remaining whole-tree debt is visible and owned by BHA-105.
+
+Reachability collection is COMPLETE and review closure PASS: zero production
+unknown or unresolved targets; 98 unknown edges are test-only. Design sync,
+architecture, reconstruction, directive/folder checks and 19 instruction tests pass.
+The final migration module passes 28 tests, including the real archived bridge
+and regressions for foreign-key grouping and trigger statement order. The earlier
+combined run passed its other 646 tests; the release push gate reruns the combined
+changed-test population, and CI runs the complete applicable matrix before merge.
+
+Before/after browser captures for the combined Cockpit match pixel-for-pixel;
+Cockpit/Evaluation navigation completes without page errors. The separate browser
+security canary exercises real requests and preflight. Every task-owned browser,
+listener and parser process is closed after verification. The final built wheel's
+runtime asset matches the source bytes.
