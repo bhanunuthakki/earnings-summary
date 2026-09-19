@@ -30,6 +30,10 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 .work-os-sort-button { inline-size:100%; justify-content:space-between; white-space:nowrap; }
 .work-os-portfolio-table th[aria-sort="ascending"] .work-os-sort-button, .work-os-portfolio-table th[aria-sort="descending"] .work-os-sort-button { color:var(--accent); }
 .work-os-threshold-link { display:inline-block; margin-block-start:var(--sp-1); color:var(--fg-soft); }
+.work-os-evaluation-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--sp-2); margin-block-end:var(--sp-2); }
+.work-os-evaluation-chips { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-1); }
+.work-os-evaluation-selects { display:flex; align-items:center; gap:var(--sp-2); }
+.work-os-eval-notice { margin-block-end:var(--sp-1); color:var(--muted); font-size:var(--fs-caption); }
 .work-os-evaluation-list { display:grid; grid-template-columns:minmax(0, 1fr) auto auto auto; gap:var(--sp-2) var(--sp-3); }
 .work-os-evaluation-thread { display:grid; grid-template-columns:subgrid; grid-column:1 / -1; align-items:center; }
 .work-os-evaluation-copy { display:grid; grid-template-columns:subgrid; grid-template-rows:auto auto; grid-column:1 / 4; align-items:center; row-gap:var(--sp-1); min-inline-size:0; }

@@ -241,6 +241,11 @@ def _canary_shell_payloads() -> dict[str, object]:
         },
         "evaluation_dialogues": {
             "state": "available",
+            "total_active": 3,
+            "total_matching": 3,
+            "limit": 3,
+            "sort": "updated_desc",
+            "filter": "all",
             "items": [
                 {
                     "ticker": "TOST",
@@ -443,7 +448,7 @@ def _canary_shell_loader() -> str:
         "const designCanaryShellFetch=window.fetch.bind(window);"
         "window.fetch=(input,init)=>{const url=String(input);"
         "if(url==='/api/work-os/portfolio')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.portfolio),{status:200,headers:{'Content-Type':'application/json'}}));"
-        "if(url==='/api/work-os/evaluation-dialogues?limit=3')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.evaluation_dialogues),{status:200,headers:{'Content-Type':'application/json'}}));"
+        "if(url.startsWith('/api/work-os/evaluation-dialogues'))return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.evaluation_dialogues),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url==='/api/work-os/evaluation')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.evaluation),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url==='/api/tickers')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.tickers),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url.startsWith('/api/work-os/briefs?'))return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.briefs),{status:200,headers:{'Content-Type':'application/json'}}));"

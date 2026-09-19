@@ -299,6 +299,31 @@ def _render_portfolio_cockpit_shell() -> str:
       </div>
       <span class="k-card-meta" id="workOsEvaluationCount" aria-live="polite">Loading</span>
     </header>
+    <div class="work-os-evaluation-controls" role="group" aria-label="Evaluation dialogue filters and sorting">
+      <div class="work-os-evaluation-chips" role="group" aria-label="Filter evaluation dialogues">
+        <button class="k-chip k-chip-btn is-active" type="button" data-work-os-eval-filter="all" aria-pressed="true">All</button>
+        <button class="k-chip k-chip-btn" type="button" data-work-os-eval-filter="has_dialogue" aria-pressed="false">Has dialogue</button>
+        <button class="k-chip k-chip-btn" type="button" data-work-os-eval-filter="has_notes" aria-pressed="false">Has notes</button>
+        <button class="k-chip k-chip-btn" type="button" data-work-os-eval-filter="ready" aria-pressed="false">Ready</button>
+      </div>
+      <div class="work-os-evaluation-selects">
+        <label class="k-field-inline">
+          <span class="k-label">Sort</span>
+          <select class="k-select" id="workOsEvaluationSort" aria-label="Sort evaluation dialogues">
+            <option value="relevance" selected>Relevance</option>
+            <option value="ticker_asc">Ticker A&ndash;Z</option>
+          </select>
+        </label>
+        <label class="k-field-inline">
+          <span class="k-label">Show</span>
+          <select class="k-select" id="workOsEvaluationLimit" aria-label="Number of dialogues to show">
+            <option value="3" selected>3</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+          </select>
+        </label>
+      </div>
+    </div>
     <div class="work-os-evaluation-list" id="workOsEvaluationDialogues">
       <div class="k-well" role="status">Loading bounded evaluation dialogues…</div>
     </div>
@@ -2193,21 +2218,87 @@ def _production_runtime(generated_at: datetime) -> str:
     workOsBindPortfolioInteractions();
   }}
 
+  let workOsEvalFilter = 'all';
+  let workOsEvalSort = 'relevance';
+  let workOsEvalLimit = 3;
+  let workOsEvalAbortController = null;
+  let workOsEvalControlsBound = false;
+  let workOsEvalRequestGeneration = 0;
+
   async function workOsRenderEvaluationDialogues() {{
     const target = document.getElementById('workOsEvaluationDialogues');
     const count = document.getElementById('workOsEvaluationCount');
     if (!target) return;
+
+    if (workOsEvalAbortController) {{
+      workOsEvalAbortController.abort();
+    }}
+    workOsEvalAbortController = new AbortController();
+    const signal = workOsEvalAbortController.signal;
+    const currentGen = ++workOsEvalRequestGeneration;
+
+    if (count) count.textContent = 'Loading…';
+    target.innerHTML = '<div class="k-well" role="status">Loading bounded evaluation dialogues…</div>';
+
+    if (!workOsEvalControlsBound) {{
+      workOsBindEvaluationControls();
+      workOsEvalControlsBound = true;
+    }}
+
     try {{
-      const response = await fetch('/api/work-os/evaluation-dialogues?limit=3', {{ headers: {{ Accept: 'application/json' }} }});
+      const url = '/api/work-os/evaluation-dialogues?limit=' + encodeURIComponent(workOsEvalLimit) +
+        '&sort=' + encodeURIComponent(workOsEvalSort) +
+        '&filter=' + encodeURIComponent(workOsEvalFilter);
+      const response = await fetch(url, {{
+        signal: signal,
+        headers: {{ Accept: 'application/json' }}
+      }});
       const payload = response.ok ? await response.json() : null;
-      if (!payload || !Array.isArray(payload.items)) throw new Error('Invalid evaluation response');
-      const items = payload.items;
-      if (count) count.textContent = String(items.length) + ' active';
-      target.innerHTML = items.length ? items.map(function (item) {{
+
+      if (currentGen !== workOsEvalRequestGeneration) return;
+
+      if (!payload || payload.state === 'unavailable' || payload.total_active == null) {{
+        if (count) count.textContent = 'Unavailable';
+        target.innerHTML = '<div class="k-well" role="alert">Evaluation dialogues are temporarily unavailable. No prototype candidates are being shown.</div>';
+        return;
+      }}
+
+      if (payload.total_active === 0) {{
+        if (count) count.textContent = '0 active';
+        target.innerHTML = '<div class="k-well">No active evaluation companies recorded.</div>';
+        return;
+      }}
+
+      if (payload.matching_state === 'indeterminate') {{
+        if (count) count.textContent = 'Verification unavailable · ' + payload.total_active + ' active total';
+        target.innerHTML = '<div class="k-well" role="alert">Source data for this filter is temporarily unavailable. Matching dialogues cannot be verified.</div>';
+        return;
+      }}
+
+      if (payload.total_matching === 0) {{
+        if (count) count.textContent = '0 matching · ' + payload.total_active + ' active total';
+        target.innerHTML = '<div class="k-well">No evaluation companies match the selected filter.</div>';
+        return;
+      }}
+
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      if (count) {{
+        if (workOsEvalFilter === 'all') {{
+          count.textContent = 'Showing ' + items.length + ' of ' + payload.total_active + ' active';
+        }} else {{
+          count.textContent = 'Showing ' + items.length + ' of ' + payload.total_matching + ' matching · ' + payload.total_active + ' active total';
+        }}
+      }}
+
+      let html = '';
+      if (workOsEvalSort === 'relevance' && Array.isArray(payload.reason_codes) && payload.reason_codes.includes('relevance_partial')) {{
+        html += '<div class="k-card-meta work-os-eval-notice">Activity recency is partially unavailable; ranking reflects available sources.</div>';
+      }}
+
+      html += items.map(function (item) {{
         const ticker = String(item.ticker || '').toUpperCase();
         const instrument = item.instrument_type === 'etf' ? 'ETF' : item.instrument_type === 'stock' ? 'Company' : 'Instrument unavailable';
         const sessionId = typeof item.ask_session_id === 'string' ? item.ask_session_id.trim() : '';
-        const linked = item.ask_session_link_state === 'linked' && Boolean(sessionId);
         const readiness = String(item.workup_readiness || 'unavailable').replaceAll('_', ' ');
         const freshnessClass = item.freshness === 'available'
           ? 'k-pill k-pill-ok'
@@ -2217,11 +2308,56 @@ def _production_runtime(generated_at: datetime) -> str:
           : 'No owner notes recorded';
         const candidateId = Number.isInteger(item.discovery_candidate_id) && item.discovery_candidate_id > 0 ? String(item.discovery_candidate_id) : '';
         const instrumentValue = item.instrument_type === 'stock' || item.instrument_type === 'etf' ? item.instrument_type : '';
-        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div class="work-os-evaluation-copy"><h3 class="k-card-title k-card-row-title work-os-evaluation-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip work-os-evaluation-kind">' + escapeWorkOsHtml(instrument) + '</span><span class="' + freshnessClass + ' work-os-evaluation-readiness">' + escapeWorkOsHtml(readiness) + ' workup</span><div class="k-card-meta work-os-evaluation-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions work-os-evaluation-actions"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-session="' + escapeWorkOsHtml(linked ? sessionId : '') + '" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">' + (linked ? 'Continue dialogue' : 'Start dialogue') + '</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button></div></article>';
-      }}).join('') : '<div class="k-well">No evaluation dialogues are ready to discuss.</div>';
-    }} catch (_error) {{
+        let dialogueAction = '';
+        if (item.ask_session_link_state === 'linked' && sessionId) {{
+          dialogueAction = '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-session="' + escapeWorkOsHtml(sessionId) + '" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Continue dialogue</button>';
+        }} else if (item.ask_session_link_state === 'unlinked') {{
+          dialogueAction = '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-session="" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Start dialogue</button>';
+        }} else {{
+          dialogueAction = '<button class="k-btn k-btn-quiet k-btn-sm" type="button" disabled title="Dialogue status temporarily unavailable">Dialogue unavailable</button>';
+        }}
+        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div class="work-os-evaluation-copy"><h3 class="k-card-title k-card-row-title work-os-evaluation-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip work-os-evaluation-kind">' + escapeWorkOsHtml(instrument) + '</span><span class="' + freshnessClass + ' work-os-evaluation-readiness">' + escapeWorkOsHtml(readiness) + ' workup</span><div class="k-card-meta work-os-evaluation-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions work-os-evaluation-actions">' + dialogueAction + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button></div></article>';
+      }}).join('');
+      target.innerHTML = html;
+    }} catch (error) {{
+      if (error && error.name === 'AbortError') return;
+      if (currentGen !== workOsEvalRequestGeneration) return;
       if (count) count.textContent = 'Unavailable';
       target.innerHTML = '<div class="k-well" role="alert">Evaluation dialogues are temporarily unavailable. No prototype candidates are being shown.</div>';
+    }}
+  }}
+
+  function workOsBindEvaluationControls() {{
+    const filterButtons = document.querySelectorAll('[data-work-os-eval-filter]');
+    filterButtons.forEach(function (button) {{
+      button.addEventListener('click', function () {{
+        const filterVal = button.getAttribute('data-work-os-eval-filter');
+        if (!filterVal || filterVal === workOsEvalFilter) return;
+        workOsEvalFilter = filterVal;
+        filterButtons.forEach(function (btn) {{
+          const isActive = btn === button;
+          btn.classList.toggle('is-active', isActive);
+          btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        }});
+        workOsRenderEvaluationDialogues();
+      }});
+    }});
+
+    const sortSelect = document.getElementById('workOsEvaluationSort');
+    if (sortSelect) {{
+      sortSelect.addEventListener('change', function () {{
+        workOsEvalSort = sortSelect.value || 'relevance';
+        workOsRenderEvaluationDialogues();
+      }});
+    }}
+
+    const limitSelect = document.getElementById('workOsEvaluationLimit');
+    if (limitSelect) {{
+      limitSelect.addEventListener('change', function () {{
+        const parsed = parseInt(limitSelect.value, 10);
+        workOsEvalLimit = [3, 5, 10].includes(parsed) ? parsed : 3;
+        workOsRenderEvaluationDialogues();
+      }});
     }}
   }}
 

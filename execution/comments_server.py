@@ -3140,13 +3140,42 @@ def create_app(
     @app.route("/api/work-os/evaluation-dialogues", methods=["GET"])
     def evaluation_dialogues_api():
         """Bounded, read-only Evaluation Dialogues hydration for Portfolio Copilot."""
-        from pipeline.evaluation_dialogues import load_evaluation_dialogues
+        from typing import Literal, cast
 
-        try:
-            limit = int(request.args.get("limit", 40))
-        except (TypeError, ValueError):
-            limit = 40
-        projection = load_evaluation_dialogues(db_path, limit=limit)
+        from pipeline.evaluation_dialogues import (
+            ALLOWED_FILTERS,
+            ALLOWED_LIMITS,
+            ALLOWED_SORTS,
+            load_evaluation_dialogues,
+        )
+
+        limit_raw = request.args.get("limit")
+        if limit_raw is None:
+            limit = 3
+        else:
+            try:
+                limit = int(limit_raw)
+            except (TypeError, ValueError):
+                return ({"error": f"limit must be an integer in {ALLOWED_LIMITS}"}, 400)
+            if limit not in ALLOWED_LIMITS:
+                return ({"error": f"limit must be one of {ALLOWED_LIMITS}"}, 400)
+
+        sort_raw = request.args.get("sort", "relevance")
+        if sort_raw not in ALLOWED_SORTS:
+            return ({"error": f"sort must be one of {ALLOWED_SORTS}"}, 400)
+        sort = cast(Literal["relevance", "ticker_asc"], sort_raw)
+
+        filter_raw = request.args.get("filter", "all")
+        if filter_raw not in ALLOWED_FILTERS:
+            return ({"error": f"filter must be one of {ALLOWED_FILTERS}"}, 400)
+        filter_state = cast(Literal["all", "has_dialogue", "has_notes", "ready"], filter_raw)
+
+        projection = load_evaluation_dialogues(
+            db_path,
+            limit=limit,
+            sort=sort,
+            filter_state=filter_state,
+        )
         return app.json.response(projection.model_dump(mode="json"))
 
     @app.route("/api/ask/sessions/<session_id>", methods=["GET", "PATCH", "DELETE"])

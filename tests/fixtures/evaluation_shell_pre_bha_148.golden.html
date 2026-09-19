@@ -1,0 +1,45 @@
+<section id="screen-evaluation" class="screen-view" data-layout="research-evaluation" role="region" aria-labelledby="workOsEvaluationSurfaceHeading">
+  <header class="research-toolbar k-card k-card-section">
+    <div>
+      <div class="k-card-meta">Research Engine · Complete evaluation coverage</div>
+      <h1 class="k-card-title" id="workOsEvaluationSurfaceHeading">Evaluation</h1>
+      <p class="k-card-meta">Scan every company and ETF currently under evaluation, then open the appropriate governed research doorway.</p>
+    </div>
+    <div class="research-actions">
+      <span class="k-pill" id="workOsEvaluationSurfaceCount">Loading</span>
+      <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-refresh-evaluation>Refresh</button>
+    </div>
+  </header>
+  <section class="k-card k-card-section work-os-section" aria-label="Evaluation coverage list">
+    <header class="k-section-head">
+      <div>
+        <div class="k-section-title k-card-title" role="heading" aria-level="2">Coverage</div>
+        <div class="k-section-meta">Decision-useful profile, business durability, book impact, valuation, and verified research links. Open a side peek for rationale and evidence.</div>
+      </div>
+    </header>
+    <div class="research-actions" role="group" aria-label="Filter evaluation coverage">
+      <button class="k-chip is-active" type="button" data-work-os-evaluation-filter="all" aria-pressed="true">All</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="compounders" aria-pressed="false">Compounders</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="garp" aria-pressed="false">GARP</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="needs_review" aria-pressed="false">Needs review</button>
+      <button class="k-chip" type="button" data-work-os-evaluation-filter="etfs" aria-pressed="false">ETFs</button>
+    </div>
+    <div class="table-scroll">
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th>Company</th>
+            <th>Investment profile</th>
+            <th>Business &amp; moat</th>
+            <th>Portfolio role</th>
+            <th>Valuation</th>
+            <th>Research</th>
+          </tr>
+        </thead>
+        <tbody id="workOsEvaluationRows">
+          <tr><td colspan="6"><div class="k-well" role="status">Loading complete evaluation coverage…</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
