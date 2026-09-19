@@ -167,6 +167,7 @@ def _bisect(
     (unavailable rather than propagating); maximum iterations still returns
     the converged midpoint as ``solved``.
     """
+
     def _value_at(x: float) -> float | None:
         try:
             return f(x)

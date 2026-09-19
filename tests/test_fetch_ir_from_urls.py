@@ -149,6 +149,7 @@ def test_approved_url_denial_never_crosses_network(
 ) -> None:
     db = tmp_path / "data" / "portfolio.db"
     _make_db(db, role=role)
+
     def fail_network(*_args: object, **_kwargs: object) -> None:
         pytest.fail("network boundary crossed")
 
@@ -174,6 +175,7 @@ def test_approved_url_rejects_period_outside_five_quarter_window(
 ) -> None:
     db = tmp_path / "data" / "portfolio.db"
     _make_db(db)
+
     def fail_network(*_args: object, **_kwargs: object) -> None:
         pytest.fail("network boundary crossed")
 

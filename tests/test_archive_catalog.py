@@ -128,7 +128,6 @@ def test_current_head_contains_append_only_verified_catalog(
         conn.close()
 
 
-
 def test_registration_is_atomic_append_only_and_exactly_idempotent(
     tmp_path: Path,
     ops_database: Path,
