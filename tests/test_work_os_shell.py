@@ -1766,9 +1766,10 @@ def test_pinned_stamps_render_their_exact_bytes_inside_one_bucket() -> None:
 
 def test_shell_render_result_reports_hit_state_and_key_derived_etag() -> None:
     clear_work_os_shell_render_cache()
+    generated_at = datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)
     try:
-        first = render_work_os_shell_result()
-        second = render_work_os_shell_result()
+        first = render_work_os_shell_result(generated_at=generated_at)
+        second = render_work_os_shell_result(generated_at=generated_at)
         assert first.cache_state == "miss"
         assert second.cache_state == "hit"
         assert second.html == first.html
