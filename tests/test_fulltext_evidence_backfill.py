@@ -6,7 +6,9 @@ import hashlib
 import io
 import json
 import sqlite3
+import sys
 import zipfile
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -1221,6 +1223,7 @@ def test_pdf_emits_one_page_anchored_node_per_substantive_page(
         return _Reader()
 
     monkeypatch.setattr(pypdf, "PdfReader", _reader)
+    monkeypatch.setattr(pypdf, "__version__", "6.16.2")
     conn, repo_root = _connection(tmp_path, suffix=".pdf", content=b"not-a-real-pdf")
     try:
         result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
@@ -1443,3 +1446,233 @@ def test_evidence_native_lane_extracts_extensionless_content_without_legacy_row(
         assert '"source_lane":"evidence_native"' in checkpoint.read_text(encoding="utf-8")
     finally:
         conn.close()
+
+
+def _install_versioned_pdf_reader(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
+    import pypdf
+
+    class Page:
+        def extract_text(self) -> str:
+            return "Reported revenue."
+
+    class Reader:
+        is_encrypted = False
+        pages = (Page(),)
+
+        def __init__(self, _stream: object) -> None:
+            pass
+
+    monkeypatch.setattr(pypdf, "__version__", version)
+    monkeypatch.setattr(pypdf, "PdfReader", Reader)
+
+
+@pytest.mark.parametrize("version", ["6.15.0", "6.16.1", "6.17.0", "unknown", None])
+def test_pdf_unapproved_runtime_is_quarantined_before_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str | None
+) -> None:
+    import pypdf
+
+    def forbidden_reader(_stream: object) -> None:
+        pytest.fail("An unapproved PDF runtime must not parse source bytes")
+
+    if version is None:
+        monkeypatch.setitem(sys.modules, "pypdf", None)
+    else:
+        monkeypatch.setattr(pypdf, "__version__", version)
+    monkeypatch.setattr(pypdf, "PdfReader", forbidden_reader)
+    conn, repo_root = _connection(tmp_path, suffix=".pdf", content=b"retained-pdf")
+    try:
+        before = tuple(conn.execute("SELECT * FROM evidence_extraction_runs").fetchall())
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+        reason = (
+            "pdf_parser_runtime_unavailable"
+            if version is None
+            else "pdf_parser_runtime_not_approved"
+        )
+        assert result.finding_counts == {reason: 1}
+        assert result.documents_extracted == 0
+        assert tuple(conn.execute("SELECT * FROM evidence_extraction_runs").fetchall()) == before
+    finally:
+        conn.close()
+
+
+def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pypdf
+
+    from provenance.fulltext_extractor_identity import (
+        BASE_FULLTEXT_EXTRACTOR,
+        FulltextExtractorIdentity,
+        resolve_fulltext_extractor_identity,
+    )
+
+    _install_versioned_pdf_reader(monkeypatch, "6.16.2")
+    conn, repo_root = _connection(tmp_path, suffix=".pdf", content=b"retained-pdf")
+    try:
+        # Reproduce the historical writer identity; its immutable rows must survive.
+        def historical_identity(_source: str, _media: str | None) -> FulltextExtractorIdentity:
+            return BASE_FULLTEXT_EXTRACTOR
+
+        monkeypatch.setattr(
+            fulltext_backfill_module, "resolve_fulltext_extractor_identity", historical_identity
+        )
+        old = backfill_fulltext_evidence(conn, _request(repo_root, apply=True, task_id="old"))
+        assert old.documents_extracted == 1
+        old_runs = tuple(conn.execute("SELECT * FROM evidence_extraction_runs").fetchall())
+        old_nodes = tuple(conn.execute("SELECT * FROM evidence_nodes").fetchall())
+        monkeypatch.setattr(
+            fulltext_backfill_module,
+            "resolve_fulltext_extractor_identity",
+            resolve_fulltext_extractor_identity,
+        )
+        promoted = backfill_fulltext_evidence(
+            conn, _request(repo_root, apply=True, task_id="promoted")
+        )
+        assert promoted.documents_extracted == 1
+        runs = tuple(conn.execute("SELECT * FROM evidence_extraction_runs").fetchall())
+        nodes = tuple(conn.execute("SELECT * FROM evidence_nodes").fetchall())
+        assert all(row in runs for row in old_runs)
+        assert all(row in nodes for row in old_nodes)
+        assert len(runs) == len(old_runs) + 1
+        current = resolve_fulltext_extractor_identity("report.pdf", "application/pdf")
+        assert "pypdf=6.16.2" in current.code_version
+        assert current.idempotency_namespace != BASE_FULLTEXT_EXTRACTOR.idempotency_namespace
+        # A reader's ambient package cannot revoke or reinterpret existing proof.
+        monkeypatch.setattr(pypdf, "__version__", "6.15.0")
+        assert resolve_fulltext_extractor_identity("report.pdf", "application/pdf") == current
+        replay = backfill_fulltext_evidence(conn, _request(repo_root, apply=True, task_id="replay"))
+        assert replay.documents_skipped_covered == 1
+        assert replay.records_created == 0
+    finally:
+        conn.close()
+
+
+def test_pdf_coverage_requires_exact_promoted_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from provenance.fulltext_extractor_identity import (
+        BASE_FULLTEXT_EXTRACTOR,
+        FulltextExtractorIdentity,
+        resolve_fulltext_extractor_identity,
+    )
+    from provenance.source_coverage_refresh import CoverageRefreshRequest, refresh_source_coverage
+    from sqlite_runtime import register_sqlite_integrity_functions
+
+    database = migrated_db(tmp_path / "coverage.db")
+    repo_root = tmp_path / "repo"
+    source = repo_root / "data" / "ACME.pdf"
+    source.parent.mkdir(parents=True)
+    raw = b"retained-pdf"
+    source.write_bytes(raw)
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    register_sqlite_integrity_functions(conn)
+    _install_versioned_pdf_reader(monkeypatch, "6.16.2")
+    recorded_at = datetime(2026, 7, 20, 12)
+    try:
+        conn.execute(
+            "INSERT INTO documents (ticker,source_type,doc_type,file_path,sha256,"
+            "fetched_at,fetch_status,raw_bytes_size) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "ACME",
+                "sec_edgar",
+                "10-Q",
+                "data/ACME.pdf",
+                hashlib.sha256(raw).hexdigest(),
+                recorded_at,
+                "ok",
+                len(raw),
+            ),
+        )
+        conn.commit()
+        backfill_legacy_evidence(conn, BackfillRequest(repo_root=repo_root, apply=True))
+        document = conn.execute(
+            "SELECT document_version_id,issuer_id,observation_id FROM evidence_document_versions"
+        ).fetchone()
+        assert document is not None
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            (str(document[1]), str(document[1]), "operating_company", recorded_at),
+        )
+        conn.execute(
+            "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "pdf-periodic:v1",
+                "pdf-periodic:v1",
+                "pdf-periodic",
+                1,
+                str(document[1]),
+                None,
+                "sec_edgar",
+                "operating_company_periodic",
+                "required",
+                "regulator_inventory",
+                recorded_at,
+                None,
+                "deterministic",
+                "test",
+                "{}",
+                recorded_at,
+                recorded_at,
+                recorded_at,
+                None,
+            ),
+        )
+        _seed_sealed_inventory(
+            conn,
+            snapshot_id="pdf-inventory",
+            inventory_key="pdf-inventory",
+            issuer_id=str(document[1]),
+            observation_id=str(document[2]),
+            recorded_at=recorded_at,
+        )
+        _seed_covered_document(
+            conn,
+            expected_document_id="pdf-expected",
+            snapshot_id="pdf-inventory",
+            issuer_id=str(document[1]),
+            accession_number="test-accession",
+            document_version_id=str(document[0]),
+            recorded_at=recorded_at,
+        )
+        conn.commit()
+        request = CoverageRefreshRequest(inventory_keys=("pdf-inventory",), recorded_at=recorded_at)
+
+        def historical_identity(_source: str, _media: str | None) -> FulltextExtractorIdentity:
+            return BASE_FULLTEXT_EXTRACTOR
+
+        with monkeypatch.context() as historical_policy:
+            historical_policy.setattr(
+                fulltext_backfill_module, "resolve_fulltext_extractor_identity", historical_identity
+            )
+            backfill_fulltext_evidence(conn, _request(repo_root, apply=True, task_id="legacy"))
+        assert refresh_source_coverage(conn, request).assessments_planned == 0
+        backfill_fulltext_evidence(conn, _request(repo_root, apply=True, task_id="promoted"))
+        current = refresh_source_coverage(conn, request.model_copy(update={"apply": True}))
+        assert current.target_status_counts == {"extracted": 1}
+        assert current.assessments_created == 1
+        assert (
+            "pypdf=6.16.2"
+            in resolve_fulltext_extractor_identity("report.html", "application/pdf").code_version
+        )
+        assert (
+            resolve_fulltext_extractor_identity("report.txt", "text/plain")
+            is BASE_FULLTEXT_EXTRACTOR
+        )
+    finally:
+        conn.close()
+
+
+def test_promoted_pdf_runtime_matches_reviewed_lock() -> None:
+    from provenance.fulltext_extractor_identity import PDF_FULLTEXT_PYPDF_VERSION
+
+    locked_versions = [
+        line.partition("==")[2].split()[0]
+        for line in (PROJECT_ROOT / "requirements.lock").read_text().splitlines()
+        if line.startswith("pypdf==")
+    ]
+    assert locked_versions == [PDF_FULLTEXT_PYPDF_VERSION]

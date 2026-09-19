@@ -175,6 +175,11 @@ while the receipt explains individual documents. Do not interpret a stored batch
 receipt as current proof after inputs, extractor versions, or inventory scope change.
 No new Operations-workspace action or health badge is introduced.
 
+The existing dashboard refresh and IR-refresh actions execute the deployed code root
+with the application-managed Windows interpreter while retaining the configured
+product-state root and write ownership. A missing managed interpreter returns an
+explicit unavailable response without starting a job; global Python is not a fallback.
+
 Historical accession-key documents use the dedicated append-only SEC binding/fact-match
 repair owners, not a hash overwrite. Those owners' isolated-target restrictions remain
 in force. Restoring unavailable original bytes, bootstrapping issuer authority and

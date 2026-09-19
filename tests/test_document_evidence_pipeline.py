@@ -382,3 +382,74 @@ def test_cli_status_and_resume_pending_require_satisfied_coverage(
         )
         receipt = cli.DocumentEvidenceResumeReceipt.model_validate_json(receipt_path.read_text())
         assert receipt.pending_document_ids == ((document_id,) if degraded else ())
+
+
+@pytest.mark.parametrize(
+    ("before", "newer", "selected", "ticker", "expected"),
+    [
+        (0, None, None, None, (3, 2, 1)),
+        (3, None, None, None, (2, 1)),
+        (0, 1, None, None, (2, 3)),
+        (4, 0, None, None, (1, 2, 3)),
+        (0, None, 2, None, (2,)),
+        (2, None, 2, None, ()),
+        (3, 2, 2, None, ()),
+        (3, 1, 2, " mid ", (2,)),
+        (2, 2, None, None, ()),
+        (3, 1, 2, "OTHER", ()),
+        (0, None, None, "MID' OR 1=1 --", ()),
+    ],
+)
+def test_pagination_combined_bounds_preserve_all_filters(
+    connection: sqlite3.Connection,
+    tmp_path: Path,
+    before: int,
+    newer: int | None,
+    selected: int | None,
+    ticker: str | None,
+    expected: tuple[int, ...],
+) -> None:
+    ids = [_seed(connection, tmp_path, ticker=name) for name in ("OLD", "MID", "NEW")]
+    first = ids[0]
+    result = process_document_evidence(
+        connection,
+        DocumentEvidenceRequest(
+            repo_root=tmp_path,
+            before_document_id=first + before - 1 if before else 0,
+            newer_than_document_id=first + newer - 1 if newer else newer,
+            document_id=first + selected - 1 if selected else None,
+            ticker=ticker,
+        ),
+    )
+    assert [item.document_id for item in result.items] == [first + index - 1 for index in expected]
+
+
+@pytest.mark.parametrize("selection", ["descending_page", "exact_document", "ascending_page"])
+def test_pagination_seeks_both_primary_key_bounds(
+    connection: sqlite3.Connection, tmp_path: Path, selection: str
+) -> None:
+    ids = [_seed(connection, tmp_path, ticker=name) for name in ("OLD", "MID", "NEW")]
+    statements: list[str] = []
+
+    def capture(statement: str) -> None:
+        if "SELECT document.id, document.ticker FROM documents AS document" in statement:
+            statements.append(statement)
+
+    connection.set_trace_callback(capture)
+    request = DocumentEvidenceRequest(
+        repo_root=tmp_path,
+        before_document_id=ids[-1] if selection != "exact_document" else 0,
+        newer_than_document_id=ids[0] if selection == "ascending_page" else None,
+        document_id=ids[0] if selection == "exact_document" else None,
+    )
+    try:
+        process_document_evidence(connection, request)
+    finally:
+        connection.set_trace_callback(None)
+    assert len(statements) == 1
+    # Inspect the actual executed query, not a duplicate of production SQL.
+    plan = connection.execute("EXPLAIN QUERY PLAN " + statements[0]).fetchall()
+    document_search = [str(row[3]) for row in plan if "SEARCH document " in str(row[3])]
+    assert len(document_search) == 1
+    assert "INTEGER PRIMARY KEY" in document_search[0]
+    assert "rowid>?" in document_search[0] and "rowid<?" in document_search[0]

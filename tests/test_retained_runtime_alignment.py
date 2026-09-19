@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from flask import Flask
@@ -240,8 +240,12 @@ def test_windows_only_missing_pid_error_authorizes_reclaim(
         assert pid_liveness(4321) == expected
 
 
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [(200, b'{"status":"ok"}', True), (302, b'{"status":"ok"}', False), (200, b"bad", False)],
+)
 def test_supervisor_keeps_owned_liveness_when_data_endpoint_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int, body: bytes, expected: bool
 ) -> None:
     process = Mock()
     process.pid = 4321
@@ -251,8 +255,14 @@ def test_supervisor_keeps_owned_liveness_when_data_endpoint_fails(
     client.get_health.return_value = V1Fetch[HealthV1](available=False, endpoint="/health")
     monkeypatch.setattr(tracker_server, "TrackerV1Client", Mock(return_value=client))
     monkeypatch.setattr(tracker_server, "endpoint_owner_matches_pid", Mock(return_value=True))
-    probe = Mock(return_value=True)
-    monkeypatch.setattr(tracker_server, "_liveness_is_responding", probe)
+    response = MagicMock(status=status)
+    response.read.return_value = body
+    response.__enter__.return_value = response
+    connection = Mock()
+    connection.getresponse.return_value = response
+    factory = Mock(return_value=connection)
+    monkeypatch.setattr(tracker_server.http.client, "HTTPConnection", factory)
+    monkeypatch.setattr(tracker_server.time, "sleep", Mock())
     supervisor = tracker_server.TrackerServiceSupervisor(
         argv=("synthetic",),
         tracker_root=tmp_path,
@@ -261,12 +271,21 @@ def test_supervisor_keeps_owned_liveness_when_data_endpoint_fails(
         launch=Mock(return_value=process),
     )
     assert supervisor.run() == 1  # child exit remains failed, never greenwashed
-    assert process.wait.call_count == 2
-    process.terminate.assert_not_called()
-    assert probe.call_count == 2
+    assert factory.call_count > 0
+    assert all(call.args == ("127.0.0.1", 8000) for call in factory.call_args_list)
+    assert all(call.kwargs == {"timeout": 3.0} for call in factory.call_args_list)
+    assert all(call.args == ("GET", "/api/health") for call in connection.request.call_args_list)
+    assert connection.close.call_count == factory.call_count
     receipt = runtime.RuntimeReceipt.model_validate_json((tmp_path / "receipt.json").read_bytes())
     assert not receipt.listener.healthy
-    assert receipt.failure_detail == "Portfolio Tracker API process exited; exit_code=0"
+    if expected:
+        assert process.wait.call_count == 2
+        process.terminate.assert_not_called()
+        assert factory.call_count == 2
+        assert receipt.failure_detail == "Portfolio Tracker API process exited; exit_code=0"
+    else:
+        process.terminate.assert_called_once()
+        assert not receipt.listener.responding
 
 
 def test_supervisor_bounds_unknown_ownership_retries_before_cleanup(

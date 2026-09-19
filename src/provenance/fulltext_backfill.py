@@ -38,6 +38,7 @@ from provenance.evidence_native_candidates import (
 )
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_PYPDF_VERSION,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     FulltextExtractorIdentity,
     resolve_fulltext_extractor_identity,
@@ -494,7 +495,14 @@ def _plan_candidate(
         return _CandidatePlan(
             candidate=candidate,
             identity=identity,
-            status="failed",
+            # A parser that did not run under the approved identity must not
+            # create an immutable run falsely stamped with that identity.
+            status=(
+                "quarantined_unrecorded"
+                if error.reason
+                in {"pdf_parser_runtime_not_approved", "pdf_parser_runtime_unavailable"}
+                else "failed"
+            ),
             reason=error.reason,
         )
     return _CandidatePlan(
@@ -1315,10 +1323,15 @@ def _bounded_dom_locator(path: str) -> str:
 
 
 def _extract_pdf_pages(raw_bytes: bytes, source_ref: str) -> list[_NodeText]:
-    from pypdf import PdfReader
+    try:
+        import pypdf
+    except ImportError as error:
+        raise _ExtractionError("pdf_parser_runtime_unavailable") from error
+    if getattr(pypdf, "__version__", None) != PDF_FULLTEXT_PYPDF_VERSION:
+        raise _ExtractionError("pdf_parser_runtime_not_approved")
 
     try:
-        reader = PdfReader(io.BytesIO(raw_bytes))
+        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
         if reader.is_encrypted:
             raise _ExtractionError("encrypted_pdf")
         nodes = [

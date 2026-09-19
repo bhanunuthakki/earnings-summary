@@ -10,12 +10,11 @@ containing the configured canonical database, never at the code checkout.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,11 +52,15 @@ LifecycleState = Literal["already_running", "started", "ownership_conflict", "fa
 
 def _liveness_is_responding() -> bool:
     """Fixed local, data-independent probe; never log response/exception text."""
+    connection = http.client.HTTPConnection("127.0.0.1", 8000, timeout=3.0)
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3.0) as response:
+        connection.request("GET", "/api/health")
+        with connection.getresponse() as response:
             return response.status == 200 and json.loads(response.read(1024)) == {"status": "ok"}
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, ValueError, http.client.HTTPException):
         return False
+    finally:
+        connection.close()
 
 
 def tracker_server_argv(

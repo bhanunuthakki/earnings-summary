@@ -462,13 +462,20 @@ def read_sec_coverage_state(db_path: Path | None) -> SecCoverageSummaryView:
             if not has_table:
                 return SecCoverageSummaryView()
             columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
-            instrument_column = "instrument_type" if "instrument_type" in columns else "NULL"
-            rows = conn.execute(
-                f"SELECT {instrument_column} AS instrument_type, "
+            query = (
+                "SELECT instrument_type, "
                 "ticker, name, list_type, sec_validated, filing_regime, archived_at "
                 "FROM tracked_companies WHERE archived_at IS NULL "
                 "ORDER BY CASE list_type WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 ELSE 3 END, ticker"
-            ).fetchall()
+            )
+            if "instrument_type" not in columns:
+                query = (
+                    "SELECT NULL AS instrument_type, "
+                    "ticker, name, list_type, sec_validated, filing_regime, archived_at "
+                    "FROM tracked_companies WHERE archived_at IS NULL "
+                    "ORDER BY CASE list_type WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 ELSE 3 END, ticker"
+                )
+            rows = conn.execute(query).fetchall()
         finally:
             conn.close()
     except (OSError, sqlite3.Error):

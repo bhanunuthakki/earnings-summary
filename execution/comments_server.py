@@ -267,7 +267,11 @@ from runtime.portfolio_tracker import (
     start_portfolio_tracker_scheduler_task,
     write_tracker_activation_receipt,
 )
-from runtime.python_process import managed_python_argv
+from runtime.python_process import (
+    ManagedPythonUnavailableError,
+    application_python_executable,
+    managed_python_argv,
+)
 from runtime.secrets import load_project_env, secret_read_path
 from schema_compat import SchemaRevisionMismatch
 from server_runtime.access import (
@@ -4134,6 +4138,10 @@ def create_app(
                 return ({"error": f"unknown step(s): {bad}; valid: {list(STEP_NAMES)}"}, 400)
 
         dispatcher = resolved_code_root / "execution" / "refresh_dispatch.py"
+        try:
+            executable = application_python_executable(resolved_code_root)
+        except ManagedPythonUnavailableError:
+            return ({"error": "managed_python_unavailable"}, 503)
         argv = managed_python_argv(
             resolved_code_root,
             dispatcher,
@@ -4145,6 +4153,7 @@ def create_app(
             str(repo_root),
             "--db",
             str(db_path),
+            executable=executable,
         )
         if force:
             argv.append("--force")
@@ -4158,6 +4167,7 @@ def create_app(
                 kind=f"refresh-{mode}",
                 argv=argv,
                 code_root=resolved_code_root,
+                cwd=str(resolved_code_root),
             )
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
@@ -4359,9 +4369,13 @@ def create_app(
         except (TypeError, ValueError):
             return ({"error": "quarters must be an integer"}, 400)
 
-        script = repo_root / "execution" / "refresh_ir_kpis.py"
+        script = resolved_code_root / "execution" / "refresh_ir_kpis.py"
+        try:
+            executable = application_python_executable(resolved_code_root)
+        except ManagedPythonUnavailableError:
+            return ({"error": "managed_python_unavailable"}, 503)
         argv = managed_python_argv(
-            repo_root,
+            resolved_code_root,
             script,
             "--ticker",
             ticker,
@@ -4370,9 +4384,18 @@ def create_app(
             str(quarters),
             "--repo-root",
             str(repo_root),
+            "--db",
+            str(db_path),
+            executable=executable,
         )
         try:
-            job = job_registry.start(ticker=ticker, kind="refresh-ir", argv=argv)
+            job = job_registry.start(
+                ticker=ticker,
+                kind="refresh-ir",
+                argv=argv,
+                code_root=resolved_code_root,
+                cwd=str(resolved_code_root),
+            )
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
 

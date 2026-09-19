@@ -36,6 +36,15 @@ at each boundary; never collapse them into a single inferred `verified` flag.
 does not satisfy the decision-grade contract. Missing completeness inventories
 remain `uninitialized` even when every selected file parses successfully.
 
+PDF full-text extraction uses the deliberately promoted identity in
+`src/provenance/fulltext_extractor_identity.py`, including the reviewed parser
+library version. The writer checks the loaded parser before parsing; a missing or
+different version is quarantined without recording an approved extraction run.
+Dependency updates require an explicit identity promotion and isolated parser
+validation. Readers select the approved identity independently of their installed
+libraries. Prior sealed evidence remains reconstructible under its pinned
+historical identity, but cannot authorize a new seal or current coverage.
+
 Mutable provider caches are working projections. Before registration, exact retained FMP
 cache bytes are installed without clobbering under content-addressed
 `data/historical/fmp_snapshots/`; documents and evidence anchors commit together.

@@ -9,31 +9,27 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
+import comments_server
 import pytest
 from bs4 import BeautifulSoup
 from flask.testing import FlaskClient
 
-# `execution/` isn't on sys.path by default; only `src/` (via pyproject pythonpath).
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-
-from integrations.portfolio_allocation import (  # noqa: E402
+from integrations.portfolio_allocation import (
     PortfolioAllocationBucket,
     PortfolioAllocationBuckets,
     PortfolioAllocationProjection,
     PortfolioAllocationReconciliation,
     unavailable_portfolio_allocation,
 )
-from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot  # noqa: E402
-from integrations.portfolio_tracker_client import LivePortfolio, LivePosition  # noqa: E402
+from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
+from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _available_allocation() -> PortfolioAllocationProjection:
@@ -203,7 +199,13 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # injection, and reference-fact listing. Modeling remains DCF-owned.
     # +1 self-hosted webfont route serving the Work OS shell's vendored
     # Google Fonts binaries (see src/ui/vendor/fonts/README.md).
-    assert len(rules) == 174
+    # +2 fixed, read-only tracker bridge endpoints retained from the live runtime.
+    assert len(rules) == 176
+    assert rules["tracker_read_health"] == "/portfolio-tracker/api/v1/health"
+    assert rules["tracker_read_snapshot"] == "/portfolio-tracker/api/v1/portfolio-snapshot"
+    for rule in client.application.url_map.iter_rules():
+        if rule.endpoint in {"tracker_read_health", "tracker_read_snapshot"}:
+            assert rule.methods == {"GET", "HEAD", "OPTIONS"}
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "allocation_recommendation_get" not in rules
     assert "allocation_recommendation_post" not in rules

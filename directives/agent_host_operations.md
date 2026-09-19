@@ -47,6 +47,12 @@ checkout does not make that database isolated.
    managed Python/verified SQLite runtime. Fixtures must use explicit disposable database,
    environment, and secrets roots with provider effects excluded. A skipped Windows-specific
    behavior is not proof. Verify the real runtime and source identities again after installation.
+   The dashboard and background ingestion must use the application-owned managed Python
+   environment, including reviewed dependency versions; a matching source commit alone is
+   insufficient. Manual refresh selects the deployed code root separately from product state.
+   Reconcile service interpreter changes with the exact approved-owner baseline and retain
+   both prior service configuration and baseline for rollback. Do not update shared global
+   Python packages to compensate for an application owner using the wrong environment.
 5. Create and validate the database snapshot, manifest, and Phase-0 backup/restore receipt
    under the coordinated writer boundary. Use `create_sqlite_snapshot.py`,
    `backup_restore_readiness_receipt.py`, and the managed SQLite bootstrap with

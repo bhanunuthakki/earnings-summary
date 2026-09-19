@@ -129,34 +129,55 @@ def process_document_evidence(
         result.findings.extend(f"unsupported_schema:{name}" for name in missing)
         result.degraded = True
         return result
-    filters = ["document.id > 0"]
-    values: list[str | int] = []
-    if request.before_document_id:
-        filters.append("document.id < ?")
-        values.append(request.before_document_id)
-    if request.newer_than_document_id is not None:
-        filters.append("document.id > ?")
-        values.append(request.newer_than_document_id)
-    if request.document_id is not None:
-        filters.append("document.id = ?")
-        values.append(request.document_id)
-    if request.ticker is not None:
-        filters.append("UPPER(document.ticker) = ?")
-        values.append(request.ticker.strip().upper())
-    # EXISTS avoids multiplying a document when malformed roster duplicates exist;
-    # the shared authorizer below rejects ambiguous or invalid stored identities.
-    filters.append(
-        "EXISTS (SELECT 1 FROM tracked_companies AS company "
-        "WHERE UPPER(company.ticker) = UPPER(document.ticker) "
-        "AND company.archived_at IS NULL "
-        "AND company.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    # Intersect all ID filters before binding so both directions can seek the
+    # primary-key range instead of rescanning newer documents on every page.
+    maximum_rowid = (1 << 63) - 1
+    lower_bound = min(request.newer_than_document_id or 0, maximum_rowid)
+    upper_bound = (
+        min(request.before_document_id - 1, maximum_rowid)
+        if request.before_document_id
+        else maximum_rowid
     )
-    order = "ASC" if request.newer_than_document_id is not None else "DESC"
+    if request.document_id is not None:
+        lower_bound = max(lower_bound, min(request.document_id - 1, maximum_rowid))
+        upper_bound = min(upper_bound, request.document_id)
+    # Both directions use fixed SQL and bound values. EXISTS avoids multiplying
+    # rows from a malformed roster; the shared authorizer rejects ambiguity.
+    query = """
+        SELECT document.id, document.ticker FROM documents AS document
+        WHERE document.id > :lower_bound
+          AND document.id <= :upper_bound
+          AND (:ticker IS NULL OR UPPER(document.ticker) = :ticker)
+          AND EXISTS (
+              SELECT 1 FROM tracked_companies AS company
+              WHERE UPPER(company.ticker) = UPPER(document.ticker)
+                AND company.archived_at IS NULL
+                AND company.list_type IN ('portfolio', 'evaluation', 'watchlist')
+          )
+        ORDER BY document.id DESC LIMIT :limit
+    """
+    if request.newer_than_document_id is not None:
+        query = """
+            SELECT document.id, document.ticker FROM documents AS document
+            WHERE document.id > :lower_bound
+              AND document.id <= :upper_bound
+              AND (:ticker IS NULL OR UPPER(document.ticker) = :ticker)
+              AND EXISTS (
+                  SELECT 1 FROM tracked_companies AS company
+                  WHERE UPPER(company.ticker) = UPPER(document.ticker)
+                    AND company.archived_at IS NULL
+                    AND company.list_type IN ('portfolio', 'evaluation', 'watchlist')
+              )
+            ORDER BY document.id ASC LIMIT :limit
+        """
     rows = conn.execute(
-        "SELECT document.id, document.ticker FROM documents AS document WHERE "
-        + " AND ".join(filters)
-        + f" ORDER BY document.id {order} LIMIT ?",
-        (*values, request.batch_size + 1),
+        query,
+        {
+            "lower_bound": lower_bound,
+            "upper_bound": upper_bound,
+            "ticker": request.ticker.strip().upper() if request.ticker is not None else None,
+            "limit": request.batch_size + 1,
+        },
     ).fetchall()
     result.has_more = len(rows) > request.batch_size
     for row in rows[: request.batch_size]:
