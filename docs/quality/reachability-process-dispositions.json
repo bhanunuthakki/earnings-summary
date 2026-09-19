@@ -749,6 +749,26 @@
     },
     {
       "disposition": "external_process",
+      "evidence": "The whole-tree gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter.",
+      "fingerprint": "fff17332f1ae354a874942bd712b869002f06797f12d0e72732a5994fd0e606a",
+      "line": 206,
+      "path": "src/quality/static_quality_gate.py",
+      "targets": [
+        "pyright"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "The hidden-path parity scan invokes only the pinned Pyright executable over byte-identical temporary copies of tracked hidden Python files.",
+      "fingerprint": "8cfcb27f53b5c453f6de303a6813b7a9ea3b5b56038b67901fa503794ad14c3d",
+      "line": 230,
+      "path": "src/quality/static_quality_gate.py",
+      "targets": [
+        "pyright"
+      ]
+    },
+    {
+      "disposition": "external_process",
       "evidence": "_acl grants via the fixed icacls.exe executable.",
       "fingerprint": "eea3cf25d04b87bb29b4bcfc064aaed54935b07061875d905fccaf6ffc841dbe",
       "line": 255,
@@ -850,13 +870,13 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "cd12afaafe5c56e719ce12b0d40bea8566f97f09d6cd2b47b7d54df3cade508c",
+      "source_sha256": "810b951c767f0ac72c83367dc5e7b3a43dc8c6a654208d39f422f3f1efebdaf1",
       "version": "1.2.1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c8911f36121834172c0ba27c5f25f4aceea71632fb78dd4838d725d0ff921df0",
     "schema_version": "operational-reachability-raw/v1",
-    "source_manifest_sha256": "cefc716929ff92bf7304c3c47cce9ff1952760bc5575f66a876807755ec1fb54"
+    "source_manifest_sha256": "cb220180cf8a4a647956fc883a9624c8906aee615f6b6be11cad650cf86e141b"
   },
   "schema_version": "reachability-process-dispositions/v1"
 }
