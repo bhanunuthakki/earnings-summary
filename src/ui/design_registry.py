@@ -707,6 +707,7 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "provenance/fulltext_backfill.py",
     "ir_uploads.py",
     "llm_client.py",
+    "operations/backup_observer.py",  # Named regex groups parse backup logs; no markup is emitted.
     "redteam/telegram_cmd.py",
     "report/sections/qa_roster.py",
     "research/dcf_tweak.py",
@@ -795,6 +796,7 @@ _NON_HTML_PYTHON_SURFACES = frozenset(
         "dashboard/_styles.py",
         "execution/land_session_notes.py",
         "execution/verify_design_conformance.py",
+        "operations/backup_observer.py",
         "pipeline/cc_overlay.py",
         "pipeline/work_os_evaluation.py",
         "redteam/telegram_cmd.py",
@@ -854,6 +856,7 @@ _RUNTIME_JS_SURFACES = frozenset(
 _SVG_SURFACES = frozenset(
     {
         "execution/land_session_notes.py",
+        "operations/backup_observer.py",
         "pipeline/allocation_decisions_panel.py",
         "pipeline/portfolio_panel.py",
         "redteam/telegram_cmd.py",
@@ -1042,7 +1045,8 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/operations_styles.py": "137755c548ddc80fa25d51832b0b3de479a8c159864696f1deb10a5d34c10c5e",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "596388526bd3d0cc6c64747d990b57391cbd2be2d734fb3eb75a38e954b1e759",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
-        "pipeline/work_os_styles.py": "5d901a8a31ef1064638d0ae66d063f64cdc6490921e67cbcea85b6224545f29b",  # pragma: allowlist secret
+        # Work OS owns the existing Explore heading's token-sized title and top spacing.
+        "pipeline/work_os_styles.py": "4c47e7e8462ff4bb8413f1252cc57dc9aa5d85a29887bdbbcbcdf44a1deed264",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
         "report/renderers/workspace_styles.py": "27eba0547bdad4a8bf4178452b7e8f5e8ba947a3f8d141ce05f4c5a4e90573a1",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret

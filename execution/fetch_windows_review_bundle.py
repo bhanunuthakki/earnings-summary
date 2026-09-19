@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import re
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -17,12 +16,14 @@ from urllib.request import ProxyHandler, Request, build_opener
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import to_jsonable_python
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+if __package__:
+    from ._lib import PROJECT_ROOT
+else:
+    from _lib import PROJECT_ROOT
 
-from log_redact import redact  # noqa: E402
-from operations.host_runtime import HostRuntimeBundle, NoRedirect  # noqa: E402
-from operations.review_bundle import OperationsReviewBundle, ReviewSchedulerTask  # noqa: E402
+from log_redact import redact
+from operations.host_runtime import HostRuntimeBundle, NoRedirect
+from operations.review_bundle import OperationsReviewBundle, ReviewSchedulerTask
 
 _ENDPOINT = "/api/operations/review-bundle"
 _HOST_ENDPOINT = "/api/operations/host-runtime"

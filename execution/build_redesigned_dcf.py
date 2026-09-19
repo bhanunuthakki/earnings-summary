@@ -1295,7 +1295,7 @@ def _bs_getter(field: str) -> Callable[[int, tuple[int, str]], float | None]:
 
 def _debt_getter(i: int, k: tuple[int, str]) -> float | None:
     """Keep each displayed debt row within the same primary-source scope as the bridge."""
-    record = bal_i.get(k, {})
+    record = balance_by_period.get(k, {})
     period_end = record.get("date")
     currency = record.get("reportedCurrency")
     if not isinstance(period_end, str) or not isinstance(currency, str):
@@ -1308,7 +1308,7 @@ def _debt_getter(i: int, k: tuple[int, str]) -> float | None:
         fiscal_period_type=k[1],
         currency=currency,
     )
-    return m(resolved.value) if resolved is not None else None
+    return to_millions(resolved.value) if resolved is not None else None
 
 
 for lab, fld in [

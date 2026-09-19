@@ -13,7 +13,6 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -22,15 +21,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+if __package__:
+    from ._lib import PROJECT_ROOT
+else:
+    from _lib import PROJECT_ROOT
 
-from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
-from operations.paths import (  # noqa: E402
+from integrations.portfolio_tracker_v1 import TrackerV1Client
+from operations.paths import (
     configured_product_state_root,
     portfolio_tracker_receipt_path,
 )
-from runtime.portfolio_tracker import (  # noqa: E402
+from runtime.portfolio_tracker import (
     AtomicFileLease,
     ListenerObservation,
     PortfolioTrackerRuntimeManager,

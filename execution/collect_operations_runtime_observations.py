@@ -31,13 +31,15 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+if __package__:
+    from ._lib import PROJECT_ROOT
+else:
+    from _lib import PROJECT_ROOT
 
-from db_paths import configured_db_path  # noqa: E402
-from log_redact import sanitize_operational_text  # noqa: E402
-from operations.host_runtime import collect_host_receipt, publish_host_receipt  # noqa: E402
-from operations.models import (  # noqa: E402
+from db_paths import configured_db_path
+from log_redact import sanitize_operational_text
+from operations.host_runtime import collect_host_receipt, publish_host_receipt
+from operations.models import (
     RUNTIME_PAIR_RECEIPT_FILENAME,
     OperationsRegistry,
     RuntimeCollectionSummary,
@@ -53,14 +55,14 @@ from operations.models import (  # noqa: E402
     ServiceRuntimeReceipt,
     ServiceState,
 )
-from operations.paths import scheduler_receipt_path, service_receipt_path  # noqa: E402
-from operations.registry import build_operations_registry  # noqa: E402
-from runtime.job_runtime import (  # noqa: E402
+from operations.paths import scheduler_receipt_path, service_receipt_path
+from operations.registry import build_operations_registry
+from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
     inherited_lock_is_valid,
 )
-from runtime.secrets import load_project_env  # noqa: E402
+from runtime.secrets import load_project_env
 
 SchedulerState = SchedulerTaskState
 ServiceRuntimeState = ServiceState
