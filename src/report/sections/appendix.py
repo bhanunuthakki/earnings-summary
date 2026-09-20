@@ -9,9 +9,11 @@ paragraphs), and packs them into the ReportSpec.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
-from parser import extract_text_from_pdf, read_text_file
+import parser as transcript_parser
 from report.models import (
     AppendixSection,
     EarningsSection,
@@ -68,8 +70,10 @@ def _extract(path: Path) -> str | None:
     suffix = path.suffix.lower()
     try:
         if suffix == ".pdf":
-            return extract_text_from_pdf(str(path))
-        return read_text_file(str(path))
+            extract_pdf = cast("Callable[[str], str]", transcript_parser.extract_text_from_pdf)
+            return extract_pdf(str(path))
+        read_text = cast("Callable[[str], str]", transcript_parser.read_text_file)
+        return read_text(str(path))
     except Exception:
         return None
 
