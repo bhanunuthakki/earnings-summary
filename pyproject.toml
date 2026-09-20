@@ -19,6 +19,16 @@ dev = [
     "pyright==1.1.414",
     "basedpyright>=1.10",
 ]
+# The Streamlit analytics deep-dive sandbox (explore-sandbox/): a read-only,
+# deterministic catalog→ViewSpec surface beside the Flask cockpit. Nothing in
+# src/ or execution/ imports streamlit — the sandbox app and its kit are the
+# only consumers, and the kit itself stays streamlit-free so its drift test
+# runs in every checkout. Install with `pip install -e .[sandbox]`.
+# Run: `streamlit run explore-sandbox/analytics_deep_dive.py`.
+sandbox = [
+    "streamlit>=1.40",
+    "pandas>=2",
+]
 # IR-document discovery (execution/refresh_ir_kpis.py --discover): a headless
 # browser renders the JS results-center to resolve hash-keyed document URLs.
 # Install with `pip install -e .[ir] && playwright install chromium`.
