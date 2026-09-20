@@ -6,8 +6,12 @@ import hashlib
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from provenance.evidence_native_candidates import (
+    LocalEvidenceReadError,
     has_evidence_native_after,
+    read_verified_local_evidence_bytes,
     resolve_local_storage_uri,
     select_evidence_native_candidates,
     select_evidence_native_candidates_by_id,
@@ -156,5 +160,100 @@ def test_pdf_filter_uses_source_url_when_server_media_type_is_generic(tmp_path: 
             conn, after_rowid=0, batch_size=10, pdf_only=True
         )
         assert [candidate.document_version_id for candidate in candidates] == ["version-2"]
+    finally:
+        conn.close()
+
+
+def test_verified_replica_reader_refuses_tampered_and_wrong_size_replicas(tmp_path: Path) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+        primary.write_bytes(b"tampered")
+        stale = tmp_path / "blobs" / "stale"
+        stale.write_bytes(b"stale")
+        wrong_size = tmp_path / "blobs" / "wrong-size"
+        wrong_size.write_bytes(expected)
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('stale', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, stale.as_uri(), digest, len(expected)),
+        )
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('wrong-size', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, wrong_size.as_uri(), digest, len(expected) + 1),
+        )
+        conn.commit()
+
+        with pytest.raises(LocalEvidenceReadError, match="sha256_mismatch"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+                document_version_id="version-1",
+            )
+    finally:
+        conn.close()
+
+
+def test_verified_replica_reader_rejects_outside_root_and_unregistered_files(
+    tmp_path: Path,
+) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+        primary.write_bytes(b"tampered")
+        unregistered = tmp_path / "blobs" / "unregistered-exact-copy"
+        unregistered.write_bytes(expected)
+        outside = tmp_path / "outside" / "exact-copy"
+        outside.parent.mkdir()
+        outside.write_bytes(expected)
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('outside', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, outside.as_uri(), digest, len(expected)),
+        )
+        conn.commit()
+
+        with pytest.raises(LocalEvidenceReadError, match="sha256_mismatch"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+                document_version_id="version-1",
+            )
+    finally:
+        conn.close()
+
+
+def test_verified_replica_reader_wraps_filesystem_errors_as_typed_degradation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+
+        def fail_is_file(_path: Path) -> bool:
+            raise OSError("simulated inaccessible filesystem")
+
+        monkeypatch.setattr(Path, "is_file", fail_is_file)
+        with pytest.raises(LocalEvidenceReadError, match="content_unreadable"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+            )
     finally:
         conn.close()

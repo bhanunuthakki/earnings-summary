@@ -195,6 +195,34 @@ def _seed_legacy_file_observation(
     conn.commit()
 
 
+def _register_exact_replica(conn: sqlite3.Connection, *, document_id: int, path: Path) -> None:
+    row = conn.execute(
+        "SELECT sha256, raw_bytes_size, fetched_at FROM documents WHERE id=?", (document_id,)
+    ).fetchone()
+    assert row is not None
+    digest = str(row[0])
+    verified_at = datetime.fromisoformat(str(row[2]))
+    location_id = "replica:" + hashlib.sha256(path.as_uri().encode()).hexdigest()
+    created = EvidenceLinkLedger(conn).persist_location(
+        BlobLocationObservation(
+            location_observation_id=location_id,
+            idempotency_key=location_id,
+            blob_sha256=digest,
+            storage_uri=path.as_uri(),
+            location_kind="local",
+            availability_state="present",
+            location_sequence=1,
+            verified_at=verified_at,
+            verified_byte_size=int(row[1]),
+            verified_sha256=digest,
+            supersedes_location_observation_id=None,
+            recorded_at=verified_at,
+        )
+    )
+    assert created.created
+    conn.commit()
+
+
 def test_dry_run_plans_complete_chain_without_ledger_writes(tmp_path: Path) -> None:
     conn, _, repo_root = _connection(tmp_path)
     try:
@@ -546,6 +574,72 @@ def test_hash_mismatch_is_quarantined_without_evidence_writes(tmp_path: Path) ->
                 "evidence_document_observation_links",
             )
         )
+    finally:
+        conn.close()
+
+
+def test_legacy_capture_uses_admitted_exact_replica_without_rewriting_source_identity(
+    tmp_path: Path,
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        original = repo_root / "data" / "ACME_10q.html"
+        first = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert first.documents_backfilled == 1
+        original_bytes = original.read_bytes()
+        replica = repo_root / "data" / "historical" / "ACME_10q.html"
+        replica.parent.mkdir()
+        replica.write_bytes(original_bytes)
+        _register_exact_replica(conn, document_id=1, path=replica)
+        second_bytes = b"<html>second historical observation</html>"
+        original.write_bytes(second_bytes)
+        conn.execute(
+            "INSERT INTO documents VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
+            "'2026-08-20 12:00:00', 'ok', ?, 'https://sec.example/acme-10q-v2', NULL)",
+            ("data/ACME_10q.html", hashlib.sha256(second_bytes).hexdigest(), len(second_bytes)),
+        )
+        conn.commit()
+        assert (
+            ensure_legacy_document_evidence(
+                conn, repo_root=repo_root, document_id=2
+            ).documents_backfilled
+            == 1
+        )
+        second_replica = repo_root / "data" / "historical" / "ACME_10q-v2.html"
+        second_replica.write_bytes(second_bytes)
+        _register_exact_replica(conn, document_id=2, path=second_replica)
+        original.write_bytes(b"new bytes under the reused mutable alias")
+
+        replay = ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=1)
+        second_replay = ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=2)
+
+        assert replay.documents_backfilled == 1
+        assert replay.finding_counts == {
+            "issuer_identity_legacy_ticker": 1,
+            "language_und": 1,
+            "verified_local_replica_fallback": 1,
+        }
+        assert second_replay.finding_counts == {
+            "issuer_identity_legacy_ticker": 1,
+            "language_und": 1,
+            "verified_local_replica_fallback": 1,
+        }
+        assert conn.execute("SELECT file_path FROM documents WHERE id=1").fetchone()[0] == (
+            "data/ACME_10q.html"
+        )
+        assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 2
+        assert (
+            conn.execute(
+                "SELECT source_url FROM evidence_source_observations WHERE observation_id='legacy-obs-1'"
+            ).fetchone()[0]
+            == "https://sec.example/acme-10q"
+        )
+        document_locator = json.loads(
+            conn.execute(
+                "SELECT locator_json FROM evidence_nodes WHERE node_id='legacy-node-doc-1'"
+            ).fetchone()[0]
+        )
+        assert document_locator["source_ref"] == "data/ACME_10q.html"
     finally:
         conn.close()
 

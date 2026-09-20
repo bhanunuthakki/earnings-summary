@@ -32,8 +32,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
 from provenance.evidence_native_candidates import (
     EvidenceNativeDocumentCandidate,
+    LocalEvidenceReadError,
     has_evidence_native_after,
-    resolve_local_storage_uri,
+    read_verified_local_evidence_bytes,
     select_evidence_native_candidates,
 )
 from provenance.fulltext_extractor_identity import (
@@ -234,6 +235,7 @@ class _CandidatePlan:
     status: _PlanStatus
     node_texts: tuple[_NodeText, ...] = ()
     reason: str | None = None
+    used_verified_replica: bool = False
 
     @property
     def node_count(self) -> int:
@@ -458,7 +460,7 @@ def _plan_candidate(
     if _has_substantive_coverage(conn, candidate.document_version_id, identity):
         return _CandidatePlan(candidate=candidate, identity=identity, status="covered")
     try:
-        raw_bytes = _verified_bytes(conn, candidate, allowed_roots)
+        raw_bytes, used_verified_replica = _verified_bytes(conn, candidate, allowed_roots)
     except _ExtractionError as error:
         # The canonical input bytes were not available, so recording a run
         # against the version's hash would falsely claim it read those bytes.
@@ -510,6 +512,7 @@ def _plan_candidate(
         identity=identity,
         status="succeeded",
         node_texts=tuple(node_texts),
+        used_verified_replica=used_verified_replica,
     )
 
 
@@ -656,6 +659,8 @@ def _execute_candidate_plan(
     )
     substantive_count = sum(node.node_kind != "document" for node in node_texts)
     summary.documents_planned += 1
+    if plan.used_verified_replica:
+        _note(summary, "verified_local_replica_fallback")
     summary.substantive_nodes_planned += substantive_count
     summary.reference_nodes_planned += reference_count
     kind_counts = Counter(summary.substantive_node_kind_counts)
@@ -680,24 +685,36 @@ def _verified_bytes(
     conn: sqlite3.Connection,
     candidate: _DocumentCandidate,
     allowed_roots: tuple[Path, ...],
-) -> bytes:
-    path = resolve_local_storage_uri(candidate.file_path, allowed_roots=allowed_roots)
-    if path is None:
-        raise _ExtractionError("storage_uri_not_allowed_local_file")
-    if not path.is_file():
-        raise _ExtractionError("content_missing")
-    raw_bytes = path.read_bytes()
-    digest = hashlib.sha256(raw_bytes).hexdigest()
-    if digest != candidate.document_sha256 or digest != candidate.blob_sha256:
+) -> tuple[bytes, bool]:
+    if candidate.blob_sha256 is None or candidate.document_version_id is None:
+        raise _ExtractionError("missing_document_version")
+    if candidate.document_sha256 != candidate.blob_sha256:
         raise _ExtractionError("sha256_mismatch")
-    if candidate.raw_bytes_size is not None and candidate.raw_bytes_size != len(raw_bytes):
-        raise _ExtractionError("byte_size_mismatch")
+    try:
+        verified = read_verified_local_evidence_bytes(
+            conn,
+            storage_uri=candidate.file_path,
+            expected_sha256=candidate.blob_sha256,
+            expected_byte_size=candidate.raw_bytes_size,
+            allowed_roots=allowed_roots,
+            legacy_document_id=candidate.document_id,
+            document_version_id=(
+                None if candidate.document_id is not None else candidate.document_version_id
+            ),
+        )
+    except LocalEvidenceReadError as error:
+        raise _ExtractionError(error.reason) from error
     blob = conn.execute(
         "SELECT byte_size FROM evidence_content_blobs WHERE sha256 = ?", (candidate.blob_sha256,)
     ).fetchone()
-    if blob is None or not isinstance(blob[0], int) or blob[0] != len(raw_bytes):
+    if (
+        blob is None
+        or isinstance(blob[0], bool)
+        or not isinstance(blob[0], int)
+        or blob[0] != len(verified.raw_bytes)
+    ):
         raise _ExtractionError("evidence_blob_size_mismatch")
-    return raw_bytes
+    return verified.raw_bytes, verified.used_replica
 
 
 def _extract_nodes(
@@ -1765,14 +1782,18 @@ def _require_recorded_at(candidate: _DocumentCandidate) -> datetime:
 
 def _quarantine(summary: FullTextBackfillSummary, document_ref: str, reason: str) -> None:
     summary.documents_quarantined += 1
-    counts = Counter(summary.finding_counts)
-    counts[reason] += 1
-    summary.finding_counts = dict(counts)
+    _note(summary, reason)
     emit_structured_event(
         "fulltext_evidence_backfill_quarantined",
         document_ref=document_ref,
         reason=reason,
     )
+
+
+def _note(summary: FullTextBackfillSummary, finding: str) -> None:
+    counts = Counter(summary.finding_counts)
+    counts[finding] += 1
+    summary.finding_counts = dict(counts)
 
 
 def _account(created: bool, summary: FullTextBackfillSummary) -> None:

@@ -45,6 +45,34 @@ def _body(marker: str) -> str:
     )
 
 
+def test_migrated_transcript_document_path_and_hash_are_immutable(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        document = conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
+            "VALUES ('ACME','transcript_audio','earnings_call_transcript',?,?,'2026-07-20','ok',1)",
+            ("transcripts/processed/ACME_Q2_2026.txt", "a" * 64),
+        )
+        assert document.lastrowid is not None
+        conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id,ticker,fiscal_period_type,period_end,source,is_active,is_current,version_number) "
+            "VALUES (?,'ACME','Q2','2026-06-30','issuer_ir',1,1,1)",
+            (document.lastrowid,),
+        )
+
+        with pytest.raises(
+            sqlite3.IntegrityError, match="transcript document evidence is immutable"
+        ):
+            conn.execute(
+                "UPDATE documents SET file_path=?, sha256=? WHERE id=?",
+                ("transcripts/processed/other.txt", "b" * 64, document.lastrowid),
+            )
+
+
 def test_unreceipted_raw_ingest_fails_before_files_or_database_writes(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
