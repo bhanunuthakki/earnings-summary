@@ -14,7 +14,8 @@ the preceding audit worktree at `b55ae89269ae94c40a06ae5aea90e151e5bf009c`.
 The three dedicated test modules are removed with their implementations. Shared DCF,
 research, driver, and approval tests remain unchanged. Two exact registry census
 expectations change with their removed members: capture-quality specs 79 → 77 and
-visual-emitter entries 156 → 155. All other registry behavior assertions are retained. The obsolete design
+visual-emitter entries 157 → 156 after integration with release #1568. Its backup-observer
+nonvisual assertion remains intact. All other registry behavior assertions are retained. The obsolete design
 census entry for `research/dcf_tweak.py` is removed; no rendered surface changes.
 
 The Ledger plan and capture program remain historical records. Their classification in
