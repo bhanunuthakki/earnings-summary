@@ -48,6 +48,9 @@ Tests ran serially with an external disposable pytest base directory; no provide
 were made. All string literals in the pre-existing `llm_client.py` functions also compare
 identically against the base source.
 
+The complete 34-module `tests/test_llm*.py` family also passes: **473 tests**.
+This exercises the retained LLM interfaces beyond the focused retirement cases.
+
 All nine retained Python files pass whole-file Ruff lint/format and strict Pyright
 (zero errors); the changed-file suppression scan returns no findings. The capture-quality
 pruning test now exercises the public corpus loader with real synthetic purpose-sharded
