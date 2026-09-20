@@ -81,13 +81,13 @@ The final integrated source baseline is `3195681c` on `main`, after typing PRs #
 #1572, #1573, and #1574 merged. Against that baseline, this candidate retains 2,525
 Python files, 2,903 whole-tree typing diagnostics, and 2,496 suppressions: reductions
 of 59 diagnostics and 13 suppressions. Every subsystem ceiling descends or stays
-unchanged. The separate queued typing slices are included in the integrated baseline
-and remain outside this retirement's counts. The retained `src/report` ceilings are
-19 diagnostics and 16 suppressions.
+unchanged. The four merged typing slices are included in the baseline; their reductions
+are separate from this retirement's 59/13 reduction. The retained `src/report` ceilings
+are 19 diagnostics and 16 suppressions.
 
 This integrated source baseline is distinct from the Windows deployment, which remains
-at `5f35a8a2` / run `0040`. This branch contains no production, database, migration,
-or deployment changes.
+at `5f35a8a2` / schema `0040_fmp_watchlist_recovery`. This branch contains no
+production, database, migration, or deployment changes.
 
 Three reviewed subprocess call sites in `src/llm/cli.py` move with the cleanup.
 Their source statements, external targets, and classifications remain unchanged;
