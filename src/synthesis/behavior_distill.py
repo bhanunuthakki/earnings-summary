@@ -348,6 +348,8 @@ def run_behavior_distill(
         row.key for row in list_facts_safe(db_path, status="affirmed", category="behavioral")
     }
 
+    if db_path is None:
+        return counts
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.execute("PRAGMA busy_timeout = 30000")  # see reference_platform_invariants memory
     try:
