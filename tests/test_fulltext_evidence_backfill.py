@@ -29,6 +29,7 @@ from provenance.evidence_ledger import (
     PersistResult,
     SourceObservation,
 )
+from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
 from provenance.fulltext_backfill import FullTextBackfillRequest, backfill_fulltext_evidence
 from provenance.fulltext_extractor_identity import (
     PDF_TABLE_EXTRACTOR_NAME,
@@ -1353,6 +1354,73 @@ def test_hash_mismatch_is_quarantined_before_parse(tmp_path: Path) -> None:
                 "WHERE extraction_run_id LIKE 'fulltext-run-%'"
             ).fetchone()[0]
             == 0
+        )
+    finally:
+        conn.close()
+
+
+def test_blob_size_mismatch_is_quarantined_before_parse_even_when_alias_bytes_match(
+    tmp_path: Path,
+) -> None:
+    conn, repo_root = _connection(tmp_path)
+    try:
+        conn.execute("DROP TRIGGER IF EXISTS trg_evidence_content_blobs_append_only")
+        conn.execute("UPDATE evidence_content_blobs SET byte_size = byte_size + 1")
+        conn.commit()
+
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+
+        assert result.documents_extracted == 0
+        assert result.documents_quarantined == 1
+        assert result.finding_counts == {"evidence_blob_size_mismatch": 1}
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs "
+                "WHERE extraction_run_id LIKE 'fulltext-run-%'"
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
+
+
+def test_fulltext_extracts_from_admitted_replica_when_legacy_alias_changed(tmp_path: Path) -> None:
+    conn, repo_root = _connection(tmp_path)
+    try:
+        original = repo_root / "data" / "ACME.txt"
+        retained = original.read_bytes()
+        replica = repo_root / "data" / "historical" / "ACME.txt"
+        replica.parent.mkdir()
+        replica.write_bytes(retained)
+        digest = hashlib.sha256(retained).hexdigest()
+        verified_at = datetime(2026, 7, 20, 12, 0, 0)
+        location = BlobLocationObservation(
+            location_observation_id="fulltext-replica",
+            idempotency_key="fulltext-replica",
+            blob_sha256=digest,
+            storage_uri=replica.as_uri(),
+            location_kind="local",
+            availability_state="present",
+            location_sequence=1,
+            verified_at=verified_at,
+            verified_byte_size=len(retained),
+            verified_sha256=digest,
+            supersedes_location_observation_id=None,
+            recorded_at=verified_at,
+        )
+        assert EvidenceLinkLedger(conn).persist_location(location).created
+        conn.commit()
+        original.write_bytes(b"tampered mutable alias")
+
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+
+        assert result.documents_extracted == 1
+        assert result.finding_counts == {"verified_local_replica_fallback": 1}
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_nodes WHERE extraction_run_id LIKE 'fulltext-run-%'"
+            ).fetchone()[0]
+            > 1
         )
     finally:
         conn.close()
