@@ -328,21 +328,15 @@ def _verified_local_replicas(
     legacy_document_id: int | None,
     document_version_id: str | None,
 ) -> list[tuple[str, str, int]]:
-    identity_clause = (
-        "document.legacy_document_id = ?"
-        if legacy_document_id is not None
-        else "document.document_version_id = ?"
-    )
-    identity_value: object = (
-        legacy_document_id if legacy_document_id is not None else document_version_id
-    )
     rows = conn.execute(
         "SELECT location.location_observation_id, location.storage_uri, blob.byte_size "
         "FROM evidence_document_versions AS document "
         "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
         "JOIN v_evidence_blob_locations_current AS location "
         "ON location.blob_sha256 = document.blob_sha256 "
-        "WHERE " + identity_clause + " AND lower(document.blob_sha256) = ? "
+        "WHERE ((? IS NOT NULL AND document.legacy_document_id = ?) "
+        "OR (? IS NOT NULL AND document.document_version_id = ?)) "
+        "AND lower(document.blob_sha256) = ? "
         "AND lower(location.blob_sha256) = ? "
         "AND location.location_kind = 'local' "
         "AND location.availability_state = 'present' "
@@ -351,7 +345,10 @@ def _verified_local_replicas(
         "AND (? IS NULL OR blob.byte_size = ?) "
         "ORDER BY location.verified_at DESC, location.storage_uri",
         (
-            identity_value,
+            legacy_document_id,
+            legacy_document_id,
+            document_version_id,
+            document_version_id,
             expected_sha256,
             expected_sha256,
             expected_sha256,
