@@ -19,6 +19,7 @@ checkout and are created only by their named producer.
     "docs",
     "evals",
     "examples",
+    "explore-sandbox",
     "execution",
     "instruction_tests",
     "micro_thesis",
@@ -81,6 +82,7 @@ tool/runtime directories such as `.git`, `.venv`, and caches.
 | `cron/` | Windows Task Scheduler manifests and wrappers. |
 | `evals/` | LLM evaluation cases, rubrics, and versioned fixtures. |
 | `design-system/`, `.design-sync/` | Design-system source and generated-sync metadata; `.design-sync/` is a registered tooling root. |
+| `explore-sandbox/` | Optional-dependency Streamlit analytics deep-dive surface. Its theme is generated from `src/ui/tokens.py` (`scripts/gen_streamlit_theme.py`; drift-checked by the design-sync gate), never hand-copied. Reads only explicit synthetic or restored-snapshot databases; never a production authority. |
 | `scratch/` | Registered compatibility exception for still-referenced one-offs and historical plans. New durable product logic is prohibited here. |
 | `outputs/` | Registered artifact-tool output. It is not the application `output/` destination and must not be read by product code. |
 
