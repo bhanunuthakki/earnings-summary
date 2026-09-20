@@ -31,6 +31,8 @@ from compute.kpi_resolver import (  # noqa: E402
     normalize_kpi_name,
     resolve_kpi_definition_name,
     resolve_kpi_definition_names,
+    semantic_series_identity_anchor_sql,
+    semantic_series_identity_flat_sql,
     semantic_series_identity_sql,
 )
 from models.facts import Unit  # noqa: E402
@@ -119,6 +121,129 @@ def test_series_identity_rejects_active_override_across_definition_alias_family(
         "ON ksc.kpi_fact_id=kf.id WHERE " + predicate + " ORDER BY kf.id"
     ).fetchall()
     assert rows == []
+    conn.close()
+
+
+def test_series_identity_flat_matches_correlated_on_basis_and_scope_drift() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_facts (
+          id INTEGER PRIMARY KEY,kpi_definition_id INTEGER,period_end TEXT
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+          id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
+          supersedes_context_id INTEGER,status TEXT,publication_lane TEXT,
+          metric_name_as_reported TEXT,accounting_basis TEXT,
+          consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT
+        );
+        INSERT INTO kpi_facts VALUES
+          (1,7,'2024-03-31'),(2,7,'2024-06-30'),(3,7,'2024-09-30'),
+          (4,7,'2024-12-31'),(5,7,'2025-03-31');
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+          (1,1,1,NULL,'admitted','current_actual','Total customers','gaap',
+           'consolidated','{}','millions'),
+          (2,2,1,NULL,'admitted','current_actual','Total customers','non_gaap',
+           'segment','{"segment":"credit"}','millions'),
+          (3,3,1,NULL,'admitted','current_actual','Active customers','non_gaap',
+           'segment','{"segment":"credit"}','millions'),
+          (4,4,1,NULL,'admitted','current_actual','Total customers','non_gaap',
+           'segment','{"segment":"credit"}','actual'),
+          (5,5,1,NULL,'admitted','current_actual','Total customers','non_gaap',
+           'segment','{"segment":"credit"}','millions');
+        """
+    )
+    correlated = conn.execute(
+        "SELECT kf.id FROM kpi_facts kf JOIN kpi_fact_semantic_contexts ksc "
+        "ON ksc.kpi_fact_id=kf.id WHERE " + semantic_series_identity_sql(conn) + " ORDER BY kf.id"
+    ).fetchall()
+    anchor_sql = semantic_series_identity_anchor_sql(conn)
+    assert anchor_sql is not None
+    flat = conn.execute(
+        "SELECT kf.id FROM kpi_facts kf "
+        "JOIN kpi_fact_semantic_contexts ksc ON ksc.kpi_fact_id=kf.id "
+        f"LEFT JOIN ({anchor_sql}) series_identity_anchor "
+        "ON series_identity_anchor.definition_id=kf.kpi_definition_id "
+        "WHERE " + semantic_series_identity_flat_sql(conn) + " ORDER BY kf.id"
+    ).fetchall()
+    # Both identity forms must select the same rows (only facts 2 and 5 match
+    # the definition's latest admitted signature), or aggregate callers that
+    # hoisted the anchor drift from row-correlated callers.
+    assert [int(row[0]) for row in correlated] == [2, 5]
+    assert [int(row[0]) for row in flat] == [2, 5]
+    conn.close()
+
+
+def test_series_identity_flat_rejects_active_override_across_definition_alias_family() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_definitions (
+          id INTEGER PRIMARY KEY,ticker TEXT,name TEXT,unit TEXT
+        );
+        CREATE TABLE kpi_facts (
+          id INTEGER PRIMARY KEY,ticker TEXT,kpi_definition_id INTEGER,
+          period_end TEXT,currency TEXT
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+          id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
+          supersedes_context_id INTEGER,status TEXT,publication_lane TEXT,
+          metric_name_as_reported TEXT,accounting_basis TEXT,
+          consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT
+        );
+        CREATE TABLE fact_overrides (
+          ticker TEXT,fact_kind TEXT,fact_key TEXT,action TEXT,status TEXT
+        );
+        INSERT INTO kpi_definitions VALUES
+          (1,'NU','Monthly ARPAC (USD)','actual'),
+          (2,'NU','Monthly ARPAC','actual');
+        INSERT INTO kpi_facts VALUES
+          (1,'NU',1,'2025-03-31','USD'),
+          (2,'NU',2,'2024-12-31','USD');
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+          (1,1,1,NULL,'admitted','current_actual','Monthly ARPAC','management',
+           'consolidated','{}','none'),
+          (2,2,1,NULL,'admitted','current_actual','Monthly ARPAC','management',
+           'consolidated','{}','none');
+        INSERT INTO fact_overrides VALUES
+          ('NU','kpi','Monthly ARPAC','replace','active');
+        """
+    )
+    anchor_sql = semantic_series_identity_anchor_sql(conn)
+    assert anchor_sql is not None
+    rows = conn.execute(
+        "SELECT kf.id FROM kpi_facts kf "
+        "JOIN kpi_fact_semantic_contexts ksc ON ksc.kpi_fact_id=kf.id "
+        f"LEFT JOIN ({anchor_sql}) series_identity_anchor "
+        "ON series_identity_anchor.definition_id=kf.kpi_definition_id "
+        "WHERE " + semantic_series_identity_flat_sql(conn) + " ORDER BY kf.id"
+    ).fetchall()
+    # The flat form shares the correlated form's active-override family
+    # rejection, so alias-family facts cannot leak into a series either way.
+    assert rows == []
+    conn.close()
+
+
+def test_series_identity_anchor_sql_returns_none_on_legacy_context_schema() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_facts (
+          id INTEGER PRIMARY KEY,kpi_definition_id INTEGER,period_end TEXT
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+          id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,status TEXT
+        );
+        INSERT INTO kpi_facts VALUES (1,7,'2024-03-31');
+        INSERT INTO kpi_fact_semantic_contexts VALUES (1,1,'admitted');
+        """
+    )
+    # No signature columns: the anchor contract is None so aggregate callers
+    # keep the correlated predicate instead of emitting SQL that cannot run.
+    assert semantic_series_identity_anchor_sql(conn) is None
     conn.close()
 
 

@@ -941,6 +941,26 @@ def semantic_series_identity_sql(
         f"((({context_alias}.id IS NULL OR {context_alias}.status='legacy_unknown') "
         f"AND NOT {admitted_anchor_exists}) OR ({qualified}))"
     )
+    blocked_definition_ids = _active_kpi_override_blocked_definition_ids(conn)
+    if not blocked_definition_ids:
+        return admitted_identity
+    blocked_ids_sql = ",".join(
+        str(definition_id) for definition_id in sorted(blocked_definition_ids)
+    )
+    return f"({admitted_identity}) AND {fact_alias}.kpi_definition_id NOT IN ({blocked_ids_sql})"
+
+
+def _active_kpi_override_blocked_definition_ids(
+    conn: sqlite3.Connection,
+) -> tuple[int, ...]:
+    """Definition ids whose family an active legacy KPI override rejects.
+
+    Shared by the correlated (:func:`semantic_series_identity_sql`) and flat
+    (:func:`semantic_series_identity_flat_sql`) identity forms so the two can
+    never disagree about override rejection. Empty when ``fact_overrides``
+    lacks the required columns or no active legacy ``replace``/``drop`` KPI
+    override exists.
+    """
     override_columns = {
         str(row["name"]) for row in conn.execute("PRAGMA table_info(fact_overrides)").fetchall()
     }
@@ -952,7 +972,7 @@ def semantic_series_identity_sql(
         "status",
     }
     if not required_override_columns.issubset(override_columns):
-        return admitted_identity
+        return ()
     active_overrides = conn.execute(
         "SELECT DISTINCT ticker,fact_key FROM fact_overrides "
         "WHERE status='active' AND action IN ('replace','drop') AND fact_kind='kpi'"
@@ -966,12 +986,115 @@ def semantic_series_identity_sql(
                 str(override["fact_key"]),
             )
         )
+    return tuple(sorted(blocked_definition_ids))
+
+
+# The five context columns that constitute a series' semantic identity — the
+# signature the identity predicates compare against the per-definition anchor.
+_SERIES_IDENTITY_SIGNATURE_FIELDS = (
+    "metric_name_as_reported",
+    "accounting_basis",
+    "consolidation_scope",
+    "dimensions_json",
+    "unit_scale",
+)
+_SERIES_IDENTITY_REQUIRED_COLUMNS = frozenset(_SERIES_IDENTITY_SIGNATURE_FIELDS) | {
+    "revision",
+    "supersedes_context_id",
+    "publication_lane",
+}
+
+
+def semantic_series_identity_anchor_sql(
+    conn: sqlite3.Connection,
+    *,
+    fact_relation: str | None = None,
+) -> str | None:
+    """The per-definition identity anchor as ONE uncorrelated relation.
+
+    One row per ``kpi_definition_id`` that has an admitted ``current_actual``
+    head context: the signature of its latest (``period_end DESC, id DESC``)
+    such head, as columns ``(definition_id, m1..m5)``. This is exactly the
+    anchor that :func:`semantic_series_identity_sql` re-derives as a
+    correlated subquery for EVERY outer row — hoisted here so an
+    aggregate-style caller (the catalog picker, the per-ticker name
+    resolution) joins it once instead of re-flattening the resolved relation
+    per row (measured ~19x faster on the 40-issuer synthetic benchmark:
+    ~5.9 s correlated vs ~0.31 s flat for the same query, identical rows).
+
+    ``None`` when ``kpi_fact_semantic_contexts`` lacks the identity columns —
+    the caller then keeps the correlated predicate, which degrades to ``1=1``
+    on those schemas anyway.
+    """
+    resolved_fact_relation = fact_relation or canonical_fact_relation(conn, "kpi_facts").sql
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)").fetchall()
+    }
+    if not _SERIES_IDENTITY_REQUIRED_COLUMNS.issubset(columns):
+        return None
+    signature_select = ", ".join(
+        f"context.{field} AS m{index}"
+        for index, field in enumerate(_SERIES_IDENTITY_SIGNATURE_FIELDS, start=1)
+    )
+    return (
+        "SELECT definition_id, m1, m2, m3, m4, m5 FROM ("
+        f"SELECT fact.kpi_definition_id AS definition_id, {signature_select}, "  # nosec B608
+        "ROW_NUMBER() OVER (PARTITION BY fact.kpi_definition_id "
+        "ORDER BY fact.period_end DESC, fact.id DESC) AS anchor_rank "
+        f"FROM {resolved_fact_relation} fact "  # nosec B608
+        "JOIN kpi_fact_semantic_contexts context "
+        "ON context.kpi_fact_id = fact.id AND NOT EXISTS ("
+        "SELECT 1 FROM kpi_fact_semantic_contexts context_successor "
+        "WHERE context_successor.supersedes_context_id = context.id) "
+        "WHERE context.status = 'admitted' "
+        "AND context.publication_lane = 'current_actual'"
+        ") WHERE anchor_rank = 1"
+    )
+
+
+def semantic_series_identity_flat_sql(
+    conn: sqlite3.Connection,
+    *,
+    fact_alias: str = "kf",
+    context_alias: str = "ksc",
+    anchor_alias: str = "series_identity_anchor",
+) -> str:
+    """The flat row predicate pairing :func:`semantic_series_identity_anchor_sql`.
+
+    The caller MUST have joined the anchor relation under ``anchor_alias``:
+
+        LEFT JOIN ({anchor_sql}) {anchor_alias}
+          ON {anchor_alias}.definition_id = {fact_alias}.kpi_definition_id
+
+    The predicate then admits a row iff either its admitted context's
+    signature equals the definition's anchor signature, or — when the
+    definition has no admitted head at all — the row's context is missing or
+    ``legacy_unknown``: the same selection :func:`semantic_series_identity_sql`
+    produces, with the anchor computed once per query instead of once per
+    row. Active legacy KPI overrides reject the same definition families
+    (shared helper), so override semantics are identical between the two
+    forms.
+    """
+    current_signature = (
+        "("
+        + ",".join(f"{context_alias}.{field}" for field in _SERIES_IDENTITY_SIGNATURE_FIELDS)
+        + ")"
+    )
+    anchor_signature = "(" + ",".join(f"{anchor_alias}.m{index}" for index in range(1, 6)) + ")"
+    identity = (
+        f"(({anchor_alias}.definition_id IS NOT NULL "
+        f"AND {current_signature}={anchor_signature}) "
+        f"OR ({anchor_alias}.definition_id IS NULL "
+        f"AND ({context_alias}.id IS NULL OR {context_alias}.status='legacy_unknown')))"
+    )
+    blocked_definition_ids = _active_kpi_override_blocked_definition_ids(conn)
     if not blocked_definition_ids:
-        return admitted_identity
+        return identity
     blocked_ids_sql = ",".join(
         str(definition_id) for definition_id in sorted(blocked_definition_ids)
     )
-    return f"({admitted_identity}) AND {fact_alias}.kpi_definition_id NOT IN ({blocked_ids_sql})"
+    return f"({identity}) AND {fact_alias}.kpi_definition_id NOT IN ({blocked_ids_sql})"
 
 
 def engine_formula_definition(name: str) -> str | None:
