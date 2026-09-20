@@ -344,7 +344,6 @@
     "execution/tracker_v1_parity.py",
     "execution/triage_second_pass.py",
     "execution/truncate_peer_fmp_cache.py",
-    "execution/update_readme.py",
     "execution/validate_environment.py",
     "execution/verify_cron_registration.py",
     "execution/verify_design_conformance.py"

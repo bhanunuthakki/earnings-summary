@@ -6,7 +6,7 @@ checked before enqueueing; index members and unknown instruments are excluded.
 
   1. Compute the last N (default and maximum 5) fiscal-quarter end dates that have already
      passed, using `tracked_companies.fiscal_year_end` to map fiscal-quarter
-     index → calendar quarter end.
+     index -> calendar quarter end.
   2. For each period with no exact DB/path/SHA evidence receipt, invoke
      `fetch_qa_transcript.fetch_qa()` to reacquire or replay an authorized Q&A
      artifact. Unreceipted local files never bypass source authorization.

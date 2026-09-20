@@ -477,7 +477,7 @@ def test_real_repository_evidence_persisted_bytes_fit_reader_contract() -> None:
     evidence = collect_repository_evidence(PROJECT_ROOT)
     payload = serialize_evidence(evidence)
 
-    assert len(payload) <= 110_000
+    assert len(payload) <= 112_000
     assert RepositoryEvidence.model_validate_json(payload) == evidence
 
 

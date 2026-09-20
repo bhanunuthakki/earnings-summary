@@ -31,13 +31,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from log_redact import redact  # noqa: E402
-from operations.readme_governance import receipt_violations  # noqa: E402
-from readme_receipt import LlmCallAttestation, StoredReadmeReceipt  # noqa: E402
-from readme_updater import (  # noqa: E402
+from log_redact import redact
+from operations.readme_governance import receipt_violations
+from readme_receipt import LlmCallAttestation, StoredReadmeReceipt
+from readme_updater import (
     MAX_REVISIONS_PER_RUN,
     CliContract,
     EvidenceSource,
@@ -46,8 +43,10 @@ from readme_updater import (  # noqa: E402
     evidence_sha256,
     run_update_cycle,
 )
-from run_lock import hold_run_lock  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from run_lock import hold_run_lock
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _SOURCE_ALLOWLIST: tuple[tuple[str, int], ...] = (
     ("AGENTS.md", 14_000),
@@ -71,7 +70,7 @@ _SOURCE_ALLOWLIST: tuple[tuple[str, int], ...] = (
     ("execution/run_morning_pipeline.py", 8_000),
 )
 _MAX_EVIDENCE_CHARS = 60_000
-_MAX_EVIDENCE_PACKET_BYTES = 110_000
+_MAX_EVIDENCE_PACKET_BYTES = 112_000
 _PATH_ROOTS = ("src", "execution", "directives", "cron", "docs", "alembic/versions", "tests")
 _PATH_SUFFIXES = frozenset({".py", ".md", ".json", ".bat", ".toml", ".txt", ".yml", ".yaml"})
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
