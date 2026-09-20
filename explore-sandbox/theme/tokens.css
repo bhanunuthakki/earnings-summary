@@ -1,6 +1,6 @@
 /*
  * GENERATED from src/ui/tokens.py — do not hand-edit.
-Regenerate: python scripts/gen_streamlit_theme.py
+ * Regenerate: python scripts/gen_streamlit_theme.py
  *
  * palette_css("dark"): the dashboard surfaces' dark-only `:root`.
  * Identical by construction to what the Flask surfaces inline via

@@ -7,17 +7,21 @@ follows the ``gen_design_tokens.py`` pattern: render from ``ui.tokens``,
 commit the artifacts, and fail ``python scripts/check_design_sync.py`` on
 drift.
 
-Two generated files under ``explore-sandbox/``:
+Three generated files under ``explore-sandbox/``:
 
 - ``explore-sandbox/.streamlit/config.toml`` — Streamlit's native
   ``[theme]`` block: ``base = "dark"`` plus the dashboard palette's four
   color mapping points. Streamlit's theme keys are coarse (one primary, one
   page background, one widget/sidebar ground, one text color); the mapping
-  is documented below and everything else rides the CSS layer.
+  is documented below and everything else rides the CSS layers.
 - ``explore-sandbox/theme/tokens.css`` — ``palette_css("dark")``
   byte-for-byte (the dashboard surfaces' dark-only ``:root``), which the
   sandbox app injects so the full custom-property layer (fonts, type scale,
   spacing, chrome, series colors) reaches sandbox DOM.
+- ``explore-sandbox/theme/controls.css`` — ``controls_css("dark")``
+  byte-for-byte: the canonical control kit layer every Flask page composes
+  after ``palette_css``. The sandbox composes the same two layers, so its
+  controls are the cockpit's controls, never a fork.
 
 Stdlib only — no streamlit import, no new Python dependencies: the sandbox
 is an optional-dependency surface, and this generator must run in every
@@ -25,7 +29,7 @@ checkout (the design-sync gate calls it).
 
 Usage::
 
-    python scripts/gen_streamlit_theme.py            # write/overwrite both files
+    python scripts/gen_streamlit_theme.py            # write/overwrite all three files
     python scripts/gen_streamlit_theme.py --check    # diff only, nonzero on drift
 """
 
@@ -39,16 +43,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from ui.controls import controls_css  # noqa: E402
 from ui.tokens import PALETTE_DARK, palette_css  # noqa: E402
 
 SANDBOX_DIR = PROJECT_ROOT / "explore-sandbox"
 CONFIG_OUTPUT = SANDBOX_DIR / ".streamlit" / "config.toml"
 CSS_OUTPUT = SANDBOX_DIR / "theme" / "tokens.css"
+CONTROLS_CSS_OUTPUT = SANDBOX_DIR / "theme" / "controls.css"
 
-_GENERATED_WARNING = (
-    "GENERATED from src/ui/tokens.py — do not hand-edit.\n"
-    "Regenerate: python scripts/gen_streamlit_theme.py"
-)
+_GENERATED_NOTE = "GENERATED from src/ui/tokens.py — do not hand-edit."
+_CONTROLS_GENERATED_NOTE = "GENERATED from src/ui/controls.py — do not hand-edit."
+_REGEN_NOTE = "Regenerate: python scripts/gen_streamlit_theme.py"
 
 # The config.toml mapping, stated once. Streamlit's [theme] surface:
 #   base                   — "dark": the dashboard surfaces' only theme
@@ -72,7 +77,8 @@ def render_config() -> str:
     """The exact ``config.toml`` contents: generated-file header plus the
     ``[theme]`` block, every value emitted verbatim from ``PALETTE_DARK``."""
     lines = [
-        f"# {_GENERATED_WARNING}",
+        f"# {_GENERATED_NOTE}",
+        f"# {_REGEN_NOTE}",
         "",
         "[theme]",
         'base = "dark"',
@@ -89,7 +95,8 @@ def render_css() -> str:
     can never drift by hand-editing."""
     banner = (
         "/*\n"
-        f" * {_GENERATED_WARNING}\n"
+        f" * {_GENERATED_NOTE}\n"
+        f" * {_REGEN_NOTE}\n"
         " *\n"
         ' * palette_css("dark"): the dashboard surfaces\' dark-only `:root`.\n'
         " * Identical by construction to what the Flask surfaces inline via\n"
@@ -100,11 +107,33 @@ def render_css() -> str:
     return banner + palette_css("dark")
 
 
+def render_controls_css() -> str:
+    """The exact ``controls.css`` contents: a generated-file header followed
+    verbatim by ``controls_css("dark")`` — the control kit layer every Flask
+    page composes after ``palette_css``. The sandbox injects the same two
+    layers, so its controls are the cockpit's controls, never a fork. No
+    sandbox-only extensions are emitted; if the surface ever needs one, it
+    goes below a marked section isolated from the canonical layer (the
+    ``gen_design_controls.py`` React-port pattern)."""
+    banner = (
+        "/*\n"
+        f" * {_CONTROLS_GENERATED_NOTE}\n"
+        f" * {_REGEN_NOTE}\n"
+        " *\n"
+        ' * controls_css("dark"): the canonical control kit layer composed\n'
+        " * immediately after palette_css on every Flask page. Identical by\n"
+        " * construction to src/ui/controls.py's output.\n"
+        " */\n\n"
+    )
+    return banner + controls_css("dark")
+
+
 def generate() -> dict[Path, str]:
-    """Return {output path: file contents} for both generated files."""
+    """Return {output path: file contents} for all generated files."""
     return {
         CONFIG_OUTPUT: render_config(),
         CSS_OUTPUT: render_css(),
+        CONTROLS_CSS_OUTPUT: render_controls_css(),
     }
 
 

@@ -1,5 +1,5 @@
 # GENERATED from src/ui/tokens.py — do not hand-edit.
-Regenerate: python scripts/gen_streamlit_theme.py
+# Regenerate: python scripts/gen_streamlit_theme.py
 
 [theme]
 base = "dark"
