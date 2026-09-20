@@ -80,7 +80,7 @@ def _anchor_text(n: AnalystNoteRow) -> str:
 
 
 def _row(n: AnalystNoteRow) -> str:
-    ctx = n.context or {}
+    ctx: dict[str, object] = n.context or {}
     ticker_cell = ticker_label(n.ticker) if n.ticker else '<span class="k-chip">PORTFOLIO</span>'
     body = n.body or ""
     # Detail fields ride as data-* so the drill-in reads them client-side

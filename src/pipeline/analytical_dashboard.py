@@ -95,9 +95,11 @@ class DecisionRow:
 class DecisionsPanel:
     """Aggregated decisions view for the dashboard."""
 
-    recent: list[DecisionRow] = field(default_factory=list)
-    hit_rate_by_kind: dict[str, dict[str, int]] = field(default_factory=dict)
-    calibration_by_conviction: dict[str, dict[str, int]] = field(default_factory=dict)
+    recent: list[DecisionRow] = field(default_factory=list[DecisionRow])
+    hit_rate_by_kind: dict[str, dict[str, int]] = field(default_factory=dict[str, dict[str, int]])
+    calibration_by_conviction: dict[str, dict[str, int]] = field(
+        default_factory=dict[str, dict[str, int]]
+    )
 
 
 @dataclass(slots=True)
@@ -133,20 +135,22 @@ class LlmBudgetPanel:
     the month-to-date totals + projected month-end. Returns empty rows + 0
     totals when the budget tables aren't present (pre-migration repos)."""
 
-    rows: list[LlmBudgetRow] = field(default_factory=list)
+    rows: list[LlmBudgetRow] = field(default_factory=list[LlmBudgetRow])
     total_spend_mtd_usd: float = 0.0
     projected_month_end_usd: float = 0.0
     month_label: str = ""  # 'YYYY-MM'
-    by_ticker: list[LlmTickerSpendRow] = field(default_factory=list)
+    by_ticker: list[LlmTickerSpendRow] = field(default_factory=list[LlmTickerSpendRow])
 
 
 @dataclass(slots=True)
 class AnalyticalDashboard:
-    trigger_ladder: list[TriggerLadderRow] = field(default_factory=list)
-    insider_events: list[InsiderEventRow] = field(default_factory=list)
-    prediction_outcomes: list[PredictionOutcomeRow] = field(default_factory=list)
+    trigger_ladder: list[TriggerLadderRow] = field(default_factory=list[TriggerLadderRow])
+    insider_events: list[InsiderEventRow] = field(default_factory=list[InsiderEventRow])
+    prediction_outcomes: list[PredictionOutcomeRow] = field(
+        default_factory=list[PredictionOutcomeRow]
+    )
     portfolio_synthesis_md: str | None = None  # cross_portfolio_synthesis lens output
-    per_ticker_reread: list[PortfolioLensRow] = field(default_factory=list)
+    per_ticker_reread: list[PortfolioLensRow] = field(default_factory=list[PortfolioLensRow])
     decisions: DecisionsPanel = field(default_factory=DecisionsPanel)
     llm_budgets: LlmBudgetPanel = field(default_factory=lambda: LlmBudgetPanel())
 
@@ -764,7 +768,9 @@ def _build_prediction_outcomes(
 def _f(v: object) -> float | None:
     if v is None or v == "":
         return None
+    if not isinstance(v, str | int | float):
+        return None
     try:
-        return float(v)  # type: ignore[arg-type]
+        return float(v)
     except (ValueError, TypeError):
         return None
