@@ -1,10 +1,13 @@
-# pyright: reportPrivateUsage=false
 """Provider-free contracts for the residual shared-FMP-client migrations."""
 
 from __future__ import annotations
 
 import os
+import sqlite3
+from collections.abc import Callable
 from datetime import date
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -19,7 +22,15 @@ from net.client import HttpJsonResponse, JsonShape, JsonValue
 
 def test_financial_report_fetch_uses_shared_client(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    database = tmp_path / "scope.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "CREATE TABLE tracked_companies (ticker TEXT,list_type TEXT,archived_at TEXT,instrument_type TEXT)"
+        )
+        conn.execute("INSERT INTO tracked_companies VALUES ('META','portfolio',NULL,'equity')")
+    monkeypatch.setattr(reports, "DB_PATH", database)
     captured: dict[str, object] = {}
     body: dict[str, JsonValue] = {
         "Consolidated Balance Sheets": [{"value": 1}],
@@ -36,7 +47,10 @@ def test_financial_report_fetch_uses_shared_client(
     monkeypatch.setattr(reports.FMP_CLIENT, "get_json", fake_get)
     monkeypatch.setattr(reports, "API_KEY", "test-key")
 
-    code, payload, error = reports._fetch_once("META", 2026, "Q2")
+    code, payload, error = cast(
+        Callable[..., tuple[int, dict[str, JsonValue] | list[JsonValue] | None, str | None]],
+        getattr(reports, "_fetch_once"),
+    )("META", 2026, "Q2")
 
     assert (code, payload, error) == (200, body, None)
     assert captured["path"] == "financial-reports-json"
@@ -46,7 +60,7 @@ def test_financial_report_fetch_uses_shared_client(
 
 def test_macro_fetch_never_bypasses_shared_recovery_circuit() -> None:
     provider = REGISTRY["fed_funds"].providers[0]
-    assert macro._fetch_json(provider) is None
+    assert cast(Callable[..., None], getattr(macro, "_fetch_json"))(provider) is None
 
 
 def test_pre_earnings_calendar_validates_records(
@@ -65,7 +79,9 @@ def test_pre_earnings_calendar_validates_records(
     monkeypatch.setattr(earnings.FMP_CLIENT, "get_json", fake_get)
     monkeypatch.setattr(earnings, "API_KEY", "test-key")
 
-    result = earnings._fetch_earnings_calendar(date(2026, 8, 8), date(2026, 8, 15))
+    result = cast(
+        Callable[[date, date], list[dict[str, str]]], getattr(earnings, "_fetch_earnings_calendar")
+    )(date(2026, 8, 8), date(2026, 8, 15))
 
     assert result == [{"symbol": "NVO", "date": "2026-08-12"}]
     assert captured["path"] == "earnings-calendar"

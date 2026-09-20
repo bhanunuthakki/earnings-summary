@@ -11,17 +11,13 @@ registration (sha256 idempotence, real file written under data/historical/sec/).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.sec_6k_fetch import (  # noqa: E402
+from pipeline.sec_6k_fetch import (
     FetchedExhibit,
     LocatedExhibit,
     fetch_6k_exhibit_text,
@@ -29,6 +25,8 @@ from pipeline.sec_6k_fetch import (  # noqa: E402
     register_6k_document,
     resolve_cik,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_resolve_cik_uses_existing_cik_map() -> None:
@@ -304,7 +302,7 @@ def test_register_6k_document_writes_file_and_row(conn: sqlite3.Connection, tmp_
     assert row["doc_type"] == "sec_6k"
     assert row["source_type"] == "sec_xbrl"
     assert row["accession_number"] == "0001292814-26-003053"
-    out_file = tmp_path / "data" / "historical" / "sec" / "NU_6k_2026-05-14.html"
+    out_file = tmp_path / row["file_path"]
     assert out_file.exists()
     assert out_file.read_text(encoding="utf-8") == "<html>segment text</html>"
 

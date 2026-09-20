@@ -8,6 +8,7 @@ from pathlib import Path
 from alembic.config import Config
 
 from alembic import command
+from schema_compat import expected_head
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,7 +33,7 @@ def test_current_head_seeds_skip_mode_budget_and_downgrade_preserves_it(
             "SELECT monthly_cap_usd, warn_threshold_pct, hard_block, on_exceed "
             "FROM llm_budgets WHERE purpose='post_earnings_readout'"
         ).fetchone()
-    assert revision == ("0039_add_dcf_forecast_series",)
+    assert revision == (expected_head(),)
     assert row == (5, 0.80, 0, "skip")
 
     command.downgrade(config, "0002_drop_dead_tables")

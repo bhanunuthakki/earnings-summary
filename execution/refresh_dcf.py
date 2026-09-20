@@ -54,6 +54,7 @@ from typing import cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from db_paths import configured_db_path
 from dcf import assumptions_doc
 from dcf import equity_bridge as equity_bridge_mod
 from dcf import forecast_series as forecast_series_mod
@@ -64,6 +65,7 @@ from dcf import reverse as reverse_mod
 from dcf import universe as universe_mod
 from dcf.provenance import DcfInputProvenance
 from runtime.python_process import managed_python_prefix
+from sources import registry as source_calls_registry
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ticker_validation import safe_ticker
 
@@ -456,10 +458,11 @@ def main() -> int:
         print(json.dumps({"event": "no_tickers", "detail": "nothing to refresh"}))
         return 0
 
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = configured_db_path(repo_root)
     if not db_path.exists():
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
         return 2
+    source_calls_registry.set_db_path(db_path)
 
     results: list[dict[str, object]] = []
     for ticker in tickers:

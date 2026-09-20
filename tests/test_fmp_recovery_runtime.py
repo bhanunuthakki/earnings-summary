@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Runtime integration for the durable FMP recovery foundation."""
 
 from __future__ import annotations
@@ -13,8 +12,10 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -36,6 +37,7 @@ from pipeline.fmp_recovery import (
     ExecutionMode,
     FmpSnapshotProof,
     OutcomeCode,
+    PlannedWork,
     PlanRunRequest,
     ReceiptStatus,
     RecoverableWorkRequest,
@@ -55,15 +57,61 @@ from provenance.financial_fact_resolution import (
     rehydrate_document_fact_observations,
 )
 
+
+class HeldCorpus(Protocol):
+    def reread(self) -> tuple[bytes, os.stat_result]: ...
+
+
 REVISION = "0008_add_fmp_recovery"
-ACTIVE_REVISION = "0039_add_dcf_forecast_series"
+ACTIVE_REVISION = "0040_fmp_watchlist_recovery"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
 CONTENT = "c" * 64
 
 
 def test_repository_clock_normalizes_pacific_time_to_naive_utc() -> None:
     pacific = datetime(2026, 8, 12, 0, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
-    assert refresh_cache._naive_utc(pacific) == datetime(2026, 8, 12, 7, 30)
+    assert cast(Callable[[datetime], datetime], getattr(refresh_cache, "_naive_utc"))(
+        pacific
+    ) == datetime(2026, 8, 12, 7, 30)
+
+
+def test_recovery_selection_uses_automatic_all_three_and_screening_boundary() -> None:
+    items = [
+        replace(_item(role.upper()), list_type=role)
+        for role in ("portfolio", "watchlist", "evaluation", "index_member", "etf")
+    ]
+    denied_deep = replace(items[3], suffix="cash_flow_quarterly")
+    selected = cast(
+        Callable[..., list[refresh_cache.QueueItem]],
+        getattr(refresh_cache, "_authorized_recovery_items"),
+    )([*items, denied_deep], explicit_tickers=None)
+    assert [item.list_type for item in selected] == [
+        "portfolio",
+        "watchlist",
+        "evaluation",
+        "index_member",
+    ]
+
+
+def test_offline_corpus_selection_automatically_includes_all_three(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    with _connection(migrated_db(tmp_path / "runtime.db")) as conn:
+        for ticker, role in (("PORT", "portfolio"), ("WATCH", "watchlist"), ("EVAL", "evaluation")):
+            conn.execute(
+                "INSERT INTO tracked_companies(ticker,name,list_type,instrument_type) VALUES (?,?,?,'equity')",
+                (ticker, ticker, role),
+            )
+            (raw_dir / f"{ticker}_income_statement_quarterly.json").write_bytes(b"[]")
+        conn.commit()
+        items, excluded = cast(
+            Callable[..., tuple[list[refresh_cache.QueueItem], int]],
+            getattr(refresh_cache, "_offline_corpus_items"),
+        )(conn, raw_corpus_dir=raw_dir, only_list_type=None, explicit_tickers=None)
+        assert {item.ticker for item in items} == {"PORT", "WATCH", "EVAL"}
+        assert excluded == 0
 
 
 def _item(
@@ -323,14 +371,14 @@ def test_production_backlog_suffixes_map_to_exact_corpus_coordinate_and_doc_type
     path.write_text('[{"date":"2026-07-31"}]', encoding="utf-8")
 
     assert (
-        refresh_cache._corpus_path(
+        cast(Callable[..., Path | None], getattr(refresh_cache, "_corpus_path"))(
             item,
             raw_corpus_dir=raw_dir,
             project_root=project_root,
         )
         == path
     )
-    spec = refresh_cache._work_spec(
+    spec = cast(Callable[..., WorkSpec], getattr(refresh_cache, "_work_spec"))(
         item,
         raw_corpus_dir=raw_dir,
         now=NOW,
@@ -348,7 +396,7 @@ def test_corpus_coordinate_rejects_noncanonical_root_and_path_components(tmp_pat
     raw_dir.mkdir(parents=True)
 
     assert (
-        refresh_cache._corpus_path(
+        cast(Callable[..., Path | None], getattr(refresh_cache, "_corpus_path"))(
             _item("RBRK"),
             raw_corpus_dir=tmp_path / "other-fmp",
             project_root=project_root,
@@ -356,7 +404,7 @@ def test_corpus_coordinate_rejects_noncanonical_root_and_path_components(tmp_pat
         is None
     )
     assert (
-        refresh_cache._corpus_path(
+        cast(Callable[..., Path | None], getattr(refresh_cache, "_corpus_path"))(
             _item("RBRK", suffix="../income_statement_quarterly"),
             raw_corpus_dir=raw_dir,
             project_root=project_root,
@@ -478,7 +526,7 @@ def test_real_corpus_admission_reclaims_crashed_lease_without_duplicate_facts(
             root: Path,
             observed_at: datetime,
         ) -> WorkOutcome:
-            outcome = refresh_cache._admit_corpus(
+            outcome = cast(Callable[..., WorkOutcome], getattr(refresh_cache, "_admit_corpus"))(
                 conn,
                 item,
                 planned,
@@ -989,11 +1037,11 @@ def test_legacy_fact_rehydration_reports_evidence_drift_truthfully(
     )
     connection = _connection(db_path)
 
-    real_reread = refresh_cache._HeldCorpusFile.reread
+    real_reread = cast(type[HeldCorpus], getattr(refresh_cache, "_HeldCorpusFile")).reread
     rereads = 0
 
     def fail_reread(
-        self: refresh_cache._HeldCorpusFile,
+        self: HeldCorpus,
     ) -> tuple[bytes, os.stat_result]:
         nonlocal rereads
         rereads += 1
@@ -1001,7 +1049,7 @@ def test_legacy_fact_rehydration_reports_evidence_drift_truthfully(
             raise RuntimeError("forced held evidence drift")
         return real_reread(self)
 
-    monkeypatch.setattr(refresh_cache._HeldCorpusFile, "reread", fail_reread)
+    monkeypatch.setattr(getattr(refresh_cache, "_HeldCorpusFile"), "reread", fail_reread)
     try:
         result = refresh_cache.run_recovery_batch(
             connection,
@@ -1052,11 +1100,11 @@ def test_fresh_fact_extraction_rolls_back_on_post_extract_evidence_drift(
     )
     db_path = migrated_db(project_root / "data" / "runtime.db", target=ACTIVE_REVISION)
     connection = _connection(db_path)
-    real_reread = refresh_cache._HeldCorpusFile.reread
+    real_reread = cast(type[HeldCorpus], getattr(refresh_cache, "_HeldCorpusFile")).reread
     rereads = 0
 
     def fail_post_extract_reread(
-        self: refresh_cache._HeldCorpusFile,
+        self: HeldCorpus,
     ) -> tuple[bytes, os.stat_result]:
         nonlocal rereads
         rereads += 1
@@ -1064,7 +1112,9 @@ def test_fresh_fact_extraction_rolls_back_on_post_extract_evidence_drift(
             raise RuntimeError("forced post-extract evidence drift")
         return real_reread(self)
 
-    monkeypatch.setattr(refresh_cache._HeldCorpusFile, "reread", fail_post_extract_reread)
+    monkeypatch.setattr(
+        getattr(refresh_cache, "_HeldCorpusFile"), "reread", fail_post_extract_reread
+    )
     try:
         result = refresh_cache.run_recovery_batch(
             connection,
@@ -1560,6 +1610,36 @@ def test_generic_corpus_endpoint_is_durably_admitted_without_facts(
             table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
             for table in counts
         } == counts
+        document = connection.execute("SELECT id,file_path,sha256 FROM documents").fetchone()
+        retained = project_root / document["file_path"]
+        original = retained.read_bytes()
+        assert retained != raw_path
+        raw_path.write_text(
+            json.dumps([{"date": "2027-01-31", "symbol": "RBRK", "revenueAvg": 1_400_000_000}]),
+            encoding="utf-8",
+        )
+        third = refresh_cache.run_recovery_batch(
+            connection,
+            items=(item,),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW + timedelta(days=1),
+            run_id="generic-corpus-new-content",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+        assert third.corpus_count >= 1
+        assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        assert retained.read_bytes() == original
+        assert hashlib.sha256(original).hexdigest() == document["sha256"]
+        assert (
+            connection.execute(
+                "SELECT storage_uri FROM evidence_content_blobs WHERE sha256=?",
+                (document["sha256"],),
+            ).fetchone()[0]
+            == retained.resolve().as_uri()
+        )
     finally:
         connection.close()
 
@@ -1922,7 +2002,9 @@ def test_run_command_emits_degraded_receipt_without_hint_or_fmp_call(
         dry_run=False,
     )
 
-    exit_code = refresh_cache._run_under_lock(args)
+    exit_code = cast(
+        Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_under_lock")
+    )(args)
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 2
@@ -1964,7 +2046,7 @@ def test_offline_corpus_only_bypasses_external_seams_is_idempotent_and_preserves
         "INSERT INTO tracked_companies (ticker,name,list_type) VALUES ('RBRK','Rubrik','portfolio')"
     )
     seed.execute(
-        "INSERT INTO tracked_companies (ticker,name,list_type) VALUES ('LOW','Lower tier','watchlist')"
+        "INSERT INTO tracked_companies (ticker,name,list_type) VALUES ('LOW','Screening tier','index_member')"
     )
     seed.commit()
     plan_run(
@@ -1987,7 +2069,10 @@ def test_offline_corpus_only_bypasses_external_seams_is_idempotent_and_preserves
         ),
     )
     seed.close()
-    before = refresh_cache._raw_corpus_manifest(raw_dir)
+    before = cast(
+        Callable[[Path], refresh_cache.RawCorpusManifest],
+        getattr(refresh_cache, "_raw_corpus_manifest"),
+    )(raw_dir)
 
     monkeypatch.setattr(refresh_cache, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(refresh_cache, "FMP_DIR", raw_dir)
@@ -2031,9 +2116,13 @@ def test_offline_corpus_only_bypasses_external_seams_is_idempotent_and_preserves
         offline_corpus_only=True,
     )
 
-    first_exit = refresh_cache._run_offline_corpus_only(args)
+    first_exit = cast(
+        Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_offline_corpus_only")
+    )(args)
     first = json.loads(capsys.readouterr().out)
-    second_exit = refresh_cache._run_offline_corpus_only(args)
+    second_exit = cast(
+        Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_offline_corpus_only")
+    )(args)
     second = json.loads(capsys.readouterr().out)
 
     assert first_exit == 2
@@ -2057,7 +2146,13 @@ def test_offline_corpus_only_bypasses_external_seams_is_idempotent_and_preserves
     assert first["run_id"] != second["run_id"]
     assert first["pending_count"] == 1
     assert second["pending_count"] == 1
-    assert refresh_cache._raw_corpus_manifest(raw_dir) == before
+    assert (
+        cast(
+            Callable[[Path], refresh_cache.RawCorpusManifest],
+            getattr(refresh_cache, "_raw_corpus_manifest"),
+        )(raw_dir)
+        == before
+    )
     facts = _connection(db_path)
     try:
         assert (
@@ -2119,7 +2214,10 @@ def test_offline_corpus_only_reports_partial_malformed_corpus_truthfully(
     )
     seed.commit()
     seed.close()
-    before = refresh_cache._raw_corpus_manifest(raw_dir)
+    before = cast(
+        Callable[[Path], refresh_cache.RawCorpusManifest],
+        getattr(refresh_cache, "_raw_corpus_manifest"),
+    )(raw_dir)
     monkeypatch.setattr(refresh_cache, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(refresh_cache, "FMP_DIR", raw_dir)
     args = argparse.Namespace(
@@ -2132,7 +2230,9 @@ def test_offline_corpus_only_reports_partial_malformed_corpus_truthfully(
         offline_corpus_only=True,
     )
 
-    exit_code = refresh_cache._run_offline_corpus_only(args)
+    exit_code = cast(
+        Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_offline_corpus_only")
+    )(args)
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 3
@@ -2147,7 +2247,13 @@ def test_offline_corpus_only_reports_partial_malformed_corpus_truthfully(
     assert payload["failed_count"] == 1
     assert payload["deferred_count"] == 0
     assert payload["excluded_by_tier_count"] == 0
-    assert refresh_cache._raw_corpus_manifest(raw_dir) == before
+    assert (
+        cast(
+            Callable[[Path], refresh_cache.RawCorpusManifest],
+            getattr(refresh_cache, "_raw_corpus_manifest"),
+        )(raw_dir)
+        == before
+    )
 
 
 def test_offline_corpus_only_detects_same_size_restored_mtime_tampering(
@@ -2196,7 +2302,9 @@ def test_offline_corpus_only_detects_same_size_restored_mtime_tampering(
     )
     args = argparse.Namespace(db=str(tmp_path / "runtime.db"), only=None, tickers=None)
 
-    exit_code = refresh_cache._run_offline_corpus_only(args)
+    exit_code = cast(
+        Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_offline_corpus_only")
+    )(args)
     stdout = capsys.readouterr().out.strip().splitlines()
 
     assert exit_code == 4
@@ -2280,7 +2388,9 @@ def test_offline_corpus_only_all_deferred_emits_one_failed_receipt(
     monkeypatch.setattr(refresh_cache, "_offline_pending_count", one_pending)
     args = argparse.Namespace(db=str(tmp_path / "runtime.db"), only=None, tickers=None)
 
-    exit_code = refresh_cache._run_offline_corpus_only(args)
+    exit_code = cast(
+        Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_offline_corpus_only")
+    )(args)
     stdout = capsys.readouterr().out.strip().splitlines()
 
     assert exit_code == 4
@@ -2335,7 +2445,10 @@ def test_offline_admission_handle_denies_refresh_overwrite_and_delete(
         )
 
     monkeypatch.setattr(refresh_cache, "_admit_held_corpus", held_admission)
-    snapshot = refresh_cache._corpus_snapshot(raw_path, root=raw_dir)
+    snapshot = cast(
+        Callable[..., refresh_cache.CorpusSnapshot | None],
+        getattr(refresh_cache, "_corpus_snapshot"),
+    )(raw_path, root=raw_dir)
     assert snapshot is not None
     planned = refresh_cache.PlannedWork(
         work_id="a" * 64,
@@ -2348,7 +2461,7 @@ def test_offline_admission_handle_denies_refresh_overwrite_and_delete(
         corpus_snapshot=snapshot,
     )
 
-    outcome = refresh_cache._admit_corpus(
+    outcome = cast(Callable[..., WorkOutcome], getattr(refresh_cache, "_admit_corpus"))(
         sqlite3.connect(":memory:"),
         _item("RBRK"),
         planned,
@@ -2439,9 +2552,15 @@ def test_corpus_manifest_and_offline_enumeration_reject_symlink(
     connection.commit()
     try:
         with pytest.raises(ValueError, match="unsafe corpus entry"):
-            refresh_cache._raw_corpus_manifest(raw_dir)
+            cast(
+                Callable[[Path], refresh_cache.RawCorpusManifest],
+                getattr(refresh_cache, "_raw_corpus_manifest"),
+            )(raw_dir)
         with pytest.raises(ValueError, match="unsafe corpus entry"):
-            refresh_cache._offline_corpus_items(
+            cast(
+                Callable[..., tuple[list[refresh_cache.QueueItem], int]],
+                getattr(refresh_cache, "_offline_corpus_items"),
+            )(
                 connection,
                 raw_corpus_dir=raw_dir,
                 only_list_type=None,
@@ -2466,7 +2585,10 @@ def test_corpus_enumeration_fails_closed_on_reparse_entry(
     monkeypatch.setattr(refresh_cache, "_is_reparse_point", fake_reparse_point)
 
     with pytest.raises(ValueError, match="unsafe corpus entry"):
-        refresh_cache._raw_corpus_manifest(raw_dir)
+        cast(
+            Callable[[Path], refresh_cache.RawCorpusManifest],
+            getattr(refresh_cache, "_raw_corpus_manifest"),
+        )(raw_dir)
 
 
 def test_public_offline_cli_branches_before_legacy_lock_and_subprocess(
@@ -2510,7 +2632,9 @@ def test_offline_atomic_lock_contention_is_retryable_and_nonzero(
 
     monkeypatch.setattr(refresh_cache, "_run_offline_corpus_only", forbidden_work)
 
-    exit_code = refresh_cache._run_offline_with_lock(argparse.Namespace())
+    exit_code = cast(
+        Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_offline_with_lock")
+    )(argparse.Namespace())
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 75
@@ -2598,8 +2722,14 @@ def test_raw_corpus_manifest_22k_tiny_files_has_bounded_two_pass_runtime(
         (raw_dir / f"T{index:05d}_profile.json").write_bytes(b"[]")
 
     started = time.perf_counter()
-    before = refresh_cache._raw_corpus_manifest(raw_dir)
-    after = refresh_cache._raw_corpus_manifest(raw_dir)
+    before = cast(
+        Callable[[Path], refresh_cache.RawCorpusManifest],
+        getattr(refresh_cache, "_raw_corpus_manifest"),
+    )(raw_dir)
+    after = cast(
+        Callable[[Path], refresh_cache.RawCorpusManifest],
+        getattr(refresh_cache, "_raw_corpus_manifest"),
+    )(raw_dir)
     elapsed = time.perf_counter() - started
 
     assert before == after
@@ -2614,7 +2744,10 @@ def test_raw_corpus_manifest_matches_rehearsal_path_order_and_hash(tmp_path: Pat
     (raw_dir / "A_balance_sheet_annual.json").write_bytes(b"[]")
     (raw_dir / "AAC_balance_sheet_annual.json").write_bytes(b"{}")
 
-    raw_manifest = refresh_cache._raw_corpus_manifest(raw_dir)
+    raw_manifest = cast(
+        Callable[[Path], refresh_cache.RawCorpusManifest],
+        getattr(refresh_cache, "_raw_corpus_manifest"),
+    )(raw_dir)
     rehearsal_manifest = data_backbone_rehearsal.build_corpus_manifest(raw_dir)
 
     expected_paths = [
@@ -2715,8 +2848,90 @@ def test_empty_audit_still_runs_due_open_circuit_backlog_probe(
         dry_run=False,
     )
 
-    assert refresh_cache._run_under_lock(args) == 0
+    assert (
+        cast(Callable[[argparse.Namespace], int], getattr(refresh_cache, "_run_under_lock"))(args)
+        == 0
+    )
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == ReceiptStatus.FRESH.value
     assert payload["planned_count"] == 0
     assert modes == [ExecutionMode.PROBE]
+
+
+@pytest.mark.parametrize("owner_request_id", [None, "explicit-owner-request"])
+def test_recovery_batch_preserves_automatic_and_explicit_request_truth(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    owner_request_id: str | None,
+) -> None:
+    with _connection(migrated_db(tmp_path / "runtime.db")) as connection:
+        items = [
+            replace(_item(role.upper()), list_type=role)
+            for role in ("portfolio", "evaluation", "watchlist")
+        ]
+
+        def forbidden_dispatch(
+            _conn: sqlite3.Connection,
+            _item: refresh_cache.QueueItem,
+            _planned: PlannedWork,
+        ) -> WorkOutcome:
+            raise AssertionError("missing credentials must not dispatch")
+
+        refresh_cache.run_recovery_batch(
+            connection,
+            items=items,
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=tmp_path / "missing-corpus",
+            now=NOW,
+            run_id="automatic-or-explicit",
+            owner_request_id=owner_request_id,
+            dispatch=forbidden_dispatch,
+        )
+        rows = connection.execute(
+            "SELECT coverage_role,requested,owner_request_id FROM fmp_work_backlog "
+            "ORDER BY coverage_role"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            (role, int(owner_request_id is not None), owner_request_id)
+            for role in ("evaluation", "portfolio", "watchlist")
+        ]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_offline_cli_does_not_invent_owner_requests_for_automatic_scope(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    explicit: bool,
+) -> None:
+    root = tmp_path / "repo"
+    raw_dir = root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    database = migrated_db(root / "data" / "runtime.db")
+    with _connection(database) as connection:
+        for role in ("portfolio", "evaluation", "watchlist"):
+            ticker = role.upper()
+            connection.execute(
+                "INSERT INTO tracked_companies(ticker,name,list_type,instrument_type) "
+                "VALUES (?,?,?,'equity')",
+                (ticker, ticker, role),
+            )
+            (raw_dir / f"{ticker}_income_statement_quarterly.json").write_text("[]")
+        connection.commit()
+    monkeypatch.setattr(refresh_cache, "PROJECT_ROOT", root)
+    monkeypatch.setattr(refresh_cache, "FMP_DIR", raw_dir)
+    monkeypatch.setattr(refresh_cache, "OFFLINE_LOCK_PATH", root / "offline.lock")
+    argv = ["refresh_cache.py", "run", "--offline-corpus-only", "--db", str(database)]
+    if explicit:
+        argv.extend(["--tickers", "PORTFOLIO,EVALUATION,WATCHLIST"])
+    monkeypatch.setattr(sys, "argv", argv)
+    refresh_cache.main()
+    capsys.readouterr()
+    with _connection(database) as connection:
+        rows = connection.execute(
+            "SELECT requested,owner_request_id FROM fmp_work_backlog"
+        ).fetchall()
+    assert len(rows) == 3
+    assert all(bool(row[0]) is explicit for row in rows)
+    assert all((row[1] is not None) is explicit for row in rows)

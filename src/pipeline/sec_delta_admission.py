@@ -23,6 +23,7 @@ from pipeline.source_policy import (
     CollectionSource,
     StoredIdentityStatus,
     authorize_collection_target_in_connection,
+    decision_for,
     issuer_policy,
 )
 from provenance.data_backbone_rehearsal import (
@@ -34,7 +35,7 @@ from provenance.data_backbone_rehearsal import (
 from schema_compat import expected_head
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-ADMISSION_VERSION = "sec-delta-native-inventory-admission.v1"
+ADMISSION_VERSION = "sec-delta-native-inventory-admission.v2"
 
 
 class SecDeltaAdmissionError(ValueError):
@@ -85,8 +86,8 @@ class SecDeltaAdmissionRequest(_FrozenModel):
 class SecDeltaNativeInventoryAuthorization(_FrozenModel):
     """Self-sealed immutable parameters for a later native inventory CLI."""
 
-    schema_version: Literal["sec_delta_native_inventory_authorization.v1"]
-    admission_version: Literal["sec-delta-native-inventory-admission.v1"]
+    schema_version: Literal["sec_delta_native_inventory_authorization.v2"]
+    admission_version: Literal["sec-delta-native-inventory-admission.v2"]
     network_policy: Literal["FORBIDDEN"]
     plan_path: str = Field(min_length=1)
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -94,7 +95,7 @@ class SecDeltaNativeInventoryAuthorization(_FrozenModel):
     task_id: str = Field(min_length=1, max_length=128)
     ticker: str = Field(min_length=1, max_length=32)
     cik: str = Field(pattern=r"^[0-9]{10}$")
-    coverage_role: Literal["portfolio", "evaluation"]
+    coverage_role: Literal["portfolio", "evaluation", "watchlist"]
     authorization: Literal["AUTOMATIC", "OWNER_REQUEST"]
     authorization_attestation: Literal["NOT_APPLICABLE", "CALLER_ATTESTED"]
     owner_request_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -124,11 +125,16 @@ class SecDeltaNativeInventoryAuthorization(_FrozenModel):
             raise ValueError("next_inventory_revision must immediately follow current revision")
         if self.authorization == "AUTOMATIC":
             if (
-                self.coverage_role != "portfolio"
+                not decision_for(
+                    self.coverage_role,
+                    CollectionSource.SEC,
+                    ArtifactKind.FILING_PACKAGE,
+                    requested=False,
+                ).allowed
                 or self.authorization_attestation != "NOT_APPLICABLE"
                 or self.owner_request_id is not None
             ):
-                raise ValueError("automatic admission must be unrequested portfolio work")
+                raise ValueError("automatic admission requires an authorized unrequested role")
         elif (
             self.coverage_role != "evaluation"
             or self.authorization_attestation != "CALLER_ATTESTED"
@@ -224,20 +230,26 @@ def _verify_plan_authorization_shape(
         or roster_entry.owner_request_id != ticker_plan.owner_request_id
     ):
         raise SecDeltaAdmissionError("planned roster identity conflicts with the selected task")
-    if ticker_plan.list_type == "portfolio":
+    if ticker_plan.authorization == "AUTOMATIC_FULL":
         valid = (
-            ticker_plan.authorization == "AUTOMATIC_PORTFOLIO"
+            decision_for(
+                ticker_plan.list_type,
+                CollectionSource.SEC,
+                ArtifactKind.FILING_PACKAGE,
+                requested=False,
+            ).allowed
             and ticker_plan.authorization_attestation == "NOT_APPLICABLE"
             and ticker_plan.owner_request_id is None
             and task.authorization == "AUTOMATIC"
             and task.authorization_attestation == "NOT_APPLICABLE"
             and task.owner_request_id is None
-            and roster_entry.selection == "AUTOMATIC_PORTFOLIO"
+            and roster_entry.selection == "AUTOMATIC_FULL"
         )
         requested = False
     else:
         valid = (
             ticker_plan.authorization == "OWNER_REQUEST"
+            and ticker_plan.list_type == "evaluation"
             and ticker_plan.authorization_attestation == "CALLER_ATTESTED"
             and ticker_plan.owner_request_id is not None
             and task.authorization == "OWNER_REQUEST"
@@ -369,7 +381,7 @@ def admit_native_inventory_task(
     if task.cik is None:
         raise SecDeltaAdmissionError("native inventory admission requires an exact CIK")
     draft = SecDeltaNativeInventoryAuthorization.model_construct(
-        schema_version="sec_delta_native_inventory_authorization.v1",
+        schema_version="sec_delta_native_inventory_authorization.v2",
         admission_version=ADMISSION_VERSION,
         network_policy="FORBIDDEN",
         plan_path=str(request.plan_path),

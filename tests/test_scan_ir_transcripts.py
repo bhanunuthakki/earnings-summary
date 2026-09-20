@@ -310,7 +310,7 @@ def test_ingested_evidence_rejects_non_relative_recorded_paths(
     assert mod._ingested_evidence_exists(tmp_path, "NU", 2026, 1, 12) is False
 
 
-def test_scan_scope_applies_the_same_portfolio_and_explicit_evaluation_policy(
+def test_scan_scope_applies_shared_acquisition_policy_and_instrument_checks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -319,10 +319,10 @@ def test_scan_scope_applies_the_same_portfolio_and_explicit_evaluation_policy(
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, "
-            "fiscal_year_end TEXT)"
+            "fiscal_year_end TEXT, instrument_type TEXT)"
         )
         conn.executemany(
-            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31')",
+            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31', 'equity')",
             [
                 ("PORT", "portfolio"),
                 ("EVAL", "evaluation"),
@@ -336,10 +336,15 @@ def test_scan_scope_applies_the_same_portfolio_and_explicit_evaluation_policy(
         connection.row_factory = sqlite3.Row
         return connection
 
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            "INSERT INTO tracked_companies VALUES (?, 'evaluation', NULL, '12-31', ?)",
+            [("FUND", "etf"), ("UNTYPED", None), ("AMBIG", "equity"), ("AMBIG", "equity")],
+        )
     monkeypatch.setattr(mod.db, "get_connection", connect)
-    assert mod._resolve_tickers(None) == [("PORT", 12)]
+    assert mod._resolve_tickers(None) == [("PORT", 12), ("EVAL", 12), ("WATCH", 12)]
     assert mod._resolve_tickers("EVAL") == [("EVAL", 12)]
-    assert mod._resolve_tickers("WATCH") == []
+    assert mod._resolve_tickers("WATCH") == [("WATCH", 12)]
     assert mod._resolve_tickers("IDX") == []
 
 

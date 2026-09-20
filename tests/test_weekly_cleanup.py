@@ -265,3 +265,20 @@ def test_main_fails_loudly_when_an_eligible_file_cannot_be_deleted(
     summary = json.loads(capsys.readouterr().out)
     assert summary["policies"]["cron_logs_30d"]["skipped_error"] == 1
     assert old_log.exists()
+
+
+@pytest.mark.parametrize("ancestor", [".pytest_cache", "__pycache__", ".ruff_cache"])
+def test_checkout_beneath_cache_ancestor_preserves_ordinary_source(
+    tmp_path: Path, ancestor: str
+) -> None:
+    root = tmp_path / ancestor / "checkout"
+    source = root / "src" / "module.py"
+    cache = root / "src" / "__pycache__" / "module.pyc"
+    for path in (source, cache):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"synthetic")
+        _age(path, 8)
+    summary = _run(root, "--apply")
+    assert source.exists()
+    assert not cache.exists()
+    assert summary.policies["main_python_caches_7d"].deleted == 1

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from dcf.equity_bridge import (
     build_equity_bridge_receipt,
     resolve_complete_aggregate,
@@ -398,3 +400,57 @@ def test_receipt_requires_model_input_context_and_rejects_an_older_matching_valu
     assert stale_match.status == "unverified"
     assert "missing_primary_cash_lineage" in stale_match.reasons
     assert "debt_component_not_in_primary_overlay" in stale_match.reasons
+
+
+@pytest.mark.parametrize("cash_field", ["cashAndCashEquivalents", "unsupportedCashField"])
+def test_cash_receipt_binds_selected_cash_concept(cash_field: str) -> None:
+    context = _context()
+    context["cash_field"] = cash_field
+    receipt = build_equity_bridge_receipt(
+        ticker="TEST",
+        operating_value_usd_m=1_000,
+        cash_m=200,
+        total_debt_m=100,
+        diluted_shares_m=10,
+        fx_to_usd=1,
+        value_per_share_usd=110,
+        reporting_currency="USD",
+        bridge_context=context,
+        primary_fact_overlay=_overlay(
+            _lineage(cash_field, 200_000_000),
+            _lineage("totalDebt", 100_000_000),
+            _lineage("financeLeaseLiability", 0),
+        ),
+    )
+    if cash_field == "cashAndCashEquivalents":
+        assert receipt.status == "verified"
+        assert receipt.cash_lineage is not None
+        assert receipt.cash_lineage["fmp_field"] == cash_field
+    else:
+        assert receipt.status != "verified"
+        assert "invalid_equity_bridge_context_cash_field" in receipt.reasons
+
+
+@pytest.mark.parametrize("short_term_debt", [None, 20_000_000])
+def test_long_term_current_and_noncurrent_pair_does_not_prove_total_borrowings(
+    short_term_debt: int | None,
+) -> None:
+    record: dict[str, object] = {
+        "interestBearingDebtCurrent": 10_000_000,
+        "interestBearingDebtNoncurrent": 90_000_000,
+        "shortTermDebt": short_term_debt,
+    }
+    assert (
+        resolve_primary_debt_scope(
+            record,
+            scope="interest_bearing_debt_only",
+            overlay=_overlay(
+                _lineage("interestBearingDebtCurrent", 10_000_000),
+                _lineage("interestBearingDebtNoncurrent", 90_000_000),
+            ),
+            period_end="2026-06-30",
+            fiscal_period_type="Q2",
+            currency="USD",
+        )
+        is None
+    )

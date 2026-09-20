@@ -15,10 +15,10 @@ def _db(path: Path, rows: list[tuple[str, str]]) -> None:
     with sqlite3.connect(path) as conn:
         conn.execute(
             "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
-            "archived_at TEXT, fiscal_year_end TEXT)"
+            "archived_at TEXT, fiscal_year_end TEXT, instrument_type TEXT)"
         )
         conn.executemany(
-            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31')",
+            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31', 'equity')",
             rows,
         )
 
@@ -27,9 +27,10 @@ def _db(path: Path, rows: list[tuple[str, str]]) -> None:
     ("role", "owner_requested", "allowed"),
     [
         ("portfolio", False, True),
-        ("evaluation", False, False),
+        ("evaluation", False, True),
         ("evaluation", True, True),
-        ("watchlist", True, False),
+        ("watchlist", True, True),
+        ("watchlist", False, True),
         ("index_member", True, False),
     ],
 )
@@ -144,7 +145,7 @@ def test_q4cdn_discover_fails_cleanly_without_network(
     assert "Traceback" not in error
 
 
-def test_batch_scope_is_portfolio_automatic_and_explicit_evaluation(
+def test_batch_scope_includes_all_active_research_roles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -179,7 +180,7 @@ def test_batch_scope_is_portfolio_automatic_and_explicit_evaluation(
         requested=["EVAL", "WATCH", "IDX", "UNKNOWN"],
     )
 
-    assert [job.ticker for job in automatic] == ["PORT"]
-    assert set(automatic_skipped) == {"EVAL", "WATCH", "IDX", "UNKNOWN"}
-    assert [job.ticker for job in requested] == ["EVAL"]
-    assert set(requested_skipped) == {"WATCH", "IDX", "UNKNOWN"}
+    assert [job.ticker for job in automatic] == ["EVAL", "PORT", "WATCH"]
+    assert set(automatic_skipped) == {"IDX", "UNKNOWN"}
+    assert [job.ticker for job in requested] == ["EVAL", "WATCH"]
+    assert set(requested_skipped) == {"IDX", "UNKNOWN"}

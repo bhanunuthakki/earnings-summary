@@ -21,10 +21,9 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from execution import fetch_ir_documents as fid
 
-from execution import fetch_ir_documents as fid  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _CATEGORIZER = PROJECT_ROOT / "execution" / "categorize_ir_uploads.py"
 
@@ -44,9 +43,12 @@ def _make_documents_db(db: Path, ticker: str = "NU") -> None:
         " doc_type TEXT, period_end TEXT, file_path TEXT, sha256 TEXT UNIQUE,"
         " fetched_at TEXT, fetch_status TEXT, raw_bytes_size INTEGER, source_url TEXT)"
     )
-    conn.execute("CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)")
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (?, 'portfolio', NULL)",
+        "CREATE TABLE tracked_companies "
+        "(ticker TEXT, list_type TEXT, archived_at TEXT, instrument_type TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (?, 'portfolio', NULL, 'equity')",
         (ticker,),
     )
     conn.commit()

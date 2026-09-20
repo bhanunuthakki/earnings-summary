@@ -7,23 +7,20 @@ monkeypatched throughout (no real children), and the roster is injected by
 string-path monkeypatch — except the one test that drives the real DB filter.
 """
 
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
+import argparse
 import json
 import sqlite3
 import subprocess
-import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from execution import discover_ir_documents_all as batch  # noqa: E402
-from execution import onboard_ticker  # noqa: E402
+from execution import discover_ir_documents_all as batch
+from execution import onboard_ticker
 
 
 class _FakeCompleted:
@@ -208,7 +205,7 @@ def test_discovery_auth_denial_is_typed_for_batch_halt(
 
     monkeypatch.setattr(batch, "_run_child", auth_child)
 
-    result = batch._run_discovery(
+    result = cast(Callable[..., batch.DiscoveryResult], getattr(batch, "_run_discovery"))(
         "NU",
         repo_root=tmp_path,
         db_path=tmp_path / "portfolio.db",
@@ -232,7 +229,7 @@ def test_onboarding_marks_ir_collection_as_owner_requested(
 
     monkeypatch.setattr(batch, "run_ticker", run_ticker)
 
-    assert onboard_ticker._run_ir_documents("EVAL") == 0
+    assert cast(Callable[[str], int], getattr(onboard_ticker, "_run_ir_documents"))("EVAL") == 0
     assert captured["owner_requested"] is True
 
 
@@ -368,7 +365,7 @@ def test_skip_download_runs_discover_only(
 def test_roster_filter_uses_real_db(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    """--tickers is intersected with the DB roster (portfolio+evaluation only)."""
+    """--tickers is intersected with the active full-coverage roster."""
     db = tmp_path / "x.db"
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -389,17 +386,26 @@ def test_roster_filter_uses_real_db(
     fake = _RecordingRun()
     monkeypatch.setattr("execution.discover_ir_documents_all.subprocess.run", fake)
     rc = batch.main(
-        ["--repo-root", str(tmp_path), "--db", str(db), "--tickers", "NU", "XYZ", "FOO"]
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--db",
+            str(db),
+            "--no-process",
+            "--tickers",
+            "NU",
+            "XYZ",
+            "FOO",
+        ]
     )
     assert rc == 0
     s = _summary(capsys.readouterr().out)
-    # XYZ is watchlist (out of roster); FOO not tracked; both surface as not-in-roster.
-    assert set(cast("list[str]", s["skipped_not_in_roster"])) == {"XYZ", "FOO"}
+    assert set(cast("list[str]", s["skipped_not_in_roster"])) == {"FOO"}
     ran = {t for t, _ in fake.stages}
-    assert ran == {"NU"}  # only the portfolio/evaluation match ran
+    assert ran == {"NU", "XYZ"}
 
 
-def test_default_roster_is_portfolio_only_and_explicit_evaluation_is_on_demand(
+def test_default_roster_covers_all_three_roles_and_keeps_index_excluded(
     tmp_path: Path,
 ) -> None:
     db = tmp_path / "x.db"
@@ -417,16 +423,24 @@ def test_default_roster_is_portfolio_only_and_explicit_evaluation_is_on_demand(
     conn.commit()
     conn.close()
 
-    assert batch._resolve_roster(db, None) == (["PORT"], [])
-    assert batch._resolve_roster(db, ["EVAL", "WATCH", "IDX"]) == (
-        ["EVAL"],
-        ["IDX", "WATCH"],
+    assert cast(
+        Callable[[Path, list[str] | None], tuple[list[str], list[str]]],
+        getattr(batch, "_resolve_roster"),
+    )(db, None) == (["PORT", "EVAL", "WATCH"], [])
+    assert cast(
+        Callable[[Path, list[str] | None], tuple[list[str], list[str]]],
+        getattr(batch, "_resolve_roster"),
+    )(db, ["EVAL", "WATCH", "IDX"]) == (
+        ["EVAL", "WATCH"],
+        ["IDX"],
     )
 
 
 def test_ir_quarter_window_is_capped_at_five() -> None:
     with pytest.raises(SystemExit):
-        batch._parse_args(["--max-quarters", "6"])
+        cast(Callable[[list[str] | None], argparse.Namespace], getattr(batch, "_parse_args"))(
+            ["--max-quarters", "6"]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +459,7 @@ def test_process_stage_runs_anchor_and_flags_brief_dirty(
     assert rc == 0
     scripts = [_script_of(c) for c in fake.calls]
     assert "ir_narrative.py" in scripts  # anchor refresh ran (cheap)
-    assert "process_ir_documents.py" not in scripts  # LLM summaries are opt-in
+    assert "process_ir_documents_state.py" not in scripts  # LLM summaries are opt-in
     conn = sqlite3.connect(str(db))
     val = conn.execute("SELECT brief_dirty FROM tracked_companies WHERE ticker='NU'").fetchone()[0]
     conn.close()
@@ -461,7 +475,93 @@ def test_summaries_flag_runs_process_ir_documents(
     fake = _RecordingRun(downloaded={"NU": 2})
     _install(monkeypatch, fake, ["NU"])
     batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--summaries"])
-    assert "process_ir_documents.py" in [_script_of(c) for c in fake.calls]
+    assert "process_ir_documents_state.py" in [_script_of(c) for c in fake.calls]
+
+
+def test_existing_uncached_narrative_is_processed_without_new_downloads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    source = tmp_path / "ir_documents" / "NU" / "2026-06-30" / "ir_presentation__abcd1234.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"source already downloaded")
+    fake = _RecordingRun(downloaded={"NU": 0})
+    _install(monkeypatch, fake, ["NU"])
+    assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 0
+    assert "ir_narrative.py" in [_script_of(c) for c in fake.calls]
+
+
+def test_processing_failure_is_failed_and_retried_after_download_count_drops_to_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    source = tmp_path / "ir_documents" / "NU" / "2026-06-30" / "ir_presentation__abcd1234.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"source already downloaded")
+    fake = _RecordingRun(downloaded={"NU": 2})
+    _install(monkeypatch, fake, ["NU"])
+
+    def failed_process(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(batch, "_run_process_stage", failed_process)
+    argv = ["--repo-root", str(tmp_path), "--db", str(db)]
+    assert batch.main(argv) == 1
+    # Extraction may have completed before a later handoff failed. The checkpoint
+    # must retain that pending handoff even when the narrative cache now exists.
+    cache = tmp_path / "data" / "ir_narrative" / "NU" / "ir_presentation__2026-06-30.txt"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("extraction succeeded before handoff failed", encoding="utf-8")
+    retry = _RecordingRun(downloaded={"NU": 0})
+    _install(monkeypatch, retry, ["NU"])
+    calls: list[str] = []
+
+    def process(ticker: str, **_kwargs: object) -> bool:
+        calls.append(ticker)
+        return True
+
+    monkeypatch.setattr(batch, "_run_process_stage", process)
+    assert batch.main(argv) == 0
+    assert calls == ["NU"]
+
+
+def test_cached_existing_narrative_does_not_dirty_brief_or_rerun_children(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    source = tmp_path / "ir_documents" / "NU" / "2026-06-30" / "ir_presentation__abcd1234.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"source already downloaded")
+    cache = tmp_path / "data" / "ir_narrative" / "NU" / "ir_presentation__2026-06-30.txt"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("processed narrative", encoding="utf-8")
+    fake = _RecordingRun(downloaded={"NU": 0})
+    _install(monkeypatch, fake, ["NU"])
+    assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 0
+    assert "ir_narrative.py" not in [_script_of(c) for c in fake.calls]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone() == (0,)
+
+
+def test_summary_reported_failure_is_not_hidden_by_zero_exit_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+
+    def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        summary = _script_of(argv) == "process_ir_documents_state.py"
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"failed": int(summary)}), "")
+
+    monkeypatch.setattr(batch, "_run_child", child)
+    assert not cast(Callable[..., bool], getattr(batch, "_run_process_stage"))(
+        "NU", repo_root=tmp_path, db_path=db, summaries=True, timeout_s=30
+    )
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone() == (0,)
 
 
 def test_no_process_skips_stage3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

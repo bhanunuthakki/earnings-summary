@@ -20,6 +20,7 @@ from provenance.evidence_ledger import EvidenceLocator, EvidenceNode, EvidenceNo
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
     OFFICE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_EXTRACTOR,
     PDF_TABLE_EXTRACTOR_NAME,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     pdf_table_extractor_code_version,
@@ -950,9 +951,9 @@ def _node_derived(
             STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR.config_sha256,
         ),
         "pdf_text": (
-            BASE_FULLTEXT_EXTRACTOR.name,
-            BASE_FULLTEXT_EXTRACTOR.code_version,
-            BASE_FULLTEXT_EXTRACTOR.config_sha256,
+            PDF_FULLTEXT_EXTRACTOR.name,
+            PDF_FULLTEXT_EXTRACTOR.code_version,
+            PDF_FULLTEXT_EXTRACTOR.config_sha256,
         ),
         "pptx_slides": (
             OFFICE_FULLTEXT_EXTRACTOR.name,
@@ -996,15 +997,35 @@ def _node_derived(
         ),
     }
     extractor_name, code_version, config_sha256 = identities[lane]
-    run = _run(
-        conn,
-        _require_text(document, "document_version_id"),
-        cutoff_at,
-        extractor_name=extractor_name,
-        code_version=code_version,
-        config_sha256=config_sha256,
-        pinned_run_id=pinned_run_id,
-    )
+    if lane == "pdf_text" and pinned_run_id is not None:
+        # Only immutable seal verification supplies this pin. Historical @1
+        # evidence stays reconstructible; it cannot authorize a new PDF seal.
+        run = _run(
+            conn,
+            _require_text(document, "document_version_id"),
+            cutoff_at,
+            extractor_name=extractor_name,
+            pinned_run_id=pinned_run_id,
+        )
+        retained_identities = {
+            (identity.code_version, identity.config_sha256)
+            for identity in (BASE_FULLTEXT_EXTRACTOR, PDF_FULLTEXT_EXTRACTOR)
+        }
+        if (
+            _require_text(run, "extractor_code_version"),
+            _require_sha(run, "extractor_config_sha256"),
+        ) not in retained_identities:
+            raise DocumentProcessingEvidenceIntegrityError("pdf_extractor_identity_not_approved")
+    else:
+        run = _run(
+            conn,
+            _require_text(document, "document_version_id"),
+            cutoff_at,
+            extractor_name=extractor_name,
+            code_version=code_version,
+            config_sha256=config_sha256,
+            pinned_run_id=pinned_run_id,
+        )
     nodes = _all_run_nodes(conn, run, cutoff_at)
     assessment_table: str | None = None
     assessment_id: str | None = None

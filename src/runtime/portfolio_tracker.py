@@ -70,6 +70,7 @@ class SchedulerActivationError(RuntimeError):
 
 class ListenerObservation(BaseModel):
     healthy: bool
+    responding: bool = False
     owner: str | None = None
     pid: int | None = None
     job_id: str | None = None
@@ -313,6 +314,7 @@ def derive_activation_idempotency_key(recorded_at: datetime) -> str:
 ProcessLiveness = Literal["alive", "dead", "unknown"]
 WINDOWS_PROCESS_TREE_TIMEOUT_SECONDS = 2.0
 MAX_WINDOWS_PROCESS_SNAPSHOT_ROWS = 4_096
+WINDOWS_ERROR_INVALID_PARAMETER = 87
 
 
 def _windows_last_error() -> int | None:
@@ -345,9 +347,10 @@ def _pid_liveness(pid: int) -> ProcessLiveness:
             pass
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
-            # A missing Win32 error seam is also inconclusive: never classify a
-            # failed query as dead merely because a POSIX ctypes build lacks it.
-            return "unknown" if _windows_last_error() in {None, 5} else "dead"
+            # Only ERROR_INVALID_PARAMETER is positive evidence that the PID
+            # no longer exists. Access denied and every other query failure
+            # are inconclusive, so they must not trigger lease reclamation.
+            return "dead" if _windows_last_error() == WINDOWS_ERROR_INVALID_PARAMETER else "unknown"
         exit_code = ctypes.c_ulong()
         try:
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
@@ -596,18 +599,39 @@ class AtomicFileLease:
             return True
         return False
 
-    def _recover_stale(self) -> bool:
-        guard = self._path.with_name(f".{self._path.name}.takeover")
+    def _open_guard(self) -> int | None:
+        # Retain compatibility safety for a legacy in-flight contender. An
+        # unidentifiable old sentinel needs operator reconciliation, never an
+        # age-based unlink. New guards are OS locks released even after a crash.
+        if self._path.with_name(f".{self._path.name}.takeover").exists():
+            return None
+        guard = self._path.with_name(f".{self._path.name}.takeover.lock")
+        descriptor = os.open(guard, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            descriptor = os.open(guard, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(descriptor)
+            return None
+        # Never unlink this persistent lock inode: doing so would let another
+        # contender lock a replacement while this descriptor still owns it.
+        return descriptor
+
+    def _recover_stale(self) -> bool:
+        descriptor = self._open_guard()
+        if descriptor is None:
             self.last_conflict_detail = "another lease contender is inspecting stale ownership"
             return False
         try:
             return self._recover_stale_locked()
         finally:
             os.close(descriptor)
-            guard.unlink(missing_ok=True)
 
     def _recover_stale_locked(self) -> bool:
         try:
@@ -625,7 +649,7 @@ class AtomicFileLease:
             self.last_conflict_detail = "lease exists with unreadable owner evidence"
             return False
         liveness = _pid_liveness(pid)
-        if age < LEASE_STALE_AFTER_SECONDS or liveness != "dead":
+        if liveness != "dead":
             self.last_conflict_detail = (
                 f"lease held by pid {pid} token={token} liveness={liveness} age_seconds={age:.1f}"
             )
@@ -679,13 +703,11 @@ class AtomicFileLease:
 
         if not self._held:
             return True
-        guard = self._path.with_name(f".{self._path.name}.takeover")
         deadline = time.monotonic() + max(0.0, deadline_seconds)
         delay = 0.01
         while True:
-            try:
-                descriptor = os.open(guard, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
+            descriptor = self._open_guard()
+            if descriptor is None:
                 self.last_conflict_detail = "lease release deferred; takeover is in progress"
                 if time.monotonic() >= deadline:
                     self.last_conflict_detail = "lease release deadline exceeded; retry required"
@@ -715,7 +737,6 @@ class AtomicFileLease:
                         return True
             finally:
                 os.close(descriptor)
-                guard.unlink(missing_ok=True)
             if time.monotonic() >= deadline:
                 self.last_conflict_detail = "lease release deadline exceeded; retry required"
                 return False
@@ -742,6 +763,7 @@ class PortfolioTrackerRuntimeManager:
         lease: AtomicFileLease | None = None,
         sleep: Callable[[float], None] = time.sleep,
         startup_timeout_seconds: float = 10.0,
+        require_data_ready: bool = True,
     ) -> None:
         self._config = config
         self._inspect_listener = inspect_listener
@@ -750,6 +772,16 @@ class PortfolioTrackerRuntimeManager:
         self._lease = lease
         self._sleep = sleep
         self._startup_timeout_seconds = startup_timeout_seconds
+        self._require_data_ready = require_data_ready
+
+    def _acceptable_health(self, listener: ListenerObservation) -> bool:
+        if self._require_data_ready:
+            return listener.healthy and health_is_healthy(listener.health, now=self._now())
+        # The process supervisor may retain an owned responder while its data
+        # is unready. Consumer activation keeps the strict default above.
+        return (
+            listener.responding or listener.health is not None
+        ) and listener.owner == self._config.listener_owner
 
     def ensure_running(
         self,
@@ -807,8 +839,8 @@ class PortfolioTrackerRuntimeManager:
                 listener=before,
                 failure_detail="listener is healthy or occupied by an unexpected owner",
             )
-        if before.healthy:
-            if not health_is_healthy(before.health, now=before_now):
+        if before.healthy or (not self._require_data_ready and self._acceptable_health(before)):
+            if not self._acceptable_health(before):
                 return self._failed("listener_health_invalid", before)
             if before.owner != self._config.listener_owner or before.pid is None or before.pid <= 0:
                 return self._failed("listener_owner_unverified", before)
@@ -845,8 +877,7 @@ class PortfolioTrackerRuntimeManager:
                     failure_detail="listener came up under an unexpected owner",
                 )
             if (
-                after.healthy
-                and health_is_healthy(after.health, now=self._now())
+                self._acceptable_health(after)
                 and after.owner == self._config.listener_owner
                 and after.pid is not None
                 and after.pid > 0

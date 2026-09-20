@@ -49,30 +49,35 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import fetch_qa_transcript  # type: ignore[import-not-found]  # noqa: E402
+try:
+    import fetch_qa_transcript
+except ImportError:
+    from execution import fetch_qa_transcript
 
-import db  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from models.documents import DocType, SourceType  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
+import db
+from models.companies import ListType
+from models.documents import DocType, SourceType
+from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     CollectionTarget,
+    authorize_collection_target_in_connection,
     select_collection_targets,
 )
-from pipeline.transcript_acquisition import (  # noqa: E402
+from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
     authorize_transcript_request,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from transcripts.acquisition_semantics import (  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
     TranscriptAcquisitionAuthorization,
@@ -194,7 +199,30 @@ def _scope_tickers(
             )
             + "\n"
         )
-    return frozenset(item.target.ticker for item in selection.allowed)
+    authorized: set[str] = set()
+    for item in selection.allowed:
+        stored = authorize_collection_target_in_connection(
+            conn,
+            item.target.ticker,
+            requested=item.target.requested,
+            source=CollectionSource.TRANSCRIPT,
+            artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
+        )
+        if stored.allowed:
+            authorized.add(item.target.ticker)
+        else:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "source_collection_policy_denied",
+                        "ticker": item.target.ticker,
+                        "reason": stored.status.value,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+    return frozenset(authorized)
 
 
 def _existing_txt_document(

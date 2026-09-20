@@ -11,6 +11,7 @@ from pathlib import Path
 from alembic.config import Config
 
 from alembic import command
+from schema_compat import expected_head
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,7 +87,7 @@ def test_graph_selection_follows_stamped_database_and_explicit_locations(tmp_pat
     upgrade(explicitly_active, "head")
     with sqlite3.connect(active_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0039_add_dcf_forecast_series",
+            expected_head(),
         )
 
     explicitly_archived_db = tmp_path / "explicitly-archived.db"

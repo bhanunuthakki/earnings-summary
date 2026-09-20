@@ -1,8 +1,8 @@
 """Policy-bounded IR-document discovery and fetch.
 
-Scheduled runs cover portfolio names automatically. Evaluation names enter
-only when explicitly named with ``--tickers``; watchlist and index-member names
-never enter the document crawler. Each selected name runs two isolated stages:
+Scheduled runs cover portfolio, evaluation, and watchlist names automatically.
+Index-member and catalog-only names never enter the document crawler.
+Each selected name runs two isolated stages:
 
   1. ``discover_ir_documents.py --ticker <T>`` — headless-crawl the issuer's IR
      site and (re-)write its URL manifest.
@@ -50,14 +50,17 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import ir_fetch_status  # noqa: E402
-from ir_uploads import calendar_id_from_fye  # noqa: E402
-from log_redact import redact  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
+import ir_fetch_status
+from compute.ir_narrative import has_pending_narrative
+from ir_uploads import calendar_id_from_fye
+from log_redact import redact
+from models.companies import ListType
+from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
@@ -65,8 +68,8 @@ from pipeline.source_policy import (  # noqa: E402
     authorize_stored_collection_target,
     select_collection_targets,
 )
-from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _DEFAULT_QUARTERS = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
 _DEFAULT_DISCOVER_TIMEOUT_S = 300  # headless browser render
@@ -81,7 +84,7 @@ _DEFAULT_PROCESS_TIMEOUT_S = 300
 _DEFAULT_DISCOVERY_WORKERS = 3
 _DEFAULT_TICKER_DEADLINE_S = 600
 _DEFAULT_WHOLE_RUN_DEADLINE_S = 1800
-_CHECKPOINT_VERSION = 1
+_CHECKPOINT_VERSION = 2
 
 
 class TickerStatus(StrEnum):
@@ -112,10 +115,11 @@ class DiscoveryResult:
     stdout: str = ""
     stderr: str = ""
     error: str | None = None
+    processing_pending: bool = False
 
 
 def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[str], list[str]]:
-    """Resolve automatic portfolio and explicitly requested evaluation work."""
+    """Resolve active companies admitted by the shared collection policy."""
 
     targets: list[CollectionTarget] = []
     if db_path.exists():
@@ -278,6 +282,10 @@ def _run_tolerant(argv: list[str], timeout_s: float, label: str) -> bool:
     if proc.returncode != 0:
         sys.stderr.write(f"{label} rc={proc.returncode} (tolerated)\n")
         return False
+    failures = _json_field(proc.stdout, "failed")
+    if isinstance(failures, int) and failures > 0:
+        sys.stderr.write(f"{label} reported {failures} failed documents\n")
+        return False
     return True
 
 
@@ -314,23 +322,27 @@ def _run_process_stage(
         first_timeout,
         f"[{ticker}] ir_narrative",
     )
+    summaries_ok = True
     if summaries:
         summary_timeout = _remaining_timeout(timeout_s, deadline_at)
         if summary_timeout is None:
             sys.stderr.write(f"[{ticker}] process deadline exhausted before summaries\n")
             return False
-        _run_tolerant(
+        summaries_ok = _run_tolerant(
             [
                 *managed_python_prefix(PROJECT_ROOT),
-                str(PROJECT_ROOT / "execution" / "process_ir_documents.py"),
+                str(PROJECT_ROOT / "execution" / "process_ir_documents_state.py"),
                 "--ticker",
                 ticker,
+                "--repo-root",
+                str(repo_root),
             ],
             summary_timeout,
             f"[{ticker}] process_ir_documents",
         )
-    dirty = _set_brief_dirty(db_path, ticker)
-    return nar and dirty
+    if not nar or not summaries_ok:
+        return False
+    return _set_brief_dirty(db_path, ticker)
 
 
 def _remaining_timeout(stage_timeout_s: float, deadline_at: float | None) -> float | None:
@@ -556,7 +568,12 @@ def _finish_discovery(
     downloaded = _json_field(fetch.stdout, "downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else None
     processed = False
-    if process and downloaded_n:
+    if process and (
+        downloaded_n
+        or discovery.processing_pending
+        or summaries
+        or has_pending_narrative(repo_root, ticker)
+    ):
         process_budget = _remaining_timeout(process_timeout, effective_deadline)
         if process_budget is not None:
             processed = _run_process_stage(
@@ -569,6 +586,16 @@ def _finish_discovery(
             )
         else:
             sys.stderr.write(f"[{ticker}] process skipped: bounded deadline exhausted\n")
+        if not processed:
+            return _fail(
+                ticker,
+                "processing_failed"
+                if process_budget is not None
+                else "processing_deadline_exhausted",
+                round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
+                discovered=discovery.discovered,
+                downloaded=downloaded_n,
+            )
 
     elapsed = round(discovery.elapsed_seconds + _elapsed(finish_t0), 3)
     sys.stdout.write(
@@ -752,6 +779,7 @@ def _discovery_to_checkpoint(result: DiscoveryResult) -> dict[str, object]:
         "discovered": result.discovered,
         "elapsed_seconds": result.elapsed_seconds,
         "error": result.error,
+        "processing_pending": result.processing_pending,
     }
 
 
@@ -778,6 +806,7 @@ def _discovery_from_checkpoint(value: object) -> DiscoveryResult | None:
         discovered=discovered if isinstance(discovered, int) else None,
         elapsed_seconds=float(elapsed),
         error=error if isinstance(error, str) else None,
+        processing_pending=row.get("processing_pending") is True,
     )
 
 
@@ -1041,6 +1070,9 @@ def main(argv: list[str] | None = None) -> int:
         results_by_ticker[ticker] = result
         _record_result(db_path, result)
         if result.status is TickerStatus.FAILED:
+            if result.error in {"processing_failed", "processing_deadline_exhausted"}:
+                discovery.processing_pending = True
+                _save_checkpoint(checkpoint_path, signature, discoveries, completed)
             if result.error and result.error.startswith("auth_denial:"):
                 return 10
             if result.error and "deadline" in result.error:

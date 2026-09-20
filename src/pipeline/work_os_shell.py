@@ -33,6 +33,7 @@ from pipeline.work_os_research import (
 )
 from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from pipeline.work_os_styles import WORK_OS_CSS
+from ui.cite_marks import CITE_MARKS_SNIPPET
 from ui.controls import controls_css, controls_js
 from ui.living_grid import head_assets as living_grid_head_assets
 from ui.tokens import FAVICON_LINK, palette_css
@@ -655,6 +656,8 @@ def _add_production_contract(
         + reader
         + "\n"
         + full_page_detail
+        + "\n"
+        + CITE_MARKS_SNIPPET
         + f'\n<script id="work-os-explore-runtime">{EXPLORE_PANEL_JS}</script>\n'
         + runtime
         + "\n"

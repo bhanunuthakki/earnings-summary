@@ -27,6 +27,49 @@ Every row in `documents` must have `(source_type, doc_type, file_path, sha256, f
 
 LLM-extracted documents must carry `parent_document_id` pointing at the primary document the LLM read from.
 
+### Progressive proof and legacy repair (2026-09-19)
+
+Capture, extraction, source coverage, semantic admission, and reader parity are
+independent properties. Apply the [progressive pipeline policy](data_pipeline_dag.md)
+at each boundary; never collapse them into a single inferred `verified` flag.
+`fetch_status=ok`, a confidence score, a content match, or a successful narrative
+does not satisfy the decision-grade contract. Missing completeness inventories
+remain `uninitialized` even when every selected file parses successfully.
+
+PDF full-text extraction uses the deliberately promoted identity in
+`src/provenance/fulltext_extractor_identity.py`, including the reviewed parser
+library version. The writer checks the loaded parser before parsing; a missing or
+different version is quarantined without recording an approved extraction run.
+Dependency updates require an explicit identity promotion and isolated parser
+validation. Readers select the approved identity independently of their installed
+libraries. Prior sealed evidence remains reconstructible under its pinned
+historical identity, but cannot authorize a new seal or current coverage.
+
+Mutable provider caches are working projections. Before registration, exact retained FMP
+cache bytes are installed without clobbering under content-addressed
+`data/historical/fmp_snapshots/`; documents and evidence anchors commit together.
+Refreshes cannot overwrite an earlier version's evidence. Cached JSON may be a
+parsed/normalized provider representation; retaining it does not prove original HTTP
+response bytes or issuer wording. Preserve that representation boundary in claims. IR categorization similarly
+retains source bytes until document/evidence publication succeeds. Moving a same-byte
+document must update its legacy path and add a verified replica while preserving
+immutable original locators and any still-referenced primary storage location.
+
+Historical SEC CompanyFacts rows require special interpretation: older `#accn=`
+rows used SHA-256 of the accession string as an identity key. That value is not a
+raw-byte hash. Classify them as `legacy_sec_accession_identity`; do not rewrite
+their hash to today's response or label them corrupt solely for that mismatch.
+The existing CompanyFacts snapshot/binding and fact-match revision workflows
+provide an append-only bridge to exact captured bytes and accession locators.
+A fresh SEC response proves current retrieval, not historical bytes or historical
+semantic equivalence. Missing originals and unmatched legacy facts stay unresolved.
+
+Other hash mismatches require exact-byte recovery from a verified retained replica,
+or a newly captured observation version. Neither replacing the expected hash nor
+re-fetching a URL proves the lost observation. Recovery must preserve old identities,
+source and knowledge times, conflict history, and explicit unavailable dispositions.
+Only genuinely matching retained bytes can receive a byte-verification stamp.
+
 ### 2.1 Issuer KPI definition lineage
 
 An issuer-reported KPI value is decision-grade only when its current
@@ -177,7 +220,7 @@ Manual override always wins over automated sources, but it must include a reason
 ## 4. Per-source ingestion rules
 
 ### `fmp`
-- `doc_type` is one of the `FMP_*` values in `DocType`. Files land in `data/historical/fmp/` named `{TICKER}_{endpoint_slug}.json`.
+- `doc_type` is one of the `FMP_*` values in `DocType`. Working caches in `data/historical/fmp/` are named `{TICKER}_{endpoint_slug}.json`; registered evidence uses immutable `data/historical/fmp_snapshots/<sha-prefix>/<sha256>/<original_filename>` bytes.
 - Currency from `reportedCurrency` field; halt if absent.
 - Period from `date` or `fillingDate`; halt if absent or malformed.
 - Logical Idempotency Key: `(ticker, doc_type, period_end)`; payload SHA-256 is its Content Identity and a changed payload is a new Observation Version.
@@ -202,7 +245,9 @@ Manual override always wins over automated sources, but it must include a reason
   - Manual upload (`categorize_ir_uploads.py`): `manual_upload:{original-filename}`, where the original filename is the basename the user dropped in `ir_documents/` before triage. Preserves the user-visible identity for audit.
 - Logical Idempotency Key: `(ticker, doc_type, period_end, source_url)` when known. SHA-256 is the UNIQUE Content Identity: re-uploading identical bytes is a no-op; modified bytes for the same logical slot write a new Observation Version and supersede the previous one — never mutate.
 - Manual uploads where ticker, doc_type, **and** period_end cannot all be determined from filename + first-page fingerprint are quarantined to `ir_documents/_unsorted/` with a `.error.json` sidecar. They are **not** registered in `documents` and **not** silently merged with any existing row — the user must repair (rename the file, extend the issuer registry, or delete the upload) and re-run.
-- The IR step is **optional**: tickers with no `ir_doc` rows in `documents` proceed through the rest of the pipeline (FMP, SEC, transcripts) without any IR-derived facts. Downstream consumers must `LEFT JOIN` against `ir_doc` rows, never `INNER JOIN`.
+- Missing IR evidence is an explicit source-coverage gap. Other preliminary analysis
+  may proceed with that limitation; absence must not become a complete/verified stamp.
+  Downstream joins must retain the company and its missing-evidence disposition.
 
 ### `transcript_audio`
 - Audio land in `transcripts/raw/audio/`, transcripts in `transcripts/raw/text/`.

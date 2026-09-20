@@ -5,29 +5,87 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import sys
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import to_jsonable_python
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+if __package__:
+    from ._lib import PROJECT_ROOT
+else:
+    from _lib import PROJECT_ROOT
 
-from log_redact import redact  # noqa: E402
-from operations.review_bundle import OperationsReviewBundle, ReviewSchedulerTask  # noqa: E402
+from log_redact import redact
+from operations.host_runtime import HostRuntimeBundle, NoRedirect
+from operations.review_bundle import OperationsReviewBundle, ReviewSchedulerTask
 
 _ENDPOINT = "/api/operations/review-bundle"
+_HOST_ENDPOINT = "/api/operations/host-runtime"
+_FETCH_ENDPOINTS = frozenset({_ENDPOINT, _HOST_ENDPOINT})
 _MAX_RESPONSE_BYTES = 2_000_000
 
 
 class ReviewFetchError(RuntimeError):
     """A closed, credential-safe fetch or validation failure."""
+
+
+def fetch_host_runtime(
+    *,
+    origin: object,
+    timeout_seconds: float,
+    pins: WindowsReviewPins,
+    expected_config_sha256: object,
+    expected_owners: frozenset[tuple[str, str]],
+    now: datetime,
+    max_age: timedelta,
+) -> HostRuntimeBundle:
+    """Read the companion through the same pinned transport; never enroll pins."""
+    from pydantic import ValidationError
+
+    if not isinstance(origin, str) or not isinstance(expected_config_sha256, str):
+        raise ReviewFetchError("host review configuration invalid")
+    origin = exact_https_origin(origin)
+    if (
+        timeout_seconds <= 0
+        or max_age.total_seconds() <= 0
+        or not expected_owners
+        or re.fullmatch(r"[0-9a-f]{64}", expected_config_sha256) is None
+    ):
+        raise ReviewFetchError("host review configuration invalid")
+    try:
+        bundle = HostRuntimeBundle.model_validate_json(
+            _fetch(origin + _HOST_ENDPOINT, timeout_seconds=timeout_seconds)
+        )
+    except (ValidationError, ValueError):
+        raise ReviewFetchError("host review payload invalid") from None
+    if (
+        bundle.serving_origin_sha256 != identity_sha256(origin)
+        or bundle.serving_origin_sha256 != pins.serving_origin_sha256
+        or bundle.code_instance_sha256 != pins.code_instance_sha256
+    ):
+        raise ReviewFetchError("host review identity mismatch")
+    if bundle.served_at > now + timedelta(minutes=5) or now - bundle.served_at > max_age:
+        raise ReviewFetchError("host review transport timestamp invalid")
+    if bundle.receipt is not None:
+        if (
+            bundle.receipt.config_sha256 is not None
+            and bundle.receipt.config_sha256 != expected_config_sha256
+        ):
+            raise ReviewFetchError("host review configuration drift")
+        actual = frozenset((row.kind, row.name) for row in bundle.receipt.owners)
+        if bundle.receipt.state == "current" and actual != expected_owners:
+            raise ReviewFetchError("host review owner scope mismatch")
+        if bundle.receipt.observed_at > now + timedelta(minutes=5):
+            raise ReviewFetchError("host review evidence timestamp invalid")
+        if bundle.receipt_state == "current" and now - bundle.receipt.observed_at > max_age:
+            raise ReviewFetchError("host review evidence stale")
+    return bundle
 
 
 class FetchSummary(BaseModel):
@@ -191,12 +249,14 @@ def _fetch(url: str, *, timeout_seconds: float) -> bytes:
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or parsed.path != _ENDPOINT
+        or parsed.path not in _FETCH_ENDPOINTS
     ):
         raise ReviewFetchError("review bundle URL must be the exact HTTPS endpoint")
     request = Request(url, headers={"Accept": "application/json"}, method="GET")
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310
+        with build_opener(ProxyHandler({}), NoRedirect()).open(
+            request, timeout=timeout_seconds
+        ) as response:
             declared = response.headers.get("Content-Length")
             if declared is not None and int(declared) > _MAX_RESPONSE_BYTES:
                 raise ReviewFetchError("review bundle exceeds the bounded response size")

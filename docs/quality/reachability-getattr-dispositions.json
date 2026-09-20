@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "ceabce454b0eb84840bc7e4b9882122d761fdb85e7f80ecaa56431c7eaae2e6e",
-      "line": 688,
+      "fingerprint": "bfe2a10771782cb337719e64bb9dbf61839c30b5a96ca3b03358d1ffd7f549bf",
+      "line": 694,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -111,8 +111,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr validates only the checked-in positive_fields argparse tuple.",
-      "fingerprint": "5a4e0253dca91d48a50456727fcab80123ecfa3b8b3dbb013a1d90a174bcd852",
-      "line": 1140,
+      "fingerprint": "024c0a6038e5b5db448dd444a95bf226905e52be1a6555149f199a9aa50889dc",
+      "line": 1172,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "positive_fields"
@@ -153,8 +153,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "fd0ae6cf46ef03a83deaa729857ece8cdd5362bcff095f735925dd8534261a1a",
-      "line": 798,
+      "fingerprint": "489e0415306d0d90f2f45255e5da262bdb1a78482a6ddec91f5a02a7e7d9ef09",
+      "line": 799,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -163,8 +163,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "3612977885420449b8965ed9a47434e379dfed1d3609db678b13fff77f64b012",
-      "line": 802,
+      "fingerprint": "779b1a54414ad30bf2149ae4c3dd46a9360cacea309e611719fd9676d983a4c3",
+      "line": 803,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -173,8 +173,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only StageSpec.skip_flags from the checked-in manifest.",
-      "fingerprint": "ace40d29eaa119f80f4c2a986d8002eb4a6c3f39d75a472b52bcab1988fc3116",
-      "line": 158,
+      "fingerprint": "813fa293267fd90e28a8403a3cfd3e09966f1e96166f5bd3aaca789200f28a35",
+      "line": 162,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "StageSpec.skip_flags"
@@ -257,8 +257,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _SCALAR_ROW_ATTR dashboard scalar attributes.",
-      "fingerprint": "214214082d8af74d7e64f5f9888855b106ca6001eacff4b71fccf14669ee49eb",
-      "line": 1462,
+      "fingerprint": "2ec4687179e271c047f87b2c4500e35c0ae3fc50376e5b4ca6c6d2450016431e",
+      "line": 1464,
       "path": "src/dcf/redesign.py",
       "targets": [
         "_SCALAR_ROW_ATTR"
@@ -599,7 +599,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "e07a3181695d51ce545139e0e5cee20ee1c491c8d6b3f15b494ac349ca5a27d4",
+      "source_sha256": "3c06f1e89a71c72f15bf56a3ff66be7abfe07abd2ff61c5f2c268a0314028403",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

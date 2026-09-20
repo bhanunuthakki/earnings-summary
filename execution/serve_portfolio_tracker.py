@@ -10,23 +10,27 @@ containing the configured canonical database, never at the code checkout.
 from __future__ import annotations
 
 import argparse
+import http.client
+import json
 import os
 import subprocess
-import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+if __package__:
+    from ._lib import PROJECT_ROOT
+else:
+    from _lib import PROJECT_ROOT
 
-from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
-from operations.paths import (  # noqa: E402
+from integrations.portfolio_tracker_v1 import TrackerV1Client
+from operations.paths import (
     configured_product_state_root,
     portfolio_tracker_receipt_path,
 )
-from runtime.portfolio_tracker import (  # noqa: E402
+from runtime.portfolio_tracker import (
     AtomicFileLease,
     ListenerObservation,
     PortfolioTrackerRuntimeManager,
@@ -41,7 +45,22 @@ from runtime.portfolio_tracker import (  # noqa: E402
 
 LISTENER_OWNER = "portfolio-tracker-service"
 HEARTBEAT_SECONDS = 300.0
+PROBE_ATTEMPTS = 3
+PROBE_RETRY_SECONDS = 5.0
 LifecycleState = Literal["already_running", "started", "ownership_conflict", "failed"]
+
+
+def _liveness_is_responding() -> bool:
+    """Fixed local, data-independent probe; never log response/exception text."""
+    connection = http.client.HTTPConnection("127.0.0.1", 8000, timeout=3.0)
+    try:
+        connection.request("GET", "/api/health")
+        with connection.getresponse() as response:
+            return response.status == 200 and json.loads(response.read(1024)) == {"status": "ok"}
+    except (OSError, ValueError, http.client.HTTPException):
+        return False
+    finally:
+        connection.close()
 
 
 def tracker_server_argv(
@@ -101,29 +120,69 @@ class TrackerServiceSupervisor:
         self._now = now
         self._launch = launch
         self._process: subprocess.Popen[bytes] | None = None
+        self._ownership_proof: bool | None = None
+        self._responding = False
 
     def _inspect_listener(self) -> ListenerObservation:
+        process = self._process
+        pid = process.pid if process is not None and process.poll() is None else None
+        if pid is None:
+            self._ownership_proof = None
+            self._responding = False
+            return ListenerObservation(healthy=False, health_checked_at=self._now())
         health_fetch = TrackerV1Client(base_url=self._api_url).get_health()
         health = health_fetch.data
         checked_at = self._now()
         healthy = bool(health_fetch.available) and health_is_healthy(health, now=checked_at)
-        process = self._process
-        pid = process.pid if process is not None and process.poll() is None else None
         bind = parse_tracker_bind_url(self._api_url)
-        endpoint_owned = (
-            pid is not None
-            and bind is not None
-            and endpoint_owner_matches_pid(bind[0], bind[1], pid, require_exclusive=True) is True
+        self._ownership_proof = (
+            endpoint_owner_matches_pid(bind[0], bind[1], pid, require_exclusive=True)
+            if bind is not None
+            else False
         )
-        owned = healthy and endpoint_owned
+        owned = self._ownership_proof is True
+        self._responding = bool(health_fetch.available) and health is not None
+        if owned and not self._responding:
+            # A failed database query can make /api/v1/health return HTTP500.
+            # The owned process is still live if its independent probe works;
+            # restarting it cannot repair the database or refresh stale data.
+            self._responding = _liveness_is_responding()
         return ListenerObservation(
             # Health without a matching child PID and loopback endpoint does
             # not prove this scheduler-owned runtime is healthy.
             healthy=healthy and owned,
+            responding=self._responding and owned,
             owner=LISTENER_OWNER if owned else None,
             pid=pid if owned else None,
             health_checked_at=checked_at,
             health=health,
+        )
+
+    def _probe_failure(self) -> str | None:
+        if self._ownership_proof is False:
+            return "listener_ownership_mismatch"
+        if self._ownership_proof is None:
+            return "ownership_probe_unavailable"
+        if not self._responding:
+            return "listener_response_unavailable"
+        return None
+
+    def _event(
+        self, event: str, *, reason: str | None = None, exit_code: int | None = None
+    ) -> None:
+        # Fixed operational fields only: never health payloads, exception text,
+        # argv, environment, URLs, or financial data. The task log retains the
+        # cause after the mutable latest receipt has been replaced by recovery.
+        print(
+            json.dumps(
+                {
+                    "event": event,
+                    "at": self._now().isoformat(),
+                    "reason": reason,
+                    "child_exit_code": exit_code,
+                }
+            ),
+            flush=True,
         )
 
     def _start_listener(self, _config: RuntimeConfig) -> None:
@@ -212,6 +271,7 @@ class TrackerServiceSupervisor:
             start_listener=self._start_listener,
             now=self._now,
             lease=AtomicFileLease(self._receipt_path.with_suffix(".lease")),
+            require_data_ready=False,
         )
         started = manager.ensure_running(receipt_path=self._receipt_path)
         if started.lifecycle_state == "ownership_conflict":
@@ -244,35 +304,49 @@ class TrackerServiceSupervisor:
             )
             return 1
         last_listener = started.listener
+        child_exit_code: int | None = None
         while self._process is not None:
             try:
-                self._process.wait(timeout=HEARTBEAT_SECONDS)
+                child_exit_code = self._process.wait(timeout=HEARTBEAT_SECONDS)
             except subprocess.TimeoutExpired:
                 pass
             else:
                 break
             listener = self._inspect_listener()
-            if (
-                not listener.healthy
-                or listener.owner != LISTENER_OWNER
-                or listener.pid != self._process.pid
-            ):
+            failure = self._probe_failure()
+            for _attempt in range(1, PROBE_ATTEMPTS):
+                if failure is None or failure == "listener_ownership_mismatch":
+                    break
+                self._event("tracker_probe_retry", reason=failure)
+                self._write(lifecycle_state="already_running", listener=listener, failure=failure)
+                time.sleep(PROBE_RETRY_SECONDS)
+                listener = self._inspect_listener()
+                failure = self._probe_failure()
+            if failure is not None:
+                self._event("tracker_supervisor_stopping", reason=failure)
                 cleanup_error = self._stop_child()
                 self._write_failure_after_cleanup(
                     listener=listener,
                     cleanup_error=cleanup_error,
-                    failure="listener health or endpoint ownership proof is missing",
+                    failure=failure,
                 )
                 return 1
-            self._write(lifecycle_state="already_running", listener=listener, failure=None)
+            if not listener.healthy:
+                self._event("tracker_data_unready", reason="data_readiness_degraded")
+            self._write(
+                lifecycle_state="already_running",
+                listener=listener,
+                failure=None if listener.healthy else "data_readiness_degraded",
+            )
             last_listener = listener
         listener = last_listener.model_copy(
             update={"healthy": False, "health_checked_at": self._now()}
         )
+        self._event("tracker_child_exited", exit_code=child_exit_code)
         self._write(
             lifecycle_state="failed",
             listener=listener,
-            failure="Portfolio Tracker API process exited",
+            failure=f"Portfolio Tracker API process exited; exit_code={child_exit_code}",
         )
         return 1
 

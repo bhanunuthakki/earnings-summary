@@ -8,10 +8,10 @@ extracted forward-looking commitments — so §5 Earnings and §6 Say-Do are
 populated in the brief from the moment a new ticker is onboarded, not
 weeks later when the user remembers to run the fetchers manually.
 
-Every network attempt is bound to the active stored identity and `list_type`:
-portfolio is automatic; evaluation is allowed only by explicit owner `--ticker`
-request; watchlist, index, ETF, unknown, malformed, and ambiguous identities fail
-closed. Audio/webcast extraction is excluded. An approved manual transcript file
+Every network attempt is bound to active stored identity, `list_type`, and instrument:
+portfolio, evaluation, and watchlist receive automatic full text-transcript acquisition
+under policy `2026-09-19.1`. Corporate lanes require equity/ADR identity; index, ETF,
+unknown, malformed, and ambiguous identities fail closed. Audio/webcast extraction is excluded. An approved manual transcript file
 may still enter through the existing ingest path without a network crawl.
 
 ## Why this exists
@@ -44,8 +44,8 @@ commitments existed in `management_commitments` to render.
 
 | Trigger | Cadence | Scope |
 |---|---|---|
-| `execution/onboard_ticker.py` | Per company onboarding | Stored-role policy applies; no implied evaluation escalation |
-| `cron/backfill_transcripts.task.xml` | Daily 02:00 | Non-archived portfolio only |
+| `execution/onboard_ticker.py` | Per company onboarding | Shared stored identity, role, instrument, and period policy |
+| `cron/backfill_transcripts.task.xml` | Daily 02:00 | Authorized non-archived portfolio, evaluation, and watchlist companies |
 | Manual ad-hoc | On-demand | `python execution/backfill_transcripts.py [--ticker X] [--lookback-quarters N]` |
 
 The daily cron + per-ticker onboard hook are belt-and-braces. The cron
@@ -63,6 +63,17 @@ catches:
 - **Attempt Identity:** the unique job/runtime invocation used by logs and checkpoints; it changes on retry.
 
 File-presence and pending-row checks are repeat-safety guards, not identities: fetch skips when the matching raw or processed file exists, and extraction selects transcripts with no terminal scan/commitment outcome.
+
+Historical acquisition receipts retain their original policy version and authorization
+meaning. New receipts use the current shared policy; a former denial is not rewritten
+as a successful attempt. Acquisition, full-text extraction, and LLM commitment/semantic
+review remain separate dispositions. Broader acquisition authorization does not grant
+new LLM capacity or silently expand narrative schedules.
+
+Automatic commitment LLM extraction remains portfolio-only. An explicit owner
+`--ticker` request may run it for an authorized evaluation/watchlist company.
+The batch reports `commitment_extraction_deferred` for other acquired companies
+and preserves unfinished coverage rather than implying semantic work completed.
 
 Running the script three times in a row produces zero new rows the second
 and third times.

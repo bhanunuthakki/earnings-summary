@@ -61,6 +61,7 @@ DECISIONS_SCRIPT = "record_decisions.py"
 LIFECYCLE_SCRIPT = "sync_position_lifecycle.py"
 DECISION_ACTIONS_SCRIPT = "reconcile_decision_actions.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
+DOCUMENT_EVIDENCE_SCRIPT = "process_document_evidence.py"
 DERIVED_METRICS_SCRIPT = "compute_derived_metrics.py"
 REPRICE_SCRIPT = "reprice_dcf.py"
 CANDIDATE_FIT_SCRIPT = "refresh_candidate_fit.py"
@@ -172,7 +173,7 @@ def test_manifest_is_complete_ordered_and_selection_dependency_valid() -> None:
     specs = run_morning_pipeline.STAGE_MANIFEST
     keys = [spec.key for spec in specs]
 
-    assert len(keys) == len(set(keys)) == 20
+    assert len(keys) == len(set(keys)) == 21
     positions = {key: index for index, key in enumerate(keys)}
     for spec in specs:
         assert spec.script.endswith(".py")
@@ -279,7 +280,7 @@ def test_resume_checkpoint_expires_after_eighteen_hours(
 
     assert run_morning_pipeline.main([]) == 0
 
-    assert len(second.scripts) == 20
+    assert len(second.scripts) == 21
 
 
 def test_resume_checkpoint_is_valid_through_exact_eighteen_hour_boundary(
@@ -320,7 +321,7 @@ def test_legacy_unversioned_checkpoint_is_not_activated(
 
     assert run_morning_pipeline.main([]) == 0
 
-    assert len(fake.scripts) == 20
+    assert len(fake.scripts) == 21
 
 
 def test_checkpoint_scope_binds_run_date_and_manifest_digest(
@@ -376,8 +377,8 @@ def test_checkpoint_write_failure_is_loud_without_short_circuiting_stages(
 
     monkeypatch.setattr(run_morning_pipeline.os, "replace", fail_replace)
 
-    assert run_morning_pipeline.main(["--db-path", str(tmp_path / "missing.db")]) == 20
-    assert len(fake.scripts) == 20
+    assert run_morning_pipeline.main(["--db-path", str(tmp_path / "missing.db")]) == 21
+    assert len(fake.scripts) == 21
 
 
 def test_main_uses_configured_db_path_for_parent_and_children(
@@ -480,6 +481,7 @@ def test_all_stages_succeed(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -540,6 +542,7 @@ def test_stage1_failure_still_runs_feed(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -579,6 +582,7 @@ def test_feed_failure_still_runs_validation(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -638,6 +642,7 @@ def test_all_stages_fail_exit_code_counts_failures(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -697,6 +702,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -848,6 +854,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -885,6 +892,7 @@ def test_skip_validation_removes_only_stage3(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -1057,7 +1065,7 @@ def test_db_path_passed_to_all_stages_when_set(
         if _script_of(argv) == FACTOR_PROXIES_SCRIPT:
             continue  # no DB at all — takes --repo-root derived from the db
             # override instead (asserted in its own stage-0g test)
-        if _script_of(argv) == DERIVED_METRICS_SCRIPT:
+        if _script_of(argv) in {DERIVED_METRICS_SCRIPT, DOCUMENT_EVIDENCE_SCRIPT}:
             # Its own flag name is --db (asserted in its stage-0d2 test).
             assert _has_flag(argv, "--db", str(db_path))
             continue
@@ -1081,7 +1089,7 @@ def test_configured_db_path_forwarded_when_cli_unset(monkeypatch: pytest.MonkeyP
         if script == FACTOR_PROXIES_SCRIPT:
             assert _has_flag(argv, "--repo-root", str(PROJECT_ROOT))
             continue
-        if script == DERIVED_METRICS_SCRIPT:
+        if script in {DERIVED_METRICS_SCRIPT, DOCUMENT_EVIDENCE_SCRIPT}:
             assert _has_flag(argv, "--db", str(configured))
             continue
         assert _has_flag(argv, "--db-path", str(configured))
@@ -1123,6 +1131,7 @@ def test_skip_news_removes_only_stage0(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -1176,6 +1185,7 @@ def test_news_failure_does_not_stop_triggers(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DOCUMENT_EVIDENCE_SCRIPT,
         DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -1459,3 +1469,33 @@ def test_post_flight_dead_man_import_resolves_under_the_scripts_own_syspath(
     )
     assert proc.returncode == 0, f"post-flight import broken:\n{proc.stderr}"
     assert "IMPORT_OK" in proc.stdout
+
+
+def test_document_evidence_degradation_does_not_block_analysis(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _RecordingRun(returncodes={DOCUMENT_EVIDENCE_SCRIPT: 2})
+    _install_fake(monkeypatch, fake)
+    database = tmp_path / "state" / "data" / "portfolio.db"
+    assert run_morning_pipeline.main(["--db-path", str(database)]) == 1
+    argv = next(call for call in fake.calls if _script_of(call) == DOCUMENT_EVIDENCE_SCRIPT)
+    assert argv[argv.index("--db") + 1] == str(database)
+    assert argv[argv.index("--repo-root") + 1] == str(database.parent.parent)
+    assert "--apply" in argv and "--resume" in argv
+    assert argv[argv.index("--batch-size") + 1] == "100"
+    assert fake.scripts.index(DOCUMENT_EVIDENCE_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0d1_document_evidence"] == "failed"
+    assert summary["stage_1_triggers"] == "ok"
+    assert summary["stage_2_feed"] == "ok"
+
+
+def test_fundamentals_failure_still_attempts_document_evidence(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _RecordingRun(returncodes={FUNDAMENTALS_SCRIPT: 1})
+    _install_fake(monkeypatch, fake)
+    assert run_morning_pipeline.main([]) == 1
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0d1_document_evidence"] == "ok"
+    assert DOCUMENT_EVIDENCE_SCRIPT in fake.scripts

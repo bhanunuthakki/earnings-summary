@@ -8,7 +8,7 @@ stale HTML. This orchestrator chains the stages into one scheduled run. (The
 morning-digest render stage retired with the standalone /digest page,
 2026-06-11 — the live Home rail serves that view straight from the DB.)
 
-Twenty manifest-defined stages run in sequence as subprocess-isolated children.
+Twenty-one manifest-defined stages run in sequence as subprocess-isolated children.
 The major phase boundaries are:
 
   0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
@@ -82,30 +82,34 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-# The repo root too, so the post-flight dead-man check can import
-# ``execution.verify_daily_chain`` (a namespace package — ``execution/`` has no
-# ``__init__.py``). Without it that import raises ModuleNotFoundError into a
-# swallowing ``except``, and the artifact every external monitor keys off is
-# silently never written.
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from db_paths import configured_db_path  # noqa: E402
-from llm import tracectx  # noqa: E402
-from pipeline.morning_manifest import (  # noqa: E402
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    # runpy.run_path from outside the checkout has neither import root.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from execution._lib import PROJECT_ROOT
+from db_paths import configured_db_path
+from llm import tracectx
+from pipeline.morning_manifest import (
     STAGE_MANIFEST,
     STAGE_PREFLIGHT,
     ArgumentProfile,
     StageSpec,
     manifest_digest,
 )
-from pipeline.run_accounting import (  # noqa: E402
+from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     suppression_payload,
 )
-from runtime.python_process import managed_python_argv  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.python_process import managed_python_argv
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+# The repo root too, so the post-flight dead-man check can import
+# ``execution.verify_daily_chain`` (a namespace package — ``execution/`` has no
+# ``__init__.py``). Without it that import raises ModuleNotFoundError into a
+# swallowing ``except``, and the artifact every external monitor keys off is
+# silently never written.
+sys.path.insert(0, str(PROJECT_ROOT))
 
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
 DEFAULT_MAX_COST_USD = 10.0
@@ -206,6 +210,8 @@ def _dynamic_argv(spec: StageSpec, args: argparse.Namespace) -> list[str]:
         return ["--db-path", str(args.db_path)]
     if spec.argument_profile is ArgumentProfile.DB:
         return ["--db", str(args.db_path)]
+    if spec.argument_profile is ArgumentProfile.DB_AND_STATE_ROOT:
+        return ["--db", str(args.db_path), "--repo-root", str(args.db_path.parent.parent)]
     if spec.argument_profile is ArgumentProfile.REPO_ROOT_FROM_DB:
         return ["--repo-root", str(args.db_path.parent.parent)]
     raise AssertionError(f"unsupported argument profile: {spec.argument_profile}")

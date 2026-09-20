@@ -3,25 +3,20 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-
-from pipeline.data_policy_settings_panel import (  # noqa: E402
+from execution import comments_server
+from pipeline.data_policy_settings_panel import (
     PolicyDisplayState,
     build_data_policy_settings_view,
     read_fmp_operational_state,
     render_data_policy_settings_panel,
 )
-from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
+from pipeline.work_os_shell import render_work_os_shell
 
 
 def test_policy_view_is_derived_from_the_canonical_authorization_contract() -> None:
@@ -36,32 +31,32 @@ def test_policy_view_is_derived_from_the_canonical_authorization_contract() -> N
     rows = {row.key: row for row in view.rows}
     assert [cell.state for cell in rows["fmp_financial_facts"].cells] == [
         PolicyDisplayState.AUTOMATIC,
-        PolicyDisplayState.ON_DEMAND,
-        PolicyDisplayState.NEVER,
+        PolicyDisplayState.AUTOMATIC,
+        PolicyDisplayState.AUTOMATIC,
         PolicyDisplayState.SCREENING_ONLY,
     ]
     assert [cell.state for cell in rows["sec_companyfacts"].cells] == [
         PolicyDisplayState.AUTOMATIC,
-        PolicyDisplayState.ON_DEMAND,
-        PolicyDisplayState.NEVER,
+        PolicyDisplayState.AUTOMATIC,
+        PolicyDisplayState.AUTOMATIC,
         PolicyDisplayState.NEVER,
     ]
     assert [cell.state for cell in rows["sec_native_filings"].cells] == [
         PolicyDisplayState.AUTOMATIC,
-        PolicyDisplayState.ON_DEMAND,
-        PolicyDisplayState.NEVER,
+        PolicyDisplayState.AUTOMATIC,
+        PolicyDisplayState.AUTOMATIC,
         PolicyDisplayState.NEVER,
     ]
     assert [cell.state for cell in rows["ir_documents"].cells] == [
         PolicyDisplayState.AUTOMATIC,
-        PolicyDisplayState.ON_DEMAND,
-        PolicyDisplayState.NEVER,
+        PolicyDisplayState.AUTOMATIC,
+        PolicyDisplayState.AUTOMATIC,
         PolicyDisplayState.NEVER,
     ]
     assert [cell.state for cell in rows["text_transcripts"].cells] == [
         PolicyDisplayState.AUTOMATIC,
-        PolicyDisplayState.ON_DEMAND,
-        PolicyDisplayState.NEVER,
+        PolicyDisplayState.AUTOMATIC,
+        PolicyDisplayState.AUTOMATIC,
         PolicyDisplayState.NEVER,
     ]
     assert all(cell.state is PolicyDisplayState.NEVER for cell in rows["webcasts"].cells)
@@ -234,7 +229,7 @@ def test_panel_is_legible_read_only_and_names_owner_approved_ir_sources() -> Non
     assert "Watchlist" in html
     assert "Index members" in html
     assert "Automatic full" in html
-    assert "Metadata only" in html
+    assert "Metadata only" not in html
     assert "Screening only" in html
     assert "SEC CompanyFacts" in html
     assert "SEC native filings" in html
@@ -290,10 +285,13 @@ def test_sec_coverage_state_and_rendering(tmp_path: Path) -> None:
     with sqlite3.connect(db) as conn:
         conn.execute(
             "CREATE TABLE tracked_companies (ticker TEXT, name TEXT, list_type TEXT, "
-            "sec_validated BOOLEAN, filing_regime TEXT, archived_at TIMESTAMP)"
+            "sec_validated BOOLEAN, filing_regime TEXT, archived_at TIMESTAMP, "
+            "instrument_type TEXT DEFAULT 'equity')"
         )
         conn.executemany(
-            "INSERT INTO tracked_companies VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tracked_companies "
+            "(ticker,name,list_type,sec_validated,filing_regime,archived_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             [
                 ("RBRK", "Rubrik", "portfolio", 1, "10-K", None),
                 ("WIX", "Wix.com", "portfolio", 0, "20-F", None),
@@ -312,7 +310,11 @@ def test_sec_coverage_state_and_rendering(tmp_path: Path) -> None:
     assert cov.evaluation_count == 2
     assert cov.watchlist_count == 1
     assert cov.validated_count == 2
-    assert cov.gap_count == 2
+    assert cov.gap_count == 3
+    companies = {company.ticker: company for company in cov.companies}
+    assert companies["ABNB"].coverage_status == "Automatic full"
+    assert companies["AMAT"].coverage_status == "Coverage gap"
+    assert companies["AMAT"].coverage_tone == "warn"
 
     html = render_data_policy_settings_panel(db_path=db)
     assert "SEC collection priority &amp; coverage gaps" in html

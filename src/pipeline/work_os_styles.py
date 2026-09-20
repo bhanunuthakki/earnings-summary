@@ -96,6 +96,7 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
 .research-screen { display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }
 .research-toolbar, .research-actions { display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
 .research-toolbar.k-card { overflow: visible; }
+.work-os-explore-title { margin:var(--sp-half) 0 0; font-size:var(--fs-title); line-height:1.05; }
 .research-decision-band { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .research-decision-band[data-units="8"] { grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); }
 .research-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; }

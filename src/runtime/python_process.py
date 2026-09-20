@@ -14,6 +14,26 @@ from collections.abc import Sequence
 from pathlib import Path
 
 
+class ManagedPythonUnavailableError(RuntimeError):
+    """The requested application runtime has no managed Windows interpreter."""
+
+
+def application_python_executable(code_root: str | os.PathLike[str]) -> str:
+    """Opt into the scheduler's Windows environment, without a global fallback.
+
+    Keep the same venv-before-.venv order as ``cron/run_python.bat``. Other
+    platforms retain the caller's interpreter for local isolated execution.
+    """
+    if sys.platform != "win32":
+        return sys.executable
+    root = Path(code_root).resolve()
+    for environment in ("venv", ".venv"):
+        executable = root / environment / "Scripts" / "python.exe"
+        if executable.is_file():
+            return os.fspath(executable)
+    raise ManagedPythonUnavailableError("managed_python_unavailable")
+
+
 def managed_python_prefix(
     repo_root: str | os.PathLike[str],
     *,
@@ -96,4 +116,10 @@ def ensure_managed_python_argv(
     )
 
 
-__all__ = ["ensure_managed_python_argv", "managed_python_argv", "managed_python_prefix"]
+__all__ = [
+    "ManagedPythonUnavailableError",
+    "application_python_executable",
+    "ensure_managed_python_argv",
+    "managed_python_argv",
+    "managed_python_prefix",
+]

@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
 from __future__ import annotations
 
 import ast
@@ -12,14 +11,17 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn, cast
 
 import pytest
 
+from aggregator_sources import AggregatorHit
 from models.documents import DocType, SourceType
+from net.client import JsonValue
 from transcript_qa import QaStatus
 from transcripts.acquisition_semantics import (
     TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
     TranscriptAuthorizationStatus,
     TranscriptProvider,
 )
@@ -148,10 +150,10 @@ def _stored_company(path: Path, *, role: str = "portfolio") -> None:
     with sqlite3.connect(path) as conn:
         conn.execute(
             "CREATE TABLE tracked_companies ("
-            "ticker TEXT, list_type TEXT, archived_at TEXT, fiscal_year_end TEXT)"
+            "ticker TEXT, list_type TEXT, archived_at TEXT, fiscal_year_end TEXT, instrument_type TEXT)"
         )
         conn.execute(
-            "INSERT INTO tracked_companies VALUES ('ACME', ?, NULL, '12-31')",
+            "INSERT INTO tracked_companies VALUES ('ACME', ?, NULL, '12-31', 'equity')",
             (role,),
         )
         conn.execute(
@@ -190,6 +192,23 @@ def _acquire_acme_q2(
     db_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Any:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def registered(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    def issuer_hit(*_args: object) -> AggregatorHit:
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nChief Executive Officer\nRevenue grew.\n\nAnalyst\nQuestion?\n\nQUESTION AND ANSWER SECTION\n",
+            full_text_chars=120,
+        )
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
     fetch.STAGING_DIR.mkdir(parents=True)
@@ -199,28 +218,16 @@ def _acquire_acme_q2(
         (
             replace(
                 fetch.SOURCES[0],
-                fetch_qa=lambda *_args: fetch.AggregatorHit(
-                    source_name="issuer_ir",
-                    page_url="https://issuer.example.invalid/transcript",
-                    qa_text=(
-                        "Operator\nWelcome.\n\nChief Executive Officer\nRevenue grew.\n\n"
-                        "Analyst\nQuestion?\n\nQUESTION AND ANSWER SECTION\n"
-                    ),
-                    full_text_chars=120,
-                ),
+                fetch_qa=issuer_hit,
             ),
         ),
     )
     monkeypatch.setattr(
         fetch,
         "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
+        validated_transcript,
     )
-    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", registered)
     acquired = fetch.fetch_qa(
         fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
         db_path=db_path,
@@ -237,6 +244,12 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     monkeypatch: pytest.MonkeyPatch,
     darwin_staging_double: None,
 ) -> None:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
     from execution import fetch_qa_transcript as fetch
 
     db_path = tmp_path / "portfolio.db"
@@ -271,11 +284,7 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     monkeypatch.setattr(
         fetch,
         "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
+        validated_transcript,
     )
 
     def register(*_args: object, **kwargs: Any) -> None:
@@ -311,6 +320,23 @@ def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
     monkeypatch: pytest.MonkeyPatch,
     darwin_staging_double: Callable[[Any], None],
 ) -> None:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def register_transcript(*_args: object, **kwargs: object) -> None:
+        return registrations.append(kwargs)
+
+    def issuer_hit(*_args: object) -> AggregatorHit:
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nQuestion and answer section.",
+            full_text_chars=100,
+        )
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
     from execution import backfill_transcripts as backfill
 
     fetch = backfill.fetch_qa_transcript_module
@@ -320,8 +346,8 @@ def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
     db_path = migrated_db(state_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     registrations: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -330,31 +356,22 @@ def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
         (
             replace(
                 fetch.SOURCES[0],
-                fetch_qa=lambda *_args: fetch.AggregatorHit(
-                    source_name="issuer_ir",
-                    page_url="https://issuer.example.invalid/transcript",
-                    qa_text="Operator\nQuestion and answer section.",
-                    full_text_chars=100,
-                ),
+                fetch_qa=issuer_hit,
             ),
         ),
     )
     monkeypatch.setattr(
         fetch,
         "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
+        validated_transcript,
     )
     monkeypatch.setattr(
         fetch.index_manager,
         "register_transcript",
-        lambda *_args, **kwargs: registrations.append(kwargs),
+        register_transcript,
     )
 
-    backfill._retarget_paths(state_root.resolve())
+    cast(Callable[[Path], None], getattr(backfill, "_retarget_paths"))(state_root.resolve())
     outcome = fetch.fetch_qa(
         fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
         db_path=db_path,
@@ -380,10 +397,16 @@ def test_fetch_qa_denial_has_zero_network_and_zero_persistence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def unexpected_call(*_args: object, **_kwargs: object) -> NoReturn:
+        return pytest.fail("index persistence was crossed")
+
+    def unexpected_call_2(*_args: object) -> NoReturn:
+        return pytest.fail("network boundary was crossed")
+
     from execution import fetch_qa_transcript as fetch
 
     db_path = tmp_path / "portfolio.db"
-    _stored_company(db_path, role="watchlist")
+    _stored_company(db_path, role="index_member")
     fetch.RAW_DIR = tmp_path / "transcripts" / "raw"
     fetch.STAGING_DIR = tmp_path / ".tmp" / "transcript-acquisition"
 
@@ -393,7 +416,7 @@ def test_fetch_qa_denial_has_zero_network_and_zero_persistence(
         tuple(
             replace(
                 source,
-                fetch_qa=lambda *_args: pytest.fail("network boundary was crossed"),
+                fetch_qa=unexpected_call_2,
             )
             for source in fetch.SOURCES
         ),
@@ -401,7 +424,7 @@ def test_fetch_qa_denial_has_zero_network_and_zero_persistence(
     monkeypatch.setattr(
         fetch.index_manager,
         "register_transcript",
-        lambda *_args, **_kwargs: pytest.fail("index persistence was crossed"),
+        unexpected_call,
     )
 
     outcome = fetch.fetch_qa(
@@ -421,13 +444,16 @@ def test_fetch_qa_denial_leaves_database_and_sidecars_byte_identical(
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def unexpected_call(*_args: object) -> NoReturn:
+        return pytest.fail("network boundary crossed")
+
     from execution import fetch_qa_transcript as fetch
 
     db_path = migrated_db(tmp_path / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','watchlist','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','index_member','12-31','equity')"
         )
     before = db_path.read_bytes()
     before_sidecars = {
@@ -438,10 +464,7 @@ def test_fetch_qa_denial_leaves_database_and_sidecars_byte_identical(
     monkeypatch.setattr(
         fetch,
         "SOURCES",
-        tuple(
-            replace(source, fetch_qa=lambda *_args: pytest.fail("network boundary crossed"))
-            for source in fetch.SOURCES
-        ),
+        tuple(replace(source, fetch_qa=unexpected_call) for source in fetch.SOURCES),
     )
 
     outcome = fetch.fetch_qa(
@@ -464,24 +487,36 @@ def test_refetch_denial_precedes_work_manifest_and_accounting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def selected_tickers(*_args: object) -> frozenset[str]:
+        return frozenset({"ACME"})
+
+    def selected_quarters(*_args: object) -> list[tuple[str, int, int]]:
+        return [("ACME", 2026, 2)]
+
+    def unexpected_call(*_args: object, **_kwargs: object) -> NoReturn:
+        return pytest.fail("denied refetch crossed provider/persistence work")
+
+    def open_test_db(*_args: object, **_kwargs: object) -> sqlite3.Connection:
+        return sqlite3.connect(db_path)
+
     from execution import refetch_aggregator_transcripts as refetch
 
     db_path = tmp_path / "portfolio.db"
     _stored_company(db_path)
     manifest_dir = tmp_path / "manifests"
     monkeypatch.setattr(refetch, "_MANIFEST_DIR", manifest_dir)
-    monkeypatch.setattr(refetch, "_scope_tickers", lambda *_args: frozenset({"ACME"}))
-    monkeypatch.setattr(refetch, "_roic_quarters_in_scope", lambda *_args: [("ACME", 2026, 2)])
+    monkeypatch.setattr(refetch, "_scope_tickers", selected_tickers)
+    monkeypatch.setattr(refetch, "_roic_quarters_in_scope", selected_quarters)
     monkeypatch.setattr(
         refetch,
         "_process_one",
-        lambda *_args, **_kwargs: pytest.fail("denied refetch crossed provider/persistence work"),
+        unexpected_call,
     )
     monkeypatch.setattr(sys, "argv", ["refetch_aggregator_transcripts.py", "--sleep-s", "0"])
     monkeypatch.setattr(
         refetch,
         "connect_sqlite",
-        lambda *_args, **_kwargs: sqlite3.connect(db_path),
+        open_test_db,
     )
 
     assert refetch.main() == 2
@@ -492,6 +527,15 @@ def test_audio_denial_precedes_files_network_model_and_index(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def unexpected_call(*_args: object, **_kwargs: object) -> NoReturn:
+        return pytest.fail("audio search crossed the network boundary")
+
+    def unexpected_call_2(*_args: object, **_kwargs: object) -> NoReturn:
+        return pytest.fail("Whisper boundary was crossed")
+
+    def unexpected_call_3(*_args: object, **_kwargs: object) -> NoReturn:
+        return pytest.fail("index persistence was crossed")
+
     from execution import fetch_audio_transcripts as audio
 
     db_path = tmp_path / "portfolio.db"
@@ -501,17 +545,17 @@ def test_audio_denial_precedes_files_network_model_and_index(
     monkeypatch.setattr(
         audio,
         "smart_search_url",
-        lambda *_args, **_kwargs: pytest.fail("audio search crossed the network boundary"),
+        unexpected_call,
     )
     monkeypatch.setattr(
         audio,
         "_transcribe",
-        lambda *_args, **_kwargs: pytest.fail("Whisper boundary was crossed"),
+        unexpected_call_2,
     )
     monkeypatch.setattr(
         audio.index_manager,
         "register_transcript",
-        lambda *_args, **_kwargs: pytest.fail("index persistence was crossed"),
+        unexpected_call_3,
     )
 
     with pytest.raises(audio.AudioCollectionPolicyError):
@@ -530,22 +574,34 @@ def test_quarterly_authorizes_and_stages_before_run_accounting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def open_test_db(_path: object) -> sqlite3.Connection:
+        return conn
+
+    def selected_tickers(*_args: object) -> list[str]:
+        return ["ACME"]
+
+    def raise_failure(*_args: object, **_kwargs: object) -> NoReturn:
+        return (_ for _ in ()).throw(TranscriptAcquisitionDeniedError("denied"))
+
+    def unexpected_call(*_args: object, **_kwargs: object) -> NoReturn:
+        return pytest.fail("run accounting was persisted before denial")
+
     from execution import quarterly_refresh
     from pipeline.transcript_acquisition import TranscriptAcquisitionDeniedError
 
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    monkeypatch.setattr(quarterly_refresh, "open_db", lambda _path: conn)
-    monkeypatch.setattr(quarterly_refresh, "_resolve_tickers", lambda *_args: ["ACME"])
+    monkeypatch.setattr(quarterly_refresh, "open_db", open_test_db)
+    monkeypatch.setattr(quarterly_refresh, "_resolve_tickers", selected_tickers)
     monkeypatch.setattr(
         quarterly_refresh,
         "stage_pending_issuer_transcripts",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(TranscriptAcquisitionDeniedError("denied")),
+        raise_failure,
     )
     monkeypatch.setattr(
         quarterly_refresh,
         "start_run",
-        lambda *_args, **_kwargs: pytest.fail("run accounting was persisted before denial"),
+        unexpected_call,
     )
 
     with pytest.raises(TranscriptAcquisitionDeniedError):
@@ -573,9 +629,11 @@ def test_staged_existing_issuer_bytes_are_exact_and_replay_is_content_addressed(
         conn.row_factory = sqlite3.Row
         conn.execute(
             "CREATE TABLE tracked_companies ("
-            "ticker TEXT, list_type TEXT, archived_at TEXT, fiscal_year_end TEXT)"
+            "ticker TEXT, list_type TEXT, archived_at TEXT, fiscal_year_end TEXT, instrument_type TEXT)"
         )
-        conn.execute("INSERT INTO tracked_companies VALUES ('ACME','portfolio',NULL,'12-31')")
+        conn.execute(
+            "INSERT INTO tracked_companies VALUES ('ACME','portfolio',NULL,'12-31','equity')"
+        )
         conn.execute(
             "CREATE TABLE documents (id INTEGER PRIMARY KEY,ticker TEXT,source_type TEXT,"
             "doc_type TEXT,file_path TEXT,sha256 TEXT,raw_bytes_size INTEGER,source_url TEXT)"
@@ -647,8 +705,8 @@ def test_fetch_replay_does_not_cross_quarterly_refresh_entrypoint(
         conn.row_factory = sqlite3.Row
         register_transcript_receipt_sqlite_functions(conn, database_path=db_path)
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
         conn.execute(
             "INSERT INTO documents "
@@ -681,7 +739,9 @@ def test_fetch_replay_does_not_cross_quarterly_refresh_entrypoint(
         )
         conn.commit()
 
-        request = fetch._request_for_source(
+        request = cast(
+            Callable[..., TranscriptAcquisitionRequest], getattr(fetch, "_request_for_source")
+        )(
             fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
             source=fetch.SOURCES[0],
             owner_requested=False,
@@ -725,8 +785,8 @@ def test_same_hash_is_unique_and_artifact_cannot_cross_document_identity(
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         conn.executemany(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES (?,?,'portfolio','12-31')",
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES (?,?,'portfolio','12-31','equity')",
             (("ACME", "Acme"), ("BETA", "Beta")),
         )
         for ticker in ("ACME", "BETA"):
@@ -797,8 +857,8 @@ def test_legacy_ingested_q1_does_not_block_new_authorized_q2_ingest(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
         legacy_path = repo_root / "transcripts" / "processed" / "ACME_Q1_2026.txt"
         legacy_path.parent.mkdir(parents=True)
@@ -929,8 +989,8 @@ def test_fresh_split_root_ingest_creates_processed_root_and_canonical_evidence(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
 
     processed_root = repo_root / "transcripts" / "processed"
@@ -946,7 +1006,7 @@ def test_fresh_split_root_ingest_creates_processed_root_and_canonical_evidence(
     assert not processed_root.exists()
     parsed = ingest.parse_transcript_filename(acquired.result.output_path)
     assert parsed is not None
-    first_inputs = ingest._invocation_inputs(
+    first_inputs = cast(Callable[..., dict[str, JsonValue]], getattr(ingest, "_invocation_inputs"))(
         [(acquired.result.output_path, parsed)],
         [],
         include_ir_transcripts=False,
@@ -958,7 +1018,9 @@ def test_fresh_split_root_ingest_creates_processed_root_and_canonical_evidence(
     alternate_receipt = acquired.result.acquired_artifact.model_copy(
         update={"source_url": "https://issuer.example.invalid/alternate-transcript"}
     )
-    second_inputs = ingest._invocation_inputs(
+    second_inputs = cast(
+        Callable[..., dict[str, JsonValue]], getattr(ingest, "_invocation_inputs")
+    )(
         [(acquired.result.output_path, parsed)],
         [],
         include_ir_transcripts=False,
@@ -1031,8 +1093,8 @@ def test_conflicting_db_path_ownership_fails_before_processed_install(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     acquired = _acquire_acme_q2(
         fetch=fetch,
@@ -1113,8 +1175,8 @@ def test_receipt_scope_rejects_unknown_wrong_owner_ticker_and_raw_identity(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.executemany(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES (?,?,'portfolio','12-31')",
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES (?,?,'portfolio','12-31','equity')",
             (("ACME", "Acme"), ("BETA", "Beta")),
         )
     acquired = _acquire_acme_q2(
@@ -1208,8 +1270,8 @@ def test_mutated_first_receipt_does_not_block_later_valid_receipt(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     q2 = _acquire_acme_q2(
         fetch=fetch,
@@ -1280,8 +1342,8 @@ def test_failed_ingest_retains_exact_authorized_processed_bytes_for_retry(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     acquired = _acquire_acme_q2(
         fetch=fetch,
@@ -1335,6 +1397,15 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     monkeypatch: pytest.MonkeyPatch,
     darwin_staging_double: None,
 ) -> None:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def register_transcript(*_args: object, **kwargs: object) -> None:
+        return registrations.append(kwargs)
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
     from execution import fetch_qa_transcript as fetch
 
     repo_root = tmp_path / "repo"
@@ -1342,8 +1413,8 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
@@ -1366,17 +1437,13 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     monkeypatch.setattr(
         fetch,
         "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
+        validated_transcript,
     )
     registrations: list[dict[str, Any]] = []
     monkeypatch.setattr(
         fetch.index_manager,
         "register_transcript",
-        lambda *_args, **kwargs: registrations.append(kwargs),
+        register_transcript,
     )
     spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
     first = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
@@ -1406,6 +1473,15 @@ def test_authorized_fetch_does_not_replay_receipt_across_owner_intent(
     monkeypatch: pytest.MonkeyPatch,
     darwin_staging_double: None,
 ) -> None:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def noop(*_a: object, **_k: object) -> None:
+        return None
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
     from execution import fetch_qa_transcript as fetch
 
     repo_root = tmp_path / "repo"
@@ -1413,8 +1489,8 @@ def test_authorized_fetch_does_not_replay_receipt_across_owner_intent(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
@@ -1435,13 +1511,9 @@ def test_authorized_fetch_does_not_replay_receipt_across_owner_intent(
     monkeypatch.setattr(
         fetch,
         "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
+        validated_transcript,
     )
-    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_a, **_k: None)
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", noop)
     spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
 
     manual = fetch.fetch_qa(spec, db_path=db_path, owner_requested=True, as_of=date(2026, 8, 12))
@@ -1467,6 +1539,18 @@ def test_authorized_fetch_replays_after_post_receipt_output_failure(
     monkeypatch: pytest.MonkeyPatch,
     darwin_staging_double: None,
 ) -> None:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def registered(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    def raise_failure(*_args: object, **_kwargs: object) -> NoReturn:
+        return (_ for _ in ()).throw(OSError("simulated output failure"))
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
     from execution import fetch_qa_transcript as fetch
 
     repo_root = tmp_path / "repo"
@@ -1474,8 +1558,8 @@ def test_authorized_fetch_replays_after_post_receipt_output_failure(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
@@ -1498,18 +1582,14 @@ def test_authorized_fetch_replays_after_post_receipt_output_failure(
     monkeypatch.setattr(
         fetch,
         "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
+        validated_transcript,
     )
-    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_args, **_kwargs: True)
-    original_restore = fetch._restore_replay
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", registered)
+    original_restore = cast(Callable[..., None], getattr(fetch, "_restore_replay"))
     monkeypatch.setattr(
         fetch,
         "_restore_replay",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("simulated output failure")),
+        raise_failure,
     )
     spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
 
@@ -1541,6 +1621,15 @@ def test_invalid_durable_replay_never_falls_through_to_network(
     darwin_staging_double: None,
     damage: str,
 ) -> None:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def registered(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
     from execution import fetch_qa_transcript as fetch
 
     repo_root = tmp_path / "repo"
@@ -1548,8 +1637,8 @@ def test_invalid_durable_replay_never_falls_through_to_network(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
@@ -1572,13 +1661,9 @@ def test_invalid_durable_replay_never_falls_through_to_network(
     monkeypatch.setattr(
         fetch,
         "validate_synthesized_transcript",
-        lambda _path: SimpleNamespace(
-            status=QaStatus.OK,
-            issues=(),
-            model_dump=lambda **_kwargs: {"status": "ok"},
-        ),
+        validated_transcript,
     )
-    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", registered)
     spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
     first = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
     assert first.result is not None
@@ -1603,6 +1688,14 @@ def test_output_install_rejects_hardlink_without_mutating_victim(
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def issuer_hit(*_args: object) -> AggregatorHit:
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+            full_text_chars=50,
+        )
+
     from execution import fetch_qa_transcript as fetch
     from transcripts.immutable_staging import TranscriptStagingError
 
@@ -1611,8 +1704,8 @@ def test_output_install_rejects_hardlink_without_mutating_victim(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
@@ -1627,12 +1720,7 @@ def test_output_install_rejects_hardlink_without_mutating_victim(
         (
             replace(
                 fetch.SOURCES[0],
-                fetch_qa=lambda *_args: fetch.AggregatorHit(
-                    source_name="issuer_ir",
-                    page_url="https://issuer.example.invalid/transcript",
-                    qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
-                    full_text_chars=50,
-                ),
+                fetch_qa=issuer_hit,
             ),
         ),
     )
@@ -1670,8 +1758,8 @@ def test_new_receipt_rejects_latent_or_changed_stored_target(
     staging_root.mkdir(parents=True)
     with sqlite3.connect(db_path) as raw:
         raw.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     from pipeline.transcript_acquisition import COMBINED_SOURCE_REGIME_IDENTITY
     from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -1746,6 +1834,14 @@ def test_returned_issuer_url_must_match_configured_authority(
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def issuer_hit(*_args: object) -> AggregatorHit:
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://unrelated.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+            full_text_chars=50,
+        )
+
     from execution import fetch_qa_transcript as fetch
     from pipeline.transcript_acquisition import TranscriptAcquisitionDeniedError
 
@@ -1754,8 +1850,8 @@ def test_returned_issuer_url_must_match_configured_authority(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
-            "VALUES ('ACME','Acme','portfolio','12-31')"
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
         )
     fetch.RAW_DIR = repo_root / "transcripts" / "raw"
     fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
@@ -1765,12 +1861,7 @@ def test_returned_issuer_url_must_match_configured_authority(
         (
             replace(
                 fetch.SOURCES[0],
-                fetch_qa=lambda *_args: fetch.AggregatorHit(
-                    source_name="issuer_ir",
-                    page_url="https://unrelated.example.invalid/transcript",
-                    qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
-                    full_text_chars=50,
-                ),
+                fetch_qa=issuer_hit,
             ),
         ),
     )

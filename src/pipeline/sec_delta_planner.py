@@ -25,6 +25,8 @@ from pipeline.source_policy import (
     POLICY_VERSION,
     ArtifactKind,
     CollectionSource,
+    StoredIdentityStatus,
+    authorize_collection_target_in_connection,
     decision_for,
     issuer_policy,
     mode_for_role,
@@ -38,7 +40,7 @@ from provenance.data_backbone_rehearsal import (
 from schema_compat import expected_head
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-PLANNER_VERSION = "sec-delta-planner.v1"
+PLANNER_VERSION = "sec-delta-planner.v2"
 SUPPORTED_ALEMBIC_REVISION = expected_head()
 
 TaskKind = Literal[
@@ -54,14 +56,15 @@ TaskStatus = Literal[
     "BLOCKED_SOURCE_POLICY",
 ]
 DependencyState = Literal["SATISFIED", "MISSING", "NOT_APPLICABLE"]
-AuthorizationKind = Literal["AUTOMATIC_PORTFOLIO", "OWNER_REQUEST"]
+AuthorizationKind = Literal["AUTOMATIC_FULL", "OWNER_REQUEST"]
 AuthorizationAttestation = Literal["NOT_APPLICABLE", "CALLER_ATTESTED"]
 ReceiptStatus = Literal["READY", "BLOCKED"]
 RosterSelection = Literal[
-    "AUTOMATIC_PORTFOLIO",
+    "AUTOMATIC_FULL",
     "OWNER_REQUESTED_EVALUATION",
-    "EXCLUDED_EVALUATION_REQUEST_REQUIRED",
     "EXCLUDED_LIST_TYPE",
+    "EXCLUDED_IDENTITY",
+    "EXCLUDED_INSTRUMENT",
     "EXCLUDED_ARCHIVED",
     "EXCLUDED_NO_SEC_FILER",
 ]
@@ -206,7 +209,7 @@ class SecDeltaTask(_FrozenModel):
 
 class TickerPlan(_FrozenModel):
     ticker: str = Field(min_length=1, max_length=32)
-    list_type: Literal["portfolio", "evaluation"]
+    list_type: Literal["portfolio", "evaluation", "watchlist"]
     authorization: AuthorizationKind
     authorization_attestation: AuthorizationAttestation
     owner_request_id: str | None = None
@@ -233,8 +236,8 @@ class AuthorizationRejection(_FrozenModel):
 
 
 class SecDeltaPlanReceipt(_FrozenModel):
-    schema_version: Literal["sec_delta_plan_receipt.v1"]
-    planner_version: Literal["sec-delta-planner.v1"]
+    schema_version: Literal["sec_delta_plan_receipt.v2"]
+    planner_version: Literal["sec-delta-planner.v2"]
     as_of: date
     network_policy: Literal["FORBIDDEN"]
     status: ReceiptStatus
@@ -391,16 +394,33 @@ def _read_roster(
             selection: RosterSelection = "EXCLUDED_ARCHIVED"
         elif ticker in NO_SEC_FILERS:
             selection = "EXCLUDED_NO_SEC_FILER"
-        elif list_type == "portfolio":
-            selection = "AUTOMATIC_PORTFOLIO"
-            selected[ticker] = (list_type, None)
-        elif list_type == "evaluation" and owner_request_id is not None:
-            selection = "OWNER_REQUESTED_EVALUATION"
-            selected[ticker] = (list_type, owner_request_id)
-        elif list_type == "evaluation":
-            selection = "EXCLUDED_EVALUATION_REQUEST_REQUIRED"
         else:
-            selection = "EXCLUDED_LIST_TYPE"
+            authorization = authorize_collection_target_in_connection(
+                conn,
+                ticker,
+                requested=owner_request_id is not None,
+                source=CollectionSource.SEC,
+                artifact_kind=ArtifactKind.FILING_PACKAGE,
+            )
+            if authorization.status in (
+                StoredIdentityStatus.INSTRUMENT_UNAVAILABLE,
+                StoredIdentityStatus.INSTRUMENT_NOT_APPLICABLE,
+            ):
+                selection = "EXCLUDED_INSTRUMENT"
+            elif authorization.status in (
+                StoredIdentityStatus.IDENTITY_AMBIGUOUS,
+                StoredIdentityStatus.IDENTITY_NOT_FOUND,
+                StoredIdentityStatus.IDENTITY_UNAVAILABLE,
+            ):
+                selection = "EXCLUDED_IDENTITY"
+            elif not authorization.allowed:
+                selection = "EXCLUDED_LIST_TYPE"
+            elif owner_request_id is not None:
+                selection = "OWNER_REQUESTED_EVALUATION"
+                selected[ticker] = (list_type, owner_request_id)
+            else:
+                selection = "AUTOMATIC_FULL"
+                selected[ticker] = (list_type, None)
         roster.append(
             RosterEntry(
                 ticker=ticker,
@@ -646,7 +666,7 @@ def _ticker_plan(
             (
                 f"caller_attested:{owner_request_id}"
                 if owner_request_id is not None
-                else "automatic portfolio policy"
+                else "automatic collection policy"
             ),
         ),
         _dependency(
@@ -752,8 +772,8 @@ def _ticker_plan(
     )
     return TickerPlan(
         ticker=ticker,
-        list_type=cast(Literal["portfolio", "evaluation"], list_type),
-        authorization=("OWNER_REQUEST" if owner_request_id is not None else "AUTOMATIC_PORTFOLIO"),
+        list_type=cast(Literal["portfolio", "evaluation", "watchlist"], list_type),
+        authorization=("OWNER_REQUEST" if owner_request_id is not None else "AUTOMATIC_FULL"),
         authorization_attestation=authorization_attestation,
         owner_request_id=owner_request_id,
         cik=cik,
@@ -819,7 +839,7 @@ def build_sec_delta_plan(request: SecDeltaPlannerRequest) -> SecDeltaPlanReceipt
         "BLOCKED" if missing_schema or rejections or blocked_task_count else "READY"
     )
     draft = SecDeltaPlanReceipt.model_construct(
-        schema_version="sec_delta_plan_receipt.v1",
+        schema_version="sec_delta_plan_receipt.v2",
         planner_version=PLANNER_VERSION,
         as_of=request.as_of,
         network_policy="FORBIDDEN",

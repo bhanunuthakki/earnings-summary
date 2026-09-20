@@ -19,9 +19,9 @@ Rate-limited per SEC fair-use policy: ~10 req/sec absolute max; we sleep 0.2s
 between tickers (~5 req/sec) to stay polite.
 
 Usage:
-    python execution/fetch_sec_xbrl.py                   # automatic portfolio scope
+    python execution/fetch_sec_xbrl.py                   # automatic active research-company scope
     python execution/fetch_sec_xbrl.py --all-mapped      # same policy-bounded automatic scope
-    python execution/fetch_sec_xbrl.py --ticker NU       # owner-requested stored portfolio/evaluation
+    python execution/fetch_sec_xbrl.py --ticker NU       # explicitly selected active research company
 """
 
 from __future__ import annotations
@@ -31,22 +31,23 @@ import json
 import sqlite3
 import sys
 import time
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from models.runs import StageStatus  # noqa: E402
-from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
+from llm_artifact_store import mark_artifacts_dirty_for_fact_change
+from models.companies import ListType
+from models.runs import StageStatus
+from pipeline.queries import open_db, tracked_companies_for_user
+from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     end_run,
     start_run,
     suppression_payload,
 )
-from pipeline.sec_xbrl import (  # noqa: E402
+from pipeline.sec_xbrl import (
     CIK_MAP,
     NO_SEC_FILERS,
     IngestStats,
@@ -54,13 +55,14 @@ from pipeline.sec_xbrl import (  # noqa: E402
     SecIngestTimingReceipt,
     ingest_for_ticker,
 )
-from pipeline.source_policy import (  # noqa: E402
+from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     CollectionTarget,
+    instrument_allows_artifact,
     select_collection_targets,
 )
-from provenance.sec_companyfacts_capture import CompanyFactsContractError  # noqa: E402
+from provenance.sec_companyfacts_capture import CompanyFactsContractError
 
 _PER_TICKER_DELAY_S = 0.2
 
@@ -139,7 +141,7 @@ def handle_silent_staleness(
 
 
 def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:
-    """Automatic portfolio scope plus an explicitly requested evaluation name."""
+    """Automatic research-company scope, bounded by stored role and instrument."""
 
     try:
         if args.ticker:
@@ -187,7 +189,27 @@ def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list
             )
             + "\n"
         )
-    allowed = [item.target.ticker for item in selection.allowed]
+    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}
+    allowed: list[str] = []
+    for item in selection.allowed:
+        if instrument_allows_artifact(
+            instruments.get(item.target.ticker),
+            source=CollectionSource.SEC,
+            artifact_kind=ArtifactKind.COMPANY_FACTS,
+        ):
+            allowed.append(item.target.ticker)
+        else:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "source_collection_instrument_denied",
+                        "ticker": item.target.ticker,
+                        "instrument_type": instruments.get(item.target.ticker),
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
     for ticker in allowed:
         if ticker in NO_SEC_FILERS:
             sys.stderr.write(
@@ -213,12 +235,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--ticker",
-        help="Owner-requested stored portfolio/evaluation ticker (must be in CIK_MAP)",
+        help="Active portfolio/evaluation/watchlist ticker (must be in CIK_MAP)",
     )
     parser.add_argument(
         "--all-mapped",
         action="store_true",
-        help="Compatibility flag; collection policy still limits automatic work to portfolio",
+        help="Compatibility flag; stored role and instrument policy still govern automatic scope",
     )
     parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
     args = parser.parse_args()

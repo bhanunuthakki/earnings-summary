@@ -5,8 +5,8 @@ days-to-weeks before the free aggregators index the call (``issuer_ir`` is the
 first link of the aggregator chain — see ``ir_pipeline.transcript``). This scan
 re-checks the IR site DAILY for a short window after each tracked ticker's last
 earnings date and stops as soon as that quarter's transcript is fetched and
-ingested. Scheduled scope is portfolio-only; evaluation names require an
-explicit ``--ticker`` request, while watchlist and index-member names are denied.
+ingested. Scheduled acquisition covers active portfolio, evaluation, and watchlist
+equities and ADRs through the same stored-authority selector as backfill.
 
 It is distinct from ``backfill_transcripts.py`` (a bounded five-quarter text
 backfill for portfolio names): this is a FOCUSED, windowed re-check of
@@ -52,29 +52,27 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
-    SOURCE_POLICY_CONFIG,
-    ArtifactKind,
-    CollectionSource,
-    CollectionTarget,
-    select_collection_targets,
-)
-from runtime.python_process import managed_python_prefix  # noqa: E402
+try:
+    import fetch_qa_transcript
+    from backfill_transcripts import quarter_end_date, recent_fiscal_quarters
+    from backfill_transcripts import resolve_transcript_targets as _resolve_tickers
+    from fetch_qa_transcript import FetchQaSpec, FetchQaStatus, fetch_qa
+except ImportError:
+    from execution import fetch_qa_transcript
+    from execution.backfill_transcripts import quarter_end_date, recent_fiscal_quarters
+    from execution.backfill_transcripts import resolve_transcript_targets as _resolve_tickers
+    from execution.fetch_qa_transcript import FetchQaSpec, FetchQaStatus, fetch_qa
 
-# Sibling scripts in execution/ — needed when this module is imported (e.g. from
-# tests) rather than run directly via `python execution/scan_ir_transcripts.py`.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from backfill_transcripts import quarter_end_date, recent_fiscal_quarters  # noqa: E402
-from fetch_qa_transcript import FetchQaSpec, FetchQaStatus, fetch_qa  # noqa: E402
-
-import db  # noqa: E402
-from sources.earnings_calendar import last_earnings_date  # noqa: E402
+import db
+from compute.evidence_snapshot import snapshot_recorded_evidence
+from pipeline.source_policy import SOURCE_POLICY_CONFIG
+from runtime.python_process import managed_python_prefix
+from sources.earnings_calendar import last_earnings_date
 
 DEFAULT_WINDOW_DAYS = 14
 
@@ -89,8 +87,6 @@ def _retarget_paths(repo_root: Path) -> None:
     db.DATA_DIR = str(repo_root / "data")
     db.DB_PATH = str(repo_root / "data" / "portfolio.db")
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
-    import fetch_qa_transcript
-
     fetch_qa_transcript.RAW_DIR = repo_root / "transcripts" / "raw"
 
 
@@ -242,80 +238,6 @@ def scan_one(
         return TickerScanResult(ticker, "not_published_yet", qlabel)
     source_name = hit.result.source_name if hit.result is not None else "issuer_ir"
     return TickerScanResult(ticker, "fetched", qlabel, detail=source_name)
-
-
-def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
-    """Return policy-authorized transcript work in company-priority order."""
-    conn = db.get_connection()
-    try:
-        if arg_ticker:
-            cur = conn.execute(
-                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
-                "WHERE ticker = ? AND archived_at IS NULL",
-                (arg_ticker.upper(),),
-            )
-        else:
-            cur = conn.execute(
-                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
-                "WHERE archived_at IS NULL ORDER BY ticker"
-            )
-        rows = cur.fetchall()
-    finally:
-        conn.close()
-
-    months_by_ticker: dict[str, int] = {}
-    targets: list[CollectionTarget] = []
-    for r in rows:
-        fye_raw = r["fiscal_year_end"]
-        if not isinstance(fye_raw, str) or len(fye_raw) < 2:
-            sys.stderr.write(
-                f"[skip] {r['ticker']}: fiscal_year_end missing/malformed ({fye_raw!r})\n"
-            )
-            continue
-        try:
-            month = int(fye_raw[:2])
-        except ValueError:
-            sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end={fye_raw!r} not parseable\n")
-            continue
-        if not 1 <= month <= 12:
-            sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end month {month} out of range\n")
-            continue
-        ticker = str(r["ticker"]).upper()
-        try:
-            role = ListType(str(r["list_type"]))
-        except ValueError:
-            continue
-        months_by_ticker[ticker] = month
-        targets.append(
-            CollectionTarget(
-                ticker=ticker,
-                coverage_role=role,
-                requested=arg_ticker is not None,
-            )
-        )
-    selection = select_collection_targets(
-        tuple(targets),
-        source=CollectionSource.TRANSCRIPT,
-        artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
-    )
-    for item in selection.denied:
-        sys.stderr.write(
-            json.dumps(
-                {
-                    "event": "source_collection_policy_denied",
-                    "ticker": item.target.ticker,
-                    "coverage_role": item.target.coverage_role.value,
-                    "source": CollectionSource.TRANSCRIPT.value,
-                    "artifact_kind": ArtifactKind.TEXT_TRANSCRIPT.value,
-                    "reason": item.decision.reason.value,
-                },
-                sort_keys=True,
-            )
-            + "\n"
-        )
-    return [
-        (item.target.ticker, months_by_ticker[item.target.ticker]) for item in selection.allowed
-    ]
 
 
 def _run_ingest(repo_root: Path, dry_run: bool) -> int:

@@ -35,8 +35,8 @@ from pipeline.restatement_detector import (
     insert_kpi_with_restatement_detection,
     insert_with_restatement_detection,
 )
+from pipeline.sec_6k_fetch import register_sec_exhibit_snapshot
 from pipeline.sec_xbrl import CIK_MAP
-from provenance.evidence_backfill import ensure_legacy_document_evidence
 from sec_identity import sec_user_agent
 from table_extractors.period_axis import NominalQuarter, expected_period_ends
 
@@ -302,49 +302,20 @@ def register_and_anchor_fpi_document(
     period_end: datetime,
     repo_root: Path,
 ) -> int:
-    """Persist exhibit HTML, upsert documents row, and anchor in immutable evidence ledger."""
-    out_dir = repo_root / "data" / "historical" / "sec"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    doc_form = "20f" if "20-F" in fetched.located.form_type.upper() else "6k"
-    doc_type_val = "sec_20f" if doc_form == "20f" else "sec_6k"
-
-    out_path = out_dir / f"{ticker.upper()}_{doc_form}_{fetched.located.filing_date}.html"
-    out_path.write_bytes(fetched.raw_html.encode("utf-8"))
-    rel_path = str(out_path.relative_to(repo_root)).replace("\\", "/")
-
-    existing = conn.execute(
-        "SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (fetched.sha256,)
-    ).fetchone()
-
-    if existing is not None:
-        doc_id = int(existing[0])
-    else:
-        cur = conn.execute(
-            """
-            INSERT INTO documents 
-            (ticker, source_type, doc_type, period_start, period_end, file_path, 
-             sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, 
-             parent_document_id, accession_number, filing_date) 
-            VALUES (?, 'sec_xbrl', ?, NULL, ?, ?, ?, ?, 'ok', 200, ?, ?, NULL, ?, ?)
-            """,
-            (
-                ticker.upper(),
-                doc_type_val,
-                period_end,
-                rel_path,
-                fetched.sha256,
-                datetime.now(UTC),
-                len(fetched.raw_html.encode("utf-8")),
-                fetched.located.exhibit_url,
-                fetched.located.accession,
-                fetched.located.filing_date,
-            ),
-        )
-        doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
-
-    # Anchor into evidence ledger
-    ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=doc_id)
-    return doc_id
+    """Retain exact UTF-8 serialization bytes with caller-owned evidence admission."""
+    if hashlib.sha256(fetched.raw_html.encode("utf-8")).hexdigest() != fetched.sha256:
+        raise ValueError("SEC FPI decoded HTML conflicts with its supplied digest")
+    return register_sec_exhibit_snapshot(
+        conn,
+        ticker=ticker,
+        raw_html=fetched.raw_html,
+        repo_root=repo_root,
+        period_end=period_end,
+        doc_type="sec_20f" if "20-F" in fetched.located.form_type.upper() else "sec_6k",
+        source_url=fetched.located.exhibit_url,
+        accession=fetched.located.accession,
+        filing_date=fetched.located.filing_date,
+    )
 
 
 def parse_numeric(val_str: str) -> Decimal | None:

@@ -201,8 +201,12 @@ _MAIN_CODE_ROOTS = ("src", "execution", "tests", "cron", "scripts", "alembic")
 _MAIN_CACHE_ROOTS = (".pytest_cache", ".ruff_cache")
 
 
-def _is_main_cache_file(path: Path) -> bool:
-    parts = path.parts
+def _is_main_cache_file(path: Path, repo_root: Path) -> bool:
+    """Match cache components relative to the checkout, never its ancestors."""
+    try:
+        parts = path.relative_to(repo_root).parts
+    except ValueError:
+        return False
     return path.suffix.lower() == ".pyc" or any(
         part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in parts[:-1]
     )
@@ -219,7 +223,7 @@ def _collect_main_caches(repo_root: Path, cutoff: datetime, counts: _Counts) -> 
     candidates: list[Candidate] = []
     for root in _main_cache_search_roots(repo_root):
         for path in _iter_regular_files(root, counts):
-            if _is_protected_name(path) or not _is_main_cache_file(path):
+            if _is_protected_name(path) or not _is_main_cache_file(path, repo_root):
                 continue
             counts.files_scanned += 1
             candidate = _older_than(path, cutoff)

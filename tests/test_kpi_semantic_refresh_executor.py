@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
@@ -9,6 +8,7 @@ from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 from pydantic import ValidationError
@@ -60,8 +60,34 @@ from pipeline.kpi_semantics import (
     persist_kpi_semantic_context,
 )
 from provenance.evidence_ledger import EvidenceLocator
-from provenance.fulltext_extractor_identity import BASE_FULLTEXT_EXTRACTOR
+from provenance.fulltext_extractor_identity import (
+    PDF_FULLTEXT_EXTRACTOR,
+)
 from sqlite_freshness import sqlite_file_token
+
+
+class EntryEffectView(Protocol):
+    inserted_fact_rows: int
+    inserted_context_rows: int
+    inserted_definition_rows: int
+    inserted_comparability_rows: int
+    fact_head_id: int
+    definition_revision_id: str | None
+    definition_commitment_sha256: str | None
+
+
+# Explicit internal test seams; production callers retain the public authority APIs.
+apply_entry = getattr(refresh, "_apply_entry")
+context_for_entry = getattr(refresh, "_context_for_entry")
+detect_applied_postcondition = getattr(refresh, "_detect_applied_postcondition")
+require_canonical_result_heads = getattr(refresh, "_require_canonical_result_heads")
+validate_applied_entry_postcondition = getattr(refresh, "_validate_applied_entry_postcondition")
+validate_apply_authority = getattr(refresh, "_validate_apply_authority")
+validate_source_binding = getattr(refresh, "_validate_source_binding")
+validate_v2_idempotency_marker = getattr(refresh, "_validate_v2_idempotency_marker")
+verify_replay = getattr(refresh, "_verify_replay")
+write_content_addressed = getattr(refresh, "_write_content_addressed")
+EntryEffect = getattr(refresh, "_EntryEffect")
 
 NOW = datetime(2026, 8, 27, 20, tzinfo=UTC)
 SOURCE_EVIDENCE_LOCATOR = EvidenceLocator(
@@ -398,7 +424,7 @@ def test_v5_manifest_serialization_and_hash_match_predecessor_contract(tmp_path:
     )
 
     output = tmp_path / "legacy-v5.json"
-    refresh._write_content_addressed(output, manifest.model_dump_json(indent=2))
+    write_content_addressed(output, manifest.model_dump_json(indent=2))
     assert json.loads(output.read_text(encoding="utf-8")) == expected_payload
 
 
@@ -661,7 +687,7 @@ def test_external_evidence_rejects_stale_review_and_scheduler_receipt(
     monkeypatch.setattr(refresh, "validate_receipt_for_source", _no_receipt_reasons)
     monkeypatch.setattr(refresh, "validate_pinned_identity", _accept_pinned_identity)
     with pytest.raises(refresh.RepairBlockedError, match="review_bundle_stale"):
-        refresh._validate_external_evidence(
+        refresh.validate_external_repair_evidence(
             manifest=manifest,
             db_path=db_path,
             review_bundle=bundle,
@@ -676,7 +702,7 @@ def test_external_evidence_rejects_stale_review_and_scheduler_receipt(
         scheduler_recorded_at=NOW - timedelta(hours=1),
     )
     with pytest.raises(refresh.RepairBlockedError, match="scheduler_runtime_evidence_stale"):
-        refresh._validate_external_evidence(
+        refresh.validate_external_repair_evidence(
             manifest=manifest,
             db_path=db_path,
             review_bundle=bundle,
@@ -698,7 +724,7 @@ def test_external_evidence_rejects_untrusted_host_identity(
 
     monkeypatch.setattr(refresh, "validate_pinned_identity", reject)
     with pytest.raises(refresh.RepairBlockedError, match="trusted_review_pin_mismatch"):
-        refresh._validate_external_evidence(
+        refresh.validate_external_repair_evidence(
             manifest=manifest,
             db_path=tmp_path / "unused.db",
             review_bundle=bundle,
@@ -757,9 +783,9 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
         (
             "run-2",
             "version-2",
-            BASE_FULLTEXT_EXTRACTOR.name,
-            BASE_FULLTEXT_EXTRACTOR.config_sha256,
-            BASE_FULLTEXT_EXTRACTOR.code_version,
+            PDF_FULLTEXT_EXTRACTOR.name,
+            PDF_FULLTEXT_EXTRACTOR.config_sha256,
+            PDF_FULLTEXT_EXTRACTOR.code_version,
             "succeeded",
         ),
     )
@@ -785,36 +811,34 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
         "INSERT INTO v_legacy_document_evidence_bindings_current VALUES (2,'version-2','root-2',?)",
         ("b" * 64,),
     )
-    source_type, source_ticker = refresh._validate_source_binding(conn, _entry())
+    source_type, source_ticker = validate_source_binding(conn, _entry())
     assert source_type.value == "ir_doc"
     assert source_ticker == "NU"
     conn.execute("UPDATE documents SET doc_type='ir_historical_spreadsheet',period_end=NULL")
-    refresh._validate_source_binding(conn, _entry(source_period_end=None))
+    validate_source_binding(conn, _entry(source_period_end=None))
     conn.execute("UPDATE documents SET doc_type='ir_presentation'")
     with pytest.raises(refresh.RepairBlockedError, match="source_period_mismatch"):
-        refresh._validate_source_binding(conn, _entry(source_period_end=None))
+        validate_source_binding(conn, _entry(source_period_end=None))
     conn.execute("UPDATE documents SET doc_type='ir_supplement'")
     with pytest.raises(refresh.RepairBlockedError, match="source_period_mismatch"):
-        refresh._validate_source_binding(conn, _entry(source_period_end=None))
+        validate_source_binding(conn, _entry(source_period_end=None))
     conn.execute(
         "UPDATE documents SET doc_type='ir_historical_spreadsheet',period_end='2024-12-31'"
     )
     with pytest.raises(refresh.RepairBlockedError, match="source_period_mismatch"):
-        refresh._validate_source_binding(conn, _entry(source_period_end=None))
+        validate_source_binding(conn, _entry(source_period_end=None))
     conn.execute("UPDATE documents SET doc_type='ir_presentation'")
     count_entry = _entry(unit=Unit.COUNT, value="114000000")
-    refresh._validate_source_binding(conn, count_entry)
+    validate_source_binding(conn, count_entry)
     with pytest.raises(refresh.RepairBlockedError, match="source_value_mismatch"):
-        refresh._validate_source_binding(
-            conn, count_entry.model_copy(update={"value": Decimal("114")})
-        )
+        validate_source_binding(conn, count_entry.model_copy(update={"value": Decimal("114")}))
     conn.execute(
         "UPDATE v_legacy_document_evidence_bindings_current SET document_version_id='other-version'"
     )
     with pytest.raises(
         refresh.RepairBlockedError, match="source_evidence_binding_version_mismatch"
     ):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute(
         "UPDATE v_legacy_document_evidence_bindings_current SET document_version_id='version-2'"
     )
@@ -825,40 +849,40 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
     with pytest.raises(
         refresh.RepairBlockedError, match="source_evidence_binding_content_mismatch"
     ):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute(
         "UPDATE v_legacy_document_evidence_bindings_current SET scope_content_sha256=?",
         ("b" * 64,),
     )
     conn.execute("UPDATE evidence_nodes SET node_kind='section' WHERE node_id='root-2'")
     with pytest.raises(refresh.RepairBlockedError, match="source_evidence_binding_not_document"):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute("UPDATE evidence_nodes SET node_kind='document' WHERE node_id='root-2'")
     conn.execute("UPDATE evidence_extraction_runs SET outcome='failed'")
     with pytest.raises(refresh.RepairBlockedError, match="evidence_extraction_not_succeeded"):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute("UPDATE evidence_extraction_runs SET outcome='succeeded'")
     conn.execute("UPDATE evidence_extraction_runs SET extractor_name='unreviewed-extractor'")
     with pytest.raises(refresh.RepairBlockedError, match="evidence_extractor_not_promoted"):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute(
         "UPDATE evidence_extraction_runs SET extractor_name=?",
-        (BASE_FULLTEXT_EXTRACTOR.name,),
+        (PDF_FULLTEXT_EXTRACTOR.name,),
     )
     conn.execute("UPDATE evidence_nodes SET node_kind='document' WHERE node_id='node-2'")
     with pytest.raises(refresh.RepairBlockedError, match="evidence_node_not_substantive"):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute("UPDATE evidence_nodes SET node_kind='pdf_page' WHERE node_id='node-2'")
     conn.execute("UPDATE evidence_document_versions SET ticker='WIX'")
     with pytest.raises(refresh.RepairBlockedError, match="evidence_document_issuer_mismatch"):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute("UPDATE evidence_document_versions SET ticker='NU'")
     conn.execute(
         "UPDATE evidence_document_versions SET blob_sha256=?",
         ("d" * 64,),
     )
     with pytest.raises(refresh.RepairBlockedError, match="evidence_document_content_mismatch"):
-        refresh._validate_source_binding(conn, _entry())
+        validate_source_binding(conn, _entry())
     conn.execute(
         "UPDATE evidence_document_versions SET blob_sha256=?",
         ("b" * 64,),
@@ -871,7 +895,7 @@ def test_source_binding_requires_exact_document_node_locator_excerpt_and_value()
     changed_locator_json = changed_locator.to_json()
     assert changed_locator_json is not None
     with pytest.raises(refresh.RepairBlockedError, match="source_excerpt_mismatch"):
-        refresh._validate_source_binding(
+        validate_source_binding(
             conn,
             _entry(
                 source_excerpt="Total customers reached 115 million.",
@@ -905,7 +929,7 @@ def test_changed_fact_chain_head_blocks_before_any_repair_write() -> None:
         """
     )
     with pytest.raises(refresh.RepairBlockedError, match="fact_chain_head_changed"):
-        refresh._validate_entry(conn, _entry(), {7})
+        refresh.validate_refresh_entry(conn, _entry(), {7})
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 2
     conn.close()
 
@@ -947,7 +971,7 @@ def test_quarantined_predecessor_requires_exact_owner_scope_and_noncanonical_sta
     monkeypatch.setattr(refresh, "_validate_source_binding", _source_nu)
     entry = _entry(predecessor_resolution_state="quarantined_legacy")
 
-    row, source_type = refresh._validate_entry(
+    row, source_type = refresh.validate_refresh_entry(
         conn,
         entry,
         set(),
@@ -960,11 +984,11 @@ def test_quarantined_predecessor_requires_exact_owner_scope_and_noncanonical_sta
         refresh.RepairBlockedError,
         match="quarantined_predecessor_outside_owner_portfolio",
     ):
-        refresh._validate_entry(conn, entry, set(), owner_tickers=frozenset())
+        refresh.validate_refresh_entry(conn, entry, set(), owner_tickers=frozenset())
     conn.execute("DROP VIEW v_kpi_facts_resolved_current")
     conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts")
     with pytest.raises(refresh.RepairBlockedError, match="quarantined_predecessor_is_canonical"):
-        refresh._validate_entry(
+        refresh.validate_refresh_entry(
             conn,
             entry,
             set(),
@@ -991,7 +1015,7 @@ def test_entry_rejects_cross_issuer_source_for_every_action(
             expected_inserted_fact_rows=0,
         )
     with pytest.raises(refresh.RepairBlockedError, match="source_issuer_mismatch"):
-        refresh._validate_entry(conn, _entry(**changes), {7})
+        refresh.validate_refresh_entry(conn, _entry(**changes), {7})
     conn.close()
 
 
@@ -1013,7 +1037,7 @@ def test_entry_rejects_cross_issuer_definition_for_every_action(
             expected_inserted_fact_rows=0,
         )
     with pytest.raises(refresh.RepairBlockedError, match="source_issuer_mismatch"):
-        refresh._validate_entry(conn, _entry(**changes), {7})
+        refresh.validate_refresh_entry(conn, _entry(**changes), {7})
     conn.close()
 
 
@@ -1035,7 +1059,7 @@ def test_entry_rejects_definition_unit_mismatch_for_every_action(
             expected_inserted_fact_rows=0,
         )
     with pytest.raises(refresh.RepairBlockedError, match="definition_unit_mismatch"):
-        refresh._validate_entry(conn, _entry(**changes), {7})
+        refresh.validate_refresh_entry(conn, _entry(**changes), {7})
     conn.close()
 
 
@@ -1078,7 +1102,7 @@ def test_missing_marker_recovers_exact_committed_postcondition(
         checked.append(head_id)
 
     monkeypatch.setattr(refresh, "_validate_applied_entry_postcondition", _exact_postcondition)
-    assert refresh._detect_applied_postcondition(conn, manifest=manifest) == (10,)
+    assert detect_applied_postcondition(conn, manifest=manifest) == (10,)
     assert checked == [10]
     conn.close()
 
@@ -1138,7 +1162,7 @@ def test_marker_replay_rejects_unrelated_canonical_head(
             id=1,
             kpi_fact_id=kpi_fact_id,
             revision=1,
-            context=refresh._context_for_entry(_entry()),
+            context=context_for_entry(_entry()),
             reviewed_by="owner",
             knowledge_at=NOW,
         )
@@ -1146,14 +1170,14 @@ def test_marker_replay_rejects_unrelated_canonical_head(
     monkeypatch.setattr(refresh, "current_kpi_semantic_context", _current_context)
     monkeypatch.setattr(refresh, "_validate_source_binding", _source_nu)
     with pytest.raises(refresh.RepairBlockedError, match="replay_fact_postcondition_mismatch"):
-        refresh._verify_replay(
+        verify_replay(
             conn,
             manifest=_manifest(),
             result_heads=(12,),
             result_definition_revision_ids=(None,),
             result_definition_commitment_sha256s=(None,),
         )
-    refresh._verify_replay(
+    verify_replay(
         conn,
         manifest=_manifest(),
         result_heads=(11,),
@@ -1173,7 +1197,7 @@ def test_v7_marker_replay_requires_exact_definition_identity_and_commitment() ->
         refresh.RepairBlockedError,
         match="idempotency_marker_definition_binding_mismatch",
     ):
-        refresh._verify_replay(
+        verify_replay(
             conn,
             manifest=manifest,
             result_heads=(10,),
@@ -1184,7 +1208,7 @@ def test_v7_marker_replay_requires_exact_definition_identity_and_commitment() ->
         refresh.RepairBlockedError,
         match="idempotency_marker_definition_binding_mismatch",
     ):
-        refresh._verify_replay(
+        verify_replay(
             conn,
             manifest=manifest,
             result_heads=(10,),
@@ -1236,7 +1260,7 @@ def test_v2_marker_is_bound_to_exact_sealed_apply_receipt(tmp_path: Path) -> Non
         "result_definition_commitment_sha256s": [definition.commitment_sha256],
     }
 
-    assert refresh._validate_v2_idempotency_marker(
+    assert validate_v2_idempotency_marker(
         marker,
         receipt_root=tmp_path,
         logical_key_sha256=logical_sha,
@@ -1249,7 +1273,7 @@ def test_v2_marker_is_bound_to_exact_sealed_apply_receipt(tmp_path: Path) -> Non
 
     marker["inserted_definition_rows"] = 9
     with pytest.raises(refresh.RepairBlockedError, match="apply_receipt_mismatch"):
-        refresh._validate_v2_idempotency_marker(
+        validate_v2_idempotency_marker(
             marker,
             receipt_root=tmp_path,
             logical_key_sha256=logical_sha,
@@ -1257,7 +1281,7 @@ def test_v2_marker_is_bound_to_exact_sealed_apply_receipt(tmp_path: Path) -> Non
         )
     marker["apply_attempt_id"] = "../outside"
     with pytest.raises(refresh.RepairBlockedError, match="apply_attempt_invalid"):
-        refresh._validate_v2_idempotency_marker(
+        validate_v2_idempotency_marker(
             marker,
             receipt_root=tmp_path,
             logical_key_sha256=logical_sha,
@@ -1298,7 +1322,7 @@ def test_bind_existing_fails_when_exact_fact_cannot_resolve(
 
     monkeypatch.setattr(refresh, "require_canonical_kpi_resolution", reject_resolution)
     with pytest.raises(refresh.RepairBlockedError, match="canonical_fact_resolution_failed"):
-        refresh._apply_entry(
+        apply_entry(
             conn,
             manifest=manifest,
             entry=entry,
@@ -1317,7 +1341,7 @@ def test_result_heads_must_all_exist_in_canonical_relation() -> None:
         "SELECT * FROM kpi_facts WHERE 0;"
     )
     with pytest.raises(refresh.RepairBlockedError, match="result_fact_not_canonically_resolved"):
-        refresh._require_canonical_result_heads(conn, result_heads=(10,))
+        require_canonical_result_heads(conn, result_heads=(10,))
     conn.close()
 
 
@@ -1456,9 +1480,9 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         _validated_entry,
     )
 
-    def simulated_apply(connection: sqlite3.Connection, **_kwargs: object) -> refresh._EntryEffect:
+    def simulated_apply(connection: sqlite3.Connection, **_kwargs: object) -> EntryEffectView:
         connection.execute("INSERT INTO dry_run_probe VALUES ('would-write')")
-        return refresh._EntryEffect(
+        return EntryEffect(
             inserted_fact_rows=1,
             inserted_context_rows=1,
             inserted_definition_rows=0,
@@ -1547,7 +1571,7 @@ def test_dry_run_rejects_corrupted_snapshot_clone_before_open(
             refresh.RepairBlockedError,
             match="backup_restore_snapshot_clone_identity_mismatch",
         ),
-        refresh._repair_database(live_db=live_db, backup=backup, apply=False),
+        refresh.repair_database_authority(live_db=live_db, backup=backup, apply=False),
     ):
         pytest.fail("corrupted clone must not be yielded for opening")
 
@@ -1600,7 +1624,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
         )
         conn.execute(
             "INSERT INTO evidence_content_blobs VALUES (?,?,?,?,?)",
-            ("a" * 64, 1, "text/html", "https://example.invalid/nu-q4", NOW.isoformat()),
+            ("a" * 64, 1, "application/pdf", "https://example.invalid/nu-q4", NOW.isoformat()),
         )
         conn.execute(
             "INSERT INTO evidence_source_observations "
@@ -1647,9 +1671,9 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
                 "run:nu:q4",
                 "document-nu-q4",
                 "a" * 64,
-                BASE_FULLTEXT_EXTRACTOR.name,
-                BASE_FULLTEXT_EXTRACTOR.config_sha256,
-                BASE_FULLTEXT_EXTRACTOR.code_version,
+                PDF_FULLTEXT_EXTRACTOR.name,
+                PDF_FULLTEXT_EXTRACTOR.config_sha256,
+                PDF_FULLTEXT_EXTRACTOR.code_version,
                 "d" * 64,
                 NOW.isoformat(),
                 NOW.isoformat(),
@@ -1792,20 +1816,20 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
         )
 
         conn.execute("BEGIN")
-        row, source_type = refresh._validate_entry(
+        row, source_type = refresh.validate_refresh_entry(
             conn,
             entry,
             set(),
             owner_tickers=frozenset({"NU"}),
         )
-        dry_run_effect = refresh._apply_entry(
+        dry_run_effect = apply_entry(
             conn,
             manifest=manifest,
             entry=entry,
             row=row,
             source_type=source_type,
         )
-        refresh._validate_applied_entry_postcondition(
+        validate_applied_entry_postcondition(
             conn,
             manifest=manifest,
             entry=entry,
@@ -1832,7 +1856,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             "('NU','2024-12-31','Q4',641,'113000000','count',1,1.0,'test',42175)"
         )
         with pytest.raises(refresh.RepairBlockedError, match="fact_chain_head_changed"):
-            refresh._validate_entry(
+            refresh.validate_refresh_entry(
                 conn,
                 entry,
                 set(),
@@ -1854,7 +1878,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             knowledge_at=NOW,
         )
         with pytest.raises(refresh.RepairBlockedError, match="semantic_context_head_changed"):
-            refresh._validate_entry(
+            refresh.validate_refresh_entry(
                 conn,
                 entry,
                 set(),
@@ -1863,13 +1887,13 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
         conn.rollback()
 
         conn.execute("BEGIN")
-        row, source_type = refresh._validate_entry(
+        row, source_type = refresh.validate_refresh_entry(
             conn,
             entry,
             set(),
             owner_tickers=frozenset({"NU"}),
         )
-        applied_effect = refresh._apply_entry(
+        applied_effect = apply_entry(
             conn,
             manifest=manifest,
             entry=entry,
@@ -1877,7 +1901,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             source_type=source_type,
         )
         new_id = applied_effect.fact_head_id
-        refresh._validate_applied_entry_postcondition(
+        validate_applied_entry_postcondition(
             conn,
             manifest=manifest,
             entry=entry,
@@ -1987,7 +2011,7 @@ def test_apply_authority_accepts_pinned_runtime_code_with_separate_state_root(
 
     monkeypatch.setattr(refresh, "review_code_identity", code_identity)
 
-    refresh._validate_apply_authority(
+    validate_apply_authority(
         db_path=state_root / "data" / "portfolio.db",
         receipt_root=state_root / "data" / "operations" / "kpi_repairs",
         review_bundle=bundle,
@@ -2013,7 +2037,7 @@ def test_apply_authority_rejects_unpinned_runtime_code(
     monkeypatch.setattr(refresh, "review_code_identity", code_identity)
 
     with pytest.raises(refresh.RepairBlockedError, match="apply_code_identity_mismatch"):
-        refresh._validate_apply_authority(
+        validate_apply_authority(
             db_path=state_root / "data" / "portfolio.db",
             receipt_root=state_root / "data" / "operations" / "kpi_repairs",
             review_bundle=bundle,
@@ -2029,8 +2053,8 @@ def test_canonical_windows_db_lock_is_owned_by_state_root(
     monkeypatch.setattr(refresh, "PROJECT_ROOT", code_root)
     monkeypatch.setattr(refresh, "CANONICAL_WINDOWS_STATE_ROOT", state_root)
 
-    assert refresh._repair_lock_root(state_root / "data" / "portfolio.db") == state_root
-    assert refresh._repair_lock_root(tmp_path / "disposable.db") == code_root
+    assert refresh.repair_lock_root(state_root / "data" / "portfolio.db") == state_root
+    assert refresh.repair_lock_root(tmp_path / "disposable.db") == code_root
 
 
 def test_judge_receipt_verdict_comes_only_from_structured_sol_response(tmp_path: Path) -> None:

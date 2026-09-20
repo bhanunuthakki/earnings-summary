@@ -65,16 +65,15 @@ from typing import BinaryIO, Literal, Protocol, Self, TypedDict, cast
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from runtime.python_process import managed_python_prefix
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
 from log_redact import redact
 from models.companies import ListType
 from pipeline import cadence_policy as _cadence_policy
-from pipeline.fmp_doc_index import classify_fmp_filename
+from pipeline.fmp_doc_index import classify_fmp_filename, register_fmp_snapshot
 from pipeline.fmp_payload_validation import (
     FmpPayloadContractError,
     FmpPayloadCoordinate,
@@ -108,15 +107,17 @@ from pipeline.source_policy import (
     POLICY_VERSION,
     ArtifactKind,
     CollectionSource,
+    authorize_collection_target_in_connection,
     decision_for,
     issuer_policy,
 )
 from provenance.financial_fact_resolution import (
     rehydrate_document_fact_observations,
 )
+from runtime.python_process import managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -1164,47 +1165,19 @@ def _admit_held_corpus(
     expected_raw_dir = project_root / "data" / "historical" / "fmp"
     if Path(os.path.abspath(raw_corpus_dir)) != Path(os.path.abspath(expected_raw_dir)):
         return unavailable(CorpusFailureReason.DOCUMENT_ADMISSION_FAILED)
-    relative_path = str(Path("data") / "historical" / "fmp" / path.name).replace("\\", "/")
-
-    connection.execute(
-        "INSERT OR IGNORE INTO documents "
-        "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
-        "fetch_status,raw_bytes_size,source_url) "
-        "VALUES (?,'fmp',?,?,?,?,?,'ok',?,NULL)",
-        (
-            item.ticker,
-            doc_type,
-            period_end,
-            relative_path,
-            corpus_snapshot.content_sha256,
-            corpus_snapshot.captured_at,
-            before_stat.st_size,
-        ),
-    )
-    connection.commit()
-    document = connection.execute(
-        "SELECT id FROM documents WHERE ticker=? AND file_path=? AND sha256=?",
-        (item.ticker, relative_path, corpus_snapshot.content_sha256),
-    ).fetchone()
-    if document is None:
-        return unavailable(CorpusFailureReason.DOCUMENT_ADMISSION_FAILED)
-    document_id = int(document[0])
-    if connection.in_transaction:
-        raise RuntimeError("document indexing left an active transaction before extraction")
-
-    # The fact writer rejects ungoverned documents. Evidence capture performs
-    # its disk verification before its ledger writes; commit that short unit
-    # before invoking the extractor.
-    from provenance.evidence_backfill import ensure_legacy_document_evidence
-
     try:
-        ensure_legacy_document_evidence(
+        connection.execute("BEGIN IMMEDIATE")
+        document_id, _created = register_fmp_snapshot(
             connection,
-            repo_root=project_root,
-            document_id=document_id,
+            ticker=item.ticker,
+            source_filename=path.name,
+            content=held.content,
+            project_root=project_root,
+            captured_at=corpus_snapshot.captured_at,
+            period_end=period_end,
         )
         connection.commit()
-    except (OSError, ValueError, sqlite3.Error):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
         if connection.in_transaction:
             connection.rollback()
         return unavailable(CorpusFailureReason.DOCUMENT_ADMISSION_FAILED)
@@ -1306,7 +1279,7 @@ def _work_spec(
     owner_request_id: str | None,
 ) -> WorkSpec:
     role = ListType(item.list_type)
-    requested = role is ListType.EVALUATION
+    requested = owner_request_id is not None
     return WorkSpec(
         ticker=item.ticker,
         coverage_role=role,
@@ -1463,7 +1436,7 @@ def run_recovery_batch(
             item,
             raw_corpus_dir=raw_corpus_dir,
             now=now,
-            owner_request_id=owner_request_id or f"refresh-cache:{run_id}",
+            owner_request_id=owner_request_id,
         )
         for item in intended
     )
@@ -2098,10 +2071,14 @@ def _authorized_recovery_items(
     authorized: list[QueueItem] = []
     for item in items:
         role = ListType(item.list_type)
-        if (
-            role is ListType.PORTFOLIO
-            or (role is ListType.EVALUATION and item.ticker in explicitly_requested)
-            or (role is ListType.INDEX_MEMBER and item.suffix in SCREENING_ENDPOINT_KEYS)
+        authorization = decision_for(
+            role,
+            CollectionSource.FMP,
+            ArtifactKind.FINANCIAL_FACT,
+            requested=item.ticker.upper() in explicitly_requested,
+        )
+        if authorization.allowed and (
+            role is not ListType.INDEX_MEMBER or item.suffix in SCREENING_ENDPOINT_KEYS
         ):
             authorized.append(item)
     return authorized
@@ -2156,18 +2133,18 @@ def _offline_corpus_items(
         selected_roles = (
             frozenset({ListType(only_list_type)})
             if only_list_type is not None
-            else frozenset({ListType.PORTFOLIO, ListType.EVALUATION})
+            else frozenset({ListType.PORTFOLIO, ListType.WATCHLIST, ListType.EVALUATION})
         )
         if role not in selected_roles:
             excluded_by_tier_count += 1
             continue
         suffix = path.stem[len(ticker) + 1 :]
-        requested = role is ListType.EVALUATION
-        authorization = decision_for(
-            role,
-            CollectionSource.FMP,
-            ArtifactKind.FINANCIAL_FACT,
-            requested=requested,
+        authorization = authorize_collection_target_in_connection(
+            connection,
+            ticker,
+            source=CollectionSource.FMP,
+            artifact_kind=ArtifactKind.FINANCIAL_FACT,
+            requested=ticker in requested_tickers,
         )
         if not authorization.allowed:
             excluded_by_tier_count += 1
@@ -2210,6 +2187,7 @@ def _run_offline_corpus_only(args: argparse.Namespace) -> int:
             explicit_tickers=explicit_tickers,
         )
         run_id = f"offline-corpus:{uuid.uuid4()}"
+        owner_request_id = f"cli:{run_id}" if explicit_tickers else None
         if items:
             intended_ids = frozenset(
                 make_work_id(
@@ -2217,7 +2195,7 @@ def _run_offline_corpus_only(args: argparse.Namespace) -> int:
                         item,
                         raw_corpus_dir=FMP_DIR,
                         now=now,
-                        owner_request_id=f"offline-corpus:{run_id}",
+                        owner_request_id=owner_request_id,
                     )
                 )
                 for item in items
@@ -2233,7 +2211,7 @@ def _run_offline_corpus_only(args: argparse.Namespace) -> int:
                 dispatch=_unexpected_offline_dispatch,
                 max_items=500,
                 provider_call_budget=0,
-                owner_request_id=f"offline-corpus:{run_id}",
+                owner_request_id=owner_request_id,
                 restrict_to_intended=True,
                 backlog_item_resolver=_offline_item_from_backlog_row,
             )

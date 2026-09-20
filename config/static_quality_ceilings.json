@@ -5,7 +5,7 @@
     "alembic": 0,
     "cron": 0,
     "evals": 0,
-    "execution": 399,
+    "execution": 338,
     "instruction_tests": 0,
     "scripts": 0,
     "src": 354,
@@ -15,7 +15,7 @@
     "src/ask": 0,
     "src/capture": 0,
     "src/competitive": 0,
-    "src/compute": 38,
+    "src/compute": 37,
     "src/credibility": 0,
     "src/dashboard": 0,
     "src/dcf": 0,
@@ -54,14 +54,14 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 2039
+    "tests": 2031
   },
   "suppressions": {
     ".github": 0,
     "alembic": 1,
     "cron": 15,
     "evals": 1,
-    "execution": 1292,
+    "execution": 1190,
     "instruction_tests": 0,
     "scripts": 4,
     "src": 26,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1240
+    "tests": 1193
   }
 }

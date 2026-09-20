@@ -92,12 +92,18 @@ def assert_artifact_unchanged(snapshot: ImmutableArtifactSnapshot) -> None:
 def publish_text_no_clobber(path: Path, payload: str) -> bool:
     """Publish UTF-8 text through a unique same-directory file without overwrite."""
 
+    return publish_bytes_no_clobber(path, (payload + "\n").encode())
+
+
+def publish_bytes_no_clobber(path: Path, payload: bytes) -> bool:
+    """Publish exact source bytes without altering or replacing an existing artifact."""
+
     destination = _lexical_absolute(path)
     require_no_reparse_points(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     require_no_reparse_points(destination)
     parent_before = os.stat(destination.parent, follow_symlinks=False)
-    encoded = (payload + "\n").encode()
+    encoded = payload
     staged: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

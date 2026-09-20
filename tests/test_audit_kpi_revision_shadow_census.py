@@ -110,6 +110,8 @@ def test_snapshot_evidence_rejects_forbidden_checkout_path_before_read(
         raise AssertionError(f"forbidden path was read: {path}")
 
     monkeypatch.setattr(sqlite_runtime, "sys", SimpleNamespace(platform="darwin"))
+    # The platform-specific authority is initialized when the module is imported.
+    monkeypatch.setattr(sqlite_runtime, "_FORBIDDEN_MAC_CHECKOUT_DB", forbidden.resolve())
     monkeypatch.setattr(census_module, "_file_sha256", unexpected_read)
     with pytest.raises(RuntimeError, match="Mac checkout database is prohibited"):
         verify_snapshot_evidence(

@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from bs4 import BeautifulSoup
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from report.legacy_body import (
     LegacyReaderBody,
@@ -170,6 +170,7 @@ class ReportFiscalPeriodBackfillItem(BaseModel):
     status: Literal["eligible", "applied", "skipped_existing", "unresolved", "failed"]
     fiscal_period_label: str | None = None
     evidence: ReportFiscalPeriodEvidence | None = None
+    unresolved_reason: str | None = None
     error: str | None = None
 
 
@@ -184,6 +185,7 @@ class ReportFiscalPeriodBackfillResult(BaseModel):
     skipped_existing: int
     unresolved: int
     failed: int
+    unresolved_reasons: dict[str, int] = Field(default_factory=dict)
     items: tuple[ReportFiscalPeriodBackfillItem, ...]
 
 
@@ -759,6 +761,7 @@ def backfill_report_fiscal_periods(
     ]
     replacements: dict[str, ReportArtifactRef] = {}
     results: list[ReportFiscalPeriodBackfillItem] = []
+    unresolved_reasons: dict[str, int] = {}
     failed = 0
     unresolved = 0
     skipped_existing = 0
@@ -799,12 +802,19 @@ def backfill_report_fiscal_periods(
             )
             if len(observed_values) != 1:
                 unresolved += 1
+                reason = (
+                    "no_active_earnings_selector"
+                    if not observed_values
+                    else "conflicting_active_selectors"
+                )
+                unresolved_reasons[reason] = unresolved_reasons.get(reason, 0) + 1
                 results.append(
                     ReportFiscalPeriodBackfillItem(
                         artifact_id=artifact.artifact_id,
                         ticker=artifact.ticker,
                         status="unresolved",
                         evidence=evidence,
+                        unresolved_reason=reason,
                     )
                 )
                 continue
@@ -852,6 +862,7 @@ def backfill_report_fiscal_periods(
         skipped_existing=skipped_existing,
         unresolved=unresolved,
         failed=failed,
+        unresolved_reasons=unresolved_reasons,
         items=tuple(results),
     )
 

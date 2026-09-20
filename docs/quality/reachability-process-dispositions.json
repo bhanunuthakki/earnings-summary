@@ -23,8 +23,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_ingest builds a fixed execution/ingest_transcripts_state.py command with managed_python_prefix.",
-      "fingerprint": "5d805b02856f50ded312b890211f72a16e6654f1dbb99a867586896bf73f26f6",
-      "line": 758,
+      "fingerprint": "bc6a87f4677aca194190a85b73ec96f610a5b773fededf0e087286b98eef5133",
+      "line": 791,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/ingest_transcripts_state.py"
@@ -33,8 +33,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_extract builds a fixed execution/extract_commitments_from_transcript.py command with managed_python_prefix.",
-      "fingerprint": "70733fc10bed8b117346199801e3d6985e1cd3147004346a228fe409a40eae43",
-      "line": 788,
+      "fingerprint": "e146dc141b3f8fb3ce6819e136b4fac9ec2258e5f8cce52627dd367a3d606299",
+      "line": 821,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -75,8 +75,8 @@
     {
       "disposition": "closed_command_set",
       "evidence": "Enumeration runs the fixed powershell.exe Get-Service es-* command with bounded output.",
-      "fingerprint": "5a49272e545f14ea0bd54cc2e93d18fc9ffb8ffce53c4c2d896ebe3699fa41c8",
-      "line": 421,
+      "fingerprint": "ea2cf0045e94b2d2141ee0df815e834e681bc66873bef4fdb37aabadc1970b05",
+      "line": 424,
       "path": "execution/collect_operations_runtime_observations.py",
       "targets": [
         "powershell.exe"
@@ -108,15 +108,15 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Batch runs only the fixed managed-Python discover, fetch, narrative, and process scripts.",
-      "fingerprint": "24029d263abf3b0a53f8e863b9230d41f7ef6c97b712f312c70dd3c01064ebb2",
-      "line": 254,
+      "evidence": "Replace prior process_ir_documents.py target with process_ir_documents_state.py: _run_child accepts only argv assembled by this module fixed discovery/fetch and opt-in narrative/summary call sites, then ensure_managed_python_argv. The summary adapter is the existing state-root-aware owner; ticker/repo-root are arguments, never script identity. Opt-in narrative remains unchanged in authority.",
+      "fingerprint": "b3fd310b2a1280a1246bb8fa37a35861190e218e72a9c59b9bad143ca1559fa3",
+      "line": 258,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "execution/discover_ir_documents.py",
         "execution/fetch_ir_documents.py",
         "src/compute/ir_narrative.py",
-        "execution/process_ir_documents.py"
+        "execution/process_ir_documents_state.py"
       ]
     },
     {
@@ -280,8 +280,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Hints refresh runs the fixed execution/schedule_pre_earnings_refresh.py script.",
-      "fingerprint": "0b1816a5abd8807eb118f6c7324dcef09ecd3dd342dd1c64dc2e0ba400bf4ea5",
-      "line": 2080,
+      "fingerprint": "faca040d5c156ed3fe16eb693c2ca87ce56bde1e469ec90c736f5ca6f7295402",
+      "line": 2053,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/schedule_pre_earnings_refresh.py"
@@ -290,8 +290,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_dispatch_one runs the fixed execution/save_fmp_data.py manifest command.",
-      "fingerprint": "9abfebf8059ee768e00b268c5f28eb30e5c38ee5842849420809009cab116e03",
-      "line": 2410,
+      "fingerprint": "3e088f37231c08eeb0ddc51ac4af57ee601b53eb53aac6c1b87b01e3a026404c",
+      "line": 2388,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -300,8 +300,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_spawn_background re-executes the fixed execution/refresh_cache.py run command.",
-      "fingerprint": "0d364fa67c863df4953471e2e58989a075018b2ec2358c9839a935f1465f8076",
-      "line": 2681,
+      "fingerprint": "4bccb0cd85047bf3b3220d4e4645ffbe20dae03086b339dc93f69153b0c34e49",
+      "line": 2659,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/refresh_cache.py"
@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "e617ab926ea0497f18b7a72a48f7a4fa4ad72817bee0c860417e2c1c7469008d",
-      "line": 667,
+      "fingerprint": "0f87c5fcebeabd838c226967e04f28648c3778840051483872c096a59351d70c",
+      "line": 670,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "886f843e1e1073b110f43b7ae7da3af1cb77546e3b6a2abea2acd18ef5382e86",
-      "line": 704,
+      "fingerprint": "82ca87fcd42eb9e6495372c640f588893c58deba72005d9a2075e289fbef3908",
+      "line": 707,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "e5fb13336817beb3de81965eca3a913be40105c47c6852c7317f9d7883dd60bd",
-      "line": 749,
+      "fingerprint": "86c7fe4fa20a96b4f3e4f61c580d5a5677bc90e62206abdf94aaf5af94c703b5",
+      "line": 752,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "86affac02c41ca4bd720c132ac1842d667b1398f01ebb9621b914cb8e62f3d02",
-      "line": 794,
+      "fingerprint": "f334c356d75bb7c8595aa4506e73ccb09738f7dccc73e8758f90846144d5c869",
+      "line": 797,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "8342c13523a8aa40e98d449836a632ce831a483692299bc18fe5522f6de1d54d",
-      "line": 841,
+      "fingerprint": "597c3be3eea4ae683ab10cc8265f1de23931b9ea2919d0fb20072d03838c5f6e",
+      "line": 844,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -360,8 +360,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "af6b781010242012ef6b6b68e53cb9c67f437ab507f07e49c64c3b3e1c173f64",
-      "line": 890,
+      "fingerprint": "2662945aa82e7947172706efff07279ba74187fe52176073936f0b6da0f61b5a",
+      "line": 893,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -456,9 +456,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Stages resolve through the fixed checked-in STAGE_MANIFEST script set via managed_python_argv.",
-      "fingerprint": "56c75dd7250f2e5d4810e35daf72c6d7308120ed962e492fff67d0da1a03fb18",
-      "line": 366,
+      "evidence": "Add execution/process_document_evidence.py to existing closed STAGE_MANIFEST dispatch. _selected_specs chooses manifest members; _build_stages resolves execution/spec.script via managed_python_argv. New deterministic stage is --apply --resume --batch-size 100, timeout600s; depends on preflight/list identity only and has DB_AND_STATE_ROOT argument profile. The target does no LLM/narrative dispatch and no arbitrary process invocation. This is a reviewed change to target scope, not a line-only refresh.",
+      "fingerprint": "4335a4db0fd590f502744548a1b62dff3f0166e70dd087707b81ec11841a7e47",
+      "line": 372,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "execution/validate_environment.py",
@@ -468,6 +468,7 @@
         "execution/sync_position_lifecycle.py",
         "execution/reconcile_decision_actions.py",
         "execution/refresh_cockpit_fundamentals.py",
+        "execution/process_document_evidence.py",
         "execution/compute_derived_metrics.py",
         "execution/reprice_dcf.py",
         "execution/refresh_candidate_fit.py",
@@ -509,8 +510,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_ingest runs the fixed execution/ingest_transcripts.py via managed_python_prefix.",
-      "fingerprint": "91311c87a2bc383f868ff2a951ab815534f1f0d35af1b3e3b76e9fb2fe1c8537",
-      "line": 335,
+      "fingerprint": "df5fb1efecf2055ac1ddc2957e1a808be48b29b5c4752f5c43902bf2013ccce2",
+      "line": 257,
       "path": "execution/scan_ir_transcripts.py",
       "targets": [
         "execution/ingest_transcripts.py"
@@ -627,6 +628,27 @@
       ]
     },
     {
+      "disposition": "external_process",
+      "evidence": "Private _system_probe has one production caller observe_owner. Both validated OwnerConfig.kind branches construct a fixed native PowerShell program. OwnerConfig.name and task_path restrictive validators exclude quote/code delimiters. Task branch queries Get-ScheduledTask/Get-ScheduledTaskInfo/Export-ScheduledTask and COM Schedule.Service; service branch queries Get-CimInstance/Get-ItemProperty and fixed sc.exe sdshow. No Python entrypoint, owner-supplied executable, or arbitrary command is accepted. Output uses bounded temporary capture, timeout15s and discarded stderr. This classification proves dispatch scope, not native command success or current host configuration.",
+      "fingerprint": "7766e42371e98f0e169214b680ca95feed775ee61ee934741158a73b0b5f794d",
+      "line": 382,
+      "path": "src/operations/host_runtime.py",
+      "targets": [
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Private _json_command has exactly two production callers, both native_projection: fixed PS executable with fixed flags and locally constructed read-only process/listener/service/task query; fixed TAILSCALE executable with literal serve status --json. Configuration executable paths and route URLs are compared only and never form argv executables. Service/task names and task paths are constrained by closed safe-character validators; ports are strict bounded integers. No caller passes an operator command or Python entrypoint. Output is bounded, stderr discarded, timeouts30s and5s.",
+      "fingerprint": "c41ccab48cae97518e62a967326f7213c09e54d0d1ff89deefc8d6ec2529144b",
+      "line": 209,
+      "path": "src/operations/topology_observer.py",
+      "targets": [
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "C:\\Program Files\\Tailscale\\tailscale.exe"
+      ]
+    },
+    {
       "disposition": "internal_python_target",
       "evidence": "PDF_WORKER_PATH is the fixed sibling pdf_worker.py; _run_pdf invokes only this file with sys.executable -I, no shell, bounded timeout, and PDF operation arguments supplied as JSON stdin rather than executable argv.",
       "fingerprint": "304ff9a9762506d20b93e02c047ca8ddc4725a2ba24e9dc7c82d3cd91a3a47a3",
@@ -704,6 +726,18 @@
       "path": "src/quality/changed_suppressions.py",
       "targets": [
         "git"
+      ]
+    },
+    {
+      "disposition": "closed_command_set",
+      "evidence": "run_checks invokes this Python interpreter with -m and only the fixed ruff, pyright, or pytest module choices; selected retained paths are separate argv entries and no shell is used.",
+      "fingerprint": "dc5eb0382df532053ed604cc8b92697e554401f92ae386453fdb4df5350ea7a3",
+      "line": 58,
+      "path": "src/quality/check_changed.py",
+      "targets": [
+        "ruff",
+        "pyright",
+        "pytest"
       ]
     },
     {
@@ -839,8 +873,8 @@
     {
       "disposition": "external_process",
       "evidence": "Activation runs the fixed schtasks.exe scheduler executable.",
-      "fingerprint": "4124ecde1efc7185d291ca623f60c36add93ff6ec35ca65b726d66848ad0cd17",
-      "line": 150,
+      "fingerprint": "d291b10f497c1630dcfded2d6dad9e28d805e921b7dbde9f626cb2f901734b91",
+      "line": 151,
       "path": "src/runtime/portfolio_tracker.py",
       "targets": [
         "schtasks.exe"
@@ -873,18 +907,6 @@
       "fingerprint": "65f67f50bbc9c1244ddf5dad81b269cb35803c6b892709b8beb25a3b6ac9e097",
       "line": 1020,
       "path": "tests/test_reconcile_quality_baseline.py"
-    },
-    {
-      "disposition": "closed_command_set",
-      "evidence": "run_checks invokes this Python interpreter with -m and only the fixed ruff, pyright, or pytest module choices; selected retained paths are separate argv entries and no shell is used.",
-      "fingerprint": "dc5eb0382df532053ed604cc8b92697e554401f92ae386453fdb4df5350ea7a3",
-      "line": 58,
-      "path": "src/quality/check_changed.py",
-      "targets": [
-        "ruff",
-        "pyright",
-        "pytest"
-      ]
     }
   ],
   "graph_provenance": {
@@ -892,7 +914,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "e07a3181695d51ce545139e0e5cee20ee1c491c8d6b3f15b494ac349ca5a27d4",
+      "source_sha256": "3c06f1e89a71c72f15bf56a3ff66be7abfe07abd2ff61c5f2c268a0314028403",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

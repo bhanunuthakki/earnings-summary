@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import importlib.util
@@ -27,21 +26,21 @@ def _db(path: Path, role: str) -> None:
     with sqlite3.connect(path) as conn:
         conn.execute(
             "CREATE TABLE tracked_companies ("
-            "ticker TEXT, list_type TEXT, archived_at TEXT, fiscal_year_end TEXT)"
+            "ticker TEXT, list_type TEXT, archived_at TEXT, fiscal_year_end TEXT, instrument_type TEXT)"
         )
         conn.execute(
-            "INSERT INTO tracked_companies VALUES ('ACME', ?, NULL, '12-31')",
+            "INSERT INTO tracked_companies VALUES ('ACME', ?, NULL, '12-31', 'equity')",
             (role,),
         )
 
 
-def test_direct_aggregator_fetch_denies_stored_watchlist_before_network(
+def test_direct_aggregator_fetch_denies_stored_index_member_before_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mod = _load_module()
     db_path = tmp_path / "portfolio.db"
-    _db(db_path, "watchlist")
+    _db(db_path, "index_member")
 
     def _unexpected_fetch(*_args: object) -> None:
         pytest.fail("network boundary was crossed")
@@ -115,7 +114,7 @@ def test_fetch_authorization_uses_the_caller_database_not_import_time_state(
     mod = _load_module()
     denied_db = tmp_path / "denied.db"
     allowed_db = tmp_path / "allowed.db"
-    _db(denied_db, "watchlist")
+    _db(denied_db, "index_member")
     _db(allowed_db, "portfolio")
     monkeypatch.setattr(mod.db, "DB_PATH", str(allowed_db))
 

@@ -218,6 +218,16 @@ _MAPPINGS: Final[dict[Statement, tuple[FieldMapping, ...]]] = {
         FieldMapping("total_current_liabilities", "totalCurrentLiabilities", "actual"),
         FieldMapping("short_term_debt", "shortTermDebt", "actual"),
         FieldMapping("long_term_debt", "longTermDebt", "actual"),
+        FieldMapping(
+            "long_term_debt_current_excluding_leases",
+            "interestBearingDebtCurrent",
+            "actual",
+        ),
+        FieldMapping(
+            "long_term_debt_non_current_excluding_leases",
+            "interestBearingDebtNoncurrent",
+            "actual",
+        ),
         FieldMapping("total_debt", "totalDebt", "actual"),
         FieldMapping("finance_lease_liability", "financeLeaseLiability", "actual"),
         FieldMapping("finance_lease_liability_current", "financeLeaseLiabilityCurrent", "actual"),

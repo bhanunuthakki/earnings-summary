@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import sys
 from collections import Counter
@@ -71,6 +72,8 @@ class BackfillCheckpoint(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     last_document_id: int = Field(ge=0)
+    database_path: str | None = None
+    pending_document_ids: tuple[int, ...] = ()
     updated_at: datetime
 
 
@@ -133,6 +136,7 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
     root = request.repo_root.resolve()
     checkpoint_path = root / ".tmp" / request.task_id / "state.json"
     targeted = request.document_id is not None
+    database_path = str(Path(conn.execute("PRAGMA database_list").fetchone()[2]).resolve())
     checkpoint = (
         BackfillCheckpoint(
             last_document_id=request.document_id - 1,
@@ -140,7 +144,7 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
         )
         if request.document_id is not None
         else (
-            _read_checkpoint(checkpoint_path)
+            _read_checkpoint(checkpoint_path, database_path)
             if request.apply
             else BackfillCheckpoint(last_document_id=0, updated_at=datetime.now(UTC))
         )
@@ -150,6 +154,18 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
         if request.document_id is not None
         else _documents_after(conn, checkpoint.last_document_id, request.batch_size)
     )
+    fresh_last_id = _integer(documents[-1], "id") if documents else checkpoint.last_document_id
+    pending = list(checkpoint.pending_document_ids)
+    if request.apply and not targeted:
+        # Finish unseen documents before retrying quarantines. Rotate attempted
+        # failures to the tail so an unreadable source cannot starve its peers.
+        retry_ids = pending[: max(0, request.batch_size - len(documents))]
+        for document_id in retry_ids:
+            retry = _documents_by_id(conn, document_id)
+            if not retry:
+                raise ValueError(f"checkpoint document {document_id} no longer exists")
+            documents.extend(retry)
+            pending.remove(document_id)
     if targeted and not documents:
         raise ValueError(f"legacy document {request.document_id} does not exist")
     summary = BackfillSummary(
@@ -171,8 +187,10 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
         for document in documents:
             document_id = _integer(document, "id")
             summary.documents_considered += 1
-            chain = _prepare_document_chain(document, root, summary)
+            chain = _prepare_document_chain(conn, document, root, summary)
             if chain is None:
+                if document_id not in pending:
+                    pending.append(document_id)
                 continue
             filing_sections = _active_filing_sections(conn, document_id, selection_modes)
             transcript_segments = _active_transcript_segments(conn, document_id, selection_modes)
@@ -202,10 +220,11 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
             conn.rollback()
         raise
 
-    if documents:
-        summary.last_document_id_after = _integer(documents[-1], "id")
+    summary.last_document_id_after = fresh_last_id
     summary.has_more = (
-        False if targeted else _has_documents_after(conn, summary.last_document_id_after)
+        False
+        if targeted
+        else bool(pending) or _has_documents_after(conn, summary.last_document_id_after)
     )
     if request.apply:
         conn.commit()
@@ -214,6 +233,8 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
                 checkpoint_path,
                 BackfillCheckpoint(
                     last_document_id=summary.last_document_id_after,
+                    database_path=database_path,
+                    pending_document_ids=tuple(pending),
                     updated_at=datetime.now(UTC),
                 ),
             )
@@ -266,7 +287,7 @@ def ensure_legacy_document_evidence(
         documents_considered=1,
         selection_modes=_selection_modes(conn),
     )
-    chain = _prepare_document_chain(document, root, summary)
+    chain = _prepare_document_chain(conn, document, root, summary)
     if chain is None:
         findings = ",".join(sorted(summary.finding_counts)) or "unknown"
         raise ValueError(f"legacy document {document_id} evidence capture failed: {findings}")
@@ -286,20 +307,34 @@ def ensure_legacy_document_evidence(
 
 
 def _prepare_document_chain(
-    document: sqlite3.Row, root: Path, summary: BackfillSummary
+    conn: sqlite3.Connection, document: sqlite3.Row, root: Path, summary: BackfillSummary
 ) -> _DocumentChain | None:
     document_id = _integer(document, "id")
     path_value = _required_text(document, "file_path")
-    resolved_path = _resolve_legacy_path(root, path_value)
-    if resolved_path is None:
-        _quarantine(summary, "path_outside_repo", document_id)
+    try:
+        resolved_path = _resolve_legacy_path(root, path_value)
+        if resolved_path is None:
+            _quarantine(summary, "path_outside_repo", document_id)
+            return None
+        if not resolved_path.is_file():
+            _quarantine(summary, "content_missing", document_id)
+            return None
+        raw_bytes = resolved_path.read_bytes()
+    except OSError:
+        _quarantine(summary, "content_unreadable", document_id)
         return None
-    if not resolved_path.is_file():
-        _quarantine(summary, "content_missing", document_id)
-        return None
-    raw_bytes = resolved_path.read_bytes()
     actual_sha = hashlib.sha256(raw_bytes).hexdigest()
     recorded_sha = _required_text(document, "sha256").lower()
+    accession = re.fullmatch(r"accn=(\d{10}-\d{2}-\d{6})", path_value.partition("#")[2])
+    if (
+        _required_text(document, "source_type") == "sec_xbrl"
+        and accession is not None
+        and recorded_sha == hashlib.sha256(accession[1].encode()).hexdigest()
+    ):
+        # Legacy rows hashed the accession identity, not the aggregate bytes.
+        # The SEC CompanyFacts binding backfill owns their scoped reconciliation.
+        _quarantine(summary, "legacy_sec_accession_identity", document_id)
+        return None
     if actual_sha != recorded_sha:
         _quarantine(summary, "sha256_mismatch", document_id)
         return None
@@ -313,6 +348,17 @@ def _prepare_document_chain(
     _required_text(document, "doc_type")
     _note(summary, "issuer_identity_legacy_ticker")
     _note(summary, "language_und")
+    existing = conn.execute(
+        "SELECT locator_json FROM evidence_nodes WHERE node_id = ?",
+        (f"legacy-node-doc-{document_id}",),
+    ).fetchone()
+    if existing is not None:
+        # Physical replicas may move; the original source locator and extraction
+        # identity remain immutable. Persistence below still verifies blob identity.
+        locator = EvidenceLocator.model_validate_json(existing[0])
+        if locator.source_ref is None:
+            raise ValueError(f"legacy document {document_id} has no recorded source locator")
+        path_value = locator.source_ref
     return _DocumentChain(
         legacy_document_id=document_id,
         extraction_run_id=f"legacy-run-doc-{document_id}",
@@ -337,6 +383,11 @@ def _persist_document_chain(
         raise RuntimeError("verified legacy path unexpectedly became invalid")
     raw_bytes = path.read_bytes()
     blob_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    recorded_size = _optional_integer(document, "raw_bytes_size")
+    if blob_sha256 != _required_text(document, "sha256").lower() or (
+        recorded_size is not None and recorded_size != len(raw_bytes)
+    ):
+        raise ValueError(f"legacy document {document_id} changed during evidence capture")
     fetched_at = _required_datetime(document, "fetched_at")
     ticker = _required_text(document, "ticker")
     source_type = _required_text(document, "source_type")
@@ -440,11 +491,11 @@ def _persist_document_chain(
                 location_kind="local",
                 availability_state="present",
                 location_sequence=sequence,
-                verified_at=fetched_at if sequence == 1 else verified_at,
+                verified_at=verified_at,
                 verified_byte_size=len(raw_bytes),
                 verified_sha256=blob_sha256,
                 supersedes_location_observation_id=parent_id,
-                recorded_at=fetched_at if sequence == 1 else verified_at,
+                recorded_at=verified_at,
             )
         )
         _account_link_result(location_result.created, summary)
@@ -859,10 +910,18 @@ def _legacy_corpus_source_uri(logical_path: str, stored_path: str) -> str:
     return f"legacy-corpus:///{encoded_path}" + (f"#{encoded_fragment}" if separator else "")
 
 
-def _read_checkpoint(path: Path) -> BackfillCheckpoint:
+def _read_checkpoint(path: Path, database_path: str) -> BackfillCheckpoint:
     if not path.exists():
         return BackfillCheckpoint(last_document_id=0, updated_at=datetime.now(UTC))
-    return BackfillCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
+    checkpoint = BackfillCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
+    if checkpoint.database_path != database_path:
+        raise ValueError("checkpoint database is missing or different; use a new task-id")
+    if len(set(checkpoint.pending_document_ids)) != len(checkpoint.pending_document_ids) or any(
+        document_id <= 0 or document_id > checkpoint.last_document_id
+        for document_id in checkpoint.pending_document_ids
+    ):
+        raise ValueError("checkpoint retry identities are invalid")
+    return checkpoint
 
 
 def _write_checkpoint(path: Path, checkpoint: BackfillCheckpoint) -> None:

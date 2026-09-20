@@ -13,19 +13,23 @@ shareholder letters, transcripts) for tracked names through two parallel paths:
    `categorize_ir_uploads.py` step classifies and routes them through the same
    provenance contract as auto-fetch.
 
-The IR pipeline as a whole is **optional** on the broader project: when neither path
-yields any documents for a ticker, the rest of the analysis (FMP, SEC, transcripts) runs
-without IR data — IR rows simply don't appear in `documents` for that ticker.
+IR coverage is a separately reported source obligation. Other analysis may proceed
+with an explicit gap when the issuer source is unavailable, but absent documents
+do not establish that the issuer has no relevant material or that coverage is complete.
 
 ## Auto-fetch authorization and known site coverage
 
 Every discovery and download boundary binds the ticker to its active stored
-`tracked_companies.list_type`: portfolio is automatic; evaluation requires an
-explicit owner request; watchlist, index, ETF, unknown, malformed, and ambiguous
-identities fail closed before network access. `--url`, `--ticker`, and `--all`
+`tracked_companies.list_type` and instrument identity: portfolio, evaluation, and watchlist
+receive automatic full acquisition under policy `2026-09-19.1`. Corporate lanes require
+equity/ADR identity; index, ETF, unknown, malformed, and ambiguous identities fail
+closed before network access. `--url`, `--ticker`, and `--all`
 cannot bypass that decision. URLs live in `src/ir_pipeline/ir_url_overrides.py`.
 
-**25 of 32 auto-fetch multi-quarter IR docs** (✓): AMZN, GOOG, META, MELI, NU, NVO, BN,
+The following is a historical crawler-probe inventory, not current roster authority
+or a freshness/completeness receipt. The live stored roster determines scope.
+
+**25 of 32 historical probes fetched multi-quarter IR docs**: AMZN, GOOG, META, MELI, NU, NVO, BN,
 RBRK, VEEV, WIX (portfolio) + V, ORCL, FCX, BKNG, UBER, ABNB, NTDOY, SOFI, NTRA, TMO,
 CGEH, CRWV, DLO, NSP, NBIS (evaluation). Mostly q4cdn / Investis / mz platforms; the
 crawler walks the IR landing → quarterly/financials page and harvests the PDFs.
@@ -43,8 +47,8 @@ anti-headless measures** (verified by direct probe; we respect it, no evasion):
 | FRVO (Fervo) | timeout | anti-headless stall (recent IPO) |
 | BHP | timeout | foreign (half-yearly) + anti-headless stall |
 
-For these 7, financial data still flows via the existing **FMP/SEC pipeline** (the IR
-auto-fetch is an optional enhancement). Evading bot-protection (stealth browsers, proxies)
+For these 7, available **FMP/SEC pipeline** evidence remains usable with the IR
+coverage limitation disclosed. Evading bot-protection (stealth browsers, proxies)
 is deliberately out of scope. Re-validate periodically — sites change their protections.
 
 ## Target Holdings & IR Pages
@@ -62,7 +66,7 @@ is deliberately out of scope. Re-validate periodically — sites change their pr
 | RBRK | https://ir.rubrik.com/financial-information/quarterly-results | Jan FY-end; IPO May 2024; best-effort for pre-IPO quarters |
 | VEEV | https://ir.veeva.com/ | Jan FY-end; map FY quarters to calendar year |
 | BN | https://bam.brookfield.com/investors | Brookfield Corp; supplemental packages |
-| LLY | https://investor.lilly.com/financial-information | Watchlist metadata only; no automatic crawl. An owner-approved exact document may use the manual lane. |
+| LLY | https://investor.lilly.com/financial-information | Automatic acquisition when stored identity is authorized; historical crawl failure needs a current disposition. |
 
 ## Fiscal Calendar Notes
 
@@ -118,17 +122,25 @@ best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip)
    downloads each manifest URL into the staging folder `ir_documents/<TICKER>/`
    (extension from the response headers), records the source URL in
    `.tmp/ir_incoming_urls.json`, then hands the ticker to `categorize_ir_uploads.py`
-   — which **content-classifies** each file (authoritative), moves it to the
+   — which **content-classifies** each file, installs retained bytes at the
    canonical `ir_documents/<TICKER>/<period_end_iso>/<doc_type>__<sha8>.<ext>`, and
-   inserts the `documents` row (`source_type='ir_doc'`, real `source_url`) + the
-   legacy JSON-index mirror. `--calendar <id>` (FYE-derived) lets a ticker not yet
+   publishes the `documents` row (`source_type='ir_doc'`, real `source_url`) and
+   foundational evidence anchor in one transaction, then updates the legacy
+   JSON-index mirror. Classification is not semantic admission. `--calendar <id>` (FYE-derived) lets a ticker not yet
    in `ISSUER_REGISTRY` register best-effort.
 3. **Batch** (`execution/discover_ir_documents_all.py`): the scheduled entry point.
-   Reads the active roster from the DB at run time; scheduled scope is portfolio-only
-   and explicitly named evaluation work is on demand. It runs steps 1–2 per ticker subprocess-isolated, never aborts
+   Reads the active roster from the DB at run time; scheduled acquisition covers
+   portfolio, evaluation, and watchlist under the same source policy. It runs
+   steps 1–2 per ticker subprocess-isolated, never aborts
    on one ticker's failure; exit code = count of FAILED tickers.
 4. **Repeat safety**: a URL already in `documents.source_url` is skipped; identical
    bytes are a Content Identity no-op. Re-running discovery or the batch is safe.
+   URL deduplication is not evidence that the remote publisher has not changed the
+   document. Source inventory/freshness reconciliation owns that separate check.
+5. **Processing debt**: existing pending documents remain eligible even if discovery
+   downloaded zero new files. Processing failure remains pending and makes the batch
+   degraded. The deterministic `process_document_evidence.py` interface selects exact
+   input/extractor versions; optional narrative processing does not seal evidence.
 
 ## Path B: Manual upload (Categorize → Register)
 

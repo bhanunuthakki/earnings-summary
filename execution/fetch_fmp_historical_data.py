@@ -21,23 +21,29 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
-# Paths
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-SRC_DIR = os.path.join(PROJECT_ROOT, "src")
-DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
-sys.path.append(SRC_DIR)
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-from net.client import (  # noqa: E402
+import db
+from net.client import (
     FMP_CLIENT,
     HttpCallError,
     JsonShape,
     JsonValue,
     QueryValue,
 )
-from pipeline.queries import ANALYZED_LIST_TYPE_VALUES  # noqa: E402
-from runtime.secrets import load_project_env  # noqa: E402
+from pipeline.queries import ANALYZED_LIST_TYPE_VALUES
+from pipeline.source_policy import (
+    ArtifactKind,
+    CollectionMode,
+    CollectionSource,
+    authorize_stored_collection_target,
+)
+from runtime.secrets import load_project_env
+
+DATA_DIR = str(PROJECT_ROOT / "data" / "historical" / "fmp")
 
 # Load API Key
 load_project_env(Path(PROJECT_ROOT))
@@ -67,7 +73,41 @@ def _retarget_paths(repo_root: Path) -> None:
 def fetch_from_fmp(
     path: str,
     params: Mapping[str, QueryValue],
+    *,
+    owner_requested: bool = True,
 ) -> list[JsonValue] | dict[str, JsonValue] | None:
+    symbol = params.get("symbol")
+    if not isinstance(symbol, str):
+        print("source_collection_policy_denied: missing canonical symbol", file=sys.stderr)
+        return None
+    authorization = authorize_stored_collection_target(
+        Path(db.DB_PATH),
+        symbol,
+        requested=owner_requested,
+        source=CollectionSource.FMP,
+        artifact_kind=ArtifactKind.FINANCIAL_FACT,
+        require_corporate_instrument=True,
+    )
+    if (
+        not authorization.allowed
+        or authorization.decision is None
+        or authorization.decision.mode
+        not in (CollectionMode.AUTOMATIC_FULL, CollectionMode.ON_DEMAND_FULL)
+    ):
+        print(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": symbol,
+                    "reason": authorization.status.value
+                    if not authorization.allowed
+                    else "full_collection_required",
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return None
     try:
         response = FMP_CLIENT.get_json(
             path,
@@ -101,7 +141,7 @@ def save_data(
     return filepath
 
 
-def process_ticker(ticker: str, limit: int = 20) -> None:
+def process_ticker(ticker: str, limit: int = 20, *, owner_requested: bool = True) -> None:
     ticker = ticker.upper()
     print(f"\n--- {ticker} ---")
 
@@ -109,6 +149,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
     income = fetch_from_fmp(
         "income-statement",
         {"symbol": ticker, "period": "quarter", "limit": limit},
+        owner_requested=owner_requested,
     )
     if income:
         p = save_data(ticker, "income_statement", income)
@@ -118,6 +159,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
     balance = fetch_from_fmp(
         "balance-sheet-statement",
         {"symbol": ticker, "period": "quarter", "limit": limit},
+        owner_requested=owner_requested,
     )
     if balance:
         p = save_data(ticker, "balance_sheet", balance)
@@ -127,6 +169,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
     cash = fetch_from_fmp(
         "cash-flow-statement",
         {"symbol": ticker, "period": "quarter", "limit": limit},
+        owner_requested=owner_requested,
     )
     if cash:
         p = save_data(ticker, "cash_flow", cash)
@@ -136,6 +179,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
     product_seg = fetch_from_fmp(
         "revenue-product-segmentation",
         {"symbol": ticker, "period": "quarter", "limit": limit},
+        owner_requested=owner_requested,
     )
     if product_seg:
         p = save_data(ticker, "product_segments", product_seg)
@@ -147,6 +191,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
     geo_seg = fetch_from_fmp(
         "revenue-geographic-segmentation",
         {"symbol": ticker, "period": "quarter", "limit": limit},
+        owner_requested=owner_requested,
     )
     if geo_seg:
         p = save_data(ticker, "geo_segments", geo_seg)
@@ -219,7 +264,7 @@ def main() -> None:
 
     print(f"FMP Historical Backfill - {len(tickers)} ticker(s), up to {args.limit} quarters each")
     for t in tickers:
-        process_ticker(t, args.limit)
+        process_ticker(t, args.limit, owner_requested=args.ticker is not None)
 
     print("\nDone.")
 

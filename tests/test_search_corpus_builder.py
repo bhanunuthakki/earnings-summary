@@ -23,7 +23,7 @@ from provenance.evidence_ledger import (
     SourceObservation,
 )
 from provenance.fulltext_extractor_identity import (
-    BASE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_EXTRACTOR,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
 )
 from provenance.semantic_disposition import (
@@ -326,8 +326,8 @@ def _seed_pdf_with_governed_ocr(conn: sqlite3.Connection) -> None:
             document_version_id="pdf-document",
             input_sha256=blob_sha,
             extractor_name="fulltext-evidence-backfill",
-            extractor_config_sha256=BASE_FULLTEXT_EXTRACTOR.config_sha256,
-            extractor_code_version=BASE_FULLTEXT_EXTRACTOR.code_version,
+            extractor_config_sha256=PDF_FULLTEXT_EXTRACTOR.config_sha256,
+            extractor_code_version=PDF_FULLTEXT_EXTRACTOR.code_version,
             output_sha256=C,
             started_at=STAMP,
             completed_at=STAMP,

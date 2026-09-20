@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for execution/discover_ir_documents.py (PR3 — single-ticker orchestrator).
 
 discover_history_hybrid is monkeypatched (no browser); these lock URL resolution
@@ -8,21 +7,20 @@ writing, and the JSON status the batch reads (done / no_docs / no_ir_url).
 
 from __future__ import annotations
 
+import argparse
 import json
 import sqlite3
-import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from execution import discover_ir_documents  # noqa: E402
-from ir_pipeline.discover import IrDiscoveryAuthenticationDeniedError  # noqa: E402
-from ir_pipeline.discover._docmeta import CandidateDoc  # noqa: E402
-from ir_pipeline.manifest import load_manifest  # noqa: E402
-from pipeline.source_policy import SOURCE_POLICY_CONFIG  # noqa: E402
+from execution import discover_ir_documents
+from ir_pipeline.discover import IrDiscoveryAuthenticationDeniedError
+from ir_pipeline.discover._docmeta import CandidateDoc
+from ir_pipeline.manifest import load_manifest
+from pipeline.source_policy import SOURCE_POLICY_CONFIG
 
 
 def _patch_hybrid(monkeypatch: pytest.MonkeyPatch, cands: list[CandidateDoc]) -> None:
@@ -35,10 +33,10 @@ def _patch_hybrid(monkeypatch: pytest.MonkeyPatch, cands: list[CandidateDoc]) ->
 def _make_tracked_db(db: Path, ticker: str, role: str, *, ir_url: str | None = None) -> None:
     with sqlite3.connect(db) as conn:
         conn.execute(
-            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, ir_url TEXT)"
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, ir_url TEXT, instrument_type TEXT)"
         )
         conn.execute(
-            "INSERT INTO tracked_companies VALUES (?, ?, NULL, ?)",
+            "INSERT INTO tracked_companies VALUES (?, ?, NULL, ?, 'equity')",
             (ticker, role, ir_url),
         )
 
@@ -175,7 +173,7 @@ def test_auth_denial_is_not_reported_as_no_docs(
     assert rc == 10
 
 
-@pytest.mark.parametrize("role", ["watchlist", "index_member"])
+@pytest.mark.parametrize("role", ["none", "index_member"])
 def test_direct_url_cannot_bypass_stored_collection_role(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -236,7 +234,10 @@ def test_direct_discovery_uses_the_canonical_reported_quarter_bound(
     assert captured["max_quarters"] == SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
 
     with pytest.raises(SystemExit):
-        discover_ir_documents._parse_args(
+        cast(
+            Callable[[list[str] | None], argparse.Namespace],
+            getattr(discover_ir_documents, "_parse_args"),
+        )(
             [
                 "--ticker",
                 "PORT",

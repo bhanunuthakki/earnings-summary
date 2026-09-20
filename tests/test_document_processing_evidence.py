@@ -5,6 +5,7 @@ import json
 import shutil
 import sqlite3
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1811,4 +1812,139 @@ def test_member_cap_fails_before_any_publication_rows(
         )
     assert (
         conn.execute("SELECT COUNT(*) FROM document_processing_evidence_headers").fetchone()[0] == 0
+    )
+
+
+@pytest.mark.parametrize("unapproved_field", [None, "code", "config"])
+def test_pdf_legacy_seal_replays_but_cannot_authorize_new_seal(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, unapproved_field: str | None
+) -> None:
+    from provenance import document_processing_evidence as processing
+    from provenance.fulltext_extractor_identity import (
+        BASE_FULLTEXT_EXTRACTOR,
+        PDF_FULLTEXT_EXTRACTOR,
+    )
+
+    document_id = "pdf-runtime-history"
+    blob_sha = _seed_document(conn, document_version_id=document_id, media_type="application/pdf")
+    legacy = BASE_FULLTEXT_EXTRACTOR
+    if unapproved_field == "code":
+        legacy = replace(legacy, code_version="fulltext-evidence-backfill@999-unapproved")
+    elif unapproved_field == "config":
+        legacy = replace(legacy, config_sha256="f" * 64)
+    _seed_run(
+        conn,
+        document_version_id=document_id,
+        blob_sha=blob_sha,
+        run_id="historical-pdf-run",
+        extractor_name=legacy.name,
+        extractor_code_version=legacy.code_version,
+        extractor_config_sha256=legacy.config_sha256,
+        children=(
+            (
+                "pdf_page",
+                "Reported revenue.",
+                EvidenceLocator(source_ref=document_id, page_number=1),
+            ),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO ocr_document_assessments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "native-assessment",
+            "native-assessment",
+            document_id,
+            blob_sha,
+            "pdf-preflight",
+            "d" * 64,
+            "pdf-preflight@1",
+            "e" * 64,
+            1,
+            "native_sufficient",
+            None,
+            T0,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO ocr_preflight_pages VALUES (?,?,?,?,?)",
+        ("native-assessment", 1, len("Reported revenue."), _sha("Reported revenue."), 0),
+    )
+    # Establish the historical seal under its historical promotion policy.
+    with monkeypatch.context() as historical_policy:
+        historical_policy.setattr(processing, "PDF_FULLTEXT_EXTRACTOR", legacy)
+        old_seal = publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pdf_text",
+            cutoff_at=T1,
+            recorded_at=T1,
+        )
+    if unapproved_field is not None:
+        with pytest.raises(
+            DocumentProcessingEvidenceIntegrityError, match="pdf_extractor_identity_not_approved"
+        ):
+            verify_document_processing_evidence(
+                conn,
+                old_seal.evidence_seal_id,
+                document_version_id=document_id,
+                processing_lane="pdf_text",
+                cutoff_at=T1,
+                observed_through=T2,
+            )
+        return
+    verified = verify_document_processing_evidence(
+        conn,
+        old_seal.evidence_seal_id,
+        document_version_id=document_id,
+        processing_lane="pdf_text",
+        cutoff_at=T1,
+        observed_through=T2,
+    )
+    assert verified.extraction_run_id == "historical-pdf-run"
+    with pytest.raises(
+        DocumentProcessingEvidenceMissingError, match="native_extraction_run_missing"
+    ):
+        publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pdf_text",
+            cutoff_at=T2,
+            recorded_at=T2,
+        )
+    current = PDF_FULLTEXT_EXTRACTOR
+    _seed_run(
+        conn,
+        document_version_id=document_id,
+        blob_sha=blob_sha,
+        run_id="promoted-pdf-run",
+        extractor_name=current.name,
+        extractor_code_version=current.code_version,
+        extractor_config_sha256=current.config_sha256,
+        children=(
+            (
+                "pdf_page",
+                "Reported revenue.",
+                EvidenceLocator(source_ref=document_id, page_number=1),
+            ),
+        ),
+    )
+    new_seal = publish_document_processing_evidence(
+        conn,
+        document_version_id=document_id,
+        processing_lane="pdf_text",
+        cutoff_at=T2,
+        recorded_at=T2,
+    )
+    assert new_seal.extraction_run_id == "promoted-pdf-run"
+    assert new_seal.evidence_seal_id != old_seal.evidence_seal_id
+    assert (
+        verify_document_processing_evidence(
+            conn,
+            old_seal.evidence_seal_id,
+            document_version_id=document_id,
+            processing_lane="pdf_text",
+            cutoff_at=T1,
+            observed_through=T2,
+        ).extraction_run_id
+        == "historical-pdf-run"
     )

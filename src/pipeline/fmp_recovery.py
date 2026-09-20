@@ -113,7 +113,8 @@ class ReceiptStatus(StrEnum):
 
 class WorkPriority(IntEnum):
     INDEX_SCREENING = 100
-    REQUESTED_EVALUATION = 200
+    WATCHLIST = 150
+    EVALUATION = 200
     PORTFOLIO = 300
 
 
@@ -282,10 +283,8 @@ class WorkSpec(_FrozenModel):
     def _cross_field_contract(self) -> Self:
         if self.artifact_kind is not ArtifactKind.FINANCIAL_FACT:
             raise ValueError("FMP recovery owns financial-fact work only")
-        if self.coverage_role is ListType.EVALUATION and (
-            not self.requested or self.owner_request_id is None
-        ):
-            raise ValueError("evaluation recovery requires an owner request_id")
+        if self.requested and (self.owner_request_id is None or not self.owner_request_id.strip()):
+            raise ValueError("requested recovery requires an owner request_id")
         if self.fmp_snapshot is not None and (
             self.fmp_snapshot.work_id != make_work_id(self)
             or self.fmp_snapshot.cache_generation_id != self.cache_generation_id
@@ -557,8 +556,10 @@ def _short_transaction(connection: sqlite3.Connection) -> Generator[None, None, 
 def _priority_for(spec: WorkSpec) -> WorkPriority:
     if spec.coverage_role is ListType.PORTFOLIO:
         return WorkPriority.PORTFOLIO
-    if spec.coverage_role is ListType.EVALUATION and spec.requested:
-        return WorkPriority.REQUESTED_EVALUATION
+    if spec.coverage_role is ListType.EVALUATION:
+        return WorkPriority.EVALUATION
+    if spec.coverage_role is ListType.WATCHLIST:
+        return WorkPriority.WATCHLIST
     if spec.coverage_role is ListType.INDEX_MEMBER:
         return WorkPriority.INDEX_SCREENING
     raise ValueError(f"unsupported FMP recovery role: {spec.coverage_role.value}")

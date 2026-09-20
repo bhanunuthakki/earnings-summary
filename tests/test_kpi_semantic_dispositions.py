@@ -56,6 +56,7 @@ from pipeline.kpi_semantic_scope import scoped_kpi_definitions
 from pipeline.kpi_semantics import semantic_admission_sql
 from pipeline.queries import open_db
 from provenance.financial_fact_resolution import resolve_fact_row
+from schema_compat import expected_head
 
 NOW = datetime(2026, 8, 30, 12, tzinfo=UTC)
 
@@ -351,7 +352,7 @@ def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mut
         user_id="owner",
         reviewer="source-review:owner",
         logical_idempotency_key="crash-safe-replay",
-        expected_schema_revision="0039_add_dcf_forecast_series",
+        expected_schema_revision=expected_head(),
         review_bundle_sha256="d" * 64,
         backup_restore_evidence_id="e" * 64,
         knowledge_at=NOW,

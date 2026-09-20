@@ -30,12 +30,15 @@ from pipeline.source_policy import (
     authorize_stored_collection_target,
     reported_quarter_is_in_window,
 )
+from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.evidence_ledger import EvidenceLocator
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
     read_stable_artifact,
     require_canonical_text_artifact,
     require_no_reparse_points,
 )
+from provenance.legacy_document_evidence import LegacyDocumentScopeLocator
 from provenance.secure_file_install import (
     SecureFileInstallError,
     SecureFileOwnershipToken,
@@ -411,6 +414,12 @@ def classifier_code_identity() -> str:
             "source_policy": _file_sha(root / "src" / "pipeline" / "source_policy.py"),
             "secure_file_install": _file_sha(
                 root / "src" / "provenance" / "secure_file_install.py"
+            ),
+            "evidence_backfill": _file_sha(root / "src" / "provenance" / "evidence_backfill.py"),
+            "evidence_ledger": _file_sha(root / "src" / "provenance" / "evidence_ledger.py"),
+            "evidence_links": _file_sha(root / "src" / "provenance" / "evidence_links.py"),
+            "legacy_document_evidence": _file_sha(
+                root / "src" / "provenance" / "legacy_document_evidence.py"
             ),
             "verifier_identity": _file_sha(root / "src" / "provenance" / "verifier_identity.py"),
             "inventory_capture": _file_sha(
@@ -990,6 +999,77 @@ def _result(
     return PreparedIssuerDocumentPublication.model_validate({**value, "result_sha256": _sha(value)})
 
 
+def _require_document_evidence(
+    conn: sqlite3.Connection,
+    item: StagedIssuerDocument,
+    document_id: int,
+    root: Path,
+    target: Path,
+) -> None:
+    """Verify the immutable byte anchor; this does not prove extraction completeness."""
+    source_ref = _relative_path(root, target)
+    locator = EvidenceLocator(
+        source_ref=source_ref, legacy_table="documents", legacy_row_id=document_id
+    )
+    scope = LegacyDocumentScopeLocator(source_ref=source_ref)
+    row = conn.execute(
+        "SELECT version.blob_sha256,version.ticker,version.issuer_id,version.document_type,"
+        "date(version.period_end),observation.source_kind,observation.source_url,"
+        "blob.byte_size,run.input_sha256,run.outcome,node.locator_json,node.locator_sha256 "
+        "FROM evidence_document_versions version "
+        "JOIN evidence_source_observations observation "
+        "ON observation.observation_id=version.observation_id "
+        "AND observation.blob_sha256=version.blob_sha256 "
+        "JOIN evidence_content_blobs blob ON blob.sha256=version.blob_sha256 "
+        "JOIN evidence_extraction_runs run ON run.document_version_id=version.document_version_id "
+        "JOIN evidence_nodes node ON node.extraction_run_id=run.extraction_run_id "
+        "AND node.node_kind='document' "
+        "JOIN evidence_document_observation_links link "
+        "ON link.document_version_id=version.document_version_id "
+        "AND link.observation_id=observation.observation_id AND link.link_kind='primary' "
+        "WHERE version.legacy_document_id=? AND version.document_version_id=? "
+        "AND observation.observation_id=? AND run.extraction_run_id=? "
+        "AND node.node_id=? AND EXISTS ("
+        "SELECT 1 FROM legacy_document_evidence_binding_revisions binding "
+        "WHERE binding.legacy_document_id=version.legacy_document_id "
+        "AND binding.document_version_id=version.document_version_id "
+        "AND binding.evidence_node_id=node.node_id "
+        "AND binding.scope_content_sha256=version.blob_sha256 "
+        "AND binding.scope_locator_json=? AND binding.scope_locator_sha256=?) "
+        "AND EXISTS (SELECT 1 FROM v_evidence_blob_locations_current location "
+        "WHERE location.blob_sha256=version.blob_sha256 AND location.storage_uri=? "
+        "AND location.availability_state='present' "
+        "AND location.verified_sha256=version.blob_sha256 "
+        "AND location.verified_byte_size=blob.byte_size)",
+        (
+            document_id,
+            f"legacy-doc-{document_id}",
+            f"legacy-obs-{document_id}",
+            f"legacy-run-doc-{document_id}",
+            f"legacy-node-doc-{document_id}",
+            scope.canonical_json,
+            scope.canonical_sha256,
+            target.as_uri(),
+        ),
+    ).fetchone()
+    expected = (
+        item.sha256,
+        item.ticker,
+        f"legacy-ticker:{item.ticker}",
+        item.document_type,
+        item.period_end,
+        "ir_doc",
+        item.source_url,
+        item.byte_size,
+        item.sha256,
+        "succeeded",
+        locator.canonical_json,
+        locator.canonical_sha256,
+    )
+    if row is None or tuple(row) != expected:
+        raise PreparedIssuerDocumentPublisherError("document_evidence_missing_or_invalid")
+
+
 def _canonical_rows(
     receipt: IssuerDocumentStagingReceipt,
     root: Path,
@@ -1049,6 +1129,7 @@ def _canonical_rows(
             )
             if len(row) != 1 or tuple(row[0][1:]) != expected:
                 raise PreparedIssuerDocumentPublisherError("canonical_row_drift")
+            _require_document_evidence(conn, item, int(row[0][0]), root, target)
             ids.append(int(row[0][0]))
             paths.append(target)
     finally:
@@ -1533,11 +1614,20 @@ def _publish_prepared_issuer_documents_impl(
                     )
                     if cur.lastrowid is None:
                         raise PreparedIssuerDocumentPublisherError("document_insert_missing_id")
-                    inserted.append(int(cur.lastrowid))
+                    document_id = int(cur.lastrowid)
+                    inserted.append(document_id)
                 else:
                     if planned.existing_id is None:
                         raise PreparedIssuerDocumentPublisherError("publication_intent_reuse_drift")
-                    reused.append(planned.existing_id)
+                    document_id = planned.existing_id
+                    reused.append(document_id)
+                anchored = conn.execute(
+                    "SELECT 1 FROM evidence_document_versions WHERE document_version_id=?",
+                    (f"legacy-doc-{document_id}",),
+                ).fetchone()
+                if anchored is None:
+                    ensure_legacy_document_evidence(conn, repo_root=root, document_id=document_id)
+                _require_document_evidence(conn, item, document_id, root, target)
             # This is deliberately logical-only. A physical DB-bound inventory
             # receipt belongs to the committed snapshot below, never this tx.
             _preflight_existing_targets(items)

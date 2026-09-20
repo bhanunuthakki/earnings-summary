@@ -331,9 +331,13 @@ def build_equity_bridge_receipt(
         reporting_currency=currency,
         reasons=reasons,
     )
+    context_cash_field = _text(validated_context, "cash_field")
+    cash_field = context_cash_field or "cashAndShortTermInvestments"
+    if cash_field not in {"cashAndShortTermInvestments", "cashAndCashEquivalents"}:
+        reasons.add("invalid_equity_bridge_context_cash_field")
     cash_lineage = _matching_lineage(
         primary_fact_overlay,
-        field="cashAndShortTermInvestments",
+        field=cash_field,
         expected_m=cash_m,
         expected_period=bridge_period,
         expected_fiscal_period=bridge_fiscal,

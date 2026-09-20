@@ -7,15 +7,22 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from report.artifacts import backfill_report_fiscal_periods  # noqa: E402
+from operations.paths import configured_product_state_root
+from report.artifacts import backfill_report_fiscal_periods
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        help="Explicit artifact root; defaults to configured product state",
+    )
     parser.add_argument(
         "--ticker",
         action="append",
@@ -28,8 +35,13 @@ def main() -> int:
         help="Atomically activate only checksum-verified, exact-period index updates.",
     )
     args = parser.parse_args()
+    repo_root = (
+        args.repo_root.resolve()
+        if args.repo_root is not None
+        else configured_product_state_root(PROJECT_ROOT)
+    )
     result = backfill_report_fiscal_periods(
-        args.repo_root.resolve(),
+        repo_root,
         tickers=set(args.ticker) or None,
         apply=bool(args.apply),
     )
@@ -44,6 +56,7 @@ def main() -> int:
                 "applied": result.applied,
                 "skipped_existing": result.skipped_existing,
                 "unresolved": result.unresolved,
+                "unresolved_reasons": result.unresolved_reasons,
                 "failed": result.failed,
             },
             sort_keys=True,

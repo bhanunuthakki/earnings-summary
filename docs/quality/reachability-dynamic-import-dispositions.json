@@ -12,32 +12,22 @@
     },
     {
       "disposition": "external_optional_dependency",
-      "evidence": "Bridge lazily loads the optional arelle.RuntimeOptions factory.",
-      "fingerprint": "7f03132271fb47a13a453811c9e272a18d90a02da692f1c4cc34311f02ff32a4",
-      "line": 342,
-      "path": "execution/filing_xbrl_bridge.py",
-      "targets": [
-        "arelle.RuntimeOptions"
-      ]
-    },
-    {
-      "disposition": "external_optional_dependency",
-      "evidence": "Bridge lazily loads the optional arelle.XbrlConst module.",
-      "fingerprint": "f4fe6d5e6a2f044451a7c2b320101f751b7a1af3952fa1e4cf63c748a66b1c44",
-      "line": 840,
-      "path": "execution/filing_xbrl_bridge.py",
-      "targets": [
-        "arelle.XbrlConst"
-      ]
-    },
-    {
-      "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.api.Session factory.",
       "fingerprint": "a734ab7b7568a72fb8519927557f789e08e4ba78786ffe4d59c42ee25514844e",
       "line": 338,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.api.Session"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Bridge lazily loads the optional arelle.RuntimeOptions factory.",
+      "fingerprint": "7f03132271fb47a13a453811c9e272a18d90a02da692f1c4cc34311f02ff32a4",
+      "line": 342,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "arelle.RuntimeOptions"
       ]
     },
     {
@@ -52,9 +42,29 @@
     },
     {
       "disposition": "external_optional_dependency",
+      "evidence": "Bridge lazily loads the optional arelle.XbrlConst module.",
+      "fingerprint": "f4fe6d5e6a2f044451a7c2b320101f751b7a1af3952fa1e4cf63c748a66b1c44",
+      "line": 840,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "arelle.XbrlConst"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
+      "evidence": "Literal optional external owner-model import. stage_wealthplan_facts checks the exact requested wealthplan_root/data/plan.local.json first, inserts that owner src path when absent, imports fixed wealthplan.models, and handles ImportError as an unavailable adapter. _WealthplanModels is a typing Protocol, not repository-owned implementation. Do not classify as internal or infer source-root attestation from import resolution; Python module caching/search-path semantics remain separate. No dynamic module name supplied by data.",
+      "fingerprint": "a7645289be02bd11f3e6997f324d394ebfb778bb614e2a2a6c64d143c8910ab3",
+      "line": 275,
+      "path": "execution/import_owner_capacity.py",
+      "targets": [
+        "wealthplan.models"
+      ]
+    },
+    {
+      "disposition": "external_optional_dependency",
       "evidence": "Windows snapshot path lazily loads the platform msvcrt module.",
-      "fingerprint": "293ae9673bade68a8acfc3c3bb111e4364058a096b1c4390de42fd6987d3fd8d",
-      "line": 793,
+      "fingerprint": "ed2d4fcc2282e5b2532fb3bde27d6338b71b85a15faa385a521cd736642b55a4",
+      "line": 794,
       "path": "execution/refresh_cache.py",
       "targets": [
         "msvcrt"
@@ -244,7 +254,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "e07a3181695d51ce545139e0e5cee20ee1c491c8d6b3f15b494ac349ca5a27d4",
+      "source_sha256": "3c06f1e89a71c72f15bf56a3ff66be7abfe07abd2ff61c5f2c268a0314028403",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

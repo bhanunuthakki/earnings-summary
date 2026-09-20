@@ -11,14 +11,22 @@ from __future__ import annotations
 
 import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from compute import ir_narrative
 from compute.ir_narrative import (
-    _discover_sources,  # pyright: ignore[reportPrivateUsage]
-    _normalize,  # pyright: ignore[reportPrivateUsage]
     extract_for_ticker,
+    has_pending_narrative,
+)
+
+_normalize = cast(Callable[[str], str], getattr(ir_narrative, "_normalize"))
+_discover_sources = cast(
+    Callable[[Path, str], dict[tuple[str, str], list[Path]]],
+    getattr(ir_narrative, "_discover_sources"),
 )
 
 # --- _normalize --------------------------------------------------------------
@@ -101,7 +109,7 @@ def _install_fake_parser(monkeypatch: pytest.MonkeyPatch, text_by_name: dict[str
     def _fake_extract(path: str) -> str:
         return text_by_name.get(Path(path).name, "")
 
-    fake.extract_text_from_pdf = _fake_extract  # type: ignore[attr-defined]
+    setattr(fake, "extract_text_from_pdf", _fake_extract)
     monkeypatch.setitem(sys.modules, "parser", fake)
 
 
@@ -175,3 +183,38 @@ def test_extract_no_sources_returns_zero_counts(
     _install_fake_parser(monkeypatch, {})
     counts = extract_for_ticker(tmp_path, "FOO")
     assert counts == {"processed": 0, "cached": 0, "failed": 0, "skipped_empty": 0}
+
+
+def test_pending_uses_narrative_source_and_cache_owner(tmp_path: Path) -> None:
+    assert not has_pending_narrative(tmp_path, "FOO")
+    _touch_pdf(tmp_path / "ir_documents" / "FOO" / "2025-Q4" / "ir_press_release__abcd1234.pdf")
+    assert not has_pending_narrative(tmp_path, "FOO")
+    _touch_pdf(tmp_path / "ir_documents" / "FOO" / "2025-Q4" / "ir_presentation__abcd1234.pdf")
+    assert has_pending_narrative(tmp_path, "FOO")
+    cache = tmp_path / "data" / "ir_narrative" / "FOO" / "ir_presentation__2025-Q4.txt"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("existing narrative", encoding="utf-8")
+    assert not has_pending_narrative(tmp_path, "FOO")
+
+
+def test_partial_pdf_failure_remains_pending_and_cli_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "ir_documents" / "FOO" / "2025-Q4"
+    _touch_pdf(base / "ir_presentation__aaaaaaaa.pdf")
+    _touch_pdf(base / "ir_presentation__bbbbbbbb.pdf")
+    fake = types.ModuleType("parser")
+
+    def extract(path: str) -> str:
+        if Path(path).name.endswith("bbbbbbbb.pdf"):
+            raise ValueError("invalid PDF")
+        return "Successful first document content. " * 20
+
+    monkeypatch.setattr(fake, "extract_text_from_pdf", extract, raising=False)
+    monkeypatch.setitem(sys.modules, "parser", fake)
+    monkeypatch.setattr(
+        sys, "argv", ["ir_narrative.py", "--ticker", "FOO", "--repo-root", str(tmp_path)]
+    )
+    assert ir_narrative.main() == 1
+    assert has_pending_narrative(tmp_path, "FOO")
+    assert not (tmp_path / "data" / "ir_narrative" / "FOO").exists()

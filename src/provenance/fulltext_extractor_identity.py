@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from provenance.ooxml_extraction import classify_office_format
 
-FULLTEXT_EXTRACTOR_IDENTITY_POLICY_VERSION = "fulltext-extractor-identity-policy@1"
+FULLTEXT_EXTRACTOR_IDENTITY_POLICY_VERSION = "fulltext-extractor-identity-policy@2"
 FULLTEXT_EXTRACTOR_NAME = "fulltext-evidence-backfill"
 PDF_TABLE_EXTRACTOR_NAME = "PyMuPDF.Page.find_tables"
 
@@ -35,6 +35,19 @@ BASE_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
     ).hexdigest(),
     idempotency_namespace="fulltext",
     evidence_namespace="fulltext",
+    hierarchy="flat",
+)
+# Deliberate PDF-only promotion of the reviewed requirements.lock runtime.
+# Readers must never select authority from their ambient installed parser.
+PDF_FULLTEXT_PYPDF_VERSION = "6.16.2"
+PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
+    name=FULLTEXT_EXTRACTOR_NAME,
+    code_version=f"fulltext-evidence-backfill@5-pdf-runtime;pypdf={PDF_FULLTEXT_PYPDF_VERSION}",
+    config_sha256=hashlib.sha256(
+        f"fulltext-evidence-backfill-config-v5-pdf:pdf-pages,pypdf={PDF_FULLTEXT_PYPDF_VERSION}".encode()
+    ).hexdigest(),
+    idempotency_namespace="fulltext-pdf-v5",
+    evidence_namespace="fulltext-pdf-v5",
     hierarchy="flat",
 )
 OFFICE_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
@@ -100,6 +113,8 @@ def resolve_fulltext_extractor_identity(
         return OFFICE_FULLTEXT_EXTRACTOR
     suffix = Path(urlparse(source_ref).path).suffix.lower()
     normalized_media_type = None if media_type is None else media_type.partition(";")[0].lower()
+    if normalized_media_type == "application/pdf" or suffix == ".pdf":
+        return PDF_FULLTEXT_EXTRACTOR
     if (
         suffix in _ARCHIVE_SUFFIXES
         or normalized_media_type in _ARCHIVE_MEDIA_TYPES

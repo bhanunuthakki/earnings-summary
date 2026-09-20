@@ -6,8 +6,8 @@
 
 ## Architecture
 
-- `src/pipeline/sec_xbrl.py` — fetch + parse. `TAG_LADDERS` maps ~45 canonical `line_item` names (verbatim the FMP extractor names, so every reader / `source_disagreement` check / tier-dedup works unchanged) to ordered GAAP+IFRS tag ladders. First rung with data wins per logical period; the winning tag is recorded in `FactLocator.json_path`. One `documents` row per SEC accession (provenance), raw payloads at `data/historical/sec/{T}_companyfacts.json`.
-- `execution/fetch_sec_xbrl.py` — CLI. Every SEC request is bound to the active stored `tracked_companies` identity and `list_type`: portfolio is automatic, evaluation requires explicit `--ticker T`, and watchlist/index/ETF/unknown names fail closed. `--all-mapped` is compatibility syntax and cannot widen automatic scope. Tracked authorized names missing a CIK emit `sec_cik_map_stale` on stderr.
+- `src/pipeline/sec_xbrl.py` — fetch + parse. `TAG_LADDERS` maps canonical `line_item` names to ordered GAAP+IFRS tag ladders. First rung with data wins per logical period; the winning tag is recorded in `FactLocator.json_path`. Exact CompanyFacts response bytes are retained as immutable snapshot documents; the conventional `{T}_companyfacts.json` is a mutable working cache, not historical evidence. CompanyFacts is a fact feed, not a retained copy of every native filing.
+- `execution/fetch_sec_xbrl.py` — CLI. Every SEC request is bound to active stored identity, role, and instrument. Portfolio, evaluation, and watchlist receive automatic full acquisition; corporate sources require equity/ADR identity and valid CIK. Index/ETF/unknown names fail closed for this lane. `--all-mapped` cannot widen automatic scope. Authorized names missing a CIK emit `sec_cik_map_stale`.
 - Tier precedence: SEC facts score confidence 1.00 (`sec_official` + deterministic) vs FMP 0.94, and `SOURCE_QUALITY_TIER_RANK` puts `sec_official` first — **where the two disagree, the filed SEC number wins by design**.
 
 ## Cadence
@@ -20,7 +20,14 @@ Weekly Windows scheduled task `\earnings-summary\fetch_sec_xbrl`, Saturday 02:00
   knowledge time, and Content Identity.
 - **Attempt Identity:** unique scheduled or interactive ingestion invocation and receipt.
 
-Rate limit: 0.2s between authorized portfolio tickers (~5 req/sec, half SEC's 10 req/sec cap) with the identifying User-Agent in `_HEADERS`. Missing/ambiguous identity, an invalid role, or denied depth is skipped before network access. At the direct CompanyFacts boundary, HTTP 401/403 becomes a typed auth denial and halts the current job without retry; ordinary non-auth transport failures and per-ticker schema failures remain visible and isolated.
+Rate limit: 0.2s between authorized tickers with the identifying User-Agent in `_HEADERS`. Missing/ambiguous identity, an invalid role/instrument, or denied depth is skipped before network access. At the direct CompanyFacts boundary, HTTP 401/403 becomes a typed auth denial and halts the current job without retry; ordinary non-auth transport failures and per-ticker schema failures remain visible and isolated.
+
+Legacy `#accn=` document rows may have SHA-256(accession text) as their old key.
+The evidence backfill reports `legacy_sec_accession_identity` and routes repair to
+the existing CompanyFacts snapshot/binding and legacy fact-match revision owners.
+Do not change those keys or treat a fresh response as recovered historical bytes.
+Source-inventory, document-processing, and semantic receipts remain separate:
+a successful CompanyFacts fetch does not prove a complete issuer filing archive.
 
 Register (or re-register after editing the XML) from the MAIN checkout — editing the XML alone does NOT update the live task:
 
