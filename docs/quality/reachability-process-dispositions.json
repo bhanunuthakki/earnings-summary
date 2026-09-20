@@ -601,7 +601,7 @@
       "disposition": "external_process",
       "evidence": "_call_claude spawns the fixed claude CLI executable.",
       "fingerprint": "f17b1bace35e733f506889f5b7f4eb8d4627a9769415039fa01cf1c65a0eda70",
-      "line": 1305,
+      "line": 1303,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -611,7 +611,7 @@
       "disposition": "external_process",
       "evidence": "Streaming path spawns the fixed claude CLI executable.",
       "fingerprint": "13c83eab24c257852a557b6678dcddd6b1fcd97c50450ef4d0501f9c10e09a16",
-      "line": 2098,
+      "line": 2099,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -621,7 +621,7 @@
       "disposition": "external_process",
       "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
       "fingerprint": "c0f2090f8e0dab9e0721b01517c1a5990c9b8324e0bcb708f43df4656bb07016",
-      "line": 2548,
+      "line": 2549,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"

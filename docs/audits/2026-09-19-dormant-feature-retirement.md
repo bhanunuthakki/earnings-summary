@@ -74,6 +74,20 @@ Evidence: `.tmp/audit-tests/dormant-retirement-compatibility-tests.txt` and
 Root verification against the initial `f0d2130c` base found 3,036 whole-tree
 Pyright diagnostics versus 3,095 before this change: 59 removed and no new
 diagnostic identities in any file. Reconstruction and architecture checks pass.
-Final counts must be measured again after the queued typing changes are integrated.
-Shared reachability receipts, reconstruction inventory, ceilings, and full release
-gates are owned by the integrating task and are not restamped by this change.
+After rebasing onto release `5f35a8a2` (#1568), `make check-fast` passes, including
+24 changed-module tests. Design synchronization and reconstruction checks pass.
+The release's LLM source and LLM tests are unchanged from the initial base, so the
+473-test compatibility evidence still applies.
+
+The retirement-only candidate has 2,525 retained Python files, 2,966 existing
+typing diagnostics, and 2,503 suppressions: reductions of 59 diagnostics and 13
+suppressions against that release. Every subsystem ceiling descends or stays
+unchanged. The separate queued typing slices are not included in these counts.
+
+Three reviewed subprocess call sites in `src/llm/cli.py` move with the cleanup.
+Their source statements, external targets, and classifications remain unchanged;
+their exact line fingerprints and scanner-consumed provenance are refreshed.
+Reachability collection is COMPLETE and closure PASS: 31,708 edges, no unresolved
+or unknown production targets, and 99 test-only unknown edges.
+Full CI on the published candidate remains the merge gate. Production data,
+migrations, and runtime deployment are outside this source retirement.
