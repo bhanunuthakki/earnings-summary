@@ -1,20 +1,21 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
 import json
 import sqlite3
-from datetime import timedelta
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
 import provenance.population_canonical_resolution as population
-from alembic import command
+import tests.test_canonical_fact_resolution as resolution_fixtures
 from provenance.canonical_fact_resolution import (
+    ResolutionPolicy,
     ResolutionSnapshotScope,
     VerifiedResolutionSnapshot,
 )
@@ -35,13 +36,35 @@ from provenance.population_canonical_resolution import (
     verify_canonical_resolution,
 )
 from provenance.population_completeness import PopulationTemporalScope
-from tests.test_canonical_fact_resolution import (
-    NOW,
-    ROOT,
-    _bind_every_published_cell,
-    _resolution_database,
+from tests.test_canonical_fact_resolution import NOW
+from tests.test_filing_xbrl_extraction_ledger import (
+    filing_xbrl_entry,
+    filing_xbrl_ledger_database,
+    filing_xbrl_output,
 )
-from tests.test_filing_xbrl_extraction_ledger import _entry, _output
+
+bind_every_published_cell: Callable[[sqlite3.Connection], str] = getattr(
+    resolution_fixtures, "_bind_every_published_cell"
+)
+verified_ontology_snapshot: Callable[
+    [sqlite3.Connection, datetime, datetime], tuple[str, str, int]
+] = getattr(population, "_verified_ontology_snapshot")
+prewrite_manifest: Callable[
+    [sqlite3.Connection, datetime, datetime], CanonicalResolutionPrewriteManifest
+] = getattr(population, "_prewrite_manifest")
+canonical_snapshot_id: Callable[[str, datetime, datetime], str] = getattr(
+    population, "_snapshot_id"
+)
+canonical_projection_id: Callable[[str, datetime, datetime], str] = getattr(
+    population, "_projection_id"
+)
+digest: Callable[..., str] = getattr(population, "_digest")
+db_time: Callable[[datetime], str] = getattr(population, "_db_time")
+resolution_policy: ResolutionPolicy = getattr(population, "_POLICY")
+verify_snapshot_sets: Callable[
+    [sqlite3.Connection, datetime, datetime, CanonicalResolutionPrewriteManifest], None
+] = getattr(population, "_verify_snapshot_sets")
+sha: Callable[[object], str] = getattr(population, "_sha")
 
 
 def _seal_ontology(conn: sqlite3.Connection) -> str:
@@ -59,31 +82,38 @@ def _seal_ontology(conn: sqlite3.Connection) -> str:
 
 def _ready_database(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     output: FilingXbrlNormalizedOutput | None = None,
 ) -> sqlite3.Connection:
-    prepared = _output((_entry(0, numeric_value=Decimal("100")),)) if output is None else output
-    conn = _resolution_database(tmp_path, prepared)
+    prepared = (
+        filing_xbrl_output((filing_xbrl_entry(0, numeric_value=Decimal("100")),))
+        if output is None
+        else output
+    )
+    conn = filing_xbrl_ledger_database(tmp_path, prepared, migrated_db)
     FilingXbrlExtractionLedger(conn).publish(prepared)
-    path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    conn.row_factory = sqlite3.Row
+    bind_every_published_cell(conn)
+    _seal_ontology(conn)
     conn.commit()
-    conn.close()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(config, "head")
-    upgraded = sqlite3.connect(path)
-    upgraded.row_factory = sqlite3.Row
-    upgraded.execute("PRAGMA foreign_keys = ON")
-    _bind_every_published_cell(upgraded)
-    _seal_ontology(upgraded)
-    upgraded.commit()
-    return upgraded
+    return conn
+
+
+PopulationDatabase = Callable[[FilingXbrlNormalizedOutput | None], sqlite3.Connection]
+
+
+@pytest.fixture
+def population_database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> PopulationDatabase:
+    return partial(_ready_database, tmp_path, migrated_db)
 
 
 def test_full_population_uses_system_clock_and_closes_exact_sets(
-    tmp_path: Path,
+    population_database: PopulationDatabase,
 ) -> None:
-    conn = _ready_database(tmp_path)
+    conn = population_database(None)
     recorded_at = NOW + timedelta(hours=2)
     try:
         preview = populate_canonical_resolution(
@@ -126,9 +156,9 @@ def test_full_population_uses_system_clock_and_closes_exact_sets(
 
 
 def test_population_selects_latest_terminal_ontology_snapshot_at_cutoff(
-    tmp_path: Path,
+    population_database: PopulationDatabase,
 ) -> None:
-    conn = _ready_database(tmp_path)
+    conn = population_database(None)
     later = NOW + timedelta(hours=1)
     terminal_snapshot_id = "ontology:population:o2"
     try:
@@ -141,7 +171,7 @@ def test_population_selects_latest_terminal_ontology_snapshot_at_cutoff(
             )
         )
 
-        snapshot_id, _, _ = population._verified_ontology_snapshot(
+        selected_snapshot_id, _, _ = verified_ontology_snapshot(
             conn,
             NOW,
             later,
@@ -154,21 +184,23 @@ def test_population_selects_latest_terminal_ontology_snapshot_at_cutoff(
             ),
         )
 
-        assert snapshot_id == terminal_snapshot_id
+        assert selected_snapshot_id == terminal_snapshot_id
         assert result.state == "planned"
         assert result.planned_resolved_cell_count == 1
     finally:
         conn.close()
 
 
-def test_unresolved_admission_cannot_seal_or_project(tmp_path: Path) -> None:
-    output = _output(
+def test_unresolved_admission_cannot_seal_or_project(
+    population_database: PopulationDatabase,
+) -> None:
+    output = filing_xbrl_output(
         (
-            _entry(0, concept_name="Revenue", numeric_value=Decimal("100")),
-            _entry(1, concept_name="Sales", numeric_value=Decimal("200")),
+            filing_xbrl_entry(0, concept_name="Revenue", numeric_value=Decimal("100")),
+            filing_xbrl_entry(1, concept_name="Sales", numeric_value=Decimal("200")),
         )
     )
-    conn = _ready_database(tmp_path, output)
+    conn = population_database(output)
     recorded_at = NOW + timedelta(hours=2)
     try:
         preview = populate_canonical_resolution(
@@ -201,9 +233,9 @@ def test_unresolved_admission_cannot_seal_or_project(tmp_path: Path) -> None:
 
 
 def test_dual_clock_verifiers_ignore_artifacts_recorded_after_observation(
-    tmp_path: Path,
+    population_database: PopulationDatabase,
 ) -> None:
-    conn = _ready_database(tmp_path)
+    conn = population_database(None)
     recorded_at = NOW + timedelta(hours=2)
     try:
         populate_canonical_resolution(
@@ -233,9 +265,9 @@ def test_dual_clock_verifiers_ignore_artifacts_recorded_after_observation(
 
 
 def test_terminal_verifiers_reject_o1_artifacts_after_o2_late_input(
-    tmp_path: Path,
+    population_database: PopulationDatabase,
 ) -> None:
-    conn = _ready_database(tmp_path)
+    conn = population_database(None)
     observed_o1 = NOW + timedelta(hours=1)
     observed_o2 = NOW + timedelta(hours=2)
     try:
@@ -292,9 +324,9 @@ def test_terminal_verifiers_reject_o1_artifacts_after_o2_late_input(
 
 
 def test_bounded_all_stops_before_sealing_and_exposes_checkpoint(
-    tmp_path: Path,
+    population_database: PopulationDatabase,
 ) -> None:
-    conn = _ready_database(tmp_path)
+    conn = population_database(None)
     try:
         preview = populate_canonical_resolution(
             conn,
@@ -328,9 +360,9 @@ def test_bounded_all_stops_before_sealing_and_exposes_checkpoint(
 
 
 def test_prewrite_manifest_streams_candidate_commitment_after_subject_revision_supersession(
-    tmp_path: Path,
+    population_database: PopulationDatabase,
 ) -> None:
-    conn = _ready_database(tmp_path)
+    conn = population_database(None)
     conn.row_factory = sqlite3.Row
     try:
         original = conn.execute(
@@ -350,7 +382,7 @@ def test_prewrite_manifest_streams_candidate_commitment_after_subject_revision_s
             replacement,
         )
 
-        manifest = population._prewrite_manifest(
+        manifest = prewrite_manifest(
             conn,
             NOW,
             NOW + timedelta(hours=1),
@@ -364,8 +396,10 @@ def test_prewrite_manifest_streams_candidate_commitment_after_subject_revision_s
         conn.close()
 
 
-def test_apply_rejects_a_dry_run_commitment_mismatch(tmp_path: Path) -> None:
-    conn = _ready_database(tmp_path)
+def test_apply_rejects_a_dry_run_commitment_mismatch(
+    population_database: PopulationDatabase,
+) -> None:
+    conn = population_database(None)
     try:
         with pytest.raises(ValueError, match="input commitment"):
             populate_canonical_resolution(
@@ -383,9 +417,9 @@ def test_apply_rejects_a_dry_run_commitment_mismatch(tmp_path: Path) -> None:
 
 
 def test_stale_ontology_snapshot_is_rejected_before_resolution_write(
-    tmp_path: Path,
+    population_database: PopulationDatabase,
 ) -> None:
-    conn = _ready_database(tmp_path)
+    conn = population_database(None)
     try:
         original = conn.execute(
             "SELECT metric_id,reporting_entity_id,period_kind,period_start,"
@@ -491,7 +525,7 @@ def test_equal_cardinality_swapped_issuer_cells_fail_exact_scope_gate(
     for issuer_id, wrong_cell in (("issuer-a", "cell-b"), ("issuer-b", "cell-a")):
         conn.execute(
             "INSERT INTO canonical_fact_resolution_snapshot_members VALUES (?,?)",
-            (population._snapshot_id(issuer_id, NOW, NOW), wrong_cell),
+            (canonical_snapshot_id(issuer_id, NOW, NOW), wrong_cell),
         )
 
     class _FakeEngine:
@@ -508,11 +542,11 @@ def test_equal_cardinality_swapped_issuer_cells_fail_exact_scope_gate(
             issuer_id = (
                 "issuer-a"
                 if snapshot_id.endswith(
-                    population._digest(
+                    digest(
                         "issuer-a",
-                        population._db_time(NOW),
-                        population._db_time(NOW),
-                        population._POLICY.config_sha256,
+                        db_time(NOW),
+                        db_time(NOW),
+                        resolution_policy.config_sha256,
                     )
                 )
                 else "issuer-b"
@@ -535,23 +569,23 @@ def test_equal_cardinality_swapped_issuer_cells_fail_exact_scope_gate(
 
     monkeypatch.setattr(population, "CanonicalFactResolutionEngine", _FakeEngine)
     with pytest.raises(ValueError, match="cell scope is not exact"):
-        population._verify_snapshot_sets(conn, NOW, NOW, manifest)
+        verify_snapshot_sets(conn, NOW, NOW, manifest)
 
 
 def test_ontology_manifest_hash_is_canonical() -> None:
     payload = json.dumps([], separators=(",", ":"))
-    assert hashlib.sha256(payload.encode()).hexdigest() == population._sha(payload)
+    assert hashlib.sha256(payload.encode()).hexdigest() == sha(payload)
 
 
 def test_population_artifact_ids_include_observation_horizon() -> None:
     later_observation = NOW + timedelta(hours=1)
 
-    assert population._snapshot_id("issuer-a", NOW, NOW) != population._snapshot_id(
+    assert canonical_snapshot_id("issuer-a", NOW, NOW) != canonical_snapshot_id(
         "issuer-a",
         NOW,
         later_observation,
     )
-    assert population._projection_id("issuer-a", NOW, NOW) != population._projection_id(
+    assert canonical_projection_id("issuer-a", NOW, NOW) != canonical_projection_id(
         "issuer-a",
         NOW,
         later_observation,

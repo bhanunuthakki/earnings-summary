@@ -19,7 +19,7 @@ from quality.test_db_invocations import collect_invocations
 
 TESTS_DIR = Path(__file__).resolve().parent
 # Resolved and unresolved AST upgrade candidates; old substring count was 109.
-_MAX_DIRECT_CHAIN_BUILDERS = 105
+_MAX_DIRECT_CHAIN_BUILDERS = 104
 
 
 def _calls_upgrade(source: str, path: str) -> bool:
