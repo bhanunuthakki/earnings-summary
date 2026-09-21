@@ -87,6 +87,20 @@ Operations registry and its visible Jobs, Sources, Data, and Actions contracts t
 unchanged; manifest validation, transactionality, and durable coverage receipts stay owned by the
 ingestion boundary rather than the Operations workspace.
 
+### Streamlit analytics deep-dive sandbox
+
+`explore-sandbox/analytics_deep_dive.py` is a local, optional-dependency analytics surface: an
+interactive composition of deterministic catalog → ViewSpec reads over an operator-named
+synthetic clone or restored snapshot. It adds no scheduled job, managed service, operator
+control, database write, or production access — the app opens every connection read-only,
+refuses a checkout-local `data/portfolio.db`, and every number comes from the shared
+provenance-aware resolver (`viewspec.engine`), never a sandbox-local query path. Theme and
+control parity with the cockpit is generated and drift-checked
+(`scripts/gen_streamlit_theme.py`; `tests/test_explore_sandbox_kit.py`), so no new visual
+contract exists to govern. The canonical Operations registry and its visible Jobs, Sources,
+Data, and Actions contracts therefore remain unchanged; the sandbox is not an operator
+workflow and never a production authority.
+
 ### KPI definition-revision shadow census
 
 `execution/audit_kpi_revision_shadow_census.py` is a supported manual, read-only rehearsal. The
