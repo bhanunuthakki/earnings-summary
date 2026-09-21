@@ -37,6 +37,19 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
+def _run_scanner_cli(script: Path, root: Path) -> subprocess.CompletedProcess[bytes]:
+    child_env = clean_local_git_env()
+    child_env.pop("PYTHONPATH", None)
+    return subprocess.run(
+        [sys.executable, str(script), "--root", str(root)],
+        capture_output=True,
+        check=False,
+        shell=False,
+        env=child_env,
+        timeout=30,
+    )
+
+
 def _init(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     assert _git(root, "init", "-q").returncode == 0
@@ -373,14 +386,7 @@ def test_scanner_identity_changes_only_after_committed_helper_change(tmp_path: P
         helper_cross = audit_test_db_patterns(helper_root)
         assert helper_cross.collection_status == "HOLD"
         assert helper_cross.collection_note == "scanner-closure-mismatch"
-    proc = subprocess.run(
-        [sys.executable, str(root / "execution/audit_test_db_patterns.py"), "--root", str(root)],
-        capture_output=True,
-        check=False,
-        shell=False,
-        env=clean_local_git_env(),
-        timeout=30,
-    )
+    proc = _run_scanner_cli(root / "execution/audit_test_db_patterns.py", root)
     assert proc.returncode == 0
     committed = json.loads(proc.stdout.decode("utf-8"))
     assert committed["collection_status"] == "COMPLETE"
@@ -399,6 +405,16 @@ def test_scanner_closure_mismatch_holds(tmp_path: Path) -> None:
     assert report.collection_status == "HOLD"
     assert report.collection_note == "scanner-closure-mismatch"
     assert report.violations == ("scanner-closure-mismatch",)
+
+    proc = _run_scanner_cli(
+        Path(__file__).resolve().parents[1] / "execution/audit_test_db_patterns.py",
+        root,
+    )
+    assert proc.returncode == 2
+    payload = json.loads(proc.stdout.decode("utf-8"))
+    assert payload["collection_status"] == "HOLD"
+    assert payload["collection_note"] == "scanner-closure-mismatch"
+    assert payload["violations"] == ["scanner-closure-mismatch"]
 
 
 def test_symlink_missing_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
