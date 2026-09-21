@@ -4,17 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
     DerivationInputV2,
@@ -29,53 +26,20 @@ from provenance.fact_plane_v2 import (
     ReportedFactObservationV2,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
-BASE_REVISION = "0213_decision_draft_provider_id"
 
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-@pytest.fixture(scope="session")
-def fact_plane_v2_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("fact_plane_v2_template") / "template.db"
-    legacy = sqlite3.connect(path)
-    legacy.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    legacy.commit()
-    legacy.close()
-    config = _config(path)
-    command.stamp(config, BASE_REVISION)
-    command.upgrade(config, "head")
-    return path
-
-
 @pytest.fixture
 def conn(
     tmp_path: Path,
-    fact_plane_v2_template: Path,
+    migrated_db: Callable[..., Path],
 ) -> Generator[sqlite3.Connection, None, None]:
     path = tmp_path / "fact-plane-v2.db"
-    shutil.copyfile(fact_plane_v2_template, path)
+    migrated_db(path)
 
     database = sqlite3.connect(path)
     database.execute("PRAGMA foreign_keys = ON")

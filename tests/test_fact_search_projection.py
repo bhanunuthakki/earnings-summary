@@ -4,18 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import JsonValue, ValidationError
 
-from alembic import command
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
     ExtractionRunCompletenessSealV2,
@@ -45,7 +42,6 @@ from search.fact_projection import (
 
 T0 = datetime(2026, 7, 27, 12, tzinfo=UTC)
 RECORDED = T0 + timedelta(hours=1)
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _sha(value: str) -> str:
@@ -56,46 +52,13 @@ def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _alembic_config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-_LEGACY_FACT_TABLES_DDL = """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        """
-
-
-@pytest.fixture(scope="module")
-def hardened_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("fact_search_projection") / "template.db"
-    database = sqlite3.connect(path)
-    database.executescript(_LEGACY_FACT_TABLES_DDL)
-    database.commit()
-    database.close()
-    base_revision = "0213_decision_draft_provider_id"
-    config = _alembic_config(path)
-    command.stamp(config, base_revision)
-    command.upgrade(config, "head")
-    return path
-
-
 @pytest.fixture
 def hardened_conn(
     tmp_path: Path,
-    hardened_template: Path,
+    migrated_db: Callable[..., Path],
 ) -> Generator[sqlite3.Connection, None, None]:
     path = tmp_path / "fact-search-projection.db"
-    shutil.copyfile(hardened_template, path)
+    migrated_db(path)
     database = sqlite3.connect(path)
     database.execute("PRAGMA foreign_keys = ON")
     _seed_hardened_foundation(database)

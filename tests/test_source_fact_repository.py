@@ -3,14 +3,12 @@ from __future__ import annotations
 import hashlib
 import inspect
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
     DerivationInputV2,
@@ -39,43 +37,20 @@ from provenance.source_fact_repository import (
     SourceFactRepository,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
-BASE_REVISION = "0213_decision_draft_provider_id"
 
 
 def sha256(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 @pytest.fixture
-def conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
+def conn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> Generator[sqlite3.Connection, None, None]:
     path = tmp_path / "source-fact-repository.db"
-    database = sqlite3.connect(path)
-    database.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    database.commit()
-    database.close()
-    config = _config(path)
-    command.stamp(config, BASE_REVISION)
-    command.upgrade(config, "head")
+    migrated_db(path)
     database = sqlite3.connect(path)
     database.execute("PRAGMA foreign_keys = ON")
     _seed_foundation(database)

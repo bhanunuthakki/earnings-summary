@@ -49,14 +49,17 @@ make_publication = cast(
     _HELPERS["make_publication"],
 )
 _conn_factory = cast(
-    Callable[[Path], Generator[sqlite3.Connection, None, None]],
+    Callable[[Path, Callable[..., Path]], Generator[sqlite3.Connection, None, None]],
     getattr(_HELPERS["conn"], "__wrapped__"),
 )
 
 
 @pytest.fixture
-def conn(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
-    yield from _conn_factory(tmp_path)
+def conn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> Generator[sqlite3.Connection, None, None]:
+    yield from _conn_factory(tmp_path, migrated_db)
 
 
 def test_as_reported_and_provenance_bundle_are_exact_and_decimal(
