@@ -11,9 +11,7 @@ from pathlib import Path
 
 import pytest
 import requests
-from alembic.config import Config
 
-from alembic import command
 from pipeline import sec_xbrl
 from pipeline.sec_xbrl import FetchedCompanyFacts
 from provenance.issuer_registry import (
@@ -30,23 +28,10 @@ from provenance.sec_companyfacts_binding_backfill import (
     backfill_sec_companyfacts_bindings,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 19, 0, 0, tzinfo=UTC)
 SHA = hashlib.sha256(b"test-policy").hexdigest()
-
-
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _database(tmp_path: Path) -> sqlite3.Connection:
-    path = tmp_path / "isolated-companyfacts.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
+_TARGET = "0231_legacy_document_evidence_bindings"
+_BOOTSTRAP_SQL = """
         CREATE TABLE documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -86,12 +71,23 @@ def _database(tmp_path: Path) -> sqlite3.Connection:
             ticker, period_end, fiscal_period_type, line_item, source_doc_id
         );
         """
+_BOOTSTRAP_SHA256 = hashlib.sha256(_BOOTSTRAP_SQL.encode()).hexdigest()
+
+
+def _bootstrap_database(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript(_BOOTSTRAP_SQL)
+
+
+def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    path = migrated_db(
+        tmp_path / "isolated-companyfacts.db",
+        archived=True,
+        upgrade_from="0213_decision_draft_provider_id",
+        before_upgrade=_bootstrap_database,
+        seed_sha256=_BOOTSTRAP_SHA256,
+        target=_TARGET,
     )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0231_legacy_document_evidence_bindings")
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -281,8 +277,9 @@ def test_companyfacts_fetch_uses_dynamic_sec_identity_header(
 
 def test_dry_run_is_offline_read_only_and_plans_exact_registry_identity(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     _seed_identity(
         conn,
         ticker="ACME",
@@ -315,8 +312,9 @@ def test_dry_run_is_offline_read_only_and_plans_exact_registry_identity(
 
 def test_apply_spaces_requests_captures_only_evidence_and_resumes_idempotently(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     _seed_identity(
         conn,
         ticker="ACME",
@@ -423,8 +421,9 @@ def test_apply_spaces_requests_captures_only_evidence_and_resumes_idempotently(
 
 def test_sec_403_is_hard_stop_without_database_or_checkpoint_mutation(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     _seed_identity(
         conn,
         ticker="ACME",
