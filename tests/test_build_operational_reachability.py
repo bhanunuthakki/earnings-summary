@@ -186,7 +186,16 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    assert len(graph.unknown_edges) == 110
+    # The required-actuals CLI regression adds one hermetic subprocess edge.
+    assert len(graph.unknown_edges) == 111
+    assert (
+        sum(
+            edge.source == "tests/test_dcf_assumption_cli.py"
+            and edge.target == "<dynamic process entrypoint>"
+            for edge in graph.unknown_edges
+        )
+        == 2
+    )
     assert any(
         edge.source == "tests/test_release_retained_boundaries.py"
         and edge.target == "<dynamic process entrypoint>"
