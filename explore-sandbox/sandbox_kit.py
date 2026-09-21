@@ -30,12 +30,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-SANDBOX_DIR = Path(__file__).resolve().parent
-_REPO_SRC = SANDBOX_DIR.parent / "src"
-if str(_REPO_SRC) not in sys.path:
-    sys.path.insert(0, str(_REPO_SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from ui.controls import (  # noqa: E402
+from ui.controls import (
     chip_tone_class,
     controls_css,
     fact_anchor_attrs,
@@ -50,7 +47,7 @@ from ui.controls import (  # noqa: E402
     thesis_status_tone,
     ticker_label,
 )
-from ui.tokens import palette_css  # noqa: E402
+from ui.tokens import palette_css
 
 __all__ = [
     "chip_tone_class",

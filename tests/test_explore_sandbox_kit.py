@@ -19,16 +19,15 @@ import sys
 import tomllib
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "explore-sandbox"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "explore-sandbox"))
 
-import sandbox_kit  # noqa: E402
+import sandbox_kit
 
-import ui.controls as controls  # noqa: E402
-import ui.tokens as tokens  # noqa: E402
-from scripts.gen_streamlit_theme import (  # noqa: E402
+import ui.controls as controls
+import ui.tokens as tokens
+from scripts.gen_streamlit_theme import (
     CONFIG_OUTPUT,
     CONTROLS_CSS_OUTPUT,
     CSS_OUTPUT,
@@ -36,6 +35,8 @@ from scripts.gen_streamlit_theme import (  # noqa: E402
     render_controls_css,
     render_css,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_theme_css_is_exactly_the_two_authority_layers() -> None:

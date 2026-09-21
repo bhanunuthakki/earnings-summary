@@ -20,6 +20,12 @@ from quality.git_env import clean_local_git_env
 _NON_RETAINED_PREFIXES = (
     "alembic/versions/",
     "alembic/versions_archived/",
+    # The Streamlit sandbox is an optional-dependency surface that [tool.pyright]
+    # excludes, because its third-party imports are absent from the hash-pinned
+    # lock this gate installs. Keeping it out of the retained population is what
+    # makes the analyzed-file count and the subsystem buckets exact; its format,
+    # lint, and suppression coverage still run through quality.check_changed.
+    "explore-sandbox/",
     "scratch/",
 )
 

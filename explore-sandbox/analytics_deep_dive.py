@@ -24,18 +24,15 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-SANDBOX_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SANDBOX_DIR.parent
-for _entry in (str(REPO_ROOT / "src"), str(SANDBOX_DIR)):
-    if _entry not in sys.path:
-        sys.path.insert(0, _entry)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import sandbox_kit  # noqa: E402
+import sandbox_kit
 
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from ui.tokens import page_title  # noqa: E402
-from viewspec.engine import execute_view, metric_catalog  # noqa: E402
-from viewspec.spec import (  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.tokens import page_title
+from viewspec.engine import execute_view, metric_catalog
+from viewspec.spec import (
     CADENCES,
     MAX_CAGR_YEARS,
     MAX_METRICS,
@@ -46,6 +43,8 @@ from viewspec.spec import (  # noqa: E402
     ViewSpecError,
 )
 
+SANDBOX_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SANDBOX_DIR.parent
 _SYNTHETIC_CLONE = REPO_ROOT / ".tmp" / "vs_opt.db"
 
 

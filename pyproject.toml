@@ -116,13 +116,19 @@ include = [
     "cron",
     "evals",
     "execution",
-    "explore-sandbox",
     "instruction_tests",
     "scripts",
     "src",
     "tests",
 ]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
+# `explore-sandbox` is an optional-dependency surface: streamlit arrives only
+# with `.[sandbox]`, never in the hash-pinned lock the ceiling gate installs.
+# Unresolved there, every `st.*` result becomes Unknown and `st.stop()` loses
+# its NoReturn narrowing, so checking it reports an import cascade instead of
+# defects (it is wholly clean once streamlit resolves). `extraPaths` keeps it
+# checkable locally after `pip install -e .[sandbox]`; its parity is gated by
+# tests/test_explore_sandbox_kit.py and scripts/check_design_sync.py.
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived", "explore-sandbox"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
@@ -156,13 +162,19 @@ include = [
     "cron",
     "evals",
     "execution",
-    "explore-sandbox",
     "instruction_tests",
     "scripts",
     "src",
     "tests",
 ]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
+# `explore-sandbox` is an optional-dependency surface: streamlit arrives only
+# with `.[sandbox]`, never in the hash-pinned lock the ceiling gate installs.
+# Unresolved there, every `st.*` result becomes Unknown and `st.stop()` loses
+# its NoReturn narrowing, so checking it reports an import cascade instead of
+# defects (it is wholly clean once streamlit resolves). `extraPaths` keeps it
+# checkable locally after `pip install -e .[sandbox]`; its parity is gated by
+# tests/test_explore_sandbox_kit.py and scripts/check_design_sync.py.
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived", "explore-sandbox"]
 extraPaths = ["src", "execution", "scratch", "cron", "explore-sandbox"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"

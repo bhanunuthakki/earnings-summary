@@ -20,10 +20,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from compute.kpi_resolver import (  # noqa: E402
+from compute.kpi_resolver import (
     QUARTERLY_FACT_PERIOD_TYPES,
     canonical_metric_name,
     engine_formula_definition,
@@ -35,7 +34,7 @@ from compute.kpi_resolver import (  # noqa: E402
     semantic_series_identity_flat_sql,
     semantic_series_identity_sql,
 )
-from models.facts import Unit  # noqa: E402
+from models.facts import Unit
 
 
 def test_series_identity_excludes_same_label_basis_and_scope_drift() -> None:

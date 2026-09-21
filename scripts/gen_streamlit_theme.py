@@ -39,13 +39,12 @@ import argparse
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from ui.controls import controls_css
+from ui.tokens import PALETTE_DARK, palette_css
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC))
-
-from ui.controls import controls_css  # noqa: E402
-from ui.tokens import PALETTE_DARK, palette_css  # noqa: E402
-
 SANDBOX_DIR = PROJECT_ROOT / "explore-sandbox"
 CONFIG_OUTPUT = SANDBOX_DIR / ".streamlit" / "config.toml"
 CSS_OUTPUT = SANDBOX_DIR / "theme" / "tokens.css"
