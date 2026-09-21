@@ -141,6 +141,7 @@ def test_every_visual_census_root_requires_design_sync(helper: ModuleType) -> No
             results={
                 "changes": "success",
                 "public-boundary": "success",
+                "fast-signal": "success",
                 "tests": "success",
                 "design": "skipped",
                 "quality": "success",

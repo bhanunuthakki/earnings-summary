@@ -280,8 +280,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Hints refresh runs the fixed execution/schedule_pre_earnings_refresh.py script.",
-      "fingerprint": "9dfae1e291cdf9f8012c56baee740a8c730f1eac52634b3a76637d0e7764f0c9",
-      "line": 2052,
+      "fingerprint": "40cab3df641db74f2eb840b233e58ad0c01d7ad6228f595a6c4ad45dc6462d7f",
+      "line": 2056,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/schedule_pre_earnings_refresh.py"
@@ -290,8 +290,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_dispatch_one runs the fixed execution/save_fmp_data.py manifest command.",
-      "fingerprint": "673c834d01732b22103f9e613a2efa101b809783d84cf6fd79747ee3b7a23860",
-      "line": 2381,
+      "fingerprint": "2e7b4ea08808c6e465c8ad3b09f6480b7db6f3814bcc1db0f7bfaf98d1adc8c0",
+      "line": 2391,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -300,8 +300,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_spawn_background re-executes the fixed execution/refresh_cache.py run command.",
-      "fingerprint": "c443ffd7d701d0d8bd8de080ca50d85f7329862850e9695f18eaa67bc36484fa",
-      "line": 2639,
+      "fingerprint": "3b6f84f26b86049389f01d670bac427d5dee16a177e496efaebafdb5b647079d",
+      "line": 2662,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/refresh_cache.py"
@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "0f87c5fcebeabd838c226967e04f28648c3778840051483872c096a59351d70c",
-      "line": 670,
+      "fingerprint": "6bc99cb62811c5c9ad90026ac24599fde3dc1fcff8e2de4a608a9d09d359a5cb",
+      "line": 665,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "82ca87fcd42eb9e6495372c640f588893c58deba72005d9a2075e289fbef3908",
-      "line": 707,
+      "fingerprint": "35d97b2680a5fcdb3e7ab3690eb874f0e2bd40a2da72ff3d49af3897f9147fe6",
+      "line": 702,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "86c7fe4fa20a96b4f3e4f61c580d5a5677bc90e62206abdf94aaf5af94c703b5",
-      "line": 752,
+      "fingerprint": "debb446ed7f5629b545a87726d66d475d50918cc1ae53d2861061dfb96ca4323",
+      "line": 747,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "f334c356d75bb7c8595aa4506e73ccb09738f7dccc73e8758f90846144d5c869",
-      "line": 797,
+      "fingerprint": "c2ea992328627187e79fb41a5f7e4ea6398028029da4a73ba42c2003ed5f06b0",
+      "line": 792,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "597c3be3eea4ae683ab10cc8265f1de23931b9ea2919d0fb20072d03838c5f6e",
-      "line": 844,
+      "fingerprint": "3bfd09fd84d25176ad6bbf578dda01ce4d3b0b7bc11dda10c268c55d5524e422",
+      "line": 839,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -360,8 +360,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "2662945aa82e7947172706efff07279ba74187fe52176073936f0b6da0f61b5a",
-      "line": 893,
+      "fingerprint": "fd2b0bd6743df9e2b23576de161d9d65212980a2b3cfbfd4cfd7abaa33a0b968",
+      "line": 888,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -610,8 +610,8 @@
     {
       "disposition": "external_process",
       "evidence": "Streaming path spawns the fixed claude CLI executable.",
-      "fingerprint": "370f09f99a4d44998ff4e0ec95d3578b59bc0864902097172c3d3d72d19ac012",
-      "line": 2099,
+      "fingerprint": "dadc8a9ac3d072ccf481590632f485abf9a9f745250599ca539eefec3b877bc3",
+      "line": 2100,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -620,8 +620,8 @@
     {
       "disposition": "external_process",
       "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
-      "fingerprint": "c3d2e4c2d88497faff6847c0fd1bd3b857b33eab36fb9d8f0df8f8c669ab0505",
-      "line": 2549,
+      "fingerprint": "0014ca54758699d308c08a3f6dd761cc0a93478ab968f1a2d318effbaf50653c",
+      "line": 2552,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -793,8 +793,8 @@
     {
       "disposition": "external_process",
       "evidence": "The whole-tree gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter.",
-      "fingerprint": "fff17332f1ae354a874942bd712b869002f06797f12d0e72732a5994fd0e606a",
-      "line": 206,
+      "fingerprint": "1076274bc1d363db53ee92d283b0793d53560b190b28a70190b5092f08acd110",
+      "line": 256,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -803,8 +803,8 @@
     {
       "disposition": "external_process",
       "evidence": "The hidden-path parity scan invokes only the pinned Pyright executable over byte-identical temporary copies of tracked hidden Python files.",
-      "fingerprint": "8cfcb27f53b5c453f6de303a6813b7a9ea3b5b56038b67901fa503794ad14c3d",
-      "line": 230,
+      "fingerprint": "f1fae0d7d3c21aa4db73f2906f0a6cb11f4b5f83a25ab39ce6bf44aefdb12ae6",
+      "line": 280,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -914,7 +914,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5f8c97da582316ef96a60d4f28772201771432cc3e86017a329c134c1aa0b9b9",
+      "source_sha256": "e288cb7221a70f30701e4b07a6a30f619f750b1f711b966e89fb15160ebc587a",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

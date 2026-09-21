@@ -317,6 +317,95 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "The characteristics capture loop reads exactly the two literal numeric profile fields; no executable target is selected.",
+      "fingerprint": "96feabe2ad98387ed182c1c28e74c7f8fc0138e7601d4bfecb0630738d94c054",
+      "line": 122,
+      "path": "src/etf_sources/ingest.py",
+      "targets": [
+        "expense_ratio",
+        "distribution_yield"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Capture iterates only the checked-in LABEL_FIELDS tuple on the typed EtfProfile model.",
+      "fingerprint": "6ba2c7c119916ee144010f9a479be287081ffda254638a961c782735269e2f1c",
+      "line": 31,
+      "path": "src/etf_sources/profile_evidence.py",
+      "targets": [
+        "asset_class",
+        "benchmark_index",
+        "sector_label",
+        "expense_ratio",
+        "distribution_yield"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Admission rejects keys outside LABEL_FIELDS before reading a corresponding typed EtfProfile value.",
+      "fingerprint": "831bf19ac7352675f6ea64de2337e624194512038a88cdbd669ae15ef15297fa",
+      "line": 56,
+      "path": "src/etf_sources/profile_evidence.py",
+      "targets": [
+        "asset_class",
+        "benchmark_index",
+        "sector_label",
+        "expense_ratio",
+        "distribution_yield"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "EDGAR CIK fallback resolves the fixed legacy _lookup_cik_for_ticker helper through a typed compatibility boundary.",
+      "fingerprint": "085409f1b512f0f77ec639e31f196ab8200066c3ef9455cbb9c0608189d1df53",
+      "line": 166,
+      "path": "src/filings/edgar_fetch.py",
+      "targets": [
+        "src/insider_transactions.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "EDGAR document fetch resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
+      "fingerprint": "4cdc82625eebc2836ef6f6d8b7fdb1cf2a7b1b693aaf64061dc1cfdfe23594d2",
+      "line": 293,
+      "path": "src/filings/edgar_fetch.py",
+      "targets": [
+        "src/filing_text_fetcher.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "EDGAR section splitting resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
+      "fingerprint": "56b7c5d0b5c8c5dccd085c787b98ed5eb791c2200561e33c80d76d614e2123dd",
+      "line": 49,
+      "path": "src/filings/edgar_sections.py",
+      "targets": [
+        "src/filing_text_fetcher.py"
+      ]
+    },
+    {
+      "disposition": "external_adapter",
+      "evidence": "Windows-only ACL code resolves ctypes.WinDLL explicitly after the os.name guard.",
+      "fingerprint": "813401d10b41d844b1bd6fa15dde0c5c051bb11b46d6eaa7b61bae6fa086bab8",
+      "line": 57,
+      "path": "src/filings/inline_xbrl_processor.py",
+      "targets": [
+        "ctypes.WinDLL"
+      ]
+    },
+    {
+      "disposition": "external_adapter",
+      "evidence": "Windows-only ACL verification resolves ctypes.get_last_error through a typed platform boundary.",
+      "fingerprint": "375813574691bc38e0e95369c29b54ba5f364be8d0b103234e50a27323425c23",
+      "line": 64,
+      "path": "src/filings/inline_xbrl_processor.py",
+      "targets": [
+        "ctypes.get_last_error"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "getattr checks only the four core wealth total fields.",
       "fingerprint": "bdd48cee993ecae3ff299f51ac59310a04da993e0b277ac2f587d8b68e178790",
       "line": 102,
@@ -503,6 +592,26 @@
       ]
     },
     {
+      "disposition": "schema_field",
+      "evidence": "Columns come from EmbeddingEvaluationReceipt.model_fields.",
+      "fingerprint": "885a71905692ea9666990039bbb90c10e66656f32a2693fa294ce356a09420cd",
+      "line": 108,
+      "path": "src/search/embedding_evaluation_receipt.py",
+      "targets": [
+        "EmbeddingEvaluationReceipt.model_fields"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "Columns come from EmbeddingRuntimeRegistration.model_fields.",
+      "fingerprint": "865973482f4c491dacfcbfe625035cc69c5c37436f8bbad64dd411366bd9526d",
+      "line": 115,
+      "path": "src/search/embedding_runtime_registration.py",
+      "targets": [
+        "EmbeddingRuntimeRegistration.model_fields"
+      ]
+    },
+    {
       "disposition": "closed_literal_set",
       "evidence": "Seal parity compares only the 12 FactProjectionSeal fields in the adjacent literal tuple.",
       "fingerprint": "be9674a7f430e296c8f629e35ea192614bfb6ac258d330c0ca9e26f6839b7079",
@@ -524,73 +633,30 @@
       ]
     },
     {
-      "disposition": "schema_field",
-      "evidence": "Columns come from EmbeddingEvaluationReceipt.model_fields.",
-      "fingerprint": "885a71905692ea9666990039bbb90c10e66656f32a2693fa294ce356a09420cd",
-      "line": 108,
-      "path": "src/search/embedding_evaluation_receipt.py",
+      "disposition": "closed_literal_set",
+      "evidence": "The missing-evidence census reads only the six literal fields on validated SourceAttemptMeasurement records.",
+      "fingerprint": "02402ceed9ad3e90aedf437e58f0f41943825f1a9c5eaf40c2465bbbc3208405",
+      "line": 329,
+      "path": "src/sources/telemetry.py",
       "targets": [
-        "EmbeddingEvaluationReceipt.model_fields"
+        "regime",
+        "bytes_received",
+        "record_count",
+        "provider_cost_usd",
+        "llm_cost_usd",
+        "operator_time_seconds"
       ]
     },
     {
-      "disposition": "schema_field",
-      "evidence": "Columns come from EmbeddingRuntimeRegistration.model_fields.",
-      "fingerprint": "865973482f4c491dacfcbfe625035cc69c5c37436f8bbad64dd411366bd9526d",
-      "line": 115,
-      "path": "src/search/embedding_runtime_registration.py",
+      "disposition": "closed_literal_set",
+      "evidence": "The measured-cost sum reads only the three literal nullable Decimal fields on validated SourceAttemptMeasurement records.",
+      "fingerprint": "220e7f4e29ff6835b5ca3417cf469c679d66948ea9778b0baf1119c1b5a9905c",
+      "line": 341,
+      "path": "src/sources/telemetry.py",
       "targets": [
-        "EmbeddingRuntimeRegistration.model_fields"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
-      "evidence": "EDGAR CIK fallback resolves the fixed legacy _lookup_cik_for_ticker helper through a typed compatibility boundary.",
-      "fingerprint": "085409f1b512f0f77ec639e31f196ab8200066c3ef9455cbb9c0608189d1df53",
-      "line": 166,
-      "path": "src/filings/edgar_fetch.py",
-      "targets": [
-        "src/insider_transactions.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
-      "evidence": "EDGAR document fetch resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
-      "fingerprint": "4cdc82625eebc2836ef6f6d8b7fdb1cf2a7b1b693aaf64061dc1cfdfe23594d2",
-      "line": 293,
-      "path": "src/filings/edgar_fetch.py",
-      "targets": [
-        "src/filing_text_fetcher.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
-      "evidence": "EDGAR section splitting resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
-      "fingerprint": "56b7c5d0b5c8c5dccd085c787b98ed5eb791c2200561e33c80d76d614e2123dd",
-      "line": 49,
-      "path": "src/filings/edgar_sections.py",
-      "targets": [
-        "src/filing_text_fetcher.py"
-      ]
-    },
-    {
-      "disposition": "external_adapter",
-      "evidence": "Windows-only ACL code resolves ctypes.WinDLL explicitly after the os.name guard.",
-      "fingerprint": "813401d10b41d844b1bd6fa15dde0c5c051bb11b46d6eaa7b61bae6fa086bab8",
-      "line": 57,
-      "path": "src/filings/inline_xbrl_processor.py",
-      "targets": [
-        "ctypes.WinDLL"
-      ]
-    },
-    {
-      "disposition": "external_adapter",
-      "evidence": "Windows-only ACL verification resolves ctypes.get_last_error through a typed platform boundary.",
-      "fingerprint": "375813574691bc38e0e95369c29b54ba5f364be8d0b103234e50a27323425c23",
-      "line": 64,
-      "path": "src/filings/inline_xbrl_processor.py",
-      "targets": [
-        "ctypes.get_last_error"
+        "provider_cost_usd",
+        "llm_cost_usd",
+        "operator_time_seconds"
       ]
     }
   ],
@@ -599,7 +665,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5f8c97da582316ef96a60d4f28772201771432cc3e86017a329c134c1aa0b9b9",
+      "source_sha256": "e288cb7221a70f30701e4b07a6a30f619f750b1f711b966e89fb15160ebc587a",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
