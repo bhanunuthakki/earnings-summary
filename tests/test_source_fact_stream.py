@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import shutil
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 import provenance.source_fact_repository as repository_module
-from alembic import command
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionSnapshotScope,
@@ -45,8 +42,6 @@ from provenance.source_fact_stream import (
     verify_resolution_snapshot_watermark,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
-BASE_REVISION = "0213_decision_draft_provider_id"
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 EMPTY_SCOPE = ResolutionSnapshotScope(
     issuer_id="stream-issuer",
@@ -54,56 +49,13 @@ EMPTY_SCOPE = ResolutionSnapshotScope(
 )
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-@pytest.fixture(scope="module")
-def migrated_template(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Path:
-    path = tmp_path_factory.mktemp("source-fact-stream") / "template.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE llm_budgets (
-            purpose TEXT PRIMARY KEY,
-            monthly_cap_usd REAL NOT NULL,
-            warn_threshold_pct REAL NOT NULL,
-            hard_block INTEGER NOT NULL,
-            on_exceed TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            notes TEXT
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, BASE_REVISION)
-    command.upgrade(config, "head")
-    return path
-
-
 @pytest.fixture
 def conn(
     tmp_path: Path,
-    migrated_template: Path,
+    migrated_db: Callable[..., Path],
 ) -> Generator[sqlite3.Connection, None, None]:
     path = tmp_path / "stream.db"
-    shutil.copy2(migrated_template, path)
+    migrated_db(path)
     database = sqlite3.connect(path, timeout=30)
     database.execute("PRAGMA foreign_keys=ON")
     database.execute(
