@@ -21,12 +21,6 @@ class ArtifactBriefPayload(TypedDict):
     portfolio_map: NotRequired[str]
 
 
-class DcfTweakPayload(TypedDict):
-    param: str
-    new_value: float | None
-    confidence: NotRequired[Literal["high", "low"]]
-
-
 class DecisionExtractionPayload(TypedDict):
     ticker: str | None
     direction: str | None
@@ -271,7 +265,6 @@ class DcfAssumptionsPayload(_ClosedPayload):
 
 
 ARTIFACT_BRIEF_SCHEMA = TypeAdapter(ArtifactBriefPayload)
-DCF_TWEAK_SCHEMA = TypeAdapter(DcfTweakPayload)
 DECISION_EXTRACTION_SCHEMA = TypeAdapter(DecisionExtractionPayload)
 INTENT_SCHEMA = TypeAdapter(IntentPayload)
 RESEARCH_TRIAGE_SCHEMA = TypeAdapter(ResearchTriagePayload)

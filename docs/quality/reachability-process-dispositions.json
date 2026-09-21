@@ -600,8 +600,8 @@
     {
       "disposition": "external_process",
       "evidence": "_call_claude spawns the fixed claude CLI executable.",
-      "fingerprint": "f17b1bace35e733f506889f5b7f4eb8d4627a9769415039fa01cf1c65a0eda70",
-      "line": 1305,
+      "fingerprint": "e3b7bd537d9a813d2e0c7e76030f6a2a04335dfd38e83cbf77ce0fe2ba20040b",
+      "line": 1303,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -610,8 +610,8 @@
     {
       "disposition": "external_process",
       "evidence": "Streaming path spawns the fixed claude CLI executable.",
-      "fingerprint": "13c83eab24c257852a557b6678dcddd6b1fcd97c50450ef4d0501f9c10e09a16",
-      "line": 2098,
+      "fingerprint": "370f09f99a4d44998ff4e0ec95d3578b59bc0864902097172c3d3d72d19ac012",
+      "line": 2099,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -620,8 +620,8 @@
     {
       "disposition": "external_process",
       "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
-      "fingerprint": "c0f2090f8e0dab9e0721b01517c1a5990c9b8324e0bcb708f43df4656bb07016",
-      "line": 2548,
+      "fingerprint": "c3d2e4c2d88497faff6847c0fd1bd3b857b33eab36fb9d8f0df8f8c669ab0505",
+      "line": 2549,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -914,7 +914,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "2a9b0d196592b3b0f89e44e62c01dc2d242b832553db984231b7289491b59b54",
+      "source_sha256": "3beb637798e6abcb47d5ca4c3c548a37d3be390f8e28e869d9c998767a246dcb",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

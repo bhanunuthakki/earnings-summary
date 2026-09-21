@@ -5,10 +5,10 @@
     "alembic": 0,
     "cron": 0,
     "evals": 0,
-    "execution": 338,
+    "execution": 336,
     "instruction_tests": 0,
     "scripts": 0,
-    "src": 354,
+    "src": 307,
     "src/advisor": 0,
     "src/alerts": 0,
     "src/allocation": 0,
@@ -54,7 +54,7 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 2031
+    "tests": 2021
   },
   "suppressions": {
     ".github": 0,
@@ -64,7 +64,7 @@
     "execution": 1190,
     "instruction_tests": 0,
     "scripts": 4,
-    "src": 26,
+    "src": 17,
     "src/advisor": 0,
     "src/alerts": 0,
     "src/allocation": 0,
@@ -81,7 +81,7 @@
     "src/filings": 14,
     "src/integrations": 0,
     "src/ir_pipeline": 0,
-    "src/llm": 5,
+    "src/llm": 3,
     "src/model_provenance": 2,
     "src/models": 5,
     "src/net": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1193
+    "tests": 1191
   }
 }

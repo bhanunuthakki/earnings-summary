@@ -80,14 +80,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Invented facts, hidden uncertainty, or a recommendation unsupported by the evidence.",
     ),
     _q(
-        "dcf_assumption_extract",
-        "P0",
-        "cold",
-        "extraction",
-        "Extract only valuation assumptions explicitly supported by the source material.",
-        "A fabricated or unit-misaligned assumption entering the valuation workflow.",
-    ),
-    _q(
         "dcf_assumptions",
         "P0",
         "cold",
@@ -541,14 +533,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "classification",
         "Classify the user's coaching reply into the correct next conversational action.",
         "Taking an irreversible or inappropriate action from ambiguous text.",
-    ),
-    _q(
-        "drift_narrate",
-        "P2",
-        "cold",
-        "synthesis",
-        "Explain portfolio or thesis drift in terms of measurable changes and decisions.",
-        "Narrating noise as drift or failing to identify the changed driver.",
     ),
     _q(
         "event_brief",

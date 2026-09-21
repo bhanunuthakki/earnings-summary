@@ -274,9 +274,8 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "research_fetch": "v2",  # transport-neutral search-first web prompt
     "research_adversarial_assess": "v1",
     "research_narrate": "v1",
-    # The Ledger Phase-2 generation seams (decision extraction + drift phrasing).
+    # The Ledger decision extraction.
     "musing_decision_extract": "v1",
-    "drift_narrate": "v1",
     # Meta-eval sampler difficulty classifier (evals/sampler.py, §2). This version
     # IS the eval_case_features cache key: bumping it invalidates every cached
     # classification by key and forks stratification history cleanly.
@@ -300,8 +299,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-1 artifact drafters (thesis entry + code-change spec).
     "thesis_entry_draft": "v1",
     "research_code_spec": "v1",
-    # The Ledger DCF assumption-tweak extractor (dcf_assumption_extract).
-    "dcf_assumption_extract": "v1",
     # Position-review verdict (src/advisor/position_review.py). Bump when
     # _build_verdict_prompt / _behavioral_rules is materially rewritten.
     # v2 (PR5): rule 1's evidence is interpolated from the live

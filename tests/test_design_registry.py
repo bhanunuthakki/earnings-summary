@@ -116,7 +116,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert isinstance(registry.REGISTERED, frozenset)
     assert isinstance(registry.GOVERNED, frozenset)
     assert len(registry.REGISTERED) == 111
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 157
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 156
     backup_observer = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST

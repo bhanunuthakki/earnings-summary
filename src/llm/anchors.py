@@ -222,7 +222,7 @@ def _stats_block_from_series(series_label: str, series: list[Observation]) -> st
     return line
 
 
-def _statistical_patterns_block(
+def statistical_patterns_block(
     repo_root: Path, ticker: str, payload: dict[str, object]
 ) -> list[str]:
     """Run detect_trend + detect_inflection on the canonical line items and
@@ -298,6 +298,10 @@ def _statistical_patterns_block(
     return lines
 
 
+# Preserve the legacy import while callers migrate to the public helper.
+_statistical_patterns_block = statistical_patterns_block
+
+
 def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
     """Compose a compact thesis anchor for prompt injection. Empty string
     when no holdings JSON exists. Output is markdown, ~300-1500 chars.
@@ -349,7 +353,7 @@ def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
     # in the timeseries layer (DB missing, scipy import error, etc.) can't
     # break the anchor for the dozens of prompts that depend on it.
     try:
-        stats_lines = _statistical_patterns_block(repo_root, ticker, payload)
+        stats_lines = statistical_patterns_block(repo_root, ticker, payload)
     except Exception as exc:  # anchor must keep rendering
         log.debug(
             {"event": "statistical_patterns_block_failed", "ticker": ticker, "error": str(exc)}
