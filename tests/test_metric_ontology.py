@@ -2,17 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from src.provenance.metric_ontology import (
     BindingRevision,
     CanonicalAxis,
@@ -30,8 +27,6 @@ from src.provenance.metric_ontology import (
     canonical_json,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
-BASE_REVISION = "0213_decision_draft_provider_id"
 T1 = datetime(2026, 7, 27, tzinfo=UTC)
 T2 = T1 + timedelta(days=1)
 CELL_SEMANTIC_SHA = "1" * 64
@@ -87,40 +82,13 @@ def _ensure_reporting_entity(conn: sqlite3.Connection) -> None:
     )
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-@pytest.fixture(scope="module")
-def ontology_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("ontology-template") / "template.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    conn.close()
-    config = _config(path)
-    command.stamp(config, BASE_REVISION)
-    command.upgrade(config, "0267_source_definition_taxonomy_identity")
-    return path
-
-
 @pytest.fixture
 def ontology(
-    ontology_template: Path, tmp_path: Path
+    migrated_db: Callable[..., Path],
+    tmp_path: Path,
 ) -> Generator[tuple[sqlite3.Connection, MetricOntology], None, None]:
     path = tmp_path / "ontology.db"
-    shutil.copy2(ontology_template, path)
+    migrated_db(path)
     conn = sqlite3.connect(path)
     repository = MetricOntology(conn)
     try:
@@ -1025,9 +993,11 @@ def test_binding_proves_qname_period_and_cutoff_compatibility() -> None:
 
 
 def test_binding_trigger_accepts_exact_and_rejects_wrong_definition_qualifier(
-    ontology_template: Path,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    migrated = sqlite3.connect(ontology_template)
+    path = migrated_db(tmp_path / "ontology-trigger.db")
+    migrated = sqlite3.connect(path)
     try:
         trigger_sql = migrated.execute(
             "SELECT sql FROM sqlite_master WHERE type='trigger' "

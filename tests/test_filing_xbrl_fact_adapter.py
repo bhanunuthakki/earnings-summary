@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.filing_xbrl_extraction_ledger import (
     FilingXbrlExtractionLedger,
 )
@@ -27,11 +25,8 @@ from provenance.filing_xbrl_fact_adapter import (
 )
 from provenance.source_fact_repository import SourceFactRepository
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 PERIOD_END = STAMP - timedelta(days=30)
-REVISION = "0246_source_fact_publication_stream"
-BASE_REVISION = "0213_decision_draft_provider_id"
 
 
 def _sha(value: str) -> str:
@@ -299,36 +294,13 @@ def test_conflicting_duplicate_source_entry_fails_closed() -> None:
     )
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 @pytest.fixture
 def repository_conn(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> Generator[sqlite3.Connection, None, None]:
     path = tmp_path / "filing-xbrl-adapter.db"
-    database = sqlite3.connect(path)
-    database.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    database.commit()
-    database.close()
-    config = _config(path)
-    command.stamp(config, BASE_REVISION)
-    command.upgrade(config, REVISION)
+    migrated_db(path)
     database = sqlite3.connect(path)
     database.execute("PRAGMA foreign_keys = ON")
     try:

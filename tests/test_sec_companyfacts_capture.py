@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -12,10 +13,8 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from execution import fetch_sec_xbrl as fetch_sec_xbrl_execution
 from pipeline import restatement_detector, sec_xbrl
 from pipeline.sec_xbrl import FetchedCompanyFacts, ingest_for_ticker
@@ -34,7 +33,6 @@ from provenance.sec_companyfacts_capture import (
 )
 from schema_compat import expected_head
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, 0, tzinfo=UTC)
 CIK = "0000000001"
 ISSUER_ID = "issuer-acme"
@@ -57,44 +55,12 @@ class _AdvancingClock:
         self._now += duration_ns
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _database(tmp_path: Path) -> sqlite3.Connection:
+def _database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> sqlite3.Connection:
     path = tmp_path / "companyfacts-capture.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start DATETIME,
-            period_end DATETIME,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL UNIQUE,
-            fetched_at DATETIME NOT NULL,
-            fetch_status TEXT NOT NULL,
-            http_code INTEGER,
-            raw_bytes_size INTEGER NOT NULL,
-            source_url TEXT,
-            parent_document_id INTEGER,
-            source_quality_tier TEXT NOT NULL,
-            accession_number TEXT,
-            filing_date TEXT
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0231_legacy_document_evidence_bindings")
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -210,8 +176,9 @@ def _request(
 
 def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     raw_body = _body()
     try:
         _seed_snapshot_document(conn, raw_body, document_id=1)
@@ -302,8 +269,9 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
 
 def test_changed_response_creates_a_new_aggregate_snapshot_without_mutation(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     try:
         first_body = _body()
         second_body = _body(second_value=201)
@@ -402,80 +370,12 @@ def _seed_issuer_identity(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _ingest_database(tmp_path: Path) -> sqlite3.Connection:
+def _ingest_database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> sqlite3.Connection:
     path = tmp_path / "companyfacts-ingest.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start DATETIME,
-            period_end DATETIME,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL UNIQUE,
-            fetched_at DATETIME NOT NULL,
-            fetch_status TEXT NOT NULL,
-            http_code INTEGER,
-            raw_bytes_size INTEGER NOT NULL,
-            source_url TEXT,
-            parent_document_id INTEGER,
-            source_quality_tier TEXT NOT NULL,
-            accession_number TEXT,
-            filing_date TEXT
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT
-        );
-        CREATE UNIQUE INDEX uq_financial_facts_provenance
-        ON financial_facts (
-            ticker, period_end, fiscal_period_type, line_item, source_doc_id
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT,
-            source_excerpt TEXT,
-            computed_from TEXT,
-            formula_id INTEGER,
-            formula_version INTEGER
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0231_legacy_document_evidence_bindings")
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -1144,8 +1044,9 @@ def test_current_schema_companyfacts_amendment_preserves_chronology(
 def test_ingest_captures_evidence_before_post_cutover_fact_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _ingest_database(tmp_path)
+    conn = _ingest_database(tmp_path, migrated_db)
     raw_body = _body()
     fetched = FetchedCompanyFacts(
         source_url=SOURCE_URL,
