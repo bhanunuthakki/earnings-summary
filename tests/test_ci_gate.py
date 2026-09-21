@@ -159,6 +159,7 @@ def test_gate_requires_every_applicable_job_to_succeed(helper: ModuleType) -> No
         results={
             "changes": "success",
             "public-boundary": "success",
+            "fast-signal": "success",
             "tests": "success",
             "design": "success",
             "quality": "success",
@@ -177,6 +178,7 @@ def test_gate_accepts_skipped_expensive_jobs_for_docs_only(helper: ModuleType) -
             results={
                 "changes": "success",
                 "public-boundary": "success",
+                "fast-signal": "skipped",
                 "tests": "skipped",
                 "design": "skipped",
                 "quality": "skipped",
@@ -188,6 +190,24 @@ def test_gate_accepts_skipped_expensive_jobs_for_docs_only(helper: ModuleType) -
     )
 
 
+def test_gate_requires_fast_signal_for_code_changes(helper: ModuleType) -> None:
+    assert helper.gate_failures(
+        code=True,
+        python=False,
+        design=False,
+        results={
+            "changes": "success",
+            "public-boundary": "success",
+            "fast-signal": "skipped",
+            "tests": "success",
+            "design": "skipped",
+            "quality": "skipped",
+            "typecheck": "skipped",
+            "security": "success",
+        },
+    ) == ["fast-signal must succeed for this change set; got skipped"]
+
+
 def test_gate_never_hides_failed_or_cancelled_jobs(helper: ModuleType) -> None:
     assert helper.gate_failures(
         code=False,
@@ -196,6 +216,7 @@ def test_gate_never_hides_failed_or_cancelled_jobs(helper: ModuleType) -> None:
         results={
             "changes": "failure",
             "public-boundary": "success",
+            "fast-signal": "skipped",
             "tests": "skipped",
             "design": "skipped",
             "quality": "skipped",
@@ -216,6 +237,7 @@ def test_gate_rejects_skipped_change_classification(helper: ModuleType) -> None:
         results={
             "changes": "skipped",
             "public-boundary": "success",
+            "fast-signal": "skipped",
             "tests": "skipped",
             "design": "skipped",
             "quality": "skipped",
@@ -233,6 +255,7 @@ def test_gate_always_requires_public_boundary(helper: ModuleType) -> None:
         results={
             "changes": "success",
             "public-boundary": "skipped",
+            "fast-signal": "skipped",
             "tests": "skipped",
             "design": "skipped",
             "quality": "skipped",
@@ -255,6 +278,7 @@ def test_gate_fails_when_design_paths_changed_but_design_job_skipped(
         results={
             "changes": "success",
             "public-boundary": "success",
+            "fast-signal": "success",
             "tests": "success",
             "design": "skipped",
             "quality": "success",
@@ -275,6 +299,7 @@ def test_gate_accepts_skipped_design_job_for_backend_only_change(helper: ModuleT
             results={
                 "changes": "success",
                 "public-boundary": "success",
+                "fast-signal": "success",
                 "tests": "success",
                 "design": "skipped",
                 "quality": "success",
@@ -301,6 +326,8 @@ def test_verify_command_consumes_design_classification(helper: ModuleType) -> No
             "--changes-result",
             "success",
             "--public-boundary-result",
+            "success",
+            "--fast-signal-result",
             "success",
             "--tests-result",
             "success",
@@ -622,7 +649,8 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "name: Public Boundary" in workflow
     assert "python execution/verify_public_tree.py" in workflow
     assert (
-        "needs: [changes, public-boundary, tests, design, quality, typecheck, security]" in workflow
+        "needs: [changes, public-boundary, fast-signal, tests, design, quality, typecheck, security]"
+        in workflow
     )
     assert "PUBLIC_BOUNDARY_RESULT" in workflow
 
@@ -673,7 +701,7 @@ def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None
         encoding="utf-8"
     )
     public_job = workflow.split("  public-boundary:\n", maxsplit=1)[1].split(
-        "\n  tests:", maxsplit=1
+        "\n  fast-signal:", maxsplit=1
     )[0]
     pre_commit = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     pre_push = (REPO_ROOT / ".githooks" / "pre-push").read_text(encoding="utf-8")
@@ -746,8 +774,34 @@ def test_test_job_labels_count_and_picker_are_stable() -> None:
     assert "--source-shard" not in workflow
     assert "--split-count" not in workflow
     assert (
-        "needs: [changes, public-boundary, tests, design, quality, typecheck, security]" in workflow
+        "needs: [changes, public-boundary, fast-signal, tests, design, quality, typecheck, security]"
+        in workflow
     )
+
+
+def test_fast_signal_is_required_for_code_without_replacing_the_full_matrix() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    fast_job = workflow.split("\n  fast-signal:\n", maxsplit=1)[1].split(
+        "\n  tests:\n", maxsplit=1
+    )[0]
+    assert "name: Fast Signal" in fast_job
+    assert "needs.changes.outputs.code == 'true'" in fast_job
+    assert "timeout-minutes: 5" in fast_job
+    assert "Preload verified SQLite writer runtime" in fast_job
+    assert 'assert sqlite3.sqlite_version == "3.53.4"' in fast_job
+    assert "PYTHONPATH=src pytest -q -n 0" in fast_job
+    for path in (
+        "tests/test_smoke.py",
+        "tests/test_ci_gate.py",
+        "tests/test_filing_xbrl_bridge.py",
+        "tests/test_filing_xbrl_normalization_rejection.py",
+        "tests/test_sec_filing_xbrl_ingest_guards.py",
+        "tests/test_sec_filing_xbrl_manifest_binding.py",
+    ):
+        assert path in fast_job
+    assert "name: tests (shard ${{ matrix.label }}/8)" in workflow
+    assert "FAST_SIGNAL_RESULT: ${{ needs.fast-signal.result }}" in workflow
+    assert '--fast-signal-result "$FAST_SIGNAL_RESULT"' in workflow
 
 
 def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:

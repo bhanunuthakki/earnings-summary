@@ -96,6 +96,92 @@ jobs:
       - name: Reject private material in the published tree
         run: python execution/verify_public_tree.py
 
+  fast-signal:
+    name: Fast Signal
+    needs: [changes]
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Resolve python version for dependency cache key
+        id: pyver
+        shell: bash
+        run: echo "version=$(python -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
+      - name: Restore verified SQLite 3.53.4 writer runtime
+        id: sqlite_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/sqlite-3.53.4
+          key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Build verified SQLite writer runtime
+        if: steps.sqlite_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
+          archive="$RUNNER_TEMP/sqlite-amalgamation-3530400.zip"
+          mkdir -p "$sqlite_dir"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip \
+            --output "$archive"
+          python - "$archive" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          expected = "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
+          observed = hashlib.sha3_256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
+          if observed != expected:
+              raise SystemExit(f"SQLite archive SHA3-256 mismatch: {observed}")
+          PY
+          unzip -q "$archive" -d "$sqlite_dir"
+          gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
+            "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
+            -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
+      - name: Preload verified SQLite writer runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
+          test -f "$sqlite_dir/libsqlite3.so.0"
+          echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
+          LD_PRELOAD="$sqlite_dir/libsqlite3.so.0" python - <<'PY'
+          import sqlite3
+
+          assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
+          PY
+      - name: Restore pip dependency environment
+        id: venv_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/ci-venv
+          key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}-lock${{ hashFiles('requirements.lock') }}-pyproject${{ hashFiles('pyproject.toml') }}
+      - name: Install dependencies
+        if: steps.venv_cache.outputs.cache-hit != 'true'
+        run: |
+          python -m venv "$RUNNER_TEMP/ci-venv"
+          "$RUNNER_TEMP/ci-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock
+          "$RUNNER_TEMP/ci-venv/bin/pip" install -e .[dev]
+      - name: Activate dependency environment
+        shell: bash
+        run: echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"
+      - name: Run fixed fail-closed and import signal
+        run: >-
+          PYTHONPATH=src pytest -q -n 0
+          tests/test_smoke.py
+          tests/test_ci_gate.py
+          tests/test_filing_xbrl_bridge.py
+          tests/test_filing_xbrl_normalization_rejection.py
+          tests/test_sec_filing_xbrl_ingest_guards.py
+          tests/test_sec_filing_xbrl_manifest_binding.py
+
   tests:
     name: tests (shard ${{ matrix.label }}/8)
     needs: [changes]
@@ -559,7 +645,7 @@ jobs:
   merge-gate:
     name: CI Gate
     if: ${{ always() }}
-    needs: [changes, public-boundary, tests, design, quality, typecheck, security]
+    needs: [changes, public-boundary, fast-signal, tests, design, quality, typecheck, security]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -570,6 +656,7 @@ jobs:
           DESIGN_CHANGED: ${{ needs.changes.outputs.design || 'false' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           PUBLIC_BOUNDARY_RESULT: ${{ needs.public-boundary.result }}
+          FAST_SIGNAL_RESULT: ${{ needs.fast-signal.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
           DESIGN_RESULT: ${{ needs.design.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
@@ -582,6 +669,7 @@ jobs:
           --design "$DESIGN_CHANGED"
           --changes-result "$CHANGES_RESULT"
           --public-boundary-result "$PUBLIC_BOUNDARY_RESULT"
+          --fast-signal-result "$FAST_SIGNAL_RESULT"
           --tests-result "$TESTS_RESULT"
           --design-result "$DESIGN_RESULT"
           --quality-result "$QUALITY_RESULT"
