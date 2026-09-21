@@ -5,13 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -23,24 +22,10 @@ from provenance.evidence_ledger import (
 from provenance.financial_fact_resolution import FactCutoverRequest, execute_fact_cutover
 from provenance.integrity_audit import AuditOptions, audit_connection
 
-ROOT = Path(__file__).resolve().parents[1]
 HEAD = "0231_legacy_document_evidence_bindings"
 STAMP = datetime(2026, 7, 27, 12, 0, 0)
 CONFIG_SHA = hashlib.sha256(b"config").hexdigest()
-
-
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
-def _database(tmp_path: Path) -> sqlite3.Connection:
-    path = tmp_path / "legacy-evidence-bindings.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
+_BOOTSTRAP_SQL = """
         CREATE TABLE documents (
             id INTEGER PRIMARY KEY,
             ticker TEXT NOT NULL,
@@ -100,12 +85,23 @@ def _database(tmp_path: Path) -> sqlite3.Connection:
             formula_version INTEGER
         );
         """
+_BOOTSTRAP_SHA256 = hashlib.sha256(_BOOTSTRAP_SQL.encode()).hexdigest()
+
+
+def _bootstrap_database(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript(_BOOTSTRAP_SQL)
+
+
+def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    path = migrated_db(
+        tmp_path / "legacy-evidence-bindings.db",
+        archived=True,
+        upgrade_from="0213_decision_draft_provider_id",
+        before_upgrade=_bootstrap_database,
+        seed_sha256=_BOOTSTRAP_SHA256,
+        target=HEAD,
     )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -262,8 +258,9 @@ def _bind(
 
 def test_many_legacy_accessions_share_snapshot_and_corrections_use_new_binding(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     try:
         first_accession = "0000000001-26-000001"
         second_accession = "0000000001-26-000002"
@@ -352,12 +349,13 @@ def test_many_legacy_accessions_share_snapshot_and_corrections_use_new_binding(
 )
 def test_legacy_fact_backfill_resolves_only_verified_accession_cells(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     fact_value: str,
     json_path: str,
     expected_captured: int,
     expected_reason: str | None,
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     try:
         accession = "0000000001-26-000001"
         _seed_legacy_document(conn, 1, accession)
@@ -433,8 +431,9 @@ def test_legacy_fact_backfill_resolves_only_verified_accession_cells(
 
 def test_companyfacts_bound_derived_kpi_requires_input_observation_lineage(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     try:
         accession = "0000000001-26-000001"
         _seed_legacy_document(conn, 1, accession)
@@ -489,8 +488,9 @@ def test_companyfacts_bound_derived_kpi_requires_input_observation_lineage(
 
 def test_binding_chain_is_append_only_and_node_must_belong_to_document(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     try:
         accession = "0000000001-26-000001"
         _seed_legacy_document(conn, 1, accession)
