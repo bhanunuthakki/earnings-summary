@@ -100,10 +100,10 @@ def test_report_panels_read_only_explicit_external_database(tmp_path: Path) -> N
     database = tmp_path / "external.sqlite"
     with sqlite3.connect(database) as conn:
         conn.execute(
-            "CREATE TABLE macro_sensitivities (ticker TEXT, series_id TEXT, beta REAL, r_squared REAL, lookback_window_days INTEGER, computed_at TEXT)"
+            "CREATE TABLE macro_sensitivities (id INTEGER PRIMARY KEY, ticker TEXT, series_id TEXT, beta REAL, r_squared REAL, lookback_window_days INTEGER, computed_at TEXT)"
         )
         conn.execute(
-            "INSERT INTO macro_sensitivities VALUES ('TEST', 'vix', -0.4, 0.15, 90, '2026-05-01 00:00:00')"
+            "INSERT INTO macro_sensitivities VALUES (1, 'TEST', 'vix', -0.4, 0.15, 90, '2026-05-01 00:00:00')"
         )
     repository = tmp_path / "checkout"
     assert not load_workspace_p3_panels("TEST", repository).macro_sensitivities

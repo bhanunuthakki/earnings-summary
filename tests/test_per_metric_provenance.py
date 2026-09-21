@@ -379,14 +379,19 @@ def test_load_financial_fact_provenance_missing_db_returns_none(tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
-def test_financials_build_per_metric_emits_expected_keys(tmp_path: Path) -> None:
+def test_financials_legacy_shadow_per_metric_preserves_old_provenance_oracle(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path
     (repo / "data").mkdir()
     db = repo / "data" / "portfolio.db"
     _make_audit_db(db)
     expected = _seed_facts_for_two_quarters(db, "TEST")
 
-    per_metric = financials_section.build_per_metric("TEST", repo)
+    per_metric = financials_section.build_per_metric_legacy_shadow("TEST", repo)
+    # Raw-only input remains available solely to the explicit comparison reader.
+    with sqlite3.connect(db) as conn:
+        assert financials_section.build_per_metric("TEST", repo, conn=conn) == {}
     # Three line items seeded — revenue, operating_income, capital_expenditure.
     assert "revenue_q_latest" in per_metric
     assert "operating_income_q_latest" in per_metric

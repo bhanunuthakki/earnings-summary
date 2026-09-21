@@ -14,6 +14,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from sources.discovery_market import DiscoveryMarketContext
+from sources.report_financials import FinancialTableProjection
+
 
 class SectionStatus(StrEnum):
     """Why a section is the shape it is."""
@@ -269,13 +272,16 @@ class QuickCategorizationRow(BaseModel):
     lfy: float | None = None
     ttm: float | None = None
     cagr_3y: float | None = None  # decimal (0.12 = +12%)
+    # Each populated display coordinate resolves through this section's
+    # canonical_financial_table; derived values list every input cell.
+    source_cell_ids: tuple[str, ...] = ()
 
 
 class EvaluationSnapshotSection(BaseModel):
     """§1 for `flavor=evaluation` — 3y quick-categorization data table.
 
-    Intended for new-name screening before deeper diligence. Pulled from the
-    `metrics` and `ratios` views; no LLM in this section.
+    Intended for new-name screening before deeper diligence. Financial values
+    are projected from admitted canonical cells at one knowledge cutoff.
     """
 
     status: SectionStatus
@@ -287,6 +293,14 @@ class EvaluationSnapshotSection(BaseModel):
     current_price: float | None = None
     rows: list[QuickCategorizationRow] = Field(default_factory=list[QuickCategorizationRow])
     fiscal_years: list[int] = Field(default_factory=list[int])  # 3 years [LFY-2, LFY-1, LFY]
+    canonical_financial_table: FinancialTableProjection | None = None
+    # Human-facing coordinate → exact canonical cells used for that displayed
+    # number. The projection retains the full source/definition provenance.
+    source_manifest: dict[str, tuple[str, ...]] = Field(default_factory=dict[str, tuple[str, ...]])
+    unavailable_reasons: dict[str, tuple[str, ...]] = Field(
+        default_factory=dict[str, tuple[str, ...]]
+    )
+    market_context: DiscoveryMarketContext | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -551,9 +565,15 @@ class QuarterlyLineItem(BaseModel):
     # per instance) — Field(default_factory=list) infers list[Unknown] here
     # and trips the pyright strict ratchet.
     sources_full: list[CellSource | None] = []
+    # Edge i admits comparison from i-1 to i. None is legacy/unmigrated;
+    # an explicit empty or false mask never grants canonical comparability.
+    comparison_eligible_edges: list[bool] | None = None
+    # Actual source dates aligned to levels_full; display labels are not elapsed-time evidence.
+    comparison_period_ends: list[date | None] | None = None
 
 
 class AnnualLineItem(BaseModel):
+    sources_full: list[CellSource | None] = []
     line_item: str
     unit: str
     digits: int = 0
@@ -612,6 +632,7 @@ class AnnualKpiSeries(BaseModel):
 
 
 class FinancialsSection(BaseModel):
+    canonical_financial_table: FinancialTableProjection | None = None
     status: SectionStatus
     missing: MissingReason | None = None
     quarter_labels: list[str] = Field(default_factory=list[str])  # 12 labels
@@ -1390,6 +1411,8 @@ class ValuationBasisHistoricalPoint(BaseModel):
 
     period_end: date
     value: float | None  # None for periods FMP doesn't disclose
+    basis: str = "unverified_legacy"
+    method: str = "unverified_legacy"
 
 
 class ValuationBasisSection(BaseModel):
@@ -1408,6 +1431,12 @@ class ValuationBasisSection(BaseModel):
     missing: MissingReason | None = None
     budget_skip: BudgetSkip | None = None
     multiple_name: str | None = None  # e.g. "EV/NTM Revenue", "P/B", "EV/LTM EBITDA"
+    requested_multiple: str | None = None
+    current_basis: str | None = None
+    current_method: str | None = None
+    comparison_unavailable_reason: str | None = None
+    current_unavailable_reason: str | None = None
+    source_context: dict[str, object] = Field(default_factory=dict[str, object])
     rationale: str | None = None  # 1-2 sentence Opus rationale
     current_value: float | None = None  # the multiple's current numeric value
     current_value_display: str | None = None  # formatted display, e.g. "15.1x"
@@ -1419,6 +1448,7 @@ class ValuationBasisSection(BaseModel):
     peg_ratio: float | None = None
     peg_growth_pct: float | None = None
     current_period_end: date | None = None
+    estimate_target_period_end: date | None = None
     history: list[ValuationBasisHistoricalPoint] = Field(
         default_factory=list[ValuationBasisHistoricalPoint]
     )

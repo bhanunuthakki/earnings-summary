@@ -476,7 +476,7 @@ def _read_high_conviction(db_path: Path, tickers: Sequence[str]) -> frozenset[st
         placeholders = ",".join("?" for _ in want)
         rows = conn.execute(
             "SELECT ticker FROM position_entries WHERE ticker IN "
-            f"({placeholders}) AND exit_date IS NULL AND entry_conviction = 'high'",
+            f"({placeholders}) AND exit_date IS NULL AND superseded_by_entry_id IS NULL AND entry_conviction = 'high'",
             want,
         ).fetchall()
     except sqlite3.Error:

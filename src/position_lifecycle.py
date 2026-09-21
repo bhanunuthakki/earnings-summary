@@ -84,10 +84,11 @@ class PositionEntry:
     source: str
     created_at: str
     updated_at: str
+    superseded_by_entry_id: int | None = None
 
     @property
     def is_open(self) -> bool:
-        return self.exit_date is None
+        return self.exit_date is None and self.superseded_by_entry_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -95,13 +96,17 @@ class PositionEntry:
 # ---------------------------------------------------------------------------
 
 
-def _open(db_path: Path | str) -> sqlite3.Connection | None:
+def _open(db_path: Path | str, *, read_only: bool = False) -> sqlite3.Connection | None:
     """Best-effort open: None when the DB or position_entries is unavailable."""
     try:
         path = Path(db_path)
         if not path.exists():
             return None
-        conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.READ_ONLY if read_only else SQLiteConnectionRole.WRITER,
+            schema_preflight=not read_only,
+        )
         conn.row_factory = sqlite3.Row
         if (
             conn.execute(
@@ -126,6 +131,7 @@ def _today_iso() -> str:
 
 
 def _row_to_entry(row: sqlite3.Row) -> PositionEntry:
+    columns = row.keys()
     return PositionEntry(
         id=int(row["id"]),
         user_id=str(row["user_id"]),
@@ -143,6 +149,9 @@ def _row_to_entry(row: sqlite3.Row) -> PositionEntry:
         source=str(row["source"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        superseded_by_entry_id=(
+            row["superseded_by_entry_id"] if "superseded_by_entry_id" in columns else None
+        ),
     )
 
 
@@ -159,11 +168,16 @@ def list_entries(
     limit: int = 100,
 ) -> list[PositionEntry]:
     """Lifecycle rows, open first then newest-closed-first â€” the timeline order."""
-    conn = _open(db_path)
+    conn = _open(db_path, read_only=True)
     if conn is None:
         return []
     try:
         clauses = ["user_id = ?"]
+        # Read-only historical snapshots predate supersession support. They cannot
+        # contain corrected successors; current schemas must filter retained aliases.
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(position_entries)")}
+        if "superseded_by_entry_id" in columns:
+            clauses.append("superseded_by_entry_id IS NULL")
         params: list[object] = [user_id]
         if ticker is not None:
             clauses.append("ticker = ?")
@@ -192,7 +206,7 @@ def get_entry(entry_id: int, *, db_path: Path | str) -> PositionEntry | None:
     ONE specific referenced entry, not the whole ticker timeline) â€” mirrors
     ``list_entries``'s decode path but keyed by primary id, which
     ``list_entries`` has no filter for."""
-    conn = _open(db_path)
+    conn = _open(db_path, read_only=True)
     if conn is None:
         return None
     try:
@@ -239,7 +253,10 @@ def update_exit_fields(
         sets.append("updated_at = ?")
         params.append(_now_iso())
         params.append(entry_id)
-        cur = conn.execute(f"UPDATE position_entries SET {', '.join(sets)} WHERE id = ?", params)
+        cur = conn.execute(
+            f"UPDATE position_entries SET {', '.join(sets)} WHERE id = ? AND superseded_by_entry_id IS NULL",
+            params,
+        )
         if cur.rowcount == 0:
             raise LookupError(f"position_entries id={entry_id} not found")
         conn.commit()
@@ -446,7 +463,7 @@ def sync_position_lifecycle(
         open_rows = {
             str(r["ticker"]).upper(): r
             for r in conn.execute(
-                "SELECT * FROM position_entries WHERE user_id = ? AND exit_date IS NULL",
+                "SELECT * FROM position_entries WHERE user_id = ? AND exit_date IS NULL AND superseded_by_entry_id IS NULL",
                 (user_id,),
             ).fetchall()
         }

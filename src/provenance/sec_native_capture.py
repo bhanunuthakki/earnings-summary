@@ -35,6 +35,12 @@ from provenance.evidence_links import (
     DocumentObservationLink,
     EvidenceLinkLedger,
 )
+from provenance.sec_execution import (
+    SecExecutionResult,
+    SecExecutionScope,
+    begin_sec_execution,
+    finish_sec_execution,
+)
 from provenance.source_coverage import CoverageAssessment, SourceCoverageLedger
 
 _COLLECTOR_VERSION = "sec-native-capture@1"
@@ -400,13 +406,84 @@ def capture_expected_sec_documents(
     *,
     session: SessionLike,
 ) -> SecNativeCaptureResult:
-    """Fetch and optionally persist one bounded, all-or-nothing SEC batch."""
-
+    """Execute one exact bounded batch, retaining actual apply attempt lifecycle."""
     candidates, has_more = load_expected_sec_documents(
         conn,
         inventory_keys=request.inventory_keys,
         limit=request.batch_size,
     )
+    if not request.apply:
+        return _capture_batch(
+            conn, request, session=session, candidates=candidates, has_more=has_more
+        )
+    inventory_scope = conn.execute(
+        "SELECT snapshot_id,ticker FROM v_source_inventory_sealed_complete WHERE inventory_key IN (SELECT value FROM json_each(?)) ORDER BY inventory_key",
+        (json.dumps(request.inventory_keys),),
+    ).fetchall()
+    scope = SecExecutionScope(
+        kind="native_capture",
+        tickers=tuple(sorted({str(row[1]) for row in inventory_scope if row[1]})),
+        inventory_keys=request.inventory_keys,
+        snapshot_ids=tuple(sorted(str(row[0]) for row in inventory_scope)),
+        expected_document_ids=tuple(item.expected_document_id for item in candidates),
+    )
+    started = begin_sec_execution(
+        conn, request_key=request.task_id, scope=scope, now=datetime.now(UTC)
+    )
+    try:
+        result = _capture_batch(
+            conn, request, session=session, candidates=candidates, has_more=has_more
+        )
+    except Exception as exc:
+        if conn.in_transaction:
+            conn.rollback()
+        finish_sec_execution(
+            conn,
+            started,
+            SecExecutionResult(
+                state="failed",
+                reason_code="authorization_failed"
+                if isinstance(exc, SecNativeCaptureHardStopError)
+                else "capture_failed",
+                considered=len(candidates),
+                failed=1,
+            ),
+            now=datetime.now(UTC),
+        )
+        raise
+    state = "succeeded"
+    if result.deferred or result.failed or result.has_more:
+        state = (
+            "deferred"
+            if result.deferred and not result.fetched and not result.failed
+            else "partial"
+        )
+    outcome = SecExecutionResult.model_validate(
+        {
+            "state": state,
+            "reason_code": "batch_complete"
+            if state == "succeeded"
+            else ("source_deferred" if state == "deferred" else "batch_partial"),
+            "considered": result.considered,
+            "captured": result.fetched,
+            "deferred": result.deferred,
+            "failed": result.failed,
+            "has_more": result.has_more,
+            "snapshot_ids": scope.snapshot_ids,
+        }
+    )
+    finish_sec_execution(conn, started, outcome, now=datetime.now(UTC))
+    return result
+
+
+def _capture_batch(
+    conn: sqlite3.Connection,
+    request: SecNativeCaptureRequest,
+    *,
+    session: SessionLike,
+    candidates: tuple[ExpectedSecDocument, ...],
+    has_more: bool,
+) -> SecNativeCaptureResult:
     run_root = request.checkpoint_root / request.task_id
     checkpoint_path = run_root / "state.json"
     checkpoint = _load_checkpoint(checkpoint_path, request.task_id)

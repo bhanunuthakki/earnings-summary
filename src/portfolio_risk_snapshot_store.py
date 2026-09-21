@@ -351,7 +351,7 @@ def _snapshot_from_row(row: sqlite3.Row) -> RiskSnapshot:
     keys = row.keys()
     return RiskSnapshot(
         captured_at=str(row["captured_at"]),
-        **{col: row[col] for col in _METRIC_COLUMNS},
+        **{col: (None if col == "rate_beta_10y" else row[col]) for col in _METRIC_COLUMNS},
         metric_version=row["metric_version"] if "metric_version" in keys else None,
         rebase_basis=row["rebase_basis"] if "rebase_basis" in keys else None,
         perf_window_start=row["perf_window_start"] if "perf_window_start" in keys else None,

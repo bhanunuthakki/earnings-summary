@@ -177,6 +177,9 @@ class EtfProfileInputs(BaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     profile_available: bool = False
+    profile_field_evidence: dict[str, dict[str, object]] = Field(
+        default_factory=dict[str, dict[str, object]]
+    )
     asset_class: str | None = None
     benchmark_index: str | None = None
     sector_label: str | None = None
@@ -536,6 +539,21 @@ def derive_etf_label_evidence(
             summary=f"Published sector exposure is cyclical: {inputs.sector_label}",
             payload={"sector_label": sector},
         )
+    # Keep capture/source dates in the displayed evidence without making daily
+    # refreshes churn the material-outcome fingerprint used by owner reviews.
+    profile_dependencies = {
+        EtfProfileLabel.CORE_BETA: ("asset_class", "benchmark_index", "expense_ratio"),
+        EtfProfileLabel.THEMATIC_EXPOSURE: ("sector_label",),
+        EtfProfileLabel.INCOME: ("distribution_yield",),
+        EtfProfileLabel.TACTICAL_CYCLICAL: ("sector_label",),
+    }
+    for label, fields in profile_dependencies.items():
+        if label in result:
+            result[label].evidence["profile_capture_evidence"] = {
+                key: inputs.profile_field_evidence[key]
+                for key in fields
+                if key in inputs.profile_field_evidence
+            }
     return result
 
 

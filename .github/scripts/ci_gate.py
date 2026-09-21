@@ -47,8 +47,11 @@ DOCUMENTATION_SUFFIXES = {".md", ".rst"}
 DESIGN_PREFIXES = (
     "design-system/",
     "mockups/",
-    "src/ui/",
-    "src/report/renderers/",
+    # conformance_scan.discover_emitters scans both complete Python roots.
+    # New and currently unregistered emitters must reach that gate too; the
+    # registry remains the owner of the surface inventory.
+    "src/",
+    "execution/",
     "tests/golden/",
 )
 DESIGN_FILES = {

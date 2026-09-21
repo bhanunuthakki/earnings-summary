@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -25,12 +26,21 @@ from decision_calibration import (
     build_calibration,
     omission_clause,
 )
-from pipeline.allocation_decisions_panel import _omission_block
+from execution import grade_decisions as gd
+from pipeline import allocation_decisions_panel
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
-import grade_decisions as gd  # noqa: E402
+class VerdictProbe(Protocol):
+    def __call__(
+        self, *, kind: str, pct_change: float, threshold_pct: float
+    ) -> tuple[str, str]: ...
+
+
+# Deliberate unit probes retain exact signatures without exporting internal APIs.
+verdict = cast(VerdictProbe, getattr(gd, "_verdict"))
+omission_block = cast(
+    Callable[[CalibrationStats], str], getattr(allocation_decisions_panel, "_omission_block")
+)
 
 _SCHEMA = """
 CREATE TABLE decisions (
@@ -97,15 +107,15 @@ def _ins(
 
 def test_avoid_verdict_is_omission_inverted() -> None:
     # A pass that ran away is the omission error; a decline/flat band vindicates it.
-    assert gd._verdict(kind="avoid", pct_change=0.20, threshold_pct=0.05)[0] == "wrong"
-    assert gd._verdict(kind="avoid", pct_change=0.08, threshold_pct=0.05)[0] == "mixed"
-    assert gd._verdict(kind="avoid", pct_change=0.03, threshold_pct=0.05)[0] == "correct"
-    assert gd._verdict(kind="avoid", pct_change=-0.30, threshold_pct=0.05)[0] == "correct"
+    assert verdict(kind="avoid", pct_change=0.20, threshold_pct=0.05)[0] == "wrong"
+    assert verdict(kind="avoid", pct_change=0.08, threshold_pct=0.05)[0] == "mixed"
+    assert verdict(kind="avoid", pct_change=0.03, threshold_pct=0.05)[0] == "correct"
+    assert verdict(kind="avoid", pct_change=-0.30, threshold_pct=0.05)[0] == "correct"
     # And it is genuinely the INVERSE of hold (a held name that ran is fine/mixed,
     # a held name that fell hard is wrong).
-    assert gd._verdict(kind="hold", pct_change=0.20, threshold_pct=0.05)[0] == "mixed"
-    assert gd._verdict(kind="hold", pct_change=-0.20, threshold_pct=0.05)[0] == "wrong"
-    assert gd._verdict(kind="hold", pct_change=0.01, threshold_pct=0.05)[0] == "correct"
+    assert verdict(kind="hold", pct_change=0.20, threshold_pct=0.05)[0] == "mixed"
+    assert verdict(kind="hold", pct_change=-0.20, threshold_pct=0.05)[0] == "wrong"
+    assert verdict(kind="hold", pct_change=0.01, threshold_pct=0.05)[0] == "correct"
 
 
 # ---------------------------------------------------------------------------
@@ -211,13 +221,13 @@ def test_calibration_pack_carries_omissions(tmp_path: Path) -> None:
 
 
 def test_panel_omission_block_renders() -> None:
-    html = _omission_block(_stats_with_omissions())
+    html = omission_block(_stats_with_omissions())
     assert "Errors of omission" in html
     assert "miss rate" in html
     assert "NVDA" in html
     # Hidden until something is graded.
     assert (
-        _omission_block(
+        omission_block(
             _stats_with_omissions().__class__(
                 total=0,
                 graded=0,
@@ -243,30 +253,33 @@ def test_panel_omission_block_renders() -> None:
 def _repo_with_prices(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "data" / "historical" / "fmp").mkdir(parents=True)
-    _make_db(repo / "data" / "portfolio.db")
     today = datetime.now(UTC).date()
     old = (today - timedelta(days=200)).isoformat()
     # NVDA ran +50% since the pass; AMD irrelevant (young pass is skipped pre-price).
-    series = [{"date": today.isoformat(), "adjClose": 150.0}, {"date": old, "adjClose": 100.0}]
+    series = [
+        {"date": today.isoformat(), "adjClose": 150.0, "volume": 0},
+        {"date": old, "adjClose": 100.0, "volume": 0},
+    ]
     (repo / "data" / "historical" / "fmp" / "NVDA_price_chart_10y_div_adj.json").write_text(
         json.dumps(series), encoding="utf-8"
+    )
+    (repo / "data" / "historical" / "fmp" / "NVDA_profile.json").write_text(
+        '[{"symbol":"NVDA","currency":"USD"}]', encoding="utf-8"
     )
     return repo
 
 
-def test_grade_pass_inverts_and_respects_horizon(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_grade_pass_inverts_and_respects_horizon(tmp_path: Path) -> None:
     repo = _repo_with_prices(tmp_path)
-    db = repo / "data" / "portfolio.db"
+    db = tmp_path / "isolated.db"
+    _make_db(db)
     today = datetime.now(UTC).date()
     old_made = (today - timedelta(days=200)).isoformat() + "T00:00:00"
     young_made = (today - timedelta(days=60)).isoformat() + "T00:00:00"
     _ins(db, ticker="NVDA", kind="avoid", label=None, made_at=old_made, outcome_at=None)
     _ins(db, ticker="AMD", kind="avoid", label=None, made_at=young_made, outcome_at=None)
 
-    monkeypatch.setattr(sys, "argv", ["grade_decisions", "--repo-root", str(repo)])
-    assert gd.main() == 0
+    assert gd.main(["--repo-root", str(repo), "--db", str(db)]) == 0
 
     conn = _conn(db)
     try:

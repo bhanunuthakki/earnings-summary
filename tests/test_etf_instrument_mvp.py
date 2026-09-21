@@ -92,7 +92,8 @@ def etf_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
             characteristics_as_of TEXT,
             characteristics_source TEXT,
             source TEXT NOT NULL DEFAULT 'fmp',
-            profile_fetched_at TIMESTAMP NOT NULL
+            field_evidence_json TEXT NOT NULL DEFAULT '{}',
+    profile_fetched_at TIMESTAMP NOT NULL
         );
 
         CREATE TABLE etf_holdings (

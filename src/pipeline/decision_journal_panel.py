@@ -16,7 +16,7 @@ timeline. Five chips select the PRD's five lenses:
 
   * owner       -- decided_by = 'owner' (default);
   * adopted     -- advisor-extracted rows the owner has since ADOPTED (a
-                  reconciled user_action_kind or an explicit
+                  followed user_action_kind or an explicit
                   owner_attested_change) -- "gradeable advisor views";
   * all         -- every row, unfiltered (the pre-P2.1 timeline);
   * lessons     -- rows with a scored process_quality (sound/flawed);
@@ -59,7 +59,7 @@ _FILTER_LABEL: dict[str, str] = {
 _WHERE_BY_FILTER: dict[str, str] = {
     "owner": "decided_by = 'owner'",
     "adopted": (
-        "decided_by != 'owner' AND (user_action_kind IS NOT NULL OR owner_attested_change = 1)"
+        "decided_by != 'owner' AND (user_action_kind = 'followed' OR owner_attested_change = 1)"
     ),
     "all": "1 = 1",
     "lessons": "process_quality IS NOT NULL",

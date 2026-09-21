@@ -38,10 +38,11 @@ import logging
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from compute.kpi_resolver import semantic_series_identity_sql
+from compute.kpi_revision_shadow_census import verify_snapshot_evidence
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
@@ -52,7 +53,15 @@ from provenance.overrides import (
     override_provenance,
     qualify_note,
 )
+from provenance.verifier_identity import verifier_source_artifact_sha256
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from timeseries.kpi_revision_shadow import (
+    KpiReaderShadowComparison,
+    KpiRevisionReadRequest,
+    LegacyKpiReaderPoint,
+    comparison_hash,
+    read_revision_kpi_points,
+)
 from timeseries.primitives import Observation
 
 log = logging.getLogger(__name__)
@@ -102,13 +111,15 @@ def _resolve_db_path(repo_root: Path | None, db_path: Path | None) -> Path | Non
     return None
 
 
-def _open(db_path: Path) -> sqlite3.Connection | None:
+def _open(
+    db_path: Path, *, role: SQLiteConnectionRole = SQLiteConnectionRole.READ_ONLY
+) -> sqlite3.Connection | None:
     """Open the DB or None when missing — never raises."""
     if not db_path.exists():
         log.debug({"event": "timeseries_loader_db_missing", "path": str(db_path)})
         return None
     try:
-        return connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        return connect_sqlite(db_path, role=role)
     except sqlite3.Error as exc:
         log.warning({"event": "timeseries_loader_open_failed", "error": str(exc)})
         return None
@@ -1011,6 +1022,7 @@ def load_kpi_series_with_provenance(
     repo_root: Path | None = None,
     *,
     db_path: Path | None = None,
+    snapshot_manifest: Path | None = None,
     period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
 ) -> list[SourcedObservation]:
     """`load_kpi_series` + per-observation provenance in ONE query.
@@ -1025,7 +1037,19 @@ def load_kpi_series_with_provenance(
     resolved = _resolve_db_path(repo_root, db_path)
     if resolved is None:
         return []
-    conn = _open(resolved)
+    evidence = (
+        verify_snapshot_evidence(database_path=resolved, manifest_path=snapshot_manifest)
+        if snapshot_manifest is not None
+        else None
+    )
+    if evidence is not None and evidence.status != "manifest_matched":
+        raise ValueError("immutable sourced reader requires a manifest-matched snapshot")
+    role = (
+        SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY
+        if evidence is not None
+        else SQLiteConnectionRole.READ_ONLY
+    )
+    conn = _open(resolved, role=role)
     if conn is None:
         return []
     period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
@@ -1128,6 +1152,12 @@ def load_kpi_series_with_provenance(
         return []
     finally:
         conn.close()
+        if (
+            snapshot_manifest is not None
+            and verify_snapshot_evidence(database_path=resolved, manifest_path=snapshot_manifest)
+            != evidence
+        ):
+            raise RuntimeError("snapshot identity changed during sourced KPI read")
 
 
 def load_kpi_series(
@@ -1660,4 +1690,99 @@ def load_segment_series(
         db_path=db_path,
         period_types=period_types,
         as_of_date=as_of_date,
+    )
+
+
+def rehearse_kpi_series_reader(
+    *,
+    db_path: Path,
+    snapshot_manifest: Path,
+    request: KpiRevisionReadRequest,
+) -> KpiReaderShadowComparison:
+    """Compare the actual sourced loader against exact revision-aware projection.
+
+    An immutable, manifest-matched file binds the two independent read-only
+    connections. Current legacy membership is intentionally not presented as
+    historical truth. This API never activates the replacement reader.
+    """
+    evidence = verify_snapshot_evidence(database_path=db_path, manifest_path=snapshot_manifest)
+    if evidence.status != "manifest_matched":
+        raise ValueError("reader comparison requires a manifest-matched snapshot")
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY)
+    try:
+        identity = conn.execute(
+            "SELECT name,ticker FROM kpi_definitions WHERE id=?", (request.kpi_definition_id,)
+        ).fetchone()
+        if identity is None or str(identity[1]).upper() != request.ticker.upper():
+            raise ValueError("definition identity does not belong to requested issuer")
+        definition_name = str(identity[0])
+        revision = read_revision_kpi_points(conn, request=request)
+    finally:
+        conn.close()
+    legacy = load_kpi_series_with_provenance(
+        ticker=request.ticker,
+        kpi_name=definition_name,
+        db_path=db_path,
+        snapshot_manifest=snapshot_manifest,
+        period_types=request.period_types,
+    )
+    legacy_points = tuple(
+        LegacyKpiReaderPoint.model_validate(
+            {
+                "period_end": (
+                    point.period_end.replace(tzinfo=UTC)
+                    if point.period_end.tzinfo is None
+                    else point.period_end
+                ),
+                "value": point.value,
+                "unit": point.unit,
+                "fact_id": point.provenance["fact_id"],
+                "source_document_id": point.provenance["source_doc_id"],
+                "locator_json": point.provenance["locator"],
+            }
+        )
+        for point in legacy
+    )
+    differences = set(revision.blocking_reasons)
+    legacy_by_id = {point.fact_id: point for point in legacy_points}
+    revised_by_id = {point.fact_id: point for point in revision.points}
+    if set(legacy_by_id) != set(revised_by_id):
+        differences.add("selected_fact_membership_differs")
+    for fact_id in set(legacy_by_id) & set(revised_by_id):
+        old, new = legacy_by_id[fact_id], revised_by_id[fact_id]
+        if (old.period_end, old.value, old.unit) != (new.period_end, float(new.value), new.unit):
+            differences.add("period_value_or_unit_differs")
+        if (old.source_document_id, old.locator_json) != (new.source_document_id, new.locator_json):
+            differences.add("source_identity_differs")
+    if verify_snapshot_evidence(database_path=db_path, manifest_path=snapshot_manifest) != evidence:
+        raise RuntimeError("snapshot identity changed during reader comparison")
+    source_root = Path(__file__).resolve().parents[1]
+    verifier_hash = verifier_source_artifact_sha256(
+        {
+            name: source_root / name
+            for name in (
+                "timeseries/loaders.py",
+                "timeseries/kpi_revision_shadow.py",
+                "compute/kpi_resolver.py",
+                "compute/kpi_revision_shadow_census.py",
+                "pipeline/kpi_definition_revisions.py",
+                "pipeline/kpi_semantics.py",
+                "provenance/financial_fact_resolution.py",
+            )
+        }
+    )
+    payload: dict[str, object] = {
+        "schema_version": "kpi-reader-shadow-comparison/v1",
+        "comparison_contract": "legacy_current_sourced_vs_revision_as_known",
+        "snapshot_evidence": evidence.model_dump(mode="json"),
+        "revision": revision.model_dump(mode="json"),
+        "legacy_points": [point.model_dump(mode="json") for point in legacy_points],
+        "differences": sorted(differences),
+        "scoped_value_source_parity": not differences,
+        "activation_state": "hold",
+        "authorizes_reader_activation": False,
+        "verifier_code_sha256": verifier_hash,
+    }
+    return KpiReaderShadowComparison.model_validate(
+        payload | {"receipt_sha256": comparison_hash(payload)}
     )

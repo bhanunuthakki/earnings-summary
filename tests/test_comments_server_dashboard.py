@@ -474,6 +474,9 @@ def test_work_os_evaluation_api_returns_complete_versioned_projection(
     assert payload["schema_version"] == "evaluation_surface.v2"
     assert payload["count"] == len(payload["items"])
     assert {item["instrument_type"] for item in payload["items"]} <= {"company", "etf"}
+    assert payload["items"]
+    retired_composites = {"score", "score_why", "score_partial", "fit", "fit_why", "fit_partial"}
+    assert all(not retired_composites.intersection(item) for item in payload["items"])
     assert "stock" not in response.get_data(as_text=True).lower()
 
 

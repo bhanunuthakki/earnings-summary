@@ -260,3 +260,39 @@ def test_deadman_quiet_on_fresh_table_and_targeted_runs(head_db: Path) -> None:
     assert _alert_count(head_db) == 0  # fresh table — quiet
     _FIRE_DEADMAN_IF_STALE(str(head_db), tickers_n=1, inserted_total=0)
     assert _alert_count(head_db) == 0  # targeted run — never judges feed health
+
+
+def test_failed_yahoo_collection_preserves_other_rows_and_returns_partial(
+    news_db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from news.store import NewsFeedUnavailableError
+
+    def failing(*args: object, **kwargs: object) -> list[NewsRow]:
+        raise NewsFeedUnavailableError("fixture transport failed")
+
+    def valid_primary(
+        *_args: object, on_rows: Callable[[str, list[NewsRow]], None], **_kwargs: object
+    ) -> list[NewsRow]:
+        rows = [_row("ACME", "https://example.com/retained")]
+        on_rows("ACME", rows)
+        return rows
+
+    monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", failing)
+    monkeypatch.setattr(fetch_news, "collect_primary", valid_primary)
+    monkeypatch.setattr(fetch_news, "_score_diet_quality", _no_scored)
+    monkeypatch.setattr(fetch_news, "_fire_deadman_if_stale", _no_scored)
+    assert (
+        fetch_news.run(
+            ["ACME"],
+            source="fmp",
+            db_path=str(news_db),
+            days=7,
+            limit=10,
+            skip_edgar=True,
+            skip_grades=True,
+            skip_s1_watch=True,
+        )
+        == 2
+    )
+    assert '"collection_status": "partial"' in capsys.readouterr().err
+    assert _persisted(news_db) == [("ACME", "https://example.com/retained")]

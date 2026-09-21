@@ -11,9 +11,7 @@ import pytest
 from execution import verify_calendars, verify_evidence_judging, verify_reader_parity
 
 
-def test_verify_calendars_main_uses_shared_db_default_and_json(
-    monkeypatch: Any, capsys: Any
-) -> None:
+def test_verify_calendars_main_uses_explicit_db_and_json(monkeypatch: Any, capsys: Any) -> None:
     captured: dict[str, Any] = {}
 
     def fake_audit(
@@ -27,6 +25,8 @@ def test_verify_calendars_main_uses_shared_db_default_and_json(
             upcoming_expected_count=1,
             past_reported_count=1,
             upcoming_strip_items_count=1,
+            forward_events_count=1,
+            forward_freshness="fresh",
             integrity_pass=True,
             issues=[],
             sample_upcoming=[{"ticker": "META"}],
@@ -34,8 +34,8 @@ def test_verify_calendars_main_uses_shared_db_default_and_json(
 
     monkeypatch.setattr(verify_calendars, "audit_calendars", fake_audit)
 
-    assert verify_calendars.main(["--json"]) == 0
-    assert captured["db_path"] == Path("data/portfolio.db")
+    assert verify_calendars.main(["--db", "snapshot.db", "--json"]) == 0
+    assert captured["db_path"] == Path("snapshot.db")
     payload = json.loads(str(capsys.readouterr().out))
     assert payload["integrity_pass"] is True
     assert payload["sample_upcoming"][0]["ticker"] == "META"

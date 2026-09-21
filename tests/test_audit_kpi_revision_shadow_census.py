@@ -325,3 +325,49 @@ def test_verifier_digest_closes_over_snapshot_connection_and_lineage_authorities
         "sqlite_runtime.py",
         "sqlite_snapshot.py",
     }.issubset(observed)
+
+
+def test_verified_wal_snapshot_census_does_not_create_sidecars(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "wal-source.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE alembic_version(version_num TEXT NOT NULL)")
+        conn.execute("INSERT INTO alembic_version VALUES ('test-head')")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+    snapshot = tmp_path / "sealed-wal.db"
+    produced = create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    before = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    assert (
+        verify_snapshot_evidence(
+            database_path=snapshot, manifest_path=produced.manifest_path
+        ).status
+        == "manifest_matched"
+    )
+    assert (
+        census_cli.main(
+            [
+                "--db-path",
+                str(snapshot),
+                "--snapshot-manifest",
+                str(produced.manifest_path),
+                "--effective-at",
+                STAMP.isoformat(),
+                "--known-at",
+                STAMP.isoformat(),
+                "--evaluated-at",
+                STAMP.isoformat(),
+            ]
+        )
+        == 2
+    )
+    receipt = KpiRevisionShadowCensus.model_validate_json(capsys.readouterr().out)
+    assert receipt.snapshot_evidence.status == "manifest_matched"
+    assert receipt.authorizes_reader_activation is False
+    assert hashlib.sha256(snapshot.read_bytes()).hexdigest() == before
+    assert not snapshot.with_name(snapshot.name + "-wal").exists()
+    assert not snapshot.with_name(snapshot.name + "-shm").exists()

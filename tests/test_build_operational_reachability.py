@@ -173,7 +173,12 @@ def test_actual_head_is_supported() -> None:
     assert graph.parser["source_sha256"]
     assert any(node.id == "execution/comments_server.py" for node in graph.nodes)
     assert graph.collection_status == "COMPLETE"
-    assert graph.closure_status == "PASS"
+    assert graph.closure_status == "PASS", {
+        "closure_reasons": graph.closure_reasons,
+        "diagnostics": [diagnostic.model_dump() for diagnostic in graph.diagnostics],
+        "parser": graph.parser,
+        "scanner_sha256": graph.scanner_sha256,
+    }
     assert graph.stats["production_unknown"] == 0
     assert graph.stats["production_unresolved"] == 0
     residual_source_edges = [
@@ -181,7 +186,16 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    assert len(graph.unknown_edges) == 99
+    # The required-actuals CLI regression adds one hermetic subprocess edge.
+    assert len(graph.unknown_edges) == 111
+    assert (
+        sum(
+            edge.source == "tests/test_dcf_assumption_cli.py"
+            and edge.target == "<dynamic process entrypoint>"
+            for edge in graph.unknown_edges
+        )
+        == 2
+    )
     assert any(
         edge.source == "tests/test_release_retained_boundaries.py"
         and edge.target == "<dynamic process entrypoint>"

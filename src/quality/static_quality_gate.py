@@ -86,9 +86,13 @@ def _ceiling_map(value: object, label: str) -> dict[str, int]:
 
 def load_ceilings(path: Path) -> tuple[dict[str, int], dict[str, int]]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        return _parse_ceilings(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise StaticQualityGateError("unable to read static-quality ceilings") from exc
+
+
+def _parse_ceilings(text: str) -> tuple[dict[str, int], dict[str, int]]:
+    payload = json.loads(text)
     if not isinstance(payload, dict):
         raise StaticQualityGateError("unsupported static-quality ceiling schema")
     payload_map = cast(dict[str, object], payload)
@@ -98,6 +102,52 @@ def load_ceilings(path: Path) -> tuple[dict[str, int], dict[str, int]]:
         _ceiling_map(payload_map.get("pyright_diagnostics"), "pyright_diagnostics"),
         _ceiling_map(payload_map.get("suppressions"), "suppressions"),
     )
+
+
+def load_base_ceilings(
+    root: Path, config_path: Path, base: str
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Read the immutable merge-base limits, never the proposed replacement."""
+    if not base.strip() or base.startswith("-"):
+        raise StaticQualityGateError("base revision is invalid")
+    try:
+        relative = config_path.resolve().relative_to(root).as_posix()
+        ancestor = subprocess.run(
+            ["git", "merge-base", base, "HEAD"],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=clean_local_git_env(),
+        )
+        if ancestor.returncode or not re.fullmatch(r"[0-9a-f]{40,64}", ancestor.stdout.strip()):
+            raise StaticQualityGateError("unable to resolve static-quality comparison base")
+        result = subprocess.run(
+            ["git", "show", f"{ancestor.stdout.strip()}:{relative}"],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=clean_local_git_env(),
+        )
+        if result.returncode:
+            raise StaticQualityGateError("comparison base has no static-quality ceilings")
+        return _parse_ceilings(result.stdout)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise StaticQualityGateError(
+            "unable to read comparison-base static-quality ceilings"
+        ) from exc
+
+
+def compare_descending(
+    label: str, previous: Mapping[str, int], proposed: Mapping[str, int]
+) -> list[str]:
+    """New subsystems start at zero; existing budgets can only decrease."""
+    return [
+        f"{bucket}: {label} ceiling increased from {previous.get(bucket, 0)} to {count}"
+        for bucket, count in sorted(proposed.items())
+        if count > previous.get(bucket, 0)
+    ]
 
 
 def _relative_diagnostic_path(root: Path, value: object) -> str:
@@ -269,6 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--config", type=Path, default=Path("config/static_quality_ceilings.json"))
     parser.add_argument("--pythonpath", default=sys.executable)
+    parser.add_argument("--base", default="origin/main")
     parser.add_argument("--pyright-json", type=Path)
     args = parser.parse_args(argv)
     root = args.repo_root.resolve()
@@ -276,6 +327,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         retained = _tracked_python_files(root)
         expected_pyright, expected_suppressions = load_ceilings(config_path)
+        prior_pyright, prior_suppressions = load_base_ceilings(root, config_path, args.base)
+        violations = compare_descending("pyright diagnostics", prior_pyright, expected_pyright)
+        violations.extend(
+            compare_descending("suppressions", prior_suppressions, expected_suppressions)
+        )
         if args.pyright_json:
             payload = json.loads(args.pyright_json.read_text(encoding="utf-8"))
             aliases: dict[str, str] = {}
@@ -284,12 +340,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         actual_pyright = parse_pyright_payload(root, payload, retained, aliases)
         findings = suppression_findings(root, retained)
         actual_suppressions = Counter(subsystem(finding.path) for finding in findings)
-        violations = compare_exact(
-            retained,
-            expected_pyright,
-            expected_suppressions,
-            actual_pyright,
-            actual_suppressions,
+        violations.extend(
+            compare_exact(
+                retained,
+                expected_pyright,
+                expected_suppressions,
+                actual_pyright,
+                actual_suppressions,
+            )
         )
     except (
         StaticQualityGateError,

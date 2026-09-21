@@ -592,9 +592,7 @@ def test_country_risk_context_requires_one_matching_valid_builder_receipt() -> N
         '"ticker":"TEST","premium":0.0,'
         '"authority":"systematic_default_zero","source_record":null}'
     )
-    default_zero = country_risk_context_from_builder(default_zero_line, expected_ticker="TEST")
-    assert default_zero is not None
-    assert default_zero["authority"] == "systematic_default_zero"
+    assert country_risk_context_from_builder(default_zero_line, expected_ticker="TEST") is None
 
 
 def test_country_risk_source_participates_in_dcf_provenance(tmp_path: Path) -> None:

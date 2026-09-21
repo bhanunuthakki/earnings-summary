@@ -272,6 +272,52 @@ def collect_repository_evidence(repo_root: Path) -> RepositoryEvidence:
         sources=tuple(sources),
         cli_contracts=_cli_contracts(root),
     )
+    return _fit_evidence_packet(evidence)
+
+
+def _evidence_packet(evidence: RepositoryEvidence) -> bytes:
+    return (evidence.model_dump_json() + "\n").encode("utf-8")
+
+
+def _fit_evidence_packet(evidence: RepositoryEvidence) -> RepositoryEvidence:
+    """Keep metadata and source identities; trim lowest-priority excerpts to exact bytes."""
+
+    sources = list(evidence.sources)
+    for index in reversed(range(len(sources))):
+        if len(_evidence_packet(evidence)) <= _MAX_EVIDENCE_PACKET_BYTES:
+            break
+        source = sources[index]
+        sources[index] = source.model_copy(
+            update={"text": "", "truncated": source.truncated or bool(source.text)}
+        )
+        evidence = evidence.model_copy(update={"sources": tuple(sources)})
+        if len(_evidence_packet(evidence)) > _MAX_EVIDENCE_PACKET_BYTES:
+            continue
+        # UTF-8 and JSON escapes have variable byte costs; preserve the longest
+        # prefix that fits rather than guessing a character-to-byte ratio.
+        low, high = 0, len(source.text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            sources[index] = source.model_copy(
+                update={
+                    "text": source.text[:middle],
+                    "truncated": source.truncated or middle < len(source.text),
+                }
+            )
+            candidate = evidence.model_copy(update={"sources": tuple(sources)})
+            if len(_evidence_packet(candidate)) <= _MAX_EVIDENCE_PACKET_BYTES:
+                low = middle
+            else:
+                high = middle - 1
+        sources[index] = source.model_copy(
+            update={
+                "text": source.text[:low],
+                "truncated": source.truncated or low < len(source.text),
+            }
+        )
+        evidence = evidence.model_copy(update={"sources": tuple(sources)})
+    # Metadata alone exceeding the cap still fails closed; never erase contracts
+    # or source identities to manufacture a packet that fits.
     serialize_evidence(evidence)
     return evidence
 
@@ -279,7 +325,7 @@ def collect_repository_evidence(repo_root: Path) -> RepositoryEvidence:
 def serialize_evidence(evidence: RepositoryEvidence) -> bytes:
     """Return the exact compact bytes persisted and accepted by every reader."""
 
-    payload = (evidence.model_dump_json() + "\n").encode("utf-8")
+    payload = _evidence_packet(evidence)
     if len(payload) > _MAX_EVIDENCE_PACKET_BYTES:
         raise ValueError("bounded README evidence packet exceeds its final serialized limit")
     return payload

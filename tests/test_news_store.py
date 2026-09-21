@@ -329,3 +329,36 @@ def test_drop_duplicates_degrades_to_batch_only_without_table(tmp_path: Path) ->
     finally:
         conn.close()
     assert [r.url for r in kept] == ["https://a/1"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "javascript:alert(1)",
+        "file:///private/data",
+        # Synthetic credential URL exercises rejection/redaction.
+        "https://user:secret@example.com/story",  # pragma: allowlist secret
+        "https://example.com/bad path",
+    ],
+)
+def test_news_source_urls_reject_unsafe_or_credentialed_values(url: str) -> None:
+    with pytest.raises(ValueError, match="HTTP"):
+        NewsRow(
+            ticker="ACME",
+            headline="Fixture",
+            url=url,
+            published_at="2026-01-01 12:00:00",
+            source_feed="yf_news",
+        )
+
+
+def test_news_source_urls_preserve_query_document_identity() -> None:
+    first = NewsRow(
+        ticker="ACME",
+        headline="Fixture",
+        url="https://www.sec.gov/ix?doc=/a.htm",
+        published_at="2026-01-01 12:00:00",
+        source_feed="edgar_8k",
+    )
+    second = first.model_copy(update={"url": "https://www.sec.gov/ix?doc=/b.htm"})
+    assert first.url != second.url

@@ -50,6 +50,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from operations.context import current as current_operation_context
+from sources.telemetry import SourceAttemptMeasurement, persist_source_attempt
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
@@ -327,10 +328,12 @@ def summarize_source_calls(
     path = db_path or _DB_PATH
     if not Path(path).exists():
         return []
-    sql = "SELECT source_name, kind, status, latency_ms, record_count FROM source_calls"
+    # Physical transport attempts have their own measured report. The legacy
+    # cockpit counts logical adapter calls and must not double-count both.
+    sql = "SELECT source_name, kind, status, latency_ms, record_count FROM source_calls WHERE kind!='http_attempt'"
     params: tuple[str, ...] = ()
     if since is not None:
-        sql += " WHERE called_at >= ?"
+        sql += " AND called_at >= ?"
         params = (since,)
     try:
         conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
@@ -426,3 +429,26 @@ def cache_effectiveness_overview(
         cost_saved_usd=cost_saved,
         by_source=rows,
     )
+
+
+def log_http_measurement(measurement: SourceAttemptMeasurement) -> bool:
+    """Persist measured transport attempts; absence is observable, never fake zero."""
+    from runtime.job_runtime import portfolio_db_path
+
+    try:
+        root = Path(__file__).resolve().parents[2]
+        # Preserve an explicit test/adapter override; the legacy implicit checkout
+        # default is never an operational database authority.
+        database = (
+            _DB_PATH if root / "data" / "portfolio.db" != _DB_PATH else portfolio_db_path(root)
+        )
+        if not database.exists():
+            return False
+        conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        try:
+            persist_source_attempt(conn, measurement)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error, ValueError, RuntimeError):
+        return False
+    return True

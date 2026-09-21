@@ -109,14 +109,14 @@ class WorkOsEvaluationItem(BaseModel):
     ticker: str = Field(min_length=1, max_length=12, pattern=r"^[A-Z0-9][A-Z0-9.\-]{0,11}$")
     name: str = Field(max_length=_NAME_LIMIT)
     instrument_type: EvaluationInstrument
-    # Frontend-removed compatibility seam. Delete these six scalar fields after
-    # 2026-09-28 unless an evidence-backed design explicitly restores them.
-    score: float | None = None
-    score_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT)
-    score_partial: bool = False
-    fit: float | None = None
-    fit_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT)
-    fit_partial: bool = False
+    # Internal compatibility only: retired composites must not reach API hydration.
+    # Delete these fields after 2026-09-28 unless a reviewed design restores them.
+    score: float | None = Field(default=None, exclude=True)
+    score_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT, exclude=True)
+    score_partial: bool = Field(default=False, exclude=True)
+    fit: float | None = Field(default=None, exclude=True)
+    fit_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT, exclude=True)
+    fit_partial: bool = Field(default=False, exclude=True)
     sharpe_delta_bps: float | None = None
     held_weight_pct: float | None = None
     dcf_upside_pct: float | None = None
@@ -250,7 +250,7 @@ def _portfolio_projection(
     return indicators, labels
 
 
-def _etf_profile_inputs(
+def build_etf_profile_inputs(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -260,11 +260,32 @@ def _etf_profile_inputs(
     whatif_cache: Mapping[str, Mapping[str, dict[str, object]]],
     warnings: set[str],
 ) -> EtfProfileInputs:
+    from etf_sources.profile_evidence import PROFILE_CAPTURE_POLICY, admitted_profile_fields
+
     try:
         fund_profile = get_etf_profile(conn, ticker)
     except (sqlite3.Error, KeyError, TypeError, ValueError):
         fund_profile = None
         warnings.add("etf_profile_unavailable")
+
+    admitted = admitted_profile_fields(fund_profile) if fund_profile is not None else {}
+    if fund_profile is not None and not admitted:
+        warnings.add("etf_profile_freshness_unverified")
+    if any(evidence.source_as_of is None for evidence in admitted.values()):
+        warnings.add("etf_profile_publication_date_unknown")
+    if fund_profile is not None and any(
+        evidence.source_as_of is not None and evidence.source_as_of < evidence.captured_at.date()
+        for evidence in fund_profile.field_evidence.values()
+    ):
+        warnings.add("etf_profile_source_currency_unverified")
+
+    def text_field(key: str) -> str | None:
+        evidence = admitted.get(key)
+        return evidence.value if evidence and isinstance(evidence.value, str) else None
+
+    def numeric_field(key: str) -> float | None:
+        evidence = admitted.get(key)
+        return _finite_object(evidence.value) if evidence else None
 
     style_rows = loadings_cache.get(ticker, [])
     style_evidence: list[EtfStyleEvidence] = []
@@ -305,14 +326,21 @@ def _etf_profile_inputs(
             whatif_sharpe = cached_delta
 
     return EtfProfileInputs(
-        profile_available=fund_profile is not None,
-        asset_class=fund_profile.asset_class if fund_profile is not None else None,
-        benchmark_index=fund_profile.benchmark_index if fund_profile is not None else None,
-        sector_label=fund_profile.sector_label if fund_profile is not None else None,
-        expense_ratio=_finite(fund_profile.expense_ratio) if fund_profile is not None else None,
-        distribution_yield=(
-            _finite(fund_profile.distribution_yield) if fund_profile is not None else None
-        ),
+        profile_available=bool(admitted),
+        profile_field_evidence={
+            key: {
+                **value.model_dump(mode="json"),
+                "capture_policy": PROFILE_CAPTURE_POLICY,
+                "currency": "recently_captured",
+                "publication_date_known": value.source_as_of is not None,
+            }
+            for key, value in admitted.items()
+        },
+        asset_class=text_field("asset_class"),
+        benchmark_index=text_field("benchmark_index"),
+        sector_label=text_field("sector_label"),
+        expense_ratio=numeric_field("expense_ratio"),
+        distribution_yield=numeric_field("distribution_yield"),
         style_evidence_available=ticker in loadings_cache,
         style_loadings=style_evidence,
         book_evidence_available=book_available,
@@ -385,6 +413,10 @@ def _position_entry_excerpt(
 
     order_key = tuple(column for column in ("updated_at", "created_at", "id") if column in columns)
     query = _POSITION_ENTRY_QUERIES[order_key]
+    if "superseded_by_entry_id" in columns:
+        query = query.replace(
+            "WHERE UPPER(ticker)", "WHERE superseded_by_entry_id IS NULL AND UPPER(ticker)"
+        )
     try:
         row = conn.execute(query, (ticker,)).fetchone()
     except sqlite3.Error:
@@ -510,7 +542,7 @@ def build_work_os_evaluation(
             profile = project_etf_profile(
                 conn,
                 ticker=ticker,
-                inputs=_etf_profile_inputs(
+                inputs=build_etf_profile_inputs(
                     conn,
                     ticker=ticker,
                     fit=structured_fit,

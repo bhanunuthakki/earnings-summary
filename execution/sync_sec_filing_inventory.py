@@ -16,22 +16,24 @@ from typing import Literal, Self
 import requests
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from filings.edgar_fetch import (  # noqa: E402
+from filings.edgar_fetch import (
     HardStopError,
     SourceContractError,
     TransientError,
 )
-from filings.sec_filing_package_inventory import (  # noqa: E402
+from filings.sec_filing_package_inventory import (
     ParsedSecFilingPackage,
     SecFilingPackageContractError,
     filing_package_index_url,
     filing_package_manifest_url,
     parse_sec_filing_package_inventory,
 )
-from filings.sec_submissions_inventory import (  # noqa: E402
+from filings.sec_submissions_inventory import (
     HistoricalComponent,
     SecFilingInventoryEntry,
     SecInventoryContractError,
@@ -39,30 +41,30 @@ from filings.sec_submissions_inventory import (  # noqa: E402
     historical_component_url,
     parse_sec_submissions_inventory,
 )
-from provenance.evidence_ledger import (  # noqa: E402
+from provenance.evidence_ledger import (
     ContentBlob,
     EvidenceLedger,
     SourceObservation,
 )
-from provenance.evidence_links import (  # noqa: E402
+from provenance.evidence_links import (
     BlobLocationObservation,
     EvidenceLinkLedger,
 )
-from provenance.inventory_identity import (  # noqa: E402
+from provenance.inventory_identity import (
     InventoryIdentityError,
     issuer_registry_available,
     resolve_sec_inventory_subject,
 )
-from provenance.source_coverage_reconcile import (  # noqa: E402
+from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
     ExplicitAbsence,
     InventoryComponentImport,
     SourceCoverageImport,
     reconcile_source_coverage,
 )
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
-from sec_identity import sec_user_agent  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+from sec_identity import sec_user_agent
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _TIMEOUT = (10, 60)
 _COLLECTOR = "sync-sec-filing-inventory@4"
@@ -995,6 +997,70 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    from provenance.sec_execution import (
+        SecExecutionResult,
+        SecExecutionScope,
+        begin_sec_execution,
+        finish_sec_execution,
+    )
+
+    if not args.apply:
+        return _run_inventory(args)
+    receipt_conn = connect_sqlite(args.db, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    try:
+        started = begin_sec_execution(
+            receipt_conn,
+            request_key=f"{str(args.ticker).upper()}:{str(args.cik).zfill(10)}:{int(args.revision)}",
+            scope=SecExecutionScope(
+                kind="inventory_sync", tickers=(str(args.ticker).strip().upper(),)
+            ),
+            now=datetime.now(UTC),
+        )
+        terminal_written = False
+
+        def completed(result: SyncResult) -> None:
+            nonlocal terminal_written
+            finish_sec_execution(
+                receipt_conn,
+                started,
+                SecExecutionResult(
+                    state="succeeded" if result.complete else "partial",
+                    reason_code="inventory_complete" if result.complete else "inventory_partial",
+                    considered=result.filing_count,
+                    deferred=result.deferred_accession_count,
+                    failed=result.package_failure_count,
+                    snapshot_ids=(result.snapshot_id,) if result.snapshot_id else (),
+                ),
+                now=datetime.now(UTC),
+            )
+            terminal_written = True
+
+        try:
+            status = _run_inventory(args, completed=completed)
+        except Exception:
+            if not terminal_written:
+                finish_sec_execution(
+                    receipt_conn,
+                    started,
+                    SecExecutionResult(state="failed", reason_code="inventory_failed", failed=1),
+                    now=datetime.now(UTC),
+                )
+            raise
+        if not terminal_written:
+            finish_sec_execution(
+                receipt_conn,
+                started,
+                SecExecutionResult(state="failed", reason_code="inventory_failed", failed=1),
+                now=datetime.now(UTC),
+            )
+        return status
+    finally:
+        receipt_conn.close()
+
+
+def _run_inventory(
+    args: argparse.Namespace, *, completed: Callable[[SyncResult], None] | None = None
+) -> int:
     ticker = str(args.ticker).strip().upper()
     cik = str(args.cik).strip().zfill(10)
     root_url = f"https://data.sec.gov/submissions/CIK{cik}.json"
@@ -1306,6 +1372,8 @@ def _run(args: argparse.Namespace) -> int:
         snapshot_id=coverage.snapshot_id,
         records_created=coverage.records_created,
     )
+    if completed is not None:
+        completed(result)
     sys.stdout.write(result.model_dump_json() + "\n")
     _event(
         "sec_filing_inventory_synced",

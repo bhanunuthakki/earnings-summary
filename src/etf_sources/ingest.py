@@ -25,14 +25,14 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from etf_sources import nport
 from etf_sources.issuer_registry import IssuerCharacteristics, fetch_issuer_data
 from factor_proxies import fetch_proxy_series, store_proxy_series
 from instrument_store import get_etf_profile, upsert_etf_holdings, upsert_etf_profile
-from models.instruments import EtfProfile
+from models.instruments import EtfFieldEvidence, EtfProfile
 
 #: yfinance window for a new ETF's price series — comfortably covers the
 #: 252-observation fit/OLS lookbacks plus calendar-intersection losses.
@@ -75,7 +75,7 @@ def apply_characteristics(
     everything else keeps its current value (or stays None on a fresh row).
     """
     existing = get_etf_profile(conn, ticker)
-    now = datetime.now()
+    now = datetime.now(UTC)
     if existing is None:
         merged = EtfProfile(
             ticker=ticker.upper(),
@@ -115,9 +115,16 @@ def apply_characteristics(
                 ),
                 "characteristics_as_of": chars.as_of or existing.characteristics_as_of,
                 "characteristics_source": chars.source,
-                "profile_fetched_at": now,
             }
         )
+    evidence = dict(merged.field_evidence)
+    for key in ("expense_ratio", "distribution_yield"):
+        value = getattr(chars, key)
+        if isinstance(value, float):
+            evidence[key] = EtfFieldEvidence(
+                value=value, source=chars.source, captured_at=now, source_as_of=chars.as_of
+            )
+    merged = merged.model_copy(update={"field_evidence": evidence})
     upsert_etf_profile(conn, merged)
 
 

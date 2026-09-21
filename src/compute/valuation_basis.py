@@ -1,55 +1,54 @@
-"""Compute the §Valuation tab payload: Opus-picked multiple + current value + 8Q history.
+"""Valuation selection and explicitly labelled provider-basis calculations.
 
-Pipeline:
-  1. Locate FMP `key_metrics_quarterly.json` (the source of truth for the
-     standard EV multiples + market cap) and `analyst_estimates_*` (NTM lines).
-  2. Build a tiny financial profile + estimates-availability summary for the LLM.
-  3. Call `generate_valuation_basis` to pick ONE multiple from the allowed set.
-  4. Compute the numeric value for the chosen multiple + 8Q history (where the
-     FMP-disclosed series supports it) so the renderer can show a sparkline +
-     rich/cheap verdict vs the trailing median.
-  5. Cache the whole payload at `data/valuation_basis/<T>.json` keyed by
-     (thesis_sha + latest_period_end + analyst_estimates_sha) so a fresh
-     quarterly print or thesis revision invalidates.
-
-Source-of-truth rules (per project memory):
-- Quantitative multiples: FMP `key_metrics_quarterly.json`
-- NTM estimates: FMP `analyst_estimates_annual.json` (forward FY1)
-- Market cap / price: FMP `historical_market_cap.json` for current spot
-- Thesis text: `micro_thesis/holdings/<T>.json`
-
-The renderer is a pure consumer of this output — no display logic lives here.
+Reported financial rows remain an unmigrated provider snapshot. Annual consensus
+is FY1, never true NTM; realized-forward and LTM history cannot grade that basis.
+All effective inputs and unavailable dispositions are retained in cache v3.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import math
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
 from llm_client import JSON_FENCE_RE, VALUATION_MULTIPLE_CHOICES, generate_valuation_basis
+from report.render_clock import render_today
+from sources.adapters import EstimateMetric, FiscalPeriodType
+from sources.discovery_financial_inputs import comparable_quarter_window
+from sources.discovery_financials import FinancialConcept
+from sources.valuation_inputs import ValuationInputs, read_valuation_inputs
 
 
 @dataclass
 class ValuationHistPoint:
     period_end: str  # ISO date
     value: float | None
+    basis: str = "unverified_legacy"
+    method: str = "unverified_legacy"
 
 
 @dataclass
 class ValuationBasisResult:
     ticker: str
     multiple_name: str | None = None
+    requested_multiple: str | None = None
+    current_basis: str = "unavailable"
+    current_method: str = "unavailable"
+    comparison_unavailable_reason: str | None = None
+    current_unavailable_reason: str | None = None
+    source_context: dict[str, object] = field(default_factory=dict[str, object])
     rationale: str | None = None
     target_band: str | None = None
     notes: str | None = None
     current_value: float | None = None
     current_value_display: str | None = None
-    current_period_end: str | None = None  # ISO date
+    current_period_end: str | None = None  # market observation / provider ratio date
+    estimate_target_period_end: str | None = None
     history: list[ValuationHistPoint] = field(default_factory=list[ValuationHistPoint])
     historical_min: float | None = None
     historical_max: float | None = None
@@ -81,10 +80,9 @@ _LTM_KEY_METRICS_FIELDS: dict[str, str] = {
 
 _NTM_MULTIPLES: frozenset[str] = frozenset({"EV/NTM Revenue", "EV/NTM EBITDA", "P/E (NTM)"})
 
-# Bump when the computed payload shape changes (new derived fields) so existing
-# caches recompute on their next --enable-llm build even though the underlying
-# inputs (thesis / profile / estimates) are unchanged. v2 added the PEG ratio.
-_CACHE_VERSION = "v2"
+# Bump the source-manifest schema with changes to these calculation semantics.
+# Unlabelled legacy caches must be rebuilt before any value is rendered.
+_CACHE_VERSION = "v5"
 
 
 def _coerce_multiple_payload(raw: str) -> dict[str, object] | None:
@@ -115,7 +113,7 @@ def _coerce_multiple_payload(raw: str) -> dict[str, object] | None:
 def extract_for_ticker(
     ticker: str,
     repo_root: Path,
-    db_conn: sqlite3.Connection,  # accepted for parity with other compute layers — unused here
+    db_conn: sqlite3.Connection,
     refresh: bool = False,
 ) -> ValuationBasisResult:
     """End-to-end: pick multiple via Opus → compute current value + history.
@@ -123,46 +121,37 @@ def extract_for_ticker(
     Falls back gracefully when inputs are missing (no FMP key_metrics → empty
     result with skipped_reason; LLM call fails → cache miss propagates).
     """
-    _ = db_conn  # signature parity hook
     ticker = ticker.upper()
     cache_path = _cache_path(repo_root, ticker)
-
-    key_metrics = _load_quarterly(repo_root, ticker, "key_metrics_quarterly.json")
-    if not key_metrics:
+    inputs = read_valuation_inputs(repo_root, ticker, as_of=render_today(), conn=db_conn)
+    key_metrics, income_q = inputs.key_metrics, inputs.income
+    if not key_metrics and inputs.thesis.get("valuation_multiple_override") not in (
+        "P/E (LTM)",
+        "P/FCF",
+    ):
         return ValuationBasisResult(
             ticker=ticker,
-            skipped_reason=f"no key_metrics_quarterly.json for {ticker}",
+            skipped_reason="provider_key_metrics_unavailable",
+            source_context=inputs.manifest,
         )
-
-    income_q = _load_quarterly(repo_root, ticker, "income_statement_quarterly.json")
-    balance_q = _load_quarterly(repo_root, ticker, "balance_sheet_quarterly.json")
-    analyst_annual = _load_list(repo_root, ticker, "analyst_estimates_annual.json")
-    thesis_text = _load_thesis(repo_root, ticker)
-    sector, industry = _load_sector_industry(repo_root, ticker)
-
-    financial_profile = _financial_profile_md(key_metrics, income_q)
-    estimates_md = _available_estimates_md(analyst_annual)
-
-    # Per-ticker override: holdings JSON can pin the multiple via
-    # `valuation_multiple_override` (must match a VALUATION_MULTIPLE_CHOICES
-    # entry). Skips the LLM call entirely when present. Use case: the
-    # analyst has already decided NTM P/E is the right lens for a
-    # particular name and doesn't want Opus second-guessing it.
-    override = _load_multiple_override(repo_root, ticker)
-
-    inputs_sha = hashlib.sha256(
+    thesis_text = next(
         (
-            _CACHE_VERSION
-            + "\x00"
-            + thesis_text
-            + "\x00"
-            + financial_profile
-            + "\x00"
-            + estimates_md
-            + "\x00"
-            + (override or "")
-        ).encode("utf-8")
-    ).hexdigest()
+            str(inputs.thesis[key])
+            for key in ("thesis", "thesis_full", "thesis_one_liner")
+            if isinstance(inputs.thesis.get(key), str) and inputs.thesis[key]
+        ),
+        "",
+    )
+    sector, industry = (
+        _str_or_none(inputs.profile.get("sector")),
+        _str_or_none(inputs.profile.get("industry")),
+    )
+    financial_profile = _financial_profile_md(key_metrics, income_q)
+    estimates_md = _dated_estimates_md(inputs)
+    override = _str_or_none(inputs.thesis.get("valuation_multiple_override"))
+    if override not in VALUATION_MULTIPLE_CHOICES:
+        override = None
+    inputs_sha = inputs.fingerprint
 
     if not refresh and cache_path.exists():
         decoded_cache: object = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -178,10 +167,7 @@ def extract_for_ticker(
         # Skip the LLM — analyst-pinned multiple.
         parsed: dict[str, object] = {
             "multiple": override,
-            "rationale": (
-                "Analyst-pinned multiple via holdings JSON "
-                "`valuation_multiple_override`. Skipping Opus selection."
-            ),
+            "rationale": "Owner-selected valuation multiple.",
             "target_band": "",
             "notes": "",
         }
@@ -218,25 +204,64 @@ def extract_for_ticker(
         # than 500-erroring the whole render.
         multiple_name = _sector_fallback(sector, industry)
 
-    current_value, current_pe, history = _compute_series(
-        multiple_name, key_metrics, analyst_annual, balance_q, income_q
+    requested_multiple = multiple_name
+    current_value, current_pe, history, basis, method, unavailable = _labelled_series(
+        multiple_name, inputs
     )
-    hist_values = [h.value for h in history if h.value is not None]
-    hist_min = min(hist_values) if hist_values else None
-    hist_max = max(hist_values) if hist_values else None
-    hist_median = sorted(hist_values)[len(hist_values) // 2] if hist_values else None
+    if multiple_name in _NTM_MULTIPLES:
+        actual_horizon = (
+            "annual estimate; horizon unavailable"
+            if basis == "unsupported_annual_estimate_horizon"
+            else "FY1 estimate"
+        )
+        multiple_name = multiple_name.replace("NTM", actual_horizon)
+    comparable = [
+        point.value
+        for point in history
+        if point.value is not None and point.basis == basis and point.method == method
+    ]
+    hist_min = min(comparable) if comparable else None
+    hist_max = max(comparable) if comparable else None
+    hist_median = sorted(comparable)[len(comparable) // 2] if comparable else None
     rich_cheap = _rich_cheap_verdict(current_value, hist_median, hist_min, hist_max)
-    peg_ratio, peg_growth_pct = _compute_peg(multiple_name, current_value, analyst_annual, income_q)
+    comparison_reason = (
+        None
+        if rich_cheap is not None
+        else "no_comparable_same_basis_history"
+        if not comparable
+        else "current_value_unavailable"
+    )
+    peg_ratio, peg_growth_pct = _dated_peg(requested_multiple, current_value, inputs)
 
+    target_period_end = current_pe if requested_multiple in _NTM_MULTIPLES else None
+    if requested_multiple in _NTM_MULTIPLES:
+        current_pe = (
+            inputs.market.captured_at.date().isoformat() if inputs.market.captured_at else None
+        )
     result = ValuationBasisResult(
         ticker=ticker,
         multiple_name=multiple_name,
+        requested_multiple=requested_multiple,
+        current_basis=basis,
+        current_method=method,
+        current_unavailable_reason=unavailable,
+        comparison_unavailable_reason=comparison_reason,
+        source_context={
+            **inputs.manifest,
+            "requested_multiple": requested_multiple,
+            "actual_display_label": multiple_name,
+            "current_unavailable_reason": unavailable,
+            "estimate_target_horizon_limit_days": 385,
+            "estimate_target_horizon_scope": "upper_bound_only_not_verified_issuer_calendar_or_complete_curve",
+            "calculation_version": _CACHE_VERSION,
+        },
         rationale=_str_or_none(parsed.get("rationale")),
         target_band=_str_or_none(parsed.get("target_band")),
         notes=_str_or_none(parsed.get("notes")),
         current_value=current_value,
         current_value_display=_format_value(current_value, multiple_name),
         current_period_end=current_pe,
+        estimate_target_period_end=target_period_end,
         history=history,
         historical_min=hist_min,
         historical_max=hist_max,
@@ -251,18 +276,210 @@ def extract_for_ticker(
     return result
 
 
-def load(repo_root: Path, ticker: str) -> ValuationBasisResult | None:
-    """Read the cached valuation basis, or None if absent."""
+def _dated_estimates_md(inputs: ValuationInputs) -> str:
+    if inputs.estimate_unavailable_reason:
+        return f"FY1 estimate unavailable: {inputs.estimate_unavailable_reason}; true NTM is not implemented."
+    lines = ["Dated annual FY1 estimates (not next twelve months):"]
+    for estimate in inputs.estimates:
+        if estimate.target_period_end.date() > render_today():
+            lines.append(
+                f"- {estimate.metric.value}: {estimate.estimated_avg} {estimate.currency.value}; FY ending {estimate.target_period_end.date()}; observed {estimate.observation_date.isoformat()}"
+            )
+    return "\n".join(lines)
+
+
+def _labelled_series(
+    requested: str | None, inputs: ValuationInputs
+) -> tuple[float | None, str | None, list[ValuationHistPoint], str, str, str | None]:
+    if requested not in _NTM_MULTIPLES:
+        current, period, history = _compute_series(requested, inputs.key_metrics, inputs.balance)
+        field_name = _LTM_KEY_METRICS_FIELDS.get(requested or "", "unknown")
+        by_date = {str(row.get("date") or ""): row for row in inputs.key_metrics}
+        for point in history:
+            provider_value = _float(by_date[point.period_end].get(field_name))
+            point.basis = "provider_reported_ratio_unmigrated"
+            point.method = f"provider_field:{field_name}"
+            if (provider_value is None or provider_value <= 0) and point.value is not None:
+                point.basis = "legacy_calculated_book_multiple_unmigrated"
+                point.method = f"legacy_book_formula:{requested}"
+        if requested in {"P/E (LTM)", "P/FCF"}:
+            concept: FinancialConcept = (
+                "net_income" if requested == "P/E (LTM)" else "free_cash_flow"
+            )
+            window = comparable_quarter_window(inputs.canonical_financials, concept, 4)
+            method = f"captured_market_cap / sum_4_contiguous_quarter_{concept}"
+            period = (
+                inputs.market.captured_at.date().isoformat() if inputs.market.captured_at else None
+            )
+            current = None
+            reason: str | None = None
+            if isinstance(window, str):
+                reason = window
+            elif sum((item.value for item in window), Decimal(0)) <= 0:
+                reason = "nonpositive_canonical_ltm_denominator"
+            elif window[0].unit not in {"actual", window[0].currency}:
+                reason = "canonical_ltm_currency_scale_unavailable"
+            elif inputs.market.status != "available" or inputs.market.market_cap is None:
+                reason = "current_captured_market_cap_unavailable"
+            elif inputs.market.currency != window[0].currency:
+                reason = "canonical_ltm_market_currency_mismatch"
+            else:
+                current = float(
+                    inputs.market.market_cap / sum((item.value for item in window), Decimal(0))
+                )
+            return current, period, history, "canonical_reported_ltm", method, reason
+        basis = history[-1].basis if history else "unavailable"
+        method = history[-1].method if history else "unavailable"
+        return (
+            current,
+            period,
+            history,
+            basis,
+            method,
+            None if current is not None else "provider_ratio_inputs_unavailable",
+        )
+    metric = {
+        "P/E (NTM)": EstimateMetric.NET_INCOME,
+        "EV/NTM Revenue": EstimateMetric.REVENUE,
+        "EV/NTM EBITDA": EstimateMetric.EBITDA,
+    }[requested]
+    candidates = sorted(
+        (
+            item
+            for item in inputs.estimates
+            if item.metric == metric
+            and item.fiscal_period == FiscalPeriodType.FY
+            and item.target_period_end.date() > render_today()
+        ),
+        key=lambda item: item.target_period_end,
+    )
+    selected = candidates[0] if candidates else None
+    current: float | None = None
+    reason = inputs.estimate_unavailable_reason
+    period = selected.target_period_end.date().isoformat() if selected else None
+    unsupported_horizon = (
+        selected is not None and (selected.target_period_end.date() - render_today()).days > 385
+    )
+    if unsupported_horizon:
+        reason = "fy1_target_horizon_unavailable"
+    if reason is None:
+        if selected is None or selected.estimated_avg <= 0:
+            reason = "positive_fy1_denominator_unavailable"
+        elif requested != "P/E (NTM)":
+            reason = "enterprise_value_definition_and_capture_unavailable"
+        elif inputs.market.status != "available" or inputs.market.market_cap is None:
+            reason = "current_captured_market_cap_unavailable"
+        elif inputs.market.currency != selected.currency.value:
+            reason = "estimate_market_currency_mismatch"
+        else:
+            current = float(inputs.market.market_cap / selected.estimated_avg)
+    income = sorted(
+        ((str(row.get("date") or ""), row) for row in inputs.income if row.get("date")),
+        key=lambda pair: pair[0],
+    )
+    ltm = {"P/E (NTM)": "peRatio", "EV/NTM Revenue": "evToSales", "EV/NTM EBITDA": "evToEBITDA"}[
+        requested
+    ]
+    history: list[ValuationHistPoint] = []
+    for row in reversed(inputs.key_metrics[:12]):
+        period_end = str(row.get("date") or "")
+        # Retain the old calculation solely as an explicitly hindsight-based
+        # numerical shadow; it is never the historical consensus comparator.
+        value = _compute_realized_forward_value(requested, row, income)
+        basis, method = "realized_forward_proxy_unmigrated", "legacy_following_four_records"
+        if value is None:
+            value = _float(row.get(ltm))
+            value = value if value is not None and value > 0 else None
+            basis, method = "provider_ltm_proxy_unmigrated", f"provider_field:{ltm}"
+        history.append(ValuationHistPoint(period_end, value, basis, method))
+    return (
+        current,
+        period,
+        history,
+        "unsupported_annual_estimate_horizon" if unsupported_horizon else "fy1_estimate",
+        "captured_market_cap / dated_fy1_net_income"
+        if requested == "P/E (NTM)"
+        else "unavailable_ev_fy1",
+        reason,
+    )
+
+
+def _dated_peg(
+    requested: str | None, current: float | None, inputs: ValuationInputs
+) -> tuple[float | None, float | None]:
+    if (
+        requested != "P/E (NTM)"
+        or current is None
+        or current <= 0
+        or inputs.estimate_unavailable_reason
+    ):
+        return None, None
+    eps = sorted(
+        (
+            item
+            for item in inputs.estimates
+            if item.metric == EstimateMetric.EPS
+            and item.fiscal_period == FiscalPeriodType.FY
+            and item.target_period_end.date() > render_today()
+        ),
+        key=lambda item: item.target_period_end,
+    )
+    income = sorted(
+        (
+            item
+            for item in inputs.estimates
+            if item.metric == EstimateMetric.NET_INCOME
+            and item.fiscal_period == FiscalPeriodType.FY
+            and item.target_period_end.date() > render_today()
+        ),
+        key=lambda item: item.target_period_end,
+    )
+    if (
+        len(eps) < 2
+        or not income
+        or eps[0].target_period_end != income[0].target_period_end
+        or eps[0].estimated_avg <= 0
+    ):
+        return None, None
+    if (
+        eps[0].currency != eps[1].currency
+        or eps[0].observation_date != eps[1].observation_date
+        or not 335 <= (eps[1].target_period_end - eps[0].target_period_end).days <= 395
+    ):
+        return None, None
+    growth = float((eps[1].estimated_avg / eps[0].estimated_avg - 1) * 100)
+    return (current / growth, growth) if growth > 0 else (None, None)
+
+
+def load(
+    repo_root: Path, ticker: str, *, conn: sqlite3.Connection | None = None
+) -> ValuationBasisResult | None:
+    """Read only a current, labelled cache; validation never invokes the picker."""
     path = _cache_path(repo_root, ticker)
     if not path.exists():
         return None
-    decoded_load: object = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(decoded_load, dict):
+    decoded: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(decoded, dict):
         raise ValueError("expected JSON object for valuation_basis cache")
-    payload = cast("dict[str, Any]", decoded_load)
+    payload = cast("dict[str, Any]", decoded)
+    context = payload.get("source_context")
+    if not isinstance(context, dict) or context.get("calculation_version") != _CACHE_VERSION:
+        return ValuationBasisResult(
+            ticker=ticker, skipped_reason="valuation_cache_rebuild_required_unlabelled_legacy_basis"
+        )
+    if conn is None:
+        return ValuationBasisResult(
+            ticker=ticker, skipped_reason="valuation_cache_validation_database_unavailable"
+        )
+    inputs = read_valuation_inputs(repo_root, ticker, as_of=render_today(), conn=conn)
+    if payload.get("cache_sha256") != inputs.fingerprint:
+        return ValuationBasisResult(
+            ticker=ticker, skipped_reason="valuation_cache_rebuild_required_input_identity_changed"
+        )
     history_raw: Any = payload.pop("history", []) or []
-    history = [ValuationHistPoint(**h) for h in history_raw]
-    return ValuationBasisResult(**payload, history=history)
+    return ValuationBasisResult(
+        **payload, history=[ValuationHistPoint(**point) for point in history_raw]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -279,90 +496,6 @@ def _write_cache(path: Path, result: ValuationBasisResult) -> None:
     path.write_text(json.dumps(asdict(result), indent=2, default=str), encoding="utf-8")
 
 
-def _load_quarterly(repo_root: Path, ticker: str, filename: str) -> list[dict[str, object]]:
-    """Load a list-shape FMP quarterly endpoint, newest-first ordered."""
-    path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_{filename}"
-    if not path.exists():
-        return []
-    try:
-        decoded: object = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(decoded, list):
-        return []
-    raw_list = cast("list[Any]", decoded)
-    rows = [cast("dict[str, object]", r) for r in raw_list if isinstance(r, dict)]
-    rows.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
-    return rows
-
-
-def _load_list(repo_root: Path, ticker: str, filename: str) -> list[dict[str, object]]:
-    return _load_quarterly(repo_root, ticker, filename)
-
-
-def _load_multiple_override(repo_root: Path, ticker: str) -> str | None:
-    """Read `valuation_multiple_override` from holdings JSON if present.
-
-    Returns None when the field is missing OR when the value isn't in
-    VALUATION_MULTIPLE_CHOICES (caller falls back to LLM selection)."""
-    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not path.exists():
-        return None
-    try:
-        decoded: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(decoded, dict):
-        return None
-    payload = cast("dict[str, object]", decoded)
-    v = payload.get("valuation_multiple_override")
-    if isinstance(v, str) and v.strip() in VALUATION_MULTIPLE_CHOICES:
-        return v.strip()
-    return None
-
-
-def _load_thesis(repo_root: Path, ticker: str) -> str:
-    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not path.exists():
-        return ""
-    try:
-        decoded: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ""
-    if not isinstance(decoded, dict):
-        return ""
-    payload = cast("dict[str, object]", decoded)
-    for key in ("thesis", "thesis_full", "thesis_one_liner"):
-        v = payload.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return ""
-
-
-def _load_sector_industry(repo_root: Path, ticker: str) -> tuple[str | None, str | None]:
-    """Pull sector/industry from FMP profile.json."""
-    path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_profile.json"
-    if not path.exists():
-        return (None, None)
-    try:
-        decoded: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return (None, None)
-    candidate: object = decoded
-    if isinstance(candidate, list):
-        items = cast("list[Any]", candidate)
-        candidate = items[0] if items else {}
-    if not isinstance(candidate, dict):
-        return (None, None)
-    r = cast("dict[str, object]", candidate)
-    sector = r.get("sector")
-    industry = r.get("industry")
-    return (
-        sector.strip() if isinstance(sector, str) and sector.strip() else None,
-        industry.strip() if isinstance(industry, str) and industry.strip() else None,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Prompt-input formatting
 # ---------------------------------------------------------------------------
@@ -374,7 +507,9 @@ def _financial_profile_md(
 ) -> str:
     """Compact summary of recent quarterly financial shape so the LLM can
     judge which multiple is appropriate. Keep it tight — 1-2 KB max."""
-    out: list[str] = []
+    out: list[str] = [
+        "Unmigrated provider financial context; native source units, currency not inferred."
+    ]
     if income_q:
         latest = income_q[0]
         prior_yr = income_q[4] if len(income_q) > 4 else None
@@ -389,23 +524,23 @@ def _financial_profile_md(
             if prior_rev:
                 yoy = (rev - prior_rev) / prior_rev * 100
         out.append(f"- Latest quarter ({latest.get('date')}):")
-        out.append(f"  - Revenue: ${rev / 1e9:.2f}B" if rev else "  - Revenue: n/a")
+        out.append(f"  - Revenue: {rev / 1e9:.2f}B" if rev else "  - Revenue: n/a")
         if yoy is not None:
             out.append(f"  - Revenue YoY: {yoy:+.1f}%")
         if op_margin is not None:
             out.append(f"  - Operating margin: {op_margin:.1f}%")
         if net_inc is not None:
-            out.append(f"  - Net income: ${net_inc / 1e9:.2f}B")
+            out.append(f"  - Net income: {net_inc / 1e9:.2f}B")
         if eps is not None:
-            out.append(f"  - EPS: ${eps:.2f}")
+            out.append(f"  - EPS: {eps:.2f}")
     if key_metrics:
         latest_km = key_metrics[0]
         ev = _float(latest_km.get("enterpriseValue"))
         mcap = _float(latest_km.get("marketCap"))
         if mcap:
-            out.append(f"  - Market cap: ${mcap / 1e9:.1f}B")
+            out.append(f"  - Market cap: {mcap / 1e9:.1f}B")
         if ev:
-            out.append(f"  - Enterprise value: ${ev / 1e9:.1f}B")
+            out.append(f"  - Enterprise value: {ev / 1e9:.1f}B")
         # Current LTM multiples (whatever FMP populated)
         for label, field_name in (
             ("EV/LTM Revenue", "evToSales"),
@@ -420,39 +555,6 @@ def _financial_profile_md(
     return "\n".join(out) if out else "(no financial profile available)"
 
 
-def _available_estimates_md(annual_estimates: list[dict[str, object]]) -> str:
-    """Tell the LLM which NTM lines are computable."""
-    if not annual_estimates:
-        return "(no analyst estimates on file — NTM multiples not computable)"
-    # The endpoint is sorted DESC by date; find the first row whose date is in the future.
-    today_iso = date.today().isoformat()
-    future = [r for r in annual_estimates if str(r.get("date") or "") > today_iso]
-    if not future:
-        return "(all analyst estimates are historical — NTM multiples not computable)"
-    nxt = future[-1]  # closest forward year
-    lines = [f"- NTM (FY ending {nxt.get('date')}): analyst consensus available for:"]
-    for label, field_name in (
-        ("Revenue", "revenueAvg"),
-        ("EBITDA", "ebitdaAvg"),
-        ("EBIT", "ebitAvg"),
-        ("EPS", "epsAvg"),
-        ("Net income", "netIncomeAvg"),
-    ):
-        v = _float(nxt.get(field_name))
-        if v is not None:
-            unit = "$" + (
-                f"{v / 1e9:.2f}B"
-                if abs(v) > 1e9
-                else f"{v / 1e6:.0f}M"
-                if abs(v) > 1e6
-                else f"{v:.2f}"
-            )
-            if label == "EPS":
-                unit = f"${v:.2f}"
-            lines.append(f"  - {label}: {unit}")
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Multiple computation
 # ---------------------------------------------------------------------------
@@ -461,16 +563,11 @@ def _available_estimates_md(annual_estimates: list[dict[str, object]]) -> str:
 def _compute_series(
     multiple_name: str | None,
     key_metrics: list[dict[str, object]],
-    analyst_annual: list[dict[str, object]],
     balance_q: list[dict[str, object]] | None = None,
-    income_q: list[dict[str, object]] | None = None,
 ) -> tuple[float | None, str | None, list[ValuationHistPoint]]:
     """Return (current_value, current_period_end_iso, 8Q history)."""
     if multiple_name is None or not key_metrics:
         return (None, None, [])
-
-    if multiple_name in _NTM_MULTIPLES:
-        return _compute_ntm_multiple(multiple_name, key_metrics, analyst_annual, income_q)
 
     field_name = _LTM_KEY_METRICS_FIELDS.get(multiple_name)
     if field_name is None:
@@ -529,79 +626,6 @@ def _manual_book_multiple(
     if tangible_book <= 0:
         return None
     return mcap / tangible_book
-
-
-def _compute_ntm_multiple(
-    multiple_name: str,
-    key_metrics: list[dict[str, object]],
-    analyst_annual: list[dict[str, object]],
-    income_q: list[dict[str, object]] | None,
-) -> tuple[float | None, str | None, list[ValuationHistPoint]]:
-    """NTM multiples = current EV (or market cap) / forward-year analyst consensus.
-
-    For historical points: we don't archive prior-period consensus snapshots,
-    so we use ACTUALLY-REALIZED 4-quarter-forward figures as the proxy. That
-    is, for period Q with date D, "NTM-at-time-of-Q" history = (price-at-Q) /
-    (sum of the 4 quarterly EPS values that followed Q in reality). This is
-    backward-looking truth, not real-time estimates, but it's a cleaner
-    historical anchor than the trailing-LTM proxy (which double-counts old
-    earnings).
-
-    Returns (current_value, current_period_end, 12Q history with realized-forward proxy).
-    """
-    if not key_metrics:
-        return (None, None, [])
-    latest = key_metrics[0]
-    ev = _float(latest.get("enterpriseValue"))
-    mcap = _float(latest.get("marketCap"))
-    today_iso = date.today().isoformat()
-    future = [r for r in analyst_annual if str(r.get("date") or "") > today_iso]
-    nxt = future[-1] if future else None
-
-    current_value: float | None = None
-    if nxt is not None:
-        if multiple_name == "EV/NTM Revenue" and ev:
-            rev = _float(nxt.get("revenueAvg"))
-            current_value = (ev / rev) if rev and rev > 0 else None
-        elif multiple_name == "EV/NTM EBITDA" and ev:
-            ebitda = _float(nxt.get("ebitdaAvg"))
-            current_value = (ev / ebitda) if ebitda and ebitda > 0 else None
-        elif multiple_name == "P/E (NTM)" and mcap:
-            ni = _float(nxt.get("netIncomeAvg"))
-            if ni and ni > 0:
-                current_value = mcap / ni
-
-    # Build per-period income lookup (oldest-first) so we can sum 4 quarters
-    # forward from any historical point.
-    income_by_date: list[tuple[str, dict[str, object]]] = []
-    if income_q:
-        income_by_date = sorted(
-            ((str(r.get("date") or ""), r) for r in income_q if r.get("date")),
-            key=lambda x: x[0],
-        )
-
-    # For each of the last 12 key_metrics quarters, compute the "NTM-as-of-then"
-    # value using realized 4-quarter-forward financials. When the 4 forward
-    # quarters aren't all on file (e.g. for the most recent 3 periods), fall
-    # back to the LTM key_metrics multiple.
-    ltm_field = {
-        "EV/NTM Revenue": "evToSales",
-        "EV/NTM EBITDA": "evToEBITDA",
-        "P/E (NTM)": "peRatio",
-    }[multiple_name]
-    history: list[ValuationHistPoint] = []
-    for row in key_metrics[:12]:
-        pe = str(row.get("date") or "")
-        v = _compute_realized_forward_value(multiple_name, row, income_by_date)
-        if v is None:
-            # Fall back to LTM proxy if forward window isn't available.
-            v = _float(row.get(ltm_field))
-            if v is not None and v <= 0:
-                v = None
-        history.append(ValuationHistPoint(period_end=pe, value=v))
-    history.reverse()
-    current_pe = str(latest.get("date") or "")
-    return (current_value, current_pe, history)
 
 
 def _compute_realized_forward_value(
@@ -763,14 +787,17 @@ def _rich_cheap_verdict(
 def _float(v: object) -> float | None:
     if v is None:
         return None
+    if isinstance(v, bool):
+        return None
     if isinstance(v, (int, float)):
-        return float(v)
+        return float(v) if math.isfinite(v) else None
     if isinstance(v, str):
         s = v.strip().replace(",", "")
         if not s:
             return None
         try:
-            return float(s)
+            value = float(s)
+            return value if math.isfinite(value) else None
         except ValueError:
             return None
     return None

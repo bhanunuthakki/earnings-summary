@@ -1,7 +1,7 @@
 """CLI entrypoint for deterministic three-regime artifact rendering.
 
 Renders normalized HTML, Markdown, and sections.json across Regime 0, Regime 1, and Regime 2
-for portfolio canaries (META, NU, BN, RBRK, ASML, WIX).
+for portfolio canaries (META, NU, BN, RBRK, FRVO, WIX).
 Emits structured JSON receipts to .tmp/three_regime_render_receipt.json.
 """
 
@@ -13,14 +13,12 @@ import sys
 from datetime import date
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from pipeline.three_regime_renderer import (  # noqa: E402
-    ThreeRegimeDeterministicRenderer,
-)
+from pipeline.three_regime_renderer import ThreeRegimeDeterministicRenderer
 
 
 def main() -> None:
@@ -41,12 +39,21 @@ def main() -> None:
     )
     parser.add_argument("--json", action="store_true", help="Print receipt JSON to stdout")
 
+    parser.add_argument("--input-manifest", type=Path)
+    parser.add_argument("--manifest-sha256")
+    parser.add_argument(
+        "--output-dir", type=Path, default=PROJECT_ROOT / ".tmp" / "three_regime_renders"
+    )
     args = parser.parse_args()
     output_receipt: Path = args.output_receipt
     as_of_dt = date.fromisoformat(args.as_of_date)
 
-    renderer = ThreeRegimeDeterministicRenderer()
-    cohort = ["META", "NU", "BN", "RBRK", "ASML", "WIX"]
+    renderer = ThreeRegimeDeterministicRenderer(
+        output_base_dir=args.output_dir,
+        input_manifest=args.input_manifest,
+        expected_manifest_sha256=args.manifest_sha256,
+    )
+    cohort = ["META", "NU", "BN", "RBRK", "FRVO", "WIX"]
 
     receipt = renderer.render_all_regimes_for_cohort(tickers=cohort, as_of_date=as_of_dt)
 
@@ -59,7 +66,7 @@ def main() -> None:
         print(json.dumps(receipt.model_dump(mode="json"), indent=2))
     else:
         print(
-            f"Three-regime rendering complete. Status: {receipt.status} "
+            f"Three-regime rendering receipt. Status: {receipt.status} "
             f"(Tickers: {receipt.total_tickers}, Regimes: {receipt.total_regimes}, "
             f"Outputs: {receipt.total_render_outputs}, Two-Pass Verified: {receipt.all_two_pass_verified})"
         )

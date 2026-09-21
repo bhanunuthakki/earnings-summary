@@ -21,9 +21,9 @@ to the cost of equity, weighted by the share of revenue earned there.
     premium while a US-only name carries ~0.
 
 It is deliberately systematic — every name runs through the same table and the
-same revenue weighting, so there are no per-ticker hand-tuned premiums. A name
-with no attributable foreign revenue (or no geo file at all) gets CRP 0 and is
-left exactly where it was.
+same revenue weighting, so there are no per-ticker hand-tuned premiums. A known
+mature-market mix may resolve to CRP 0. Missing or unattributable geography is
+unavailable and cannot masquerade as mature-market evidence.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,22 @@ class CountryRiskObservation:
     premium: float
     source_record: dict[str, object] | None
     geo_revenue: dict[str, float]
+
+
+class CountryRiskUnavailableError(RuntimeError):
+    """Typed failure for missing or unattributable geographic revenue evidence."""
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        source_record: dict[str, object] | None = None,
+        geo_revenue: dict[str, float] | None = None,
+    ) -> None:
+        self.reason = reason
+        self.source_record = source_record
+        self.geo_revenue = dict(geo_revenue or {})
+        super().__init__(f"country risk unavailable: {reason}")
 
 
 # Damodaran equity country risk premiums (decimal), the premium ABOVE the
@@ -140,16 +157,19 @@ def crp_for_country(label: str) -> float | None:
     return None
 
 
-def weighted_crp(geo_revenue: dict[str, float]) -> float:
+def weighted_crp(geo_revenue: dict[str, float]) -> float | None:
     """Revenue-weighted CRP over the country-attributable share of revenue.
 
     Labels that map to a country contribute ``weight_i * CRP_i``; unattributable
     aggregates ("Other Countries") and unknown labels are excluded and the
-    weights renormalised over the attributable revenue. Returns 0.0 when nothing
-    is attributable (a US-only / no-geo name is left untouched).
+    weights renormalised over the attributable revenue. Returns ``None`` when
+    nothing is attributable. A known mature-market mix remains an available
+    numeric ``0.0``.
     """
     attributable: list[tuple[float, float]] = []  # (revenue, crp)
     for label, rev in geo_revenue.items():
+        if not math.isfinite(rev):
+            return None
         if rev <= 0:
             continue
         crp = crp_for_country(label)
@@ -157,9 +177,10 @@ def weighted_crp(geo_revenue: dict[str, float]) -> float:
             continue
         attributable.append((float(rev), crp))
     total = sum(rev for rev, _ in attributable)
-    if total <= 0:
-        return 0.0
-    return sum(rev * crp for rev, crp in attributable) / total
+    if total <= 0 or not math.isfinite(total):
+        return None
+    premium = sum(rev * crp for rev, crp in attributable) / total
+    return premium if math.isfinite(premium) else None
 
 
 def _geo_source_record(
@@ -209,8 +230,8 @@ def _latest_geo_observation(repo_root: Path, ticker: str) -> CountryRiskObservat
     """Latest geographic revenue mix for a ticker from the FMP geo-segment cache.
 
     Prefers the annual file's most recent fiscal year; falls back to summing the
-    latest four quarters of the quarterly file. Returns an empty dict when no
-    usable geo cache exists (so the caller yields CRP 0).
+    latest four quarters of the quarterly file. Missing or unattributable
+    geography raises :class:`CountryRiskUnavailableError`.
     """
     fmp = repo_root / "data" / "historical" / "fmp"
 
@@ -223,7 +244,14 @@ def _latest_geo_observation(repo_root: Path, ticker: str) -> CountryRiskObservat
         latest = max(annual[0], key=lambda record: str(record.get("fiscalYear", "")))
         geo = _geo_values(latest)
         if geo:
-            return CountryRiskObservation(weighted_crp(geo), annual[1], geo)
+            premium = weighted_crp(geo)
+            if premium is None:
+                raise CountryRiskUnavailableError(
+                    "geographic_revenue_unattributable",
+                    source_record=annual[1],
+                    geo_revenue=geo,
+                )
+            return CountryRiskObservation(premium, annual[1], geo)
 
     quarterly = _geo_source_record(
         fmp / f"{ticker}_geo_segments_quarterly.json",
@@ -243,8 +271,15 @@ def _latest_geo_observation(repo_root: Path, ticker: str) -> CountryRiskObservat
             for key, value in _geo_values(rec).items():
                 agg[key] = agg.get(key, 0.0) + value
         if agg:
-            return CountryRiskObservation(weighted_crp(agg), quarterly[1], agg)
-    return CountryRiskObservation(0.0, None, {})
+            premium = weighted_crp(agg)
+            if premium is None:
+                raise CountryRiskUnavailableError(
+                    "geographic_revenue_unattributable",
+                    source_record=quarterly[1],
+                    geo_revenue=agg,
+                )
+            return CountryRiskObservation(premium, quarterly[1], agg)
+    raise CountryRiskUnavailableError("geographic_revenue_unavailable")
 
 
 def _latest_geo_revenue(repo_root: Path, ticker: str) -> dict[str, float]:
@@ -256,20 +291,18 @@ def country_risk_observation(repo_root: Path, ticker: str) -> CountryRiskObserva
     """Return CRP and a same-byte-stream receipt for its selected geo source."""
     try:
         return _latest_geo_observation(Path(repo_root), ticker)
-    except Exception as exc:  # never let a CRP lookup break a build
+    except CountryRiskUnavailableError:
+        raise
+    except Exception as exc:
         log.debug({"event": "country_risk_premium_failed", "ticker": ticker, "error": str(exc)})
-        return CountryRiskObservation(0.0, None, {})
+        raise CountryRiskUnavailableError("geographic_revenue_read_failed") from exc
 
 
 def country_risk_premium(repo_root: Path, ticker: str) -> float:
     """The operation-weighted country risk premium for a ticker (decimal).
 
     Reads the cached geographic revenue mix and weights it through
-    ``COUNTRY_CRP``. Best-effort: any read/parse failure degrades to 0.0 so a
-    DCF build never fails because the geo cache was missing or malformed.
+    ``COUNTRY_CRP``. Missing, malformed, or wholly unattributable geography is
+    unavailable rather than a synthetic mature-market zero.
     """
-    try:
-        return country_risk_observation(repo_root, ticker).premium
-    except Exception as exc:  # pragma: no cover - compatibility defense
-        log.debug({"event": "country_risk_premium_failed", "ticker": ticker, "error": str(exc)})
-        return 0.0
+    return country_risk_observation(repo_root, ticker).premium

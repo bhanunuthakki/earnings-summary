@@ -204,10 +204,7 @@ def _static_migration_string(node: ast.expr, constants: dict[str, str]) -> str |
         return node.value
     if isinstance(node, ast.Name):
         return constants.get(node.id)
-    if isinstance(node, ast.Call) and len(node.args) == 1 and not node.keywords:
-        func = node.func
-        if isinstance(func, ast.Attribute) and func.attr == "text":
-            return _static_migration_string(node.args[0], constants)
+    # A call can transform its argument; a method named text is not SQL provenance.
     return None
 
 

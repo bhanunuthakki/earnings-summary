@@ -11,22 +11,31 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
+from collections.abc import Callable, Sequence
 from datetime import date, timedelta
+from importlib import import_module
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from allocation.book_risk import BookRisk  # noqa: E402
-from risk_reward import (  # noqa: E402
-    _dcf_reward_legs,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
-    _Reward,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
+from allocation.book_risk import BookRisk
+from pipeline import portfolio_panel
+from risk_reward import (
+    Reward,
+    RiskRewardGap,
     build_gap_rows,
     build_risk_reward_gap,
+)
+
+# Typed test seams retain private implementation coverage without exporting helpers.
+_dcf_reward_legs = cast(
+    Callable[[Path, Sequence[str], date], dict[str, Reward]],
+    getattr(import_module("risk_reward"), "_dcf_reward_legs"),
+)
+_risk_reward_gap_section = cast(
+    Callable[[RiskRewardGap], str], getattr(portfolio_panel, "_risk_reward_gap_section")
 )
 
 
@@ -48,8 +57,8 @@ def _book(risk_share: dict[str, float], weights: dict[str, float]) -> BookRisk:
     )
 
 
-def _reward(er: float | None, *, low_conf: bool = False, reason: str | None = None) -> _Reward:
-    return _Reward(
+def _reward(er: float | None, *, low_conf: bool = False, reason: str | None = None) -> Reward:
+    return Reward(
         expected_return=er,
         has_scenarios=er is not None,
         low_confidence=low_conf,
@@ -308,9 +317,6 @@ def test_gap_section_renders_with_control_kit() -> None:
         shrinkage=0.1,
         valued_names=valued,
     )
-    from pipeline.portfolio_panel import (
-        _risk_reward_gap_section,  # pyright: ignore[reportPrivateUsage]
-    )
 
     html = _risk_reward_gap_section(gap)
     assert "Risk vs reward vs conviction" in html
@@ -342,9 +348,6 @@ def test_gap_section_low_reward_coverage_leads_with_warning() -> None:
         shrinkage=0.1,
         valued_names=valued,
     )
-    from pipeline.portfolio_panel import (
-        _risk_reward_gap_section,  # pyright: ignore[reportPrivateUsage]
-    )
 
     html = _risk_reward_gap_section(gap)
     assert "OF REWARD UNMODELED" in html
@@ -352,9 +355,6 @@ def test_gap_section_low_reward_coverage_leads_with_warning() -> None:
 
 
 def test_gap_section_hidden_reason_renders_note() -> None:
-    from pipeline.portfolio_panel import (
-        _risk_reward_gap_section,  # pyright: ignore[reportPrivateUsage]
-    )
     from risk_reward import RiskRewardGap
 
     gap = RiskRewardGap(
@@ -458,7 +458,7 @@ def test_entry_conviction_fallback_fills_names_without_intents(tmp_path: Path) -
             );
             CREATE TABLE position_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker TEXT NOT NULL, entry_conviction TEXT, exit_date TEXT
+                ticker TEXT NOT NULL, entry_conviction TEXT, exit_date TEXT, superseded_by_entry_id INTEGER
             );
             """
         )

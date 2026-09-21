@@ -10,10 +10,9 @@ from pathlib import Path
 
 import pytest
 import requests
-from alembic.config import Config
 
-from alembic import command
 from execution import capture_expected_sec_documents as cli
+from pipeline.sec_operations_view import read_sec_coverage_state
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -25,6 +24,7 @@ from provenance.evidence_ledger import (
 from provenance.fulltext_extractor_identity import (
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
 )
+from provenance.sec_execution import read_sec_executions
 from provenance.sec_native_capture import (
     SecNativeCaptureError,
     SecNativeCaptureHardStopError,
@@ -118,13 +118,6 @@ class FakeSession:
         return None
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 def _conn(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -132,21 +125,43 @@ def _conn(
     source_url: str = SOURCE_URL,
 ) -> sqlite3.Connection:
     path = tmp_path / "sec-native-capture.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        archived=True,
-        target="0220_source_inventory_seals",
-    )
-    config = _config(path)
-    # Indexed coverage is a current-runtime contract. Projection seals were
-    # added later without changing the SEC capture tables, so this focused
-    # fixture fast-forwards only that additive search publication gate.
-    command.stamp(config, "0232_document_semantic_dispositions")
-    command.upgrade(config, "0233_search_projection_seals")
+    migrated_db(path)
     conn = sqlite3.connect(path)
-    conn.execute("ALTER TABLE search_projection_seals ADD COLUMN runtime_artifact_sha256 TEXT")
+    from sqlite_runtime import register_sqlite_integrity_functions
+
+    register_sqlite_integrity_functions(conn)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(
+        "INSERT INTO issuer_entities VALUES(?,?,?,?)",
+        ("issuer-acme", "issuer-acme", "operating_company", STAMP),
+    )
+    conn.execute(
+        "INSERT INTO source_obligation_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "sec-periodic:v1",
+            "sec-periodic:v1",
+            "sec-periodic",
+            1,
+            "issuer-acme",
+            None,
+            "sec_edgar",
+            "operating_company_periodic",
+            "required",
+            "regulator_inventory",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            None,
+            "deterministic",
+            "test",
+            "{}",
+            STAMP,
+            STAMP,
+            STAMP,
+            None,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies(ticker,name,list_type,sec_validated,filing_regime,instrument_type) VALUES('ACME','Synthetic issuer','portfolio',1,'10-K','equity')"
+    )
     ledger = EvidenceLedger(conn)
     inventory_body = b'{"filings":{"recent":{}}}'
     inventory_sha = hashlib.sha256(inventory_body).hexdigest()
@@ -434,6 +449,7 @@ def test_dry_run_fetches_to_checkpoint_without_database_or_durable_blob_writes(
             _request(tmp_path, apply=False),
             session=session,
         )
+        assert conn.execute("SELECT COUNT(*) FROM sec_execution_receipts").fetchone()[0] == 0
         assert result.mode == "dry_run"
         assert result.fetched == 1
         assert session.calls == [SOURCE_URL]
@@ -631,6 +647,11 @@ def test_transient_failure_is_deferred_then_retried_and_audited(
             request,
             session=FakeSession([requests.Timeout("secret response body")]),
         )
+        projected = read_sec_coverage_state(tmp_path / "sec-native-capture.db")
+        assert projected.companies[0].documents[0].state == "deferred"
+        assert projected.companies[0].executions[0].receipt.state == "deferred"
+        assert projected.companies[0].executions[0].population_matches
+        assert projected.execution_gap_count == 1
         assert first.deferred == 1
         assert first.items[0].reason_code == "sec_fetch_timeout"
         assert conn.execute(
@@ -642,6 +663,7 @@ def test_transient_failure_is_deferred_then_retried_and_audited(
             request,
             session=FakeSession([FakeResponse()]),
         )
+        assert read_sec_executions(conn, ticker="ACME")[0].state == "succeeded"
         assert second.fetched == 1
         assert conn.execute("SELECT coverage_status FROM v_source_coverage_current").fetchone() == (
             "captured",
@@ -651,7 +673,7 @@ def test_transient_failure_is_deferred_then_retried_and_audited(
         conn.close()
 
 
-def test_sec_403_is_a_hard_stop_with_checkpoint_and_no_database_mutation(
+def test_sec_403_retains_failure_with_no_document_admission(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
@@ -667,6 +689,7 @@ def test_sec_403_is_a_hard_stop_with_checkpoint_and_no_database_mutation(
         checkpoint = (tmp_path / "checkpoints" / "capture-10k" / "state.json").read_text(
             encoding="utf-8"
         )
+        assert read_sec_executions(conn, ticker="ACME")[0].state == "failed"
         assert "sec_authorization_hard_stop" in checkpoint
         assert "do not log me" not in checkpoint
     finally:
@@ -800,3 +823,49 @@ def test_cli_defaults_to_read_only_dry_run(
     assert '"mode":"dry_run"' in captured.out
     assert "sec_native_capture_completed" in captured.err
     assert not (tmp_path / "cli-blobs").exists()
+
+
+def test_actual_apply_retains_execution_completion_beyond_checkpoint(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        result = capture_expected_sec_documents(
+            conn, _request(tmp_path, apply=True), session=FakeSession([FakeResponse()])
+        )
+        assert result.fetched == 1
+        rows = conn.execute("SELECT state FROM sec_execution_receipts ORDER BY sequence").fetchall()
+        assert [row[0] for row in rows] == ["requested", "running", "succeeded"]
+    finally:
+        conn.close()
+
+
+def test_interrupted_apply_retains_running_without_terminal_success(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    class InterruptedSession(FakeSession):
+        def get(
+            self, url: str, *, headers: Mapping[str, str], timeout: tuple[int, int], stream: bool
+        ) -> FakeResponse:
+            raise KeyboardInterrupt("synthetic interruption")
+
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        with pytest.raises(KeyboardInterrupt, match="synthetic interruption"):
+            capture_expected_sec_documents(
+                conn, _request(tmp_path, apply=True), session=InterruptedSession([])
+            )
+        receipt = read_sec_executions(conn, ticker="ACME")[0]
+        assert receipt.state == "running" and receipt.result is None
+        assert (
+            conn.execute("SELECT COUNT(*) FROM sec_execution_receipts WHERE sequence=2").fetchone()[
+                0
+            ]
+            == 0
+        )
+        company = read_sec_coverage_state(tmp_path / "sec-native-capture.db").companies[0]
+        assert company.executions[0].receipt.result is None
+        assert company.executions[0].population_matches
+        assert company.coverage_status != "Covered / freshness unknown"
+    finally:
+        conn.close()

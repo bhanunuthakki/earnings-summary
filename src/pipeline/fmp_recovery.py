@@ -15,7 +15,7 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -537,6 +537,129 @@ class RefreshReceipt(_FrozenModel):
     circuit_state: CircuitState
     circuit_revision: int
     backlog: BacklogStatus
+
+
+class FinalRefreshReceipt(RefreshReceipt):
+    """A terminal run receipt reconstructed from durable outcomes and its exact plan."""
+
+    schema_version: Literal["fmp-final-refresh.v1"] = "fmp-final-refresh.v1"
+    receipt_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    recorded_at: datetime
+    expected_work_ids: tuple[str, ...]
+    attempt_ids: tuple[str, ...]
+    unattempted_count: int = Field(ge=0)
+    reused_attempt_ids: tuple[str, ...] = ()
+
+
+def finalize_refresh_receipt(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    expected_work_ids: tuple[str, ...],
+    now: datetime,
+    reused_work: dict[str, ExecutionMode] | None = None,
+) -> FinalRefreshReceipt:
+    """Seal completed-run evidence; identical replay returns the original receipt.
+
+    A crash before this call leaves attempts but no terminal receipt. A resumed
+    run seals those same immutable attempts, rather than claiming event=completion.
+    """
+    expected = tuple(sorted(set(expected_work_ids)))
+    with _short_transaction(connection):
+        attempts = connection.execute(
+            "SELECT attempt_id,work_id,outcome_code,corpus_captured_at FROM fmp_work_attempts WHERE run_id=? ORDER BY attempt_id",
+            (run_id,),
+        ).fetchall()
+        attempt_ids = tuple(str(row["attempt_id"]) for row in attempts)
+        prior = connection.execute(
+            "SELECT payload_json,payload_sha256 FROM fmp_refresh_receipts WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if prior is not None:
+            payload = str(prior["payload_json"])
+            if hashlib.sha256(payload.encode()).hexdigest() != str(prior["payload_sha256"]):
+                raise ValueError("stored FMP receipt digest mismatch")
+            receipt = FinalRefreshReceipt.model_validate_json(payload)
+            if receipt.expected_work_ids != expected or receipt.attempt_ids != attempt_ids:
+                raise ValueError("terminal FMP run replay changed plan or outcomes")
+            return receipt
+        rows = connection.execute(
+            "SELECT work_id,state FROM fmp_work_backlog WHERE work_id IN (SELECT value FROM json_each(?))",
+            (_canonical_json(list(expected)),),
+        ).fetchall()
+        if len(rows) != len(expected):
+            raise ValueError("terminal FMP plan contains unknown work")
+        reused: list[sqlite3.Row] = []
+        for work_id, mode in (reused_work or {}).items():
+            if work_id not in expected or mode not in {
+                ExecutionMode.ALREADY_SATISFIED,
+                ExecutionMode.ALREADY_APPLIED_CORPUS,
+            }:
+                raise ValueError("invalid reused recovery work")
+            proof = connection.execute(
+                "SELECT attempt_id,work_id,outcome_code,corpus_captured_at FROM fmp_work_attempts WHERE work_id=? AND outcome_code IN ('live_success','alternative_success','reconciled_success','corpus_success') ORDER BY recorded_at DESC,attempt_id DESC LIMIT 1",
+                (work_id,),
+            ).fetchone()
+            if proof is None or (
+                (mode is ExecutionMode.ALREADY_APPLIED_CORPUS)
+                != (proof["outcome_code"] == "corpus_success")
+            ):
+                raise ValueError("reused recovery work lacks matching durable proof")
+            reused.append(proof)
+        proof_rows = [*attempts, *reused]
+        codes = [OutcomeCode(str(row["outcome_code"])) for row in proof_rows]
+        fresh = sum(
+            code
+            in {
+                OutcomeCode.LIVE_SUCCESS,
+                OutcomeCode.ALTERNATIVE_SUCCESS,
+                OutcomeCode.RECONCILED_SUCCESS,
+            }
+            for code in codes
+        )
+        corpus = sum(code is OutcomeCode.CORPUS_SUCCESS for code in codes)
+        unresolved = sum(row["state"] != WorkState.SATISFIED.value for row in rows)
+        status = _receipt_status(codes) if codes else ReceiptStatus.FAILED
+        if unresolved and status is ReceiptStatus.FRESH:
+            status = ReceiptStatus.PARTIAL
+        observed_work = {str(row["work_id"]) for row in proof_rows}
+        unattempted = len(set(expected) - observed_work)
+        if unattempted and status in {ReceiptStatus.FRESH, ReceiptStatus.DEGRADED_CORPUS}:
+            status = ReceiptStatus.PARTIAL
+        ages = [
+            (now - datetime.fromisoformat(str(row["corpus_captured_at"]))).total_seconds()
+            for row in proof_rows
+            if row["corpus_captured_at"] is not None
+        ]
+        circuit = _circuit_row(connection)
+        receipt = FinalRefreshReceipt(
+            receipt_id=hashlib.sha256(run_id.encode()).hexdigest(),
+            run_id=run_id,
+            recorded_at=now,
+            expected_work_ids=expected,
+            attempt_ids=attempt_ids,
+            unattempted_count=unattempted,
+            reused_attempt_ids=tuple(sorted(str(row["attempt_id"]) for row in reused)),
+            status=status,
+            fresh_count=fresh,
+            corpus_count=corpus,
+            failed_count=len(codes) - fresh - corpus,
+            corpus_age_seconds=max(ages) if ages else None,
+            circuit_state=CircuitState(str(circuit["state"])),
+            circuit_revision=int(circuit["revision"]),
+            backlog=_backlog_status(connection, now=now),
+        )
+        payload = receipt.model_dump_json()
+        connection.execute(
+            "INSERT INTO fmp_refresh_receipts VALUES (?,?,?,?,?)",
+            (
+                run_id,
+                receipt.receipt_id,
+                _iso(now),
+                payload,
+                hashlib.sha256(payload.encode()).hexdigest(),
+            ),
+        )
+        return receipt
 
 
 @contextmanager

@@ -25,11 +25,12 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import cast
 
+from macro_store import fetch_sensitivities
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,10 @@ class MacroSensitivityRow:
     r_squared: float | None
     lookback_window_days: int
     computed_at: datetime
+    metric_version: str = "legacy_unversioned"
+    shock_unit: str = "log_return"
+    input_sha: str | None = None
+    source_as_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -188,44 +193,33 @@ def _parse_date(raw: object) -> date | None:
 def load_macro_sensitivities(
     ticker: str, *, db_path: Path | str | None = None, conn: sqlite3.Connection | None = None
 ) -> list[MacroSensitivityRow]:
-    """All macro_sensitivities rows for `ticker`, ordered by |beta| desc."""
+    """Admitted estimates only; legacy rate rows remain quarantined."""
     db_conn = conn if conn is not None else _open(db_path)
     if db_conn is None:
         return []
-    original_factory = db_conn.row_factory
-    db_conn.row_factory = sqlite3.Row
     try:
         if not _table_exists(db_conn, "macro_sensitivities"):
             return []
-        rows = db_conn.execute(
-            """
-            SELECT series_id, beta, r_squared, lookback_window_days, computed_at
-            FROM macro_sensitivities
-            WHERE ticker = ?
-            ORDER BY ABS(beta) DESC
-            """,
-            (ticker.upper(),),
-        ).fetchall()
+        return [
+            MacroSensitivityRow(
+                series_id=r.series_id,
+                beta=r.beta,
+                r_squared=r.r_squared,
+                lookback_window_days=r.lookback_window_days,
+                computed_at=r.computed_at,
+                metric_version=r.metric_version,
+                shock_unit=r.shock_unit,
+                input_sha=r.input_sha,
+                source_as_of=r.source_as_of,
+            )
+            for r in sorted(
+                fetch_sensitivities(ticker=ticker, conn=db_conn),
+                key=lambda r: -abs(r.beta),
+            )
+        ]
     finally:
         if conn is None:
             db_conn.close()
-        else:
-            db_conn.row_factory = original_factory
-    out: list[MacroSensitivityRow] = []
-    for r in rows:
-        computed = _parse_dt(r["computed_at"])
-        if computed is None:
-            continue
-        out.append(
-            MacroSensitivityRow(
-                series_id=str(r["series_id"]),
-                beta=float(r["beta"]),
-                r_squared=(float(r["r_squared"]) if r["r_squared"] is not None else None),
-                lookback_window_days=int(r["lookback_window_days"]),
-                computed_at=computed,
-            )
-        )
-    return out
 
 
 def load_strategic_targets(
@@ -510,6 +504,8 @@ class PeerCompRow:
     net_margin_ttm: float | None
     roic_ttm: float | None
     match_reasons: tuple[str, ...] = ()
+    coverage_notes: tuple[str, ...] = ()
+    source_evidence: dict[str, object] | None = None
 
 
 def _read_json(path: Path) -> object | None:
@@ -581,10 +577,16 @@ def _fmp_peer_pool(fmp_dir: Path, ticker: str) -> list[tuple[str, str | None, fl
     return [(str(p).upper(), None, None) for p in pool]
 
 
-def _watchlist_names(ticker: str, repo_root: Path) -> list[str]:
+def _watchlist_names(
+    ticker: str, repo_root: Path, *, captured: dict[str, object] | None = None
+) -> list[str]:
     """The owner's competitive_watchlist (prose rival names) for `ticker`,
     from the thesis JSON when one exists. Best-effort."""
-    raw = _read_json(Path(repo_root) / "micro_thesis" / "holdings" / f"{ticker}.json")
+    raw = (
+        captured
+        if captured is not None
+        else _read_json(Path(repo_root) / "micro_thesis" / "holdings" / f"{ticker}.json")
+    )
     if not isinstance(raw, dict):
         return []
     wl = cast("dict[str, object]", raw).get("competitive_watchlist")
@@ -593,7 +595,9 @@ def _watchlist_names(ticker: str, repo_root: Path) -> list[str]:
     return [str(n) for n in cast("list[object]", wl) if isinstance(n, str) and n.strip()]
 
 
-def _peer_curation(ticker: str, repo_root: Path) -> tuple[list[str], dict[str, object] | None]:
+def _peer_curation(
+    ticker: str, repo_root: Path, *, captured: dict[str, object] | None = None
+) -> tuple[list[str], dict[str, object] | None]:
     """The owner's `curate_peers` artifacts from the thesis JSON (S5):
 
     - ``peer_exclude`` — rivals to drop from the shown set (ticker or name),
@@ -602,7 +606,11 @@ def _peer_curation(ticker: str, repo_root: Path) -> tuple[list[str], dict[str, o
       condition modelling "remove this section UNLESS you show better peers".
 
     Best-effort: ``([], None)`` on any miss."""
-    raw = _read_json(Path(repo_root) / "micro_thesis" / "holdings" / f"{ticker}.json")
+    raw = (
+        captured
+        if captured is not None
+        else _read_json(Path(repo_root) / "micro_thesis" / "holdings" / f"{ticker}.json")
+    )
     if not isinstance(raw, dict):
         return [], None
     payload = cast("dict[str, object]", raw)
@@ -748,6 +756,66 @@ def _is_named_rival(company_name: str | None, watchlist: list[str]) -> bool:
 
 
 def load_peer_comp(
+    ticker: str,
+    *,
+    repo_root: Path,
+    max_peers: int = 6,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[PeerCompRow]:
+    """Read a frozen governed set and source-bound metrics; never resolve or add members."""
+    from compute.comparable_set_reader import read_frozen_comparable_set
+    from report.render_clock import render_today
+    from report.sections.peer_projection import project_peer, read_peer_owner_context
+
+    connection = conn if conn is not None else _open(db_path)
+    if connection is None:
+        raise ValueError("canonical_peer_database_unavailable")
+    try:
+        as_of = render_today()
+        selection = read_frozen_comparable_set(connection, ticker, as_of=as_of)
+        if selection is None:
+            raise ValueError("canonical_peer_membership_unavailable")
+        owner_context, owner_receipt = read_peer_owner_context(repo_root, ticker)
+        exclusions, override = _peer_curation(ticker, repo_root, captured=owner_context)
+        excluded = {item.strip().upper() for item in exclusions}
+        excluded_names = {_normalize_name(item) for item in exclusions}
+        watchlist = _watchlist_names(ticker, repo_root, captured=owner_context)
+        named = {item.strip().upper() for item in watchlist}
+        rows: list[PeerCompRow] = []
+        if max_peers <= 0:
+            return rows
+        for peer, reason in selection.members:
+            if peer == ticker.upper() or peer in excluded:
+                continue
+            row = project_peer(
+                connection,
+                repo_root / "data" / "historical" / "fmp",
+                peer,
+                reason,
+                selection,
+                as_of=as_of,
+                named=peer in named or reason == "pinned_override",
+            )
+            if _is_named_rival(row.peer_name, watchlist) and "named rival" not in row.match_reasons:
+                row = replace(row, match_reasons=(*row.match_reasons, "named rival"))
+            if row.source_evidence is not None:
+                row = replace(
+                    row, source_evidence={**row.source_evidence, "owner_context": owner_receipt}
+                )
+            if row.peer_name and _normalize_name(row.peer_name) in excluded_names:
+                continue
+            rows.append(row)
+            if len(rows) >= max(0, max_peers):
+                break
+        hide, _detail = evaluate_peers_override(override, rows)
+        return [] if hide else rows
+    finally:
+        if conn is None:
+            connection.close()
+
+
+def load_peer_comp_legacy_shadow(
     ticker: str,
     *,
     repo_root: Path,

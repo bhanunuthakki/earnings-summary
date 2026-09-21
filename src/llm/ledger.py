@@ -26,13 +26,37 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from llm.fallback import GEMINI_FALLBACK_MODEL, try_gemini_fallback
 from llm.resolver import CapabilityProfile, require_model_capabilities
 
+if TYPE_CHECKING:
+    from llm_call_ledger import LlmCallRecord
+
 log = logging.getLogger(__name__)
+
+_CALL_RECORDS: ContextVar[tuple[LlmCallRecord, ...] | None] = ContextVar(
+    "llm_call_records", default=None
+)
+
+
+@contextmanager
+def capture_call_records() -> Generator[Callable[[], tuple[LlmCallRecord, ...]]]:
+    """Observe this scope's canonical attempts without altering dispatch or writes.
+
+    Immutable tuples prevent copied async contexts from mutating a parent's
+    collection. Nested scopes restore their predecessor, including on failure.
+    """
+    token = _CALL_RECORDS.set(())
+    try:
+        yield lambda: _CALL_RECORDS.get() or ()
+    finally:
+        _CALL_RECORDS.reset(token)
 
 
 def record_llm_call(
@@ -92,48 +116,50 @@ def record_llm_call(
         resolved_attempt_count = attempt_count if attempt_count is not None else attempts
         resolved_retry_count = retry_count if retry_count is not None else retries
         safe_error = redact(error)[:500] if error else None
-        record_call(
-            LlmCallRecord(
-                called_at=started_at,
-                model=model,
-                prompt_sha256=prompt_sha,
-                prompt_chars=prompt_chars,
-                elapsed_ms=elapsed_ms,
-                purpose=purpose,
-                ticker=ticker,
-                scope=scope,
-                run_id=run_id,
-                response_sha256=sha256_text(response_text) if response_text else None,
-                response_chars=len(response_text) if response_text else None,
-                input_tokens=cast("int | None", usage.get("input_tokens")),
-                cache_creation_input_tokens=cast(
-                    "int | None", usage.get("cache_creation_input_tokens")
-                ),
-                cache_read_input_tokens=cast("int | None", usage.get("cache_read_input_tokens")),
-                output_tokens=cast("int | None", usage.get("output_tokens")),
-                cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
-                fallback_used=fallback_used,
-                error=safe_error,
-                template_id=template_id,
-                template_version=template_version,
-                template_vars_sha256=vars_sha,
-                trace_id=trace_id,
-                span_id=span_id,
-                parent_span_id=parent_span_id,
-                stage=stage,
-                provider=provider,
-                transport=transport,
-                auth_class=auth_class,
-                attempts=attempts,
-                retries=retries,
-                attempt_count=resolved_attempt_count,
-                retry_count=resolved_retry_count,
-                outcome=outcome or ("failure" if error else "success"),
-                failure_class=failure_class,
-                fallback_from_provider=fallback_from_provider,
-                fallback_from_transport=fallback_from_transport,
-            )
+        record = LlmCallRecord(
+            called_at=started_at,
+            model=model,
+            prompt_sha256=prompt_sha,
+            prompt_chars=prompt_chars,
+            elapsed_ms=elapsed_ms,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            response_sha256=sha256_text(response_text) if response_text else None,
+            response_chars=len(response_text) if response_text else None,
+            input_tokens=cast("int | None", usage.get("input_tokens")),
+            cache_creation_input_tokens=cast(
+                "int | None", usage.get("cache_creation_input_tokens")
+            ),
+            cache_read_input_tokens=cast("int | None", usage.get("cache_read_input_tokens")),
+            output_tokens=cast("int | None", usage.get("output_tokens")),
+            cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
+            fallback_used=fallback_used,
+            error=safe_error,
+            template_id=template_id,
+            template_version=template_version,
+            template_vars_sha256=vars_sha,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            stage=stage,
+            provider=provider,
+            transport=transport,
+            auth_class=auth_class,
+            attempts=attempts,
+            retries=retries,
+            attempt_count=resolved_attempt_count,
+            retry_count=resolved_retry_count,
+            outcome=outcome or ("failure" if error else "success"),
+            failure_class=failure_class,
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
+        records = _CALL_RECORDS.get()
+        if records is not None:
+            _CALL_RECORDS.set((*records, record))
+        record_call(record)
     except Exception as exc:  # ImportError, unexpected attribute errors, …
         # Best-effort — the ledger module's record_call already swallows DB
         # errors; this outer guard catches anything more exotic so the LLM call

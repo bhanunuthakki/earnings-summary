@@ -36,7 +36,14 @@ def main(argv: list[str] | None = None) -> int:
         database_path=database_path,
         snapshot_evidence_status=evidence.status,
     )
-    conn = connect_sqlite(database_path, role=SQLiteConnectionRole.READ_ONLY)
+    # Only a byte/manifest-matched, sidecar-free artifact is safe for immutable
+    # reads. Ordinary read-only WAL connections can create SHM sidecars.
+    role = (
+        SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY
+        if evidence.status == "manifest_matched"
+        else SQLiteConnectionRole.READ_ONLY
+    )
+    conn = connect_sqlite(database_path, role=role)
     try:
         conn.execute("PRAGMA query_only=ON")
         result = audit_kpi_revision_shadow_census(

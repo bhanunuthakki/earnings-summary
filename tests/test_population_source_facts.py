@@ -555,10 +555,10 @@ def test_spilled_run_dependencies_preserve_topological_waves() -> None:
 
 
 def test_commitment_fold_preencoded_path_is_byte_exact() -> None:
-    fold_type = cast(type[object], getattr(population, "_CommitmentFold"))
+    fold_type = cast(Callable[[str], object], getattr(population, "_CommitmentFold"))
     payload = {"nested": [1, "two", {"three": True}]}
-    direct = cast(object, fold_type("test-namespace"))
-    preencoded = cast(object, fold_type("test-namespace"))
+    direct = fold_type("test-namespace")
+    preencoded = fold_type("test-namespace")
 
     getattr(direct, "add")("reported_fact", payload)
     encoded = getattr(fold_type, "encode")("reported_fact", payload)
@@ -1111,3 +1111,67 @@ def test_persisted_verifier_ignores_post_observation_clock_revision() -> None:
     assert verification.materialized_count == 1
     assert verification.failed_count == 0
     assert verification.details["ontology_snapshot_id"] == "snapshot"
+
+
+def test_exact_ticker_hash_scope_excludes_unrelated_documents(conn: sqlite3.Connection) -> None:
+    from provenance.population_source_facts import SourceFactDocumentScope
+
+    _seed_observation(conn, suffix="2", fact_row_id=2)
+    conn.execute("ALTER TABLE documents ADD COLUMN ticker TEXT")
+    conn.execute("ALTER TABLE documents ADD COLUMN sha256 TEXT")
+    conn.execute("ALTER TABLE evidence_document_versions ADD COLUMN blob_sha256 TEXT")
+    conn.execute("UPDATE documents SET ticker='NU',sha256=? WHERE id=1", (_sha("input-1"),))
+    conn.execute("UPDATE documents SET ticker='WIX',sha256=? WHERE id=2", (_sha("input-2"),))
+    conn.execute(
+        "UPDATE evidence_document_versions SET blob_sha256=? WHERE document_version_id='document-1'",
+        (_sha("input-1"),),
+    )
+    conn.execute(
+        "UPDATE evidence_document_versions SET blob_sha256=? WHERE document_version_id='document-2'",
+        (_sha("input-2"),),
+    )
+    conn.commit()
+    scope = SourceFactDocumentScope(ticker="NU", document_sha256=_sha("input-1"))
+    request = _request().model_copy(update={"document_scopes": (scope,)})
+    selected = populate_source_fact_plane(conn, request)
+    assert selected.expected_count == selected.eligible_count == selected.eligible_run_count == 1
+    wrong = _request().model_copy(
+        update={
+            "document_scopes": (
+                SourceFactDocumentScope(ticker="WIX", document_sha256=_sha("input-1")),
+            )
+        }
+    )
+    assert populate_source_fact_plane(conn, wrong).expected_count == 0
+    assert (
+        selected.input_commitment_sha256
+        != populate_source_fact_plane(conn, _request()).input_commitment_sha256
+    )
+
+
+def test_document_scope_cannot_silently_drop_revision_lineage(conn: sqlite3.Connection) -> None:
+    from provenance.population_source_facts import SourceFactDocumentScope
+
+    _seed_observation(conn, suffix="2", fact_row_id=1, fact_revision=2)
+    conn.execute("ALTER TABLE documents ADD COLUMN ticker TEXT")
+    conn.execute("ALTER TABLE documents ADD COLUMN sha256 TEXT")
+    conn.execute("ALTER TABLE evidence_document_versions ADD COLUMN blob_sha256 TEXT")
+    for ordinal in (1, 2):
+        conn.execute(
+            "UPDATE documents SET ticker='NU',sha256=? WHERE id=?",
+            (_sha(f"input-{ordinal}"), ordinal),
+        )
+        conn.execute(
+            "UPDATE evidence_document_versions SET blob_sha256=? WHERE document_version_id=?",
+            (_sha(f"input-{ordinal}"), f"document-{ordinal}"),
+        )
+    conn.commit()
+    request = _request().model_copy(
+        update={
+            "document_scopes": (
+                SourceFactDocumentScope(ticker="NU", document_sha256=_sha("input-2")),
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="lineage"):
+        populate_source_fact_plane(conn, request)

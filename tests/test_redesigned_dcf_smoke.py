@@ -2,14 +2,16 @@
 
 Generates a minimal FMP fixture for a fake ticker, runs the builder as a
 subprocess (the way the driver invokes it), and asserts the workbook has the
-ten expected sheets, the headline value cell, the Dashboard dropdowns, and no
+expected worksheet structure, the headline value cell, the Dashboard dropdowns, and no
 column-A label that accidentally became a formula (the leading-'=' bug).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -21,9 +23,10 @@ import openpyxl
 import pytest
 
 from dcf import redesign
+from tests.fixtures.dcf_statements import seed_dcf_statements
 
 BUILDER = Path(__file__).resolve().parents[1] / "execution" / "build_redesigned_dcf.py"
-_OVERRIDE_TABLE_SQL = ""
+_SCHEMA_TEMPLATE: Path | None = None
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -31,20 +34,15 @@ def canonical_override_schema(
     migrated_db: Callable[..., Path], tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     """Use the migrated override contract rather than duplicating its schema."""
-    global _OVERRIDE_TABLE_SQL
-    template = migrated_db(tmp_path_factory.mktemp("dcf_smoke_schema") / "template.sqlite")
-    with sqlite3.connect(template) as conn:
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='fact_overrides'"
-        ).fetchone()
-    assert row is not None
-    _OVERRIDE_TABLE_SQL = str(row[0]).replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+    global _SCHEMA_TEMPLATE
+    _SCHEMA_TEMPLATE = migrated_db(tmp_path_factory.mktemp("dcf_smoke_schema") / "template.sqlite")
 
 
 def _builder_database(repo: Path) -> Path:
     database = repo / "data" / "portfolio.db"
-    with sqlite3.connect(database) as conn:
-        conn.execute(_OVERRIDE_TABLE_SQL)
+    if not database.exists():
+        assert _SCHEMA_TEMPLATE is not None
+        shutil.copyfile(_SCHEMA_TEMPLATE, database)
     return database
 
 
@@ -60,72 +58,39 @@ SHEETS = [
     "Valuation",
     "Sensitivity",
     "Monte Carlo",
+    "Statement Evidence",
 ]
 
 
-def _write_primary_bridge_facts(
-    repo: Path, ticker: str, latest: dict[str, object], *, currency: str
-) -> None:
-    conn = sqlite3.connect(repo / "data" / "portfolio.db")
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
-            fetched_at TEXT NOT NULL, source_url TEXT, source_quality_tier TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS financial_facts (
-            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, period_end TEXT NOT NULL,
-            fiscal_period_type TEXT NOT NULL, line_item TEXT NOT NULL, value NUMERIC NOT NULL,
-            currency TEXT, unit TEXT NOT NULL, source_doc_id INTEGER NOT NULL, locator TEXT
-        );
-        CREATE VIEW IF NOT EXISTS v_financial_facts_resolved_current AS
-            SELECT * FROM financial_facts;
-        """
+def _publish_statements(repo: Path, ticker: str) -> None:
+    assert _SCHEMA_TEMPLATE is not None
+    fmp = repo / "data" / "historical" / "fmp"
+    income = cast(
+        "list[dict[str, object]]",
+        json.loads((fmp / f"{ticker}_income_statement_quarterly.json").read_text()),
     )
-    conn.execute(
-        "INSERT OR REPLACE INTO documents VALUES (1, ?, 'sec_xbrl', "
-        "'2026-01-15T00:00:00+00:00', 'https://www.sec.gov/example', 'sec_official')",
-        (ticker,),
+    balance = cast(
+        "list[dict[str, object]]",
+        json.loads((fmp / f"{ticker}_balance_sheet_quarterly.json").read_text()),
     )
-    conn.executemany(
-        "INSERT OR REPLACE INTO financial_facts "
-        "(id,ticker,period_end,fiscal_period_type,line_item,value,currency,unit,source_doc_id,locator) "
-        "VALUES (?,?,?,?,?,?,?,?,1,NULL)",
-        [
-            (
-                1,
-                ticker,
-                latest["date"],
-                latest["period"],
-                "cash_and_short_term_investments",
-                latest["cashAndShortTermInvestments"],
-                currency,
-                "actual",
-            ),
-            (
-                2,
-                ticker,
-                latest["date"],
-                latest["period"],
-                "total_debt",
-                latest["totalDebt"],
-                currency,
-                "actual",
-            ),
-            (
-                3,
-                ticker,
-                latest["date"],
-                latest["period"],
-                "finance_lease_liability",
-                latest.get("financeLeaseLiability", 0),
-                currency,
-                "actual",
-            ),
-        ],
+    cashflow = cast(
+        "list[dict[str, object]]",
+        json.loads((fmp / f"{ticker}_cash_flow_quarterly.json").read_text()),
     )
-    conn.commit()
-    conn.close()
+    key = hashlib.sha256(
+        json.dumps([ticker, income, balance, cashflow], sort_keys=True).encode()
+    ).hexdigest()
+    cached = _SCHEMA_TEMPLATE.parent / f"{key}.sqlite"
+    if not cached.exists():
+        shutil.copyfile(_SCHEMA_TEMPLATE, cached)
+        with sqlite3.connect(cached) as conn:
+            seed_dcf_statements(
+                conn,
+                ticker,
+                {"income": income, "balance": balance, "cash_flow": cashflow},
+                currency="USD",
+            )
+    shutil.copyfile(cached, repo / "data" / "portfolio.db")
 
 
 def _write_fixture(repo: Path, ticker: str) -> None:
@@ -201,6 +166,10 @@ def _write_fixture(repo: Path, ticker: str) -> None:
         ),
         encoding="utf-8",
     )
+    (fmp / f"{ticker}_geo_segments_annual.json").write_text(
+        json.dumps([{"fiscalYear": 2025, "period": "FY", "data": {"United States": rev}}]),
+        encoding="utf-8",
+    )
     est = [
         {
             "date": f"{y}-12-31",
@@ -214,12 +183,7 @@ def _write_fixture(repo: Path, ticker: str) -> None:
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
-    _write_primary_bridge_facts(
-        repo,
-        ticker,
-        cast("dict[str, object]", bal[-1]),
-        currency="USD",
-    )
+    _publish_statements(repo, ticker)
 
 
 def test_builder_produces_valid_nine_sheet_workbook(tmp_path: Path) -> None:
@@ -300,8 +264,9 @@ def test_builder_uses_exact_primary_debt_when_normalized_aggregate_is_missing(
         if payload.get("event") == "dcf_country_risk_context":
             country_events.append(payload)
     assert len(country_events) == 1
-    assert country_events[0]["authority"] == "systematic_default_zero"
-    assert country_events[0]["source_record"] is None
+    assert country_events[0]["authority"] == "systematic_geo"
+    assert country_events[0]["premium"] == 0.0
+    assert country_events[0]["source_record"] is not None
     inputs = redesign.read_inputs(tmp_path / "TESTCO.xlsx")
     assert inputs is not None
     latest = balance[-1]
@@ -314,6 +279,73 @@ def test_builder_uses_exact_primary_debt_when_normalized_aggregate_is_missing(
     )
 
 
+def test_builder_fails_before_workbook_persistence_without_attributable_geography(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture(repo, "TESTCO")
+    geo = repo / "data/historical/fmp/TESTCO_geo_segments_annual.json"
+    geo.write_text(
+        json.dumps([{"fiscalYear": 2025, "period": "FY", "data": {"Rest of World": 100.0}}]),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "TESTCO.xlsx"
+    sentinel = b"existing-workbook-must-survive"
+    destination.write_bytes(sentinel)
+
+    result = _run_builder(repo, "TESTCO", destination)
+
+    assert result.returncode != 0
+    assert "country risk unavailable" in result.stderr
+    assert "geographic_revenue_unattributable" in result.stderr
+    assert destination.read_bytes() == sentinel
+
+
+def test_builder_fails_before_workbook_persistence_with_nan_geography(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture(repo, "TESTCO")
+    geo = repo / "data/historical/fmp/TESTCO_geo_segments_annual.json"
+    geo.write_text(
+        json.dumps([{"fiscalYear": 2025, "period": "FY", "data": {"Brazil": float("nan")}}]),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "TESTCO.xlsx"
+    sentinel = b"existing-workbook-must-survive"
+    destination.write_bytes(sentinel)
+
+    result = _run_builder(repo, "TESTCO", destination)
+
+    assert result.returncode != 0
+    assert "country risk unavailable" in result.stderr
+    assert "geographic_revenue_unattributable" in result.stderr
+    assert destination.read_bytes() == sentinel
+
+
+def test_builder_preserves_explicit_owner_zero_country_risk_override(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture(repo, "TESTCO")
+    (repo / "data/historical/fmp/TESTCO_geo_segments_annual.json").unlink()
+    assumptions = repo / "data/dcf_assumptions/TESTCO.json"
+    assumptions.parent.mkdir(parents=True)
+    assumptions.write_text(
+        json.dumps({"redesign": {"country_risk_premium": 0.0}}), encoding="utf-8"
+    )
+    destination = tmp_path / "TESTCO.xlsx"
+
+    result = _run_builder(repo, "TESTCO", destination)
+
+    assert result.returncode == 0, result.stderr
+    events = [
+        json.loads(line)
+        for line in result.stderr.splitlines()
+        if line.startswith("{") and "dcf_country_risk_context" in line
+    ]
+    assert len(events) == 1
+    assert events[0]["authority"] == "owner_override"
+    assert events[0]["premium"] == 0.0
+    assert events[0]["source_record"] is None
+
+
 def test_builder_fails_loudly_on_partial_debt_or_missing_shares(tmp_path: Path) -> None:
     repo = tmp_path / "partial-debt"
     _write_fixture(repo, "TESTCO")
@@ -322,16 +354,13 @@ def test_builder_fails_loudly_on_partial_debt_or_missing_shares(tmp_path: Path) 
     for row in balance:
         row.pop("totalDebt")
     balance_path.write_text(json.dumps(balance), encoding="utf-8")
-    conn = sqlite3.connect(repo / "data" / "portfolio.db")
-    conn.execute("DELETE FROM financial_facts WHERE line_item='total_debt'")
-    conn.commit()
-    conn.close()
+    _publish_statements(repo, "TESTCO")
 
     partial = _run_builder(repo, "TESTCO", tmp_path / "partial.xlsx")
 
     assert partial.returncode != 0
-    assert '"event": "dcf_equity_bridge_unavailable"' in partial.stderr
-    assert '"verified_interest_bearing_debt_only"' in partial.stderr
+    assert "canonical DCF required actuals missing" in partial.stderr
+    assert "total_debt" in partial.stderr
 
     shares_repo = tmp_path / "missing-shares"
     _write_fixture(shares_repo, "TESTCO")
@@ -340,20 +369,23 @@ def test_builder_fails_loudly_on_partial_debt_or_missing_shares(tmp_path: Path) 
     for row in income:
         row.pop("weightedAverageShsOutDil")
     income_path.write_text(json.dumps(income), encoding="utf-8")
+    _publish_statements(shares_repo, "TESTCO")
 
     missing_shares = _run_builder(shares_repo, "TESTCO", tmp_path / "shares.xlsx")
 
     assert missing_shares.returncode != 0
-    assert '"positive_diluted_shares"' in missing_shares.stderr
+    assert "positive diluted shares unavailable" in missing_shares.stderr
 
 
 def test_builder_preserves_existing_workbook_when_primary_cash_is_missing(tmp_path: Path) -> None:
     repo = tmp_path / "missing-primary-cash"
     _write_fixture(repo, "TESTCO")
-    conn = sqlite3.connect(repo / "data" / "portfolio.db")
-    conn.execute("DELETE FROM financial_facts WHERE line_item='cash_and_short_term_investments'")
-    conn.commit()
-    conn.close()
+    balance_path = repo / "data/historical/fmp/TESTCO_balance_sheet_quarterly.json"
+    balance = json.loads(balance_path.read_text())
+    for row in balance:
+        row.pop("cashAndShortTermInvestments")
+    balance_path.write_text(json.dumps(balance))
+    _publish_statements(repo, "TESTCO")
     destination = tmp_path / "existing.xlsx"
     sentinel = b"existing-workbook-must-survive"
     destination.write_bytes(sentinel)
@@ -361,14 +393,13 @@ def test_builder_preserves_existing_workbook_when_primary_cash_is_missing(tmp_pa
     result = _run_builder(repo, "TESTCO", destination)
 
     assert result.returncode != 0
-    assert '"event": "dcf_equity_bridge_unavailable"' in result.stderr
-    assert '"cash_and_short_term_investments"' in result.stderr
+    assert "canonical DCF cash unavailable" in result.stderr
     assert not result.stdout.startswith("RESULT\t")
     assert destination.read_bytes() == sentinel
 
 
 # --------------------------------------------------------------------------- #
-# graceful degradation: short histories (clean SKIP) + base-year segment gaps
+# Missing history fails closed; base-year segment gaps retain the existing
 # (single-seg fallback) instead of crashing on out-of-range/zero-denominator data
 # --------------------------------------------------------------------------- #
 def _statement_rows(
@@ -464,6 +495,10 @@ def _write_quarters(
         json.dumps([{"companyName": "Test Co", "beta": 1.2, "price": 50.0, "currency": "USD"}]),
         encoding="utf-8",
     )
+    (fmp / f"{ticker}_geo_segments_annual.json").write_text(
+        json.dumps([{"fiscalYear": 2025, "period": "FY", "data": {"United States": rev}}]),
+        encoding="utf-8",
+    )
     est = [
         {
             "date": f"{y}-12-31",
@@ -477,7 +512,7 @@ def _write_quarters(
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
-    _write_primary_bridge_facts(repo, ticker, bal[-1], currency="USD")
+    _publish_statements(repo, ticker)
 
 
 def _run_builder(repo: Path, ticker: str, dest: Path) -> subprocess.CompletedProcess[str]:
@@ -498,9 +533,8 @@ def _run_builder(repo: Path, ticker: str, dest: Path) -> subprocess.CompletedPro
     )
 
 
-def test_builder_skips_when_no_quarterly_history(tmp_path: Path) -> None:
-    """A name that just IPO'd: FMP returns a profile but no quarterly statements
-    (FRVO). The builder must SKIP cleanly, not IndexError on an empty quarter list."""
+def test_builder_rejects_when_no_quarterly_history(tmp_path: Path) -> None:
+    """Missing admitted history fails closed without publishing a workbook."""
     repo = tmp_path / "repo"
     fmp = repo / "data" / "historical" / "fmp"
     fmp.mkdir(parents=True, exist_ok=True)
@@ -509,22 +543,19 @@ def test_builder_skips_when_no_quarterly_history(tmp_path: Path) -> None:
     )
     dest = tmp_path / "IPOCO.xlsx"
     proc = _run_builder(repo, "IPOCO", dest)
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.startswith("SKIP\tIPOCO"), proc.stdout
-    assert "no quarterly FMP history" in proc.stdout
+    assert proc.returncode != 0
+    assert "no admitted history" in proc.stderr
     assert not dest.exists()
 
 
-def test_builder_skips_when_no_complete_fiscal_year(tmp_path: Path) -> None:
-    """A couple of quarters in, but no full four-quarter fiscal year yet — SKIP
-    rather than indexing into an empty full-FY list."""
+def test_builder_rejects_when_no_complete_fiscal_year(tmp_path: Path) -> None:
+    """A partial fiscal year cannot supply the complete actual forecast anchor."""
     repo = tmp_path / "repo"
     _write_quarters(repo, "YOUNGCO", [(2025, "Q1"), (2025, "Q2")])
     dest = tmp_path / "YOUNGCO.xlsx"
     proc = _run_builder(repo, "YOUNGCO", dest)
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.startswith("SKIP\tYOUNGCO"), proc.stdout
-    assert "no complete fiscal year yet" in proc.stdout
+    assert proc.returncode != 0
+    assert "complete fiscal year unavailable" in proc.stderr
     assert not dest.exists()
 
 

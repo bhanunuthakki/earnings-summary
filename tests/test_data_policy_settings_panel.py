@@ -310,19 +310,19 @@ def test_sec_coverage_state_and_rendering(tmp_path: Path) -> None:
     assert cov.evaluation_count == 2
     assert cov.watchlist_count == 1
     assert cov.validated_count == 2
-    assert cov.gap_count == 3
+    assert cov.gap_count == 5
     companies = {company.ticker: company for company in cov.companies}
-    assert companies["ABNB"].coverage_status == "Automatic full"
-    assert companies["AMAT"].coverage_status == "Coverage gap"
+    assert companies["ABNB"].coverage_status == "Not yet wired"
+    assert companies["AMAT"].coverage_status == "Not yet wired"
     assert companies["AMAT"].coverage_tone == "warn"
 
     html = render_data_policy_settings_panel(db_path=db)
     assert "SEC collection priority &amp; coverage gaps" in html
-    assert "Portfolio issuers" in html
-    assert "SEC Profile Gaps" in html
+    assert "Portfolio" in html
+    assert "Coverage gaps" in html
     assert "Rubrik" in html
     assert "Wix.com" in html
-    assert "Coverage gap" in html
+    assert "Not yet wired" in html
     assert "Automatic full" in html
     assert "Archived Co" not in html
 
@@ -361,6 +361,6 @@ def test_fmp_recovery_event_receipts_in_panel(tmp_path: Path) -> None:
     assert view.fmp_state.recent_events[0].event_type == "circuit_half_open"
 
     html = render_data_policy_settings_panel(db_path=db)
-    assert "Recent recovery receipts &amp; transitions" in html
+    assert "Recent recovery events &amp; transitions" in html
     assert "circuit_half_open" in html
     assert "probe_window_reached" in html

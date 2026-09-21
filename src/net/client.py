@@ -19,12 +19,14 @@ from enum import StrEnum
 from types import TracebackType
 from typing import TypeAlias, cast
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import requests
 from requests.adapters import HTTPAdapter
 
 from log_redact import redact
 from sec_identity import sec_user_agent
+from sources.telemetry import SourceAttemptMeasurement, current_measurement_scope
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -286,6 +288,7 @@ class HttpClient:
         event_sink: EventSink = _default_event_sink,
         sleep: Callable[[float], None] = time.sleep,
         sec_user_agent_hook: Callable[[], str] = sec_user_agent,
+        measurement_sink: Callable[[SourceAttemptMeasurement], bool] | None = None,
     ) -> None:
         self._session = session or requests.Session()
         if session is None:
@@ -303,6 +306,7 @@ class HttpClient:
         self._event_sink = event_sink
         self._sleep = sleep
         self._sec_user_agent_hook = sec_user_agent_hook
+        self._measurement_sink = measurement_sink
 
     def __enter__(self) -> HttpClient:
         return self
@@ -327,6 +331,43 @@ class HttpClient:
     def _emit(self, **event: object) -> None:
         self._event_sink({"event": "http_call", **event})
 
+    def _measure(
+        self,
+        *,
+        run_id: str,
+        host: str,
+        path: str,
+        ticker: str | None,
+        attempt: int,
+        elapsed_ms: int,
+        status: int | None,
+        byte_size: int | None,
+        outcome: str,
+    ) -> bool:
+        from sources.registry import log_http_measurement
+
+        scope = current_measurement_scope()
+        measurement = SourceAttemptMeasurement.model_validate(
+            {
+                "run_id": scope.run_id if scope else run_id,
+                "regime": scope.regime if scope else None,
+                "provider": "fmp"
+                if host == "financialmodelingprep.com"
+                else "sec"
+                if host == "sec.gov" or host.endswith(".sec.gov")
+                else host,
+                "ticker_scope": scope.ticker_scope if scope else ((ticker,) if ticker else ()),
+                "endpoint": host + path,
+                "latency_ms": elapsed_ms,
+                "retry_count": attempt - 1,
+                "http_status": status,
+                "bytes_received": byte_size,
+                "status": outcome,
+            }
+        )
+        sink = self._measurement_sink or log_http_measurement
+        return sink(measurement)
+
     def request(
         self,
         method: str,
@@ -339,6 +380,15 @@ class HttpClient:
         attempt_hook: AttemptHook | None = None,
     ) -> requests.Response:
         normalized_method = method.upper()
+        measured_run_id = str(uuid4())
+        raw_ticker = (params or {}).get("symbol")
+        ticker = (
+            raw_ticker.upper()
+            if isinstance(raw_ticker, str)
+            and raw_ticker.replace(".", "").replace("-", "").isalnum()
+            and len(raw_ticker) <= 16
+            else None
+        )
         parsed = urlsplit(url)
         host = (parsed.hostname or "").lower()
         path = parsed.path or "/"
@@ -367,7 +417,19 @@ class HttpClient:
                     attempt_hook(HttpAttempt(attempt=attempt, status_code=None, network_error=True))
                 elapsed_ms = round((time.monotonic() - started) * 1000)
                 will_retry = retryable_method and attempt < policy.max_attempts
+                measurement_persisted = self._measure(
+                    run_id=measured_run_id,
+                    host=host,
+                    path=path,
+                    ticker=ticker,
+                    attempt=attempt,
+                    elapsed_ms=elapsed_ms,
+                    status=None,
+                    byte_size=None,
+                    outcome="retry" if will_retry else "network_error",
+                )
                 self._emit(
+                    measurement_persisted=measurement_persisted,
                     host=host,
                     path=path,
                     attempt=attempt,
@@ -390,7 +452,19 @@ class HttpClient:
                 attempt_hook(HttpAttempt(attempt=attempt, status_code=status))
             retry_status = status in policy.retry_statuses
             will_retry = retryable_method and retry_status and attempt < policy.max_attempts
+            measurement_persisted = self._measure(
+                run_id=measured_run_id,
+                host=host,
+                path=path,
+                ticker=ticker,
+                attempt=attempt,
+                elapsed_ms=elapsed_ms,
+                status=status,
+                byte_size=len(response.content),
+                outcome="retry" if will_retry else ("ok" if status < 400 else "http_error"),
+            )
             self._emit(
+                measurement_persisted=measurement_persisted,
                 host=host,
                 path=path,
                 attempt=attempt,

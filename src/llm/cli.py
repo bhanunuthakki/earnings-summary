@@ -1711,7 +1711,9 @@ def call_llm(
                 backend="codex",
             )
             return text
-        except (OSError, RuntimeError, ValueError) as codex_error:
+        except (LLMBudgetExceeded, LLMSetupError, ValueError):
+            raise  # budget/configuration/schema failures never authorize fallback
+        except (OSError, RuntimeError) as codex_error:
             if backend == "codex" or subscription_fallback_disabled():
                 raise
             from log_redact import redact
@@ -1740,7 +1742,6 @@ def call_llm(
             subprocess.SubprocessError,
             OSError,
             RuntimeError,
-            ValueError,
             gemini_api_error_type(),
             gemini_http_error_type(),
         )
@@ -1768,7 +1769,7 @@ def call_llm(
                 backend="gemini",
             )
             return text
-        except (LLMBudgetExceeded, LLMSetupError):
+        except (LLMBudgetExceeded, LLMSetupError, ValueError):
             raise  # hard stops — never paper over with a backend switch
         except gemini_operational_errors as gemini_error:
             if backend == "gemini" or subscription_fallback_disabled():
@@ -1812,9 +1813,9 @@ def call_llm(
                 backend="openrouter",
             )
             return text
-        except (LLMBudgetExceeded, LLMSetupError):
+        except (LLMBudgetExceeded, LLMSetupError, ValueError):
             raise  # hard stops — never paper over with a backend switch
-        except (OSError, RuntimeError, ValueError) as openrouter_error:
+        except (OSError, RuntimeError) as openrouter_error:
             # requests.RequestException subclasses OSError, so network failures land here.
             if backend == "openrouter" or subscription_fallback_disabled():
                 raise  # explicit routing or provider-wide fail-closed policy
@@ -1863,9 +1864,9 @@ def call_llm(
             fallback_from_transport=fallback_from_transport,
             capability_profile=effective_profile,
         )
-    except LLMQuotaExhausted:
-        raise
-    except (OSError, RuntimeError, ValueError) as claude_error:
+    except (LLMQuotaExhausted, LLMBudgetExceeded, LLMSetupError, ValueError):
+        raise  # preserve hard stops even after a prior transport failed
+    except (OSError, RuntimeError) as claude_error:
         if primary_codex_error is None:
             raise
         raise RuntimeError(
@@ -2443,7 +2444,9 @@ def call_llm_with_web(
                 backend="codex",
             )
             return text
-        except (OSError, RuntimeError, ValueError) as codex_error:
+        except (LLMBudgetExceeded, LLMSetupError, ValueError):
+            raise  # web transport is subject to the same hard-stop policy
+        except (OSError, RuntimeError) as codex_error:
             if subscription_fallback_disabled():
                 raise
             from log_redact import redact

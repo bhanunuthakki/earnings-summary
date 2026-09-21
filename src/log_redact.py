@@ -9,7 +9,8 @@ presented.
 from __future__ import annotations
 
 import re
-from typing import Literal
+from collections.abc import Mapping
+from typing import Literal, cast
 
 _CREDENTIAL_NAME = (
     r"x[ _-]*api[ _-]*key|apikey|api[ _-]*key|access[ _-]*token|auth[ _-]*token|"
@@ -83,6 +84,23 @@ def redact(text: object) -> str:
     sanitized = _BASIC_RE.sub(lambda match: f"{match.group(1)}***", sanitized)
     sanitized = _JSON_SECRET_RE.sub(lambda match: f"{match.group(1)}***{match.group(2)}", sanitized)
     return _EMAIL_RE.sub(lambda match: f"***{match.group(1)}", sanitized)
+
+
+def redact_payload(value: object) -> object:
+    """Redact diagnostic JSON values without corrupting its surrounding syntax."""
+    if isinstance(value, Mapping):
+        values = cast(Mapping[object, object], value)
+        return {
+            redact(key): "***"
+            if re.fullmatch(_CREDENTIAL_NAME, str(key), re.IGNORECASE)
+            else redact_payload(item)
+            for key, item in values.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [redact_payload(item) for item in cast(list[object] | tuple[object, ...], value)]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return redact(value)
 
 
 def sanitize_operational_text(text: object, *, mode: OperationalTextMode) -> str:

@@ -7,20 +7,17 @@ clamping, and the module result cache.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
-import sys
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from allocation.what_if import (  # noqa: E402
+from allocation.what_if import (
     ALLOWED_WEIGHTS,
     FUNDING_MODES,
     WhatIfResult,
@@ -349,11 +346,22 @@ def _write_factor_exposures(db_path: Path, rows: list[tuple[str, str, float, boo
     conn.executescript(_FACTOR_DDL)
     now = "2026-07-24T00:00:00"
     for ticker, factor, loading, is_latest in rows:
+        from risk_factors import compute_input_sha
+
+        path = db_path.parent.parent / "micro_thesis" / "holdings" / f"{ticker}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"ticker": ticker, "thesis": "Synthetic business"}))
+        input_sha = compute_input_sha(
+            ticker,
+            geo_mix=None,
+            product_mix=None,
+            thesis_sha=hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
         conn.execute(
             "INSERT INTO business_factor_exposures "
-            "(ticker, factor, loading, provenance, is_latest, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'segment_derived', ?, ?, ?)",
-            (ticker, factor, loading, int(is_latest), now, now),
+            "(ticker, factor, loading, provenance, is_latest, created_at, updated_at, input_sha) "
+            "VALUES (?, ?, ?, 'segment_derived', ?, ?, ?, ?)",
+            (ticker, factor, loading, int(is_latest), now, now, input_sha),
         )
     conn.commit()
     conn.close()
@@ -363,7 +371,8 @@ def _write_weights_cache(repo_root: Path, weights: dict[str, float]) -> None:
     cache = repo_root / "data" / "portfolio_weights.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(
-        json.dumps({"computed_at": "2026-07-24T00:00:00", "weights": weights}), encoding="utf-8"
+        json.dumps({"computed_at": datetime.now(UTC).isoformat(), "weights": weights}),
+        encoding="utf-8",
     )
 
 
@@ -397,6 +406,19 @@ def test_factor_vector_before_after_pro_rata_blend(tmp_path: Path, market: list[
         "digital ad spend": (1.0 - w) * 0.0 + w * 0.4,
     }
     assert r.factor_vector_after == pytest.approx(expected_after)
+    # Current factor admission must not be bypassed by the unchanged-price result cache.
+    thesis = tmp_path / "micro_thesis" / "holdings" / "CCC.json"
+    thesis.write_text(json.dumps({"thesis": "Changed candidate business"}))
+    changed = compute_what_if(
+        tmp_path,
+        "CCC",
+        w,
+        book_weights={"AAA": 1.0},
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+        db_path=db_path,
+    )
+    assert changed.factor_vector_after is None
 
 
 def test_factor_vector_absent_without_db_path(tmp_path: Path, market: list[float]) -> None:

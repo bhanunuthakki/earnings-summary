@@ -39,9 +39,9 @@ from triggers.risk_drift import (
     TOP5_DRIFT_THRESHOLD_PCT,
     TRIGGER_KIND,
     DriftFinding,
-    _bucket_magnitude,  # pyright: ignore[reportPrivateUsage]
-    _HistoryRow,  # pyright: ignore[reportPrivateUsage]
+    HistoryRow,
     append_factor_vector,
+    bucket_magnitude,
     compute_drift_findings,
     load_drift_inputs,
     scan_and_fire,
@@ -64,8 +64,8 @@ def _row(
     top1: float | None = None,
     top5: float | None = None,
     factors: dict[str, float] | None = None,
-) -> _HistoryRow:
-    return _HistoryRow(
+) -> HistoryRow:
+    return HistoryRow(
         captured_at=captured_at,
         metrics={
             "spy_beta": spy_beta,
@@ -250,7 +250,7 @@ def test_signature_differs_by_direction() -> None:
 
 
 def test_bucket_magnitude_zero_threshold_is_safe() -> None:
-    assert _bucket_magnitude(1.0, 0.0) == 0
+    assert bucket_magnitude(1.0, 0.0) == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -488,6 +488,28 @@ def test_append_factor_vector_writes_current_vector_onto_latest_row(
         head_db, ticker="NU", factor="Brazil consumer credit", loading=0.8
     )
 
+    # Bind the positive fixture to current inputs and a fully covered book.
+    import hashlib
+    from datetime import UTC, datetime
+
+    from risk_factors import compute_input_sha
+
+    _write_weights_cache(repo_root, {"NU": 0.20})
+    weights_path = repo_root / "data" / "portfolio_weights.json"
+    weights_path.write_text(
+        json.dumps({"computed_at": datetime.now(UTC).isoformat(), "weights": {"NU": 0.20}})
+    )
+    thesis = repo_root / "micro_thesis" / "holdings" / "NU.json"
+    thesis.parent.mkdir(parents=True)
+    thesis.write_text(json.dumps({"thesis": "Synthetic lending"}))
+    sha = compute_input_sha(
+        "NU",
+        geo_mix=None,
+        product_mix=None,
+        thesis_sha=hashlib.sha256(thesis.read_bytes()).hexdigest(),
+    )
+    with sqlite3.connect(head_db) as conn:
+        conn.execute("UPDATE business_factor_exposures SET input_sha=? WHERE ticker='NU'", (sha,))
     assert append_factor_vector(head_db, repo_root) is True
 
     conn = sqlite3.connect(str(head_db))

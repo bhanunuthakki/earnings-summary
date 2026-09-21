@@ -1,13 +1,9 @@
-"""§3 Financials — last 12 quarters wide-form + last 10 FY (workbook only).
+"""Canonical financial tables with exact source coordinates and provenance.
 
-Quarterly: pull one deduped row per calendar quarter straight from
-``financial_facts`` (NOT the ``metrics`` view — see ``_load_quarterly`` for
-why the view cross-labels quarters for off-calendar reporters), display the
-most recent 12, and compute QoQ / YoY / 1Y-TTM CAGR / 3Y-TTM CAGR.
-
-Annual: pull 10 fiscal years from ``financial_facts`` (fiscal_period_type IN
-('FY','annual')) for the workbook's Annual_Financials tab. Display only —
-no growth columns at the annual cadence.
+Production builds use admitted source observations. ``build_legacy_shadow``
+and its loaders retain the previous ranking solely for explicit parity tests.
+Quarterly calendar buckets are display labels; annual years are issuer fiscal
+identities. KPI chart-priority resolution is a separate existing reader.
 """
 
 from __future__ import annotations
@@ -15,6 +11,8 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable
+from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import cast
 
@@ -26,6 +24,7 @@ from compute.kpi_resolver import (
     resolve_kpi_definition_name,
     semantic_series_identity_sql,
 )
+from db_paths import configured_db_path, require_db_path
 from identity import DEFAULT_USER_ID
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
 from pipeline.kpi_report_reference_dispositions import canonical_financial_chart_priority
@@ -42,6 +41,7 @@ from report.models import (
     AnnualLineItem,
     CellSource,
     FinancialsSection,
+    GrowthMetrics,
     KpiSeries,
     QuarterlyLineItem,
     SectionStatus,
@@ -58,6 +58,12 @@ from report.sections._common import (
     open_repo_db,
     quarter_label,
 )
+from sources.report_financials import (
+    FinancialTableCell,
+    annual_comparison_supported,
+    read_financial_table,
+)
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import (
     load_financial_cell_provenance,
     load_financial_fact_provenance,
@@ -112,7 +118,7 @@ _DEFAULT_CHART_PRIORITIES: tuple[str, ...] = (
 )
 
 
-def build(
+def build_legacy_shadow(
     ticker: str,
     repo_root: Path,
     *,
@@ -175,7 +181,7 @@ def build(
                 if src is None:
                     continue
                 try:
-                    raw_v = float(r.get(col))  # type: ignore[arg-type]
+                    raw_v = float(str(r.get(col)))
                 except (TypeError, ValueError):
                     raw_v = 0.0
                 strings = display_issues_for_fact(
@@ -900,7 +906,7 @@ def _to_display(value: object, column: str) -> float | None:
     if value is None:
         return None
     try:
-        v = float(value)  # type: ignore[arg-type]
+        v = float(str(value))
     except (TypeError, ValueError):
         return None
     if column.startswith("eps"):
@@ -961,6 +967,41 @@ def _load_annual(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object
     return rows
 
 
+def financials_reader_value(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    line_item: str,
+    fiscal_period_type: str,
+    period_end: str,
+) -> float | None:
+    """Return the exact value the financials reader renders for one fact coordinate.
+
+    The reader-tier audit uses this public projection boundary rather than
+    duplicating the report pivot or reaching into its private loaders.
+    """
+    fact_to_column = {fact: column for column, fact in _COL_TO_FACT_LINE_ITEM.items()}
+    column = fact_to_column.get(line_item)
+    if column is None:
+        return None
+    rows = (
+        _load_annual(conn, ticker)
+        if fiscal_period_type in ANNUAL_PERIOD_TYPES
+        else _load_quarterly(conn, ticker)
+    )
+    for row in rows:
+        if str(row.get("period_end"))[:10] != period_end:
+            continue
+        raw = row.get(column)
+        if raw is None:
+            return None
+        try:
+            return float(str(raw))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _build_annual(rows: list[dict[str, object]]) -> tuple[list[int], list[AnnualLineItem]]:
     if not rows:
         return ([], [])
@@ -1009,7 +1050,7 @@ _LINE_ITEM_TO_FACT_KEY: dict[str, str] = {
 }
 
 
-def build_per_metric(
+def build_per_metric_legacy_shadow(
     ticker: str,
     repo_root: Path,
     *,
@@ -1034,4 +1075,276 @@ def build_per_metric(
         if prov is None:
             continue
         out[f"{view_col}_q_latest"] = prov
+    return out
+
+
+def _canonical_source(cell: FinancialTableCell | None) -> CellSource | None:
+    if cell is None or not cell.available or cell.provenance is None:
+        return None
+    bundle = cell.provenance
+    evidence = bundle.evidence
+    if evidence is None:
+        return None
+    return CellSource(
+        source=cell.source_kind or "canonical_reported",
+        fetched_at=cell.source_retrieved_at.isoformat() if cell.source_retrieved_at else None,
+        source_url=cell.source_url,
+        doc_id=cell.legacy_document_id,
+        locator=evidence.source_locator.model_dump_json(),
+        extracted_by=bundle.observation.method_name,
+    )
+
+
+def _comparable_window(cells: list[FinancialTableCell | None]) -> bool:
+    if not cells or any(
+        cell is None or not cell.available or cell.provenance is None for cell in cells
+    ):
+        return False
+    bundles = [
+        cell.provenance for cell in cells if cell is not None and cell.provenance is not None
+    ]
+    identities = {
+        (
+            bundle.cell.reporting_entity_id,
+            bundle.cell.currency,
+            bundle.cell.unit_key,
+            bundle.cell.accounting_basis,
+            bundle.cell.consolidation_scope,
+        )
+        for bundle in bundles
+    }
+    metrics = {
+        (cell.metric_id, cell.metric_definition_revision_id) for cell in cells if cell is not None
+    }
+    return len(identities) == len(metrics) == 1 and all(
+        newer.cell.period_start is not None
+        and (newer.cell.period_start.date() - older.cell.period_end.date()).days == 1
+        and older.cell.fiscal_year is not None
+        and newer.cell.fiscal_year is not None
+        and older.cell.fiscal_period in {"Q1", "Q2", "Q3", "Q4"}
+        and newer.cell.fiscal_period in {"Q1", "Q2", "Q3", "Q4"}
+        and newer.cell.fiscal_year * 4 + int(newer.cell.fiscal_period[1])
+        == older.cell.fiscal_year * 4 + int(older.cell.fiscal_period[1]) + 1
+        for older, newer in pairwise(bundles)
+    )
+
+
+def _source_period_ends(cells: list[FinancialTableCell | None]) -> list[date | None]:
+    return [
+        cell.provenance.cell.period_end.date()
+        if cell is not None and cell.available and cell.provenance is not None
+        else None
+        for cell in cells
+    ]
+
+
+def _annual_windows_supported(cells: list[FinancialTableCell | None]) -> bool:
+    """Check inclusive TTM coverage as well as source-end comparison spans."""
+    first = cells[0] if cells else None
+    if first is None or first.provenance is None or first.provenance.cell.period_start is None:
+        return False
+    boundaries = [
+        first.provenance.cell.period_start.date() - timedelta(days=1),
+        *_source_period_ends(cells),
+    ]
+    return annual_comparison_supported(boundaries, 0, len(cells))
+
+
+def _canonical_growth(
+    cells: list[FinancialTableCell | None], values: list[float | None]
+) -> GrowthMetrics:
+    growth = compute_growth(values)
+    dates = _source_period_ends(cells)
+    return GrowthMetrics(
+        qoq=growth.qoq if _comparable_window(cells[-2:]) else None,
+        yoy=growth.yoy
+        if len(cells) >= 5
+        and _comparable_window(cells[-5:])
+        and annual_comparison_supported(dates, len(cells) - 5, len(cells) - 1)
+        else None,
+        cagr_1y_ttm=growth.cagr_1y_ttm
+        if len(cells) >= 8
+        and _comparable_window(cells[-8:])
+        and _annual_windows_supported(cells[-8:])
+        else None,
+        cagr_3y_ttm=growth.cagr_3y_ttm
+        if len(cells) >= 16
+        and _comparable_window(cells[-16:])
+        and _annual_windows_supported(cells[-16:])
+        else None,
+    )
+
+
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+    as_of: datetime | None = None,
+) -> FinancialsSection:
+    """Project exact canonical selections; the legacy reader is shadow-only."""
+    cutoff = datetime.now(UTC) if as_of is None else as_of
+    own_connection = conn is None
+    if conn is None:
+        try:
+            path = require_db_path(configured_db_path(repo_root))
+            if path == (repo_root / "data" / "portfolio.db").resolve():
+                raise RuntimeError("checkout-local database prohibited")
+            conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+            conn.row_factory = sqlite3.Row
+        except (OSError, RuntimeError, sqlite3.Error):
+            return _missing(
+                "configured canonical database unavailable",
+                "Configure the canonical database or pass the request-scoped connection",
+            )
+    original_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        projection = read_financial_table(conn, ticker, as_of=cutoff)
+        quarters = sorted(
+            {
+                cell.display_coordinate
+                for cell in projection.cells
+                if cell.cadence == "quarterly" and cell.display_coordinate is not None
+            }
+        )[-UNDERLYING_QUARTERS:]
+        if quarters:
+            first_year, first_q = (int(value) for value in quarters[0].split(" Q"))
+            last_year, last_q = (int(value) for value in quarters[-1].split(" Q"))
+            quarters = [
+                f"{index // 4} Q{index % 4 + 1}"
+                for index in range(first_year * 4 + first_q - 1, last_year * 4 + last_q)
+            ][-UNDERLYING_QUARTERS:]
+        years = sorted(
+            {
+                int(cell.display_coordinate)
+                for cell in projection.cells
+                if cell.cadence == "annual" and cell.display_coordinate is not None
+            }
+        )[-ANNUAL_HISTORY_YEARS:]
+        available = [cell for cell in projection.cells if cell.available]
+        selected = {
+            (cell.concept, cell.cadence, cell.display_coordinate): cell for cell in available
+        }
+        currencies = {
+            cell.provenance.cell.currency for cell in available if cell.provenance is not None
+        }
+        currency = next(iter(currencies)) if len(currencies) == 1 else "unavailable"
+        quarterly: list[QuarterlyLineItem] = []
+        annual: list[AnnualLineItem] = []
+        for col, name, _unit, digits in _LINE_ITEM_SPECS:
+            concept = _COL_TO_FACT_LINE_ITEM[col]
+            qcells = [selected.get((concept, "quarterly", quarter)) for quarter in quarters]
+            acells = [selected.get((concept, "annual", str(year))) for year in years]
+            qvalues = [
+                float(cell.display_value)
+                if cell is not None and cell.display_value is not None
+                else None
+                for cell in qcells
+            ]
+            avalues = [
+                float(cell.display_value)
+                if cell is not None and cell.display_value is not None
+                else None
+                for cell in acells
+            ]
+            unit = f"{currency}/share" if col == "eps_diluted" else f"{currency} millions"
+            if any(value is not None for value in qvalues):
+                quarterly.append(
+                    QuarterlyLineItem(
+                        line_item=name,
+                        unit=unit,
+                        digits=digits,
+                        quarters=quarters[-DISPLAY_QUARTERS:],
+                        values=qvalues[-DISPLAY_QUARTERS:],
+                        levels_full=qvalues,
+                        sources_full=[_canonical_source(cell) for cell in qcells],
+                        growth=_canonical_growth(qcells, qvalues),
+                        comparison_period_ends=_source_period_ends(qcells),
+                        comparison_eligible_edges=[
+                            False,
+                            *(
+                                _comparable_window([older, newer])
+                                for older, newer in pairwise(qcells)
+                            ),
+                        ],
+                    )
+                )
+            if any(value is not None for value in avalues):
+                annual.append(
+                    AnnualLineItem(
+                        line_item=name,
+                        unit=unit,
+                        digits=digits,
+                        years=years,
+                        values=avalues,
+                        sources_full=[_canonical_source(cell) for cell in acells],
+                    )
+                )
+        requested = _read_chart_priorities_request(ticker, repo_root)
+        priorities, kpis, annual_kpis, kpi_years = _resolve_priorities(
+            requested,
+            quarterly,
+            ticker,
+            repo_root,
+            quarters[-DISPLAY_QUARTERS:],
+            quarters,
+            conn=conn,
+        )
+        reasons = {
+            *projection.reason_codes,
+            *(reason for cell in projection.cells for reason in cell.reason_codes),
+        }
+        if not quarterly:
+            reasons.add("quarterly_financial_cells_unavailable")
+        if not annual:
+            reasons.add("annual_financial_cells_unavailable")
+        rejected = bool(reasons)
+        status = (
+            SectionStatus.OK
+            if quarterly and annual and not rejected
+            else SectionStatus.PARTIAL
+            if quarterly or annual
+            else SectionStatus.MISSING_DATA
+        )
+        return FinancialsSection(
+            status=status,
+            missing=missing(
+                "CANONICAL(financial_table)",
+                "Review canonical source admission and fiscal coordinates",
+                "; ".join(sorted(reasons)),
+            )
+            if status != SectionStatus.OK
+            else None,
+            quarter_labels=quarters[-DISPLAY_QUARTERS:],
+            quarter_labels_full=quarters,
+            line_items=quarterly,
+            annual_years=years,
+            annual_line_items=annual,
+            chart_priorities=priorities,
+            kpi_chart_series=kpis,
+            annual_kpi_chart_series=annual_kpis,
+            annual_kpi_years=kpi_years,
+            currency=currency or "unavailable",
+            canonical_financial_table=projection,
+        )
+    finally:
+        conn.row_factory = original_factory
+        if own_connection:
+            conn.close()
+
+
+def build_per_metric(
+    ticker: str, repo_root: Path, *, conn: sqlite3.Connection | None = None
+) -> dict[str, dict[str, object]]:
+    """Latest-quarter audit entries come from the same exact canonical projection."""
+    section = build(ticker, repo_root, conn=conn)
+    projection = section.canonical_financial_table
+    if projection is None:
+        return {}
+    out: dict[str, dict[str, object]] = {}
+    for cell in sorted(projection.cells, key=lambda item: item.display_coordinate or ""):
+        if cell.available and cell.cadence == "quarterly":
+            key = "capex" if cell.concept == "capital_expenditure" else cell.concept
+            out[f"{key}_q_latest"] = cell.model_dump(mode="json")
     return out

@@ -53,6 +53,7 @@ def db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(str(d))
     try:
         record_investor_day(conn, "META", date(2099, 9, 18), "Analyst Day 2099", firm="Meta IR")
+        conn.commit()
     finally:
         conn.close()
     return d
@@ -141,7 +142,8 @@ def test_empty_state_discloses_on_pre_migration_db(tmp_path: Path) -> None:
     signals_only(empty)  # signals table exists but no rows
     html = render_diet_panel(empty)
     assert "No diet signals yet" in html
-    assert "No investor days on the calendar" in html
+    assert "Event source coverage is stale or incomplete" in html
+    assert 'data-calendar-state="empty"' not in html
 
 
 def test_no_raw_hex_in_output(db: Path) -> None:

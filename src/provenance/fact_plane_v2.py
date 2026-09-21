@@ -573,12 +573,29 @@ class DerivationInputV2(_FrozenModel):
         min_length=1,
         max_length=128,
     )
+    input_canonical_resolution_revision_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+    )
     input_role: str = Field(min_length=1, max_length=128)
     recorded_at: datetime
 
+    @model_validator(mode="after")
+    def _one_resolution_domain(self) -> Self:
+        if (
+            self.input_resolution_revision_id is not None
+            and self.input_canonical_resolution_revision_id is not None
+        ):
+            raise ValueError("a derivation input cannot mix resolution domains")
+        return self
+
     @property
     def canonical_json(self) -> str:
-        return _canonical_json(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        if self.input_canonical_resolution_revision_id is None:
+            payload.pop("input_canonical_resolution_revision_id")
+        return _canonical_json(payload)
 
 
 class DerivationSealV2(_FrozenModel):
@@ -625,18 +642,21 @@ class DerivationSealV2(_FrozenModel):
 
     @property
     def canonical_inputs_json(self) -> str:
-        return _canonical_json(
-            [
-                {
-                    "input_observation_id": item.input_observation_id,
-                    "input_ordinal": item.input_position,
-                    "input_resolution_revision_id": (item.input_resolution_revision_id),
-                    "input_role": item.input_role,
-                    "output_observation_id": item.derived_observation_id,
-                }
-                for item in self.ordered_inputs
-            ]
-        )
+        inputs: list[dict[str, object]] = []
+        for item in self.ordered_inputs:
+            payload: dict[str, object] = {
+                "input_observation_id": item.input_observation_id,
+                "input_ordinal": item.input_position,
+                "input_resolution_revision_id": (item.input_resolution_revision_id),
+                "input_role": item.input_role,
+                "output_observation_id": item.derived_observation_id,
+            }
+            if item.input_canonical_resolution_revision_id is not None:
+                payload["input_canonical_resolution_revision_id"] = (
+                    item.input_canonical_resolution_revision_id
+                )
+            inputs.append(payload)
+        return _canonical_json(inputs)
 
     @property
     def canonical_inputs_sha256(self) -> str:
@@ -1124,7 +1144,7 @@ class FactPlaneV2:
             return result
         with self._savepoint("finalize_fact_derivation_v2"):
             for edge in seal.ordered_inputs:
-                columns = (
+                columns: tuple[str, ...] = (
                     "edge_id",
                     "idempotency_key",
                     "output_observation_id",
@@ -1134,7 +1154,7 @@ class FactPlaneV2:
                     "input_ordinal",
                     "recorded_at",
                 )
-                values = (
+                values: tuple[object, ...] = (
                     edge.edge_id,
                     edge.idempotency_key,
                     edge.derived_observation_id,
@@ -1144,6 +1164,14 @@ class FactPlaneV2:
                     edge.input_position,
                     edge.recorded_at,
                 )
+                if self._has_column(
+                    "fact_derivation_input_edges_v2",
+                    "input_canonical_resolution_revision_id",
+                ):
+                    columns += ("input_canonical_resolution_revision_id",)
+                    values += (edge.input_canonical_resolution_revision_id,)
+                elif edge.input_canonical_resolution_revision_id is not None:
+                    raise ValueError("canonical derivation resolution schema is unavailable")
                 self._insert_or_verify(
                     table="fact_derivation_input_edges_v2",
                     columns=columns,
@@ -1527,6 +1555,12 @@ class FactPlaneV2:
             raise ValueError(f"immutable {table} identity {idempotency_key!r} conflicts")
         return PersistResult(record_id, False)
 
+    def _has_column(self, table: str, column: str) -> bool:
+        return any(
+            str(row[1]) == column
+            for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608 -- fixed internal table names
+        )
+
     @staticmethod
     def _matches(
         existing: tuple[object, ...],
@@ -1826,12 +1860,26 @@ class FactPlaneV2:
             f"SELECT {','.join(columns)} FROM fact_derivation_seals_v2 WHERE idempotency_key = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (seal.idempotency_key,),
         ).fetchone()
-        edge_rows = self._fetchall(
+        has_canonical_resolution = self._has_column(
+            "fact_derivation_input_edges_v2",
+            "input_canonical_resolution_revision_id",
+        )
+        edge_query = (
             "SELECT edge_id,idempotency_key,output_observation_id,"
+            "input_observation_id,input_resolution_revision_id,"
+            "input_canonical_resolution_revision_id,input_role,"
+            "input_ordinal,recorded_at "
+            "FROM fact_derivation_input_edges_v2 "
+            "WHERE output_observation_id = ? ORDER BY input_ordinal"
+            if has_canonical_resolution
+            else "SELECT edge_id,idempotency_key,output_observation_id,"
             "input_observation_id,input_resolution_revision_id,input_role,"
             "input_ordinal,recorded_at "
             "FROM fact_derivation_input_edges_v2 "
-            "WHERE output_observation_id = ? ORDER BY input_ordinal",
+            "WHERE output_observation_id = ? ORDER BY input_ordinal"
+        )
+        edge_rows = self._fetchall(
+            edge_query,
             (seal.derived_observation_id,),
         )
         stored_edges = tuple(
@@ -1841,6 +1889,11 @@ class FactPlaneV2:
                 row["output_observation_id"],
                 row["input_observation_id"],
                 row["input_resolution_revision_id"],
+                *(
+                    (row["input_canonical_resolution_revision_id"],)
+                    if has_canonical_resolution
+                    else ()
+                ),
                 row["input_role"],
                 row["input_ordinal"],
                 row["recorded_at"],
@@ -1854,6 +1907,11 @@ class FactPlaneV2:
                 edge.derived_observation_id,
                 edge.input_observation_id,
                 edge.input_resolution_revision_id,
+                *(
+                    (edge.input_canonical_resolution_revision_id,)
+                    if has_canonical_resolution
+                    else ()
+                ),
                 edge.input_role,
                 edge.input_position,
                 edge.recorded_at,

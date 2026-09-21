@@ -10,18 +10,13 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from integrations.portfolio_tracker_client import (  # noqa: E402
+from integrations.portfolio_tracker_client import (
     BetaStats,
     Concentration,
     LivePortfolio,
@@ -31,11 +26,13 @@ from integrations.portfolio_tracker_client import (  # noqa: E402
     PositionCorrelationRow,
     Positioning,
 )
-from portfolio_risk_snapshot_store import (  # noqa: E402
+from portfolio_risk_snapshot_store import (
     RiskSnapshot,
     read_latest_snapshot,
     write_snapshot,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 PRIOR_HEAD = "0104_ask_answer_budget"
 NEW_HEAD = "0105_portfolio_risk_snapshot"
@@ -129,7 +126,7 @@ def test_store_upsert_roundtrip(migrated_db: Path) -> None:
     assert got.beta == pytest.approx(1.12)
     assert got.max_drawdown_pct == pytest.approx(-14.2)
     assert got.spy_beta == pytest.approx(1.25)
-    assert got.rate_beta_10y == pytest.approx(-2.0)
+    assert got.rate_beta_10y is None  # retained unversioned rate field is quarantined
     assert got.num_positions == 11
     assert got.captured_at  # stamped at write time
     # Second write overwrites (single row per user), never appends.

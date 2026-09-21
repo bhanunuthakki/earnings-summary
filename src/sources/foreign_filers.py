@@ -8,12 +8,11 @@ fails closed / degrades on non-inline HTML instead of silently faking XBRL facts
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, Literal, cast
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -194,7 +193,7 @@ FOREIGN_FILER_ROSTER: MappingProxyType[str, ForeignFilerProfile] = MappingProxyT
 
 
 class ForeignFilerNormalizer:
-    """Deterministic normalizer for foreign filer SEC forms and IR packages."""
+    """Legacy negative classifier; positive admission requires retained source evidence."""
 
     def __init__(
         self,
@@ -236,8 +235,6 @@ class ForeignFilerNormalizer:
                 verified_at=now_ts,
             )
 
-        currency = profile.reporting_currency
-
         # 2. Semiannual filter guard (e.g. BHP)
         if profile.cadence == ReportingCadence.SEMIANNUAL and requested_period in (
             "Q1",
@@ -277,101 +274,16 @@ class ForeignFilerNormalizer:
                 verified_at=now_ts,
             )
 
-        # 4. Parse admitted spreadsheet or statement cache
-        if form == ForeignFilingForm.ISSUER_IR_SPREADSHEET and (
-            not profile.admitted_document_hashes or doc_hash not in profile.admitted_document_hashes
-        ):
-            return ForeignNormalizationReceipt(
-                ticker=ticker_clean,
-                form=form,
-                document_hash=doc_hash,
-                disposition=InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT,
-                facts_extracted_count=0,
-                facts=(),
-                reason=f"Spreadsheet hash {doc_hash} is not in admitted roster for {ticker_clean}.",
-                verified_at=now_ts,
-            )
-
-        # 5. Extract standardized concepts from structured payload
-        facts: list[ForeignFactObservation] = []
-        try:
-            raw_text = content.decode("utf-8")
-            raw_obj: object = json.loads(raw_text)
-            if not isinstance(raw_obj, dict):
-                raise ValueError("Payload must be a JSON dictionary")
-            data = cast("dict[str, Any]", raw_obj)
-            raw_facts_obj = data.get("facts")
-            if not isinstance(raw_facts_obj, dict) or not raw_facts_obj:
-                raise ValueError("Payload has empty or missing facts dictionary")
-            raw_facts = cast("dict[str, Any]", raw_facts_obj)
-
-            # Determine period start date
-            if period_start is not None:
-                start_dt = period_start
-            elif requested_period in ("FY", "H1", "Q1"):
-                start_dt = date(fiscal_year, 1, 1)
-            elif requested_period in ("H2", "Q3"):
-                start_dt = date(fiscal_year, 7, 1)
-            elif requested_period == "Q2":
-                start_dt = date(fiscal_year, 4, 1)
-            elif requested_period == "Q4":
-                start_dt = date(fiscal_year, 10, 1)
-            else:
-                start_dt = date(fiscal_year, 1, 1)
-
-            for concept_name, val in raw_facts.items():
-                if val is not None:
-                    lookup_key = concept_name.lower().replace(" ", "_")
-                    canonical = IFRS_TO_CANONICAL_CONCEPT.get(lookup_key)
-                    is_mapped = canonical is not None
-                    facts.append(
-                        ForeignFactObservation(
-                            ticker=ticker_clean,
-                            form=form,
-                            accession_number=accession_number,
-                            period_start=start_dt,
-                            period_end=period_end,
-                            fiscal_year=fiscal_year,
-                            fiscal_period=requested_period,
-                            concept=concept_name,
-                            canonical_concept=canonical,
-                            is_canonical_mapped=is_mapped,
-                            value=Decimal(str(val)),
-                            currency=currency,
-                            unit="currency",
-                            source_hash=doc_hash,
-                            extracted_at=now_ts,
-                        )
-                    )
-        except Exception as e:
-            return ForeignNormalizationReceipt(
-                ticker=ticker_clean,
-                form=form,
-                document_hash=doc_hash,
-                disposition=InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT,
-                facts_extracted_count=0,
-                facts=(),
-                reason=f"Failed parsing structured foreign facts for {ticker_clean}: {type(e).__name__}: {e}",
-                verified_at=now_ts,
-            )
-
-        disposition = (
-            InterimDisposition.ADMITTED_XBRL
-            if is_inline_xbrl
-            else (
-                InterimDisposition.ADMITTED_GOVERNED_SPREADSHEET
-                if form == ForeignFilingForm.ISSUER_IR_SPREADSHEET
-                else InterimDisposition.ADMITTED_STATEMENT_CACHE
-            )
-        )
-
+        # A boolean, ticker profile or hash allowlist cannot prove extraction or
+        # semantic admission. Positive normalization belongs to the source-bound
+        # runner and its existing governed publishers, never this legacy helper.
         return ForeignNormalizationReceipt(
             ticker=ticker_clean,
             form=form,
             document_hash=doc_hash,
-            disposition=disposition,
-            facts_extracted_count=len(facts),
-            facts=tuple(facts),
-            reason=f"Successfully extracted {len(facts)} normalized foreign facts for {ticker_clean}.",
+            disposition=InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT,
+            facts_extracted_count=0,
+            facts=(),
+            reason="Source-bound governed extraction is required; raw values cannot authorize normalization.",
             verified_at=now_ts,
         )

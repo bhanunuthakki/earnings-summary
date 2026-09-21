@@ -481,6 +481,57 @@ def test_real_repository_evidence_persisted_bytes_fit_reader_contract() -> None:
     assert RepositoryEvidence.model_validate_json(payload) == evidence
 
 
+@pytest.mark.parametrize(
+    "text",
+    ['🧭"\\\n' * 2_500, "\x00\t\n" * 3_000],
+    ids=["unicode-json-escaping", "control-json-escaping"],
+)
+def test_evidence_budget_preserves_source_identity_and_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    from execution import update_readme
+
+    (tmp_path / "AGENTS.md").write_text(text, encoding="utf-8")
+    (tmp_path / "execution").mkdir()
+    (tmp_path / "execution" / "comments_server.py").write_text(
+        'parser.add_argument("--port")\n', encoding="utf-8"
+    )
+    unbounded = update_readme.collect_repository_evidence(tmp_path)
+    monkeypatch.setattr(update_readme, "_MAX_EVIDENCE_PACKET_BYTES", 2_000)
+
+    bounded = update_readme.collect_repository_evidence(tmp_path)
+    payload = update_readme.serialize_evidence(bounded)
+
+    assert len(payload) <= 2_000
+    assert RepositoryEvidence.model_validate_json(payload) == bounded
+    assert bounded.model_dump(exclude={"sources"}) == unbounded.model_dump(exclude={"sources"})
+    assert tuple((s.path, s.sha256) for s in bounded.sources) == tuple(
+        (s.path, s.sha256) for s in unbounded.sources
+    )
+    for source, original in zip(bounded.sources, unbounded.sources, strict=True):
+        assert original.text.startswith(source.text)
+        assert source.truncated == (original.truncated or source.text != original.text)
+    assert bounded.sources[0].text
+    assert bounded.sources[0].truncated
+    next_prefix = unbounded.sources[0].text[: len(bounded.sources[0].text) + 1]
+    longer_source = bounded.sources[0].model_copy(update={"text": next_prefix})
+    longer_packet = bounded.model_copy(update={"sources": (longer_source, *bounded.sources[1:])})
+    with pytest.raises(ValueError, match="final serialized limit"):
+        update_readme.serialize_evidence(longer_packet)
+    assert update_readme.collect_repository_evidence(tmp_path) == bounded
+
+
+def test_evidence_budget_does_not_drop_critical_metadata_to_fit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from execution import update_readme
+
+    (tmp_path / "AGENTS.md").write_text("rules", encoding="utf-8")
+    monkeypatch.setattr(update_readme, "_MAX_EVIDENCE_PACKET_BYTES", 1)
+    with pytest.raises(ValueError, match="final serialized limit"):
+        update_readme.collect_repository_evidence(tmp_path)
+
+
 def test_evidence_collection_rejects_allowlisted_hardlink_to_private_state(
     tmp_path: Path,
 ) -> None:
@@ -536,3 +587,55 @@ def test_llm_purposes_are_versioned_isolated_and_model_pinned() -> None:
     assert GENERATOR_PURPOSE in AUDIT_SPECS
     assert JUDGE_PURPOSE in META_PURPOSES
     assert {GENERATOR_PURPOSE, JUDGE_PURPOSE} <= CAPTURE_DENYLIST
+
+
+def test_real_readme_consumer_persists_contracts_without_changing_judge_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm import structured
+    from llm.prompt_registry import RenderedPrompt
+    from readme_updater import evidence_sha256
+
+    evidence = _evidence()
+    calls: list[tuple[str, RenderedPrompt]] = []
+
+    def transport(prompt: str, **kwargs: object) -> str:
+        assert isinstance(prompt, RenderedPrompt)
+        purpose = kwargs["purpose"]
+        assert isinstance(purpose, str)
+        calls.append((purpose, prompt))
+        if purpose == GENERATOR_PURPOSE:
+            return _draft("candidate").model_dump_json()
+        assert purpose == JUDGE_PURPOSE
+        return _judge("revise", issue=True).model_dump_json()
+
+    monkeypatch.setattr(structured, "call_llm", transport)
+    result = run_update_cycle(
+        evidence=evidence,
+        current_readme=_markdown("current"),
+        max_revisions=0,
+        run_id="contract-consumer-test",
+    )
+    assert result.approved is False
+    assert [purpose for purpose, _prompt in calls] == [GENERATOR_PURPOSE, JUDGE_PURPOSE]
+    attempt = result.attempts[0]
+    assert attempt.generator_contract is not None
+    assert attempt.judge_contract is not None
+    assert attempt.generator_contract.source_evidence_sha256 == (evidence_sha256(evidence),)
+    assert attempt.judge_contract.source_evidence_sha256 == (evidence_sha256(evidence),)
+    assert attempt.generator_contract.prompt_version == calls[0][1].template_version
+    assert attempt.judge_contract.prompt_version == calls[1][1].template_version
+    assert (
+        attempt.generator_contract.response_sha256
+        == hashlib.sha256(attempt.generator_raw_response.encode()).hexdigest()
+    )
+    assert (
+        attempt.judge_contract.response_sha256
+        == hashlib.sha256(attempt.judge_raw_response.encode()).hexdigest()
+    )
+    assert "content" not in attempt.generator_contract.model_dump()
+    assert "parsed_payload" not in attempt.generator_contract.model_dump()
+    assert attempt.generator_contract.purpose == GENERATOR_PURPOSE
+    assert attempt.judge_contract.purpose == JUDGE_PURPOSE
+    assert attempt.judge_contract.schema_version != attempt.generator_contract.schema_version
+    assert ReadmeUpdateResult.model_validate_json(result.model_dump_json()) == result

@@ -33,6 +33,7 @@ from allocation.book_risk import BookRisk, build_book_risk
 from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import scenario_reward
 from identity import DEFAULT_USER_ID
+from sources.market_price_policy import PRICE_STALE_DAYS as PRICE_STALE_DAYS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Ranking thresholds — coarse by design (they rank attention, they don't measure
@@ -52,13 +53,12 @@ REWARD_CLAMP = 1.0  # +-100%
 # refresh (stale past a month, mirroring dcf_coverage_panel.STALE_DAYS); the price
 # leg is re-priced daily by L6, so a price older than a week is itself a tell.
 REWARD_STALE_DAYS = 30
-PRICE_STALE_DAYS = 7
 
 CONVICTION_KIND = "conviction"
 
 
 @dataclass(slots=True)
-class _Reward:
+class Reward:
     """The asymmetry-aware reward leg for one name, with its confidence."""
 
     expected_return: float | None  # fraction; None when there is no usable DCF reward
@@ -172,7 +172,7 @@ def _score_row(
 
 def build_gap_rows(
     book: BookRisk,
-    rewards: Mapping[str, _Reward],
+    rewards: Mapping[str, Reward],
     convictions: Mapping[str, float],
 ) -> tuple[list[RiskRewardGapRow], int]:
     """Join risk shares × reward legs × conviction into the ranked rows.
@@ -194,7 +194,7 @@ def build_gap_rows(
     valued = 0
     for t in book.tickers:
         rs = risk_shares[t]
-        reward = rewards.get(t) or _Reward(None, False, True, "no DCF on file", None)
+        reward = rewards.get(t) or Reward(None, False, True, "no DCF on file", None)
         er_pct = reward.expected_return * 100.0 if reward.expected_return is not None else None
         if reward.expected_return is not None:
             valued += 1
@@ -252,7 +252,7 @@ def _parse_date(raw: object) -> date | None:
             return None
 
 
-def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict[str, _Reward]:
+def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict[str, Reward]:
     """Asymmetry-aware reward leg per ticker, with freshness-derived confidence.
 
     Reads the latest TOP-LEVEL (unsegmented, current-version) ``dcf_runs`` row
@@ -270,12 +270,12 @@ def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict
     valuation must not drive the risk-parity-gap ranking any more than it may
     drive eligibility (``allocation.eligibility``)."""
     want = {t.upper() for t in tickers}
-    out: dict[str, _Reward] = {}
+    out: dict[str, Reward] = {}
     for t, row in latest_dcf_rows_from_db(db_path).items():
         if t not in want:
             continue
         if row.sanity_flag:
-            out[t] = _Reward(
+            out[t] = Reward(
                 None, False, True, f"DCF sanity-flagged (outlier: {row.sanity_flag!r})", None
             )
             continue
@@ -285,7 +285,7 @@ def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict
             snapshot_json=row.assumption_snapshot_json,
         )
         if reward is None:
-            out[t] = _Reward(None, False, True, "DCF has no usable price / fair value", None)
+            out[t] = Reward(None, False, True, "DCF has no usable price / fair value", None)
             continue
         val_date = _parse_date(row.valuation_date)
         priced_date = _parse_date(row.live_price_at)
@@ -299,7 +299,7 @@ def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict
         elif (today - priced_date).days > PRICE_STALE_DAYS:
             stale_bits.append(f"price {(today - priced_date).days}d stale")
         low_conf = bool(stale_bits)
-        out[t] = _Reward(
+        out[t] = Reward(
             expected_return=reward.expected_return,
             has_scenarios=reward.has_scenarios,
             low_confidence=low_conf,
@@ -352,7 +352,7 @@ def _entry_convictions(db_path: Path, tickers: Sequence[str]) -> dict[str, float
         try:
             rows = conn.execute(
                 "SELECT ticker, entry_conviction FROM position_entries "
-                "WHERE exit_date IS NULL AND entry_conviction IS NOT NULL "
+                "WHERE exit_date IS NULL AND superseded_by_entry_id IS NULL AND entry_conviction IS NOT NULL "
                 "ORDER BY id DESC"
             ).fetchall()
         finally:

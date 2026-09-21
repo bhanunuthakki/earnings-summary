@@ -189,18 +189,33 @@ def grade(
     notes: str | None = None,
     evaluator_run_id: str | None = None,
     db_path: Path | str | None = None,
+    only_if_pending: bool = False,
+    expected_prediction: Prediction | None = None,
 ) -> bool:
     conn = _open(db_path)
     if conn is None:
         return False
     try:
-        conn.execute(
+        if expected_prediction is not None:
+            # Bind every loaded grading input and retained note while holding the
+            # writer lock; an owner edit must invalidate a stale calculation.
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT * FROM predictions WHERE id=?", (prediction_id,)
+            ).fetchone()
+            if (
+                expected_prediction.id != prediction_id
+                or current is None
+                or _row_to_prediction(current) != expected_prediction
+            ):
+                return False
+        cursor = conn.execute(
             """
             UPDATE predictions
             SET outcome = ?, realized_value = ?, realized_doc_id = ?,
                 outcome_confidence = ?, notes = ?, evaluator_run_id = ?,
                 evaluated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND (? = 0 OR outcome = 'pending')
             """,
             (
                 outcome,
@@ -211,10 +226,11 @@ def grade(
                 evaluator_run_id,
                 datetime.now(UTC).isoformat(),
                 prediction_id,
+                int(only_if_pending),
             ),
         )
         conn.commit()
-        return True
+        return cursor.rowcount == 1
     except sqlite3.Error as exc:
         log.warning({"event": "prediction_grade_failed", "error": str(exc)})
         return False

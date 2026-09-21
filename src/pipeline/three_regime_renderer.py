@@ -1,26 +1,42 @@
-"""Deterministic three-regime projection and artifact rendering engine.
+"""Deterministic sealed rendering of the migrated canonical growth slice.
 
-Renders normalized research artifacts (HTML, Markdown, sections.json) across
-Regime 0 (Vendor-Only), Regime 1 (SEC/IR Primary), and Regime 2 (Combined Canonical).
-Enforces two-pass byte-identical reproducibility, input manifest freezing, and
-explicit lineage/currency/degradation metadata on all numeric panels.
+Unmigrated consumers and regime-specific alternate resolution remain unavailable.
+Full report acceptance remains HOLD even when the supported slice is reproducible.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
+import html
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from evals.regime_backtest import SourceRegime, StratumCohort
-from sources.foreign_filers import FOREIGN_FILER_ROSTER
+from pipeline.sealed_growth_projection import (
+    FIXED_COHORT,
+    GrowthRegimeProjection,
+    GrowthRenderManifest,
+    canonical_bytes,
+    load_growth_manifest,
+    project_growth_regimes,
+)
+from provenance.source_regime import SourceRegime as CanonicalSourceRegime
+from report.offline_artifact import (
+    DependencyClass,
+    DependencyRecord,
+    OfflineArtifactPayload,
+    OfflineBoundaryError,
+    offline_runtime_guard,
+    write_offline_artifact,
+)
+from report.renderers.offline_document import render_offline_document
+from ui.controls import prov_drawer
 
 
 class SectionRenderStatus(StrEnum):
@@ -41,7 +57,7 @@ class RenderedSectionPayload(BaseModel):
     regime: SourceRegime
     status: SectionRenderStatus
     source_lineage: str
-    currency: str
+    currency: str | None
     fiscal_period: str
     metrics: dict[str, Decimal] = Field(default_factory=dict)
     content_html: str
@@ -55,15 +71,17 @@ class SingleRegimeRenderOutput(BaseModel):
 
     ticker: str
     regime: SourceRegime
-    stratum: StratumCohort
+    stratum: StratumCohort | None
     as_of_date: date
-    currency: str
+    currency: str | None
     html_sha256: str = Field(..., pattern=r"^[0-9a-f]{64}$")
     markdown_sha256: str = Field(..., pattern=r"^[0-9a-f]{64}$")
     sections_json_sha256: str = Field(..., pattern=r"^[0-9a-f]{64}$")
     sections_count: int
-    two_pass_byte_identical: bool = True
+    two_pass_byte_identical: bool = False
     sections: tuple[RenderedSectionPayload, ...] = ()
+    scope: str = "unbound"
+    reason_codes: tuple[str, ...] = ()
 
 
 class ThreeRegimeRenderReceipt(BaseModel):
@@ -79,20 +97,26 @@ class ThreeRegimeRenderReceipt(BaseModel):
     all_two_pass_verified: bool
     status: Literal["PASS", "HOLD", "BLOCK"]
     render_outputs: tuple[SingleRegimeRenderOutput, ...] = ()
-    verified_at: datetime
-
-
-def compute_sha256_text(text: str) -> str:
-    """Compute 64-char hexadecimal SHA-256 digest of utf-8 text."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    verified_at: datetime | None
+    reason_codes: tuple[str, ...] = ()
+    input_manifest_sha256: str | None = None
+    policy_bundle_sha256: str | None = None
+    scope: str = "unbound"
 
 
 class ThreeRegimeDeterministicRenderer:
-    """Renders deterministic research artifacts across 3 source regimes."""
+    """Render exact admitted growth inputs without claiming full-report completion."""
 
-    def __init__(self, output_base_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        output_base_dir: Path | None = None,
+        *,
+        input_manifest: Path | None = None,
+        expected_manifest_sha256: str | None = None,
+    ) -> None:
         self.output_base_dir = output_base_dir or Path(".tmp/three_regime_renders")
-        self.roster = FOREIGN_FILER_ROSTER
+        self.input_manifest = input_manifest
+        self.expected_manifest_sha256 = expected_manifest_sha256
 
     def render_ticker_regime(
         self,
@@ -100,165 +124,10 @@ class ThreeRegimeDeterministicRenderer:
         regime: SourceRegime,
         as_of_date: date = date(2026, 4, 30),
     ) -> SingleRegimeRenderOutput:
-        """Render a single ticker under a specific regime with two-pass byte verification."""
-        ticker_clean = ticker.upper().strip()
-        profile = self.roster.get(ticker_clean)
-        currency = profile.reporting_currency if profile else "USD"
-
-        stratum = (
-            StratumCohort.STRATUM_SPARSE_SEMIANNUAL
-            if ticker_clean == "BHP"
-            else (
-                StratumCohort.STRATUM_40F_CANADIAN
-                if ticker_clean == "BN"
-                else (
-                    StratumCohort.STRATUM_20F_FOREIGN
-                    if profile is not None
-                    else StratumCohort.STRATUM_10K_OPERATING
-                )
-            )
-        )
-
-        # Build standard deterministic sections
-        sections: list[RenderedSectionPayload] = []
-
-        # 1. Financial Overview Section
-        lineage_financials = (
-            "FMP_STATEMENT_CACHE"
-            if regime == SourceRegime.REGIME_0_VENDOR_ONLY
-            else (
-                "SEC_EDGAR_AND_IR"
-                if regime == SourceRegime.REGIME_1_SEC_IR_PRIMARY
-                else "CANONICAL_PRIMARY_PROJECTION"
-            )
-        )
-
-        fin_metrics = {
-            "revenue": Decimal("250000000000")
-            if ticker_clean == "NVO"
-            else Decimal("95000000000")
-            if ticker_clean == "BN"
-            else Decimal("1000000000"),
-            "operating_income": Decimal("100000000000")
-            if ticker_clean == "NVO"
-            else Decimal("20000000000")
-            if ticker_clean == "BN"
-            else Decimal("250000000"),
-        }
-
-        sec1_html = (
-            f"<section id='financial-overview' data-regime='{regime.value}' data-lineage='{lineage_financials}'>"
-            f"<h2>Financial Overview ({ticker_clean})</h2>"
-            f"<p>Currency: {currency} | As-of: {as_of_date.isoformat()} | Lineage: {lineage_financials}</p>"
-            f"<ul><li>Revenue: {fin_metrics['revenue']} {currency}</li><li>Operating Income: {fin_metrics['operating_income']} {currency}</li></ul>"
-            f"</section>"
-        )
-        sec1_md = (
-            f"## Financial Overview ({ticker_clean})\n\n"
-            f"- **Regime**: {regime.value}\n"
-            f"- **Lineage**: {lineage_financials}\n"
-            f"- **Currency**: {currency}\n"
-            f"- **As-Of**: {as_of_date.isoformat()}\n"
-            f"- **Revenue**: {fin_metrics['revenue']} {currency}\n"
-            f"- **Operating Income**: {fin_metrics['operating_income']} {currency}\n"
-        )
-        sections.append(
-            RenderedSectionPayload(
-                section_id="financial-overview",
-                section_name="Financial Overview",
-                regime=regime,
-                status=SectionRenderStatus.COMPLETE,
-                source_lineage=lineage_financials,
-                currency=currency,
-                fiscal_period="FY2025",
-                metrics=fin_metrics,
-                content_html=sec1_html,
-                content_markdown=sec1_md,
-            )
-        )
-
-        # 2. DCF & Valuation Section
-        lineage_dcf = (
-            "FMP_PEER_RATIOS"
-            if regime == SourceRegime.REGIME_0_VENDOR_ONLY
-            else (
-                "INDEPENDENT_ANALYST_ESTIMATES"
-                if regime == SourceRegime.REGIME_1_SEC_IR_PRIMARY
-                else "COMBINED_INDEPENDENT_PRICES_AND_DCF"
-            )
-        )
-        dcf_metrics = {
-            "intrinsic_value": Decimal("145.50"),
-            "discount_rate": Decimal("0.095"),
-            "terminal_growth": Decimal("0.025"),
-        }
-        sec2_html = (
-            f"<section id='dcf-valuation' data-regime='{regime.value}' data-lineage='{lineage_dcf}'>"
-            f"<h2>DCF Valuation Model ({ticker_clean})</h2>"
-            f"<p>Intrinsic Value: {dcf_metrics['intrinsic_value']} {currency} | WACC: {dcf_metrics['discount_rate']:.1%}</p>"
-            f"</section>"
-        )
-        sec2_md = (
-            f"## DCF Valuation Model ({ticker_clean})\n\n"
-            f"- **Intrinsic Value**: {dcf_metrics['intrinsic_value']} {currency}\n"
-            f"- **Discount Rate**: {dcf_metrics['discount_rate']:.1%}\n"
-            f"- **Lineage**: {lineage_dcf}\n"
-        )
-        sections.append(
-            RenderedSectionPayload(
-                section_id="dcf-valuation",
-                section_name="DCF Valuation Model",
-                regime=regime,
-                status=SectionRenderStatus.COMPLETE,
-                source_lineage=lineage_dcf,
-                currency=currency,
-                fiscal_period="FY2025",
-                metrics=dcf_metrics,
-                content_html=sec2_html,
-                content_markdown=sec2_md,
-            )
-        )
-
-        # Assemble full documents
-        full_html = (
-            f"<!DOCTYPE html><html><head><title>{ticker_clean} - {regime.value}</title></head><body>"
-            + "".join(s.content_html for s in sections)
-            + "</body></html>"
-        )
-        full_md = f"# Research Report: {ticker_clean} ({regime.value})\n\n" + "\n\n".join(
-            s.content_markdown for s in sections
-        )
-        sections_dict: list[dict[str, Any]] = [s.model_dump(mode="json") for s in sections]
-        full_json = json.dumps(sections_dict, indent=2, sort_keys=True)
-
-        # Compute Pass 1 Hashes
-        html_h1 = compute_sha256_text(full_html)
-        md_h1 = compute_sha256_text(full_md)
-        json_h1 = compute_sha256_text(full_json)
-
-        # Compute Pass 2 Hashes to guarantee determinism
-        html_h2 = compute_sha256_text(full_html)
-        md_h2 = compute_sha256_text(full_md)
-        json_h2 = compute_sha256_text(full_json)
-
-        two_pass_match = (html_h1 == html_h2) and (md_h1 == md_h2) and (json_h1 == json_h2)
-        if not two_pass_match:
-            raise ValueError(
-                f"Two-pass determinism check failed for {ticker_clean} under {regime.value}"
-            )
-
-        return SingleRegimeRenderOutput(
-            ticker=ticker_clean,
-            regime=regime,
-            stratum=stratum,
-            as_of_date=as_of_date,
-            currency=currency,
-            html_sha256=html_h1,
-            markdown_sha256=md_h1,
-            sections_json_sha256=json_h1,
-            sections_count=len(sections),
-            two_pass_byte_identical=True,
-            sections=tuple(sections),
+        """Reject unbound requests rather than invent source lineage and values."""
+        raise ValueError(
+            "Single render unavailable: use the fixed-cohort route with sealed source inputs "
+            "and a verified manifest hash."
         )
 
     def render_all_regimes_for_cohort(
@@ -266,31 +135,279 @@ class ThreeRegimeDeterministicRenderer:
         tickers: list[str],
         as_of_date: date = date(2026, 4, 30),
     ) -> ThreeRegimeRenderReceipt:
-        """Render artifacts across all 3 regimes for the entire cohort."""
-        run_id = f"render_3reg_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{uuid4().hex[:8]}"
-        now_ts = datetime.now(UTC)
-        outputs: list[SingleRegimeRenderOutput] = []
-
-        for ticker in tickers:
-            for regime in SourceRegime:
-                out = self.render_ticker_regime(ticker, regime, as_of_date=as_of_date)
-                outputs.append(out)
-
-        all_two_pass = all(o.two_pass_byte_identical for o in outputs)
-        status: Literal["PASS", "HOLD", "BLOCK"] = (
-            "PASS"
-            if all_two_pass and len(outputs) == (len(tickers) * len(SourceRegime))
-            else "HOLD"
-        )
-
+        """Render the supported sealed slice, or hold an unbound request."""
+        if self.input_manifest is not None:
+            if self.expected_manifest_sha256 is None:
+                raise OfflineBoundaryError("expected manifest hash is required")
+            manifest, dependency = load_growth_manifest(
+                self.input_manifest, self.expected_manifest_sha256
+            )
+            if tuple(tickers) != FIXED_COHORT or as_of_date != manifest.as_of:
+                raise OfflineBoundaryError("requested cohort/as-of differs from sealed inputs")
+            return self._render_bound(manifest, dependency)
         return ThreeRegimeRenderReceipt(
-            run_id=run_id,
+            run_id=f"render_3reg_{uuid4().hex}",
             as_of_date=as_of_date,
             total_tickers=len(tickers),
-            total_regimes=len(SourceRegime),
-            total_render_outputs=len(outputs),
-            all_two_pass_verified=all_two_pass,
-            status=status,
-            render_outputs=tuple(outputs),
-            verified_at=now_ts,
+            total_regimes=0,
+            total_render_outputs=0,
+            all_two_pass_verified=False,
+            status="HOLD",
+            render_outputs=(),
+            reason_codes=("sealed_regime_rendering_not_implemented",),
+            verified_at=datetime.now(UTC),
         )
+
+    def _render_bound(
+        self, manifest: GrowthRenderManifest, input_dependency: DependencyRecord
+    ) -> ThreeRegimeRenderReceipt:
+        output_root = self.output_base_dir.resolve()
+        protected = (
+            manifest.database.path,
+            *(item.path for item in manifest.source_files),
+            self.input_manifest,
+        )
+        for path in protected:
+            if path is not None and (
+                path.resolve() == output_root or output_root in path.resolve().parents
+            ):
+                raise OfflineBoundaryError("output root overlaps sealed inputs")
+        source_root = Path(__file__).resolve().parents[1]
+        code_dependencies = tuple(
+            DependencyRecord(
+                logical_path="src/" + path.relative_to(source_root).as_posix(),
+                dependency_class=DependencyClass.CODE,
+                sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                size_bytes=path.stat().st_size,
+            )
+            for path in sorted(source_root.rglob("*.py"))
+        )
+        dependencies = (
+            *code_dependencies,
+            input_dependency,
+            DependencyRecord(
+                logical_path="data/sealed_growth_snapshot.db",
+                dependency_class=DependencyClass.DATABASE_SNAPSHOT,
+                sha256=manifest.database.sha256,
+                size_bytes=manifest.database.size_bytes,
+            ),
+            *(
+                DependencyRecord(
+                    logical_path=f"sources/{index}",
+                    dependency_class=DependencyClass.FILESYSTEM,
+                    sha256=item.sha256,
+                    size_bytes=item.size_bytes,
+                )
+                for index, item in enumerate(manifest.source_files)
+            ),
+        )
+        # Both passes reconstruct from the verified input graph, not a copied first output.
+        with offline_runtime_guard(output_root) as guard:
+            first = tuple(_render_growth(item) for item in project_growth_regimes(manifest))
+            second = tuple(_render_growth(item) for item in project_growth_regimes(manifest))
+            if first != second:
+                raise OfflineBoundaryError("two-pass canonical growth projections differ")
+            outputs: list[SingleRegimeRenderOutput] = []
+            for output, payload in first:
+                receipt = write_offline_artifact(
+                    output_dir=output_root / output.regime.value / output.ticker,
+                    ticker=output.ticker,
+                    as_of=manifest.as_of,
+                    payload=payload,
+                    dependencies=dependencies,
+                )
+                outputs.append(
+                    output.model_copy(
+                        update={
+                            "html_sha256": receipt.output_sha256["report.html"],
+                            "markdown_sha256": receipt.output_sha256["report.md"],
+                            "sections_json_sha256": receipt.output_sha256["sections.json"],
+                            "two_pass_byte_identical": True,
+                        }
+                    )
+                )
+        if any(
+            (
+                guard.network_attempts,
+                guard.subprocess_attempts,
+                guard.llm_attempts,
+                guard.denied_writes,
+            )
+        ):
+            raise OfflineBoundaryError("offline runtime observed a forbidden capability attempt")
+        return ThreeRegimeRenderReceipt(
+            run_id=f"growth_3reg_{input_dependency.sha256}",
+            as_of_date=manifest.as_of,
+            total_tickers=len(manifest.cohort),
+            total_regimes=3,
+            total_render_outputs=len(outputs),
+            all_two_pass_verified=True,
+            status="HOLD",
+            render_outputs=tuple(outputs),
+            verified_at=None,
+            reason_codes=(
+                "remaining_consumers_not_migrated",
+                "regime_specific_reresolution_not_implemented",
+                "full_bha30_appcontainer_attestation_not_executed",
+                "source_acquisition_completeness_unverified",
+            ),
+            input_manifest_sha256=input_dependency.sha256,
+            policy_bundle_sha256=manifest.policy_bundle_sha256,
+            scope="canonical_discovery_growth_only",
+        )
+
+
+_REGIMES = {
+    CanonicalSourceRegime.OFFICIAL_PRIMARY: SourceRegime.REGIME_1_SEC_IR_PRIMARY,
+    CanonicalSourceRegime.NORMALIZED_VENDOR_ONLY: SourceRegime.REGIME_0_VENDOR_ONLY,
+    CanonicalSourceRegime.COMBINED: SourceRegime.REGIME_2_COMBINED,
+}
+
+
+def _render_growth(
+    projection: GrowthRegimeProjection,
+) -> tuple[SingleRegimeRenderOutput, OfflineArtifactPayload]:
+    """Pure rendering of already admitted values; no repository or database reads."""
+    regime = _REGIMES[projection.regime]
+    available = projection.status == "available"
+    calculation = projection.calculation
+    currency = calculation.references[0].currency if available else None
+    period = (
+        calculation.latest_period_end.isoformat()
+        if available and calculation.latest_period_end
+        else "unavailable"
+    )
+    values = {
+        name: value
+        for name, value in (
+            ("revenue_yoy", calculation.revenue_yoy),
+            ("revenue_yoy_prior", calculation.revenue_yoy_prior),
+            ("gross_margin_ttm", calculation.gross_margin_ttm),
+        )
+        if available and value is not None
+    }
+    reasons = projection.reason_codes
+    lineage = (
+        "; ".join(
+            sorted(
+                {
+                    f"{item.source_type.value}:{item.source_document_id}"
+                    for item in projection.source_admissions
+                }
+            )
+        )
+        if available
+        else "unavailable"
+    )
+    metadata: dict[str, object] = {
+        "regime": projection.regime.value,
+        "policy_sha256": projection.contract_sha256,
+        "as_of": projection.as_of.isoformat(),
+        "status": projection.status,
+        "currency": currency,
+        "fiscal_period": period,
+        "source_lineage": lineage,
+        "reason_codes": list(reasons),
+        "decision_grade": False,
+        "supported_scope": projection.supported_scope,
+    }
+    labels = {
+        "revenue_yoy": "Revenue growth · latest quarter",
+        "revenue_yoy_prior": "Revenue growth · prior-year quarter",
+        "gross_margin_ttm": "Gross margin · trailing four quarters",
+    }
+    state = "Available projection · not decision-grade" if available else "Projection unavailable"
+    body = (
+        '<main class="l1-root"><div class="l1-tabs-wrap"><div class="tab-body">'
+        '<header class="k-card-heading"><h1 class="k-section-title">'
+        + html.escape(projection.ticker)
+        + ' — canonical growth projection</h1><p class="k-note">'
+        + html.escape(state)
+        + " · As of "
+        + projection.as_of.isoformat()
+        + '</p><p class="k-note">Scope: migrated discovery growth calculation. '
+        + "Other report, valuation and DCF content is unavailable.</p></header>"
+    )
+    if available:
+        body += (
+            '<section class="panel"><div class="table-scroll"><table class="tbl">'
+            '<thead><tr><th scope="col">Metric</th><th class="num" scope="col">Value</th></tr></thead><tbody>'
+            + "".join(
+                f'<tr><td>{html.escape(labels[key])}</td><td class="num">{value * 100:.2f}%</td></tr>'
+                for key, value in values.items()
+            )
+            + "</tbody></table></div></section>"
+        )
+    else:
+        body += '<p class="k-note">' + html.escape("; ".join(reasons)) + "</p>"
+    body += prov_drawer(
+        "Source and policy evidence",
+        '<div class="table-scroll" tabindex="0" role="region" aria-label="Source and policy evidence table"><table class="tbl"><tbody>'
+        + "".join(
+            f'<tr><th scope="row">{html.escape(key.replace("_", " "))}</th>'
+            f"<td>{html.escape(str(value))}</td></tr>"
+            for key, value in metadata.items()
+        )
+        + "</tbody></table></div>",
+    )
+    body += "</div></div></main>"
+    markdown = (
+        f"# {projection.ticker} — canonical growth projection\n\n"
+        + "\n".join(f"- {key}: {value}" for key, value in metadata.items())
+        + "\n\n"
+        + "\n".join(f"- {key}: {value}" for key, value in values.items())
+        + "\n"
+    )
+    section = RenderedSectionPayload(
+        section_id="canonical_growth",
+        section_name="Canonical discovery growth",
+        regime=regime,
+        status=SectionRenderStatus.DEGRADED if available else SectionRenderStatus.UNAVAILABLE,
+        source_lineage=lineage,
+        currency=currency,
+        fiscal_period=period,
+        metrics=values,
+        content_html=body,
+        content_markdown=markdown,
+    )
+    sections: dict[str, object] = {
+        "ticker": projection.ticker,
+        "metadata": metadata,
+        "sections": [section.model_dump(mode="json")],
+        "unavailable_consumers": list(projection.excluded_consumers),
+    }
+    payload = OfflineArtifactPayload(
+        html=render_offline_document(body, title="Canonical growth projection"),
+        markdown=markdown,
+        sections=sections,
+        status={
+            "scope": projection.supported_scope,
+            "decision_grade": False,
+            "status": projection.status,
+            "reason_codes": list(reasons),
+        },
+        numeric_provenance={
+            "metadata": metadata,
+            "calculation": calculation.model_dump(mode="json") if available else None,
+            "source_admissions": [
+                item.model_dump(mode="json") for item in projection.source_admissions
+            ]
+            if available
+            else [],
+        },
+    )
+    digest = hashlib.sha256(canonical_bytes(sections)).hexdigest()
+    return SingleRegimeRenderOutput(
+        ticker=projection.ticker,
+        regime=regime,
+        stratum=None,
+        as_of_date=projection.as_of,
+        currency=currency,
+        html_sha256=hashlib.sha256(payload.html.encode()).hexdigest(),
+        markdown_sha256=hashlib.sha256(payload.markdown.encode()).hexdigest(),
+        sections_json_sha256=digest,
+        sections_count=1,
+        sections=(section,),
+        scope=projection.supported_scope,
+        reason_codes=reasons,
+    ), payload

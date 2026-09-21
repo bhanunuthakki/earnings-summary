@@ -17,7 +17,6 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -63,6 +62,10 @@ CREATE TABLE kpi_facts (
     period_end TIMESTAMP NOT NULL, fiscal_period_type TEXT NOT NULL,
     kpi_definition_id INTEGER NOT NULL, value TEXT NOT NULL,
     unit TEXT NOT NULL DEFAULT 'actual', source_doc_id INTEGER NOT NULL
+);
+CREATE TABLE transcripts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+    document_id INTEGER, fiscal_period_type TEXT, period_end TIMESTAMP
 );
 CREATE TABLE validation_issues (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
@@ -155,22 +158,19 @@ def test_canonical_loader_picks_sec_despite_lower_id(repo: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cockpit_fundamentals_uses_tier_winner(repo: Path) -> None:
+def test_cockpit_fundamentals_rejects_legacy_tier_projection(repo: Path) -> None:
     from cockpit_fundamentals import compute_from_db
 
     conn = _conn(repo)
     try:
-        # rev_yoy needs a prior-year quarter; seed one SEC row a year earlier so
-        # the YoY is computable and anchored on the SEC value.
+        # A tempting legacy tier winner cannot be represented as canonical
+        # financial evidence and therefore cannot populate the cockpit.
         conn.execute(
             "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, "
             "value, source_doc_id) VALUES ('TST', '2025-03-31', 'Q1', 'revenue', '80000', 1)"
         )
         conn.commit()
-        out = compute_from_db(conn)
-        rev_yoy, _margin = out["TST"]
-        # SEC latest = 100000 vs prior 80000 → +25%. An FMP pick (90000) → +12.5%.
-        assert rev_yoy == pytest.approx(25.0)
+        assert compute_from_db(conn) == {}
     finally:
         conn.close()
 
@@ -181,26 +181,28 @@ def test_cockpit_fundamentals_uses_tier_winner(repo: Path) -> None:
 
 
 def test_financials_quarterly_uses_tier_winner(repo: Path) -> None:
-    import report.sections.financials as fin_section
+    from report.sections.financials import build_legacy_shadow
 
     conn = _conn(repo)
     try:
-        rows = fin_section._load_quarterly(conn, "TST")  # pyright: ignore[reportPrivateUsage]
-        q = {str(r["period_end"])[:10]: r["revenue"] for r in rows}
-        assert float(cast("float", q["2026-03-31"])) == _SEC_Q_REVENUE
+        section = build_legacy_shadow("TST", repo, conn=conn)
+        revenue = next(item for item in section.line_items if item.line_item == "Revenue")
+        q = dict(zip(revenue.quarters, revenue.values, strict=True))
+        assert q["2026 Q1"] == _SEC_Q_REVENUE / 1_000_000
     finally:
         conn.close()
 
 
 def test_financials_annual_uses_tier_winner_and_ignores_q4_dualwrite(repo: Path) -> None:
-    import report.sections.financials as fin_section
+    from report.sections.financials import build_legacy_shadow
 
     conn = _conn(repo)
     try:
-        rows = fin_section._load_annual(conn, "TST")  # pyright: ignore[reportPrivateUsage]
-        a = {str(r["period_end"])[:10]: r["revenue"] for r in rows}
+        section = build_legacy_shadow("TST", repo, conn=conn)
+        revenue = next(item for item in section.annual_line_items if item.line_item == "Revenue")
+        a = dict(zip(revenue.years, revenue.values, strict=True))
         # FY axis picks the SEC FY row, NOT the FMP FY row and NOT the Q4 dual-write.
-        assert float(cast("float", a["2025-12-31"])) == _SEC_FY_REVENUE
+        assert a[2025] == _SEC_FY_REVENUE / 1_000_000
     finally:
         conn.close()
 
@@ -211,18 +213,22 @@ def test_financials_annual_uses_tier_winner_and_ignores_q4_dualwrite(repo: Path)
 
 
 def test_grounding_fin_item_surfaces_sec_provenance(repo: Path) -> None:
-    import ask.grounding as grounding
+    from ask.grounding import gather_evidence
 
     conn = _conn(repo)
     try:
-        item = grounding._fact_ref_fin_item(  # pyright: ignore[reportPrivateUsage]
-            conn, "TST", "revenue", "Q1"
+        items = gather_evidence(
+            "fin:TST:revenue:Q1",
+            repo_root=repo,
+            db_path=repo / "data" / "portfolio.db",
+            scope_tickers=["TST"],
+            strict=True,
         )
-        assert item is not None
+        item = next(item for item in items if item.fact_ref == "fin:TST:revenue:Q1")
         # The winning row's document must be the SEC doc (id 1), not the FMP doc.
-        assert item["doc_id"] == 1
+        assert item.doc_id == 1
         src = conn.execute(
-            "SELECT source_type FROM documents WHERE id = ?", (item["doc_id"],)
+            "SELECT source_type FROM documents WHERE id = ?", (item.doc_id,)
         ).fetchone()
         assert src["source_type"] == "sec_xbrl"
     finally:
@@ -235,17 +241,11 @@ def test_grounding_fin_item_surfaces_sec_provenance(repo: Path) -> None:
 
 
 def test_fmp_derived_fetch_uses_canonical_winners_per_cell(repo: Path) -> None:
-    """Derived inputs share the canonical source-resolution contract.
-
-    SEC wins the revenue collision, while the later FMP document supplies the
-    other statement cells that have no SEC observation.
-    """
-    import compute.fmp_derived_kpis as fmp_derived
+    """The public canonical series query gives each derivation input its tier winner."""
+    from timeseries.loaders import load_financial_fact_provenance, load_financial_series
 
     conn = _conn(repo)
     try:
-        # A SECOND FMP document (id 3, higher than doc 2) — a re-fetch that
-        # restated the quarter. All four required line items under BOTH FMP docs.
         conn.execute(
             "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256, "
             "fetched_at, fetch_status, source_quality_tier) VALUES "
@@ -253,37 +253,44 @@ def test_fmp_derived_fetch_uses_canonical_winners_per_cell(repo: Path) -> None:
             "'data/historical/fmp/TST_income_statement_quarterly.json', 'c', '2026-05-01', 'ok', "
             "'fmp_normalized')"
         )
-        # doc 2 = older FMP (lower id), doc 3 = newer FMP (higher id, should win).
-        for li, old_v, new_v in [
+        for line_item, old_value, new_value in [
             ("revenue", 90_000, 95_000),
-            ("operating_income", 18000, 19000),
-            ("net_income", 13000, 14000),
-            ("gross_profit", 36000, 37000),
+            ("operating_income", 18_000, 19_000),
+            ("net_income", 13_000, 14_000),
+            ("gross_profit", 36_000, 37_000),
         ]:
-            conn.execute(
-                "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, "
-                "value, source_doc_id) VALUES ('TST', '2026-03-31', 'Q1', ?, ?, 2)",
-                (li, str(old_v)),
-            )
-            conn.execute(
-                "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, "
-                "value, source_doc_id) VALUES ('TST', '2026-03-31', 'Q1', ?, ?, 3)",
-                (li, str(new_v)),
-            )
+            for doc_id, value in ((2, old_value), (3, new_value)):
+                conn.execute(
+                    "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, "
+                    "value, source_doc_id) VALUES ('TST', '2026-03-31', 'Q1', ?, ?, ?)",
+                    (line_item, str(value), doc_id),
+                )
         conn.commit()
-        facts, _degradations = fmp_derived._fetch_quarterly_facts(  # pyright: ignore[reportPrivateUsage]
-            conn, "TST"
-        )
-        q1 = [f for f in facts if str(f.period_end)[:10] == "2026-03-31"]
-        assert len(q1) == 1
-        f = q1[0]
-        assert int(f.revenue) == _SEC_Q_REVENUE
-        assert int(f.operating_income) == 19000
-        assert int(f.net_income) == 14000
-        assert int(f.gross_profit) == 37000
-        assert f.source_doc_id == 1
     finally:
         conn.close()
+
+    db_path = repo / "data" / "portfolio.db"
+    selected = {
+        line_item: next(
+            observation
+            for observation in load_financial_series("TST", line_item, db_path=db_path)
+            if str(observation.period_end)[:10] == "2026-03-31"
+        )
+        for line_item in ("revenue", "operating_income", "net_income", "gross_profit")
+    }
+    assert selected["revenue"].value == _SEC_Q_REVENUE
+    assert selected["operating_income"].value == 19_000
+    assert selected["net_income"].value == 14_000
+    assert selected["gross_profit"].value == 37_000
+    provenance = {
+        line_item: load_financial_fact_provenance("TST", line_item, db_path=db_path)
+        for line_item in selected
+    }
+    assert provenance["revenue"] is not None
+    assert provenance["operating_income"] is not None
+    assert provenance["net_income"] is not None
+    assert provenance["gross_profit"] is not None
+    assert {item["source_doc_id"] for item in provenance.values() if item is not None} == {1, 3}
 
 
 # ---------------------------------------------------------------------------

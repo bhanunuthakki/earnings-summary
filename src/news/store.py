@@ -21,6 +21,7 @@ import re
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -68,6 +69,10 @@ SOURCE_FEED_YF_NEWS = "yf_news"
 SOURCE_FEED_EDGAR_S1_WATCH = "edgar_s1_watch"
 
 
+class NewsFeedUnavailableError(RuntimeError):
+    """A failed collection is not an empty successful news response."""
+
+
 class NewsRow(BaseModel):
     """A validated news row ready to persist — the single contract gate for the
     `news` table. Both the FMP and WebSearch+Opus feeds map into this.
@@ -89,6 +94,20 @@ class NewsRow(BaseModel):
     snippet: str | None = None
     source: str | None = None
     source_feed: str  # SOURCE_FEED_FMP | SOURCE_FEED_WEBSEARCH
+
+    @field_validator("url")
+    @classmethod
+    def _http_source_url(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+            or any(char.isspace() for char in value)
+        ):
+            raise ValueError("news source URL must be an HTTP(S) URL without credentials")
+        return value
 
     @field_validator("published_at")
     @classmethod

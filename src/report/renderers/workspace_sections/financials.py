@@ -381,10 +381,22 @@ def _validation_panel(body: StringIO, fin: FinancialsSection, seg: SegmentsSecti
             reason="cannot tie · labels misaligned",
         )
         return
+    if not revenue.unit.endswith(" millions") or any(s.unit != revenue.unit for s in real):
+        _empty_panel(
+            body,
+            "Numeric tie-out: segments ↔ revenue",
+            "Declared currency or scale differs; numeric comparison is unavailable.",
+            reason="cannot tie · units differ",
+        )
+        return
     diffs: list[tuple[str, float | None]] = []
     for i, lbl in enumerate(fin.quarter_labels):
-        total = revenue.values[i]
-        if total is None:
+        total = revenue.values[i] if i < len(revenue.values) else None
+        if (
+            total is None
+            or total == 0
+            or any(i >= len(s.values) or s.values[i] is None for s in real)
+        ):
             diffs.append((lbl, None))
             continue
         seg_sum = _sum_segments_at(real, i)
@@ -398,10 +410,16 @@ def _validation_panel(body: StringIO, fin: FinancialsSection, seg: SegmentsSecti
         default=None,
     )
     if worst is None:
+        _empty_panel(
+            body,
+            "Numeric tie-out: segments ↔ revenue",
+            "No complete, nonzero observation pair is available.",
+            reason="numeric tie-out unavailable",
+        )
         return
     if worst <= 0.5:
         status_cls = "k-chip-ok"
-        status_text = f"ties to FMP (max drift {worst:.2f}%)"
+        status_text = f"numeric match (max drift {worst:.2f}%)"
     elif worst <= 2.0:
         status_cls = "k-chip-warn"
         status_text = f"minor drift (max {worst:.2f}%)"
@@ -410,9 +428,13 @@ def _validation_panel(body: StringIO, fin: FinancialsSection, seg: SegmentsSecti
         status_text = f"DRIFT — segments off by up to {worst:.1f}%"
     body.write(
         _panel_head(
-            "Validation: segments ↔ consolidated revenue",
+            "Numeric tie-out: segments ↔ consolidated revenue",
             sub_html=f'<span class="k-chip k-chip-mono {status_cls}">{_esc(status_text)}</span>',
         )
+    )
+    body.write(
+        '<div class="prose-pad">Source, definition, and exact fiscal-period parity are unverified; '
+        "this compares displayed numbers only.</div>"
     )
     # Compact per-quarter detail table — only show drift > 0.1% to keep it scannable.
     body.write('<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>')
@@ -594,6 +616,13 @@ def _line_items_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
         rows.append(
             MatrixRow(
                 name=li.line_item,
+                comparison_eligible_edges=li.comparison_eligible_edges,
+                comparison_period_ends=(
+                    li.comparison_period_ends
+                    if li.comparison_period_ends is not None
+                    or fin.canonical_financial_table is None
+                    else []
+                ),
                 levels=list(levels),
                 unit=li.unit,
                 cell_titles=cell_titles,
@@ -660,23 +689,31 @@ def _line_items_levels_panel(body: StringIO, fin: FinancialsSection, seg: Segmen
             li.line_item.lower() == "revenue"
             and bool(real_segments)
             and seg.quarter_labels == fin.quarter_labels
+            and all(s.unit == li.unit for s in real_segments)
         )
         row_id = f"fin-row-{_esc(li.line_item.lower().replace(' ', '-'))}"
         chev = chr(0x25B6) if drillable else ""
         cls = "fin-row drillable" if drillable else "fin-row"
         body.write(
             f'<tr class="{cls}" data-drill-target="{row_id}">'
-            f'<td><span class="fin-chev">{chev}</span> {_esc(li.line_item)}</td>'
+            f'<td><span class="fin-chev">{chev}</span> {_esc(li.line_item)}'
+            f"{' (' + _esc(li.unit) + ')' if '/share' in li.unit else ''}</td>"
         )
         for v in li.values[-12:]:
             if v is None:
                 body.write('<td class="num muted">—</td>')
-            elif li.unit == "USD":
+            elif li.unit == fin.currency or li.unit in {
+                f"{fin.currency}/share",
+                f"{fin.currency}/shares",
+            }:
                 body.write(f'<td class="num">{v:.2f}</td>')
-            elif v < 0:
-                body.write(f'<td class="num neg">({abs(v) / 1000:.1f})</td>')
+            elif li.unit == f"{fin.currency} millions":
+                if v < 0:
+                    body.write(f'<td class="num neg">({abs(v):.1f})</td>')
+                else:
+                    body.write(f'<td class="num">{v:.1f}</td>')
             else:
-                body.write(f'<td class="num">{v / 1000:.1f}</td>')
+                body.write('<td class="num muted">—</td>')
         g = li.growth
         body.write(_growth_cell(g.qoq))
         body.write(_growth_cell(g.yoy))
@@ -708,7 +745,7 @@ def _segment_drill_table(
             if v is None:
                 body.write('<td class="num muted">—</td>')
             else:
-                body.write(f'<td class="num">{v / 1000:.1f}</td>')
+                body.write(f'<td class="num">{v:.1f}</td>')
         body.write("</tr>")
     # Sum row.
     body.write('<tr class="fin-sum-row"><td><strong>Σ segments</strong></td>')
@@ -717,7 +754,7 @@ def _segment_drill_table(
             body.write('<td class="num muted">—</td>')
             continue
         total = _sum_segments_at(real_segments, i)
-        body.write(f'<td class="num"><strong>{total / 1000:.1f}</strong></td>')
+        body.write(f'<td class="num"><strong>{total:.1f}</strong></td>')
     body.write("</tr></tbody></table>")
 
 

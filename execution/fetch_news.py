@@ -47,25 +47,36 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-for _p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import execution.fetch_edgar_news as edgarnews  # noqa: E402
-import execution.fetch_fmp_news as fmpnews  # noqa: E402
-import execution.fetch_yf_grades as yfgrades  # noqa: E402
-import execution.fetch_yf_news as yfnews  # noqa: E402
-from competitive.sec_watch import check_s1_watch, load_watches  # noqa: E402
-from db import DB_PATH  # noqa: E402
-from execution.fetch_news_websearch import fetch_websearch_news_for_ticker  # noqa: E402
-from llm.cli import is_hard_stop  # noqa: E402
-from news.store import NewsRow, drop_duplicate_stories, upsert_news_rows  # noqa: E402
-from signals.quality import score_unscored_signals  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+try:
+    import execution.fetch_edgar_news as edgarnews
+    import execution.fetch_fmp_news as fmpnews
+    import execution.fetch_yf_grades as yfgrades
+    import execution.fetch_yf_news as yfnews
+    from execution.fetch_news_websearch import fetch_websearch_news_for_ticker
+except ModuleNotFoundError:
+    import fetch_edgar_news as edgarnews
+    import fetch_fmp_news as fmpnews
+    import fetch_yf_grades as yfgrades
+    import fetch_yf_news as yfnews
+    from fetch_news_websearch import fetch_websearch_news_for_ticker
+from competitive.sec_watch import check_s1_watch, load_watches
+from db import DB_PATH
+from llm.cli import is_hard_stop
+from news.store import (
+    NewsFeedUnavailableError,
+    NewsRow,
+    drop_duplicate_stories,
+    upsert_news_rows,
+)
+from signals.quality import score_unscored_signals
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 SOURCES = ("fmp", "websearch", "auto")
 DEFAULT_SOURCE = "auto"
@@ -210,8 +221,8 @@ def _safe_yf_news(ticker: str, *, days: int) -> list[NewsRow]:
     try:
         return yfnews.fetch_news_for_ticker(ticker, days=days)
     except Exception as exc:
-        _log("yf_news_failed", ticker=ticker, error=f"{type(exc).__name__}: {exc}"[:200])
-        return []
+        _log("yf_news_failed", ticker=ticker, error_type=type(exc).__name__)
+        raise NewsFeedUnavailableError("yf_news collection unavailable") from None
 
 
 def _collect_additive(
@@ -222,6 +233,7 @@ def _collect_additive(
     skip_grades: bool,
     skip_s1_watch: bool,
     skip_yf_news: bool = False,
+    unavailable_feeds: list[str] | None = None,
 ) -> list[NewsRow]:
     """The additive non-FMP feeds for the whole book: EDGAR sequentially (its
     module throttles to honor SEC's 10 req/s policy), grades threaded (plain
@@ -245,7 +257,11 @@ def _collect_additive(
                 executor.submit(_safe_yf_news, ticker.upper(), days=days) for ticker in tickers
             ]
             for future in futures:
-                rows.extend(future.result())
+                try:
+                    rows.extend(future.result())
+                except NewsFeedUnavailableError:
+                    if unavailable_feeds is not None:
+                        unavailable_feeds.append("yf_news")
     if not skip_s1_watch:
         rows.extend(_safe_s1_watch())
     return rows
@@ -427,9 +443,9 @@ def run(
     websearch_scope: str = "portfolio",
 ) -> int:
     """Collect every ticker under the source policy, add the additive feeds,
-    persisting INCREMENTALLY throughout. Returns 0 normally; 1 only on a
-    structural failure (the `news` table absent) — per-ticker feed hiccups are
-    logged and degraded, so the morning pipeline's trigger stage still runs.
+    persisting INCREMENTALLY throughout. Returns 0 for a completed attempt,
+    1 for a persistence failure, and 2 when Yahoo collection was unavailable.
+    Valid rows survive partial collection failures.
 
     Shape (2026-07-19 review): the old collect-everything-then-one-upsert run
     was killed daily at the stage budget BEFORE its single persist — weeks of
@@ -462,6 +478,7 @@ def run(
     inserted_total = 0
     deduped_total = 0
     persist_failures = 0
+    unavailable_feeds: list[str] = []
 
     def _persist(label: str, rows: list[NewsRow]) -> None:
         nonlocal inserted_total, deduped_total, persist_failures
@@ -498,6 +515,7 @@ def run(
             skip_grades=skip_grades,
             skip_yf_news=skip_yf_news,
             skip_s1_watch=skip_s1_watch,
+            unavailable_feeds=unavailable_feeds,
         )
         # Additive feeds supplement, never duplicate: drop any story the policy
         # rows (or the table) already carry under another url.
@@ -516,9 +534,13 @@ def run(
         inserted=inserted_total,
         deduped=deduped_total,
         persist_failures=persist_failures,
+        unavailable_feeds=sorted(set(unavailable_feeds)),
+        collection_status="partial"
+        if unavailable_feeds or persist_failures
+        else "completed_attempt",
     )
     _fire_deadman_if_stale(db_path, tickers_n=len(tickers), inserted_total=inserted_total)
-    return 1 if persist_failures and not inserted_total else 0
+    return 1 if persist_failures else 2 if unavailable_feeds else 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

@@ -143,7 +143,7 @@ def test_garp_grade_graded_between() -> None:
 def test_garp_grade_no_metrics() -> None:
     score, reason = garp_grade(None)
     assert score == 0.0
-    assert "no cached fundamentals" in reason
+    assert "no canonical fundamentals" in reason
 
 
 def test_garp_grade_reason_always_carries_the_proxy_disclosure() -> None:

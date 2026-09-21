@@ -1,27 +1,23 @@
-"""§1 (eval flavor) — 3y quick-categorization data table for new-name screening.
-
-Reads the `metrics` and `ratios` views for 3 fiscal years + TTM, plus a 4th
-prior FY to anchor the 3y CAGR baseline. Pulls company metadata (name from
-the DB, sector/market-cap/current-price from the FMP `profile.json` cache
-when present). No LLM in this section.
-
-Rendered in §1 position only when `flavor == ReportFlavor.EVALUATION`.
-"""
+"""Canonical quick-categorization snapshot for evaluation reports."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
+from collections.abc import Iterable
+from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
-from typing import cast
 
-from report import metrics_view
-from report.models import (
-    EvaluationSnapshotSection,
-    QuickCategorizationRow,
-    SectionStatus,
+from report.models import EvaluationSnapshotSection, QuickCategorizationRow, SectionStatus
+from report.sections._common import missing, open_repo_db
+from sources.discovery_market import read_market_context
+from sources.report_financials import (
+    FinancialTableCell,
+    FinancialTableProjection,
+    read_financial_table,
 )
-from report.sections._common import has_table, missing, open_repo_db
+
+_FRACTION_TO_PCT = 0.01
 
 
 def build(
@@ -29,325 +25,438 @@ def build(
     repo_root: Path,
     *,
     conn: sqlite3.Connection | None = None,
+    as_of: datetime | None = None,
 ) -> EvaluationSnapshotSection:
+    """Build from one admitted financial projection at one aware cutoff."""
     ticker = ticker.upper()
+    cutoff = datetime.now(UTC) if as_of is None else as_of
+    if cutoff.tzinfo is None:
+        raise ValueError("evaluation snapshot cutoff must be timezone-aware")
     db_conn = open_repo_db(repo_root, conn)
     if db_conn is None:
-        return _missing(
-            ticker,
-            stage="PERSIST(init_db)",
-            fix_command="alembic upgrade head",
-            detail="No portfolio.db at data/portfolio.db.",
+        return _missing(ticker, "PERSIST(canonical_financials)", "Configure the canonical database")
+    try:
+        projection = read_financial_table(db_conn, ticker, as_of=cutoff)
+        market = read_market_context(
+            db_conn, repo_root / "data" / "historical" / "fmp", ticker, as_of=cutoff
         )
-
-    if not has_table(db_conn, "metrics") or not has_table(db_conn, "ratios"):
+    finally:
         if conn is None:
             db_conn.close()
-        return _missing(
-            ticker,
-            stage="PERSIST(metrics_views)",
-            fix_command="alembic upgrade head",
-            detail="The metrics + ratios views are missing. Migration 0012 creates them.",
+    rows, years, manifest, unavailable = _build_rows(projection)
+    if not rows:
+        return EvaluationSnapshotSection(
+            status=SectionStatus.MISSING_DATA,
+            missing=missing(
+                stage="INGEST(canonical_financial_facts)",
+                fix_command=f"python execution/onboard_ticker.py --ticker {ticker}",
+                detail="No admitted annual financial cells are available at the report cutoff.",
+            ),
+            ticker=ticker,
+            company_name=market.name,
+            sector=market.sector,
+            canonical_financial_table=projection,
+            market_context=market,
         )
-
-    # 4 FY rows so the 3y CAGR baseline (LFY-3) is available, plus TTM.
-    annual_metrics = _load_annual(db_conn, ticker, table="metrics", n=4)
-    annual_ratios = _load_annual(db_conn, ticker, table="ratios", n=4)
-    ttm_metrics = _load_ttm(db_conn, ticker, table="metrics")
-    ttm_ratios = _load_ttm(db_conn, ticker, table="ratios")
-    company_name = _load_company_name(db_conn, ticker)
-    if conn is None:
-        db_conn.close()
-
-    if not annual_metrics:
-        return _missing(
-            ticker,
-            stage="INGEST(financial_facts)",
-            fix_command=f"python execution/onboard_ticker.py --ticker {ticker}",
-            detail="No annual rows in the metrics view for this ticker.",
-        )
-
-    sector, market_cap, current_price = _load_profile_fields(repo_root, ticker)
-
-    fiscal_years = [_safe_int(r["fiscal_year"]) for r in annual_metrics[-3:]]
-    rows = _build_rows(annual_metrics, annual_ratios, ttm_metrics, ttm_ratios)
-
     return EvaluationSnapshotSection(
         status=SectionStatus.OK,
         ticker=ticker,
-        company_name=company_name,
-        sector=sector,
-        market_cap=market_cap,
-        current_price=current_price,
+        company_name=market.name,
+        sector=market.sector,
+        market_cap=float(market.market_cap)
+        if market.status == "available" and market.market_cap is not None
+        else None,
+        current_price=float(market.price)
+        if market.status == "available" and market.price is not None
+        else None,
         rows=rows,
-        fiscal_years=fiscal_years,
+        fiscal_years=years,
+        canonical_financial_table=projection,
+        source_manifest=manifest,
+        unavailable_reasons=unavailable,
+        market_context=market,
     )
-
-
-# ---------------------------------------------------------------------------
-# DB loaders
-# ---------------------------------------------------------------------------
-
-
-def _load_annual(
-    conn: sqlite3.Connection, ticker: str, table: str, n: int
-) -> list[dict[str, object]]:
-    """Up to N most-recent FY rows from the ``metrics`` / ``ratios`` view for
-    this ticker, oldest first.
-
-    Routed through ``report.metrics_view``, which inlines the view's dedup+pivot
-    with ``WHERE ticker = ?`` *inside* the ROW_NUMBER partition — so cost scales
-    with this ticker's facts, not the whole financial_facts table (the global
-    views can't push the ticker filter past the window). Row shape is identical.
-    """
-    return metrics_view.annual_rows(conn, ticker, table, n)
-
-
-def _load_ttm(conn: sqlite3.Connection, ticker: str, table: str) -> dict[str, object] | None:
-    """Most-recent TTM row for this ticker (ticker-scoped; see ``_load_annual``)."""
-    return metrics_view.ttm_row(conn, ticker, table)
-
-
-def _load_company_name(conn: sqlite3.Connection, ticker: str) -> str | None:
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM tracked_companies WHERE ticker = ?", (ticker,))
-    row = cursor.fetchone()
-    if row is None:
-        return None
-    return str(row["name"]) if row["name"] is not None else None
-
-
-def _load_profile_fields(
-    repo_root: Path, ticker: str
-) -> tuple[str | None, float | None, float | None]:
-    """Read sector / market_cap / current_price from FMP profile.json cache.
-
-    All three are optional. If the file or any field is missing, returns None
-    for that field — the section still renders fine.
-    """
-    path = repo_root / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
-    if not path.exists():
-        return (None, None, None)
-    try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return (None, None, None)
-    # FMP profile endpoint returns a list of one object. Cast at the JSON
-    # boundary — pyright cannot narrow `json.loads` output past `object`.
-    rec: dict[str, object] | None = None
-    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        rec = cast("dict[str, object]", payload[0])
-    elif isinstance(payload, dict):
-        rec = cast("dict[str, object]", payload)
-    if rec is None:
-        return (None, None, None)
-    sector = rec.get("sector")
-    market_cap = rec.get("marketCap") or rec.get("mktCap")
-    current_price = rec.get("price")
-    return (
-        sector if isinstance(sector, str) else None,
-        float(market_cap) if isinstance(market_cap, (int, float)) else None,
-        float(current_price) if isinstance(current_price, (int, float)) else None,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Row assembly
-# ---------------------------------------------------------------------------
-
-
-_USD_M = 1_000_000.0
-# The ratios view stores FRACTIONS (operating_income / revenue → 0.062); the
-# display contract is percent POINTS (6.2 + unit "%"). _scale divides, so the
-# fraction→points conversion is a divisor of 0.01. Without this every ratio row
-# rendered 100x too small ("0.1%" for a 6.2% margin).
-_FRACTION_TO_PCT = 0.01
 
 
 def _build_rows(
-    annual_metrics: list[dict[str, object]],
-    annual_ratios: list[dict[str, object]],
-    ttm_metrics: dict[str, object] | None,
-    ttm_ratios: dict[str, object] | None,
-) -> list[QuickCategorizationRow]:
-    """Map (metrics, ratios, ttm_*) into 5 display rows.
+    projection: FinancialTableProjection,
+) -> tuple[
+    list[QuickCategorizationRow],
+    list[int],
+    dict[str, tuple[str, ...]],
+    dict[str, tuple[str, ...]],
+]:
+    annual = _annual_cells(projection.cells)
+    all_years = sorted({int(cell.display_coordinate) for cell in annual if cell.display_coordinate})
+    if not all_years:
+        return [], [], {}, {}
+    latest_year = all_years[-1]
+    # Calendar labels are not continuity evidence. Keep fixed display slots so
+    # a sparse history cannot shift a lone FY into the LFY-2 column.
+    years = [latest_year - 2, latest_year - 1, latest_year]
+    annual_by_concept = _by_coordinate(annual)
+    quarterly_by_concept = _by_coordinate(_quarterly_cells(projection.cells))
+    currency = _currency(annual) or "Currency"
+    manifest: dict[str, tuple[str, ...]] = {}
+    unavailable: dict[str, tuple[str, ...]] = {}
+    return (
+        [
+            _absolute_row(
+                "Revenue",
+                f"{currency} M",
+                0,
+                "revenue",
+                years,
+                annual_by_concept,
+                quarterly_by_concept,
+                manifest,
+                unavailable,
+            ),
+            _absolute_row(
+                "EPS diluted",
+                currency,
+                2,
+                "eps_diluted",
+                years,
+                annual_by_concept,
+                quarterly_by_concept,
+                manifest,
+                unavailable,
+                allow_ttm=False,
+            ),
+            _margin_row(
+                "Operating margin",
+                "operating_income",
+                years,
+                annual_by_concept,
+                quarterly_by_concept,
+                manifest,
+                unavailable,
+            ),
+            _margin_row(
+                "FCF margin",
+                "free_cash_flow",
+                years,
+                annual_by_concept,
+                quarterly_by_concept,
+                manifest,
+                unavailable,
+            ),
+            QuickCategorizationRow(metric="ROE", unit="%", digits=1),
+        ],
+        years,
+        manifest,
+        {
+            **unavailable,
+            **{
+                f"ROE {coordinate}": ("canonical_equity_fact_unavailable",)
+                for coordinate in (*[f"FY{year}" for year in years], "TTM", "3y CAGR")
+            },
+        },
+    )
 
-    Caller has already trimmed annual_* to at most 4 rows (LFY-3..LFY). We use
-    LFY-3 as the CAGR baseline for absolute series and drop it from display.
-    """
-    by_period_m: dict[int, dict[str, object]] = {
-        _safe_int(r["fiscal_year"]): r for r in annual_metrics
-    }
-    by_period_r: dict[int, dict[str, object]] = {
-        _safe_int(r["fiscal_year"]): r for r in annual_ratios
-    }
-    years = sorted(by_period_m.keys())
-    if not years:
-        return []
-    display_years = years[-3:]
-    cagr_baseline_year = years[-4] if len(years) >= 4 else None
 
-    return [
-        _abs_row(
-            "Revenue",
-            "USD M",
-            0,
-            by_period_m,
-            ttm_metrics,
-            "revenue",
-            display_years,
-            cagr_baseline_year,
-            scale=_USD_M,
-        ),
-        _abs_row(
-            "EPS diluted",
-            "USD",
-            2,
-            by_period_m,
-            ttm_metrics,
-            "eps_diluted",
-            display_years,
-            cagr_baseline_year,
-            scale=1.0,
-        ),
-        _ratio_row(
-            "Operating margin",
-            "%",
-            1,
-            by_period_r,
-            ttm_ratios,
-            "operating_margin",
-            display_years,
-        ),
-        _ratio_row(
-            "FCF margin",
-            "%",
-            1,
-            by_period_r,
-            ttm_ratios,
-            "fcf_margin",
-            display_years,
-        ),
-        _ratio_row(
-            "ROE",
-            "%",
-            1,
-            by_period_r,
-            ttm_ratios,
-            "roe",
-            display_years,
-        ),
-    ]
+def _annual_cells(cells: Iterable[FinancialTableCell]) -> list[FinancialTableCell]:
+    return [cell for cell in cells if cell.available and cell.cadence == "annual"]
 
 
-def _abs_row(
+def _quarterly_cells(cells: Iterable[FinancialTableCell]) -> list[FinancialTableCell]:
+    return [cell for cell in cells if cell.available and cell.cadence == "quarterly"]
+
+
+def _by_coordinate(cells: Iterable[FinancialTableCell]) -> dict[str, dict[str, FinancialTableCell]]:
+    result: dict[str, dict[str, FinancialTableCell]] = {}
+    for cell in cells:
+        if cell.display_coordinate is not None:
+            result.setdefault(cell.concept, {})[cell.display_coordinate] = cell
+    return result
+
+
+def _absolute_row(
     metric: str,
     unit: str,
     digits: int,
-    by_period: dict[int, dict[str, object]],
-    ttm: dict[str, object] | None,
-    col: str,
-    display_years: list[int],
-    cagr_baseline_year: int | None,
-    scale: float,
+    concept: str,
+    years: list[int],
+    annual: dict[str, dict[str, FinancialTableCell]],
+    quarterly: dict[str, dict[str, FinancialTableCell]],
+    manifest: dict[str, tuple[str, ...]],
+    unavailable: dict[str, tuple[str, ...]],
+    *,
+    allow_ttm: bool = True,
 ) -> QuickCategorizationRow:
-    """Build a row for an absolute-value series (Revenue, EPS). CAGR included."""
-    lfy_minus_2 = _annual_scaled(by_period, _at(display_years, 0), col, scale)
-    lfy_minus_1 = _annual_scaled(by_period, _at(display_years, 1), col, scale)
-    lfy = _annual_scaled(by_period, _at(display_years, 2), col, scale)
-    baseline = _annual_scaled(by_period, cagr_baseline_year, col, scale)
+    cells = annual.get(concept, {})
+    values = [_cell_value(cells.get(str(year))) for year in years]
+    ids = [_cell_id(cells.get(str(year))) for year in years]
+    for year, cell_id in zip(years, ids, strict=True):
+        if cell_id:
+            manifest[f"{metric} FY{year}"] = (cell_id,)
+        else:
+            unavailable[f"{metric} FY{year}"] = _coordinate_reasons(cells.get(str(year)))
+    baseline_year = years[0] - 1 if len(years) == 3 else None
+    baseline = _cell_value(cells.get(str(baseline_year))) if baseline_year is not None else None
+    cagr = (
+        _cagr_3y(baseline, values[-1])
+        if _annual_span_supported(cells, baseline_year, years[-1])
+        else None
+    )
+    baseline_id = _cell_id(cells.get(str(baseline_year)))
+    if cagr is not None and baseline_id and ids[-1]:
+        manifest[f"{metric} 3y CAGR"] = (baseline_id, ids[-1])
+    else:
+        unavailable[f"{metric} 3y CAGR"] = ("four_contiguous_compatible_fiscal_years_unavailable",)
+    ttm, ttm_ids = _ttm_sum(quarterly.get(concept, {})) if allow_ttm else (None, ())
+    if ttm_ids:
+        manifest[f"{metric} TTM"] = ttm_ids
+    else:
+        unavailable[f"{metric} TTM"] = (
+            "four_comparable_contiguous_quarters_unavailable"
+            if allow_ttm
+            else "per_share_ttm_requires_weighted_share_count",
+        )
     return QuickCategorizationRow(
         metric=metric,
         unit=unit,
         digits=digits,
-        lfy_minus_2=lfy_minus_2,
-        lfy_minus_1=lfy_minus_1,
-        lfy=lfy,
-        ttm=_scale(_dict_get(ttm, col), scale),
-        cagr_3y=_cagr_3y(baseline, lfy),
+        lfy_minus_2=values[0] if values else None,
+        lfy_minus_1=values[1] if len(values) > 1 else None,
+        lfy=values[2] if len(values) > 2 else None,
+        ttm=ttm,
+        cagr_3y=cagr,
+        source_cell_ids=tuple(value for value in (*ids, baseline_id, *ttm_ids) if value),
     )
 
 
-def _ratio_row(
+def _margin_row(
     metric: str,
-    unit: str,
-    digits: int,
-    by_period: dict[int, dict[str, object]],
-    ttm: dict[str, object] | None,
-    col: str,
-    display_years: list[int],
+    numerator: str,
+    years: list[int],
+    annual: dict[str, dict[str, FinancialTableCell]],
+    quarterly: dict[str, dict[str, FinancialTableCell]],
+    manifest: dict[str, tuple[str, ...]],
+    unavailable: dict[str, tuple[str, ...]],
 ) -> QuickCategorizationRow:
-    """Build a row for a ratio series (margins, ROE). CAGR intentionally None."""
+    values: list[float | None] = []
+    all_ids: list[str] = []
+    for year in years:
+        value, ids = _ratio(
+            annual.get(numerator, {}).get(str(year)), annual.get("revenue", {}).get(str(year))
+        )
+        values.append(value)
+        if ids:
+            manifest[f"{metric} FY{year}"] = ids
+            all_ids.extend(ids)
+        else:
+            unavailable[f"{metric} FY{year}"] = _pair_reasons(
+                annual.get(numerator, {}).get(str(year)),
+                annual.get("revenue", {}).get(str(year)),
+            )
+    ttm, ttm_ids = _ttm_ratio(quarterly.get(numerator, {}), quarterly.get("revenue", {}))
+    if ttm_ids:
+        manifest[f"{metric} TTM"] = ttm_ids
+    else:
+        unavailable[f"{metric} TTM"] = (
+            "matched_four_quarter_numerator_and_revenue_window_unavailable",
+        )
+    unavailable[f"{metric} 3y CAGR"] = ("ratio_cagr_not_meaningful",)
     return QuickCategorizationRow(
         metric=metric,
-        unit=unit,
-        digits=digits,
-        lfy_minus_2=_annual_scaled(by_period, _at(display_years, 0), col, _FRACTION_TO_PCT),
-        lfy_minus_1=_annual_scaled(by_period, _at(display_years, 1), col, _FRACTION_TO_PCT),
-        lfy=_annual_scaled(by_period, _at(display_years, 2), col, _FRACTION_TO_PCT),
-        ttm=_scale(_dict_get(ttm, col), _FRACTION_TO_PCT),
-        cagr_3y=None,
+        unit="%",
+        digits=1,
+        lfy_minus_2=values[0] if values else None,
+        lfy_minus_1=values[1] if len(values) > 1 else None,
+        lfy=values[2] if len(values) > 2 else None,
+        ttm=ttm,
+        source_cell_ids=tuple((*all_ids, *ttm_ids)),
     )
 
 
-def _annual_scaled(
-    by_period: dict[int, dict[str, object]],
-    year: int | None,
-    col: str,
-    scale: float,
-) -> float | None:
-    if year is None or year not in by_period:
+def _ratio(
+    numerator: FinancialTableCell | None, denominator: FinancialTableCell | None
+) -> tuple[float | None, tuple[str, ...]]:
+    if not _ratio_pair_supported(numerator, denominator):
+        return None, ()
+    value = _ratio_values(_cell_value(numerator), _cell_value(denominator))
+    if value is None:
+        return None, ()
+    return value, tuple(value for value in (_cell_id(numerator), _cell_id(denominator)) if value)
+
+
+def _ratio_values(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator == 0:
         return None
-    return _scale(_to_float(by_period[year].get(col)), scale)
+    return numerator / denominator / _FRACTION_TO_PCT
 
 
-def _at(xs: list[int], i: int) -> int | None:
-    return xs[i] if 0 <= i < len(xs) else None
+def _ttm_sum(cells: dict[str, FinancialTableCell]) -> tuple[float | None, tuple[str, ...]]:
+    ordered = sorted(
+        cells.values(),
+        key=lambda cell: cell.provenance.observation.period_end if cell.provenance else date.min,
+    )[-4:]
+    if (
+        len(ordered) != 4
+        or not _quarter_span_supported(ordered)
+        or not _series_context_supported(ordered)
+    ):
+        return None, ()
+    values = [_cell_value(cell) for cell in ordered]
+    if any(value is None for value in values):
+        return None, ()
+    return sum(value for value in values if value is not None), tuple(
+        cell.canonical_metric_cell_id for cell in ordered
+    )
 
 
-def _safe_int(v: object) -> int:
-    """Convert a SQLite value to int. fiscal_year is always int in the schema."""
-    if isinstance(v, (int, float)):
-        return int(v)
-    raise TypeError(f"expected numeric fiscal_year, got {type(v).__name__}: {v!r}")
+def _ttm_ratio(
+    numerators: dict[str, FinancialTableCell], denominators: dict[str, FinancialTableCell]
+) -> tuple[float | None, tuple[str, ...]]:
+    numerator_cells = sorted(numerators.values(), key=lambda cell: cell.display_coordinate or "")[
+        -4:
+    ]
+    denominator_cells = sorted(
+        denominators.values(), key=lambda cell: cell.display_coordinate or ""
+    )[-4:]
+    if len(numerator_cells) != 4 or len(denominator_cells) != 4:
+        return None, ()
+    if any(
+        left.display_coordinate != right.display_coordinate
+        or not _ratio_pair_supported(left, right)
+        for left, right in zip(numerator_cells, denominator_cells, strict=True)
+    ):
+        return None, ()
+    numerator, numerator_ids = _ttm_sum(
+        {cell.display_coordinate or "": cell for cell in numerator_cells}
+    )
+    denominator, denominator_ids = _ttm_sum(
+        {cell.display_coordinate or "": cell for cell in denominator_cells}
+    )
+    ratio = _ratio_values(numerator, denominator)
+    return (ratio, (*numerator_ids, *denominator_ids)) if ratio is not None else (None, ())
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def _quarter_span_supported(cells: list[FinancialTableCell]) -> bool:
+    periods = [cell.provenance.observation for cell in cells if cell.provenance]
+    bounds: list[tuple[datetime, datetime]] = []
+    for item in periods:
+        if item.period_start is None:
+            return False
+        bounds.append((item.period_start, item.period_end))
+    if len(bounds) != 4:
+        return False
+    return (
+        all(70 <= (end - start).days + 1 <= 105 for start, end in bounds)
+        and all(
+            later_start == earlier_end + timedelta(days=1)
+            for (_, earlier_end), (later_start, _) in pairwise(bounds)
+        )
+        and 345 <= (bounds[-1][1] - bounds[0][0]).days + 1 <= 385
+    )
 
 
-def _missing(ticker: str, stage: str, fix_command: str, detail: str) -> EvaluationSnapshotSection:
+def _annual_span_supported(
+    cells: dict[str, FinancialTableCell], baseline_year: int | None, end_year: int
+) -> bool:
+    if baseline_year is None:
+        return False
+    chosen = [cells.get(str(year)) for year in range(baseline_year, end_year + 1)]
+    if any(cell is None or cell.provenance is None for cell in chosen):
+        return False
+    ends = [cell.provenance.observation.period_end for cell in chosen if cell and cell.provenance]
+    return _series_context_supported([cell for cell in chosen if cell is not None]) and all(
+        345 <= (later - earlier).days <= 385 for earlier, later in pairwise(ends)
+    )
+
+
+def _series_context_supported(cells: list[FinancialTableCell]) -> bool:
+    if not cells or any(cell.provenance is None for cell in cells):
+        return False
+    contexts = {
+        (
+            cell.concept,
+            cell.metric_id,
+            cell.metric_definition_revision_id,
+            cell.provenance.cell.reporting_entity_id,
+            cell.provenance.cell.accounting_basis,
+            cell.provenance.cell.consolidation_scope,
+            cell.provenance.observation.currency,
+            cell.provenance.observation.unit_key,
+        )
+        for cell in cells
+        if cell.provenance is not None
+    }
+    return len(contexts) == 1
+
+
+def _ratio_pair_supported(
+    numerator: FinancialTableCell | None, denominator: FinancialTableCell | None
+) -> bool:
+    if (
+        numerator is None
+        or denominator is None
+        or numerator.provenance is None
+        or denominator.provenance is None
+    ):
+        return False
+    left, right = numerator.provenance, denominator.provenance
+    return (
+        left.observation.period_start == right.observation.period_start
+        and left.observation.period_end == right.observation.period_end
+        and left.cell.reporting_entity_id == right.cell.reporting_entity_id
+        and left.cell.accounting_basis == right.cell.accounting_basis
+        and left.cell.consolidation_scope == right.cell.consolidation_scope
+        and left.observation.currency == right.observation.currency
+    )
+
+
+def _currency(cells: list[FinancialTableCell]) -> str | None:
+    currencies = {
+        cell.provenance.observation.currency
+        for cell in cells
+        if cell.provenance is not None and cell.provenance.observation.currency is not None
+    }
+    return next(iter(currencies)) if len(currencies) == 1 else None
+
+
+def _cell_value(cell: FinancialTableCell | None) -> float | None:
+    return None if cell is None or cell.display_value is None else float(cell.display_value)
+
+
+def _cell_id(cell: FinancialTableCell | None) -> str | None:
+    return None if cell is None else cell.canonical_metric_cell_id
+
+
+def _coordinate_reasons(cell: FinancialTableCell | None) -> tuple[str, ...]:
+    if cell is None:
+        return ("canonical_cell_unavailable",)
+    return cell.reason_codes or ("canonical_cell_value_unavailable",)
+
+
+def _pair_reasons(
+    numerator: FinancialTableCell | None, denominator: FinancialTableCell | None
+) -> tuple[str, ...]:
+    reasons = (*_coordinate_reasons(numerator), *_coordinate_reasons(denominator))
+    if (
+        numerator is not None
+        and denominator is not None
+        and not _ratio_pair_supported(numerator, denominator)
+    ):
+        reasons = (*reasons, "period_scope_basis_or_currency_mismatch")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _missing(ticker: str, stage: str, fix_command: str) -> EvaluationSnapshotSection:
     return EvaluationSnapshotSection(
         status=SectionStatus.MISSING_DATA,
-        missing=missing(stage=stage, fix_command=fix_command, detail=detail),
+        missing=missing(
+            stage=stage, fix_command=fix_command, detail="Canonical financial data unavailable."
+        ),
         ticker=ticker,
     )
 
 
-def _to_float(v: object) -> float | None:
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    try:
-        return float(str(v))
-    except (TypeError, ValueError):
-        return None
-
-
-def _scale(v: float | None, divisor: float) -> float | None:
-    return None if v is None else v / divisor
-
-
-def _dict_get(d: dict[str, object] | None, key: str) -> float | None:
-    if d is None:
-        return None
-    return _to_float(d.get(key))
-
-
 def _cagr_3y(baseline: float | None, end: float | None) -> float | None:
-    """LFY-3 → LFY CAGR over 3 years. Requires positive endpoints."""
-    if baseline is None or end is None or baseline <= 0 or end <= 0:
-        return None
-    return (end / baseline) ** (1.0 / 3.0) - 1.0
+    return (
+        None
+        if baseline is None or end is None or baseline <= 0 or end <= 0
+        else (end / baseline) ** (1.0 / 3.0) - 1.0
+    )

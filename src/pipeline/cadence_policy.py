@@ -50,6 +50,31 @@ GROWTH_STALE_DAYS: int = 3
 REFERENCE_STALE_DAYS: int = 30
 
 
+# The same list-tier base used by the refresh queue; unknown tiers retain the
+# existing monthly default. These are endpoint freshness limits, not acquisition authority.
+LIST_TYPE_BASE_FRESH_H: dict[str, int] = {
+    "portfolio": 24,
+    "watchlist": 24,
+    "evaluation": 24,
+    "none": 24 * 90,
+    "etf": 24 * 30,
+    "index_member": 24 * 30,
+}
+CLASS_CADENCE_MULT: dict[str, float] = {
+    "time_sensitive": float(TIME_SENSITIVE_STALE_DAYS),
+    "growth": float(GROWTH_STALE_DAYS),
+    "segment": float(STATEMENT_STALE_DAYS),
+    "statement": float(STATEMENT_STALE_DAYS),
+    "reference": float(REFERENCE_STALE_DAYS),
+}
+
+
+def cadence_hours(list_type: str, endpoint_class: str) -> float:
+    return LIST_TYPE_BASE_FRESH_H.get(list_type, 24 * 30) * CLASS_CADENCE_MULT.get(
+        endpoint_class, 1.0
+    )
+
+
 # Conservative estimate of FMP calls required to fully onboard one ticker
 # (statements x4 endpoints x2 periods + segments + ratios + key-metrics +
 # enterprise-values + DCF + profile + executives + ... = ~40). Used by the

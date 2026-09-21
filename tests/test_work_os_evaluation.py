@@ -13,6 +13,7 @@ import pytest
 import pipeline.work_os_evaluation as evaluation
 from allocation.candidate_fit import CandidateFit, FitFactor
 from dcf.availability import DcfRouteArtifact
+from etf_sources.profile_evidence import capture_profile_fields
 from models.instruments import EtfProfile
 from pipeline.dashboard_status import DashboardRow
 from pipeline.etf_score import StyleLoadingRead
@@ -494,7 +495,7 @@ def test_etf_profile_reuses_current_profile_loadings_fit_and_whatif(
         }
 
     def fake_etf_profile(_conn: sqlite3.Connection, _ticker: str) -> EtfProfile:
-        return EtfProfile(
+        profile = EtfProfile(
             ticker="VDE",
             name="Vanguard Energy ETF",
             asset_class="equity",
@@ -502,8 +503,10 @@ def test_etf_profile_reuses_current_profile_loadings_fit_and_whatif(
             expense_ratio=0.001,
             distribution_yield=0.035,
             source="issuer:test",
-            profile_fetched_at=datetime(2026, 8, 20, tzinfo=UTC),
+            profile_fetched_at=datetime.now(UTC),
         )
+
+        return capture_profile_fields(profile)
 
     monkeypatch.setattr(evaluation, "read_materialized_candidate_fit", fake_candidate_fit)
     monkeypatch.setattr(

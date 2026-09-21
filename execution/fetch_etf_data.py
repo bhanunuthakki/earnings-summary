@@ -27,16 +27,18 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from instrument_store import upsert_etf_holdings, upsert_etf_profile  # noqa: E402
-from models.instruments import EtfHolding, EtfProfile  # noqa: E402
-from net.client import FMP_CLIENT, FMP_ORIGIN, HttpCallError, JsonShape  # noqa: E402
+from etf_sources.profile_evidence import capture_profile_fields
+from instrument_store import upsert_etf_holdings, upsert_etf_profile
+from models.instruments import EtfHolding, EtfProfile
+from net.client import FMP_CLIENT, FMP_ORIGIN, HttpCallError, JsonShape
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 FMP_BASE = FMP_ORIGIN
@@ -61,7 +63,7 @@ def parse_etf_info(payload: object, ticker: str, fetched_at: datetime) -> EtfPro
     record = _first_record(payload)
     record = cast("dict[str, object]", record or {})
 
-    return EtfProfile(
+    profile = EtfProfile(
         ticker=ticker.upper(),
         name=_str(record.get("name")),
         issuer=_str(record.get("etfCompany")) or _str(record.get("issuer")),
@@ -83,6 +85,11 @@ def parse_etf_info(payload: object, ticker: str, fetched_at: datetime) -> EtfPro
         source="fmp",
         profile_fetched_at=fetched_at,
     )
+
+    source_as_of = _iso_date(record.get("asOfDate"))
+    if record.get("asOfDate") is not None and source_as_of is None:
+        return profile  # Malformed source dating cannot be relabeled as undated evidence.
+    return capture_profile_fields(profile, source_as_of=source_as_of)
 
 
 def parse_etf_holdings(
@@ -136,11 +143,14 @@ def ingest_from_payloads(
     holdings_payload: object,
     as_of_date: date | None = None,
     fetched_at: datetime | None = None,
+    profile_capture_verified: bool = False,
 ) -> tuple[EtfProfile, int]:
     """Persist parsed payloads to the DB. Returns (profile, num_holdings)."""
-    ts = fetched_at or datetime.now()
+    ts = fetched_at or datetime.now(UTC)
     resolved_date = as_of_date or ts.date()
     profile = parse_etf_info(info_payload, ticker, ts)
+    if not profile_capture_verified:
+        profile = profile.model_copy(update={"field_evidence": {}})
     holdings = parse_etf_holdings(holdings_payload, ticker, resolved_date, ts)
     upsert_etf_profile(conn, profile)
     upsert_etf_holdings(conn, ticker, resolved_date, holdings)
@@ -176,6 +186,7 @@ def ingest_from_cache(
         holdings_payload=holdings_payload,
         as_of_date=as_of_date,
         fetched_at=file_mtime,
+        profile_capture_verified=False,
     )
 
 
@@ -208,7 +219,8 @@ def ingest_live(
         info_payload=info_payload,
         holdings_payload=holdings_payload,
         as_of_date=as_of_date,
-        fetched_at=datetime.now(),
+        fetched_at=datetime.now(UTC),
+        profile_capture_verified=True,
     )
 
 
@@ -254,7 +266,7 @@ def _float(v: object) -> float | None:
     if v is None or v == "":
         return None
     try:
-        return float(v)  # type: ignore[arg-type]
+        return float(v) if isinstance(v, (str, int, float)) else None
     except (TypeError, ValueError):
         return None
 

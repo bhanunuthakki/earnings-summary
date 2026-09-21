@@ -29,7 +29,16 @@ def build(
     conn: sqlite3.Connection | None = None,
 ) -> ValuationBasisSection:
     if not enable_llm:
-        cached = compute_valuation.load(repo_root, ticker)
+        cached = _load_cached(repo_root, ticker, conn)
+        if cached is not None and cached.skipped_reason:
+            return ValuationBasisSection(
+                status=SectionStatus.MISSING_DATA,
+                missing=missing(
+                    stage="COMPUTE(valuation_basis)",
+                    fix_command=f"python execution/build_artifacts.py --ticker {ticker.upper()} --enable-llm --refresh",
+                    detail=cached.skipped_reason,
+                ),
+            )
         if cached is None or cached.multiple_name is None:
             return ValuationBasisSection(
                 status=SectionStatus.LLM_PENDING,
@@ -52,7 +61,7 @@ def build(
     )
     if skip is not None:
         # A previously-cached multiple is free to render — prefer it over forgoing.
-        cached = compute_valuation.load(repo_root, ticker)
+        cached = _load_cached(repo_root, ticker, conn)
         if cached is not None and cached.multiple_name is not None:
             return _to_section(cached)
         return ValuationBasisSection(
@@ -111,11 +120,24 @@ def build(
     return _to_section(result)
 
 
+def _load_cached(
+    root: Path, ticker: str, conn: sqlite3.Connection | None
+) -> compute_valuation.ValuationBasisResult | None:
+    connection = open_repo_db(root, conn)
+    try:
+        return compute_valuation.load(root, ticker, conn=connection)
+    finally:
+        if connection is not None and conn is None:
+            connection.close()
+
+
 def _to_section(r: compute_valuation.ValuationBasisResult) -> ValuationBasisSection:
     history = [
         ValuationBasisHistoricalPoint(
             period_end=period_end,
             value=h.value,
+            basis=h.basis,
+            method=h.method,
         )
         for h in r.history
         if h.period_end and (period_end := _as_date(h.period_end)) is not None
@@ -123,12 +145,25 @@ def _to_section(r: compute_valuation.ValuationBasisResult) -> ValuationBasisSect
     return ValuationBasisSection(
         status=SectionStatus.OK,
         multiple_name=r.multiple_name,
+        requested_multiple=r.requested_multiple,
+        current_basis=r.current_basis,
+        current_method=r.current_method,
+        comparison_unavailable_reason=r.comparison_unavailable_reason,
+        current_unavailable_reason=r.current_unavailable_reason,
+        source_context={
+            **r.source_context,
+            "historical_points": [
+                {"period_end": p.period_end, "value": p.value, "basis": p.basis, "method": p.method}
+                for p in r.history
+            ],
+        },
         rationale=r.rationale,
         current_value=r.current_value,
         current_value_display=r.current_value_display,
         peg_ratio=r.peg_ratio,
         peg_growth_pct=r.peg_growth_pct,
         current_period_end=_as_date(r.current_period_end),
+        estimate_target_period_end=_as_date(r.estimate_target_period_end),
         history=history,
         historical_min=r.historical_min,
         historical_max=r.historical_max,

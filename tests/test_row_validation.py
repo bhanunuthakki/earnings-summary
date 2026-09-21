@@ -49,3 +49,24 @@ def test_invalid_threshold_contract_fails_before_consuming_rows(tmp_path: Path) 
             max_drop_rate=1.1,
             rejection_dir=tmp_path,
         )
+
+
+def test_rejected_provider_payload_redacts_credentials_before_persistence(tmp_path: Path) -> None:
+    validate_provider_rows(
+        [
+            {
+                "value": "bad",
+                # Synthetic credential URL exercises rejection/redaction.
+                "url": "https://user:fixture-password@example.com?apikey=fixture-key",  # pragma: allowlist secret
+                "token": "fixture-token",
+            }
+        ],
+        TypeAdapter(_Row),
+        source="secret-fixture",
+        rejection_dir=tmp_path,
+    )
+    persisted = (tmp_path / "secret-fixture.jsonl").read_text()
+    for secret in ("fixture-password", "fixture-key", "fixture-token"):
+        assert secret not in persisted
+    record = json.loads(persisted)
+    assert record["raw"]["value"] == "bad"

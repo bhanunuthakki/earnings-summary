@@ -172,7 +172,7 @@ def test_upsert_sensitivity_idempotent_and_distinct_lookbacks() -> None:
             conn.close()
         a = upsert_sensitivity(
             ticker="AMZN",
-            series_id="us_10y",
+            series_id="brent",
             beta=-0.45,
             r_squared=0.32,
             lookback_window_days=252,
@@ -180,7 +180,7 @@ def test_upsert_sensitivity_idempotent_and_distinct_lookbacks() -> None:
         )
         b = upsert_sensitivity(
             ticker="AMZN",
-            series_id="us_10y",
+            series_id="brent",
             beta=-0.50,
             r_squared=0.35,
             lookback_window_days=252,
@@ -188,7 +188,7 @@ def test_upsert_sensitivity_idempotent_and_distinct_lookbacks() -> None:
         )
         c = upsert_sensitivity(
             ticker="AMZN",
-            series_id="us_10y",
+            series_id="brent",
             beta=-0.30,
             r_squared=0.22,
             lookback_window_days=756,

@@ -14,7 +14,7 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
     BaseModel,
@@ -52,9 +52,24 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def _omit_absent_canonical_derivation_resolution(value: object) -> object:
+    if isinstance(value, dict):
+        mapping = cast("dict[str, object]", value)
+        payload = {
+            key: _omit_absent_canonical_derivation_resolution(item) for key, item in mapping.items()
+        }
+        if payload.get("input_canonical_resolution_revision_id") is None:
+            payload.pop("input_canonical_resolution_revision_id", None)
+        return payload
+    if isinstance(value, list):
+        items = cast("list[object]", value)
+        return [_omit_absent_canonical_derivation_resolution(item) for item in items]
+    return value
+
+
 def _canonical_json(value: object) -> str:
     if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
+        value = _omit_absent_canonical_derivation_resolution(value.model_dump(mode="json"))
     return json.dumps(
         value,
         sort_keys=True,
@@ -203,7 +218,21 @@ class DerivationInput(_FrozenModel):
         min_length=1,
         max_length=128,
     )
+    input_canonical_resolution_revision_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+    )
     input_role: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def _one_resolution_domain(self) -> Self:
+        if (
+            self.input_resolution_revision_id is not None
+            and self.input_canonical_resolution_revision_id is not None
+        ):
+            raise ValueError("a derivation input cannot mix resolution domains")
+        return self
 
 
 class DerivedFactLineage(_FrozenModel):
@@ -230,16 +259,20 @@ class DerivedFactLineage(_FrozenModel):
         ordinals = tuple(item.input_ordinal for item in self.inputs)
         if ordinals != tuple(range(len(self.inputs))):
             raise ValueError("derivation inputs must have contiguous canonical ordinals")
-        payload = [
-            {
+        payload: list[dict[str, object]] = []
+        for item in self.inputs:
+            entry: dict[str, object] = {
                 "input_observation_id": item.input_observation_id,
                 "input_ordinal": item.input_ordinal,
                 "input_resolution_revision_id": (item.input_resolution_revision_id),
                 "input_role": item.input_role,
                 "output_observation_id": "",
             }
-            for item in self.inputs
-        ]
+            if item.input_canonical_resolution_revision_id is not None:
+                entry["input_canonical_resolution_revision_id"] = (
+                    item.input_canonical_resolution_revision_id
+                )
+            payload.append(entry)
         # The v2 seal includes the output observation ID.  It is injected by
         # FactHit's cross-contract validator before comparing the digest.
         if not payload:
@@ -374,16 +407,20 @@ class FactHit(_FrozenModel):
         if _digest(_canonical_json(dimensions_payload)) != self.dimensions_sha256:
             raise ValueError("dimensions_sha256 must match dimensions")
         if isinstance(self.provenance, DerivedFactLineage):
-            input_payload = [
-                {
+            input_payload: list[dict[str, object]] = []
+            for item in self.provenance.inputs:
+                entry: dict[str, object] = {
                     "input_observation_id": item.input_observation_id,
                     "input_ordinal": item.input_ordinal,
                     "input_resolution_revision_id": (item.input_resolution_revision_id),
                     "input_role": item.input_role,
                     "output_observation_id": self.observation_id,
                 }
-                for item in self.provenance.inputs
-            ]
+                if item.input_canonical_resolution_revision_id is not None:
+                    entry["input_canonical_resolution_revision_id"] = (
+                        item.input_canonical_resolution_revision_id
+                    )
+                input_payload.append(entry)
             if (
                 _digest(_canonical_json(input_payload))
                 != self.provenance.canonical_input_digest_sha256
@@ -398,7 +435,9 @@ class FactHit(_FrozenModel):
 
     @property
     def canonical_row_sha256(self) -> str:
-        payload = self.model_dump(mode="json", exclude={"row_sha256"})
+        payload = _omit_absent_canonical_derivation_resolution(
+            self.model_dump(mode="json", exclude={"row_sha256"})
+        )
         return _digest(_canonical_json(payload))
 
 
@@ -1470,6 +1509,7 @@ class FactSearchProjectionStore:
         derivation = value.derivation
         edges = self._fetchall(
             "SELECT input_observation_id,input_resolution_revision_id,"
+            "input_canonical_resolution_revision_id,"
             "input_role,input_ordinal FROM fact_derivation_input_edges_v2 "
             "WHERE output_observation_id = ? ORDER BY input_ordinal",
             (value.observation_id,),
@@ -1494,6 +1534,9 @@ class FactSearchProjectionStore:
                     input_observation_id=str(edge["input_observation_id"]),
                     input_resolution_revision_id=self._optional_text(
                         edge["input_resolution_revision_id"]
+                    ),
+                    input_canonical_resolution_revision_id=self._optional_text(
+                        edge["input_canonical_resolution_revision_id"]
                     ),
                     input_role=str(edge["input_role"]),
                 )

@@ -301,7 +301,9 @@ def compute_what_if(
         risk_free_annual,
         str(db_path) if db_path is not None else "",
     )
-    if prices_through is not None:
+    # DB-backed factor admission depends on current thesis/mix inputs, which
+    # the price-only result cache cannot identify. Keep only the price cache.
+    if prices_through is not None and db_path is None:
         cached = _cache_get(_result_cache, result_key)
         if cached is not None:
             return cached
@@ -380,11 +382,12 @@ def compute_what_if(
     factor_vector_after: dict[str, float] | None = None
     if db_path is not None:
         try:
-            from risk_factors import book_factor_vector
+            from risk_factors import book_factor_vector, current_ticker_loadings
 
-            book_vector = book_factor_vector(db_path, repo_root).vector
-            if book_vector:
-                cand_loadings = _ticker_factor_loadings(db_path, upper)
+            book_factors = book_factor_vector(db_path, repo_root)
+            book_vector = book_factors.vector
+            cand_loadings = current_ticker_loadings(db_path, repo_root, upper)
+            if book_vector and cand_loadings and book_factors.availability == "full":
                 factor_vector_before = dict(book_vector)
                 after: dict[str, float] = {f: (1.0 - w) * v for f, v in book_vector.items()}
                 for factor, loading in cand_loadings.items():
@@ -414,7 +417,7 @@ def compute_what_if(
         prices_through=prices_through,
         degraded=tuple(degraded),
     )
-    if prices_through is not None:
+    if prices_through is not None and db_path is None:
         _cache_put(_result_cache, result_key, result, _RESULT_CACHE_MAX)
     return result
 

@@ -17,20 +17,20 @@ import json
 import math
 import sqlite3
 import sys
+from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import etf_role_synthesis as ers  # noqa: E402
-from allocation.candidate_fit import BookContext, compute_candidate_fit  # noqa: E402
-from instrument_store import upsert_etf_holdings, upsert_etf_profile  # noqa: E402
-from models.instruments import EtfHolding, EtfProfile  # noqa: E402
-from pipeline.etf_workup import render_etf_workup  # noqa: E402
-from report.etf_models import EtfRoleSynthesis  # noqa: E402
+import etf_role_synthesis as ers
+from allocation.candidate_fit import BookContext, compute_candidate_fit
+from instrument_store import upsert_etf_holdings, upsert_etf_profile
+from models.instruments import EtfHolding, EtfProfile
+from pipeline.etf_workup import render_etf_workup
+from report.etf_models import EtfRoleSynthesis
 
 _DDL = """
 CREATE TABLE tracked_companies (
@@ -46,6 +46,7 @@ CREATE TABLE etf_profile (
     pe_ratio REAL, pb_ratio REAL, weighted_avg_mktcap_usd_m REAL,
     characteristics_as_of TEXT, characteristics_source TEXT,
     source TEXT NOT NULL DEFAULT 'fmp',
+    field_evidence_json TEXT NOT NULL DEFAULT '{}',
     profile_fetched_at TIMESTAMP NOT NULL
 );
 CREATE TABLE etf_holdings (
@@ -70,7 +71,7 @@ CREATE TABLE llm_artifacts (
 
 
 @pytest.fixture
-def env(tmp_path: Path) -> tuple[sqlite3.Connection, Path, Path]:
+def env(tmp_path: Path) -> Iterator[tuple[sqlite3.Connection, Path, Path]]:
     db_path = tmp_path / "portfolio.db"
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -250,10 +251,11 @@ def test_generate_invalid_output_degrades(
     env: tuple[sqlite3.Connection, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     conn, repo, db_path = env
-    monkeypatch.setattr(
-        "llm.structured.call_llm_structured",
-        lambda *a, **k: {"role_summary": "x", "verdict": "moon"},  # bad enum
-    )
+
+    def invalid_output(*_args: object, **_kwargs: object) -> dict[str, str]:
+        return {"role_summary": "x", "verdict": "moon"}
+
+    monkeypatch.setattr("llm.structured.call_llm_structured", invalid_output)
     artifact_id, status = ers.generate_role_synthesis(conn, repo, db_path, "AVDV")
     assert artifact_id is None and status.startswith("error:")
     assert ers.read_role_synthesis(db_path, "AVDV") is None
@@ -309,11 +311,23 @@ def test_held_candidate_scores_ex_self(tmp_path: Path) -> None:
     assert compute_candidate_fit(tmp_path, ["CAND"], unheld_book)["CAND"].held_weight is None
 
 
-def test_held_weight_round_trips_cache(tmp_path: Path) -> None:
+def test_held_weight_round_trips_cache(
+    env: tuple[sqlite3.Connection, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
     import candidate_fit_cache as cfc
     from allocation.candidate_fit import CandidateFit
 
+    conn, repo, db_path = env
     fit = CandidateFit(ticker="AVDV", factors=[], fit=1.0, why="", partial=False, held_weight=0.031)
-    blob = cfc._fit_to_json(fit)  # pyright: ignore[reportPrivateUsage]
-    back = cfc._fit_from_json("AVDV", blob)  # pyright: ignore[reportPrivateUsage]
-    assert back is not None and back.held_weight == pytest.approx(0.031)
+
+    def book(*_args: object, **_kwargs: object) -> BookContext:
+        return BookContext(weights={})
+
+    def fits(*_args: object, **_kwargs: object) -> dict[str, CandidateFit]:
+        return {"AVDV": fit}
+
+    monkeypatch.setattr(cfc, "assemble_book_context", book)
+    monkeypatch.setattr(cfc, "compute_candidate_fit", fits)
+    cfc.materialize_candidate_fit(conn, repo, db_path=db_path)
+    back = cfc.read_materialized_candidate_fit(repo)["AVDV"]
+    assert back.held_weight == pytest.approx(0.031)
